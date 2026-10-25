@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useRef } from "react";
 import { Download } from "lucide-react";
 import { ChatMessageContent } from "@/components/chat/ChatMessages";
@@ -18,14 +19,18 @@ export function AriaAnswer({
   question?: string;
   chart?: UsageChart;
 }) {
+  const { t } = useLanguage();
   const answerRef = useRef<HTMLDivElement>(null);
   const exportAnswer = () => {
     if (!answerRef.current || !exportAriaAnswer(question ?? "", answerRef.current)) {
-      toast.error("Could not open the PDF print dialog. Please try again.");
+      toast.error(t("Could not open the PDF print dialog. Please try again."));
     }
   };
   return (
-    <article aria-label={`${ARIA_AGENT_LABEL} answer`} className="space-y-3">
+    <article
+      aria-label={t("{ARIA_AGENT_LABEL} answer", { ARIA_AGENT_LABEL: String(ARIA_AGENT_LABEL) })}
+      className="space-y-3"
+    >
       <p className="text-xs font-medium text-muted-foreground">{ARIA_AGENT_LABEL}</p>
       <div ref={answerRef} className="space-y-4">
         {chart && <UsageAnswerChart chart={chart} />}
@@ -37,7 +42,7 @@ export function AriaAnswer({
           actions={
             <Button variant="ghost" size="sm" onClick={exportAnswer} data-export-exclude>
               <Download className="size-3.5" />
-              Export answer
+              {t("Export answer")}
             </Button>
           }
         />

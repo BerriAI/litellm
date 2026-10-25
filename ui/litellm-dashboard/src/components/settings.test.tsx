@@ -4,6 +4,8 @@ import { FormProvider, useForm } from "react-hook-form";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { alertingSettingsCall, getCallbackConfigsCall, getCallbacksCall, setCallbacksCall } from "./networking";
 import Settings, { backendCallbackLogoSrc, CallbackSelector } from "./settings";
+import { LanguageProvider } from "@/contexts/LanguageContext";
+import { toast } from "@/lib/toast";
 
 vi.mock("./networking", () => ({
   getCallbacksCall: vi.fn(),
@@ -101,6 +103,45 @@ describe("Settings", () => {
     await waitFor(() => {
       expect(mockGetCallbackConfigsCall).toHaveBeenCalledWith(defaultProps.accessToken);
     });
+  });
+
+  // 固定校验和成功提示需要翻译，服务端提供的名称及提交值不能匹配翻译词典。
+  it.each(["callback", "parameter", "success"])("中文回调表单的 %s 提示保留业务原值", async (scenario) => {
+    localStorage.clear();
+    mockGetCallbackConfigsCall.mockResolvedValue([
+      { id: "Home", displayName: "Home", dynamic_params: { custom: { ui_name: "Settings", required: true } } },
+    ]);
+    const user = userEvent.setup();
+    render(
+      <LanguageProvider defaultLanguage="zh-CN" userId="callback-form" storageScope="test">
+        <Settings {...defaultProps} />
+      </LanguageProvider>,
+    );
+    await user.click(await screen.findByRole("button", { name: "添加回调" }));
+    const dialog = screen.getByRole("dialog");
+    const submit = within(dialog).getByRole("button", { name: "添加回调" });
+    if (scenario !== "callback") {
+      await user.type(within(dialog).getByRole("combobox", { name: "回调" }), "Home");
+      await user.click(await screen.findByRole("option", { name: /Home$/ }));
+      expect(within(dialog).getByLabelText("Settings")).toBeVisible();
+    }
+    if (scenario === "success") {
+      fireEvent.change(within(dialog).getByLabelText("Settings"), { target: { value: "Home" } });
+    }
+    await user.click(submit);
+    if (scenario === "callback") {
+      expect(await within(dialog).findByText("请选择回调")).toBeVisible();
+      expect(setCallbacksCall).not.toHaveBeenCalled();
+    } else if (scenario === "parameter") {
+      expect(await within(dialog).findByText("请输入 settings")).toBeVisible();
+      expect(setCallbacksCall).not.toHaveBeenCalled();
+    } else {
+      await waitFor(() => expect(toast.success).toHaveBeenCalledWith("回调 Home 添加成功"));
+      expect(setCallbacksCall).toHaveBeenCalledWith("token", {
+        environment_variables: { callback: "Home", custom: "Home" },
+        litellm_settings: { success_callback: ["Home"] },
+      });
+    }
   });
 
   const openLangfuseEditModal = async () => {

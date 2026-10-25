@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { SortingState } from "@tanstack/react-table";
 import { FolderKanban } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -22,16 +23,17 @@ interface ProjectsTableProps {
 const PAGE_SIZE_OPTIONS = [PROJECTS_DEFAULT_PAGE_SIZE, 25, 50];
 
 function EmptyState({ isFiltered }: { isFiltered: boolean }) {
+  const { t } = useLanguage();
   return (
     <div className="flex flex-col items-center gap-1 py-6">
       <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-muted">
         <FolderKanban className="size-5 text-muted-foreground" />
       </div>
       <div className="text-sm font-medium text-foreground">
-        {isFiltered ? "No matching projects" : "No projects yet"}
+        {isFiltered ? t("No matching projects") : t("No projects yet")}
       </div>
       <div className="text-sm text-muted-foreground">
-        {isFiltered ? "Try a different search term." : "Create a project to organize keys within your teams."}
+        {isFiltered ? t("Try a different search term.") : t("Create a project to organize keys within your teams.")}
       </div>
     </div>
   );
@@ -45,14 +47,15 @@ export function ProjectsTable({
   teamAliasMap,
   isTeamsLoading,
 }: ProjectsTableProps) {
+  const { t } = useLanguage();
   const [sorting, setSorting] = useState<SortingState>([]);
   const { pagination, onPaginationChange } = useProjectsTableState();
   const pageSize = PAGE_SIZE_OPTIONS.includes(pagination.pageSize) ? pagination.pageSize : PROJECTS_DEFAULT_PAGE_SIZE;
 
   const columns = useMemo(() => {
-    const deps = { onProjectClick, teamAliasMap, isTeamsLoading };
+    const deps = { onProjectClick, teamAliasMap, isTeamsLoading, t };
     return getProjectsTableColumns(deps);
-  }, [onProjectClick, teamAliasMap, isTeamsLoading]);
+  }, [onProjectClick, teamAliasMap, isTeamsLoading, t]);
 
   const pageCount = Math.max(Math.ceil(projects.length / pageSize), 1);
   const pageIndex = pagination.pageIndex < pageCount ? pagination.pageIndex : 0;
@@ -80,7 +83,7 @@ export function ProjectsTable({
         />
       )}
       isLoading={isLoading}
-      loadingMessage="Loading projects…"
+      loadingMessage={t("Loading projects…")}
       noDataMessage={<EmptyState isFiltered={isFiltered} />}
       size="compact"
     />

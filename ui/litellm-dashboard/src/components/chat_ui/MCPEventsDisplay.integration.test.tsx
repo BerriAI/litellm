@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { LanguageProvider, useLanguage } from "@/contexts/LanguageContext";
 import type { MCPEvent } from "@/components/mcp_tools/types";
 import MCPEventsDisplay from "./MCPEventsDisplay";
 
@@ -22,6 +23,32 @@ const callEvent: MCPEvent = {
 };
 
 describe("MCPEventsDisplay", () => {
+  it("仅翻译缺省工具标题，切回英文保留真实工具名和折叠状态", () => {
+    function LanguageSwitch() {
+      const { setPreference } = useLanguage();
+      return <button onClick={() => setPreference("en")}>English</button>;
+    }
+    const unnamedCall: MCPEvent = { ...callEvent, item: { ...callEvent.item, name: undefined } };
+    const namedCall: MCPEvent = { ...callEvent, item: { ...callEvent.item, name: "Tool call" } };
+    render(
+      <LanguageProvider defaultLanguage="zh-CN" userId="mcp-events-fallback" storageScope="mcp-events-test">
+        <LanguageSwitch />
+        <MCPEventsDisplay events={[unnamedCall, namedCall]} />
+      </LanguageProvider>,
+    );
+
+    const fallbackTitle = screen.getByRole("button", { name: "工具调用" });
+    expect(screen.getByRole("button", { name: "Tool call" })).toBeInTheDocument();
+    fireEvent.click(fallbackTitle);
+    expect(fallbackTitle).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(screen.getByRole("button", { name: "English" }));
+
+    expect(fallbackTitle).toHaveTextContent("Tool call");
+    expect(fallbackTitle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getAllByRole("button", { name: "Tool call" })).toHaveLength(2);
+  });
+
   it("collapses discovery while showing tool calls and lets users expand discovery", async () => {
     render(<MCPEventsDisplay events={[toolsEvent, callEvent]} />);
 

@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -103,56 +104,59 @@ const CredentialField = ({ field }: { field: AgentCredentialFieldMetadata }) => 
   );
 };
 
-const DynamicAgentFormFields: React.FC<DynamicAgentFormFieldsProps> = ({ agentTypeInfo, panels }) => (
-  <>
-    <FieldGroup className="mb-4">
-      <AgentFormField
-        name="agent_name"
-        label={labelWithHint("Agent Name", "Unique identifier for the agent")}
-        rules={{ required: "Please enter a unique agent name" }}
-      >
-        {({ value, onChange, ref, ...control }) => (
-          <Input
-            {...control}
-            ref={ref}
-            placeholder="e.g., my-langgraph-agent"
-            value={typeof value === "string" ? value : ""}
-            onChange={onChange}
-          />
-        )}
-      </AgentFormField>
+const DynamicAgentFormFields: React.FC<DynamicAgentFormFieldsProps> = ({ agentTypeInfo, panels }) => {
+  const { t } = useLanguage();
+  return (
+    <>
+      <FieldGroup className="mb-4">
+        <AgentFormField
+          name="agent_name"
+          label={labelWithHint(t("Agent Name"), t("Unique identifier for the agent"))}
+          rules={{ required: "Please enter a unique agent name" }}
+        >
+          {({ value, onChange, ref, ...control }) => (
+            <Input
+              {...control}
+              ref={ref}
+              placeholder={t("e.g., my-langgraph-agent")}
+              value={typeof value === "string" ? value : ""}
+              onChange={onChange}
+            />
+          )}
+        </AgentFormField>
 
-      <AgentFormField
-        name="description"
-        label={labelWithHint("Description", "Brief description of what this agent does")}
-      >
-        {({ value, onChange, ref, ...control }) => (
-          <Textarea
-            {...control}
-            ref={ref}
-            rows={2}
-            placeholder="Describe what this agent does..."
-            value={typeof value === "string" ? value : ""}
-            onChange={onChange}
-          />
-        )}
-      </AgentFormField>
+        <AgentFormField
+          name="description"
+          label={labelWithHint(t("Description"), t("Brief description of what this agent does"))}
+        >
+          {({ value, onChange, ref, ...control }) => (
+            <Textarea
+              {...control}
+              ref={ref}
+              rows={2}
+              placeholder={t("Describe what this agent does...")}
+              value={typeof value === "string" ? value : ""}
+              onChange={onChange}
+            />
+          )}
+        </AgentFormField>
 
-      {agentTypeInfo.credential_fields.map((field) => (
-        <CredentialField key={field.key} field={field} />
-      ))}
-    </FieldGroup>
+        {agentTypeInfo.credential_fields.map((field) => (
+          <CredentialField key={field.key} field={field} />
+        ))}
+      </FieldGroup>
 
-    <div className="mb-4 rounded-md border border-border px-4">
-      <AgentFormPanel panelKey={AGENT_FORM_CONFIG.cost.key} title={AGENT_FORM_CONFIG.cost.title} panels={panels}>
-        <CostConfigFields />
-      </AgentFormPanel>
-      <AgentFormPanel panelKey={KILL_SWITCH_PANEL_KEY} title="Kill Switch" panels={panels}>
-        <KillSwitchFormFields />
-      </AgentFormPanel>
-    </div>
-  </>
-);
+      <div className="mb-4 rounded-md border border-border px-4">
+        <AgentFormPanel panelKey={AGENT_FORM_CONFIG.cost.key} title={AGENT_FORM_CONFIG.cost.title} panels={panels}>
+          <CostConfigFields />
+        </AgentFormPanel>
+        <AgentFormPanel panelKey={KILL_SWITCH_PANEL_KEY} title={t("Kill Switch")} panels={panels}>
+          <KillSwitchFormFields />
+        </AgentFormPanel>
+      </div>
+    </>
+  );
+};
 
 export const buildDynamicAgentData = (
   values: AgentFormValues,

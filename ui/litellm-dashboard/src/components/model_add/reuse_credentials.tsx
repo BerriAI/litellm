@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import { z } from "zod";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
@@ -17,11 +18,12 @@ interface ReuseCredentialsModalProps {
   setIsCredentialModalOpen: (isVisible: boolean) => void;
 }
 
-const reuseCredentialsSchema = z.object({
-  credential_name: z.string().min(1, "Credential name is required"),
-});
+const reuseCredentialsSchema = (t: ReturnType<typeof useLanguage>["t"]) =>
+  z.object({
+    credential_name: z.string().min(1, t("Credential name is required")),
+  });
 
-type ReuseCredentialsFormValues = z.infer<typeof reuseCredentialsSchema>;
+type ReuseCredentialsFormValues = z.infer<ReturnType<typeof reuseCredentialsSchema>>;
 
 const storedValuesOf = (existingCredential: CredentialItem | null): Record<string, unknown> => {
   const values: unknown = existingCredential?.credential_values;
@@ -35,9 +37,10 @@ const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
   existingCredential,
   setIsCredentialModalOpen,
 }) => {
+  const { t } = useLanguage();
   const fieldIdPrefix = React.useId();
   const storedValues = storedValuesOf(existingCredential);
-  const form = useZodForm(reuseCredentialsSchema, {
+  const form = useZodForm(reuseCredentialsSchema(t), {
     defaultValues: { credential_name: existingCredential?.credential_name ?? "" },
   });
 
@@ -56,14 +59,14 @@ const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
     <Dialog open={isVisible} onOpenChange={(open) => !open && handleCancel()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[600px]">
         <DialogHeader>
-          <DialogTitle>Reuse Credentials</DialogTitle>
+          <DialogTitle>{t("Reuse Credentials")}</DialogTitle>
         </DialogHeader>
         <TooltipProvider>
           <form onSubmit={form.handleSubmit(handleSubmit)} noValidate>
             <FieldGroup>
-              <FormField control={form.control} name="credential_name" label="Credential Name:">
+              <FormField control={form.control} name="credential_name" label={t("Credential Name:")}>
                 {({ ref, ...field }) => (
-                  <Input {...field} ref={ref} placeholder="Enter a friendly name for these credentials" />
+                  <Input {...field} ref={ref} placeholder={t("Enter a friendly name for these credentials")} />
                 )}
               </FormField>
 
@@ -73,7 +76,7 @@ const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
                   <Input
                     id={`${fieldIdPrefix}-${key}`}
                     value={String(value)}
-                    placeholder={`Enter ${key}`}
+                    placeholder={t("Enter {key}", { key })}
                     disabled
                     readOnly
                   />
@@ -88,18 +91,18 @@ const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
                         href="https://github.com/BerriAI/litellm/issues"
                         className="text-sm text-primary underline-offset-4 hover:underline"
                       >
-                        Need Help?
+                        {t("Need Help?")}
                       </a>
                     }
                   />
-                  <TooltipContent>Get help on our github</TooltipContent>
+                  <TooltipContent>{t("Get help on our github")}</TooltipContent>
                 </Tooltip>
 
                 <div className="flex gap-2.5">
                   <Button type="button" variant="outline" onClick={handleCancel}>
-                    Cancel
+                    {t("Cancel")}
                   </Button>
-                  <Button type="submit">Reuse Credentials</Button>
+                  <Button type="submit">{t("Reuse Credentials")}</Button>
                 </div>
               </div>
             </FieldGroup>

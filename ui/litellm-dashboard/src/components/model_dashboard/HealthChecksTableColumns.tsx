@@ -1,6 +1,8 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { ColumnDef } from "@tanstack/react-table";
+import { englishTranslate, type Translate } from "@/i18n/language";
 import { Info, Play, RefreshCw } from "lucide-react";
 
 import { Team } from "@/components/key_team_helpers/key_list";
@@ -51,11 +53,12 @@ const NEVER_SUCCEEDED = "Never succeeded";
 const NONE = "None";
 
 function HealthStatusBadge({ status }: { status: string }) {
+  const { t } = useLanguage();
   const tone = HEALTH_STATUS_TONES[status];
   if (!tone) {
-    return <StatusBadge tone="neutral" label="unknown" />;
+    return <StatusBadge tone="neutral" label={t("unknown")} />;
   }
-  return <StatusBadge tone={tone} label={status} />;
+  return <StatusBadge tone={tone} label={t(status)} />;
 }
 
 function DotPulse({ className }: { className: string }) {
@@ -120,9 +123,10 @@ function RunHealthCheckButton({
   model: HealthCheckData;
   onRunHealthCheck: (modelId: string) => void;
 }) {
+  const { t } = useLanguage();
   const isLoading = model.health_loading;
   const hasExistingStatus = Boolean(model.health_status) && model.health_status !== "none";
-  const label = runButtonLabel(isLoading, hasExistingStatus);
+  const label = t(runButtonLabel(isLoading, hasExistingStatus));
 
   return (
     <button
@@ -198,6 +202,7 @@ function compareSentinels(
 }
 
 export interface HealthChecksTableColumnsDeps {
+  t?: Translate;
   modelHealthStatuses: Record<string, HealthStatus>;
   getDisplayModelName: (model: HealthCheckData) => string;
   onRunHealthCheck: (modelId: string) => void;
@@ -208,6 +213,7 @@ export interface HealthChecksTableColumnsDeps {
 }
 
 export const getHealthChecksTableColumns = ({
+  t = englishTranslate,
   modelHealthStatuses,
   getDisplayModelName,
   onRunHealthCheck,
@@ -217,13 +223,13 @@ export const getHealthChecksTableColumns = ({
   teams,
 }: HealthChecksTableColumnsDeps): ColumnDef<HealthCheckData>[] => [
   createSelectionColumn<HealthCheckData>({
-    rowAriaLabel: (row) => `Select ${row.original.model_info?.id ?? row.original.model_name}`,
+    rowAriaLabel: (row) => t("Select {name}", { name: row.original.model_info?.id ?? row.original.model_name }),
   }),
   {
     id: "model_id",
     accessorFn: (row) => row.model_info?.id ?? "",
-    meta: { title: "Model ID" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Model ID" variant="header-cycle" />,
+    meta: { title: t("Model ID") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Model ID")} variant="header-cycle" />,
     size: 220,
     enableSorting: true,
     sortingFn: "alphanumeric",
@@ -241,8 +247,8 @@ export const getHealthChecksTableColumns = ({
   {
     id: "model_name",
     accessorKey: "model_name",
-    meta: { title: "Model Name" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Model Name" variant="header-cycle" />,
+    meta: { title: t("Model Name") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Model Name")} variant="header-cycle" />,
     size: 200,
     enableSorting: true,
     sortingFn: "alphanumeric",
@@ -258,8 +264,8 @@ export const getHealthChecksTableColumns = ({
   {
     id: "team_id",
     accessorFn: (row) => row.model_info?.team_id ?? "",
-    meta: { title: "Team Alias" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Team Alias" variant="header-cycle" />,
+    meta: { title: t("Team Alias") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Team Alias")} variant="header-cycle" />,
     size: 160,
     enableSorting: true,
     sortingFn: "alphanumeric",
@@ -279,8 +285,8 @@ export const getHealthChecksTableColumns = ({
   {
     id: "health_status",
     accessorKey: "health_status",
-    meta: { title: "Health Status", skeleton: "badge" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Health Status" variant="header-cycle" />,
+    meta: { title: t("Health Status"), skeleton: "badge" },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Health Status")} variant="header-cycle" />,
     size: 170,
     enableSorting: true,
     sortingFn: (rowA, rowB) => {
@@ -297,7 +303,7 @@ export const getHealthChecksTableColumns = ({
         return (
           <div className="flex items-center space-x-2">
             <DotPulse className="size-2 bg-indigo-500" />
-            <span className="text-sm text-muted-foreground">Checking...</span>
+            <span className="text-sm text-muted-foreground">{t("Checking...")}</span>
           </div>
         );
       }
@@ -312,7 +318,7 @@ export const getHealthChecksTableColumns = ({
           <HealthStatusBadge status={model.health_status} />
           {hasSuccessResponse && (
             <DetailButton
-              label="View response details"
+              label={t("View response details")}
               testId="view-health-success-btn"
               className="text-success hover:bg-success/10 "
               onClick={() => onShowSuccess(displayName, successResponse)}
@@ -325,8 +331,8 @@ export const getHealthChecksTableColumns = ({
   {
     id: "health_error",
     accessorKey: "health_error",
-    meta: { title: "Error Details" },
-    header: "Error Details",
+    meta: { title: t("Error Details") },
+    header: t("Error Details"),
     size: 240,
     enableSorting: false,
     cell: ({ row }) => {
@@ -335,7 +341,7 @@ export const getHealthChecksTableColumns = ({
       const healthStatus = modelHealthStatuses[modelId];
 
       if (!healthStatus?.error) {
-        return <span className="text-sm text-muted-foreground">No errors</span>;
+        return <span className="text-sm text-muted-foreground">{t("No errors")}</span>;
       }
 
       const cleanedError = healthStatus.error;
@@ -349,7 +355,7 @@ export const getHealthChecksTableColumns = ({
           </span>
           {fullError !== cleanedError && (
             <DetailButton
-              label="View full error details"
+              label={t("View full error details")}
               testId="view-health-error-btn"
               className="text-destructive hover:bg-destructive/10 "
               onClick={() => onShowError(displayName, cleanedError, fullError)}
@@ -362,8 +368,8 @@ export const getHealthChecksTableColumns = ({
   {
     id: "last_check",
     accessorKey: "last_check",
-    meta: { title: "Last Check" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Last Check" variant="header-cycle" />,
+    meta: { title: t("Last Check") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Last Check")} variant="header-cycle" />,
     size: 170,
     enableSorting: true,
     sortingFn: (rowA, rowB) => {
@@ -372,17 +378,17 @@ export const getHealthChecksTableColumns = ({
       const sentinel = compareSentinels(rawA, rawB, [NEVER_CHECKED], [CHECK_IN_PROGRESS]);
       return sentinel ?? compareDatesDesc(rawA, rawB);
     },
-    cell: ({ row }) => (
-      <span className="text-sm text-muted-foreground">
-        {row.original.health_loading ? CHECK_IN_PROGRESS : row.original.last_check}
-      </span>
-    ),
+    cell: ({ row }) => {
+      const lastCheck = row.original.health_loading ? CHECK_IN_PROGRESS : row.original.last_check;
+      const label = lastCheck === CHECK_IN_PROGRESS || lastCheck === NEVER_CHECKED ? t(lastCheck) : lastCheck;
+      return <span className="text-sm text-muted-foreground">{label}</span>;
+    },
   },
   {
     id: "last_success",
     accessorKey: "last_success",
-    meta: { title: "Last Success" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Last Success" variant="header-cycle" />,
+    meta: { title: t("Last Success") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Last Success")} variant="header-cycle" />,
     size: 170,
     enableSorting: true,
     sortingFn: (rowA, rowB) => {
@@ -394,13 +400,17 @@ export const getHealthChecksTableColumns = ({
     cell: ({ row }) => {
       const modelId = row.original.model_info?.id ?? "";
       const lastSuccess = modelHealthStatuses[modelId]?.lastSuccess || NONE;
-      return <span className="text-sm text-muted-foreground">{lastSuccess}</span>;
+      return (
+        <span className="text-sm text-muted-foreground">
+          {lastSuccess === NONE || lastSuccess === NEVER_SUCCEEDED ? t(lastSuccess) : lastSuccess}
+        </span>
+      );
     },
   },
   {
     id: "actions",
-    meta: { title: "Actions", className: "text-right", headerClassName: "text-right" },
-    header: () => <span className="sr-only">Actions</span>,
+    meta: { title: t("Actions"), className: "text-right", headerClassName: "text-right" },
+    header: () => <span className="sr-only">{t("Actions")}</span>,
     size: 80,
     enableSorting: false,
     enableHiding: false,

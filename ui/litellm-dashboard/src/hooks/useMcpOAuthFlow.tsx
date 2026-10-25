@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useLanguage } from "@/contexts/LanguageContext";
 import { toast } from "@/lib/toast";
 import {
   buildMcpOAuthAuthorizeUrl,
@@ -15,6 +16,9 @@ import { generateCodeChallenge, generateCodeVerifier } from "@/utils/pkce";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 export type McpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" | "error";
+
+// 只标记本地固定错误，同文的后端错误仍按原文展示。
+const LOCAL_OAUTH_ERROR = Symbol("mcp-oauth-local-error");
 
 export interface McpDcrCredentials {
   client_id: string;
@@ -82,8 +86,14 @@ export const useMcpOAuthFlow = ({
   onBeforeRedirect,
   flowSource,
 }: UseMcpOAuthFlowOptions): UseMcpOAuthFlowResult => {
+  const { t } = useLanguage();
+  const translateRef = useRef(t);
+  // 语言更新只替换提示文案，不成为 OAuth 回调的重执行条件。
+  useEffect(() => {
+    translateRef.current = t;
+  }, [t]);
   const [status, setStatus] = useState<McpOAuthStatus>("idle");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ message: string; local: boolean } | null>(null);
   const [tokenResponse, setTokenResponse] = useState<Record<string, any> | null>(null);
   const processingRef = useRef(false);
   const resetVersionRef = useRef(0);
@@ -155,16 +165,16 @@ export const useMcpOAuthFlow = ({
     const credentials = getCredentials() || {};
 
     if (!accessToken) {
-      setError("Missing admin token");
-      toast.error("Access token missing. Please re-authenticate and try again.");
+      setError({ message: "Missing admin token", local: true });
+      toast.error(translateRef.current("Access token missing. Please re-authenticate and try again."));
       return;
     }
 
     const temporaryPayload = getTemporaryPayload();
     if (!temporaryPayload || !temporaryPayload.url || !temporaryPayload.transport) {
       const message = "Please complete server URL and transport before starting OAuth.";
-      setError(message);
-      toast.error(message);
+      setError({ message, local: true });
+      toast.error(translateRef.current(message));
       return;
     }
     try {
@@ -174,7 +184,7 @@ export const useMcpOAuthFlow = ({
       const cachedServer = await cacheTemporaryMcpServer(accessToken, temporaryPayload);
       const serverId = cachedServer?.server_id?.trim();
       if (!serverId) {
-        throw new Error("Temporary MCP server identifier missing. Please retry.");
+        throw new Error("Temporary MCP server identifier missing. Please retry.", { cause: LOCAL_OAUTH_ERROR });
       }
 
       let registeredClient: McpDcrCredentials | undefined;
@@ -224,7 +234,7 @@ export const useMcpOAuthFlow = ({
       };
 
       if (typeof window === "undefined") {
-        throw new Error("OAuth redirect is only supported in the browser.");
+        throw new Error("OAuth redirect is only supported in the browser.", { cause: LOCAL_OAUTH_ERROR });
       }
 
       if (onBeforeRedirect) {
@@ -239,7 +249,9 @@ export const useMcpOAuthFlow = ({
         setStorageItem(FLOW_STATE_KEY, JSON.stringify(flowState));
         setStorageItem(RETURN_URL_KEY, window.location.href);
       } catch (storageErr) {
-        throw new Error("Unable to access browser storage for OAuth. Please enable storage and retry.");
+        throw new Error("Unable to access browser storage for OAuth. Please enable storage and retry.", {
+          cause: LOCAL_OAUTH_ERROR,
+        });
       }
 
       window.location.href = authorizeUrl;
@@ -247,8 +259,9 @@ export const useMcpOAuthFlow = ({
       console.error("Failed to start OAuth flow", err);
       setStatus("error");
       const message = extractErrorMessage(err);
-      setError(message);
-      toast.error(message);
+      const local = err instanceof Error && err.cause === LOCAL_OAUTH_ERROR;
+      setError({ message, local });
+      toast.error(local ? translateRef.current(message) : message);
     }
   }, [accessToken, getCredentials, getTemporaryPayload, onBeforeRedirect]);
 
@@ -288,9 +301,9 @@ export const useMcpOAuthFlow = ({
     } catch (err) {
       clearStoredFlow();
       processingRef.current = false;
-      setError("Failed to resume OAuth flow. Please retry.");
+      setError({ message: "Failed to resume OAuth flow. Please retry.", local: true });
       setStatus("error");
-      toast.error("Failed to resume OAuth flow. Please retry.");
+      toast.error(translateRef.current("Failed to resume OAuth flow. Please retry."));
       return;
     }
 
@@ -326,16 +339,17 @@ export const useMcpOAuthFlow = ({
         throw new Error(
           "OAuth session state was lost. This can happen if you have strict browser privacy settings. " +
             "Please try again and ensure cookies/storage is enabled.",
+          { cause: LOCAL_OAUTH_ERROR },
         );
       }
       if (!payload.state || payload.state !== flowState.state) {
-        throw new Error("OAuth state mismatch. Please retry.");
+        throw new Error("OAuth state mismatch. Please retry.", { cause: LOCAL_OAUTH_ERROR });
       }
       if (payload.error) {
         throw new Error(payload.error_description || payload.error);
       }
       if (!payload.code) {
-        throw new Error("Authorization code missing in callback.");
+        throw new Error("Authorization code missing in callback.", { cause: LOCAL_OAUTH_ERROR });
       }
 
       const client =
@@ -360,15 +374,16 @@ export const useMcpOAuthFlow = ({
       setTokenResponse(token);
       setStatus("success");
       setError(null);
-      toast.success("OAuth token retrieved successfully");
+      toast.success(translateRef.current("OAuth token retrieved successfully"));
     } catch (err) {
       if (resetVersion !== resetVersionRef.current) {
         return;
       }
       const message = extractErrorMessage(err);
-      setError(message);
+      const local = err instanceof Error && err.cause === LOCAL_OAUTH_ERROR;
+      setError({ message, local });
       setStatus("error");
-      toast.error(message);
+      toast.error(local ? translateRef.current(message) : message);
     } finally {
       if (resetVersion === resetVersionRef.current) {
         clearStoredFlow();
@@ -395,7 +410,7 @@ export const useMcpOAuthFlow = ({
   return {
     startOAuthFlow,
     status,
-    error,
+    error: error?.local ? t(error.message) : error?.message ?? null,
     tokenResponse,
     reset,
   };

@@ -4,6 +4,7 @@ import type { LatestReleaseInfo } from "@/app/(dashboard)/hooks/latestRelease/us
 import React from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails", () => ({
   useHealthReadinessDetails: vi.fn(),
@@ -65,6 +66,33 @@ describe("NotificationsBellView", () => {
     );
     await user.click(bell(2));
     expect(announcement("LiteLLM v1.103.0 is available")).toHaveTextContent("1 new feature, 1 fix, and 1 other update");
+  });
+
+  it("汉化本地升级说明和未读计数，切换语言不改变已读键或发行链接", async () => {
+    const user = userEvent.setup();
+    const renderInLanguage = (language: "en" | "zh-CN") => (
+      <LanguageProvider defaultLanguage={language} userId="navbar-test" storageScope="navbar-test">
+        <NotificationsBellView currentVersion="1.102.0" latestRelease={RELEASE} />
+      </LanguageProvider>
+    );
+    const { rerender } = renderWithProviders(renderInLanguage("zh-CN"));
+    await user.click(screen.getByRole("button", { name: "通知，2 条未读" }));
+
+    const upgrade = announcement("LiteLLM v1.103.0 已发布");
+    expect(upgrade).toHaveTextContent("12 项新功能、30 项修复和 8 项其他更新。当前版本为 v1.102.0");
+    expect(screen.getByRole("link", { name: "查看发行说明" })).toHaveAttribute("href", RELEASE.release_url);
+    expect(announcement("LiteLLM 自动路由")).toHaveTextContent(
+      "将每个请求路由到能够处理它的最便宜模型，无需修改提示词。",
+    );
+    await user.click(screen.getAllByRole("button", { name: "标为已读" })[0]);
+    expect(localStorage.getItem("litellm:upgradeBannerDismissed:1.103.0")).toBe("true");
+    expect(screen.getByRole("button", { name: "通知，1 条未读" })).toBeInTheDocument();
+
+    rerender(renderInLanguage("en"));
+    expect(bell(1)).toBeInTheDocument();
+    expect(announcement("LiteLLM v1.103.0 is available")).toHaveTextContent(
+      "12 new features, 30 fixes, and 8 other updates. Your current version is v1.102.0",
+    );
   });
 
   it.each([

@@ -7,6 +7,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../../tests/test-utils";
 import ModelSettingsModal from "./ModelSettingsModal";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 vi.mock("@/app/(dashboard)/hooks/storeModelInDB/useStoreModelInDB");
 vi.mock("@/app/(dashboard)/hooks/proxyConfig/useProxyConfig");
@@ -54,6 +55,20 @@ describe("ModelSettingsModal", () => {
   it("should render form field with initial values", () => {
     renderWithProviders(<ModelSettingsModal {...defaultProps} />);
     expect(screen.getByText("Store Model in DB")).toBeInTheDocument();
+  });
+
+  it("数据库配置没有说明时显示中文本地提示", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="zh-CN" userId="model-storage-hint" storageScope="model-storage-hint">
+        <ModelSettingsModal {...defaultProps} />
+      </LanguageProvider>,
+    );
+    // 提示触发器是无名称的库 SVG，使用组件库提供的稳定标记定位。
+    const trigger = screen.getByRole("dialog").querySelector('[data-slot="tooltip-trigger"]');
+    expect(trigger).not.toBeNull();
+    await user.hover(trigger!);
+    expect(await screen.findByText("启用后，模型和配置将存储在数据库中，并从数据库加载。")).toBeVisible();
   });
 
   it("should render cancel and save buttons", () => {
@@ -169,6 +184,21 @@ describe("ModelSettingsModal", () => {
     await waitFor(() => {
       expect(mockToast.fromError).toHaveBeenCalledWith("Failed to save model storage settings: Network error");
     });
+  });
+
+  it.each([false, true])("模型存储保存失败时仅翻译通知前缀（回调=%s）", async (callback) => {
+    const error = new Error("Home");
+    mockMutateAsync.mockImplementation((_params, options) => {
+      if (callback) options?.onError?.(error);
+      return Promise.reject(error);
+    });
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="zh-CN" userId="model-storage-error" storageScope="model-storage-error">
+        <ModelSettingsModal {...defaultProps} />
+      </LanguageProvider>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(mockToast.fromError).toHaveBeenCalledWith("保存模型存储设置失败：Home"));
   });
 
   it("should show error notification from onError callback", async () => {

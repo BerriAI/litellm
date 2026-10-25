@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useLanguage } from "@/contexts/LanguageContext";
 import type { TooltipContentProps, TooltipValueType } from "recharts";
 
 export type ChartTooltipProps = Pick<
@@ -68,6 +69,7 @@ const formatMetricValue = (rawValue: number | undefined, isSpend: boolean): stri
 };
 
 export const CustomTooltip = ({ active, payload, label }: ChartTooltipProps) => {
+  const { t } = useLanguage();
   if (!active || !payload || payload.length === 0) return null;
 
   return (
@@ -86,7 +88,9 @@ export const CustomTooltip = ({ active, payload, label }: ChartTooltipProps) => 
                 className="h-2 w-2 shrink-0 rounded-full ring-2 ring-white drop-shadow-md"
                 style={{ backgroundColor: item.color }}
               />
-              <p className="font-medium text-muted-foreground">{formatCategoryName(dataKey)}</p>
+              <p className="font-medium text-muted-foreground">
+                {knownMetricLabels[dataKey] ? t(knownMetricLabels[dataKey]) : formatCategoryName(dataKey)}
+              </p>
             </div>
             <p className="font-medium text-foreground">{formattedValue}</p>
           </div>
@@ -94,4 +98,18 @@ export const CustomTooltip = ({ active, payload, label }: ChartTooltipProps) => 
       })}
     </div>
   );
+};
+
+// 仅为产品定义的指标翻译标题，不把用户模型名或动态序列名当成词典键
+const knownMetricLabels: Readonly<Record<string, string>> = {
+  "metrics.total_tokens": "Total Tokens",
+  "metrics.prompt_tokens": "Prompt Tokens",
+  "metrics.completion_tokens": "Completion Tokens",
+  "metrics.spend": "Spend",
+  "metrics.api_requests": "API Requests",
+  "metrics.successful_requests": "Successful Requests",
+  "metrics.failed_requests": "Failed Requests",
+  "metrics.cache_read_input_tokens": "Cache Read Input Tokens",
+  "metrics.cache_creation_input_tokens": "Cache Creation Input Tokens",
+  "metrics.avg_response_time_ms": "Average Response Time (ms)",
 };

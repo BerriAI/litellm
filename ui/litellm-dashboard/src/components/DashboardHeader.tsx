@@ -28,6 +28,8 @@ import { Ellipsis } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { CommandPaletteTrigger } from "@/components/CommandPalette/CommandPaletteTrigger";
+import LanguageSelector from "@/components/LanguageSelector";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 // Top bar for the dashboard shell. Sits only over the content column (the brand
 // lives in the sidebar header); mirrors the design's breadcrumb-left / tools-right layout.
@@ -40,8 +42,10 @@ export function DashboardHeader({
   navigationTrigger?: ReactNode;
   deploymentHealth?: ReactNode;
 }) {
+  const { t } = useLanguage();
   const { title } = getBreadcrumb(usePathname());
-  const isDesktop = useMediaQuery("(min-width: 768px)", { initializeWithValue: false });
+  // 侧边栏占用宽度后，平板也使用紧凑菜单，避免语言选择器被挤出窗口
+  const isDesktop = useMediaQuery("(min-width: 1280px)", { initializeWithValue: false });
   const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
   if (isDesktop && mobileToolsOpen) setMobileToolsOpen(false);
   const { isControlPlane, selectedWorker } = useWorker();
@@ -57,23 +61,23 @@ export function DashboardHeader({
   };
 
   return (
-    <header className="flex h-14 flex-none items-center justify-between gap-4 border-b border-border bg-background px-4 max-md:gap-2 max-md:px-2">
+    <header className="flex h-14 flex-none items-center justify-between gap-4 border-b border-border bg-background px-4 max-xl:gap-2 max-md:px-2">
       {navigationTrigger}
-      <Breadcrumb className="min-w-0 max-md:flex-1">
+      <Breadcrumb className="min-w-0 max-xl:flex-1">
         <BreadcrumbList className="flex-nowrap">
-          <BreadcrumbItem className="flex-none max-md:hidden">
+          <BreadcrumbItem className="flex-none max-xl:hidden">
             <ViewSwitcher />
           </BreadcrumbItem>
-          <BreadcrumbSeparator className="max-md:hidden" />
+          <BreadcrumbSeparator className="max-xl:hidden" />
           <BreadcrumbItem className="min-w-0">
-            <BreadcrumbPage className="truncate">{title}</BreadcrumbPage>
+            <BreadcrumbPage className="truncate">{t(title)}</BreadcrumbPage>
           </BreadcrumbItem>
         </BreadcrumbList>
       </Breadcrumb>
 
       <CommandPaletteTrigger />
 
-      <div className="flex flex-none items-center gap-1 max-md:hidden">
+      <div className="flex flex-none items-center gap-1 max-xl:hidden">
         {showWorkerSwitch && (
           <>
             <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />
@@ -85,20 +89,24 @@ export function DashboardHeader({
         <BlogDropdown />
         {!hideCommunityLinks && <CommunityEngagementButtons />}
         <ToolbarSeparator />
+        <LanguageSelector />
         <ThemeToggle />
         {deploymentHealth}
         <NotificationsBell accessToken={accessToken} />
       </div>
-      <div className="flex shrink-0 items-center gap-1 md:hidden">
+      <div className="flex shrink-0 items-center gap-1 xl:hidden">
         <CommandPaletteTrigger mobile />
         {deploymentHealth}
         <NotificationsBell accessToken={accessToken} />
         <Popover open={!isDesktop && mobileToolsOpen} onOpenChange={setMobileToolsOpen}>
-          <PopoverTrigger render={<Button variant="ghost" size="icon" className="size-11" aria-label="More options" />}>
+          <PopoverTrigger
+            render={<Button variant="ghost" size="icon" className="size-11" aria-label={t("More options")} />}
+          >
             <Ellipsis />
           </PopoverTrigger>
           <PopoverContent align="end" className="max-w-[calc(100vw-2rem)]">
-            <PopoverTitle>Gateway tools</PopoverTitle>
+            <PopoverTitle>{t("Gateway tools")}</PopoverTitle>
+            <LanguageSelector />
             <ViewSwitcher />
             {showWorkerSwitch && <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />}
             <div className="flex flex-wrap items-center gap-2">

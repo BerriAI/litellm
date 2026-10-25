@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { CircleHelp } from "lucide-react";
 import React, { useEffect, useId } from "react";
 import {
@@ -128,15 +129,17 @@ const SKIP_MESSAGE_ITEMS = [
 ];
 
 export const SkipMessageSelect: React.FC<{ control: GuardrailFieldControlProps }> = ({ control }) => {
+  const { t } = useLanguage();
   const { id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy } = control;
+  const items = SKIP_MESSAGE_ITEMS.map((item) => ({ ...item, label: t(item.label) }));
 
   return (
-    <Select items={SKIP_MESSAGE_ITEMS} value={asText(value) || null} onValueChange={onChange}>
+    <Select items={items} value={asText(value) || null} onValueChange={onChange}>
       <SelectTrigger id={id} aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy} className="w-full">
-        <SelectValue placeholder="Select an option" />
+        <SelectValue placeholder={t("Select an option")} />
       </SelectTrigger>
       <SelectContent>
-        {SKIP_MESSAGE_ITEMS.map((item) => (
+        {items.map((item) => (
           <SelectItem key={item.value} value={item.value}>
             {item.label}
           </SelectItem>
@@ -150,8 +153,12 @@ export const LoggingOnlyScopeSelect: React.FC<{
   control: GuardrailFieldControlProps;
   directionalScopeSupported: boolean;
 }> = ({ control, directionalScopeSupported }) => {
+  const { t } = useLanguage();
   const { id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy } = control;
-  const items = getLoggingOnlyScopeOptions(directionalScopeSupported);
+  const items = getLoggingOnlyScopeOptions(directionalScopeSupported).map((item) => ({
+    ...item,
+    label: t(item.label),
+  }));
 
   useEffect(() => {
     const currentChoice = isLoggingOnlyScopeChoice(value) ? value : "default";
@@ -162,7 +169,7 @@ export const LoggingOnlyScopeSelect: React.FC<{
   return (
     <Select items={items} value={asText(value) || "default"} onValueChange={onChange}>
       <SelectTrigger id={id} aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy} className="w-full">
-        <SelectValue placeholder="Select an option" />
+        <SelectValue placeholder={t("Select an option")} />
       </SelectTrigger>
       <SelectContent>
         {items.map((item) => (
@@ -180,6 +187,7 @@ export const LoggingOnlyScopeField: React.FC<{
   mode: unknown;
   directionalScopeSupported: boolean;
 }> = ({ control, mode, directionalScopeSupported }) => {
+  const { t } = useLanguage();
   const scopeChoice = useWatch({ control, name: "logging_only_scope_choice" });
   const continueDisabled = scopeChoice === "input" || scopeChoice === "output";
   if (!modeIncludesLoggingOnly(mode)) return null;
@@ -190,8 +198,10 @@ export const LoggingOnlyScopeField: React.FC<{
         control={control}
         name="logging_only_scope_choice"
         label={labelWithHint(
-          "Logging only scope",
-          "Which direction a logging_only scan observes. Observe-only scans never block; pre_call and post_call on this guardrail still block.",
+          t("Logging only scope"),
+          t(
+            "Which direction a logging_only scan observes. Observe-only scans never block; pre_call and post_call on this guardrail still block.",
+          ),
         )}
       >
         {(fieldControl) => (
@@ -202,8 +212,10 @@ export const LoggingOnlyScopeField: React.FC<{
         control={control}
         name="logging_only_continue_on_input_failure"
         label={labelWithHint(
-          "Continue observing the response after a flagged request",
-          "When on, a flagged or failing request scan is logged and the response is still scanned, so both verdicts land.",
+          t("Continue observing the response after a flagged request"),
+          t(
+            "When on, a flagged or failing request scan is logged and the response is still scanned, so both verdicts land.",
+          ),
         )}
       >
         {(fieldControl) => (
@@ -214,7 +226,7 @@ export const LoggingOnlyScopeField: React.FC<{
             onCheckedChange={fieldControl.onChange}
             aria-invalid={fieldControl["aria-invalid"]}
             aria-describedby={fieldControl["aria-describedby"]}
-            aria-label="Continue observing the response after a flagged request"
+            aria-label={t("Continue observing the response after a flagged request")}
           />
         )}
       </GuardrailField>

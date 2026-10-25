@@ -1,3 +1,5 @@
+import { useLanguage } from "@/contexts/LanguageContext";
+import type { Translate } from "@/i18n/language";
 import React, { useState, useMemo } from "react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import PresidioDetectedEntities from "./PresidioDetectedEntities";
@@ -115,10 +117,12 @@ const modeMatches = (mode: GuardrailInformation["guardrail_mode"], target: strin
   return false;
 };
 
-const formatMode = (mode: GuardrailInformation["guardrail_mode"]): string => {
+const formatMode = (mode: GuardrailInformation["guardrail_mode"], t: Translate): string => {
   const s = resolveMode(mode);
   if (s == null || s === "") return "—";
-  return s.replace(/_/g, "-").toUpperCase();
+  const display = s.replace(/_/g, "-").toUpperCase();
+  // 仅翻译支持的固定阶段，自定义模式仍保留服务端名称。
+  return ["pre_call", "during_call", "post_call", "logging_only"].includes(s) ? t(display) : display;
 };
 
 const formatDurationMs = (seconds: number | null): string => {
@@ -286,19 +290,23 @@ const DownloadIcon = () => (
 // ── Sub-components ──────────────────────────────────────────────────────────
 
 const MatchDetailsTable = ({ matchDetails }: { matchDetails: MatchDetail[] }) => {
+  const { t } = useLanguage();
   if (!matchDetails || matchDetails.length === 0) return null;
 
   return (
     <div className="mt-3">
-      <h5 className="text-sm font-medium mb-2 text-foreground">Match Details ({matchDetails.length})</h5>
+      <h5 className="text-sm font-medium mb-2 text-foreground">
+        {t("Match Details (")}
+        {matchDetails.length})
+      </h5>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b text-left text-muted-foreground">
-              <th className="pb-2 pr-4 font-medium">Type</th>
-              <th className="pb-2 pr-4 font-medium">Method</th>
-              <th className="pb-2 pr-4 font-medium">Action</th>
-              <th className="pb-2 font-medium">Detail</th>
+              <th className="pb-2 pr-4 font-medium">{t("Type")}</th>
+              <th className="pb-2 pr-4 font-medium">{t("Method")}</th>
+              <th className="pb-2 pr-4 font-medium">{t("Action")}</th>
+              <th className="pb-2 font-medium">{t("Detail")}</th>
             </tr>
           </thead>
           <tbody>
@@ -333,6 +341,7 @@ const MatchDetailsTable = ({ matchDetails }: { matchDetails: MatchDetail[] }) =>
 };
 
 const GenericGuardrailResponse = ({ response }: { response: any }) => {
+  const { t } = useLanguage();
   const [showRaw, setShowRaw] = useState(false);
   return (
     <div className="mt-3">
@@ -343,7 +352,7 @@ const GenericGuardrailResponse = ({ response }: { response: any }) => {
         >
           <div className="flex items-center">
             <ChevronIcon expanded={showRaw} />
-            <h5 className="font-medium text-sm ml-1">Raw Guardrail Response</h5>
+            <h5 className="font-medium text-sm ml-1">{t("Raw Guardrail Response")}</h5>
           </div>
         </div>
         {showRaw && (
@@ -382,6 +391,7 @@ const orderWithinPhase = (group: GuardrailInformation[]): GuardrailInformation[]
 };
 
 const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
+  const { t } = useLanguage();
   const sorted = useMemo(() => entries.filter(belongsOnLifecycle), [entries]);
 
   const timeline = useMemo(() => {
@@ -394,7 +404,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
     const items: TimelineEntry[] = [];
 
     // Request received
-    items.push({ type: "request", label: "Request received", offsetMs: baseTime === null ? null : 0 });
+    items.push({ type: "request", label: t("Request received"), offsetMs: baseTime === null ? null : 0 });
 
     // Pre-call guardrails — use modeMatches so array modes (e.g. ["pre_call", "post_call"])
     // place the entry in every matching bucket.
@@ -407,7 +417,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
     for (const e of preCalls) {
       items.push({
         type: "guardrail",
-        label: `Pre-call guardrail: ${getDisplayName(e)}`,
+        label: t("Pre-call guardrail: {name}", { name: getDisplayName(e) }),
         offsetMs: offsetOf(e),
         outcome: getEntryOutcome(e),
       });
@@ -422,7 +432,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
 
     items.push({
       type: "llm",
-      label: "LLM call",
+      label: t("LLM call"),
       offsetMs: llmEndTime === null || baseTime === null ? null : Math.round((llmEndTime - baseTime) * 1000),
     });
 
@@ -430,7 +440,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
     for (const e of duringCalls) {
       items.push({
         type: "guardrail",
-        label: `During-call guardrail: ${getDisplayName(e)}`,
+        label: t("During-call guardrail: {name}", { name: getDisplayName(e) }),
         offsetMs: offsetOf(e),
         outcome: getEntryOutcome(e),
       });
@@ -440,7 +450,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
     for (const e of postCalls) {
       items.push({
         type: "guardrail",
-        label: `Post-call guardrail: ${getDisplayName(e)}`,
+        label: t("Post-call guardrail: {name}", { name: getDisplayName(e) }),
         offsetMs: offsetOf(e),
         outcome: getEntryOutcome(e),
       });
@@ -449,14 +459,16 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
     // Response returned
     const maxEnd = timed.length > 0 ? Math.max(...timed.map((e) => e.end_time)) : null;
     const responseOffsetMs = maxEnd === null || baseTime === null ? null : Math.round((maxEnd - baseTime) * 1000) + 1;
-    items.push({ type: "response", label: "Response returned", offsetMs: responseOffsetMs });
+    items.push({ type: "response", label: t("Response returned"), offsetMs: responseOffsetMs });
 
     return items;
-  }, [sorted]);
+  }, [sorted, t]);
 
   return (
     <div>
-      <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-4">Request Lifecycle</h4>
+      <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-4">
+        {t("Request Lifecycle")}
+      </h4>
       <div className="relative">
         {timeline.map((item, idx) => (
           <div key={idx} data-testid="lifecycle-row" className="flex items-start gap-3 relative">
@@ -484,7 +496,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
                   <span
                     className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${OUTCOME_BADGE_CLASS[item.outcome]}`}
                   >
-                    {OUTCOME_LABEL[item.outcome]}
+                    {t(OUTCOME_LABEL[item.outcome])}
                   </span>
                 )}
                 <span className="text-xs text-muted-foreground font-mono ml-auto shrink-0">
@@ -509,12 +521,13 @@ const formatGuardrailCost = (cost: number): string => {
 };
 
 const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
+  const { t } = useLanguage();
   const [expanded, setExpanded] = useState(false);
   const outcome = getEntryOutcome(entry);
   const totalMasked = getTotalMasked(entry);
   const displayName = getDisplayName(entry);
   const durationStr = formatDurationMs(entry.duration);
-  const modeStr = formatMode(entry.guardrail_mode);
+  const modeStr = formatMode(entry.guardrail_mode, t);
   const riskScore = getRiskScore(entry);
   const textRecords = entry.guardrail_usage?.["text_records"];
 
@@ -532,9 +545,9 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
   // Match count string: "X/Y matched" or "X matched"
   const matchCountStr =
     entry.patterns_checked != null
-      ? `${totalMasked}/${entry.patterns_checked} matched`
+      ? t("{count}/{total} matched", { count: totalMasked, total: entry.patterns_checked })
       : totalMasked > 0
-        ? `${totalMasked} matched`
+        ? t("{count} matched", { count: totalMasked })
         : null;
 
   return (
@@ -560,7 +573,7 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
           <span
             className={`px-2 py-0.5 rounded text-[11px] font-semibold uppercase shrink-0 ${OUTCOME_BADGE_CLASS[outcome]}`}
           >
-            {OUTCOME_LABEL[outcome]}
+            {t(OUTCOME_LABEL[outcome])}
           </span>
 
           {matchCountStr && (
@@ -577,7 +590,8 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
 
           {entry.confidence_score != null && (
             <span className="px-2 py-0.5 bg-muted text-muted-foreground border border-border rounded-sm text-[11px] font-medium shrink-0">
-              {(entry.confidence_score * 100).toFixed(0)}% conf
+              {(entry.confidence_score * 100).toFixed(0)}
+              {t("% conf")}
             </span>
           )}
 
@@ -591,16 +605,19 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
                     />
                   }
                 >
-                  Risk {riskScore}/10
+                  {t("Risk")} {riskScore}/10
                 </TooltipTrigger>
-                <TooltipContent>{`Risk score: ${riskScore}/10`}</TooltipContent>
+                <TooltipContent>{t("Risk score: {value1}/10", { value1: String(riskScore) })}</TooltipContent>
               </Tooltip>
             </TooltipProvider>
           )}
 
           {textRecords != null && (
             <span className="px-2 py-0.5 bg-muted text-muted-foreground border border-border rounded-sm text-[11px] font-medium shrink-0">
-              {textRecords.toLocaleString()} text record{textRecords === 1 ? "" : "s"}
+              {/* 完整句子承担单复数，避免中文文案后残留英文 s。 */}
+              {t(textRecords === 1 ? "{count} text record" : "{count} text records", {
+                count: textRecords.toLocaleString(),
+              })}
             </span>
           )}
 
@@ -616,8 +633,8 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
                 </TooltipTrigger>
                 <TooltipContent>
                   {entry.guardrail_cost_in_spend === false
-                    ? "Estimated guardrail cost (reported only; not counted against spend or budgets)"
-                    : "Guardrail cost"}
+                    ? t("Estimated guardrail cost (reported only; not counted against spend or budgets)")
+                    : t("Guardrail cost")}
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -642,28 +659,28 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
           {/* Classification details for llm-judge */}
           {entry.classification && (
             <div className="mb-3 bg-muted rounded-lg p-3 space-y-1">
-              <h5 className="text-sm font-medium text-foreground mb-2">Classification</h5>
+              <h5 className="text-sm font-medium text-foreground mb-2">{t("Classification")}</h5>
               {entry.classification.category && (
                 <div className="flex text-sm">
-                  <span className="font-medium w-1/3 text-muted-foreground">Category:</span>
+                  <span className="font-medium w-1/3 text-muted-foreground">{t("Category:")}</span>
                   <span>{entry.classification.category}</span>
                 </div>
               )}
               {entry.classification.article_reference && (
                 <div className="flex text-sm">
-                  <span className="font-medium w-1/3 text-muted-foreground">Reference:</span>
+                  <span className="font-medium w-1/3 text-muted-foreground">{t("Reference:")}</span>
                   <span className="font-mono">{entry.classification.article_reference}</span>
                 </div>
               )}
               {entry.classification.confidence != null && (
                 <div className="flex text-sm">
-                  <span className="font-medium w-1/3 text-muted-foreground">Confidence:</span>
+                  <span className="font-medium w-1/3 text-muted-foreground">{t("Confidence:")}</span>
                   <span>{(entry.classification.confidence * 100).toFixed(0)}%</span>
                 </div>
               )}
               {entry.classification.reason && (
                 <div className="flex text-sm">
-                  <span className="font-medium w-1/3 text-muted-foreground">Reason:</span>
+                  <span className="font-medium w-1/3 text-muted-foreground">{t("Reason:")}</span>
                   <span>{entry.classification.reason}</span>
                 </div>
               )}
@@ -678,7 +695,7 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
           {/* Masked entity summary */}
           {totalMasked > 0 && (
             <div className="mt-3">
-              <h5 className="text-sm font-medium text-foreground mb-2">Masked Entities</h5>
+              <h5 className="text-sm font-medium text-foreground mb-2">{t("Masked Entities")}</h5>
               <div className="flex flex-wrap gap-2">
                 {Object.entries(entry.masked_entity_count || {}).map(([entityType, count]) => (
                   <span key={entityType} className="px-2 py-1 bg-info/10 text-info rounded-sm text-xs font-medium">
@@ -721,6 +738,7 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
 // ── Main Component ──────────────────────────────────────────────────────────
 
 const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) => {
+  const { t } = useLanguage();
   const guardrailEntries = useMemo(() => {
     return Array.isArray(data)
       ? data.filter((entry): entry is GuardrailInformation => Boolean(entry))
@@ -763,10 +781,12 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
         <div className="flex items-center gap-4">
           <ShieldIcon />
           <div>
-            <h3 className="text-lg font-semibold text-foreground">Guardrails &amp; Policy Compliance</h3>
+            <h3 className="text-lg font-semibold text-foreground">{t("Guardrails & Policy Compliance")}</h3>
             <div className="flex items-center gap-2 mt-0.5">
               <span className="text-sm text-muted-foreground">
-                {evaluatedCount} guardrail{evaluatedCount !== 1 ? "s" : ""} evaluated
+                {t(evaluatedCount === 1 ? "{count} guardrail evaluated" : "{count} guardrails evaluated", {
+                  count: evaluatedCount,
+                })}
               </span>
               <span className="text-muted-foreground">|</span>
               <span
@@ -783,20 +803,20 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
                     />
                   </svg>
                 ) : null}
-                {passedCount} Passed
+                {passedCount} {t("Passed")}
               </span>
               {flaggedCount > 0 && (
                 <span
                   className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${OUTCOME_BADGE_CLASS.flagged}`}
                 >
-                  {flaggedCount} Flagged
+                  {flaggedCount} {t("Flagged")}
                 </span>
               )}
               {notRunCount > 0 && (
                 <span
                   className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${OUTCOME_BADGE_CLASS.not_run}`}
                 >
-                  {notRunCount} Not run
+                  {notRunCount} {t("Not run")}
                 </span>
               )}
             </div>
@@ -805,7 +825,10 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
 
         <div className="flex items-center gap-6">
           <div className="text-right">
-            <div className="text-sm font-medium text-foreground">Total: {totalOverheadMs}ms overhead</div>
+            <div className="text-sm font-medium text-foreground">
+              {t("Total:")} {totalOverheadMs}
+              {t("ms overhead")}
+            </div>
           </div>
 
           <button
@@ -813,7 +836,7 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
             className="inline-flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium text-foreground bg-card hover:bg-accent transition-colors"
           >
             <DownloadIcon />
-            Export Compliance Log
+            {t("Export Compliance Log")}
           </button>
         </div>
       </div>
@@ -835,7 +858,7 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
         {/* Evaluation Details */}
         <div className="px-6 py-5">
           <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-4">
-            Evaluation Details
+            {t("Evaluation Details")}
           </h4>
           <div className="space-y-3">
             {guardrailEntries.map((entry, index) => (

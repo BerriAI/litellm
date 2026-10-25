@@ -5,14 +5,14 @@ import { useBlogPosts, type BlogPost } from "@/app/(dashboard)/hooks/blogPosts/u
 import { useDisableBlogPosts } from "@/app/(dashboard)/hooks/useDisableBlogPosts";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 export const BLOG_URL = "https://docs.litellm.ai/blog";
 const MAX_ROWS = 6;
 const DAY_MS = 86_400_000;
 
-const relativeTime = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
-
-export const formatRelativeDate = (isoDate: string, now: Date = new Date()): string => {
+export const formatRelativeDate = (isoDate: string, now: Date = new Date(), language = "en"): string => {
+  const relativeTime = new Intl.RelativeTimeFormat(language, { numeric: "auto" });
   const published = new Date(`${isoDate}T00:00:00`);
   if (Number.isNaN(published.getTime())) return isoDate;
   const days = Math.max(0, Math.round((now.getTime() - published.getTime()) / DAY_MS));
@@ -33,6 +33,7 @@ const Row = ({ children }: { children: React.ReactNode }) => (
 
 /** Latest posts from the LiteLLM blog RSS feed, via /public/litellm_blog_posts, one row per post. */
 export default function UpdatesFeed({ className }: { className?: string }) {
+  const { t, language } = useLanguage();
   const disabled = useDisableBlogPosts();
   const { data, isLoading, isError, refetch } = useBlogPosts();
   if (disabled) return null;
@@ -43,10 +44,10 @@ export default function UpdatesFeed({ className }: { className?: string }) {
     <section aria-labelledby="home-updates-title" data-testid="home-updates" className={className}>
       <div className="flex items-center justify-between gap-2">
         <h2 id="home-updates-title" className="text-lg font-semibold">
-          Updates
+          {t("Updates")}
         </h2>
         <Button variant="ghost" size="sm" render={<a href={BLOG_URL} target="_blank" rel="noopener noreferrer" />}>
-          View all
+          {t("View all")}
           <ArrowUpRight className="size-3.5" />
         </Button>
       </div>
@@ -63,18 +64,20 @@ export default function UpdatesFeed({ className }: { className?: string }) {
       )}
       {isError && (
         <div className="flex items-center justify-between gap-2 py-3 text-sm">
-          <span className="text-destructive">Failed to load posts</span>
+          <span className="text-destructive">{t("Failed to load posts")}</span>
           <Button variant="outline" size="sm" onClick={() => void refetch()}>
-            Retry
+            {t("Retry")}
           </Button>
         </div>
       )}
-      {data && posts.length === 0 && <p className="py-3 text-sm text-muted-foreground">No posts yet</p>}
+      {data && posts.length === 0 && <p className="py-3 text-sm text-muted-foreground">{t("No posts yet")}</p>}
       {posts.length > 0 && (
         <ol className="m-0 list-none p-0">
           {posts.map((post: BlogPost) => (
             <Row key={post.url}>
-              <span className="text-xs text-muted-foreground">{formatRelativeDate(post.date)}</span>
+              <span className="text-xs text-muted-foreground">
+                {formatRelativeDate(post.date, new Date(), language)}
+              </span>
               <a
                 href={post.url}
                 target="_blank"

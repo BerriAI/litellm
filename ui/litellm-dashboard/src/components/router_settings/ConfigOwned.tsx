@@ -2,6 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Lock } from "lucide-react";
 import React from "react";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 export type RouterSettingSource = "config" | "db" | "env" | "default" | "unset";
 export type RouterSettingsSource = { [key: string]: RouterSettingSource };
@@ -14,6 +15,7 @@ export function isOwnedByConfig(source: RouterSettingsSource, key: string): bool
 }
 
 export function ConfigOwnedBadge(): React.ReactElement {
+  const { t } = useLanguage();
   return (
     <Tooltip>
       <TooltipTrigger
@@ -22,7 +24,7 @@ export function ConfigOwnedBadge(): React.ReactElement {
         <Lock aria-hidden />
         config.yaml
       </TooltipTrigger>
-      <TooltipContent>{CONFIG_OWNED_HINT}</TooltipContent>
+      <TooltipContent>{t(CONFIG_OWNED_HINT)}</TooltipContent>
     </Tooltip>
   );
 }

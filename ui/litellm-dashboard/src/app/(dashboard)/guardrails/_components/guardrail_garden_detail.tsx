@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,7 @@ interface GuardrailDetailViewProps {
 }
 
 const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack, accessToken, onGuardrailCreated }) => {
+  const { t } = useLanguage();
   const [isAddFormVisible, setIsAddFormVisible] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
 
@@ -71,7 +73,7 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
       {/* Action buttons — outlined style like Vertex */}
       <div className="mb-8 flex gap-2.5">
         <Button variant="outline" className="rounded-full" onClick={() => setIsAddFormVisible(true)}>
-          Create Guardrail
+          {t("Create Guardrail")}
         </Button>
       </div>
 
@@ -100,16 +102,16 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
         <div className="flex gap-16">
           {/* Left column — overview + details table */}
           <div className="min-w-0 flex-1">
-            <h2 className="m-0 mb-3 text-lg font-normal text-foreground">Overview</h2>
+            <h2 className="m-0 mb-3 text-lg font-normal text-foreground">{t("Overview")}</h2>
             <p className="m-0 mb-8 text-sm leading-[1.7] text-foreground">{card.description}</p>
 
-            <h2 className="m-0 mb-1 text-lg font-normal text-foreground">Guardrail Details</h2>
-            <p className="m-0 mb-4 text-[13px] text-muted-foreground">Details are as follows</p>
+            <h2 className="m-0 mb-1 text-lg font-normal text-foreground">{t("Guardrail Details")}</h2>
+            <p className="m-0 mb-4 text-[13px] text-muted-foreground">{t("Details are as follows")}</p>
 
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr className="border-b border-border">
-                  <th className="w-50 py-3 text-left font-medium text-muted-foreground">Property</th>
+                  <th className="w-50 py-3 text-left font-medium text-muted-foreground">{t("Property")}</th>
                   <th className="py-3 text-left font-medium text-muted-foreground">{card.name}</th>
                 </tr>
               </thead>
@@ -128,20 +130,20 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
           <div className="w-60 shrink-0">
             {/* Guardrail ID */}
             <div className="mb-7">
-              <div className="mb-1 text-xs text-muted-foreground">Guardrail ID</div>
+              <div className="mb-1 text-xs text-muted-foreground">{t("Guardrail ID")}</div>
               <div className="break-all text-[13px] text-foreground">litellm/{card.id}</div>
             </div>
 
             {/* Type */}
             <div className="mb-7">
-              <div className="mb-1 text-xs text-muted-foreground">Type</div>
+              <div className="mb-1 text-xs text-muted-foreground">{t("Type")}</div>
               <div className="text-[13px] text-foreground">{CATEGORY_LABELS[card.category].type}</div>
             </div>
 
             {/* Tags — pill style like Vertex */}
             {card.tags.length > 0 && (
               <div className="mb-7">
-                <div className="mb-2 text-xs text-muted-foreground">Tags</div>
+                <div className="mb-2 text-xs text-muted-foreground">{t("Tags")}</div>
                 <div className="flex flex-wrap gap-1.5">
                   {card.tags.map((tag) => (
                     <span
@@ -160,12 +162,12 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
 
       {activeTab === "eval" && (
         <div>
-          <h2 className="m-0 mb-4 text-lg font-normal text-foreground">Eval Results</h2>
+          <h2 className="m-0 mb-4 text-lg font-normal text-foreground">{t("Eval Results")}</h2>
           <table className="w-full max-w-[560px] border-collapse text-sm">
             <thead>
               <tr className="border-b border-border bg-muted">
-                <th className="px-4 py-3 text-left font-medium text-muted-foreground">Metric</th>
-                <th className="px-4 py-3 text-left font-medium text-muted-foreground">Value</th>
+                <th className="px-4 py-3 text-left font-medium text-muted-foreground">{t("Metric")}</th>
+                <th className="px-4 py-3 text-left font-medium text-muted-foreground">{t("Value")}</th>
               </tr>
             </thead>
             <tbody>

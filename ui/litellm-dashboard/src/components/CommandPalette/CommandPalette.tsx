@@ -14,6 +14,7 @@ import type { KeyResponse } from "@/components/key_team_helpers/key_list";
 import { CommandPaletteResultRow, type CommandPaletteRowData } from "./CommandPaletteResultRow";
 import { useVisibleMenuGroups } from "./useVisibleMenuGroups";
 import { flattenNavItems, matchNavItems, paletteScopeForRoute, type PaletteNavItem, type PaletteScope } from "./utils";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 type PaletteEntry = CommandPaletteRowData &
   (
@@ -39,6 +40,7 @@ export function CommandPalette({ open, setOpen }: { open: boolean; setOpen: (ope
 }
 
 function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void }) {
+  const { t } = useLanguage();
   const pathname = usePathname();
   const router = useRouter();
   const [query, setQuery] = useState("");
@@ -70,8 +72,18 @@ function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void })
   const visibleGroups = useVisibleMenuGroups();
   const navItems = useMemo(() => flattenNavItems(visibleGroups), [visibleGroups]);
   const navMatches = useMemo(
-    () => (scope === "global" || trimmedQuery ? matchNavItems(navItems, query) : []),
-    [navItems, query, scope, trimmedQuery],
+    // 同时匹配英文名称和当前语言，不改变导航路由或用户数据
+    () => {
+      if (scope !== "global" && !trimmedQuery) return [];
+      const localized = navItems.map((item) => ({ ...item, label: t(item.label), section: t(item.section) }));
+      const matches = [...matchNavItems(localized, query), ...matchNavItems(navItems, query)];
+      return [
+        ...new Map(
+          matches.map((item) => [item.key, { ...item, label: t(item.label), section: t(item.section) }]),
+        ).values(),
+      ];
+    },
+    [navItems, query, scope, trimmedQuery, t],
   );
   const groups = useMemo<PaletteGroup[]>(() => {
     const pages: PaletteEntry[] = navMatches.map((page) => ({
@@ -85,18 +97,22 @@ function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void })
     }));
 
     if (scope === "global") {
-      const searchKeysAction = !trimmedQuery || "search virtual keys".includes(trimmedQuery.toLowerCase());
+      const searchKeysAction =
+        !trimmedQuery ||
+        ["Search virtual keys", t("Search virtual keys")].some((label) =>
+          label.toLowerCase().includes(trimmedQuery.toLowerCase()),
+        );
       return [
         ...(searchKeysAction
           ? [
               {
-                label: "Actions",
+                label: t("Actions"),
                 entries: [
                   {
                     id: "action:search-keys",
                     kind: "search-keys" as const,
-                    title: "Search virtual keys",
-                    subtitle: "Find a key by alias or ID",
+                    title: t("Search virtual keys"),
+                    subtitle: t("Find a key by alias or ID"),
                     icon: <KeyRound className="size-4" />,
                     typeLabel: "Action" as const,
                   },
@@ -104,7 +120,7 @@ function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void })
               },
             ]
           : []),
-        ...(pages.length > 0 ? [{ label: "Pages", entries: pages }] : []),
+        ...(pages.length > 0 ? [{ label: t("Pages"), entries: pages }] : []),
       ];
     }
 
@@ -121,7 +137,7 @@ function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void })
       return {
         id: `key:${key.token}`,
         kind: "key",
-        title: key.key_alias || "Unnamed key",
+        title: key.key_alias || t("Unnamed key"),
         subtitle,
         icon: <KeyRound className="size-4" />,
         typeLabel: "Key",
@@ -129,9 +145,9 @@ function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void })
       };
     });
     const keysGroup: PaletteGroup = {
-      label: trimmedQuery ? "Keys" : "Recent keys",
+      label: t(trimmedQuery ? "Keys" : "Recent keys"),
       entries: keyEntries,
-      emptyMessage: trimmedQuery ? `No keys match “${trimmedQuery}”` : "No recent keys",
+      emptyMessage: trimmedQuery ? t("No keys match “{query}”", { query: trimmedQuery }) : t("No recent keys"),
       isLoading: isLoadingKeys,
     };
 
@@ -140,18 +156,18 @@ function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void })
     const filterEntry: PaletteEntry = {
       id: "action:filter-keys",
       kind: "filter",
-      title: `Filter the keys table for “${trimmedQuery}”`,
-      subtitle: "Open Virtual Keys with this search applied",
+      title: t("Filter the keys table for “{query}”", { query: trimmedQuery }),
+      subtitle: t("Open Virtual Keys with this search applied"),
       icon: <Search className="size-4" />,
       typeLabel: "Action",
     };
 
     return [
       keysGroup,
-      { label: "Actions", entries: [filterEntry] },
-      ...(pages.length > 0 ? [{ label: "Pages", entries: pages }] : []),
+      { label: t("Actions"), entries: [filterEntry] },
+      ...(pages.length > 0 ? [{ label: t("Pages"), entries: pages }] : []),
     ];
-  }, [isLoadingKeys, keyResults.data?.keys, navMatches, scope, teamAliases, trimmedQuery]);
+  }, [isLoadingKeys, keyResults.data?.keys, navMatches, scope, teamAliases, trimmedQuery, t]);
   const selectableEntries = useMemo(() => groups.flatMap((group) => group.entries), [groups]);
   const activeEntryId = activeSelection?.query === query && activeSelection.scope === scope ? activeSelection.id : null;
   const selectedIndex = selectableEntries.findIndex((entry) => entry.id === activeEntryId);
@@ -214,7 +230,7 @@ function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void })
       return (
         <div className="flex h-20 items-center justify-center gap-2 text-sm text-muted-foreground">
           <LoaderCircle className="size-4 animate-spin" />
-          Searching…
+          {t("Searching…")}
         </div>
       );
     }
@@ -242,26 +258,26 @@ function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void })
         overlayClassName="bg-black/35 backdrop-blur-sm"
         className="top-[15vh] max-h-[70vh] translate-y-0 gap-0 overflow-hidden rounded-xl border border-border p-0 shadow-2xl sm:max-w-[640px]"
       >
-        <DialogTitle className="sr-only">Command palette</DialogTitle>
+        <DialogTitle className="sr-only">{t("Command palette")}</DialogTitle>
         <div className="flex h-14 items-center gap-3 border-b border-border px-4">
           <Search className="size-4 shrink-0 text-muted-foreground" />
           {scope === "keys" && (
             <span className="flex shrink-0 items-center gap-1.5 rounded-md bg-muted px-2 py-1 text-xs font-medium">
               <KeyRound className="size-3.5" />
-              Virtual Keys
+              {t("Virtual Keys")}
             </span>
           )}
           <input
             autoFocus
             type="text"
             role="combobox"
-            aria-label="Search"
+            aria-label={t("Search")}
             aria-expanded="true"
             aria-controls="command-palette-results"
             aria-activedescendant={activeOptionId}
             aria-autocomplete="list"
             className="h-full min-w-0 flex-1 border-0 bg-transparent text-[15px] outline-none placeholder:text-muted-foreground focus:ring-0"
-            placeholder={scope === "keys" ? "Search keys by alias or ID…" : "Search pages and actions…"}
+            placeholder={t(scope === "keys" ? "Search keys by alias or ID…" : "Search pages and actions…")}
             value={query}
             onChange={(event) => {
               setQuery(event.currentTarget.value);
@@ -272,11 +288,13 @@ function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void })
         <div id="command-palette-results" role="listbox" className="max-h-[400px] overflow-y-auto p-2">
           {hasKeyError && (
             <div className="flex h-20 items-center justify-center text-sm text-muted-foreground">
-              Unable to search keys
+              {t("Unable to search keys")}
             </div>
           )}
           {!hasKeyError && scope === "global" && trimmedQuery && groups.length === 0 && (
-            <div className="px-2 py-3 text-sm text-muted-foreground">No results for “{trimmedQuery}”</div>
+            <div className="px-2 py-3 text-sm text-muted-foreground">
+              {t("No results for “{query}”", { query: trimmedQuery })}
+            </div>
           )}
           {!hasKeyError &&
             groups.map((group, groupIndex) => {
@@ -299,17 +317,17 @@ function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void })
         <div className="flex h-10 items-center justify-between border-t border-border bg-muted/30 px-3 text-xs text-muted-foreground">
           <div className="flex items-center gap-2">
             <span className="font-medium text-foreground">LiteLLM</span>
-            <span>{scope === "keys" ? "Virtual Keys" : "All pages"}</span>
+            <span>{t(scope === "keys" ? "Virtual Keys" : "All pages")}</span>
           </div>
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1">
-              <kbd className={shortcutChipClass}>↵</kbd> Open
+              <kbd className={shortcutChipClass}>↵</kbd> {t("Open")}
             </span>
             <span className="flex items-center gap-1">
-              <kbd className={shortcutChipClass}>↑↓</kbd> Navigate
+              <kbd className={shortcutChipClass}>↑↓</kbd> {t("Navigate")}
             </span>
             <span className="flex items-center gap-1">
-              <kbd className={shortcutChipClass}>esc</kbd> Close
+              <kbd className={shortcutChipClass}>esc</kbd> {t("Close")}
             </span>
           </div>
         </div>

@@ -8,6 +8,7 @@ import { clearTokenCookies, storeLoginToken } from "@/utils/cookieUtils";
 import { OnboardingLoadingView } from "./OnboardingLoadingView";
 import { OnboardingErrorView } from "./OnboardingErrorView";
 import { OnboardingFormBody } from "./OnboardingFormBody";
+import TranslatedMessage from "@/components/shared/TranslatedMessage";
 
 type OnboardingFormProps = {
   variant: "signup" | "reset_password";
@@ -16,7 +17,8 @@ type OnboardingFormProps = {
 export function OnboardingForm({ variant }: OnboardingFormProps) {
   const searchParams = useSearchParams()!;
   const inviteId = searchParams.get("invitation_id");
-  const [claimError, setClaimError] = React.useState<string | null>(null);
+  // 本地提示延迟到渲染时翻译，服务端错误仍按原文显示。
+  const [claimError, setClaimError] = React.useState<React.ReactNode>(null);
 
   const {
     data: credentialsData,
@@ -41,7 +43,7 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
       {
         onSuccess: (data: { token?: string }) => {
           if (!data?.token) {
-            setClaimError("Failed to start session. Please try again.");
+            setClaimError(<TranslatedMessage message="Failed to start session. Please try again." />);
             return;
           }
           // Invite signup is a principal-change boundary — the prior admin's
@@ -56,7 +58,7 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
           );
         },
         onError: (error: Error) => {
-          setClaimError(error.message || "Failed to submit. Please try again.");
+          setClaimError(error.message || <TranslatedMessage message="Failed to submit. Please try again." />);
         },
       },
     );

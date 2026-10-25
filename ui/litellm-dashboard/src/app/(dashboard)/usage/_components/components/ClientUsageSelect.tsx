@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { parseUsageClient, UsageClient } from "./overview/agentCatalog";
 
@@ -13,10 +14,11 @@ export default function ClientUsageSelect({
   value: UsageClient | null;
   onChange: (client: UsageClient | null) => void;
 }) {
+  const { t } = useLanguage();
   return (
     <SearchSelect
-      aria-label="View client usage"
-      placeholder="View client usage"
+      aria-label={t("View client usage")}
+      placeholder={t("View client usage")}
       value={value}
       options={CLIENT_OPTIONS}
       onValueChange={(client) => onChange(parseUsageClient(client))}

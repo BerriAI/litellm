@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import PluginSettings from "./PluginSettings";
+import { LanguageProvider } from "@/contexts/LanguageContext";
+import LanguageSelector from "@/components/LanguageSelector";
 
 const { getConfigFieldSettingMock, updateConfigFieldSettingMock } = vi.hoisted(() => ({
   getConfigFieldSettingMock: vi.fn(),
@@ -26,7 +28,61 @@ const savedPayload = () => updateConfigFieldSettingMock.mock.calls[0];
 describe("PluginSettings config payload", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     updateConfigFieldSettingMock.mockResolvedValue({});
+  });
+
+  it("插件字段错误切换语言时即时更新并保留草稿和请求次数", async () => {
+    getConfigFieldSettingMock.mockResolvedValue({ field_value: [] });
+    render(
+      <LanguageProvider defaultLanguage="en" userId="plugin-errors" storageScope="management">
+        <LanguageSelector />
+        <PluginSettings />
+      </LanguageProvider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Add Plugin" }));
+    fireEvent.change(screen.getByLabelText("Name (identifier)"), { target: { value: "Home" } });
+    fireEvent.change(screen.getByLabelText("Display Name"), { target: { value: "Settings" } });
+    fireEvent.change(screen.getByLabelText("URL"), { target: { value: "invalid" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
+    expect(await screen.findByText("Must be a valid URL")).toBeVisible();
+
+    // 弹窗有焦点隔离，直接切换选择器来验证上下文传播，不关闭表单。
+    fireEvent.change(screen.getByLabelText("Interface language"), { target: { value: "zh-CN" } });
+    expect(await screen.findByText("请输入有效的 URL")).toBeVisible();
+    expect(screen.getByLabelText("名称（标识符）")).toHaveValue("Home");
+    expect(screen.getByLabelText("显示名称")).toHaveValue("Settings");
+    expect(screen.getByLabelText("URL")).toHaveValue("invalid");
+    expect(screen.queryByText("必填")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("界面语言"), { target: { value: "en" } });
+    expect(await screen.findByText("Must be a valid URL")).toBeVisible();
+    expect(getConfigFieldSettingMock).toHaveBeenCalledTimes(1);
+    expect(updateConfigFieldSettingMock).not.toHaveBeenCalled();
+  });
+
+  it("使用中文校验提示，同时保留插件名称、URL 和提交字段", async () => {
+    const user = userEvent.setup();
+    getConfigFieldSettingMock.mockResolvedValue({ field_value: [] });
+    render(
+      <LanguageProvider defaultLanguage="zh-CN" userId="plugin-language" storageScope="management">
+        <PluginSettings />
+      </LanguageProvider>,
+    );
+    await user.click(await screen.findByRole("button", { name: "添加插件" }));
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findAllByText("必填")).toHaveLength(3);
+    expect(updateConfigFieldSettingMock).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("名称（标识符）"), { target: { value: "Home" } });
+    fireEvent.change(screen.getByLabelText("显示名称"), { target: { value: "Settings" } });
+    fireEvent.change(screen.getByLabelText("URL"), { target: { value: "https://plugins.example.com" } });
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(updateConfigFieldSettingMock).toHaveBeenCalledTimes(1));
+    expect(savedPayload()).toStrictEqual([
+      "123",
+      "plugins",
+      [{ name: "Home", display_name: "Settings", url: "https://plugins.example.com", plugin_key: undefined }],
+    ]);
   });
 
   it("sends a new plugin with no plugin_key when the key field is left blank", async () => {

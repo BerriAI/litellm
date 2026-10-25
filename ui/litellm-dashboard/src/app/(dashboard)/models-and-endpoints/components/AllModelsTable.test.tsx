@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ModelData } from "@/components/model_dashboard/types";
 
 import { AllModelsTable } from "./AllModelsTable";
+import { LanguageProvider, useLanguage } from "@/contexts/LanguageContext";
 
 const makeModel = (overrides: Partial<ModelData> = {}): ModelData =>
   ({
@@ -76,6 +77,76 @@ const row = (modelId: string): HTMLElement => {
 };
 
 describe("AllModelsTable", () => {
+  it("创建人单元格翻译日期和本地空值，但不翻译用户名称", () => {
+    render(
+      <LanguageProvider defaultLanguage="zh-CN" userId="models-created" storageScope="models-created-language">
+        <AllModelsTable
+          {...baseProps}
+          data={[
+            makeModel({
+              model_info: {
+                id: "dated",
+                created_by: "Home",
+                created_at: new Date(2026, 6, 7).toISOString(),
+              } as ModelData["model_info"],
+            }),
+            makeModel({ model_info: { id: "missing", created_by: "", created_at: "" } as ModelData["model_info"] }),
+            makeModel({
+              model_info: { id: "config", db_model: false, created_by: "Unknown" } as ModelData["model_info"],
+            }),
+          ]}
+          rowCount={3}
+        />
+      </LanguageProvider>,
+    );
+    expect(within(row("dated")).getByText("Home")).toBeInTheDocument();
+    expect(within(row("dated")).getByText("2026-07-07")).toBeInTheDocument();
+    expect(within(row("missing")).getByText("未知")).toBeInTheDocument();
+    expect(within(row("missing")).getByText("日期未知")).toBeInTheDocument();
+    expect(within(row("config")).getByText("配置文件中定义")).toBeInTheDocument();
+  });
+
+  it("状态筛选的选中值与菜单显示中文，提交值仍为 paused", async () => {
+    const user = userEvent.setup();
+    const onColumnFiltersChange = vi.fn();
+    render(
+      <LanguageProvider defaultLanguage="zh-CN" userId="models-status" storageScope="models-status-language">
+        <AllModelsTable {...baseProps} onColumnFiltersChange={onColumnFiltersChange} />
+      </LanguageProvider>,
+    );
+    await user.click(screen.getByTestId("datatable-filters-trigger"));
+    expect(screen.getByRole("combobox", { name: "按状态筛选" })).toHaveTextContent("全部");
+    await user.click(screen.getByRole("combobox", { name: "按状态筛选" }));
+    await user.click(await screen.findByRole("option", { name: "已暂停" }));
+    expect(screen.getByRole("combobox", { name: "按状态筛选" })).toHaveTextContent("已暂停");
+    await user.click(screen.getByTestId("filter-drawer-apply"));
+    const updater = onColumnFiltersChange.mock.calls.at(-1)?.[0];
+    const next = typeof updater === "function" ? updater([]) : updater;
+    expect(next).toEqual([{ id: "model_info_blocked", value: "paused" }]);
+  });
+
+  it("查看模式的选中值和菜单同步翻译，且保留团队名和协议值", async () => {
+    const user = userEvent.setup();
+    const onViewModeChange = vi.fn();
+    function LanguageSwitch() {
+      const { setPreference } = useLanguage();
+      return <button onClick={() => setPreference("en")}>English</button>;
+    }
+    render(
+      <LanguageProvider defaultLanguage="zh-CN" userId="models-view" storageScope="models-view-language">
+        <LanguageSwitch />
+        <AllModelsTable {...baseProps} selectedTeamValue="team-1" onViewModeChange={onViewModeChange} />
+      </LanguageProvider>,
+    );
+    expect(screen.getByTestId("models-view-select")).toHaveTextContent("当前团队模型");
+    expect(screen.getByTestId("models-team-select")).toHaveTextContent("Engineering");
+    await user.click(screen.getByTestId("models-view-select"));
+    await user.click(await screen.findByRole("option", { name: "所有代理模型" }));
+    expect(onViewModeChange).toHaveBeenCalledWith("all");
+    fireEvent.click(screen.getByRole("button", { name: "English" }));
+    expect(screen.getByTestId("models-view-select")).toHaveTextContent("Current Team Models");
+  });
+
   it("renders the nine design columns and hides Source behind the Columns menu", async () => {
     const user = userEvent.setup();
     render(<AllModelsTable {...baseProps} />);

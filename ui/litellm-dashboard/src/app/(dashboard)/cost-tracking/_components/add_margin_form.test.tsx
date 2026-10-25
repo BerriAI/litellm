@@ -5,6 +5,7 @@ import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event"
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import AddMarginForm from "./add_margin_form";
 import { MarginConfig } from "./types";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 const DEFAULT_PROPS = {
   marginConfig: {} as MarginConfig,
@@ -20,6 +21,20 @@ const DEFAULT_PROPS = {
 };
 
 describe("AddMarginForm", () => {
+  it("汉化字段和全局选项，但保持全局选项提交值", async () => {
+    const user = userEvent.setup();
+    const onProviderChange = vi.fn();
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="zh-CN" userId="margin-test" storageScope="margin-test">
+        <AddMarginForm {...DEFAULT_PROPS} onProviderChange={onProviderChange} />
+      </LanguageProvider>,
+    );
+    expect(screen.getByLabelText("提供商")).toBeInTheDocument();
+    await user.click(screen.getByRole("combobox"));
+    await user.click(await screen.findByText("全局（全部提供商）"));
+    expect(onProviderChange).toHaveBeenCalledWith("global");
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });

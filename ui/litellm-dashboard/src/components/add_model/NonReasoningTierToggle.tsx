@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 
 import { Separator } from "@/components/ui/separator";
@@ -10,6 +11,7 @@ const NonReasoningTierToggle: React.FC<{
   onChange: (value: ComplexityRouterConfigValue) => void;
   available: boolean;
 }> = ({ value, onChange, available }) => {
+  const { t } = useLanguage();
   const handleToggle = (enabled: boolean): void => {
     const { NON_REASONING: existingPool, ...keptTiers } = value.tiers;
     // Turning it off must also release the plan-mode floor, which the backend rejects while it
@@ -33,14 +35,15 @@ const NonReasoningTierToggle: React.FC<{
           checked={value.enable_non_reasoning_tier === true}
           disabled={!available}
           onCheckedChange={handleToggle}
-          aria-label="Add a non-reasoning tier"
+          aria-label={t("Add a non-reasoning tier")}
         />
-        <strong className="font-semibold">Add a non-reasoning tier</strong>
+        <strong className="font-semibold">{t("Add a non-reasoning tier")}</strong>
       </div>
       <span className="block text-xs text-muted-foreground">
-        Adds NON_REASONING below Simple, for operational agent traffic that relays or reformats information rather than
-        reasoning about it. Escalation still moves up out of it when a request needs more.
-        {!available && " Requires the LLM or Jev classification method"}
+        {t(
+          "Adds NON_REASONING below Simple, for operational agent traffic that relays or reformats information rather than reasoning about it. Escalation still moves up out of it when a request needs more.",
+        )}
+        {!available && t(" Requires the LLM or Jev classification method")}
       </span>
     </>
   );

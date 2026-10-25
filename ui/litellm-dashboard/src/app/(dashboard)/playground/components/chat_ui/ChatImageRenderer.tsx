@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import Image from "next/image";
 import { FileText } from "lucide-react";
@@ -9,6 +10,7 @@ interface ChatImageRendererProps {
 }
 
 const ChatImageRenderer: React.FC<ChatImageRendererProps> = ({ message }) => {
+  const { t } = useLanguage();
   if (!shouldShowChatAttachedImage(message)) {
     return null;
   }
@@ -19,7 +21,7 @@ const ChatImageRenderer: React.FC<ChatImageRendererProps> = ({ message }) => {
     <div className="mb-2">
       {isPdf ? (
         <div className="flex h-32 w-64 items-center justify-center rounded-md border border-border bg-destructive/10">
-          <FileText className="size-12 text-destructive" aria-label="PDF attachment" />
+          <FileText className="size-12 text-destructive" aria-label={t("PDF attachment")} />
         </div>
       ) : (
         <Image

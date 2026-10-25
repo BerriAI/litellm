@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { chooseSelectOption } from "@/../tests/test-utils";
 import { UsageViewSelect } from "./UsageViewSelect";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 const openMenu = async (user: ReturnType<typeof userEvent.setup>) => {
   await user.click(screen.getByRole("combobox"));
@@ -18,6 +19,23 @@ describe("UsageViewSelect", () => {
 
   beforeEach(() => {
     mockOnChange.mockClear();
+    localStorage.clear();
+  });
+
+  it("中文菜单保持角色可见性及原始用量路由值", async () => {
+    const user = userEvent.setup();
+    render(
+      <LanguageProvider defaultLanguage="zh-CN" userId="usage-test" storageScope="usage-test">
+        <UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" />
+      </LanguageProvider>,
+    );
+
+    expect(screen.getByRole("heading", { name: "用量" })).toBeInTheDocument();
+    const picker = screen.getByRole("combobox", { name: "选择要查看的用量数据" });
+    await chooseSelectOption(user, picker, /^团队用量/);
+    expect(mockOnChange).toHaveBeenCalledWith("team");
+    await user.click(picker);
+    expect(screen.queryByRole("option", { name: /^组织用量/ })).not.toBeInTheDocument();
   });
 
   it("should render", async () => {

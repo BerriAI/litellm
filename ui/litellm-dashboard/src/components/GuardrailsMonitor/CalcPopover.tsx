@@ -1,9 +1,11 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { CircleHelp } from "lucide-react";
 import React, { type ReactNode } from "react";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import type { MathRow } from "./usageUnits";
 
 export function CalcPopover({ title, formula, children }: { title: string; formula: string; children: ReactNode }) {
+  const { t } = useLanguage();
   return (
     <Popover>
       <PopoverTrigger
@@ -18,7 +20,7 @@ export function CalcPopover({ title, formula, children }: { title: string; formu
         }
       >
         <CircleHelp className="mt-px size-3.5 shrink-0" />
-        How is this calculated?
+        {t("How is this calculated?")}
       </PopoverTrigger>
       <PopoverContent side="bottom" align="start" className="w-auto min-w-72 max-w-md gap-3">
         <PopoverTitle>{title}</PopoverTitle>
@@ -30,6 +32,7 @@ export function CalcPopover({ title, formula, children }: { title: string; formu
 }
 
 export function MathTable({ rows, total }: { rows: readonly MathRow[]; total: string }) {
+  const { t } = useLanguage();
   const width = 1 + Math.max(...rows.map((row) => row.parts.length), 1);
   return (
     <table className="w-full text-xs">
@@ -57,7 +60,7 @@ export function MathTable({ rows, total }: { rows: readonly MathRow[]; total: st
       <tfoot>
         <tr className="border-t border-border font-medium">
           <td className="pt-1.5 pr-3" colSpan={width - 1}>
-            Total
+            {t("Total")}
           </td>
           <td className="pt-1.5 pl-3 text-right whitespace-nowrap tabular-nums">{total}</td>
         </tr>

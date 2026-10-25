@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useQuery } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Download, Users } from "lucide-react";
@@ -9,6 +10,7 @@ import { MoneyCell } from "@/components/shared/table_cells";
 import { Button } from "@/components/ui/button";
 
 import { Panel } from "../overview/Primitives";
+import { englishTranslate, type Translate } from "@/i18n/language";
 
 import {
   buildTeamUserSpendCsv,
@@ -30,41 +32,47 @@ interface TeamUserSpendCardProps {
 
 const QUIET_HEADER = { headerClassName: "font-normal" };
 
-const columns: ColumnDef<TeamUserSpendRow>[] = [
-  { header: "Team", accessorFn: teamLabel, id: "team", meta: QUIET_HEADER, cell: ({ row }) => teamLabel(row.original) },
+const getTeamUserColumns = (t: Translate = englishTranslate): ColumnDef<TeamUserSpendRow>[] => [
   {
-    header: "User",
+    header: t("Team"),
+    accessorFn: teamLabel,
+    id: "team",
+    meta: QUIET_HEADER,
+    cell: ({ row }) => teamLabel(row.original),
+  },
+  {
+    header: t("User"),
     accessorFn: userLabel,
     id: "user",
     meta: QUIET_HEADER,
     cell: ({ row }) => <span className="font-medium text-foreground">{userLabel(row.original)}</span>,
   },
   {
-    header: "Spend",
+    header: t("Spend"),
     accessorKey: "spend",
     meta: { numeric: true, ...QUIET_HEADER },
     cell: ({ row }) => <MoneyCell value={row.original.spend} decimals={4} />,
   },
   {
-    header: "Requests",
+    header: t("Requests"),
     accessorKey: "api_requests",
     meta: { numeric: true, ...QUIET_HEADER },
     cell: ({ row }) => row.original.api_requests.toLocaleString(),
   },
   {
-    header: "Successful",
+    header: t("Successful"),
     accessorKey: "successful_requests",
     meta: { numeric: true, className: "text-success", ...QUIET_HEADER },
     cell: ({ row }) => row.original.successful_requests.toLocaleString(),
   },
   {
-    header: "Failed",
+    header: t("Failed"),
     accessorKey: "failed_requests",
     meta: { numeric: true, className: "text-destructive", ...QUIET_HEADER },
     cell: ({ row }) => row.original.failed_requests.toLocaleString(),
   },
   {
-    header: "Tokens",
+    header: t("Tokens"),
     accessorKey: "total_tokens",
     meta: { numeric: true, ...QUIET_HEADER },
     cell: ({ row }) => row.original.total_tokens.toLocaleString(),
@@ -72,6 +80,8 @@ const columns: ColumnDef<TeamUserSpendRow>[] = [
 ];
 
 const TeamUserSpendCard: React.FC<TeamUserSpendCardProps> = ({ accessToken, startTime, endTime, teamIds }) => {
+  const { t } = useLanguage();
+  const columns = useMemo(() => getTeamUserColumns(t), [t]);
   const hasTeams = teamIds.length > 0;
   const { data, isLoading } = useQuery({
     queryKey: ["teamSpendByUser", startTime?.toISOString(), endTime?.toISOString(), teamIds],
@@ -84,7 +94,7 @@ const TeamUserSpendCard: React.FC<TeamUserSpendCardProps> = ({ accessToken, star
   return (
     <Panel
       icon={Users}
-      title="Spend Per User Within Team"
+      title={t("Spend Per User Within Team")}
       action={
         <Button
           variant="outline"
@@ -93,12 +103,12 @@ const TeamUserSpendCard: React.FC<TeamUserSpendCardProps> = ({ accessToken, star
           onClick={() => data && downloadCsv(buildTeamUserSpendCsv(data), teamUserSpendCsvFileName(data))}
         >
           <Download />
-          Download CSV
+          {t("Download CSV")}
         </Button>
       }
     >
       <p className="mb-3 text-xs text-muted-foreground">
-        Attributed per request from spend logs, so it includes JWT/SSO traffic that does not use a virtual key
+        {t("Attributed per request from spend logs, so it includes JWT/SSO traffic that does not use a virtual key")}
       </p>
       <DataTable
         columns={columns}
@@ -106,7 +116,9 @@ const TeamUserSpendCard: React.FC<TeamUserSpendCardProps> = ({ accessToken, star
         getRowId={teamUserSpendRowId}
         isLoading={isLoading}
         maxBodyHeight={320}
-        noDataMessage={teamIds.length === 0 ? "Select a team to see spend per user" : "No user spend in this range"}
+        noDataMessage={
+          teamIds.length === 0 ? t("Select a team to see spend per user") : t("No user spend in this range")
+        }
         size="compact"
       />
     </Panel>

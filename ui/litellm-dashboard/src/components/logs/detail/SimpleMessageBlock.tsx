@@ -4,6 +4,7 @@
  */
 
 import { cn } from "@/lib/cva.config";
+import { useLanguage } from "@/contexts/LanguageContext";
 import { ToolCall } from "./prettyMessagesTypes";
 import { SimpleToolCallBlock } from "./SimpleToolCallBlock";
 
@@ -15,6 +16,11 @@ interface SimpleMessageBlockProps {
 }
 
 export function SimpleMessageBlock({ label, content, toolCalls, isCompact = false }: SimpleMessageBlockProps) {
+  const { t } = useLanguage();
+  // 仅翻译标准消息角色，工具名称及其他调用方标签保持原样。
+  const displayLabel = ["SYSTEM", "USER", "ASSISTANT", "TOOL", "FUNCTION", "DEVELOPER"].includes(label)
+    ? t(label)
+    : label;
   // Don't show "null" for empty content
   const displayContent = content && content !== "null" && content.length > 0 ? content : null;
   const hasToolCalls = toolCalls && toolCalls.length > 0;
@@ -26,7 +32,9 @@ export function SimpleMessageBlock({ label, content, toolCalls, isCompact = fals
 
   return (
     <div className={cn(isCompact && "mb-2")}>
-      <span className="mb-[3px] block text-[10px] uppercase tracking-[0.5px] text-muted-foreground">{label}</span>
+      <span className="mb-[3px] block text-[10px] uppercase tracking-[0.5px] text-muted-foreground">
+        {displayLabel}
+      </span>
 
       {displayContent && (
         <div

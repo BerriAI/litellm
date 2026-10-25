@@ -1,4 +1,5 @@
-import { describeGroups, TeamAccessGroupModelGrant } from "../team/teamModelAccess";
+import { TeamAccessGroupModelGrant } from "../team/teamModelAccess";
+import { englishTranslate, type Translate } from "@/i18n/language";
 
 export interface InheritedGrant {
   id: string;
@@ -20,7 +21,18 @@ export function computeInheritedGrants(
   }));
 }
 
-export const inheritedGrantTooltip = (grant: InheritedGrant): string => {
-  const source = grant.accessGroupNames.length > 0 ? describeGroups(grant.accessGroupNames) : "an access group";
-  return `Granted via ${source}. Full ID: ${grant.id}`;
+export const inheritedGrantTooltip = (grant: InheritedGrant, t: Translate = englishTranslate): string => {
+  // 组名属于业务数据，仅翻译来源说明，不对名称本身做匹配替换。
+  if (grant.accessGroupNames.length === 0) {
+    return t("Granted via an access group. Full ID: {id}", { id: grant.id });
+  }
+  return t(
+    grant.accessGroupNames.length === 1
+      ? "Granted via access group {groups}. Full ID: {id}"
+      : "Granted via access groups {groups}. Full ID: {id}",
+    {
+      groups: grant.accessGroupNames.join(", "),
+      id: grant.id,
+    },
+  );
 };

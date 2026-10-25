@@ -1,8 +1,15 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
-import { fireEvent, renderWithProviders, screen, waitFor } from "../../../../../../tests/test-utils";
+import { act, fireEvent, renderWithProviders, screen, waitFor } from "../../../../../../tests/test-utils";
 import { EditProjectModal } from "./EditProjectModal";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
+import LanguageSelector from "@/components/LanguageSelector";
+import { LanguageProvider } from "@/contexts/LanguageContext";
+import { translate, type Language } from "@/i18n/language";
+import { fetchTeamModels } from "@/components/organisms/create_key_button";
+import { getGuardrailsList } from "@/components/networking";
+import { Toaster } from "@/components/ui/sonner";
+import { toast } from "@/lib/toast";
 
 const mutate = vi.fn();
 
@@ -34,9 +41,7 @@ vi.mock("@/components/key_team_helpers/fetch_available_models_team_key", () => (
   getModelDisplayName: (model: string) => model,
 }));
 
-vi.mock("@/lib/toast", () => ({
-  toast: { success: vi.fn(), fromError: vi.fn(), error: vi.fn() },
-}));
+vi.unmock("@/lib/toast");
 
 const setup = () => userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
 type User = ReturnType<typeof setup>;
@@ -78,7 +83,110 @@ const variables = () => mutate.mock.calls.at(-1)?.[0] as { projectId: string; pa
 
 describe("EditProjectModal submit payload", () => {
   beforeEach(() => {
+    localStorage.clear();
+    toast.dismiss();
     vi.clearAllMocks();
+  });
+
+  afterEach(() => act(() => toast.dismiss()));
+
+  it.each(["success", "failure", "server", "envelope"])(
+    "项目保存的 %s 通知跟随当前语言且保留服务端消息",
+    async (result) => {
+      const user = setup();
+      renderWithProviders(
+        <LanguageProvider defaultLanguage="en" userId="project-edit-notice" storageScope="project-edit-notice">
+          <LanguageSelector />
+          <EditProjectModal isOpen project={project} onClose={vi.fn()} />
+          <Toaster expand />
+        </LanguageProvider>,
+      );
+      fireEvent.change(screen.getByLabelText("Project Name"), { target: { value: "Settings" } });
+      await save(user);
+      await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+      const callbacks = mutate.mock.calls[0][1];
+      const serverMessage = result === "server" || result === "envelope";
+      const body = { error: { message: "Home", internal: "internal implementation detail" } };
+      const serverError = result === "envelope" ? JSON.stringify(body) : "Home";
+      fireEvent.change(screen.getByLabelText("Interface language"), { target: { value: "zh-CN" } });
+      act(() => {
+        if (result === "success") callbacks.onSuccess();
+        else callbacks.onError(new Error(serverMessage ? serverError : ""));
+      });
+      const message = result === "success" ? "Project updated successfully" : "Failed to update project";
+      expect(await screen.findByText(serverMessage ? "Home" : translate("zh-CN", message))).toBeVisible();
+      expect(screen.queryByText("首页")).not.toBeInTheDocument();
+      expect(screen.queryByText(/internal implementation detail/)).not.toBeInTheDocument();
+      fireEvent.change(screen.getByLabelText("界面语言"), { target: { value: "en" } });
+      expect(await screen.findByText(serverMessage ? "Home" : message)).toBeVisible();
+      expect(mutate).toHaveBeenCalledTimes(1);
+      expect(variables()).toMatchObject({
+        projectId: "proj-1",
+        params: { project_alias: "Settings", team_id: "team-1" },
+      });
+      if (result !== "success") expect(screen.getByLabelText("Project Name")).toHaveValue("Settings");
+    },
+  );
+
+  it.each<Language>(["en", "zh-CN"])("重复字段校验随 %s 切换且保留编辑值与项目标识", async (initialLanguage) => {
+    const user = setup();
+    const nextLanguage = initialLanguage === "en" ? "zh-CN" : "en";
+    renderWithProviders(
+      <LanguageProvider defaultLanguage={initialLanguage} userId="project-edit" storageScope="project-edit">
+        <LanguageSelector />
+        <EditProjectModal isOpen project={project} onClose={vi.fn()} />
+      </LanguageProvider>,
+    );
+    fireEvent.change(screen.getByLabelText(translate(initialLanguage, "Project Name")), { target: { value: "Home" } });
+    await user.click(screen.getByText(translate(initialLanguage, "Advanced Settings")));
+    await user.click(screen.getByRole("button", { name: translate(initialLanguage, "Add Model Limit") }));
+    fireEvent.change(screen.getAllByLabelText(translate(initialLanguage, "Model"), { exact: true })[1], {
+      target: { value: "gpt-4" },
+    });
+    fireEvent.change(screen.getAllByLabelText(translate(initialLanguage, "RPM Limit"), { exact: true })[1], {
+      target: { value: "5" },
+    });
+    await user.click(screen.getByRole("button", { name: translate(initialLanguage, "Add Key-Value Pair") }));
+    fireEvent.change(screen.getAllByPlaceholderText(translate(initialLanguage, "Metadata key"))[1], {
+      target: { value: "owner" },
+    });
+    fireEvent.change(screen.getAllByPlaceholderText(translate(initialLanguage, "Value"))[1], {
+      target: { value: "Settings" },
+    });
+    await user.click(screen.getByRole("button", { name: translate(initialLanguage, "Save Changes") }));
+    expect(await screen.findByText(translate(initialLanguage, "Duplicate model"))).toBeVisible();
+    expect(screen.getByText(translate(initialLanguage, "Duplicate key"))).toBeVisible();
+    await waitFor(() => expect(fetchTeamModels).toHaveBeenCalledTimes(1));
+
+    // 已有错误更新语言时，不重建表单，也不发送保存或资源查询。
+    fireEvent.change(screen.getByLabelText(translate(initialLanguage, "Interface language")), {
+      target: { value: nextLanguage },
+    });
+    expect(screen.getByText(translate(nextLanguage, "Duplicate model"))).toBeVisible();
+    expect(screen.getByText(translate(nextLanguage, "Duplicate key"))).toBeVisible();
+    expect(screen.queryByText(translate(initialLanguage, "Duplicate model"))).not.toBeInTheDocument();
+    expect(screen.getByLabelText(translate(nextLanguage, "Project Name"))).toHaveValue("Home");
+    expect(screen.getAllByPlaceholderText(translate(nextLanguage, "Value"))[1]).toHaveValue("Settings");
+    expect(fetchTeamModels).toHaveBeenCalledTimes(1);
+    expect(getGuardrailsList).toHaveBeenCalledTimes(1);
+    expect(mutate).not.toHaveBeenCalled();
+    fireEvent.change(screen.getAllByLabelText(translate(nextLanguage, "Model"), { exact: true })[1], {
+      target: { value: "Settings" },
+    });
+    fireEvent.change(screen.getAllByPlaceholderText(translate(nextLanguage, "Metadata key"))[1], {
+      target: { value: "Home" },
+    });
+    await user.click(screen.getByRole("button", { name: translate(nextLanguage, "Save Changes") }));
+    await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+    expect(variables().projectId).toBe("proj-1");
+    const expected = {
+      project_alias: "Home",
+      team_id: "team-1",
+      models: ["gpt-4"],
+      model_rpm_limit: { "gpt-4": 20, Settings: 5 },
+      metadata: { owner: "platform", Home: "Settings" },
+    };
+    expect(variables().params).toMatchObject(expected);
   });
 
   it("sends exactly the antd payload for an untouched save", async () => {

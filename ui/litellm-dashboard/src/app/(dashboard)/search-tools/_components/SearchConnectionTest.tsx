@@ -1,5 +1,6 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { AlertTriangle, CheckCircle2, Info } from "lucide-react";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useEffectEvent, useState } from "react";
 import { toast } from "@/lib/toast";
 import { testSearchToolConnection } from "@/components/networking";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,7 @@ interface SearchConnectionTestProps {
 }
 
 const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({ litellmParams, accessToken, onTestComplete }) => {
+  const { t } = useLanguage();
   const [isLoading, setIsLoading] = useState(true);
   const [testResult, setTestResult] = useState<{
     status: "success" | "error";
@@ -22,6 +24,8 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({ litellmPara
     error_type?: string;
   } | null>(null);
   const [showDetails, setShowDetails] = useState(false);
+  // 通知取当前语言，不因语言改变再次执行外部连通测试
+  const showTestSuccess = useEffectEvent(() => toast.success(t("Connection test successful!")));
 
   useEffect(() => {
     const runTest = async () => {
@@ -30,7 +34,7 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({ litellmPara
         const result = await testSearchToolConnection(accessToken, litellmParams);
         setTestResult(result);
         if (result.status === "success") {
-          toast.success("Connection test successful!");
+          showTestSuccess();
         }
       } catch (error) {
         setTestResult({
@@ -84,7 +88,7 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({ litellmPara
         <div className="flex flex-col items-center justify-center px-5 py-8">
           <UiLoadingSpinner className="mb-4 size-8 text-primary" />
           <p className="text-base text-foreground">
-            Testing connection to {litellmParams.search_provider || "search provider"}...
+            {t("Testing connection to")} {litellmParams.search_provider || t("search provider")}...
           </p>
         </div>
       </div>
@@ -102,15 +106,17 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({ litellmPara
           <CheckCircle2 className="size-6 text-success" />
           <div className="ml-3">
             <p className="text-lg font-medium text-success">
-              Connection to {litellmParams.search_provider} successful!
+              {t("Connection to")} {litellmParams.search_provider} {t("successful!")}
             </p>
             {testResult.test_query && (
               <p className="mt-2 text-sm text-muted-foreground">
-                Test query: <code className="rounded bg-muted px-1.5 py-0.5">{testResult.test_query}</code>
+                {t("Test query:")} <code className="rounded bg-muted px-1.5 py-0.5">{testResult.test_query}</code>
               </p>
             )}
             {testResult.results_count !== undefined && (
-              <p className="text-sm text-muted-foreground">Results retrieved: {testResult.results_count}</p>
+              <p className="text-sm text-muted-foreground">
+                {t("Results retrieved:")} {testResult.results_count}
+              </p>
             )}
           </div>
         </div>
@@ -119,18 +125,18 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({ litellmPara
           <div className="mb-5 flex items-center">
             <AlertTriangle className="mr-3 size-6 text-destructive" />
             <p className="text-lg font-medium text-destructive">
-              Connection to {litellmParams.search_provider || "search provider"} failed
+              {t("Connection to")} {litellmParams.search_provider || t("search provider")} {t("failed")}
             </p>
           </div>
 
           <div className="mb-5 rounded-lg border border-destructive/30 bg-destructive/10 p-4">
-            <p className="mb-2 font-semibold text-foreground">Error: </p>
+            <p className="mb-2 font-semibold text-foreground">{t("Error:")} </p>
             <p className="text-sm leading-relaxed text-destructive">{errorMessage}</p>
 
             {testResult.error_type && (
               <div className="mt-2">
                 <p className="text-[13px] text-muted-foreground">
-                  Error type:{" "}
+                  {t("Error type:")}{" "}
                   <code className="rounded bg-destructive/10 px-1.5 py-0.5 text-destructive">
                     {testResult.error_type}
                   </code>
@@ -141,7 +147,7 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({ litellmPara
             {testResult.message && (
               <div className="mt-3">
                 <Button variant="link" size="sm" className="h-auto p-0" onClick={() => setShowDetails(!showDetails)}>
-                  {showDetails ? "Hide Details" : "Show Details"}
+                  {showDetails ? t("Hide Details") : t("Show Details")}
                 </Button>
               </div>
             )}
@@ -149,7 +155,7 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({ litellmPara
 
           {showDetails && (
             <div className="mb-5">
-              <p className="mb-2 text-[15px] font-semibold text-foreground">Full Error Details</p>
+              <p className="mb-2 text-[15px] font-semibold text-foreground">{t("Full Error Details")}</p>
               <pre className="max-h-52 overflow-auto rounded-lg border border-border bg-muted p-4 text-[13px] leading-relaxed break-words whitespace-pre-wrap">
                 {testResult.message}
               </pre>
@@ -157,12 +163,12 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({ litellmPara
           )}
 
           <div className="rounded-lg border border-warning/20 border-l-4 border-l-amber-500 bg-warning/10 p-4">
-            <p className="mb-2 font-semibold text-warning">Troubleshooting tips:</p>
+            <p className="mb-2 font-semibold text-warning">{t("Troubleshooting tips:")}</p>
             <ul className="my-2 list-disc pl-5 text-warning">
-              <li className="mb-1.5">Verify your API key is correct and active</li>
-              <li className="mb-1.5">Check if the search provider service is operational</li>
-              <li className="mb-1.5">Ensure you have sufficient credits/quota with the provider</li>
-              <li className="mb-1.5">Review the provider&apos;s documentation for any additional requirements</li>
+              <li className="mb-1.5">{t("Verify your API key is correct and active")}</li>
+              <li className="mb-1.5">{t("Check if the search provider service is operational")}</li>
+              <li className="mb-1.5">{t("Ensure you have sufficient credits/quota with the provider")}</li>
+              <li className="mb-1.5">{t("Review the provider's documentation for any additional requirements")}</li>
             </ul>
           </div>
         </div>
@@ -176,7 +182,7 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({ litellmPara
           className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
         >
           <Info className="size-4" />
-          View Search Documentation
+          {t("View Search Documentation")}
         </a>
       </div>
     </div>

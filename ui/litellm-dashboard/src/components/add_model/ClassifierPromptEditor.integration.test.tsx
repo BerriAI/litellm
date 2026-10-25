@@ -1,8 +1,12 @@
-import { fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
+import { act, fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { vi, type Mock } from "vitest";
 import ClassifierPromptEditor from "./ClassifierPromptEditor";
 import { ClassificationRubric } from "./ComplexityRouterConfig";
+import { LanguageProvider } from "@/contexts/LanguageContext";
+import LanguageSelector from "@/components/LanguageSelector";
+import { Toaster } from "@/components/ui/sonner";
+import { toast } from "@/lib/toast";
 vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
   async () => await import("../../../tests/mocks/complexityScorerDefaults"),
@@ -124,5 +128,85 @@ describe("ClassifierPromptEditor", () => {
   it("seeds the editor from the stored override, not the default", async () => {
     await openEditor({ systemPrompt: "Grade data sensitivity" });
     expect(screen.getByLabelText("Classifier system prompt")).toHaveValue("Grade data sensitivity");
+  });
+});
+
+describe("分类器提示词加载的语言边界", () => {
+  beforeEach(async () => {
+    localStorage.clear();
+    const actual = await vi.importActual<typeof import("@/lib/toast")>("@/lib/toast");
+    vi.mocked(toast.fromError).mockImplementation(actual.toast.fromError);
+  });
+
+  afterEach(async () => {
+    const actual = await vi.importActual<typeof import("@/lib/toast")>("@/lib/toast");
+    act(() => actual.toast.dismiss());
+    vi.mocked(toast.fromError).mockReset();
+  });
+
+  const tree = (defaultLanguage: string, onChange: Mock) => (
+    <LanguageProvider defaultLanguage={defaultLanguage} userId="classifier-review" storageScope="/classifier">
+      <LanguageSelector />
+      <ClassifierPromptEditor
+        systemPrompt="Home"
+        onChange={onChange}
+        contextWindowSize={7}
+        tierLabels={{ SIMPLE: "Home" }}
+        classificationRubric="agentic"
+      />
+      <Toaster />
+    </LanguageProvider>
+  );
+
+  it("加载期间全站默认语言变化后，失败通知使用当前语言，且不重新加载或提交", async () => {
+    const pending = Promise.withResolvers<string>();
+    getDefaultPrompt.mockReturnValue(pending.promise);
+    const onChange = vi.fn();
+    const view = renderWithProviders(tree("en", onChange));
+    await userEvent.click(screen.getByRole("button", { name: "Edit custom prompt" }));
+
+    // 真实模态框会阻止页外点击，此处模拟全站默认设置更新，不绕过模态焦点约束。
+    view.rerender(tree("zh-CN", onChange));
+    await act(async () => pending.reject(new Error("Home")));
+    expect(await screen.findByText("默认分类器提示词加载失败，请重试。")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("combobox", { name: "界面语言" }), { target: { value: "en" } });
+    expect(screen.getByText("Could not load the default classifier prompt")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(getDefaultPrompt).toHaveBeenCalledExactlyOnceWith("sk-test", 7, { SIMPLE: "Home" }, "agentic");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("已显示的本地失败提示随个人语言切换", async () => {
+    getDefaultPrompt.mockRejectedValue(new Error("Home"));
+    const onChange = vi.fn();
+    renderWithProviders(tree("en", onChange));
+    await userEvent.click(screen.getByRole("button", { name: "Edit custom prompt" }));
+    expect(await screen.findByText("Could not load the default classifier prompt")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Interface language" }), { target: { value: "zh-CN" } });
+    expect(screen.getByText("默认分类器提示词加载失败，请重试。")).toBeInTheDocument();
+    expect(getDefaultPrompt).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("加载和草稿编辑时切换语言不翻译提示词、层级名称，也不再次请求或保存", async () => {
+    const pending = Promise.withResolvers<string>();
+    getDefaultPrompt.mockReturnValue(pending.promise);
+    const onChange = vi.fn();
+    const view = renderWithProviders(tree("en", onChange));
+    await userEvent.click(screen.getByRole("button", { name: "Edit custom prompt" }));
+    view.rerender(tree("zh-CN", onChange));
+    await act(async () => pending.resolve("Home"));
+
+    const prompt = screen.getByRole("textbox");
+    expect(prompt).toHaveValue("Home");
+    fireEvent.change(prompt, { target: { value: "Home draft" } });
+    view.rerender(tree("en", onChange));
+    expect(screen.getByRole("textbox", { name: "Classifier system prompt" })).toHaveValue("Home draft");
+    expect(onChange).not.toHaveBeenCalled();
+    expect(getDefaultPrompt).toHaveBeenCalledExactlyOnceWith("sk-test", 7, { SIMPLE: "Home" }, "agentic");
+    await userEvent.click(screen.getByRole("button", { name: "Save prompt" }));
+    expect(onChange).toHaveBeenCalledExactlyOnceWith("Home draft");
   });
 });

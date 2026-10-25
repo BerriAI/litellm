@@ -1,5 +1,7 @@
 "use client";
 
+import { englishTranslate, type Translate } from "@/i18n/language";
+import { useLanguage } from "@/contexts/LanguageContext";
 import type { ColumnDef } from "@tanstack/react-table";
 import { GitBranch, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 
@@ -24,10 +26,11 @@ interface RoutingGroupRowActionsProps {
 }
 
 function RoutingGroupRowActions({ group, onEdit, onDelete }: RoutingGroupRowActionsProps) {
+  const { t } = useLanguage();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label={`Open actions for ${group.group_name}`}
+        aria-label={t("Open actions for {group_name}", { group_name: String(group.group_name) })}
         data-testid={`routing-group-actions-${group.group_name}`}
         className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "text-muted-foreground")}
       >
@@ -36,7 +39,7 @@ function RoutingGroupRowActions({ group, onEdit, onDelete }: RoutingGroupRowActi
       <DropdownMenuContent align="end" className="w-44">
         <DropdownMenuItem data-testid="routing-group-action-edit" onClick={() => onEdit(group)}>
           <Pencil />
-          Edit
+          {t("Edit")}
         </DropdownMenuItem>
         <DropdownMenuItem
           variant="destructive"
@@ -44,7 +47,7 @@ function RoutingGroupRowActions({ group, onEdit, onDelete }: RoutingGroupRowActi
           onClick={() => onDelete(group)}
         >
           <Trash2 />
-          Delete
+          {t("Delete")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -52,12 +55,14 @@ function RoutingGroupRowActions({ group, onEdit, onDelete }: RoutingGroupRowActi
 }
 
 interface RoutingGroupsTableColumnsDeps {
+  t?: Translate;
   onEdit: (group: RoutingGroup) => void;
   onDelete: (group: RoutingGroup) => void;
   onToggleUsage: (group: RoutingGroup) => void;
 }
 
 export const getRoutingGroupsTableColumns = ({
+  t = englishTranslate,
   onEdit,
   onDelete,
   onToggleUsage,
@@ -65,8 +70,8 @@ export const getRoutingGroupsTableColumns = ({
   {
     id: "group_name",
     accessorKey: "group_name",
-    meta: { title: "Group Name", skeleton: "text" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Group Name" />,
+    meta: { title: t("Routing Group Name"), skeleton: "text" },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Routing Group Name")} />,
     size: 240,
     enableSorting: true,
     cell: ({ row }) => (
@@ -75,8 +80,8 @@ export const getRoutingGroupsTableColumns = ({
   },
   {
     id: "models",
-    meta: { title: "Models", skeleton: "chips" },
-    header: "Models",
+    meta: { title: t("Models"), skeleton: "chips" },
+    header: t("Models"),
     size: 320,
     enableSorting: false,
     cell: ({ row }) => <ModelsCell models={row.original.models} />,
@@ -84,8 +89,8 @@ export const getRoutingGroupsTableColumns = ({
   {
     id: "routing_strategy",
     accessorKey: "routing_strategy",
-    meta: { title: "Strategy", skeleton: "text" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Strategy" />,
+    meta: { title: t("Strategy"), skeleton: "text" },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Strategy")} />,
     size: 180,
     enableSorting: true,
     cell: ({ row }) => (
@@ -98,7 +103,7 @@ export const getRoutingGroupsTableColumns = ({
   {
     id: "actions",
     meta: { className: "text-right", headerClassName: "text-right" },
-    header: () => <span className="sr-only">Actions</span>,
+    header: () => <span className="sr-only">{t("Actions")}</span>,
     size: 64,
     enableSorting: false,
     enableHiding: false,

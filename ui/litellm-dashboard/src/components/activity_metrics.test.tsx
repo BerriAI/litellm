@@ -5,6 +5,8 @@ import { ActivityMetrics, formatKeyLabel, processActivityData, ResponseTimeToolt
 import type { ChartTooltipProps } from "@/components/shared/charts";
 import { Team } from "./key_team_helpers/key_list";
 import { DailyData, KeyMetricWithMetadata, ModelActivityData } from "./UsagePage/types";
+import { LanguageProvider } from "@/contexts/LanguageContext";
+import { translate } from "@/i18n/language";
 
 beforeAll(() => {
   if (typeof window !== "undefined" && !window.ResizeObserver) {
@@ -174,6 +176,33 @@ describe("ActivityMetrics", () => {
   const mockModelMetrics: Record<string, ModelActivityData> = {
     "gpt-4": createMockModelActivityData("GPT-4"),
   };
+
+  it("中文显示固定指标但保留模型展示名", () => {
+    localStorage.clear();
+    render(
+      <LanguageProvider defaultLanguage="zh-CN" userId="activity-language" storageScope="activity-test">
+        <ActivityMetrics modelMetrics={{ Home: createMockModelActivityData("Home") }} />
+      </LanguageProvider>,
+    );
+    expect(screen.getByText("总体用量")).toBeInTheDocument();
+    expect(screen.getAllByText("成功请求总数").length).toBeGreaterThan(0);
+    expect(screen.getByText("Home")).toBeInTheDocument();
+    expect(screen.getAllByText("输入 Token").length).toBeGreaterThan(0);
+  });
+
+  it("中文将空展示名显示为未知项目，取数仍使用原模型标识", async () => {
+    localStorage.clear();
+    const fetchTopApiKeys = vi.fn().mockResolvedValue({ api_keys: [] });
+    render(
+      <LanguageProvider defaultLanguage="zh-CN" userId="activity-language" storageScope="activity-test">
+        <ActivityMetrics modelMetrics={{ Home: createMockModelActivityData("") }} fetchTopApiKeys={fetchTopApiKeys} />
+      </LanguageProvider>,
+    );
+
+    expect(screen.getByText("未知项目")).toBeInTheDocument();
+    await waitFor(() => expect(fetchTopApiKeys).toHaveBeenCalledWith("Home"));
+    expect(screen.queryByText("Unknown Item")).not.toBeInTheDocument();
+  });
 
   it("should render", () => {
     render(<ActivityMetrics modelMetrics={mockModelMetrics} />);
@@ -1484,6 +1513,13 @@ describe("ActivityMetrics response time", () => {
 });
 
 describe("formatKeyLabel", () => {
+  it("汉化团队标签模板但保留密钥与团队别名", () => {
+    const modelData = { metadata: { key_alias: "Home", team_id: "team1" } } as Pick<KeyMetricWithMetadata, "metadata">;
+    const t = (message: string, values?: Record<string, string | number>) => translate("zh-CN", message, values);
+    expect(formatKeyLabel(modelData, "hash", MOCK_TEAMS, t)).toBe("Home（团队：Test Team 1）");
+    expect(formatKeyLabel(modelData, "hash", [], t)).toBe("Home（团队 ID：team1）");
+  });
+
   it("should return key_alias when no team_id is present", () => {
     const modelData = createMockKeyMetricWithMetadata({
       key_alias: "test-key",

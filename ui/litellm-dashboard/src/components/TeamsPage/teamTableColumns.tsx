@@ -1,5 +1,7 @@
 "use client";
 
+import { englishTranslate, type Translate } from "@/i18n/language";
+import { useLanguage } from "@/contexts/LanguageContext";
 import { ColumnDef } from "@tanstack/react-table";
 import { Copy, KeyRound, Layers, MoreHorizontal, Pencil, Trash2, Users } from "lucide-react";
 
@@ -42,10 +44,11 @@ const teamModelCount = (team: Team): number => team.models?.length ?? 0;
 const teamKeyCount = (team: Team): number => team.keys_count ?? team.keys?.length ?? 0;
 
 function ResourcesCell({ team }: { team: Team }) {
+  const { t } = useLanguage();
   const items = [
-    { key: "members" as const, label: "members", count: teamMemberCount(team) },
-    { key: "models" as const, label: "models", count: teamModelCount(team) },
-    { key: "keys" as const, label: "keys", count: teamKeyCount(team) },
+    { key: "members" as const, label: t("members"), count: teamMemberCount(team) },
+    { key: "models" as const, label: t("models"), count: teamModelCount(team) },
+    { key: "keys" as const, label: t("keys"), count: teamKeyCount(team) },
   ];
 
   return (
@@ -72,10 +75,11 @@ function ResourcesCell({ team }: { team: Team }) {
 }
 
 function RateLimitLine({ label, value }: { label: string; value: number | null }) {
+  const { t } = useLanguage();
   return (
     <div>
       <span className="text-[10px] font-semibold text-muted-foreground">{label} </span>
-      <span className="tabular-nums">{value != null ? formatNumberWithCommas(value) : "Unlimited"}</span>
+      <span className="tabular-nums">{value != null ? formatNumberWithCommas(value) : t("Unlimited")}</span>
     </div>
   );
 }
@@ -88,14 +92,15 @@ interface TeamRowActionsProps {
 }
 
 function TeamRowActions({ team, canManage, onEditTeam, onDeleteTeam }: TeamRowActionsProps) {
+  const { t } = useLanguage();
   const handleCopy = () => {
-    void copyToClipboard(team.team_id, "Team ID copied");
+    void copyToClipboard(team.team_id, t("Team ID copied"));
   };
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label="Open team actions"
+        aria-label={t("Open team actions")}
         data-testid={`team-actions-${team.team_id}`}
         className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "text-muted-foreground")}
       >
@@ -105,19 +110,19 @@ function TeamRowActions({ team, canManage, onEditTeam, onDeleteTeam }: TeamRowAc
         {canManage && (
           <DropdownMenuItem onClick={() => onEditTeam(team)} data-testid="team-action-edit">
             <Pencil />
-            Edit team
+            {t("Edit team")}
           </DropdownMenuItem>
         )}
         <DropdownMenuItem onClick={handleCopy} data-testid="team-action-copy">
           <Copy />
-          Copy team ID
+          {t("Copy team ID")}
         </DropdownMenuItem>
         {canManage && (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem variant="destructive" onClick={() => onDeleteTeam(team)} data-testid="team-action-delete">
               <Trash2 />
-              Delete team
+              {t("Delete team")}
             </DropdownMenuItem>
           </>
         )}
@@ -127,6 +132,7 @@ function TeamRowActions({ team, canManage, onEditTeam, onDeleteTeam }: TeamRowAc
 }
 
 interface TeamTableColumnsDeps {
+  t?: Translate;
   organizations: Organization[];
   userRole: string | null;
   onSelectTeam: (team: Team) => void;
@@ -135,6 +141,7 @@ interface TeamTableColumnsDeps {
 }
 
 export const getTeamTableColumns = ({
+  t = englishTranslate,
   organizations,
   userRole,
   onSelectTeam,
@@ -148,7 +155,7 @@ export const getTeamTableColumns = ({
       id: "team_alias",
       accessorKey: "team_alias",
       meta: {
-        title: "Team",
+        title: t("Team"),
         renderSkeleton: () => (
           <div className="flex flex-col gap-2 py-1">
             <Skeleton className="h-4 w-32" />
@@ -156,7 +163,7 @@ export const getTeamTableColumns = ({
           </div>
         ),
       },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Team" variant="header-cycle" />,
+      header: ({ column }) => <DataTableSortHeader column={column} title={t("Team")} variant="header-cycle" />,
       size: 260,
       enableSorting: true,
       cell: ({ row }) => {
@@ -174,8 +181,8 @@ export const getTeamTableColumns = ({
     {
       id: "organization_alias",
       accessorKey: "organization_id",
-      meta: { title: "Organization" },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Organization" />,
+      meta: { title: t("Organization") },
+      header: ({ column }) => <DataTableSortHeader column={column} title={t("Organization")} />,
       sortDescFirst: false,
       size: 160,
       enableSorting: true,
@@ -195,7 +202,7 @@ export const getTeamTableColumns = ({
     {
       id: "resources",
       meta: {
-        title: "Resources",
+        title: t("Resources"),
         renderSkeleton: () => (
           <div className="flex items-center gap-1.5">
             <Skeleton className="h-6 w-12 rounded-md" />
@@ -208,9 +215,9 @@ export const getTeamTableColumns = ({
         <DataTableMultiSortHeader
           table={table}
           fields={[
-            { id: "members", label: "Members" },
-            { id: "models", label: "Models" },
-            { id: "keys_count", label: "Keys" },
+            { id: "members", label: t("Members") },
+            { id: "models", label: t("Models") },
+            { id: "keys_count", label: t("Keys") },
           ]}
         />
       ),
@@ -221,13 +228,13 @@ export const getTeamTableColumns = ({
     {
       id: "spend",
       accessorKey: "spend",
-      meta: { title: "Spend / Budget", skeleton: "meter", numeric: true },
+      meta: { title: t("Spend / Budget"), skeleton: "meter", numeric: true },
       header: ({ table }) => (
         <DataTableMultiSortHeader
           table={table}
           fields={[
-            { id: "spend", label: "Spend" },
-            { id: "max_budget", label: "Budget" },
+            { id: "spend", label: t("Spend") },
+            { id: "max_budget", label: t("Budget") },
           ]}
         />
       ),
@@ -244,8 +251,8 @@ export const getTeamTableColumns = ({
     {
       id: "created_at",
       accessorKey: "created_at",
-      meta: { title: "Created" },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Created" variant="header-cycle" />,
+      meta: { title: t("Created") },
+      header: ({ column }) => <DataTableSortHeader column={column} title={t("Created")} variant="header-cycle" />,
       size: 130,
       enableSorting: true,
       cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" />,
@@ -253,8 +260,8 @@ export const getTeamTableColumns = ({
     {
       id: "members",
       accessorFn: teamMemberCount,
-      meta: { title: "Members", numeric: true },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Members" />,
+      meta: { title: t("Members"), numeric: true },
+      header: ({ column }) => <DataTableSortHeader column={column} title={t("Members")} />,
       sortDescFirst: true,
       size: 110,
       enableSorting: true,
@@ -263,8 +270,8 @@ export const getTeamTableColumns = ({
     {
       id: "models",
       accessorFn: teamModelCount,
-      meta: { title: "Models", numeric: true },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Models" />,
+      meta: { title: t("Models"), numeric: true },
+      header: ({ column }) => <DataTableSortHeader column={column} title={t("Models")} />,
       sortDescFirst: true,
       size: 100,
       enableSorting: true,
@@ -272,7 +279,7 @@ export const getTeamTableColumns = ({
     },
     {
       id: "rate_limits",
-      meta: { title: "Rate Limits", skeleton: "twoLine" },
+      meta: { title: t("Rate Limits"), skeleton: "twoLine" },
       header: ({ table }) => (
         <DataTableMultiSortHeader
           table={table}
@@ -294,17 +301,17 @@ export const getTeamTableColumns = ({
     {
       id: "updated_at",
       accessorKey: "updated_at",
-      meta: { title: "Updated" },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Updated" />,
+      meta: { title: t("Updated") },
+      header: ({ column }) => <DataTableSortHeader column={column} title={t("Updated")} />,
       sortDescFirst: false,
       size: 130,
       enableSorting: true,
-      cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback="Never" />,
+      cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback={t("Never")} />,
     },
     {
       id: "actions",
       meta: { className: "text-right", headerClassName: "text-right" },
-      header: () => <span className="sr-only">Actions</span>,
+      header: () => <span className="sr-only">{t("Actions")}</span>,
       size: 60,
       enableSorting: false,
       enableHiding: false,

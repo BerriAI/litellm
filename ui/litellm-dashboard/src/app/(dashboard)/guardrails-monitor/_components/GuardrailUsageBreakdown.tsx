@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import type { ColumnDef } from "@tanstack/react-table";
 import { CircleDollarSign } from "lucide-react";
 import React from "react";
@@ -113,47 +114,54 @@ const groupColumns = (label: string, emptyLabel: string): ColumnDef<GroupRow>[] 
 const teamColumns = groupColumns("Team", "No team");
 const keyColumns = groupColumns("Key", "No key");
 
-const CostMath = ({ counters, detail }: { counters: CounterRow[]; detail: GuardrailUsageDetail }) => (
-  <CalcPopover title="How this cost is calculated" formula="priced units × price per unit = cost, per counter">
-    <MathTable rows={counters.map(counterMathRow)} total={formatCost(detail.cost)} />
-    <p className="text-xs text-muted-foreground">Per-unit prices come from the cost map LiteLLM ships with.</p>
-    <UnpricedNote unpriced={detail.untracked_usage_units} provider={detail.provider} />
-  </CalcPopover>
-);
+const CostMath = ({ counters, detail }: { counters: CounterRow[]; detail: GuardrailUsageDetail }) => {
+  const { t } = useLanguage();
+  return (
+    <CalcPopover title={t("How this cost is calculated")} formula="priced units × price per unit = cost, per counter">
+      <MathTable rows={counters.map(counterMathRow)} total={formatCost(detail.cost)} />
+      <p className="text-xs text-muted-foreground">{t("Per-unit prices come from the cost map LiteLLM ships with.")}</p>
+      <UnpricedNote unpriced={detail.untracked_usage_units} provider={detail.provider} />
+    </CalcPopover>
+  );
+};
 
-const UnitsMath = ({ units }: { units: GuardrailUsageDetail["usage_units"] }) => (
-  <CalcPopover title="How usage units add up" formula="counter + counter + … = usage units">
-    <MathTable rows={unitsMathRows(units)} total={totalUnits(units).toLocaleString()} />
-    <p className="text-xs text-muted-foreground">
-      Units are the billable counters the provider reported for this guardrail, added up over every call.
-    </p>
-  </CalcPopover>
-);
+const UnitsMath = ({ units }: { units: GuardrailUsageDetail["usage_units"] }) => {
+  const { t } = useLanguage();
+  return (
+    <CalcPopover title={t("How usage units add up")} formula="counter + counter + … = usage units">
+      <MathTable rows={unitsMathRows(units)} total={totalUnits(units).toLocaleString()} />
+      <p className="text-xs text-muted-foreground">
+        {t("Units are the billable counters the provider reported for this guardrail, added up over every call.")}
+      </p>
+    </CalcPopover>
+  );
+};
 
 const TableHeading = ({ title }: { title: string }) => (
   <h6 className="text-sm font-semibold text-foreground">{title}</h6>
 );
 
 export function GuardrailUsageBreakdown({ detail }: { detail: GuardrailUsageDetail }) {
+  const { t } = useLanguage();
   const counters = counterRows(detail);
   const unpriced = unpricedSummary(detail.untracked_usage_units);
 
   return (
-    <section className="space-y-4" aria-label="Usage and cost">
+    <section className="space-y-4" aria-label={t("Usage and cost")}>
       <div>
-        <h5 className="mb-0 text-base font-semibold text-foreground">Usage &amp; Cost</h5>
+        <h5 className="mb-0 text-base font-semibold text-foreground">{t("Usage & Cost")}</h5>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          Billable units the provider reported for this guardrail and what LiteLLM priced them at
+          {t("Billable units the provider reported for this guardrail and what LiteLLM priced them at")}
         </p>
       </div>
 
       {counters.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No billable usage units were recorded in this period.</p>
+        <p className="text-sm text-muted-foreground">{t("No billable usage units were recorded in this period.")}</p>
       ) : (
         <>
           <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
             <MetricCard
-              label="Cost"
+              label={t("Cost")}
               value={formatCost(detail.cost)}
               valueColor={detail.cost != null ? "text-foreground" : "text-muted-foreground"}
               icon={<CircleDollarSign className="size-4" />}
@@ -161,7 +169,7 @@ export function GuardrailUsageBreakdown({ detail }: { detail: GuardrailUsageDeta
               hint={<CostMath counters={counters} detail={detail} />}
             />
             <MetricCard
-              label="Usage Units"
+              label={t("Usage Units")}
               value={totalUnits(detail.usage_units).toLocaleString()}
               subtitle={`${counters.length} ${counters.length === 1 ? "counter" : "counters"}`}
               hint={<UnitsMath units={detail.usage_units} />}
@@ -173,7 +181,7 @@ export function GuardrailUsageBreakdown({ detail }: { detail: GuardrailUsageDeta
             data={counters}
             getRowId={(row) => row.counter}
             size="compact"
-            toolbar={() => <TableHeading title="By counter" />}
+            toolbar={() => <TableHeading title={t("By counter")} />}
           />
 
           <div className="grid gap-4 lg:grid-cols-2">
@@ -182,14 +190,14 @@ export function GuardrailUsageBreakdown({ detail }: { detail: GuardrailUsageDeta
               data={groupRows(detail.usage_units_by_team, detail.cost_by_team, detail.untracked_usage_units_by_team)}
               getRowId={(row) => row.id || "no-team"}
               size="compact"
-              toolbar={() => <TableHeading title="By team" />}
+              toolbar={() => <TableHeading title={t("By team")} />}
             />
             <DataTable
               columns={keyColumns}
               data={groupRows(detail.usage_units_by_key, detail.cost_by_key, detail.untracked_usage_units_by_key)}
               getRowId={(row) => row.id || "no-key"}
               size="compact"
-              toolbar={() => <TableHeading title="By key" />}
+              toolbar={() => <TableHeading title={t("By key")} />}
             />
           </div>
         </>

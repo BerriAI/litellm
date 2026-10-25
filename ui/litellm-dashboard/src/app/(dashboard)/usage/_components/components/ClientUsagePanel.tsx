@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useMemo } from "react";
 import { ArrowLeft, Coins } from "lucide-react";
 import { useTagSummary } from "@/app/(dashboard)/hooks/tags/useTagSummary";
@@ -80,6 +81,7 @@ export default function ClientUsagePanel({
   summaryFailed = false,
   onRetry,
 }: ClientUsagePanelProps) {
+  const { t } = useLanguage();
   const label = client === "claude-desktop" ? "Claude Desktop" : "Claude Code";
   const scopedRequest = Boolean(userId || teamId) && !accessError;
   const personRequest = {
@@ -152,7 +154,7 @@ export default function ClientUsagePanel({
       <SheetContent className="gap-0 data-[side=right]:w-[calc(100%-16px)] data-[side=right]:sm:max-w-[600px]">
         <SheetHeader className="shrink-0 border-b px-6 pt-5 pb-4">
           <Button variant="ghost" size="sm" className="mb-3 w-fit -ml-2 text-muted-foreground" onClick={onClose}>
-            <ArrowLeft className="size-4" /> Back to Usage
+            <ArrowLeft className="size-4" /> {t("Back to Usage")}
           </Button>
           <div className="flex items-center gap-3">
             <AgentMark agent={{ id: client, label, logo: claudeLogo.src }} />
@@ -176,11 +178,11 @@ export default function ClientUsagePanel({
           {teams.length > 0 && onTeamChange && (
             <div className="space-y-2">
               <label htmlFor="client-usage-team" className="text-xs font-medium text-muted-foreground">
-                Usage scope
+                {t("Usage scope")}
               </label>
               <SearchSelect
                 id="client-usage-team"
-                aria-label="Usage scope"
+                aria-label={t("Usage scope")}
                 value={teamId ? `team:${teamId}` : "default"}
                 options={[
                   { value: "default", label: defaultScopeLabel },
@@ -194,14 +196,14 @@ export default function ClientUsagePanel({
           {teamId && (
             <div className="space-y-2">
               <label htmlFor="client-usage-member" className="text-xs font-medium text-muted-foreground">
-                Team member
+                {t("Team member")}
               </label>
               <SearchSelect
                 id="client-usage-member"
-                aria-label="Team member"
+                aria-label={t("Team member")}
                 value={userId ? `user:${userId}` : "all"}
                 options={[
-                  { value: "all", label: "All members" },
+                  { value: "all", label: t("All members") },
                   ...members.map((member) => ({ ...member, value: `user:${member.value}` })),
                 ]}
                 allowClear={false}
@@ -213,11 +215,11 @@ export default function ClientUsagePanel({
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <label htmlFor="client-usage-user" className="text-xs font-medium text-muted-foreground">
-                  Filter by person
+                  {t("Filter by person")}
                 </label>
                 {userId && (
                   <Button variant="ghost" size="sm" onClick={() => onUserChange(null)}>
-                    All users
+                    {t("All users")}
                   </Button>
                 )}
               </div>
@@ -225,13 +227,13 @@ export default function ClientUsagePanel({
             </div>
           )}
           {pending && (
-            <div role="status" aria-label="Loading client usage">
+            <div role="status" aria-label={t("Loading client usage")}>
               <Skeleton className="h-24 w-full" />
             </div>
           )}
           {error && (
             <div role="alert" className="rounded-lg border p-4">
-              <p className="font-medium">Could not load client usage</p>
+              <p className="font-medium">{t("Could not load client usage")}</p>
               <p className="mt-1 text-muted-foreground">{error}</p>
               {canRetry && (
                 <Button
@@ -246,25 +248,27 @@ export default function ClientUsagePanel({
                     }
                   }}
                 >
-                  Try again
+                  {t("Try again")}
                 </Button>
               )}
             </div>
           )}
           {ready && !summary && (
-            <p className="rounded-lg border p-4 text-muted-foreground">No {label} usage recorded in this date range.</p>
+            <p className="rounded-lg border p-4 text-muted-foreground">
+              {t("No {client} usage recorded in this date range.", { client: label })}
+            </p>
           )}
           {ready && summary && (
             <>
               <div className="grid grid-cols-3 divide-x overflow-hidden rounded-xl border bg-card py-4">
-                <SummaryStat label="Spend" value={formatUsd(summary.spend)} />
-                <SummaryStat label="Total tokens" value={formatCompact(summary.tokens)} />
-                <SummaryStat label="Requests" value={summary.requests.toLocaleString()} />
+                <SummaryStat label={t("Spend")} value={formatUsd(summary.spend)} />
+                <SummaryStat label={t("Total tokens")} value={formatCompact(summary.tokens)} />
+                <SummaryStat label={t("Requests")} value={summary.requests.toLocaleString()} />
               </div>
               {summary.requests === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  No {label} requests in the selected range. Try another date range.
-                  {(canChooseUser || teamId) && " You can also choose another person."}
+                  {t("No {client} requests in the selected range. Try another date range.", { client: label })}
+                  {(canChooseUser || teamId) && t(" You can also choose another person.")}
                 </p>
               ) : (
                 <>
@@ -283,7 +287,7 @@ export default function ClientUsagePanel({
                         {chartError}
                       </p>
                       <Button variant="outline" size="sm" className="mt-3" onClick={retryModels}>
-                        Retry model breakdown
+                        {t("Retry model breakdown")}
                       </Button>
                     </div>
                   )}
@@ -292,9 +296,11 @@ export default function ClientUsagePanel({
               )}
               <p className="border-t pt-3 text-xs leading-5 text-muted-foreground">
                 {scopedRequest
-                  ? "Based on retained request logs within the exact selected time range."
-                  : "All-user totals use UTC daily aggregates for the selected dates. Filtering by person uses the exact selected times. Cache values are reported counts."}{" "}
-                Spend is the cost recorded by LiteLLM.
+                  ? t("Based on retained request logs within the exact selected time range.")
+                  : t(
+                      "All-user totals use UTC daily aggregates for the selected dates. Filtering by person uses the exact selected times. Cache values are reported counts.",
+                    )}{" "}
+                {t("Spend is the cost recorded by LiteLLM.")}
               </p>
             </>
           )}
@@ -313,20 +319,26 @@ function SummaryStat({ label, value }: { label: string; value: string }) {
 }
 
 function TokenExplanation({ total, breakdown }: { total: number; breakdown: ClientAgentDetail["tokenBreakdown"] }) {
+  const { t } = useLanguage();
   const { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } = breakdown;
   const freshInput =
     inputTokens !== null && cacheReadTokens !== null && cacheWriteTokens !== null
       ? inputTokens - cacheReadTokens - cacheWriteTokens
       : null;
   const rows = [
-    { label: "Cache reads", value: cacheReadTokens, color: stackedUsageColor(0) },
-    { label: "Cache writes", value: cacheWriteTokens, color: stackedUsageColor(1) },
-    { label: "Uncached input", value: freshInput, color: stackedUsageColor(2) },
-    { label: "Output", value: outputTokens, color: stackedUsageColor(3) },
+    { label: t("Cache reads"), value: cacheReadTokens, color: stackedUsageColor(0) },
+    { label: t("Cache writes"), value: cacheWriteTokens, color: stackedUsageColor(1) },
+    { label: t("Uncached input"), value: freshInput, color: stackedUsageColor(2) },
+    { label: t("Output"), value: outputTokens, color: stackedUsageColor(3) },
   ];
   const complete = rows.every((row) => row.value !== null);
   return (
-    <Panel icon={Coins} title="Token breakdown" subtitle={`${formatCompact(total)} total tokens`} bodyClassName="gap-3">
+    <Panel
+      icon={Coins}
+      title={t("Token breakdown")}
+      subtitle={t("{value1} total tokens", { value1: String(formatCompact(total)) })}
+      bodyClassName="gap-3"
+    >
       {complete && total > 0 && (
         <div aria-hidden="true" className="flex h-2 overflow-hidden rounded-full bg-muted">
           {rows.map((row) => (
@@ -339,7 +351,8 @@ function TokenExplanation({ total, breakdown }: { total: number; breakdown: Clie
       )}
       {cacheReadTokens !== null && total > 0 && (
         <p className="text-xs text-muted-foreground">
-          {((cacheReadTokens / total) * 100).toFixed(1)}% of these tokens are cache reads.
+          {((cacheReadTokens / total) * 100).toFixed(1)}
+          {t("% of these tokens are cache reads.")}
         </p>
       )}
       <dl className="divide-y rounded-lg border px-3 text-xs">
@@ -354,8 +367,9 @@ function TokenExplanation({ total, breakdown }: { total: number; breakdown: Clie
         ))}
       </dl>
       <p className="text-xs leading-5 text-muted-foreground">
-        Total tokens include input, cached input and output. Cached input is priced differently, so token count alone
-        does not explain spend. Compare the same person and dates when checking the count shown by a client.
+        {t(
+          "Total tokens include input, cached input and output. Cached input is priced differently, so token count alone does not explain spend. Compare the same person and dates when checking the count shown by a client.",
+        )}
       </p>
     </Panel>
   );

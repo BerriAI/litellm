@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import {
   type Cell,
   type Column,
@@ -353,13 +354,14 @@ function MessageRow({
 }
 
 function DefaultEmptyState() {
+  const { t } = useLanguage();
   return (
     <div className="flex flex-col items-center gap-1 py-6">
       <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-muted">
         <SearchX className="size-5 text-muted-foreground" />
       </div>
-      <div className="text-sm font-medium text-foreground">No results</div>
-      <div className="text-sm text-muted-foreground">No rows match your search or filters.</div>
+      <div className="text-sm font-medium text-foreground">{t("No results")}</div>
+      <div className="text-sm text-muted-foreground">{t("No rows match your search or filters.")}</div>
     </div>
   );
 }
@@ -596,6 +598,7 @@ function useSettledPageClamp<TData extends RowData>(table: Table<TData>, options
 }
 
 export function DataTable<TData extends RowData, TValue>(props: DataTableProps<TData, TValue>) {
+  const { t } = useLanguage();
   const resolved: DataTableResolvedProps<TData, TValue> = props;
 
   const {
@@ -603,7 +606,7 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
     isError = false,
     errorMessage,
     onRetry,
-    loadingMessage = "Loading…",
+    loadingMessage = t("Loading…"),
     skeletonRowCount = 8,
     noDataMessage,
     paginationMode = "none",

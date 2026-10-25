@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
@@ -82,6 +83,7 @@ const AllModelsTab = ({
   setSelectedModelId,
   setSelectedTeamId,
 }: AllModelsTabProps) => {
+  const { t } = useLanguage();
   const { data: modelCostMapData, isLoading: isLoadingModelCostMap } = useModelCostMap();
   const { accessToken, userId, userRole, isViewOnly } = useAuthorized();
   const { data: teams, isLoading: isLoadingTeams } = useTeams();
@@ -240,12 +242,12 @@ const AllModelsTab = ({
 
   const teamOptions = useMemo(
     () => [
-      { value: PERSONAL_TEAM_VALUE, label: "Personal" },
+      { value: PERSONAL_TEAM_VALUE, label: t("Personal") },
       ...(teams ?? [])
         .filter((team) => team.team_id)
         .map((team) => ({ value: team.team_id, label: team.team_alias ? team.team_alias : team.team_id })),
     ],
-    [teams],
+    [teams, t],
   );
 
   const selectedTeam = useMemo(
@@ -263,7 +265,7 @@ const AllModelsTab = ({
     try {
       setDeleteLoading(true);
       await modelDeleteCall(accessToken, deleteModalModelId);
-      toast.success("Model deleted successfully");
+      toast.success(t("Model deleted successfully"));
       queryClient.invalidateQueries({ queryKey: ["models", "list"] });
       refetchModels();
     } catch (error) {
@@ -352,17 +354,19 @@ const AllModelsTab = ({
             <Info className="mt-0.5 size-3.5 shrink-0" />
             {selectedTeamValue === PERSONAL_TEAM_VALUE ? (
               <span>
-                To access these models, create a Virtual Key without selecting a team on the{" "}
+                {t("To access these models, create a Virtual Key without selecting a team on the")}{" "}
                 <a href={uiHref("api-keys")} className="font-medium text-info hover:underline">
-                  Virtual Keys page
+                  {t("Virtual Keys page")}
                 </a>
                 .
               </span>
             ) : (
               <span>
-                To access these models, create a Virtual Key and select Team as &quot;{teamAccessLabel}&quot; on the{" "}
+                {t("To access these models, create a Virtual Key and select team {team} on the", {
+                  team: teamAccessLabel,
+                })}{" "}
                 <a href={uiHref("api-keys")} className="font-medium text-info hover:underline">
-                  Virtual Keys page
+                  {t("Virtual Keys page")}
                 </a>
                 .
               </span>
@@ -373,7 +377,7 @@ const AllModelsTab = ({
 
       <DeleteResourceModal
         isOpen={!!deleteModalModelId}
-        title="Delete Model"
+        title={t("Delete Model")}
         alertMessage="This action cannot be undone."
         message="Are you sure you want to delete this model?"
         resourceInformationTitle="Model Information"
@@ -381,19 +385,19 @@ const AllModelsTab = ({
           modelToDelete
             ? [
                 {
-                  label: "Model Name",
+                  label: t("Model Name"),
                   value: modelToDelete.model_name || "Not Set",
                 },
                 {
-                  label: "LiteLLM Model Name",
+                  label: t("LiteLLM Model Name"),
                   value: modelToDelete.litellm_model_name || "Not Set",
                 },
                 {
-                  label: "Provider",
+                  label: t("Provider"),
                   value: modelToDelete.provider || "Not Set",
                 },
                 {
-                  label: "Created By",
+                  label: t("Created By"),
                   value: modelToDelete.model_info?.created_by || "Not Set",
                 },
               ]

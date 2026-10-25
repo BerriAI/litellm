@@ -1,5 +1,7 @@
 "use client";
 
+import { englishTranslate, type Translate } from "@/i18n/language";
+import { useLanguage } from "@/contexts/LanguageContext";
 import { ColumnDef } from "@tanstack/react-table";
 import { Copy, MoreHorizontal, Trash2 } from "lucide-react";
 
@@ -69,10 +71,11 @@ interface PromptRowActionsProps {
 }
 
 function PromptRowActions({ prompt, isAdmin, onDeleteClick }: PromptRowActionsProps) {
+  const { t } = useLanguage();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label="Open prompt actions"
+        aria-label={t("Open prompt actions")}
         data-testid={`prompt-actions-${prompt.prompt_id}`}
         className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "text-muted-foreground")}
       >
@@ -81,10 +84,10 @@ function PromptRowActions({ prompt, isAdmin, onDeleteClick }: PromptRowActionsPr
       <DropdownMenuContent align="end" className="w-52">
         <DropdownMenuItem
           data-testid="prompt-action-copy"
-          onClick={() => void copyToClipboard(prompt.prompt_id, "Prompt ID copied")}
+          onClick={() => void copyToClipboard(prompt.prompt_id, t("Prompt ID copied"))}
         >
           <Copy />
-          Copy prompt ID
+          {t("Copy prompt ID")}
         </DropdownMenuItem>
         {isAdmin && (
           <>
@@ -101,7 +104,7 @@ function PromptRowActions({ prompt, isAdmin, onDeleteClick }: PromptRowActionsPr
               }
             >
               <Trash2 />
-              Delete
+              {t("Delete")}
             </DropdownMenuItem>
           </>
         )}
@@ -111,6 +114,7 @@ function PromptRowActions({ prompt, isAdmin, onDeleteClick }: PromptRowActionsPr
 }
 
 interface PromptTableColumnsDeps {
+  t?: Translate;
   modelHubData: Map<string, ModelGroupInfo>;
   isAdmin: boolean;
   onPromptClick?: (id: string, environment: string) => void;
@@ -118,6 +122,7 @@ interface PromptTableColumnsDeps {
 }
 
 export const getPromptTableColumns = ({
+  t = englishTranslate,
   modelHubData,
   isAdmin,
   onPromptClick,
@@ -126,8 +131,8 @@ export const getPromptTableColumns = ({
   {
     id: "prompt_id",
     accessorKey: "prompt_id",
-    meta: { title: "Prompt ID" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Prompt ID" />,
+    meta: { title: t("Prompt ID") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Prompt ID")} />,
     size: 220,
     enableSorting: true,
     cell: ({ row }) => (
@@ -145,8 +150,8 @@ export const getPromptTableColumns = ({
   },
   {
     id: "model",
-    meta: { title: "Model" },
-    header: "Model",
+    meta: { title: t("Model") },
+    header: t("Model"),
     size: 200,
     enableSorting: false,
     cell: ({ row }) => <PromptModelCell prompt={row.original} modelHubData={modelHubData} />,
@@ -155,8 +160,8 @@ export const getPromptTableColumns = ({
     id: "created_at",
     accessorKey: "created_at",
     sortingFn: "datetime",
-    meta: { title: "Created At" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Created At" />,
+    meta: { title: t("Created At") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Created At")} />,
     size: 160,
     enableSorting: true,
     cell: ({ row }) => <DateCell value={row.original.created_at} />,
@@ -165,8 +170,8 @@ export const getPromptTableColumns = ({
     id: "updated_at",
     accessorKey: "updated_at",
     sortingFn: "datetime",
-    meta: { title: "Updated At" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Updated At" />,
+    meta: { title: t("Updated At") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Updated At")} />,
     size: 160,
     enableSorting: true,
     cell: ({ row }) => <DateCell value={row.original.updated_at} />,
@@ -174,8 +179,8 @@ export const getPromptTableColumns = ({
   {
     id: "environment",
     accessorKey: "environment",
-    meta: { title: "Environment", skeleton: "badge" },
-    header: "Environment",
+    meta: { title: t("Environment"), skeleton: "badge" },
+    header: t("Environment"),
     size: 130,
     enableSorting: false,
     cell: ({ row }) => {
@@ -186,8 +191,8 @@ export const getPromptTableColumns = ({
   {
     id: "created_by",
     accessorKey: "created_by",
-    meta: { title: "Created By" },
-    header: "Created By",
+    meta: { title: t("Created By") },
+    header: t("Created By"),
     size: 160,
     enableSorting: false,
     cell: ({ row }) => {
@@ -209,8 +214,8 @@ export const getPromptTableColumns = ({
   {
     id: "prompt_type",
     accessorKey: "prompt_info.prompt_type",
-    meta: { title: "Type" },
-    header: "Type",
+    meta: { title: t("Type") },
+    header: t("Type"),
     size: 140,
     enableSorting: false,
     cell: ({ row }) => {
@@ -225,7 +230,7 @@ export const getPromptTableColumns = ({
   {
     id: "actions",
     meta: { className: "text-right", headerClassName: "text-right" },
-    header: () => <span className="sr-only">Actions</span>,
+    header: () => <span className="sr-only">{t("Actions")}</span>,
     size: 64,
     enableSorting: false,
     enableHiding: false,

@@ -1,5 +1,6 @@
 import React from "react";
 import { screen, waitFor, within } from "@testing-library/react";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -97,6 +98,20 @@ vi.mock("./add_attachment_form", () => ({
 describe("PoliciesPanel attachment delete", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("切换语言不重复请求策略与绑定列表", async () => {
+    const tree = (language: string) => (
+      <LanguageProvider defaultLanguage={language} userId="policy-test" storageScope="language-effects">
+        <PoliciesPanel accessToken="test-token" userRole="Admin" />
+      </LanguageProvider>
+    );
+    const view = renderWithProviders(tree("en"));
+    await waitFor(() => expect(networkingMocks.getPolicyAttachmentsList).toHaveBeenCalledTimes(1));
+    view.rerender(tree("zh-CN"));
+    await screen.findByRole("tab", { name: "关联项" });
+    expect(networkingMocks.getPoliciesList).toHaveBeenCalledTimes(1);
+    expect(networkingMocks.getPolicyAttachmentsList).toHaveBeenCalledTimes(1);
   });
 
   it("should call deletePolicyAttachmentCall after the user confirms delete in the attachment modal", async () => {

@@ -1,6 +1,7 @@
-import type { ReactNode } from "react";
+import { createElement, type ReactNode } from "react";
 import { toast as sonner } from "sonner";
 import { ApiError, deriveErrorMessage, unwrapProxyErrorMessage } from "@/lib/http/client";
+import TranslatedMessage from "@/components/shared/TranslatedMessage";
 
 export type ToastKind = "success" | "info" | "warning" | "error";
 
@@ -142,7 +143,11 @@ export const toast = {
   fromError: (input: unknown, options?: ToastOptions): void => {
     const facts = describeError(input);
     const title = titleFor(facts);
-    show(WARNING_TITLES.has(title) ? "warning" : "error", title, { description: facts.text, ...options });
+    // 分类仍使用原始标题，只有固定标题在 Sonner 的语言上下文中翻译。
+    show(WARNING_TITLES.has(title) ? "warning" : "error", createElement(TranslatedMessage, { message: title }), {
+      description: facts.text,
+      ...options,
+    });
   },
   dismiss: (): void => {
     sonner.dismiss();

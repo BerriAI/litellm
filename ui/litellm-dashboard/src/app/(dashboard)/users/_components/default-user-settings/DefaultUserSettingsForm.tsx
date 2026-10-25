@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { useFieldArray, type Control } from "react-hook-form";
@@ -7,6 +8,7 @@ import { useFieldArray, type Control } from "react-hook-form";
 import { useInfiniteTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { ModelSelect, MODEL_SENTINEL_OPTIONS } from "@/components/ModelSelect/ModelSelect";
 import { toast } from "@/lib/toast";
+import TranslatedMessage from "@/components/shared/TranslatedMessage";
 import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
@@ -18,6 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { fetchClient } from "@/lib/http/api";
+import { formatUserRole } from "@/utils/roles";
 
 import { buildBody, settingsToForm, type DefaultInternalUserParams, type InternalUserSettings } from "./mapper";
 import {
@@ -71,6 +74,7 @@ interface RoleOption {
 type SettingsControl = Control<DefaultUserSettingsFormValues, unknown, DefaultUserSettingsSubmitValues>;
 
 const TeamPickerField = ({ control, index }: { control: SettingsControl; index: number }) => {
+  const { t } = useLanguage();
   const [search, setSearch] = React.useState("");
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteTeams(
     TEAMS_PAGE_SIZE,
@@ -90,7 +94,12 @@ const TeamPickerField = ({ control, index }: { control: SettingsControl; index: 
   );
 
   return (
-    <FormField control={control} name={`teams.${index}.team_id`} label="Team">
+    <FormField
+      control={control}
+      name={`teams.${index}.team_id`}
+      label={t("Team")}
+      renderError={(error) => t(error.message ?? "")}
+    >
       {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
         <PaginatedSearchSelect
           options={options}
@@ -101,8 +110,8 @@ const TeamPickerField = ({ control, index }: { control: SettingsControl; index: 
           hasNextPage={hasNextPage}
           isLoading={isLoading}
           isFetchingNextPage={isFetchingNextPage}
-          placeholder="Search a team"
-          emptyText="No teams found"
+          placeholder={t("Search a team")}
+          emptyText={t("No teams found")}
           inputId={id}
           aria-invalid={ariaInvalid}
           aria-describedby={ariaDescribedBy}
@@ -113,39 +122,47 @@ const TeamPickerField = ({ control, index }: { control: SettingsControl; index: 
 };
 
 const TeamsField = ({ control }: { control: SettingsControl }) => {
+  const { t } = useLanguage();
   const { fields, append, remove } = useFieldArray({ control, name: "teams" });
 
   return (
     <div className="flex w-full flex-col gap-3">
       <div>
-        <p className="text-sm font-medium">Default Teams</p>
+        <p className="text-sm font-medium">{t("Default Teams")}</p>
         <p className="text-sm text-muted-foreground">
-          New users are added to these teams. Only teams that already exist can be selected.
+          {t("New users are added to these teams. Only teams that already exist can be selected.")}
         </p>
       </div>
 
       {fields.map((field, index) => (
         <div key={field.id} className="rounded-lg border border-border p-4">
           <div className="mb-3 flex items-center justify-between">
-            <p className="text-sm font-medium">Team {index + 1}</p>
+            <p className="text-sm font-medium">
+              {t("Team")} {index + 1}
+            </p>
             <Button type="button" variant="destructive" size="sm" onClick={() => remove(index)}>
-              Remove
+              {t("Remove")}
             </Button>
           </div>
 
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <TeamPickerField control={control} index={index} />
 
-            <FormField control={control} name={`teams.${index}.max_budget_in_team`} label="Max Budget in Team (USD)">
+            <FormField
+              control={control}
+              name={`teams.${index}.max_budget_in_team`}
+              label={t("Max Budget in Team (USD)")}
+              renderError={(error) => t(error.message ?? "")}
+            >
               {({ ref, ...budgetField }) => (
-                <Input {...budgetField} ref={ref} type="number" step="any" min={0} placeholder="Optional" />
+                <Input {...budgetField} ref={ref} type="number" step="any" min={0} placeholder={t("Optional")} />
               )}
             </FormField>
 
-            <FormField control={control} name={`teams.${index}.user_role`} label="Team Role">
+            <FormField control={control} name={`teams.${index}.user_role`} label={t("Team Role")}>
               {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
                 <Select
-                  items={TEAM_ROLE_OPTIONS}
+                  items={TEAM_ROLE_OPTIONS.map((option) => ({ ...option, label: t(option.label) }))}
                   value={value}
                   onValueChange={(selected) => onChange(selected ?? "user")}
                 >
@@ -160,7 +177,7 @@ const TeamsField = ({ control }: { control: SettingsControl }) => {
                   <SelectContent>
                     {TEAM_ROLE_OPTIONS.map((option) => (
                       <SelectItem key={option.value} value={option.value}>
-                        {option.label}
+                        {t(option.label)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -172,7 +189,7 @@ const TeamsField = ({ control }: { control: SettingsControl }) => {
       ))}
 
       <Button type="button" variant="outline" onClick={() => append(EMPTY_TEAM_ROW)}>
-        Add Team
+        {t("Add Team")}
       </Button>
     </div>
   );
@@ -191,6 +208,7 @@ interface SettingsViewProps {
 }
 
 const SettingsView = ({ values, roleOptions }: SettingsViewProps) => {
+  const { t } = useLanguage();
   const roleLabel = roleOptions.find((option) => option.value === values.user_role)?.label ?? values.user_role;
   const durationValue = values.budget_duration === "" ? NO_RESET : values.budget_duration;
   const durationLabel =
@@ -198,23 +216,30 @@ const SettingsView = ({ values, roleOptions }: SettingsViewProps) => {
 
   return (
     <div className="flex flex-col gap-4">
-      <ViewRow label="Default Role">{roleLabel === "" ? "Not set" : roleLabel}</ViewRow>
-      <ViewRow label="Max Budget (USD)">{values.max_budget === "" ? "Not set" : values.max_budget}</ViewRow>
-      <ViewRow label="Reset Budget">{durationLabel}</ViewRow>
-      <ViewRow label="Default Models">
+      <ViewRow label={t("Default Role")}>{roleLabel === "" ? t("Not set") : roleLabel}</ViewRow>
+      <ViewRow label={t("Max Budget (USD)")}>{values.max_budget === "" ? t("Not set") : values.max_budget}</ViewRow>
+      <ViewRow label={t("Reset Budget")}>{t(durationLabel)}</ViewRow>
+      <ViewRow label={t("Default Models")}>
         {values.models.length === 0
-          ? "Not set"
-          : values.models.map((model) => MODEL_SENTINEL_LABELS.get(model) ?? model).join(", ")}
+          ? t("Not set")
+          : values.models
+              .map((model) => (MODEL_SENTINEL_LABELS.has(model) ? t(MODEL_SENTINEL_LABELS.get(model)!) : model))
+              .join(", ")}
       </ViewRow>
       <div>
-        <p className="text-sm font-medium">Default Teams</p>
+        <p className="text-sm font-medium">{t("Default Teams")}</p>
         {values.teams.length === 0 ? (
-          <p className="text-sm text-muted-foreground">None</p>
+          <p className="text-sm text-muted-foreground">{t("None")}</p>
         ) : (
           values.teams.map((team) => (
             <p key={team.team_id} className="text-sm text-muted-foreground">
               {team.team_id}
-              {team.max_budget_in_team !== "" && <> · ${team.max_budget_in_team} max budget</>}
+              {team.max_budget_in_team !== "" && (
+                <>
+                  {" "}
+                  · ${team.max_budget_in_team} {t("max budget")}
+                </>
+              )}
               <> · {team.user_role}</>
             </p>
           ))
@@ -233,20 +258,29 @@ interface SettingsFormProps {
 }
 
 const SettingsForm = ({ initialValues, roleOptions, updateSettings, onCancel, onSaved }: SettingsFormProps) => {
+  const { t } = useLanguage();
   const queryClient = useQueryClient();
+  // 包含重复团队的嵌套错误仅在显示时翻译，语言切换不触发重新校验。
   const form = useZodForm(defaultUserSettingsSchema, { defaultValues: initialValues });
   const { isDirty } = form.formState;
 
   const mutation = useMutation({
     mutationFn: (values: DefaultUserSettingsSubmitValues) => updateSettings(buildBody(values)),
     onSuccess: (_result, values) => {
-      toast.success("Default user settings updated successfully");
+      toast.success(<TranslatedMessage message="Default user settings updated successfully" />);
       queryClient.invalidateQueries({ queryKey: SETTINGS_QUERY_KEY });
       form.reset(values);
       onSaved();
     },
-    onError: (error: unknown) =>
-      toast.fromError(error instanceof Error ? error.message : "Failed to update default user settings"),
+    onError: (error: unknown) => {
+      const hasEmptyMessage = error instanceof Error && !error.message;
+      toast.fromError(
+        error,
+        error == null || error === "" || hasEmptyMessage
+          ? { description: <TranslatedMessage message="Failed to update default user settings" /> }
+          : undefined,
+      );
+    },
   });
 
   const onSubmit = form.handleSubmit((values) => mutation.mutate(values));
@@ -257,8 +291,8 @@ const SettingsForm = ({ initialValues, roleOptions, updateSettings, onCancel, on
         <FormField
           control={form.control}
           name="user_role"
-          label="Default Role"
-          description="Role assigned to new users"
+          label={t("Default Role")}
+          description={t("Role assigned to new users")}
         >
           {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
             <Select
@@ -267,7 +301,7 @@ const SettingsForm = ({ initialValues, roleOptions, updateSettings, onCancel, on
               onValueChange={(selected) => onChange(selected ?? "")}
             >
               <SelectTrigger id={id} className="w-full" aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy}>
-                <SelectValue placeholder="Not set" />
+                <SelectValue placeholder={t("Not set")} />
               </SelectTrigger>
               <SelectContent>
                 {roleOptions.map((option) => (
@@ -286,8 +320,9 @@ const SettingsForm = ({ initialValues, roleOptions, updateSettings, onCancel, on
         <FormField
           control={form.control}
           name="max_budget"
-          label="Max Budget (USD)"
-          description="Default maximum budget for new users"
+          label={t("Max Budget (USD)")}
+          description={t("Default maximum budget for new users")}
+          renderError={(error) => t(error.message ?? "")}
         >
           {({ ref, ...field }) => <Input {...field} ref={ref} type="number" step="any" min={0} />}
         </FormField>
@@ -295,12 +330,12 @@ const SettingsForm = ({ initialValues, roleOptions, updateSettings, onCancel, on
         <FormField
           control={form.control}
           name="budget_duration"
-          label="Reset Budget"
-          description="How often the default budget resets"
+          label={t("Reset Budget")}
+          description={t("How often the default budget resets")}
         >
           {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
             <Select
-              items={BUDGET_DURATION_OPTIONS}
+              items={BUDGET_DURATION_OPTIONS.map((option) => ({ ...option, label: t(option.label) }))}
               value={value === "" ? NO_RESET : value}
               onValueChange={(selected) => onChange(selected === null || selected === NO_RESET ? "" : selected)}
             >
@@ -310,7 +345,7 @@ const SettingsForm = ({ initialValues, roleOptions, updateSettings, onCancel, on
               <SelectContent>
                 {BUDGET_DURATION_OPTIONS.map((option) => (
                   <SelectItem key={option.value} value={option.value}>
-                    {option.label}
+                    {t(option.label)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -321,8 +356,8 @@ const SettingsForm = ({ initialValues, roleOptions, updateSettings, onCancel, on
         <FormField
           control={form.control}
           name="models"
-          label="Default Models"
-          description="Models new users can access"
+          label={t("Default Models")}
+          description={t("Models new users can access")}
         >
           {(field) => (
             <ModelSelect
@@ -347,28 +382,31 @@ const SettingsForm = ({ initialValues, roleOptions, updateSettings, onCancel, on
           }}
           disabled={mutation.isPending}
         >
-          Cancel
+          {t("Cancel")}
         </Button>
         <Button type="submit" disabled={!isDirty || mutation.isPending}>
-          {mutation.isPending ? "Saving..." : "Save Changes"}
+          {mutation.isPending ? t("Saving...") : t("Save Changes")}
         </Button>
       </div>
     </form>
   );
 };
 
-const SettingsCard = ({ action, children }: { action?: React.ReactNode; children: React.ReactNode }) => (
-  <Card>
-    <CardHeader>
-      <CardTitle>Default User Settings</CardTitle>
-      <CardDescription>
-        Applied to every new internal user created through SSO or the user management APIs.
-      </CardDescription>
-      {action !== undefined && <CardAction>{action}</CardAction>}
-    </CardHeader>
-    <CardContent>{children}</CardContent>
-  </Card>
-);
+const SettingsCard = ({ action, children }: { action?: React.ReactNode; children: React.ReactNode }) => {
+  const { t } = useLanguage();
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t("Default User Settings")}</CardTitle>
+        <CardDescription>
+          {t("Applied to every new internal user created through SSO or the user management APIs.")}
+        </CardDescription>
+        {action !== undefined && <CardAction>{action}</CardAction>}
+      </CardHeader>
+      <CardContent>{children}</CardContent>
+    </Card>
+  );
+};
 
 export interface DefaultUserSettingsFormProps {
   possibleUIRoles?: Record<string, Record<string, string>> | null;
@@ -381,6 +419,7 @@ export const DefaultUserSettingsForm = ({
   fetchSettings = defaultFetchSettings,
   updateSettings = defaultUpdateSettings,
 }: DefaultUserSettingsFormProps) => {
+  const { t } = useLanguage();
   const [isEditing, setIsEditing] = React.useState(false);
   const { data, isPending, isError } = useQuery({ queryKey: SETTINGS_QUERY_KEY, queryFn: fetchSettings });
 
@@ -388,8 +427,15 @@ export const DefaultUserSettingsForm = ({
     () =>
       Object.entries(possibleUIRoles ?? {})
         .filter(([role]) => role.includes("internal_user"))
-        .map(([role, meta]) => ({ value: role, label: meta.ui_label || role, description: meta.description ?? "" })),
-    [possibleUIRoles],
+        .map(([role, meta]) => {
+          const builtInLabel = formatUserRole(role);
+          // 仅翻译已知角色的默认标签，自定义标签和角色标识不进入翻译字典。
+          const isBuiltIn = role === "internal_user" || role === "internal_user_viewer";
+          const label =
+            isBuiltIn && (!meta.ui_label || meta.ui_label === builtInLabel) ? t(builtInLabel) : meta.ui_label || role;
+          return { value: role, label, description: meta.description ?? "" };
+        }),
+    [possibleUIRoles, t],
   );
 
   const initialValues = React.useMemo(() => (data === undefined ? undefined : settingsToForm(data.values)), [data]);
@@ -405,7 +451,7 @@ export const DefaultUserSettingsForm = ({
   if (isError || initialValues === undefined) {
     return (
       <SettingsCard>
-        <p role="alert">Could not load the default user settings.</p>
+        <p role="alert">{t("Could not load the default user settings.")}</p>
       </SettingsCard>
     );
   }
@@ -415,7 +461,7 @@ export const DefaultUserSettingsForm = ({
       action={
         isEditing ? undefined : (
           <Button type="button" onClick={() => setIsEditing(true)}>
-            Edit Settings
+            {t("Edit Settings")}
           </Button>
         )
       }

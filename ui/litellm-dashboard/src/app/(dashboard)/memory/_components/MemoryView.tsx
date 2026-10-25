@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { PaginationState } from "@tanstack/react-table";
@@ -25,6 +26,7 @@ interface MemoryViewProps {
 const DEFAULT_PAGE_SIZE = 50;
 
 export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
+  const { t } = useLanguage();
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearch] = useDebouncedValue(searchInput, { wait: DEBOUNCE_WAIT_MS });
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE });
@@ -72,11 +74,11 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       return createMemory(accessToken, args);
     },
     onSuccess: (row) => {
-      toast.success(`Created ${row.key}`);
+      toast.success(t("Created {key}", { key: String(row.key) }));
       invalidateList();
     },
     onError: (err: Error) => {
-      toast.error(`Save failed: ${err.message}`);
+      toast.error(t("Save failed: {message}", { message: String(err.message) }));
     },
   });
 
@@ -87,11 +89,11 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       return updateMemory(accessToken, key, payload);
     },
     onSuccess: (row) => {
-      toast.success(`Updated ${row.key}`);
+      toast.success(t("Updated {key}", { key: String(row.key) }));
       invalidateList();
     },
     onError: (err: Error) => {
-      toast.error(`Save failed: ${err.message}`);
+      toast.error(t("Save failed: {message}", { message: String(err.message) }));
     },
   });
 
@@ -101,11 +103,11 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       return deleteMemory(accessToken, key).then(() => key);
     },
     onSuccess: (key) => {
-      toast.success(`Deleted ${key}`);
+      toast.success(t("Deleted {key}", { key: String(key) }));
       invalidateList();
     },
     onError: (err: Error) => {
-      toast.error(`Delete failed: ${err.message}`);
+      toast.error(t("Delete failed: {message}", { message: String(err.message) }));
     },
   });
 
@@ -147,7 +149,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       try {
         metadataPayload = JSON.parse(metadataText);
       } catch {
-        toast.error("Metadata must be valid JSON (or leave empty).");
+        toast.error(t("Metadata must be valid JSON (or leave empty)."));
         return false;
       }
     }
@@ -178,18 +180,18 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       <div className="flex flex-col gap-6">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-semibold text-foreground">Memory</h1>
+            <h1 className="text-2xl font-semibold text-foreground">{t("Memory")}</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Inspect what your agents have stored under{" "}
+              {t("Inspect what your agents have stored under")}{" "}
               <code className="rounded-sm border border-border bg-muted px-1 py-0.5 font-mono text-xs text-foreground">
                 /v1/memory
               </code>
-              . Scoped to memories visible to your user / team (admins see all).
+              {t(". Scoped to memories visible to your user / team (admins see all).")}
             </p>
           </div>
           <Button onClick={() => setIsCreateOpen(true)}>
             <Plus />
-            New memory
+            {t("New memory")}
           </Button>
         </div>
 
@@ -228,7 +230,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       {/* Delete confirmation modal */}
       <DeleteResourceModal
         isOpen={!!deleteRow}
-        title="Delete memory"
+        title={t("Delete memory")}
         message="This action cannot be undone."
         resourceInformationTitle="Memory"
         resourceInformation={

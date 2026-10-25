@@ -2,16 +2,18 @@ import type { Team } from "@/components/key_team_helpers/key_list";
 import { toKeyMetadata, type KeyActivityRow, type KeySpendActivityRow } from "../dailyActivityApi";
 import { formatKeyLabel } from "@/components/activity_metrics";
 import type { ModelActivityData } from "../types";
+import { englishTranslate, type Translate } from "@/i18n/language";
 
 export const keyActivityRowsToMetrics = (
   rows: readonly (KeyActivityRow | KeySpendActivityRow)[],
   teams: Team[],
+  t: Translate = englishTranslate,
 ): Record<string, ModelActivityData> =>
   Object.fromEntries(
     rows.map((row) => {
       const metadata = toKeyMetadata(row.metadata);
       const metrics: ModelActivityData = {
-        label: formatKeyLabel({ metadata }, row.api_key, teams),
+        label: formatKeyLabel({ metadata }, row.api_key, teams, t),
         key_metadata: metadata,
         total_requests: row.metrics.api_requests,
         total_successful_requests: row.metrics.successful_requests,

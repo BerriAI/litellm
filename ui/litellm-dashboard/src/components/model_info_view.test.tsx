@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import ModelInfoView from "./model_info_view";
 import { toast } from "@/lib/toast";
 import * as networking from "./networking";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 vi.mock("./model_info/KubernetesPodsCard", () => ({
   default: ({ modelId }: { modelId: string }) => <div data-testid="kubernetes-pods-card">{modelId}</div>,
 }));
@@ -428,6 +429,18 @@ describe("ModelInfoView", () => {
     await waitFor(() => {
       expect(mockToast.error).toHaveBeenCalled();
     });
+  });
+
+  it.each([new Error("Home"), "Home"])("连接失败时只翻译本地通知文案：%s", async (error) => {
+    mockTestConnectionRequest.mockRejectedValue(error);
+    render(
+      <LanguageProvider defaultLanguage="zh-CN" userId="model-test-error" storageScope="model-test-error">
+        <ModelInfoView {...DEFAULT_ADMIN_PROPS} />
+      </LanguageProvider>,
+      { wrapper },
+    );
+    await userEvent.click(await screen.findByTestId("test-connection-button"));
+    await waitFor(() => expect(mockToast.error).toHaveBeenCalledWith("连接测试失败：Home"));
   });
 
   it("should display reuse credentials button for admin users", async () => {

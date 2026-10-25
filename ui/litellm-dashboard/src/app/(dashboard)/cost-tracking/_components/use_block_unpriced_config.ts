@@ -1,6 +1,7 @@
-import { useState, useCallback } from "react";
+import { createElement, useState, useCallback } from "react";
 import { apiClient } from "@/components/networking";
 import { toast } from "@/lib/toast";
+import TranslatedMessage from "@/components/shared/TranslatedMessage";
 
 export interface UseBlockUnpricedConfigProps {
   accessToken: string | null;
@@ -41,10 +42,13 @@ export function useBlockUnpricedConfig({ accessToken }: UseBlockUnpricedConfigPr
       try {
         const data = await apiClient.patch<BlockUnpricedResponse>(ENDPOINT, { accessToken, body: { enabled } });
         setBlockUnpricedState(Boolean(data?.enabled));
+        // 成功文案跟随通知的当前语言，不影响开关请求与状态。
         toast.success(
-          enabled
-            ? "Requests for models without pricing will now be blocked"
-            : "Requests for models without pricing are now allowed",
+          createElement(TranslatedMessage, {
+            message: enabled
+              ? "Requests for models without pricing will now be blocked"
+              : "Requests for models without pricing are now allowed",
+          }),
         );
       } catch (error) {
         console.error("Error updating block-unpriced-models setting:", error);

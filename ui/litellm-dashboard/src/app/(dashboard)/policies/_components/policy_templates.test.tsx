@@ -5,6 +5,7 @@ import { renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
 import PolicyTemplates from "./policy_templates";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 vi.mock("@/components/networking");
 
@@ -48,6 +49,23 @@ const defaultProps = {
 describe("PolicyTemplates", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("切换语言不重新加载模板或重放加载回调", async () => {
+    vi.mocked(networking.getPolicyTemplates).mockResolvedValue([makeTemplate({ title: "Home" })]);
+    const onTemplatesLoaded = vi.fn();
+    const tree = (language: string) => (
+      <LanguageProvider defaultLanguage={language} userId="templates-test" storageScope="language-effects">
+        <PolicyTemplates {...defaultProps} onTemplatesLoaded={onTemplatesLoaded} />
+      </LanguageProvider>
+    );
+    const view = renderWithProviders(tree("en"));
+    await screen.findByText("Home");
+    view.rerender(tree("zh-CN"));
+    await screen.findByRole("button", { name: "使用模板" });
+    expect(screen.getByText("Home")).toBeInTheDocument();
+    expect(networking.getPolicyTemplates).toHaveBeenCalledTimes(1);
+    expect(onTemplatesLoaded).toHaveBeenCalledTimes(1);
   });
 
   it("should render the section header after loading", async () => {

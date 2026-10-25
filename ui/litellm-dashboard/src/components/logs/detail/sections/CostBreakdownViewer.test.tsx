@@ -3,6 +3,7 @@ import { describe, it, expect } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders, screen } from "../../../../../tests/test-utils";
 import { CostBreakdownViewer, CostBreakdown } from "./CostBreakdownViewer";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 async function expandCostBreakdown() {
   const user = userEvent.setup();
@@ -205,6 +206,25 @@ describe("CostBreakdownViewer", () => {
     renderWithProviders(<CostBreakdownViewer costBreakdown={breakdown} totalSpend={0} cacheHit="true" />);
 
     expect(screen.getByText(/\(Cached\)/)).toBeInTheDocument();
+  });
+
+  it("中文在费用摘要和展开明细里显示缓存命中", async () => {
+    localStorage.clear();
+    const user = userEvent.setup();
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="zh-CN" userId="cost-cache-language" storageScope="cost-cache-test">
+        <CostBreakdownViewer
+          costBreakdown={{ input_cost: 0.001, output_cost: 0.002, total_cost: 0.003 }}
+          totalSpend={0}
+          cacheHit="true"
+        />
+      </LanguageProvider>,
+    );
+
+    expect(screen.getByText(/（缓存命中）/)).toBeInTheDocument();
+    await user.click(screen.getByText("费用明细"));
+    expect(screen.getAllByText(/（缓存命中）/)).toHaveLength(2);
+    expect(screen.queryByText(/\(Cached\)/)).not.toBeInTheDocument();
   });
 
   it("shows discount label with percentage when panel is expanded", async () => {

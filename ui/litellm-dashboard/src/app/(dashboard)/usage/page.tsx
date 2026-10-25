@@ -9,8 +9,10 @@ import { useQueryStates } from "nuqs";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { Skeleton } from "@/components/ui/skeleton";
 import { dateRangeFromParams, usageUrlParsers } from "./_components/usageUrlState";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 export default function UsagePage() {
+  const { t } = useLanguage();
   useAuthorized();
   const { data: teams, isLoading: teamsLoading } = useTeams();
   const { data: organizations } = useOrganizations();
@@ -18,7 +20,7 @@ export default function UsagePage() {
   const [params] = useQueryStates(usageUrlParsers);
   if (settingsLoading && !dateRangeFromParams(params)) {
     return (
-      <div role="status" aria-label="Loading usage settings" className="p-6">
+      <div role="status" aria-label={t("Loading usage settings")} className="p-6">
         <Skeleton className="h-64 w-full" />
       </div>
     );

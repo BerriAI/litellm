@@ -1,13 +1,16 @@
-import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
+import { act, fireEvent, renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import { vi } from "vitest";
 import AutoRouterConnectionTest from "./auto_router_connection_test";
 import { AutoRouterTestTarget } from "./build_auto_router_test_targets";
+import { LanguageProvider, useLanguage } from "@/contexts/LanguageContext";
+import { testAutoRouterRouting, type AutoRouterRoutingTestResponse } from "../networking";
 
 vi.mock("../networking", async () => {
   const actual = await vi.importActual("../networking");
   return {
     ...actual,
     testModelGroupConnection: vi.fn(),
+    testAutoRouterRouting: vi.fn(),
   };
 });
 
@@ -21,6 +24,51 @@ const targets: AutoRouterTestTarget[] = [
 ];
 
 describe("AutoRouterConnectionTest", () => {
+  it("OSS 本地测试状态随语言切换，保留路由原因且不重复发送请求", async () => {
+    let complete: (result: AutoRouterRoutingTestResponse) => void = () => undefined;
+    vi.mocked(testAutoRouterRouting).mockReturnValue(
+      new Promise((resolve) => {
+        complete = resolve;
+      }),
+    );
+    function SwitchLanguage() {
+      const { setPreference } = useLanguage();
+      return <button onClick={() => setPreference("en")}>English</button>;
+    }
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="zh-CN" userId="oss-test" storageScope="oss-test-language">
+        <SwitchLanguage />
+        <AutoRouterConnectionTest
+          accessToken="token"
+          targets={[]}
+          jevRequest={{ prompt: "Home", complexity_router_config: {} }}
+        />
+      </LanguageProvider>,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("正在测试 OSS 分类");
+    await act(async () =>
+      complete({
+        status: "success",
+        result: {
+          routed_model: "Home",
+          routed_model_configured: true,
+          routing_decision: {
+            router_model_name: "Home",
+            router_type: "complexity",
+            routed_model: "Home",
+            cause: "Home",
+          },
+        },
+      }),
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("未能成功调用 OSS 分类器（路由原因：Home）");
+    fireEvent.click(screen.getByRole("button", { name: "English" }));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "OSS classifier was not reached successfully (routing cause: Home)",
+    );
+    expect(testAutoRouterRouting).toHaveBeenCalledOnce();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });

@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useEffect, useState } from "react";
 import {
   Combobox,
@@ -32,6 +33,7 @@ const SearchToolSelector: React.FC<SearchToolSelectorProps> = ({
   placeholder = "Select search tools (optional)",
   disabled = false,
 }) => {
+  const { t } = useLanguage();
   const anchor = useComboboxAnchor();
   const [options, setOptions] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -80,10 +82,10 @@ const SearchToolSelector: React.FC<SearchToolSelectorProps> = ({
           }
         </ComboboxValue>
         <ComboboxChipsInput placeholder={placeholder} aria-label={placeholder} disabled={disabled} />
-        {value && value.length > 0 && <ComboboxClear aria-label="Clear all search tools" disabled={disabled} />}
+        {value && value.length > 0 && <ComboboxClear aria-label={t("Clear all search tools")} disabled={disabled} />}
       </ComboboxChips>
       <ComboboxContent anchor={anchor}>
-        <ComboboxEmpty>{loading ? "Loading search tools…" : "No search tools found"}</ComboboxEmpty>
+        <ComboboxEmpty>{loading ? t("Loading search tools…") : t("No search tools found")}</ComboboxEmpty>
         <ComboboxList>
           {(tool: string) => (
             <ComboboxItem key={tool} value={tool}>

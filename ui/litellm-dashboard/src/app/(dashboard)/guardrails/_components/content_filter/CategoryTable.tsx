@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import { Trash2 } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
@@ -30,6 +31,7 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
   onRemove,
   readOnly = false,
 }) => {
+  const { t } = useLanguage();
   const columns: ColumnDef<ContentCategory>[] = [
     {
       header: "Category",
@@ -61,7 +63,7 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
               value && onSeverityChange?.(id, value as "high" | "medium" | "low")
             }
           >
-            <SelectTrigger size="sm" className="w-[150px]" aria-label="Severity Threshold">
+            <SelectTrigger size="sm" className="w-[150px]" aria-label={t("Severity Threshold")}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -90,7 +92,7 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
             value={action}
             onValueChange={(value: string | null) => value && onActionChange?.(id, value as "BLOCK" | "MASK")}
           >
-            <SelectTrigger size="sm" className="w-[120px]" aria-label="Action">
+            <SelectTrigger size="sm" className="w-[120px]" aria-label={t("Action")}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -114,14 +116,14 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
       cell: ({ row }) => (
         <Button variant="ghost" size="sm" onClick={() => onRemove?.(row.original.id)}>
           <Trash2 />
-          Delete
+          {t("Delete")}
         </Button>
       ),
     });
   }
 
   if (categories.length === 0) {
-    return <div className="py-10 text-center text-muted-foreground">No categories configured.</div>;
+    return <div className="py-10 text-center text-muted-foreground">{t("No categories configured.")}</div>;
   }
 
   return <DataTable data={categories} columns={columns} getRowId={(row) => row.id} size="compact" />;

@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import { useForm } from "react-hook-form";
 import { CircleCheck, Trash2 } from "lucide-react";
@@ -33,6 +34,7 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
   handleSubmit,
   premiumUser,
 }) => {
+  const { t } = useLanguage();
   const form = useForm<AlertingFormValues>({ defaultValues: {} });
 
   const onFinish = (formData: AlertingFormValues) => {
@@ -108,12 +110,12 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
             {value.stored_in_db == true ? (
               <Badge variant="secondary">
                 <CircleCheck />
-                In DB
+                {t("In DB")}
               </Badge>
             ) : value.stored_in_db == false ? (
-              <Badge variant="outline">In Config</Badge>
+              <Badge variant="outline">{t("In Config")}</Badge>
             ) : (
-              <Badge variant="outline">Not Set</Badge>
+              <Badge variant="outline">{t("Not Set")}</Badge>
             )}
           </TableCell>
           <TableCell>
@@ -121,7 +123,7 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
               type="button"
               variant="ghost"
               size="icon-sm"
-              aria-label={`Reset ${value.field_name}`}
+              aria-label={t("Reset {field_name}", { field_name: String(value.field_name) })}
               onClick={() => handleResetField(value.field_name, index)}
               className="text-destructive"
             >
@@ -131,7 +133,7 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
         </TableRow>
       ))}
       <div>
-        <Button type="submit">Update Settings</Button>
+        <Button type="submit">{t("Update Settings")}</Button>
       </div>
     </form>
   );

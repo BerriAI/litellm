@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useState } from "react";
 import { ChevronRight, Minus, Plus, SlidersHorizontal } from "lucide-react";
 import type { KeyValuePair } from "@/components/key_value_input";
@@ -47,6 +48,7 @@ function TagField({
   options: readonly string[];
   onChange: (value: readonly string[]) => void;
 }) {
+  const { t } = useLanguage();
   const anchor = useComboboxAnchor();
   const [query, setQuery] = useState("");
   const custom = query.trim();
@@ -66,10 +68,10 @@ function TagField({
         <ComboboxValue>
           {(values: string[]) => values.map((tag) => <ComboboxChip key={tag}>{tag}</ComboboxChip>)}
         </ComboboxValue>
-        <ComboboxChipsInput id="playground-tags" placeholder={value.length === 0 ? "Add a tag" : ""} />
+        <ComboboxChipsInput id="playground-tags" placeholder={value.length === 0 ? t("Add a tag") : ""} />
       </ComboboxChips>
       <ComboboxContent anchor={anchor}>
-        <ComboboxEmpty>No tags yet, type one to add it</ComboboxEmpty>
+        <ComboboxEmpty>{t("No tags yet, type one to add it")}</ComboboxEmpty>
         <ComboboxList>
           {(tag: string) => (
             <ComboboxItem key={tag} value={tag}>
@@ -78,7 +80,7 @@ function TagField({
               ) : (
                 <>
                   <Plus />
-                  Add {tag}
+                  {t("Add")} {tag}
                 </>
               )}
             </ComboboxItem>
@@ -96,29 +98,30 @@ function HeaderEditor({
   pairs: readonly KeyValuePair[];
   onChange: (pairs: readonly KeyValuePair[]) => void;
 }) {
+  const { t } = useLanguage();
   const replace = (index: number, pair: KeyValuePair) => onChange(pairs.map((item, i) => (i === index ? pair : item)));
   return (
     <div className="flex flex-col gap-2">
       {pairs.map(([name, value], index) => (
         <ButtonGroup key={index} className="w-full">
           <Input
-            aria-label="Header name"
+            aria-label={t("Header name")}
             value={name}
             onChange={(event) => replace(index, [event.target.value, value])}
-            placeholder="Name"
+            placeholder={t("Name")}
             className="h-8 font-mono text-xs"
           />
           <Input
-            aria-label="Header value"
+            aria-label={t("Header value")}
             value={value}
             onChange={(event) => replace(index, [name, event.target.value])}
-            placeholder="Value"
+            placeholder={t("Value")}
             className="h-8 font-mono text-xs"
           />
           <Button
             variant="outline"
             size="icon-sm"
-            aria-label={`Remove ${name || "header"}`}
+            aria-label={t("Remove {value}", { value: String(name || "header") })}
             onClick={() => onChange(pairs.filter((_, i) => i !== index))}
           >
             <Minus />
@@ -127,7 +130,7 @@ function HeaderEditor({
       ))}
       <Button variant="ghost" size="sm" className="-ml-2 w-fit" onClick={() => onChange([...pairs, ["", ""]])}>
         <Plus />
-        Add header
+        {t("Add header")}
       </Button>
     </div>
   );
@@ -142,18 +145,19 @@ function ProxyBaseUrlField({
   suggested: string | null;
   onChange: (value: string) => void;
 }) {
+  const { t } = useLanguage();
   return (
     <Field>
       <div className="flex items-center justify-between">
-        <FieldLabel htmlFor="playground-base-url">Proxy base URL</FieldLabel>
+        <FieldLabel htmlFor="playground-base-url">{t("Proxy base URL")}</FieldLabel>
         {value ? (
           <Button variant="link" size="xs" className="h-auto p-0" onClick={() => onChange("")}>
-            Clear
+            {t("Clear")}
           </Button>
         ) : (
           suggested && (
             <Button variant="link" size="xs" className="h-auto p-0" onClick={() => onChange(suggested)}>
-              Use {suggested}
+              {t("Use")} {suggested}
             </Button>
           )
         )}
@@ -162,10 +166,14 @@ function ProxyBaseUrlField({
         id="playground-base-url"
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        placeholder="Same as this dashboard"
+        placeholder={t("Same as this dashboard")}
         className="h-8"
       />
-      {value && <FieldDescription>Requests go to {value}</FieldDescription>}
+      {value && (
+        <FieldDescription>
+          {t("Requests go to")} {value}
+        </FieldDescription>
+      )}
     </Field>
   );
 }
@@ -177,6 +185,7 @@ const parseTemperature = (text: string): number | null | undefined => {
 };
 
 function TemperatureInput({ value, onChange }: { value: number | null; onChange: (value: number | null) => void }) {
+  const { t } = useLanguage();
   const [draft, setDraft] = useState<string | null>(null);
   const edit = (text: string) => {
     setDraft(text);
@@ -185,9 +194,9 @@ function TemperatureInput({ value, onChange }: { value: number | null; onChange:
   };
   return (
     <Input
-      aria-label="Temperature value"
+      aria-label={t("Temperature value")}
       inputMode="decimal"
-      placeholder="Default"
+      placeholder={t("Default")}
       value={draft ?? value?.toString() ?? ""}
       onChange={(event) => edit(event.target.value)}
       onBlur={() => setDraft(null)}
@@ -203,12 +212,13 @@ function SamplingFields({
   settings: PlaygroundSettings;
   update: (change: SettingsUpdate) => void;
 }) {
+  const { t } = useLanguage();
   const temperature = settings.temperature ?? DEFAULT_TEMPERATURE;
   return (
     <>
       <Field orientation="horizontal">
         <FieldLabel htmlFor="playground-temperature" className="w-28 shrink-0 font-normal">
-          Temperature
+          {t("Temperature")}
         </FieldLabel>
         <Slider
           id="playground-temperature"
@@ -222,7 +232,7 @@ function SamplingFields({
       </Field>
       <Field orientation="horizontal">
         <FieldLabel htmlFor="playground-max-tokens" className="w-28 shrink-0 font-normal">
-          Max tokens
+          {t("Max tokens")}
         </FieldLabel>
         <Input
           id="playground-max-tokens"
@@ -233,7 +243,7 @@ function SamplingFields({
             const parsed = Number.parseInt(event.target.value, 10);
             update({ maxTokens: Number.isFinite(parsed) && parsed > 0 ? parsed : null });
           }}
-          placeholder="Default"
+          placeholder={t("Default")}
           className="h-8 w-24"
         />
       </Field>
@@ -260,6 +270,7 @@ export function SettingsPopover({
   sessions: Readonly<{ enabled: boolean; responseId: string | null; onToggle: (enabled: boolean) => void }>;
   defaultOpen?: boolean;
 }) {
+  const { t } = useLanguage();
   const advancedSet = [
     settings.headerPairs.length > 0,
     Boolean(settings.proxyBaseUrl),
@@ -273,19 +284,19 @@ export function SettingsPopover({
     <Popover defaultOpen={defaultOpen}>
       <PopoverTrigger render={<InputGroupButton size="xs" />}>
         <SlidersHorizontal />
-        Settings
+        {t("Settings")}
       </PopoverTrigger>
       <PopoverContent align="end" side="top" className="max-h-(--available-height) w-96 overflow-y-auto p-0">
         <FieldGroup className="gap-5 p-4">
           <Field>
-            <FieldLabel htmlFor="playground-key-source">Send as</FieldLabel>
+            <FieldLabel htmlFor="playground-key-source">{t("Send as")}</FieldLabel>
             <Select
               items={KEY_SOURCES}
               value={settings.keySource}
               onValueChange={(value) => update({ keySource: value as KeySource })}
               disabled={keysDisabled}
             >
-              <SelectTrigger id="playground-key-source" size="sm" className="w-full" aria-label="Send as">
+              <SelectTrigger id="playground-key-source" size="sm" className="w-full" aria-label={t("Send as")}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -298,17 +309,17 @@ export function SettingsPopover({
             </Select>
             {settings.keySource === "custom" ? (
               <PasswordInput
-                aria-label="Virtual key"
+                aria-label={t("Virtual key")}
                 value={settings.virtualKey}
                 onChange={(event) => update({ virtualKey: event.target.value })}
-                placeholder="Paste a virtual key"
+                placeholder={t("Paste a virtual key")}
               />
             ) : (
-              <FieldDescription>Pick a virtual key to test what it can access</FieldDescription>
+              <FieldDescription>{t("Pick a virtual key to test what it can access")}</FieldDescription>
             )}
           </Field>
           <Field>
-            <FieldLabel htmlFor="playground-tags">Tags</FieldLabel>
+            <FieldLabel htmlFor="playground-tags">{t("Tags")}</FieldLabel>
             <TagField value={settings.tags} options={tagOptions} onChange={(tags) => update({ tags })} />
           </Field>
           {hasToggles && (
@@ -316,7 +327,7 @@ export function SettingsPopover({
               {capabilities.stream && (
                 <Field orientation="horizontal">
                   <FieldLabel htmlFor="playground-stream" className="font-normal">
-                    Stream response
+                    {t("Stream response")}
                   </FieldLabel>
                   <Switch
                     id="playground-stream"
@@ -328,7 +339,7 @@ export function SettingsPopover({
               {capabilities.simulateFallback && (
                 <Field orientation="horizontal">
                   <FieldLabel htmlFor="playground-fallback" className="font-normal">
-                    Simulate a fallback
+                    {t("Simulate a fallback")}
                   </FieldLabel>
                   <Switch
                     id="playground-fallback"
@@ -340,9 +351,9 @@ export function SettingsPopover({
               {capabilities.sessions && (
                 <Field orientation="horizontal">
                   <FieldLabel htmlFor="playground-sessions" className="flex-col items-start gap-0.5 font-normal">
-                    Keep context on the gateway
+                    {t("Keep context on the gateway")}
                     <span className="text-xs text-muted-foreground">
-                      Sends previous_response_id instead of the whole history
+                      {t("Sends previous_response_id instead of the whole history")}
                     </span>
                   </FieldLabel>
                   <Switch id="playground-sessions" checked={sessions.enabled} onCheckedChange={sessions.onToggle} />
@@ -350,9 +361,9 @@ export function SettingsPopover({
               )}
               {lastResponseId && (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <span className="shrink-0">Last response</span>
+                  <span className="shrink-0">{t("Last response")}</span>
                   <span className="min-w-0 truncate font-mono">{lastResponseId}</span>
-                  <CopyIconButton value={lastResponseId} label="response ID" />
+                  <CopyIconButton value={lastResponseId} label={t("response ID")} />
                 </div>
               )}
             </FieldSet>
@@ -368,15 +379,15 @@ export function SettingsPopover({
               }
             >
               <ChevronRight className="transition-transform in-data-panel-open:rotate-90" />
-              Advanced
+              {t("Advanced")}
             </CollapsibleTrigger>
             <CollapsibleContent>
               <FieldGroup className="gap-5 pt-3">
                 {capabilities.customHeaders && (
                   <Field>
-                    <FieldLabel>Custom headers</FieldLabel>
+                    <FieldLabel>{t("Custom headers")}</FieldLabel>
                     <HeaderEditor pairs={settings.headerPairs} onChange={(headerPairs) => update({ headerPairs })} />
-                    <FieldDescription>Sent with every request, like anthropic-beta</FieldDescription>
+                    <FieldDescription>{t("Sent with every request, like anthropic-beta")}</FieldDescription>
                   </Field>
                 )}
                 <ProxyBaseUrlField

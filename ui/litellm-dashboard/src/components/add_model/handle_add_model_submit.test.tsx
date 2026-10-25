@@ -1,11 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
-import { prepareModelAddRequest } from "./handle_add_model_submit";
+import { handleAddModelSubmit, prepareModelAddRequest } from "./handle_add_model_submit";
+import { modelCreateCall } from "../networking";
+import { toast } from "@/lib/toast";
+import { translate, type Translate } from "@/i18n/language";
+
+vi.mock("@/lib/toast", () => ({ toast: { fromError: vi.fn() } }));
 
 vi.mock("../networking", () => ({
   modelCreateCall: vi.fn(),
 }));
 
 describe("prepareModelAddRequest", () => {
+  it("添加失败只翻译本地前缀，保留服务端诊断原文", async () => {
+    const t: Translate = (message, values) => translate("zh-CN", message, values);
+    vi.mocked(modelCreateCall).mockRejectedValueOnce(new Error("Home"));
+    await handleAddModelSubmit(
+      { model_mappings: [{ public_name: "Home", litellm_model: "openai/gpt-4" }] },
+      "token",
+      { resetFields: vi.fn() },
+      { t },
+    );
+    expect(toast.fromError).toHaveBeenLastCalledWith(expect.stringMatching(/[\u3400-\u9fff].*Home/));
+  });
+
   it("returns deployment data for the most basic form", async () => {
     const formValues = {
       model_mappings: [

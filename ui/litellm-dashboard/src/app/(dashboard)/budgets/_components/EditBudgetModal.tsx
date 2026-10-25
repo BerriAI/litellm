@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useEffect, useId } from "react";
 import { useUpdateBudget } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import { budgetItem } from "@/app/(dashboard)/hooks/budgets/useBudgets";
@@ -7,6 +8,7 @@ import { pickDirty } from "@/lib/forms/pickDirty";
 import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import TranslatedMessage from "@/components/shared/TranslatedMessage";
 
 const toFormValues = (budget: budgetItem) => ({
   budget_id: budget.budget_id,
@@ -23,6 +25,7 @@ interface EditBudgetModalProps {
   existingBudget: budgetItem;
 }
 const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIsModalVisible, existingBudget }) => {
+  const { t } = useLanguage();
   const formId = useId();
   const form = useBudgetForm(toFormValues(existingBudget));
   const { dirtyFields } = form.formState;
@@ -39,15 +42,22 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIs
 
   const handleUpdate = async (formValues: BudgetFormValues) => {
     try {
-      toast.info("Making API Call");
+      toast.info(<TranslatedMessage message="Making API Call" />);
       const changedValues = pickDirty(formValues, dirtyFields);
       await updateBudget.mutateAsync(applyBudgetPrecision({ budget_id: formValues.budget_id, ...changedValues }));
-      toast.success("Budget Updated");
+      toast.success(<TranslatedMessage message="Budget Updated" />);
       form.reset();
       setIsModalVisible(false);
     } catch (error) {
       console.error("Error updating the budget:", error);
-      toast.fromError(`Error updating the budget: ${error}`);
+      // 保留状态码与业务错误原文，不把对象字符串或内部 JSON 放进提示模板。
+      const hasEmptyMessage = error instanceof Error && !error.message;
+      toast.fromError(
+        error,
+        error == null || error === "" || hasEmptyMessage
+          ? { description: <TranslatedMessage message="Failed to update budget" /> }
+          : undefined,
+      );
     }
   };
 
@@ -55,15 +65,15 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIs
     <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleCancel()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle className="text-[15px] leading-[22px] font-semibold">Edit budget</DialogTitle>
+          <DialogTitle className="text-[15px] leading-[22px] font-semibold">{t("Edit budget")}</DialogTitle>
         </DialogHeader>
         <form id={formId} onSubmit={form.handleSubmit(handleUpdate)} noValidate>
           <BudgetFormFields form={form} isEditing />
         </form>
         <DialogFooter>
-          <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+          <DialogClose render={<Button variant="outline" />}>{t("Cancel")}</DialogClose>
           <Button type="submit" form={formId}>
-            Save
+            {t("Save")}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -577,7 +577,7 @@ describe("AddAutoRouterTab", () => {
     mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
     renderWithProviders(<Harness />);
     await waitForAutomaticTiers();
-    await selectAutoRouterApproach("Capability");
+    await selectAutoRouterApproach("Capability classifier");
     expect(screen.queryByTestId("configure-automatically-button")).not.toBeInTheDocument();
     await selectAutoRouterApproach("Complexity");
     expect(screen.queryByTestId("configure-automatically-button")).not.toBeInTheDocument();

@@ -1,12 +1,16 @@
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import SidebarAccountMenu from "./SidebarAccountMenu";
+import { LanguageProvider } from "@/contexts/LanguageContext";
+import LanguageSelector from "@/components/LanguageSelector";
 
 interface AuthMock {
   userId: string | null;
   userEmail: string | null;
   userRoleLabel: string;
+  userRole?: string;
+  isViewOnly?: boolean;
   premiumUser: boolean;
   accessToken: string;
   loginMethod?: string | null;
@@ -144,6 +148,35 @@ describe("SidebarAccountMenu", () => {
     await openMenu(user);
 
     expect(screen.getByText("Premium")).toBeInTheDocument();
+  });
+
+  it("共享账户标签双向切换语言，账户信息保持原样", async () => {
+    localStorage.clear();
+    const user = userEvent.setup();
+    mockUseAuthorizedImpl = () => ({
+      userId: "test-user-id",
+      userEmail: "test@example.com",
+      userRoleLabel: "Admin",
+      userRole: "proxy_admin",
+      isViewOnly: false,
+      premiumUser: false,
+      accessToken: "test-token",
+    });
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="en" userId="account-labels" storageScope="test">
+        <LanguageSelector />
+        <SidebarAccountMenu onLogout={mockOnLogout} />
+      </LanguageProvider>,
+    );
+    await openMenu(user);
+
+    // 只覆盖共享账户菜单，不对独立功能开关增加翻译要求。
+    fireEvent.change(screen.getByLabelText("Interface language"), { target: { value: "zh-CN" } });
+    expect(screen.getByText("订阅版本")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "账户菜单，test@example.com" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("界面语言"), { target: { value: "en" } });
+    expect(screen.getByText("Subscription tier")).toBeInTheDocument();
+    expect(getAccountTrigger()).toHaveAttribute("aria-expanded", "true");
   });
 
   it("should render a clickable version badge linking to the release notes", async () => {

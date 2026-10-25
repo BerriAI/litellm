@@ -1,9 +1,11 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import { CheckCircle } from "lucide-react";
 import { getProxyBaseUrl, ConnectFlowStatus } from "@/components/networking";
 import { OAuth2ConnectButton } from "@/components/chat/MCPAppsPanel";
+import type { Translate } from "@/i18n/language";
 
 interface Props {
   flowHandle: string;
@@ -24,41 +26,55 @@ export function isLoopbackOrigin(origin: string | null): boolean {
   }
 }
 
-const copyFor = (flow: ConnectFlowStatus | undefined, failed: boolean): readonly [string, string] => {
-  const clientLabel = flow?.client_origin ?? "the application";
-  const serverLabel = flow?.server_name ?? "the requested MCP server";
+// 仅翻译说明文案，客户端来源和服务器名称保留原值。
+const copyFor = (flow: ConnectFlowStatus | undefined, failed: boolean, t: Translate): readonly [string, string] => {
+  const clientLabel = flow?.client_origin ?? t("the application");
+  const serverLabel = flow?.server_name ?? t("the requested MCP server");
   const serverNames = flow?.servers?.map((server) => server.server_name).join(", ") ?? "";
   if (failed || flow === undefined || flow.state === "stale") {
     return [
-      "The connection cannot continue",
-      `The gateway could not validate this connection. Cancel to return to ${clientLabel}.`,
+      t("The connection cannot continue"),
+      t("The gateway could not validate this connection. Cancel to return to {client}.", { client: clientLabel }),
     ];
   }
   if (flow.state === "unscoped") {
     return [
-      `Connect your MCP servers to ${clientLabel}`,
-      `Authorize the servers you want to use below, then click Finish connecting to return to ${clientLabel}.`,
+      t("Connect your MCP servers to {client}", { client: clientLabel }),
+      t("Authorize the servers you want to use below, then click Finish connecting to return to {client}.", {
+        client: clientLabel,
+      }),
     ];
   }
   if (flow.state === "multi") {
     const allServersConnected =
       flow.servers !== null && flow.servers.length > 0 && flow.servers.every((server) => server.connected);
     return [
-      `Allow ${clientLabel} to use ${serverNames}`,
+      t("Allow {client} to use {servers}", { client: clientLabel, servers: serverNames }),
       allServersConnected
-        ? `Click Finish connecting to give ${clientLabel} access to ${serverNames} as you.`
-        : `Authorize each requested server below to continue, or cancel to send ${clientLabel} away.`,
+        ? t("Click Finish connecting to give {client} access to {servers} as you.", {
+            client: clientLabel,
+            servers: serverNames,
+          })
+        : t("Authorize each requested server below to continue, or cancel to send {client} away.", {
+            client: clientLabel,
+          }),
     ];
   }
   if (flow.state === "interactive" && !flow.connected) {
     return [
-      `Allow ${clientLabel} to use ${serverLabel}`,
-      `Authorize ${serverLabel} below to continue, or cancel to send ${clientLabel} away.`,
+      t("Allow {client} to use {servers}", { client: clientLabel, servers: serverLabel }),
+      t("Authorize {server} below to continue, or cancel to send {client} away.", {
+        server: serverLabel,
+        client: clientLabel,
+      }),
     ];
   }
   return [
-    `Allow ${clientLabel} to use ${serverLabel}`,
-    `Click Finish connecting to give ${clientLabel} access to ${serverLabel} as you.`,
+    t("Allow {client} to use {servers}", { client: clientLabel, servers: serverLabel }),
+    t("Click Finish connecting to give {client} access to {servers} as you.", {
+      client: clientLabel,
+      servers: serverLabel,
+    }),
   ];
 };
 
@@ -83,13 +99,14 @@ const vendorServersFor = (
 };
 
 const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, flow, accessToken, onConnected, failed }) => {
+  const { t } = useLanguage();
   const action = `${getProxyBaseUrl()}/authorize/complete`;
   const state = failed || flow === undefined ? "stale" : flow.state;
   const canFinish = canFinishConnectFlow(state, flow);
   const canCancel = state !== "unscoped";
   const loopbackClient = isLoopbackOrigin(flow?.client_origin ?? null);
   const vendorServers = vendorServersFor(state, flow);
-  const copy = copyFor(flow, failed);
+  const copy = copyFor(flow, failed, t);
 
   return (
     <div className="mb-6 rounded-lg border border-primary/30 bg-primary/5 px-5 py-4">
@@ -110,7 +127,11 @@ const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, flow, accessToken, onC
               onConnect={onConnected}
               scopes={flow?.requested_scopes}
               variant="button"
-              buttonLabel={state === "multi" ? `Connect ${server.server_name ?? server.server_id}` : undefined}
+              buttonLabel={
+                state === "multi"
+                  ? t("Connect {server}", { server: server.server_name ?? server.server_id })
+                  : undefined
+              }
               {...(state === "multi"
                 ? {}
                 : { autoStartKey: `litellm-mcp-autostart:${flowHandle}:${server.server_id}` })}
@@ -123,7 +144,7 @@ const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, flow, accessToken, onC
                 type="submit"
                 className="h-[38px] rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
               >
-                Finish connecting
+                {t("Finish connecting")}
               </button>
             )}
             {canCancel && (
@@ -133,13 +154,13 @@ const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, flow, accessToken, onC
                 value="deny"
                 className="ml-2 h-[38px] rounded-md border px-4 text-sm font-semibold text-foreground hover:bg-accent/40"
               >
-                Cancel
+                {t("Cancel")}
               </button>
             )}
             {loopbackClient && (
               <label className="mt-2 flex items-center gap-2 text-[13px] text-muted-foreground">
                 <input type="checkbox" name="delivery" value="manual" />
-                My client is on a remote or SSH machine
+                {t("My client is on a remote or SSH machine")}
               </label>
             )}
           </form>

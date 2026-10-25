@@ -3,6 +3,7 @@
  * Shows arrow indicator and message count
  */
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -14,6 +15,7 @@ interface HistoryTreeProps {
 }
 
 export function HistoryTree({ messages }: HistoryTreeProps) {
+  const { t } = useLanguage();
   const [isExpanded, setIsExpanded] = useState(false);
 
   if (messages.length === 0) {
@@ -29,7 +31,9 @@ export function HistoryTree({ messages }: HistoryTreeProps) {
           <ChevronRight className="size-3 shrink-0 text-muted-foreground" />
         )}
         <span className="text-[10px] uppercase tracking-[0.5px] text-muted-foreground">
-          HISTORY ({messages.length} message{messages.length !== 1 ? "s" : ""})
+          {messages.length === 1
+            ? t("HISTORY ({count} message)", { count: messages.length })
+            : t("HISTORY ({count} messages)", { count: messages.length })}
         </span>
       </CollapsibleTrigger>
 

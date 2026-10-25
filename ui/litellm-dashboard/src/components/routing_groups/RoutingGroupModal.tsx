@@ -1,8 +1,10 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useEffect, useMemo } from "react";
 import { useWatch } from "react-hook-form";
 import { z } from "zod";
+import { englishTranslate } from "@/i18n/language";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import {
@@ -65,13 +67,14 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
   onSubmit,
   saving,
 }) => {
+  const { t } = useLanguage();
   const modelsAnchor = useComboboxAnchor();
   const selectableStrategies =
     mode === "edit" && initialValue
       ? Array.from(new Set([...availableStrategies, initialValue.routing_strategy]))
       : availableStrategies;
   const strategyItems = selectableStrategies.map((strategy) => ({
-    label: strategy === "priority" ? "Priority" : strategy,
+    label: strategy === "priority" ? t("Priority") : strategy,
     value: strategy,
   }));
 
@@ -81,12 +84,16 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
   }, [existingGroupNames, initialValue]);
 
   const schema = useMemo(() => {
+    // 本地校验保存英文原文，动态详情在字段展示时按当前语言组成。
     const shape = {
       group_name: z
         .string()
         .trim()
         .min(1, "Group name is required")
-        .max(GROUP_NAME_MAX_LENGTH, `Must be ${GROUP_NAME_MAX_LENGTH} characters or fewer`)
+        .max(
+          GROUP_NAME_MAX_LENGTH,
+          englishTranslate("Must be {count} characters or fewer", { count: GROUP_NAME_MAX_LENGTH }),
+        )
         .refine((value) => !reservedNames.has(value.toLowerCase()), "A group with this name already exists"),
       models: z.array(z.string()).min(1, "Select at least one model"),
       routing_strategy: z.string().min(1, "Strategy is required"),
@@ -114,7 +121,8 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
   const handleSubmit = async (values: z.infer<typeof schema>) => {
     const payload = buildRoutingGroupPayload(values);
     if (!payload.ok) {
-      form.setError(payload.field, { message: payload.message });
+      // payload.message 仅来自本地纯校验函数，不包含后端错误或用户原文
+      form.setError(payload.field, { type: "local-validation", message: payload.message });
       return;
     }
     await onSubmit(payload.group);
@@ -125,7 +133,7 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[560px]">
         <DialogHeader>
           <DialogTitle>
-            {mode === "create" ? "Create Routing Group" : `Edit ${initialValue?.group_name ?? ""}`}
+            {mode === "create" ? t("Create Routing Group") : t("Edit {name}", { name: initialValue?.group_name ?? "" })}
           </DialogTitle>
         </DialogHeader>
         <form onSubmit={(event) => event.preventDefault()} noValidate>
@@ -133,8 +141,15 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
             <FormField
               control={form.control}
               name="group_name"
-              label="Group Name"
-              description="Use this name as the model in API calls. LiteLLM routes the request to one of the group's models."
+              renderError={(error) =>
+                error.type === "too_big"
+                  ? t("Must be {count} characters or fewer", { count: GROUP_NAME_MAX_LENGTH })
+                  : error.message && t(error.message)
+              }
+              label={t("Routing Group Name")}
+              description={t(
+                "Use this name as the model in API calls. LiteLLM routes the request to one of the group's models.",
+              )}
             >
               {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="fast-chat" disabled={mode === "edit"} />}
             </FormField>
@@ -142,11 +157,20 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
             <FormField
               control={form.control}
               name="models"
-              label="Models"
+              renderError={(error) =>
+                error.type === "custom"
+                  ? modelConflictError(selectedModels, groupNameByModel, t) ?? error.message
+                  : error.message && t(error.message)
+              }
+              label={t("Models")}
               description={
                 selectedStrategy === "priority"
-                  ? "Models from your model list that this group routes between. Models can belong to multiple priority groups."
-                  : "Models from your model list that this group routes between. A model can belong to one non-priority group."
+                  ? t(
+                      "Models from your model list that this group routes between. Models can belong to multiple priority groups.",
+                    )
+                  : t(
+                      "Models from your model list that this group routes between. A model can belong to one non-priority group.",
+                    )
               }
             >
               {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
@@ -172,14 +196,14 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
                             id={id}
                             aria-invalid={ariaInvalid}
                             aria-describedby={ariaDescribedBy}
-                            placeholder="Select models"
+                            placeholder={t("Select models")}
                           />
                         </>
                       )}
                     </ComboboxValue>
                   </ComboboxChips>
                   <ComboboxContent anchor={modelsAnchor}>
-                    <ComboboxEmpty>No models found</ComboboxEmpty>
+                    <ComboboxEmpty>{t("No models found")}</ComboboxEmpty>
                     <ComboboxList>
                       {(model: string) => (
                         <ComboboxItem key={model} value={model}>
@@ -195,10 +219,13 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
             <FormField
               control={form.control}
               name="routing_strategy"
-              label="Routing Strategy"
+              renderError={(error) => error.message && t(error.message)}
+              label={t("Routing Strategy")}
               description={
                 selectedStrategy === "priority"
-                  ? "Lower priorities are tried first. Models with the same priority share traffic. Applies only when calling this group."
+                  ? t(
+                      "Lower priorities are tried first. Models with the same priority share traffic. Applies only when calling this group.",
+                    )
                   : strategyDescriptions[selectedStrategy]
               }
             >
@@ -215,7 +242,7 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
                   }}
                 >
                   <SelectTrigger id={id} aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy}>
-                    <SelectValue placeholder="Select strategy" />
+                    <SelectValue placeholder={t("Select strategy")} />
                   </SelectTrigger>
                   <SelectContent>
                     {strategyItems.map((strategy) => (
@@ -232,25 +259,30 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
               <FormField
                 control={form.control}
                 name="model_priorities"
-                label="Model Priorities"
-                description="Use 1 for your first choice, 2 for your next choice, and so on. Unavailable models are skipped."
+                renderError={(error) =>
+                  error.type === "local-validation" && error.message ? t(error.message) : error.message
+                }
+                label={t("Model Priorities")}
+                description={t(
+                  "Use 1 for your first choice, 2 for your next choice, and so on. Unavailable models are skipped.",
+                )}
               >
                 {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-                  <div id={id} className="space-y-2" role="group" aria-label="Model priorities">
+                  <div id={id} className="space-y-2" role="group" aria-label={t("Model priorities")}>
                     {value.length === 0 && (
-                      <p className="text-sm text-muted-foreground">Select models to set priorities</p>
+                      <p className="text-sm text-muted-foreground">{t("Select models to set priorities")}</p>
                     )}
                     {value.map((entry, index) => (
                       <div key={entry.model} className="flex items-center justify-between gap-3">
                         <label htmlFor={`${id}-${index}`} className="min-w-0 flex-1 break-words text-sm">
                           {entry.model}
                           {!selectedModels.includes(entry.model) && (
-                            <span className="block text-xs text-destructive">Model is not selected</span>
+                            <span className="block text-xs text-destructive">{t("Model is not selected")}</span>
                           )}
                         </label>
                         <Input
                           id={`${id}-${index}`}
-                          aria-label={`Priority for ${entry.model}`}
+                          aria-label={t("Priority for {model}", { model: String(entry.model) })}
                           aria-invalid={ariaInvalid}
                           aria-describedby={ariaDescribedBy}
                           inputMode="numeric"
@@ -269,10 +301,10 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
                             type="button"
                             variant="ghost"
                             size="sm"
-                            aria-label={`Remove priority for ${entry.model}`}
+                            aria-label={t("Remove priority for {model}", { model: String(entry.model) })}
                             onClick={() => onChange(value.filter((_, itemIndex) => itemIndex !== index))}
                           >
-                            Remove
+                            {t("Remove")}
                           </Button>
                         )}
                       </div>
@@ -286,8 +318,13 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
               <FormField
                 control={form.control}
                 name="routing_strategy_args"
-                label="Strategy Arguments (JSON)"
-                description={ARGS_EXAMPLES[selectedStrategy] ?? 'Example: { "ttl": 60 }'}
+                renderError={(error) =>
+                  error.type === "local-validation" && error.message ? t(error.message) : error.message
+                }
+                label={t("Strategy Arguments (JSON)")}
+                description={
+                  t("Example:") + " " + (ARGS_EXAMPLES[selectedStrategy]?.replace(/^Example: /, "") ?? '{ "ttl": 60 }')
+                }
               >
                 {({ ref, ...field }) => (
                   <Textarea {...field} ref={ref} rows={4} placeholder='{ "ttl": 3600 }' className="font-mono text-xs" />
@@ -297,17 +334,17 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
 
             <p className="text-xs text-muted-foreground">
               {selectedStrategy === "priority"
-                ? "Direct requests to a member model keep their existing routing behavior."
-                : "Models outside non-priority groups use the proxy's top-level routing strategy."}
+                ? t("Direct requests to a member model keep their existing routing behavior.")
+                : t("Models outside non-priority groups use the proxy's top-level routing strategy.")}
             </p>
           </FieldGroup>
         </form>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button onClick={() => void form.handleSubmit(handleSubmit)()} disabled={saving} aria-busy={saving}>
-            {mode === "create" ? "Create Group" : "Save Changes"}
+            {mode === "create" ? t("Create Routing Group") : t("Save Changes")}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { englishTranslate, type Translate } from "@/i18n/language";
 import { UseFormReturn, UseFormSetValue } from "react-hook-form";
 
 import { KeyResponse } from "../key_team_helpers/key_list";
@@ -123,54 +124,57 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
   rotation_interval: keyData.rotation_interval,
 });
 
-export const keyEditFormSchema = z.object({
-  key_alias: z.custom<string | undefined>().optional(),
-  models: z.custom<string[] | undefined>().optional(),
-  allowed_routes: z.custom<string | undefined>().optional(),
-  max_budget: z.custom<number | string | null | undefined>().optional(),
-  soft_budget: z.custom<number | string | null | undefined>().optional(),
-  budget_duration: z.custom<string | null | undefined>().optional(),
-  tpm_limit: z.custom<number | string | null | undefined>().optional(),
-  tpm_limit_type: z.custom<string | null | undefined>().optional(),
-  rpm_limit: z.custom<number | string | null | undefined>().optional(),
-  rpm_limit_type: z.custom<string | null | undefined>().optional(),
-  tpd_limit: z.custom<number | string | null | undefined>().optional(),
-  throttle_on_budget_exceeded: z.custom<boolean | undefined>().optional(),
-  enable_prompt_caching: z.custom<boolean | undefined>().optional(),
-  max_parallel_requests: z.custom<number | string | null | undefined>().optional(),
-  model_tpm_limit: z.custom<string | undefined>().optional(),
-  model_rpm_limit: z.custom<string | undefined>().optional(),
-  default_estimated_output_tokens: z
-    .custom<number | string | null | undefined>()
-    .refine(estimateChecks.positive.isValid, estimateChecks.positive.message)
-    .optional(),
-  default_estimated_output_tokens_per_model: z
-    .custom<string | undefined>()
-    .refine(estimateChecks.perModel.isValid, estimateChecks.perModel.message)
-    .optional(),
-  guardrails: z.custom<string[] | undefined>().optional(),
-  disable_global_guardrails: z.custom<boolean | undefined>().optional(),
-  policies: z.custom<string[] | undefined>().optional(),
-  tags: z.custom<string[] | undefined>().optional(),
-  prompts: z.custom<string[] | undefined>().optional(),
-  access_group_ids: z.custom<string[] | undefined>().optional(),
-  allowed_passthrough_routes: z.custom<string[] | undefined>().optional(),
-  vector_stores: z.custom<string[] | undefined>().optional(),
-  mcp_servers_and_groups: z.custom<McpServersAndGroups | undefined>().optional(),
-  mcp_tool_permissions: z.custom<Record<string, string[]> | undefined>().optional(),
-  agents_and_groups: z.custom<AgentsAndGroups | undefined>().optional(),
-  skills: z.custom<string[] | undefined>().optional(),
-  organization_id: z.custom<string | null | undefined>().optional(),
-  team_id: z.custom<string | null | undefined>().optional(),
-  project_id: z.string().nullable().optional(),
-  logging_settings: z.custom<unknown[] | undefined>().optional(),
-  metadata: z.custom<string | undefined>().optional(),
-  duration: z.custom<string | null | undefined>().optional(),
-  token: z.custom<string | undefined>().optional(),
-  disabled_callbacks: z.custom<string[] | undefined>().optional(),
-  auto_rotate: z.custom<boolean | undefined>().optional(),
-  rotation_interval: z.custom<string | undefined>().optional(),
-});
+export const createKeyEditFormSchema = (t: Translate) =>
+  z.object({
+    key_alias: z.custom<string | undefined>().optional(),
+    models: z.custom<string[] | undefined>().optional(),
+    allowed_routes: z.custom<string | undefined>().optional(),
+    max_budget: z.custom<number | string | null | undefined>().optional(),
+    soft_budget: z.custom<number | string | null | undefined>().optional(),
+    budget_duration: z.custom<string | null | undefined>().optional(),
+    tpm_limit: z.custom<number | string | null | undefined>().optional(),
+    tpm_limit_type: z.custom<string | null | undefined>().optional(),
+    rpm_limit: z.custom<number | string | null | undefined>().optional(),
+    rpm_limit_type: z.custom<string | null | undefined>().optional(),
+    tpd_limit: z.custom<number | string | null | undefined>().optional(),
+    throttle_on_budget_exceeded: z.custom<boolean | undefined>().optional(),
+    enable_prompt_caching: z.custom<boolean | undefined>().optional(),
+    max_parallel_requests: z.custom<number | string | null | undefined>().optional(),
+    model_tpm_limit: z.custom<string | undefined>().optional(),
+    model_rpm_limit: z.custom<string | undefined>().optional(),
+    default_estimated_output_tokens: z
+      .custom<number | string | null | undefined>()
+      .refine(estimateChecks.positive.isValid, t(estimateChecks.positive.message))
+      .optional(),
+    default_estimated_output_tokens_per_model: z
+      .custom<string | undefined>()
+      .refine(estimateChecks.perModel.isValid, t(estimateChecks.perModel.message))
+      .optional(),
+    guardrails: z.custom<string[] | undefined>().optional(),
+    disable_global_guardrails: z.custom<boolean | undefined>().optional(),
+    policies: z.custom<string[] | undefined>().optional(),
+    tags: z.custom<string[] | undefined>().optional(),
+    prompts: z.custom<string[] | undefined>().optional(),
+    access_group_ids: z.custom<string[] | undefined>().optional(),
+    allowed_passthrough_routes: z.custom<string[] | undefined>().optional(),
+    vector_stores: z.custom<string[] | undefined>().optional(),
+    mcp_servers_and_groups: z.custom<McpServersAndGroups | undefined>().optional(),
+    mcp_tool_permissions: z.custom<Record<string, string[]> | undefined>().optional(),
+    agents_and_groups: z.custom<AgentsAndGroups | undefined>().optional(),
+    skills: z.custom<string[] | undefined>().optional(),
+    organization_id: z.custom<string | null | undefined>().optional(),
+    team_id: z.custom<string | null | undefined>().optional(),
+    project_id: z.string().nullable().optional(),
+    logging_settings: z.custom<unknown[] | undefined>().optional(),
+    metadata: z.custom<string | undefined>().optional(),
+    duration: z.custom<string | null | undefined>().optional(),
+    token: z.custom<string | undefined>().optional(),
+    disabled_callbacks: z.custom<string[] | undefined>().optional(),
+    auto_rotate: z.custom<boolean | undefined>().optional(),
+    rotation_interval: z.custom<string | undefined>().optional(),
+  });
+
+export const keyEditFormSchema = createKeyEditFormSchema(englishTranslate);
 
 export interface MountedFieldGates {
   canViewPolicies: boolean;

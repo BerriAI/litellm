@@ -3,6 +3,8 @@
 import { InheritedBudgetHint, type InheritedBudgetGate } from "@/components/shared/InheritedBudgetHint";
 import { Meter, MeterIndicator, MeterTrack } from "@/components/shared/Meter";
 import { formatNumberWithCommas, getSpendString } from "@/utils/dataUtils";
+import { useLanguage } from "@/contexts/LanguageContext";
+import type { Translate } from "@/i18n/language";
 
 interface SpendBudgetCellProps {
   spend: number | null | undefined;
@@ -21,25 +23,34 @@ export const getSpendBudgetMeterTone = (pct: number): "default" | "warning" | "o
 
 const getBudgetLabel = (
   budget: number | null,
-  usesTeamMemberBudget: boolean,
-  memberSpendText: string,
-  budgetDecimals: number,
+  options: { usesTeamMemberBudget: boolean; memberSpendText: string; budgetDecimals: number },
+  t: Translate,
 ): string => {
-  if (budget === null) return "· Unlimited";
+  const { usesTeamMemberBudget, memberSpendText, budgetDecimals } = options;
+  if (budget === null) return `· ${t("Unlimited")}`;
   const formattedBudget = formatNumberWithCommas(budget, budgetDecimals);
-  if (usesTeamMemberBudget) return `· ${memberSpendText} of $${formattedBudget} (team member)`;
-  return `of $${formattedBudget}`;
+  if (usesTeamMemberBudget)
+    return t("· {spend} of {budget} (team member)", { spend: memberSpendText, budget: `$${formattedBudget}` });
+  return t("of {budget}", { budget: `$${formattedBudget}` });
 };
 
 const getMeterValueText = (
-  hasBudget: boolean,
-  budget: number | null,
-  meterSpendText: string,
-  budgetDecimals: number,
+  options: {
+    hasBudget: boolean;
+    budget: number | null;
+    meterSpendText: string;
+    budgetDecimals: number;
+    usesTeamMemberBudget: boolean;
+  },
+  t: Translate,
 ): string => {
+  const { hasBudget, budget, meterSpendText, budgetDecimals, usesTeamMemberBudget } = options;
   if (!hasBudget || budget === null) return "";
   const formattedBudget = formatNumberWithCommas(budget, budgetDecimals);
-  return `${meterSpendText} of $${formattedBudget}`;
+  return t(usesTeamMemberBudget ? "team member spend {spend} of {budget}" : "{spend} of {budget}", {
+    spend: meterSpendText,
+    budget: `$${formattedBudget}`,
+  });
 };
 
 export function SpendBudgetCell({
@@ -50,6 +61,7 @@ export function SpendBudgetCell({
   spendDecimals = 4,
   budgetDecimals = 0,
 }: SpendBudgetCellProps) {
+  const { t } = useLanguage();
   const spendValue = typeof spend === "number" && !Number.isNaN(spend) ? spend : 0;
   const ownBudget = maxBudget ?? null;
   const budget = ownBudget ?? teamMemberGate?.maxBudget ?? null;
@@ -62,9 +74,11 @@ export function SpendBudgetCell({
 
   const spendText = spendValue > 0 ? getSpendString(spendValue, spendDecimals) : "$0.00";
   const memberSpendText = memberSpendValue > 0 ? getSpendString(memberSpendValue, spendDecimals) : "$0.00";
-  const budgetLabel = getBudgetLabel(budget, usesTeamMemberBudget, memberSpendText, budgetDecimals);
-  const meterSpendText = usesTeamMemberBudget ? `team member spend ${memberSpendText}` : spendText;
-  const meterValueText = getMeterValueText(hasBudget, budget, meterSpendText, budgetDecimals);
+  // 显示文案与无障碍文案采用完整模板，金额计算和计量值保持原样。
+  const budgetLabel = getBudgetLabel(budget, { usesTeamMemberBudget, memberSpendText, budgetDecimals }, t);
+  const meterSpendText = usesTeamMemberBudget ? memberSpendText : spendText;
+  const meterOptions = { hasBudget, budget, meterSpendText, budgetDecimals, usesTeamMemberBudget };
+  const meterValueText = getMeterValueText(meterOptions, t);
 
   return (
     <div className="flex min-w-[130px] flex-col gap-1">

@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import {
   createContext,
   useCallback,
@@ -147,11 +148,12 @@ export function LiteAdminFrame({ children }: { children: ReactNode }) {
 }
 
 function AriaLauncher({ show, buttonRef }: { show: () => void; buttonRef: RefObject<HTMLButtonElement | null> }) {
+  const { t } = useLanguage();
   return (
     <Button
       ref={buttonRef}
       variant="outline"
-      aria-label={`Launch ${ARIA_AGENT_LABEL}`}
+      aria-label={t("Launch {ARIA_AGENT_LABEL}", { ARIA_AGENT_LABEL: String(ARIA_AGENT_LABEL) })}
       aria-keyshortcuts="Meta+J Control+J"
       aria-expanded={false}
       onClick={show}
@@ -164,22 +166,27 @@ function AriaLauncher({ show, buttonRef }: { show: () => void; buttonRef: RefObj
 }
 
 export function LiteAdminHome() {
+  const { t } = useLanguage();
   const state = useContext(LiteAdminContext);
   if (!state || state.access.mode !== "admin") return null;
   const { open, show, setHomeContainer } = state;
   return (
-    <section aria-label={`Ask ${ARIA_AGENT_LABEL}`} hidden={open} className="space-y-3">
+    <section
+      aria-label={t("Ask {ARIA_AGENT_LABEL}", { ARIA_AGENT_LABEL: String(ARIA_AGENT_LABEL) })}
+      hidden={open}
+      className="space-y-3"
+    >
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <h2 className="flex items-center gap-2 text-sm font-semibold">
             <AriaAvatar size={32} />
             {ARIA_AGENT_LABEL}
           </h2>
-          <p className="border-l pl-3 text-sm text-muted-foreground">Your gateway, a little easier.</p>
+          <p className="border-l pl-3 text-sm text-muted-foreground">{t("Your gateway, a little easier.")}</p>
         </div>
         <Button variant="ghost" size="sm" onClick={show} className="text-muted-foreground">
           <History className="size-3.5" />
-          Open conversation
+          {t("Open conversation")}
         </Button>
       </div>
       <div ref={setHomeContainer} />
@@ -207,13 +214,14 @@ export default function LiteAdminTrigger() {
 }
 
 export function AriaUsageTrigger() {
+  const { t } = useLanguage();
   const state = useContext(LiteAdminContext);
   if (!state) return null;
   return (
     <Button
       variant="outline"
       size="sm"
-      aria-label={`Open ${ARIA_AGENT_LABEL}`}
+      aria-label={t("Open {ARIA_AGENT_LABEL}", { ARIA_AGENT_LABEL: String(ARIA_AGENT_LABEL) })}
       aria-expanded={state.open}
       onClick={state.show}
       className="gap-1.5 border-blue-200 bg-blue-50/70 pl-1.5 text-blue-700 hover:bg-blue-100 hover:text-blue-800 dark:border-blue-400/20 dark:bg-blue-400/10 dark:text-blue-300 dark:hover:bg-blue-400/20"
@@ -225,16 +233,17 @@ export function AriaUsageTrigger() {
 }
 
 export function AriaUsageComposer() {
+  const { t } = useLanguage();
   const state = useContext(LiteAdminContext);
   if (!state) return null;
   const { open, setUsageContainer } = state;
   return (
-    <section aria-label="Ask Aria about usage" hidden={open} className="mb-4">
+    <section aria-label={t("Ask Aria about usage")} hidden={open} className="mb-4">
       <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
         <h2 className="flex items-center gap-2 text-sm font-medium">
           <AriaAvatar size={24} /> {ARIA_AGENT_LABEL}
         </h2>
-        <p className="text-sm text-muted-foreground">Your AI usage assistant</p>
+        <p className="text-sm text-muted-foreground">{t("Your AI usage assistant")}</p>
       </div>
       <div ref={setUsageContainer} />
     </section>
@@ -278,6 +287,7 @@ function Destination({
   open: boolean;
   close: () => void;
 }) {
+  const { t } = useLanguage();
   const [approved, setApproved] = useState(false);
   if (target?.baseUrl && (!target.requiresConsent || approved)) {
     return <LiteAdminChat session={{ ...session, inferenceBaseUrl: target.baseUrl }} open={open} close={close} />;
@@ -288,29 +298,30 @@ function Destination({
       close={close}
       composer={
         <div className="p-4">
-          {loading && <Skeleton className="h-24" aria-label="Loading gateway settings" />}
+          {loading && <Skeleton className="h-24" aria-label={t("Loading gateway settings")} />}
           {!loading && !target?.baseUrl && (
             <Alert variant="destructive">
-              <AlertDescription>{target?.error || "Could not load gateway settings."}</AlertDescription>
+              <AlertDescription>{target?.error || t("Could not load gateway settings.")}</AlertDescription>
               <Button variant="link" onClick={retry}>
-                Retry
+                {t("Retry")}
               </Button>
             </Alert>
           )}
           {!loading && target?.baseUrl && (
             <Card size="sm">
               <CardHeader>
-                <CardTitle>Connect to the configured gateway</CardTitle>
+                <CardTitle>{t("Connect to the configured gateway")}</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
                 <p className="break-all font-mono text-xs">{target.baseUrl}</p>
                 <p className="text-muted-foreground">
-                  This gateway uses a different address. Aria will send your existing session credential to the address
-                  shown above.
+                  {t(
+                    "This gateway uses a different address. Aria will send your existing session credential to the address shown above.",
+                  )}
                 </p>
               </CardContent>
               <CardFooter>
-                <Button onClick={() => setApproved(true)}>Use configured gateway</Button>
+                <Button onClick={() => setApproved(true)}>{t("Use configured gateway")}</Button>
               </CardFooter>
             </Card>
           )}
@@ -383,6 +394,7 @@ function useForegroundReviewFocus(
 }
 
 function LiteAdminChat({ session, open, close }: { session: LiteAdminSession; open: boolean; close: () => void }) {
+  const { t } = useLanguage();
   const state = useContext(LiteAdminContext);
   const chat = useLiteAdmin(session);
   const [input, setInput] = useState("");
@@ -469,7 +481,7 @@ function LiteAdminChat({ session, open, close }: { session: LiteAdminSession; op
           className="text-muted-foreground"
         >
           <RotateCcw className="size-3.5" />
-          Start over
+          {t("Start over")}
         </Button>
       </PanelHeader>
       <LiteAdminConversation
@@ -502,10 +514,15 @@ function LiteAdminComposer({
   usage: boolean;
   tooLong: boolean;
 }) {
+  const { t } = useLanguage();
   return (
     <div className={cn("space-y-3", !home && "border-t p-3")}>
       <ModelStatus models={models} />
-      {tooLong && <FieldError>Keep your message within {MAX_INPUT_LENGTH.toLocaleString()} characters.</FieldError>}
+      {tooLong && (
+        <FieldError>
+          {t("Keep your message within")} {MAX_INPUT_LENGTH.toLocaleString()} {t("characters.")}
+        </FieldError>
+      )}
       {home ? (
         <LiteAdminHomeComposer
           {...props}
@@ -517,7 +534,7 @@ function LiteAdminComposer({
       ) : (
         <ChatComposer
           {...props}
-          placeholder="Ask Aria…"
+          placeholder={t("Ask Aria…")}
           className="[&_[data-slot=input-group]]:min-h-0 [&_textarea]:min-h-12"
           tools={
             <ModelPicker models={models} value={model} onChange={onModelChange} disabled={props.isLoading} compact />
@@ -541,15 +558,16 @@ function ModelPicker({
   disabled: boolean;
   compact?: boolean;
 }) {
-  if (models.isPending) return <Skeleton className="h-8 w-full" aria-label="Loading models" />;
+  const { t } = useLanguage();
+  if (models.isPending) return <Skeleton className="h-8 w-full" aria-label={t("Loading models")} />;
   return (
     <SearchSelect
-      aria-label={`${ARIA_AGENT_LABEL} model`}
+      aria-label={t("{ARIA_AGENT_LABEL} model", { ARIA_AGENT_LABEL: String(ARIA_AGENT_LABEL) })}
       options={(models.data ?? []).map((item) => ({ value: item.model_group, label: item.model_group }))}
       value={value}
       onValueChange={onChange}
-      placeholder="Choose a chat model"
-      emptyText={models.data?.length ? "No matching models" : "No available models"}
+      placeholder={t("Choose a chat model")}
+      emptyText={models.data?.length ? t("No matching models") : t("No available models")}
       disabled={disabled}
       allowClear={false}
       className={compact ? "border-transparent shadow-none dark:bg-transparent" : undefined}
@@ -558,13 +576,14 @@ function ModelPicker({
 }
 
 function ModelStatus({ models }: { models: UseQueryResult<ModelGroup[]> }) {
+  const { t } = useLanguage();
   if (!models.isError) return null;
   return (
     <Alert variant="destructive">
       <AlertDescription>
-        Could not load models.{" "}
+        {t("Could not load models.")}{" "}
         <Button variant="link" onClick={() => void models.refetch()}>
-          Retry
+          {t("Retry")}
         </Button>
       </AlertDescription>
     </Alert>
@@ -572,6 +591,7 @@ function ModelStatus({ models }: { models: UseQueryResult<ModelGroup[]> }) {
 }
 
 function PanelHeader({ children }: { children?: ReactNode }) {
+  const { t } = useLanguage();
   const state = useContext(LiteAdminContext);
   return (
     <div className="flex items-start justify-between gap-3 border-b p-4">
@@ -582,13 +602,21 @@ function PanelHeader({ children }: { children?: ReactNode }) {
         </DialogTitle>
         <DialogDescription>
           {state?.access.mode === "usage"
-            ? "Your AI assistant for usage and spend."
+            ? t("Your AI assistant for usage and spend.")
             : "Ask about your gateway. Review changes in chat."}
         </DialogDescription>
       </div>
       <div className="flex shrink-0">
         {children}
-        <DialogClose render={<Button variant="ghost" size="icon-sm" aria-label={`Close ${ARIA_AGENT_LABEL}`} />}>
+        <DialogClose
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={t("Close {ARIA_AGENT_LABEL}", { ARIA_AGENT_LABEL: String(ARIA_AGENT_LABEL) })}
+            />
+          }
+        >
           <X className="size-4" />
         </DialogClose>
       </div>

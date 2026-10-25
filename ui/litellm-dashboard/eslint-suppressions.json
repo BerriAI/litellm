@@ -215,9 +215,6 @@
     },
     "max-lines": {
       "count": 1
-    },
-    "react/no-unescaped-entities": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/guardrails/_components/content_filter/CompetitorIntentConfiguration.tsx": {
@@ -1098,11 +1095,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/usage/_components/components/UsagePageView.tsx": {
-    "react-hooks/purity": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/users/_components/BulkEditUsers.tsx": {
     "prefer-const": {
       "count": 1
@@ -1304,11 +1296,6 @@
       "count": 2
     }
   },
-  "src/components/Teams.test.tsx": {
-    "max-nested-callbacks": {
-      "count": 4
-    }
-  },
   "src/components/Teams.tsx": {
     "local/no-complex-jsx-arrow": {
       "count": 3
@@ -1326,6 +1313,11 @@
   "src/components/TeamsPage/teamTableColumns.tsx": {
     "local/filename-pascal-case": {
       "count": 1
+    }
+  },
+  "src/components/TeamsShell.integration.test.tsx": {
+    "max-nested-callbacks": {
+      "count": 4
     }
   },
   "src/components/UsagePage/utils/value_formatters.tsx": {

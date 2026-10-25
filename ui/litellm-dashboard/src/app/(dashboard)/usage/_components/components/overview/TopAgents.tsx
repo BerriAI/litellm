@@ -6,6 +6,7 @@ import { StackedUsageChart } from "@/components/shared/charts";
 import { Logo } from "@/components/molecules/logo/Logo";
 import type { DailyData } from "@/components/UsagePage/types";
 import { cn } from "@/lib/cva.config";
+import { useLanguage } from "@/contexts/LanguageContext";
 import {
   bucketTotals,
   labelForDate,
@@ -84,6 +85,7 @@ function AgentItem({
   color: string | undefined;
   onOpen?: (agent: AgentRow) => void;
 }) {
+  const { t } = useLanguage();
   const openRow = onOpen && agent.tags.length > 0 ? () => onOpen(agent) : undefined;
   const content = (
     <>
@@ -102,15 +104,17 @@ function AgentItem({
         <span className="block truncate text-sm font-medium text-foreground">{agent.label}</span>
         {openRow ? (
           <span className="inline-flex items-center gap-1 text-xs text-muted-foreground group-hover:text-foreground">
-            View activity
+            {t("View activity")}
             <ArrowRight aria-hidden="true" className="size-3 transition-transform group-hover:translate-x-0.5" />
           </span>
         ) : (
-          <span className="block truncate text-xs text-muted-foreground">{agent.description}</span>
+          <span className="block truncate text-xs text-muted-foreground">{t(agent.description)}</span>
         )}
       </span>
       <span className="text-right">
-        <span className="block text-sm tabular-nums text-foreground">{formatCompact(agent.tokens)} tokens</span>
+        <span className="block text-sm tabular-nums text-foreground">
+          {t("{count} tokens", { count: formatCompact(agent.tokens) })}
+        </span>
         <span className="block text-xs tabular-nums text-muted-foreground">
           {formatCompactUsd(agent.spend)} · {share.toFixed(1)}%
         </span>
@@ -124,7 +128,7 @@ function AgentItem({
       {openRow ? (
         <button
           type="button"
-          aria-label={`View ${agent.label} usage`}
+          aria-label={t("View {agent} usage", { agent: agent.label })}
           onClick={openRow}
           className={cn(
             rowClassName,
@@ -141,8 +145,10 @@ function AgentItem({
 }
 
 function TopAgentsBody({ loading, empty, children }: { loading: boolean; empty: boolean; children: React.ReactNode }) {
+  const { t } = useLanguage();
   if (loading) return <ChartSkeleton className="mx-5 h-64 w-auto" />;
-  if (empty) return <p className="py-10 text-center text-xs text-muted-foreground">No agent traffic in this range</p>;
+  if (empty)
+    return <p className="py-10 text-center text-xs text-muted-foreground">{t("No agent traffic in this range")}</p>;
   return <>{children}</>;
 }
 
@@ -167,6 +173,7 @@ export default function TopAgents({
   totalTokens: number;
   onOpenAgent?: (agent: AgentRow) => void;
 }) {
+  const { t, language } = useLanguage();
   const [metric, setMetric] = useState<UsageMetric>("tokens");
   const allAgents = useMemo(() => topAgents(rows ?? []), [rows]);
   const agents = useMemo(
@@ -177,7 +184,10 @@ export default function TopAgents({
       ].slice(0, ROWS),
     [allAgents],
   );
-  const series = useMemo(() => seriesBy(agentDailyData(daily), "models", metric, CHART_SERIES), [daily, metric]);
+  const series = useMemo(
+    () => seriesBy(agentDailyData(daily), "models", metric, { top: CHART_SERIES, otherLabel: t("Other") }),
+    [daily, metric, t],
+  );
   const totalsByDay = useMemo(() => bucketTotals(series), [series]);
   const colorOf = (label: string) => {
     const index = series.labels.indexOf(label);
@@ -189,17 +199,26 @@ export default function TopAgents({
   const coverage = totalTokens > 0 ? Math.min(attributedTokens / totalTokens, 1) : 1;
   const subtitle =
     coverage < COVERAGE_NOTE_BELOW
-      ? `Daily usage by agent. ${Math.round(coverage * 100)}% of tokens came with a User-Agent; the rest is unattributed`
-      : "Daily usage by agent, from each request's User-Agent";
+      ? t("Daily usage by agent. {percentage}% of tokens came with a User-Agent; the rest is unattributed", {
+          percentage: Math.round(coverage * 100),
+        })
+      : t("Daily usage by agent, from each request's User-Agent");
   const half = Math.ceil(agents.length / 2);
 
   return (
     <Panel
       icon={Bot}
-      title="Top agents"
+      title={t("Top agents")}
       subtitle={subtitle}
       testId="top-agents"
-      action={<Segmented label="Agent metric" value={metric} options={METRICS} onChange={setMetric} />}
+      action={
+        <Segmented
+          label={t("Agent metric")}
+          value={metric}
+          options={METRICS.map((option) => ({ ...option, label: t(option.label) }))}
+          onChange={setMetric}
+        />
+      }
       bodyClassName="px-0 pt-4 pb-0"
     >
       <TopAgentsBody loading={loading} empty={agents.length === 0}>
@@ -210,7 +229,7 @@ export default function TopAgents({
             labels={series.labels}
             colors={series.colors}
             xKey="date"
-            xLabel={(date) => labelForDate(series, date)}
+            xLabel={(date) => (language === "zh-CN" ? date : labelForDate(series, date))}
             format={(value) => formatMetricValue(value, metric)}
             totalFor={(date) => totalsByDay.get(date)}
             className="h-64"

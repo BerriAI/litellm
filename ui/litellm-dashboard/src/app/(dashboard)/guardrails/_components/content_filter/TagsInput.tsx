@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useState } from "react";
 
 import {
@@ -52,6 +53,7 @@ export const TagsInput = ({
   disabled = false,
   id,
 }: TagsInputProps) => {
+  const { t } = useLanguage();
   const anchor = useComboboxAnchor();
   const [query, setQuery] = useState("");
 
@@ -118,7 +120,7 @@ export const TagsInput = ({
               ))}
               <ComboboxChipsInput
                 id={id}
-                placeholder={loading ? "Loading..." : placeholder}
+                placeholder={loading ? t("Loading...") : placeholder}
                 className="min-w-24"
                 onBlur={commitPending}
                 onKeyDown={handleKeyDown}

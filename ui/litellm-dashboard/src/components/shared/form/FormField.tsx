@@ -5,6 +5,7 @@ import {
   Controller,
   type Control,
   type ControllerRenderProps,
+  type FieldError as FormFieldError,
   type FieldPath,
   type FieldValues,
 } from "react-hook-form";
@@ -27,6 +28,7 @@ export interface FormFieldProps<TFieldValues extends FieldValues, TName extends 
   description?: React.ReactNode;
   orientation?: "vertical" | "horizontal" | "responsive";
   className?: string;
+  renderError?: (error: FormFieldError) => React.ReactNode;
   children: (control: FormFieldControlProps<TFieldValues, TName>) => React.ReactNode;
 }
 
@@ -37,6 +39,7 @@ export const FormField = <TFieldValues extends FieldValues, TName extends FieldP
   description,
   orientation,
   className,
+  renderError,
   children,
 }: FormFieldProps<TFieldValues, TName>) => {
   const reactId = React.useId();
@@ -66,7 +69,10 @@ export const FormField = <TFieldValues extends FieldValues, TName extends FieldP
             {label !== undefined && <FieldLabel htmlFor={controlId}>{label}</FieldLabel>}
             {children(controlProps)}
             {description !== undefined && <FieldDescription id={descriptionId}>{description}</FieldDescription>}
-            <FieldError id={errorId} errors={[fieldState.error]} />
+            {/* 仅调用方识别的本地错误按当前语言渲染，其他错误保持原文。 */}
+            <FieldError id={errorId} errors={[fieldState.error]}>
+              {fieldState.error && renderError ? renderError(fieldState.error) : undefined}
+            </FieldError>
           </Field>
         );
       }}

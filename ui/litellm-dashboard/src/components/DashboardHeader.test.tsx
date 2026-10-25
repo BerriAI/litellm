@@ -9,7 +9,7 @@ const { mockUsePluginMode, mockUseUISettings, state } = vi.hoisted(() => {
     plugins: [] as { name: string; display_name: string; url: string }[],
     enableChatUI: false,
     pathname: "/ui/logs",
-    isDesktop: false,
+    width: 390,
   };
   return {
     state,
@@ -21,7 +21,10 @@ const { mockUsePluginMode, mockUseUISettings, state } = vi.hoisted(() => {
 vi.mock("@/contexts/PluginModeContext", () => ({ usePluginMode: mockUsePluginMode }));
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({ useUISettings: mockUseUISettings }));
 vi.mock("next/navigation", () => ({ usePathname: () => state.pathname }));
-vi.mock("usehooks-ts", () => ({ useMediaQuery: () => state.isDesktop }));
+// 按视口计算断点，让测试覆盖平板上的真实工具栏行为
+vi.mock("usehooks-ts", () => ({
+  useMediaQuery: (query: string) => state.width >= Number(/min-width:\s*(\d+)px/.exec(query)?.[1] ?? Infinity),
+}));
 vi.mock("@/hooks/useWorker", () => ({ useWorker: () => ({ isControlPlane: false, selectedWorker: null }) }));
 vi.mock("@/app/(dashboard)/hooks/useDisableShowPrompts", () => ({ useDisableShowPrompts: () => false }));
 vi.mock("@/components/Navbar/BlogDropdown/BlogDropdown", () => ({ BlogDropdown: () => null }));
@@ -48,7 +51,7 @@ describe("DashboardHeader breadcrumb", () => {
     state.plugins = [];
     state.enableChatUI = false;
     state.pathname = "/ui/logs";
-    state.isDesktop = false;
+    state.width = 390;
     localStorage.clear();
   });
 
@@ -132,7 +135,7 @@ describe("DashboardHeader breadcrumb", () => {
     fireEvent.click(screen.getByRole("button", { name: "More options" }));
     expect(await screen.findByRole("dialog", { name: "Gateway tools" })).toBeInTheDocument();
 
-    state.isDesktop = true;
+    state.width = 1280;
     rerender(
       <CommandPaletteProvider>
         <DashboardHeader accessToken={null} />
@@ -140,12 +143,20 @@ describe("DashboardHeader breadcrumb", () => {
     );
     expect(screen.queryByRole("dialog", { name: "Gateway tools" })).not.toBeInTheDocument();
 
-    state.isDesktop = false;
+    state.width = 390;
     rerender(
       <CommandPaletteProvider>
         <DashboardHeader accessToken={null} />
       </CommandPaletteProvider>,
     );
     expect(screen.queryByRole("dialog", { name: "Gateway tools" })).not.toBeInTheDocument();
+  });
+
+  it("平板宽度通过更多选项访问语言选择，避免完整工具栏挤出窗口", async () => {
+    state.width = 1000;
+    renderDashboardHeader();
+    fireEvent.click(screen.getByRole("button", { name: "More options" }));
+    const tools = await screen.findByRole("dialog", { name: "Gateway tools" });
+    expect(within(tools).getByRole("combobox", { name: "Interface language" })).toBeInTheDocument();
   });
 });

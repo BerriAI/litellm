@@ -4,6 +4,7 @@
  * in a readable format instead of raw JSON.
  */
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useState } from "react";
 import { ChevronDown, ChevronUp, MessageSquare, Mic, Settings, Volume2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -82,6 +83,7 @@ export function isRealtimeResponse(response: any): boolean {
 }
 
 export function RealtimePrettyView({ response, metrics }: RealtimePrettyViewProps) {
+  const { t } = useLanguage();
   const events: RealtimeEvent[] = response?.results || [];
   const usage = response?.usage;
 
@@ -114,7 +116,7 @@ export function RealtimePrettyView({ response, metrics }: RealtimePrettyViewProp
             fontSize: 13,
           }}
         >
-          No recognized realtime events found
+          {t("No recognized realtime events found")}
         </div>
       )}
     </div>
@@ -122,6 +124,7 @@ export function RealtimePrettyView({ response, metrics }: RealtimePrettyViewProp
 }
 
 function SessionCard({ session, turnCount }: { session: RealtimeSession; turnCount: number }) {
+  const { t } = useLanguage();
   const [isCollapsed, setIsCollapsed] = useState(true);
 
   return (
@@ -162,14 +165,14 @@ function SessionCard({ session, turnCount }: { session: RealtimeSession; turnCou
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <Settings className="size-3.5 text-muted-foreground" />
-            <span style={{ fontWeight: 500, fontSize: 14 }}>Session</span>
+            <span style={{ fontWeight: 500, fontSize: 14 }}>{t("Session")}</span>
           </div>
           <span className="text-muted-foreground" style={{ fontSize: 12 }}>
             {session.model}
           </span>
           {turnCount > 0 && (
             <Badge variant="secondary" style={{ margin: 0, fontWeight: 500 }}>
-              {turnCount} {turnCount === 1 ? "turn" : "turns"}
+              {turnCount} {turnCount === 1 ? t("turn") : t("turns")}
             </Badge>
           )}
           {session.voice && (
@@ -181,7 +184,8 @@ function SessionCard({ session, turnCount }: { session: RealtimeSession; turnCou
             <div style={{ display: "flex", gap: 4 }}>
               {session.modalities.map((m) => (
                 <Badge key={m} variant="outline" style={{ margin: 0 }}>
-                  {m === "audio" ? <Mic className="size-3" /> : <MessageSquare className="size-3" />} {m}
+                  {m === "audio" ? <Mic className="size-3" /> : <MessageSquare className="size-3" />}{" "}
+                  {m === "audio" || m === "text" ? t(m) : m}
                 </Badge>
               ))}
             </div>
@@ -206,15 +210,15 @@ function SessionCard({ session, turnCount }: { session: RealtimeSession; turnCou
               fontSize: 13,
             }}
           >
-            <ConfigRow label="Model" value={session.model} />
-            <ConfigRow label="Voice" value={session.voice} />
-            <ConfigRow label="Temperature" value={session.temperature} />
-            <ConfigRow label="Max Output Tokens" value={session.max_response_output_tokens} />
-            <ConfigRow label="Input Audio Format" value={session.input_audio_format} />
-            <ConfigRow label="Output Audio Format" value={session.output_audio_format} />
-            {session.turn_detection && <ConfigRow label="Turn Detection" value={session.turn_detection.type} />}
+            <ConfigRow label={t("Model")} value={session.model} />
+            <ConfigRow label={t("Voice")} value={session.voice} />
+            <ConfigRow label={t("Temperature")} value={session.temperature} />
+            <ConfigRow label={t("Max Output Tokens")} value={session.max_response_output_tokens} />
+            <ConfigRow label={t("Input Audio Format")} value={session.input_audio_format} />
+            <ConfigRow label={t("Output Audio Format")} value={session.output_audio_format} />
+            {session.turn_detection && <ConfigRow label={t("Turn Detection")} value={session.turn_detection.type} />}
             {session.tools && session.tools.length > 0 && (
-              <ConfigRow label="Tools" value={`${session.tools.length} tool(s)`} />
+              <ConfigRow label={t("Tools")} value={t("{count} tool(s)", { count: session.tools.length })} />
             )}
           </div>
 
@@ -230,7 +234,7 @@ function SessionCard({ session, turnCount }: { session: RealtimeSession; turnCou
                   marginBottom: 4,
                 }}
               >
-                Instructions
+                {t("Instructions")}
               </span>
               <div
                 style={{
@@ -316,6 +320,7 @@ function ConversationCard({
 }
 
 function ResponseTurn({ response, index }: { response: RealtimeResponse; index: number }) {
+  const { t } = useLanguage();
   const outputs = response.output || [];
   const usage = response.usage;
 
@@ -337,11 +342,11 @@ function ResponseTurn({ response, index }: { response: RealtimeResponse; index: 
         }}
       >
         <Badge variant={response.status === "completed" ? "secondary" : "outline"} style={{ margin: 0 }}>
-          {response.status || "unknown"}
+          {response.status || t("unknown")}
         </Badge>
         {usage && (
           <span className="text-muted-foreground" style={{ fontSize: 11 }}>
-            {usage.input_tokens ?? 0} in / {usage.output_tokens ?? 0} out tokens
+            {usage.input_tokens ?? 0} {t("in /")} {usage.output_tokens ?? 0} {t("out tokens")}
           </span>
         )}
         {response.conversation_id && (
@@ -350,7 +355,7 @@ function ResponseTurn({ response, index }: { response: RealtimeResponse; index: 
               <TooltipTrigger
                 render={<span className="text-muted-foreground" style={{ fontSize: 11, cursor: "help" }} />}
               >
-                conv: {response.conversation_id.slice(0, 12)}...
+                {t("conv:")} {response.conversation_id.slice(0, 12)}...
               </TooltipTrigger>
               <TooltipContent>{response.conversation_id}</TooltipContent>
             </Tooltip>
@@ -364,13 +369,14 @@ function ResponseTurn({ response, index }: { response: RealtimeResponse; index: 
       ))}
 
       {/* Token breakdown if available */}
-      {usage?.input_token_details && <TokenBreakdown label="Input" details={usage.input_token_details} />}
-      {usage?.output_token_details && <TokenBreakdown label="Output" details={usage.output_token_details} />}
+      {usage?.input_token_details && <TokenBreakdown label={t("Input")} details={usage.input_token_details} />}
+      {usage?.output_token_details && <TokenBreakdown label={t("Output")} details={usage.output_token_details} />}
     </div>
   );
 }
 
 function OutputMessage({ output }: { output: RealtimeOutputItem }) {
+  const { t } = useLanguage();
   const contents = output.content || [];
   const hasTranscripts = contents.some((c) => c.transcript || c.text);
 
@@ -388,7 +394,7 @@ function OutputMessage({ output }: { output: RealtimeOutputItem }) {
           marginBottom: 3,
         }}
       >
-        {output.role?.toUpperCase() || "ASSISTANT"}
+        {output.role?.toUpperCase() || t("ASSISTANT")}
       </span>
       {contents.map((c, cIdx) => {
         const text = c.transcript || c.text;
@@ -440,6 +446,7 @@ function OutputMessage({ output }: { output: RealtimeOutputItem }) {
 }
 
 function TokenBreakdown({ label, details }: { label: string; details: Record<string, any> }) {
+  const { t } = useLanguage();
   const entries = Object.entries(details).filter(
     ([, v]) => typeof v === "number" || (typeof v === "object" && v !== null),
   );
@@ -452,7 +459,7 @@ function TokenBreakdown({ label, details }: { label: string; details: Record<str
         className="text-muted-foreground"
         style={{ fontSize: 10, letterSpacing: "0.5px", textTransform: "uppercase" }}
       >
-        {label} Token Breakdown
+        {label} {t("Token Breakdown")}
       </span>
       <div
         style={{
@@ -466,7 +473,7 @@ function TokenBreakdown({ label, details }: { label: string; details: Record<str
           if (typeof value === "number") {
             return (
               <Badge key={key} variant="outline" style={{ margin: 0 }}>
-                {formatTokenLabel(key)}: {value.toLocaleString()}
+                {formatTokenLabel(key, t)}: {value.toLocaleString()}
               </Badge>
             );
           }
@@ -489,6 +496,8 @@ function ConfigRow({ label, value }: { label: string; value: any }) {
   );
 }
 
-function formatTokenLabel(key: string): string {
-  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+function formatTokenLabel(key: string, t: (message: string) => string): string {
+  const label = key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  // 实时接口的内建 Token 字段可翻译，扩展字段仍保留原标签。
+  return ["text_tokens", "audio_tokens", "cached_tokens", "image_tokens"].includes(key) ? t(label) : label;
 }

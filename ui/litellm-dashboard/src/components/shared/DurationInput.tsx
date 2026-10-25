@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import type { ComponentProps } from "react";
 import { useId, useState } from "react";
 import { Input } from "@/components/ui/input";
@@ -15,6 +16,7 @@ export type DurationInputProps = Omit<ComponentProps<"div">, "onChange"> & {
 };
 
 export function DurationInput({ label, value, onChange, base, max, className, ...props }: DurationInputProps) {
+  const { t } = useLanguage();
   const id = useId();
   const units =
     base === "minutes"
@@ -48,7 +50,7 @@ export function DurationInput({ label, value, onChange, base, max, className, ..
         />
         <div className="relative w-28 shrink-0">
           <select
-            aria-label={`${label} unit`}
+            aria-label={t("{label} unit", { label: String(label) })}
             value={scale}
             className="h-9 w-full appearance-none rounded-md border border-input bg-background pl-3 pr-9 text-sm"
             onChange={(event) => changeUnit(Number(event.target.value))}

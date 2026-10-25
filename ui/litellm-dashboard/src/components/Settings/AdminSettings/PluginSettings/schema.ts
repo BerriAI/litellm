@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { englishTranslate, type Translate } from "@/i18n/language";
 
 const IPV4 = "(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]\\d|\\d)(?:\\.(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]\\d|\\d)){3}";
 const SEG = "[a-fA-F\\d]{1,4}";
@@ -24,16 +25,20 @@ const URL_RULE_PATTERN = new RegExp(
 
 const isUrl = (value: string): boolean => value.length <= 2048 && URL_RULE_PATTERN.test(value);
 
-const pluginShape = {
-  name: z.string().min(1, "Required"),
-  display_name: z.string().min(1, "Required"),
-  url: z
-    .string()
-    .min(1, "Required")
-    .refine((value) => value === "" || isUrl(value), "Must be a valid URL"),
-  plugin_key: z.string().optional(),
+// 校验提示跟随界面语言，插件标识和 URL 保持原值
+export const buildPluginSchema = (t: Translate = englishTranslate) => {
+  const shape = {
+    name: z.string().min(1, t("Required")),
+    display_name: z.string().min(1, t("Required")),
+    url: z
+      .string()
+      .min(1, t("Required"))
+      .refine((value) => value === "" || isUrl(value), t("Must be a valid URL")),
+    plugin_key: z.string().optional(),
+  };
+  return z.object(shape);
 };
 
-export const pluginSchema = z.object(pluginShape);
+export const pluginSchema = buildPluginSchema();
 
 export type PluginFormValues = z.output<typeof pluginSchema>;

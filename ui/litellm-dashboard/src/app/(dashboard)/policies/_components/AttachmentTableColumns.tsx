@@ -1,5 +1,7 @@
 "use client";
 
+import { englishTranslate, type Translate } from "@/i18n/language";
+import { useLanguage } from "@/contexts/LanguageContext";
 import { ColumnDef } from "@tanstack/react-table";
 import { Copy, MoreHorizontal, Trash2 } from "lucide-react";
 
@@ -45,12 +47,13 @@ const CONFIG_ATTACHMENT_HINT =
   "Config attachments are defined in the config file and cannot be deleted from the dashboard.";
 
 function AttachmentRowActions({ attachment, isAdmin, onDeleteClick }: AttachmentRowActionsProps) {
+  const { t } = useLanguage();
   const isConfigAttachment = attachment.definition_location === "config";
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label="Open attachment actions"
+        aria-label={t("Open attachment actions")}
         data-testid={`attachment-actions-${attachment.attachment_id}`}
         className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "text-muted-foreground")}
       >
@@ -59,10 +62,10 @@ function AttachmentRowActions({ attachment, isAdmin, onDeleteClick }: Attachment
       <DropdownMenuContent align="end" className="w-52">
         <DropdownMenuItem
           data-testid="attachment-action-copy-id"
-          onClick={() => void copyToClipboard(attachment.attachment_id, "Attachment ID copied")}
+          onClick={() => void copyToClipboard(attachment.attachment_id, t("Attachment ID copied"))}
         >
           <Copy />
-          Copy attachment ID
+          {t("Copy attachment ID")}
         </DropdownMenuItem>
         {isAdmin && (
           <>
@@ -75,7 +78,7 @@ function AttachmentRowActions({ attachment, isAdmin, onDeleteClick }: Attachment
               onClick={() => onDeleteClick(attachment.attachment_id)}
             >
               <Trash2 />
-              Delete attachment
+              {t("Delete attachment")}
             </DropdownMenuItem>
           </>
         )}
@@ -85,12 +88,14 @@ function AttachmentRowActions({ attachment, isAdmin, onDeleteClick }: Attachment
 }
 
 interface AttachmentTableColumnsDeps {
+  t?: Translate;
   isAdmin: boolean;
   accessToken: string | null;
   onDeleteClick: (attachmentId: string) => void;
 }
 
 export const getAttachmentTableColumns = ({
+  t = englishTranslate,
   isAdmin,
   accessToken,
   onDeleteClick,
@@ -98,8 +103,8 @@ export const getAttachmentTableColumns = ({
   {
     id: "attachment_id",
     accessorKey: "attachment_id",
-    meta: { title: "Attachment ID" },
-    header: "Attachment ID",
+    meta: { title: t("Attachment ID") },
+    header: t("Attachment ID"),
     size: 160,
     enableSorting: false,
     cell: ({ row }) => <IdCell value={row.original.attachment_id} variant="plain" />,
@@ -107,8 +112,8 @@ export const getAttachmentTableColumns = ({
   {
     id: "policy_name",
     accessorKey: "policy_name",
-    meta: { title: "Policy", skeleton: "badge" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Policy" />,
+    meta: { title: t("Policy"), skeleton: "badge" },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Policy")} />,
     size: 180,
     enableSorting: true,
     cell: ({ row }) => <StatusBadge tone="info" label={row.original.policy_name} />,
@@ -116,8 +121,8 @@ export const getAttachmentTableColumns = ({
   {
     id: "scope",
     accessorFn: (row) => row.scope ?? "",
-    meta: { title: "Scope", skeleton: "badge" },
-    header: "Scope",
+    meta: { title: t("Scope"), skeleton: "badge" },
+    header: t("Scope"),
     size: 120,
     enableSorting: false,
     cell: ({ row }) => {
@@ -126,7 +131,7 @@ export const getAttachmentTableColumns = ({
         return <span className="text-muted-foreground">-</span>;
       }
       if (scope === "*") {
-        return <StatusBadge tone="warning" label="Global (*)" />;
+        return <StatusBadge tone="warning" label={t("Global (*)")} />;
       }
       return (
         <span className="block max-w-40 truncate text-xs" title={scope}>
@@ -137,32 +142,32 @@ export const getAttachmentTableColumns = ({
   },
   {
     id: "teams",
-    meta: { title: "Teams", skeleton: "chips" },
-    header: "Teams",
+    meta: { title: t("Teams"), skeleton: "chips" },
+    header: t("Teams"),
     size: 160,
     enableSorting: false,
     cell: ({ row }) => <ChipList values={row.original.teams ?? []} />,
   },
   {
     id: "keys",
-    meta: { title: "Keys", skeleton: "chips" },
-    header: "Keys",
+    meta: { title: t("Keys"), skeleton: "chips" },
+    header: t("Keys"),
     size: 160,
     enableSorting: false,
     cell: ({ row }) => <ChipList values={row.original.keys ?? []} />,
   },
   {
     id: "models",
-    meta: { title: "Models", skeleton: "chips" },
-    header: "Models",
+    meta: { title: t("Models"), skeleton: "chips" },
+    header: t("Models"),
     size: 160,
     enableSorting: false,
     cell: ({ row }) => <ChipList values={row.original.models ?? []} />,
   },
   {
     id: "tags",
-    meta: { title: "Tags", skeleton: "chips" },
-    header: "Tags",
+    meta: { title: t("Tags"), skeleton: "chips" },
+    header: t("Tags"),
     size: 160,
     enableSorting: false,
     cell: ({ row }) => <ChipList values={row.original.tags ?? []} />,
@@ -170,8 +175,8 @@ export const getAttachmentTableColumns = ({
   {
     id: "priority",
     accessorFn: (row) => row.priority ?? Number.POSITIVE_INFINITY,
-    meta: { title: "Priority" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Priority" />,
+    meta: { title: t("Priority") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Priority")} />,
     size: 100,
     enableSorting: true,
     cell: ({ row }) =>
@@ -184,13 +189,17 @@ export const getAttachmentTableColumns = ({
   {
     id: "default",
     accessorFn: (row) => (row.default ? 1 : 0),
-    meta: { title: "Default" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Default" />,
+    meta: { title: t("Default") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Default")} />,
     size: 100,
     enableSorting: true,
     cell: ({ row }) =>
       row.original.default ? (
-        <StatusBadge tone="info" label="Default" tooltip="Applied only when no non-default attachment matches" />
+        <StatusBadge
+          tone="info"
+          label={t("Default")}
+          tooltip={t("Applied only when no non-default attachment matches")}
+        />
       ) : (
         <span className="text-muted-foreground">-</span>
       ),
@@ -198,8 +207,8 @@ export const getAttachmentTableColumns = ({
   {
     id: "created_at",
     accessorFn: (row) => row.created_at ?? "",
-    meta: { title: "Created At" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Created At" />,
+    meta: { title: t("Created At") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Created At")} />,
     size: 150,
     enableSorting: true,
     cell: ({ row }) => <DateCell value={row.original.created_at} />,
@@ -207,7 +216,7 @@ export const getAttachmentTableColumns = ({
   {
     id: "actions",
     meta: { className: "text-right", headerClassName: "text-right" },
-    header: () => <span className="sr-only">Actions</span>,
+    header: () => <span className="sr-only">{t("Actions")}</span>,
     size: 88,
     enableSorting: false,
     enableHiding: false,

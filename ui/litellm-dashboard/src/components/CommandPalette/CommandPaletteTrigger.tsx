@@ -7,21 +7,23 @@ import { routeSegmentForPathname } from "@/utils/uiHref";
 import { paletteScopeForRoute } from "./utils";
 import { useCommandPalette } from "./CommandPaletteProvider";
 import { useShortcutLabel } from "./useShortcutLabel";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 export function CommandPaletteTrigger({ mobile = false }: { mobile?: boolean }) {
+  const { t } = useLanguage();
   const pathname = usePathname();
   const { open, setOpen } = useCommandPalette();
   const shortcut = useShortcutLabel();
   const isKeysRoute = paletteScopeForRoute(routeSegmentForPathname(pathname)) === "keys";
-  const label = isKeysRoute ? "Search keys…" : "Search or jump to…";
+  const label = t(isKeysRoute ? "Search keys…" : "Search or jump to…");
 
   if (mobile) {
     return (
       <Button
         variant="ghost"
         size="icon"
-        className="size-11 md:hidden"
-        aria-label="Search"
+        className="size-11 xl:hidden"
+        aria-label={t("Search")}
         aria-expanded={open}
         onClick={() => setOpen(true)}
       >
@@ -33,7 +35,7 @@ export function CommandPaletteTrigger({ mobile = false }: { mobile?: boolean }) 
   return (
     <button
       type="button"
-      className="hidden h-8 w-64 shrink-0 items-center justify-between rounded-lg border border-border bg-muted/40 px-2.5 text-sm text-muted-foreground transition-colors hover:bg-muted lg:w-80 md:flex"
+      className="hidden h-8 w-64 shrink-0 items-center justify-between rounded-lg border border-border bg-muted/40 px-2.5 text-sm text-muted-foreground transition-colors hover:bg-muted lg:w-80 xl:flex"
       aria-label={label}
       aria-expanded={open}
       onClick={() => setOpen(true)}

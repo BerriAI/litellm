@@ -2,6 +2,7 @@
  * Expanded content for a tool with view mode toggle
  */
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useState } from "react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ParsedTool } from "./types";
@@ -15,6 +16,7 @@ interface ToolExpandedContentProps {
 }
 
 export function ToolExpandedContent({ tool }: ToolExpandedContentProps) {
+  const { t } = useLanguage();
   const [viewMode, setViewMode] = useState<ViewMode>("formatted");
 
   return (
@@ -27,10 +29,10 @@ export function ToolExpandedContent({ tool }: ToolExpandedContentProps) {
           marginBottom: 12,
         }}
       >
-        <span className="text-xs text-muted-foreground">Description</span>
+        <span className="text-xs text-muted-foreground">{t("Description")}</span>
         <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as ViewMode)}>
           <TabsList>
-            <TabsTrigger value="formatted">Formatted</TabsTrigger>
+            <TabsTrigger value="formatted">{t("Formatted")}</TabsTrigger>
             <TabsTrigger value="json">JSON</TabsTrigger>
           </TabsList>
         </Tabs>

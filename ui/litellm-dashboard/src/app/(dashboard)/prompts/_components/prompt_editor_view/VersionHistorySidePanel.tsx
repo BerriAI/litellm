@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useEffect, useState } from "react";
 import { getPromptVersions, PromptSpec } from "@/components/networking";
 import { Badge } from "@/components/ui/badge";
@@ -22,6 +23,7 @@ const VersionHistorySidePanel: React.FC<VersionHistorySidePanelProps> = ({
   activeVersionId,
   onSelectVersion,
 }) => {
+  const { t } = useLanguage();
   const [versions, setVersions] = useState<PromptSpec[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -90,23 +92,23 @@ const VersionHistorySidePanel: React.FC<VersionHistorySidePanelProps> = ({
     >
       <Button type="button" variant="ghost" size="icon-sm" className="absolute top-4 right-4" onClick={onClose}>
         <XIcon />
-        <span className="sr-only">Close</span>
+        <span className="sr-only">{t("Close")}</span>
       </Button>
       <header className="flex flex-col gap-1.5 p-4">
         <h2 id="version-history-title" className="font-medium text-foreground">
-          Version History
+          {t("Version History")}
         </h2>
       </header>
       <div className="overflow-y-auto px-4 pb-4">
         {loading ? (
-          <div className="space-y-3" role="status" aria-label="Loading version history">
+          <div className="space-y-3" role="status" aria-label={t("Loading version history")}>
             <Skeleton className="h-24 w-full" />
             <Skeleton className="h-24 w-full" />
             <Skeleton className="h-24 w-full" />
             <Skeleton className="h-24 w-full" />
           </div>
         ) : versions.length === 0 ? (
-          <div className="text-center py-8 text-muted-foreground">No version history available.</div>
+          <div className="text-center py-8 text-muted-foreground">{t("No version history available.")}</div>
         ) : (
           <div className="space-y-4">
             {versions.map((item, index) => {
@@ -138,15 +140,15 @@ const VersionHistorySidePanel: React.FC<VersionHistorySidePanelProps> = ({
                   <div className="flex justify-between items-start mb-2">
                     <div className="flex items-center gap-2">
                       <Badge variant="secondary">{getVersionNumber(item)}</Badge>
-                      {index === 0 && <Badge>Latest</Badge>}
+                      {index === 0 && <Badge>{t("Latest")}</Badge>}
                     </div>
-                    {isSelected && <Badge variant="secondary">Active</Badge>}
+                    {isSelected && <Badge variant="secondary">{t("Active")}</Badge>}
                   </div>
 
                   <div className="flex flex-col gap-1">
                     <span className="text-sm text-muted-foreground font-medium">{formatDate(item.created_at)}</span>
                     <span className="text-xs text-muted-foreground">
-                      {item.prompt_info?.prompt_type === "db" ? "Saved to Database" : "Config Prompt"}
+                      {item.prompt_info?.prompt_type === "db" ? t("Saved to Database") : t("Config Prompt")}
                     </span>
                   </div>
                 </button>

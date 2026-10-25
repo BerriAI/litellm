@@ -1,11 +1,17 @@
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { vectorStoreCreateCall } from "@/components/networking";
 import { toast } from "@/lib/toast";
 
 import VectorStoreForm from "./VectorStoreForm";
+import { LanguageProvider } from "@/contexts/LanguageContext";
+import LanguageSelector from "@/components/LanguageSelector";
+import { translate } from "@/i18n/language";
+import { Toaster } from "@/components/ui/sonner";
+import { ApiError } from "@/lib/http/client";
+import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 
 vi.mock("@/components/networking", () => ({
   vectorStoreCreateCall: vi.fn(),
@@ -66,6 +72,36 @@ describe("VectorStoreForm submit payload", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCreate.mockResolvedValue(undefined);
+  });
+
+  it("切换语言保留向量存储草稿，并翻译内置提供商的必填校验", async () => {
+    localStorage.clear();
+    const user = setupUser();
+    render(
+      <LanguageProvider defaultLanguage="en" userId="vector-validation" storageScope="test">
+        <LanguageSelector />
+        <VectorStoreForm isVisible onCancel={vi.fn()} onSuccess={onSuccess} accessToken="test-token" credentials={[]} />
+      </LanguageProvider>,
+    );
+    await user.type(screen.getByPlaceholderText("Enter vector store ID from your provider"), "Home");
+    await chooseProvider(user, "OpenAI");
+
+    // 向量存储 ID 和提供商是请求数据，语言切换不得改写。
+    fireEvent.change(screen.getByLabelText("Interface language"), { target: { value: "zh-CN" } });
+    expect(screen.getByPlaceholderText("输入提供商的向量存储 ID")).toHaveValue("Home");
+    expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: translate("zh-CN", "Create") }));
+    expect(await screen.findByText("请输入API 密钥")).toBeInTheDocument();
+    expect(mockCreate).not.toHaveBeenCalled();
+
+    // 密码显隐按钮的文案随语言切换，已经填写的凭据不发生变化。
+    fireEvent.change(screen.getByPlaceholderText("sk-..."), { target: { value: "test-credential" } });
+    await user.click(screen.getByRole("button", { name: "显示密码" }));
+    expect(screen.getByPlaceholderText("sk-...")).toHaveAttribute("type", "text");
+    expect(screen.getByRole("button", { name: "隐藏密码" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("界面语言"), { target: { value: "en" } });
+    expect(screen.getByPlaceholderText("sk-...")).toHaveValue("test-credential");
+    expect(screen.getByRole("button", { name: "Hide Password" })).toBeInTheDocument();
   });
 
   it("sends every payload key for the default provider, leaving untouched optional fields undefined", async () => {
@@ -219,7 +255,12 @@ describe("VectorStoreForm submit payload", () => {
     await user.type(screen.getByPlaceholderText('{"key": "value"}'), "not json");
     await submit(user);
 
-    await vi.waitFor(() => expect(mockToast.fromError).toHaveBeenCalledWith("Invalid JSON in metadata field"));
+    await vi.waitFor(() =>
+      expect(mockToast.fromError).toHaveBeenCalledWith(
+        "Invalid JSON in metadata field",
+        expect.objectContaining({ description: expect.anything() }),
+      ),
+    );
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
@@ -231,5 +272,150 @@ describe("VectorStoreForm submit payload", () => {
 
     expect(await screen.findByText("Please input the vector store ID from your api provider")).toBeInTheDocument();
     expect(mockCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe("向量存储创建的语言边界", () => {
+  beforeEach(async () => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    mockCreate.mockResolvedValue(undefined);
+    const realToast = (await vi.importActual<typeof import("@/lib/toast")>("@/lib/toast")).toast;
+    mockToast.success.mockImplementation(realToast.success);
+    mockToast.fromError.mockImplementation(realToast.fromError);
+  });
+
+  afterEach(async () => {
+    const realToast = (await vi.importActual<typeof import("@/lib/toast")>("@/lib/toast")).toast;
+    act(() => realToast.dismiss());
+    mockToast.success.mockReset();
+    mockToast.fromError.mockReset();
+  });
+
+  const renderLocalized = () => {
+    const tree = (defaultLanguage: "en" | "zh-CN") => (
+      <LanguageProvider defaultLanguage={defaultLanguage} userId="vector-create-review" storageScope="/vector-stores">
+        <VectorStoreForm isVisible onCancel={vi.fn()} onSuccess={onSuccess} accessToken="test-token" credentials={[]} />
+        <Toaster />
+      </LanguageProvider>
+    );
+    const view = render(tree("en"));
+    return { changeLanguage: (language: "en" | "zh-CN") => view.rerender(tree(language)) };
+  };
+
+  it("已有 ID 和密码校验提示随语言切换，不提交或覆盖草稿", async () => {
+    const user = setupUser();
+    const view = renderLocalized();
+    await chooseProvider(user, "OpenAI");
+    fireEvent.change(screen.getByLabelText("Vector Store Name"), { target: { value: "Home" } });
+    fireEvent.change(screen.getByPlaceholderText('{"key": "value"}'), { target: { value: '{"Home":"Home"}' } });
+    await submit(user);
+    expect(await screen.findByText("Please input the vector store ID from your api provider")).toBeInTheDocument();
+    expect(screen.getByText("Please input the api key")).toBeInTheDocument();
+
+    view.changeLanguage("zh-CN");
+    expect(
+      screen.getByText(translate("zh-CN", "Please input the vector store ID from your api provider")),
+    ).toBeInTheDocument();
+    expect(screen.getByText("请输入API 密钥")).toBeInTheDocument();
+    expect(screen.getByLabelText(translate("zh-CN", "Vector Store Name"))).toHaveValue("Home");
+    expect(screen.getByPlaceholderText('{"key": "value"}')).toHaveValue('{"Home":"Home"}');
+    view.changeLanguage("en");
+    expect(screen.getByText("Please input the api key")).toBeInTheDocument();
+    expect(screen.getByLabelText("Vector Store Name")).toHaveValue("Home");
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(fetchAvailableModels).toHaveBeenCalledTimes(1);
+    expect(onSuccess).not.toHaveBeenCalled();
+  });
+
+  it("已有模型选择校验提示随语言切换，保留提供商凭据", async () => {
+    const user = setupUser();
+    const view = renderLocalized();
+    await chooseProvider(user, "Milvus");
+    fireEvent.change(screen.getByLabelText("Vector Store ID"), { target: { value: "Home" } });
+    fireEvent.change(screen.getByPlaceholderText("username:password or api key"), {
+      target: { value: "synthetic-key" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("https://your-milvus-endpoint.com/"), {
+      target: { value: "https://example.invalid" },
+    });
+    await submit(user);
+    expect(await screen.findByText("Please select the embedding model")).toBeInTheDocument();
+    view.changeLanguage("zh-CN");
+    expect(
+      screen.getByText(
+        translate("zh-CN", "Please select the {field}", { field: translate("zh-CN", "Embedding Model") }),
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("username:password or api key")).toHaveValue("synthetic-key");
+    expect(screen.getByLabelText(translate("zh-CN", "Vector Store ID"))).toHaveValue("Home");
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(fetchAvailableModels).toHaveBeenCalledTimes(1);
+  });
+
+  it("成功通知在请求等待中和显示后随语言切换，提交数据不变", async () => {
+    const user = setupUser();
+    const pending = Promise.withResolvers<undefined>();
+    mockCreate.mockReturnValue(pending.promise);
+    const view = renderLocalized();
+    fireEvent.change(screen.getByLabelText("Vector Store ID"), { target: { value: "Home" } });
+    await submit(user);
+    await waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1));
+    view.changeLanguage("zh-CN");
+    await act(async () => pending.resolve(undefined));
+    expect(await screen.findByText(translate("zh-CN", "Vector store created successfully"))).toBeInTheDocument();
+    view.changeLanguage("en");
+    expect(screen.getByText("Vector store created successfully")).toBeInTheDocument();
+    const expectedPayload = {
+      vector_store_id: "Home",
+      custom_llm_provider: "bedrock",
+      vector_store_name: undefined,
+      vector_store_description: undefined,
+      vector_store_metadata: {},
+      litellm_credential_name: undefined,
+      litellm_params: {},
+    };
+    expect(createdPayload()).toStrictEqual(expectedPayload);
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+    expect(fetchAvailableModels).toHaveBeenCalledTimes(1);
+  });
+
+  it("本地 JSON 错误通知随语言切换，不改变无效输入或发送请求", async () => {
+    const user = setupUser();
+    const view = renderLocalized();
+    fireEvent.change(screen.getByLabelText("Vector Store ID"), { target: { value: "Home" } });
+    fireEvent.change(screen.getByPlaceholderText('{"key": "value"}'), { target: { value: "not json" } });
+    await submit(user);
+    expect(await screen.findByText("Invalid JSON in metadata field")).toBeInTheDocument();
+    view.changeLanguage("zh-CN");
+    expect(screen.getByText(translate("zh-CN", "Invalid JSON in metadata field"))).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('{"key": "value"}')).toHaveValue("not json");
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it("服务端限流保持警告分类和原文，只有通知上下文切换语言", async () => {
+    const user = setupUser();
+    const pending = Promise.withResolvers<undefined>();
+    mockCreate.mockReturnValue(pending.promise);
+    const view = renderLocalized();
+    fireEvent.change(screen.getByLabelText("Vector Store ID"), { target: { value: "Home" } });
+    await submit(user);
+    await waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1));
+    view.changeLanguage("zh-CN");
+    await act(async () =>
+      pending.reject(new ApiError("Home", 429, { error: { message: "Home" }, debug: "private-detail" })),
+    );
+    expect(await screen.findByText(translate("zh-CN", "Rate Limit Exceeded"))).toBeInTheDocument();
+    expect(
+      screen.getByText(translate("zh-CN", "Error creating vector store: {error}", { error: "Home" })),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/private-detail/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(translate("zh-CN", "Vector Store ID"))).toHaveValue("Home");
+    view.changeLanguage("en");
+    expect(screen.getByText("Rate Limit Exceeded")).toBeInTheDocument();
+    expect(screen.getByText("Error creating vector store: Home")).toBeInTheDocument();
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(onSuccess).not.toHaveBeenCalled();
   });
 });

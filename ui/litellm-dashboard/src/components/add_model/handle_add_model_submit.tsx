@@ -2,8 +2,14 @@ import { toast } from "@/lib/toast";
 import { Model, modelCreateCall } from "../networking";
 import { resolveLitellmProviderSlug } from "../provider_info_helpers";
 import { ptuPickerToUtcIso } from "../../utils/ptuDatetime";
+import { englishTranslate, type Translate } from "@/i18n/language";
 
-export const prepareModelAddRequest = async (formValues: Record<string, any>, accessToken: string, form: any) => {
+export const prepareModelAddRequest = async (
+  formValues: Record<string, any>,
+  accessToken: string,
+  form: any,
+  t: Translate = englishTranslate,
+) => {
   try {
     // Get model mappings and safely remove from formValues
     const modelMappings = formValues["model_mappings"] || [];
@@ -134,8 +140,9 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
             try {
               litellmExtraParams = JSON.parse(value);
             } catch (error) {
-              toast.fromError("Failed to parse LiteLLM Extra Params: " + error);
-              throw new Error("Failed to parse litellm_extra_params: " + error);
+              // 仅本地提示参与翻译，解析异常与API字段原样插入。
+              toast.fromError(t("Failed to parse LiteLLM Extra Params: {error}", { error: String(error) }));
+              throw new Error(t("Failed to parse litellm_extra_params: {error}", { error: String(error) }));
             }
             if ("litellm_credential_name" in litellmExtraParams && formValues.litellm_credential_name) {
               delete litellmExtraParams.litellm_credential_name;
@@ -150,8 +157,8 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
             try {
               modelInfoParams = JSON.parse(value);
             } catch (error) {
-              toast.fromError("Failed to parse LiteLLM Extra Params: " + error);
-              throw new Error("Failed to parse litellm_extra_params: " + error);
+              toast.fromError(t("Failed to parse LiteLLM Extra Params: {error}", { error: String(error) }));
+              throw new Error(t("Failed to parse litellm_extra_params: {error}", { error: String(error) }));
             }
             for (const [key, value] of Object.entries(modelInfoParams)) {
               modelInfoObj[key] = value;
@@ -203,13 +210,19 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
 
     return deployments;
   } catch (error) {
-    toast.fromError("Failed to create model: " + error);
+    toast.fromError(t("Failed to create model: {error}", { error: String(error) }));
   }
 };
 
-export const handleAddModelSubmit = async (values: any, accessToken: string, form: any, callback?: () => void) => {
+export const handleAddModelSubmit = async (
+  values: any,
+  accessToken: string,
+  form: any,
+  options: { callback?: () => void; t?: Translate } = {},
+) => {
+  const { callback, t = englishTranslate } = options;
   try {
-    const deployments = await prepareModelAddRequest(values, accessToken, form);
+    const deployments = await prepareModelAddRequest(values, accessToken, form, t);
 
     if (!deployments || deployments.length === 0) {
       return; // Exit if preparation failed or no deployments
@@ -231,6 +244,6 @@ export const handleAddModelSubmit = async (values: any, accessToken: string, for
     callback && callback();
     form.resetFields();
   } catch (error) {
-    toast.fromError("Failed to add model: " + error);
+    toast.fromError(t("Failed to add model: {error}", { error: String(error) }));
   }
 };

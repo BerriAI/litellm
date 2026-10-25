@@ -29,7 +29,10 @@ import { useRouter } from "next/navigation";
 import { useEffect, useId, useState } from "react";
 import { z } from "zod";
 import { useWorker } from "@/hooks/useWorker";
+import { useLanguage } from "@/contexts/LanguageContext";
+import LanguageSelector from "@/components/LanguageSelector";
 
+// 仅在字段展示时翻译本地校验，登录接口的错误和凭据保持原文。
 const loginSchema = z.object({
   username: z.string().min(1, "Please enter your username"),
   password: z.string().min(1, "Please enter your password"),
@@ -38,6 +41,7 @@ const loginSchema = z.object({
 type LoginFormValues = z.infer<typeof loginSchema>;
 
 function SsoEnabledNotice() {
+  const { t } = useLanguage();
   const [dismissed, setDismissed] = useState(false);
 
   if (dismissed) {
@@ -48,13 +52,13 @@ function SsoEnabledNotice() {
     <Alert variant="info" className="mt-4">
       <Info />
       <AlertTitle>
-        Single Sign-On (SSO) is enabled. LiteLLM no longer automatically redirects to the SSO login flow upon loading
-        this page. To re-enable auto-redirect-to-SSO, set{" "}
-        <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">AUTO_REDIRECT_UI_LOGIN_TO_SSO=true</code> in your
-        environment configuration.
+        {t(
+          "Single Sign-On (SSO) is enabled. LiteLLM no longer automatically redirects to SSO when this page loads. To re-enable automatic SSO redirects, add this setting to your environment configuration:",
+        )}{" "}
+        <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">AUTO_REDIRECT_UI_LOGIN_TO_SSO=true</code>
       </AlertTitle>
       <AlertAction>
-        <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={() => setDismissed(true)}>
+        <Button variant="ghost" size="icon-sm" aria-label={t("Close")} onClick={() => setDismissed(true)}>
           <X className="size-4" />
         </Button>
       </AlertAction>
@@ -63,6 +67,7 @@ function SsoEnabledNotice() {
 }
 
 function LoginPageContent() {
+  const { t } = useLanguage();
   const [isLoading, setIsLoading] = useState(true);
   const { data: uiConfig, isLoading: isConfigLoading } = useUIConfig();
   const loginMutation = useLogin();
@@ -203,11 +208,12 @@ function LoginPageContent() {
 
               <Alert variant="warning">
                 <TriangleAlert />
-                <AlertTitle>Admin UI Disabled</AlertTitle>
+                <AlertTitle>{t("Admin UI Disabled")}</AlertTitle>
                 <AlertDescription>
                   <p className="text-sm">
-                    The Admin UI has been disabled by the administrator. To re-enable it, please update the following
-                    environment variable:
+                    {t(
+                      "The Admin UI has been disabled by the administrator. To re-enable it, please update the following environment variable:",
+                    )}
                   </p>
                   <p className="mt-2 text-sm">
                     <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">DISABLE_ADMIN_UI=False</code>
@@ -232,24 +238,24 @@ function LoginPageContent() {
               </div>
 
               <div className="text-center">
-                <h3 className="text-2xl font-semibold text-foreground">Login</h3>
-                <p className="text-sm text-muted-foreground">Access your LiteLLM Admin UI.</p>
+                <h3 className="text-2xl font-semibold text-foreground">{t("Login")}</h3>
+                <p className="text-sm text-muted-foreground">{t("Access your LiteLLM Admin UI.")}</p>
               </div>
 
               {!uiConfig?.hide_default_credentials_hint && (
                 <Alert variant="info">
                   <Info />
-                  <AlertTitle>Default Credentials</AlertTitle>
+                  <AlertTitle>{t("Default Credentials")}</AlertTitle>
                   <AlertDescription>
                     <p className="text-sm">
-                      By default, Username is <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">admin</code> and
-                      Password is your set LiteLLM Proxy
+                      {t("Default username:")} <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">admin</code>{" "}
+                      {t("Password: your configured LiteLLM Proxy")}{" "}
                       <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">MASTER_KEY</code>.
                     </p>
                     <p className="mt-2 text-sm">
-                      Need to set UI credentials or SSO?{" "}
+                      {t("Need to set UI credentials or SSO?")}{" "}
                       <a href="https://docs.litellm.ai/docs/proxy/ui" target="_blank" rel="noopener noreferrer">
-                        Check the documentation
+                        {t("Check the documentation")}
                       </a>
                       .
                     </p>
@@ -268,14 +274,14 @@ function LoginPageContent() {
                 <FieldGroup>
                   {uiConfig?.is_control_plane && workers.length > 0 && (
                     <Field>
-                      <FieldLabel htmlFor={workerFieldId}>Worker</FieldLabel>
+                      <FieldLabel htmlFor={workerFieldId}>{t("Worker")}</FieldLabel>
                       <Select
                         items={workers.map((worker) => ({ label: worker.name, value: worker.worker_id }))}
                         value={selectedWorkerId}
                         onValueChange={(value: string | null) => setSelectedWorkerId(value)}
                       >
                         <SelectTrigger id={workerFieldId} className="h-10 w-full">
-                          <SelectValue placeholder="Choose a worker to connect to" />
+                          <SelectValue placeholder={t("Choose a worker to connect to")} />
                         </SelectTrigger>
                         <SelectContent>
                           {workers.map((worker) => (
@@ -288,12 +294,17 @@ function LoginPageContent() {
                     </Field>
                   )}
 
-                  <FormField control={form.control} name="username" label="Username">
+                  <FormField
+                    control={form.control}
+                    name="username"
+                    label={t("Username")}
+                    renderError={(error) => error.message && t(error.message)}
+                  >
                     {({ ref, ...field }) => (
                       <Input
                         {...field}
                         ref={ref}
-                        placeholder="Enter your username"
+                        placeholder={t("Enter your username")}
                         autoComplete="username"
                         disabled={isLoginLoading}
                         className="h-10 rounded-md"
@@ -301,12 +312,17 @@ function LoginPageContent() {
                     )}
                   </FormField>
 
-                  <FormField control={form.control} name="password" label="Password">
+                  <FormField
+                    control={form.control}
+                    name="password"
+                    label={t("Password")}
+                    renderError={(error) => error.message && t(error.message)}
+                  >
                     {({ ref, ...field }) => (
                       <PasswordInput
                         {...field}
                         ref={ref}
-                        placeholder="Enter your password"
+                        placeholder={t("Enter your password")}
                         autoComplete="current-password"
                         disabled={isLoginLoading}
                         groupClassName="h-10"
@@ -315,18 +331,18 @@ function LoginPageContent() {
                   </FormField>
 
                   <Button type="submit" size="lg" disabled={isLoginLoading} className="w-full">
-                    {isLoginLoading && <UiLoadingSpinner className="size-4" role="img" aria-label="loading" />}
-                    {isLoginLoading ? "Logging in..." : "Login"}
+                    {isLoginLoading && <UiLoadingSpinner className="size-4" role="img" aria-label={t("loading")} />}
+                    {isLoginLoading ? t("Logging in...") : t("Login")}
                   </Button>
 
                   {!uiConfig?.sso_configured ? (
                     <Tooltip>
                       <TooltipTrigger render={<span className="block w-full" />}>
                         <Button type="button" variant="outline" size="lg" disabled className="w-full">
-                          Login with SSO
+                          {t("Login with SSO")}
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent>Please configure SSO to log in with SSO.</TooltipContent>
+                      <TooltipContent>{t("Please configure SSO to log in with SSO.")}</TooltipContent>
                     </Tooltip>
                   ) : (
                     <Button
@@ -349,11 +365,12 @@ function LoginPageContent() {
                       }}
                       className="w-full"
                     >
-                      Login with SSO
+                      {t("Login with SSO")}
                     </Button>
                   )}
                 </FieldGroup>
               </form>
+              <LanguageSelector />
             </div>
             {uiConfig?.sso_configured && <SsoEnabledNotice />}
           </TooltipProvider>

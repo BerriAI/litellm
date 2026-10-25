@@ -1,20 +1,23 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Badge } from "@/components/ui/badge";
 import { CircleAlert, CircleCheck, TriangleAlert } from "lucide-react";
 import { errorCount as countErrors, type PayloadValidation } from "./lib/validatePayload";
 
 export function ValidationStatus({ validation }: { validation: PayloadValidation<unknown> }) {
+  const { t } = useLanguage();
   const errorCount = countErrors(validation);
   if (errorCount > 0) {
     return (
       <Badge variant="destructive">
-        {errorCount} {errorCount === 1 ? "issue" : "issues"}
+        {errorCount} {errorCount === 1 ? t("issue") : t("issues")}
       </Badge>
     );
   }
-  return <Badge variant="secondary">Valid payload</Badge>;
+  return <Badge variant="secondary">{t("Valid payload")}</Badge>;
 }
 
 export function ValidationSummary({ validation }: { validation: PayloadValidation<unknown> }) {
+  const { t } = useLanguage();
   const errorCount = countErrors(validation);
   return (
     <p role="status" aria-live="polite" className="flex min-w-0 items-center gap-2 text-sm">
@@ -24,18 +27,23 @@ export function ValidationSummary({ validation }: { validation: PayloadValidatio
         <CircleAlert className="size-4 shrink-0 text-destructive" />
       )}
       <span className={errorCount === 0 ? "text-muted-foreground" : "text-destructive"}>
-        {errorCount === 0 ? "Ready to send" : `${errorCount} ${errorCount === 1 ? "issue" : "issues"} to fix`}
+        {errorCount === 0 ? t("Ready to send") : `${errorCount} ${errorCount === 1 ? "issue" : "issues"} to fix`}
       </span>
     </p>
   );
 }
 
 export function IssueList({ id, validation }: { id: string; validation: PayloadValidation<unknown> }) {
+  const { t } = useLanguage();
   if (validation.issues.length === 0) {
     return null;
   }
   return (
-    <ul id={id} aria-label="Payload validation issues" className="grid max-h-36 gap-1 overflow-auto border-t px-3 py-2">
+    <ul
+      id={id}
+      aria-label={t("Payload validation issues")}
+      className="grid max-h-36 gap-1 overflow-auto border-t px-3 py-2"
+    >
       {validation.issues.map((issue, index) => (
         <li key={`${issue.path}-${index}`} className="flex items-start gap-1.5 text-xs">
           {issue.severity === "error" ? (

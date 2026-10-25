@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { type FC, type KeyboardEvent, type MouseEvent } from "react";
 import { Check, CircleAlert, Ellipsis, Trash2, Zap } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -56,6 +57,7 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
   onDelete,
   stdioEnabled = true,
 }) => {
+  const { t } = useLanguage();
   const alias = server.alias || server.server_name || "";
   const name = server.server_name || alias || server.server_id;
   // Logo is sourced exclusively from the admin-set `mcp_info.logo_url`.
@@ -162,7 +164,7 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
                     type="button"
                     onClick={stop}
                     onKeyDown={stop}
-                    aria-label="Server actions"
+                    aria-label={t("Server actions")}
                     className="-mr-1 -mt-1 inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
                   >
                     <Ellipsis className="size-5" />
@@ -179,7 +181,7 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
                     }}
                   >
                     <Zap />
-                    Test Connection
+                    {t("Test Connection")}
                   </DropdownMenuItem>
                 )}
                 {onRecheckHealth && onDelete && <DropdownMenuSeparator />}
@@ -192,7 +194,7 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
                     }}
                   >
                     <Trash2 />
-                    Delete
+                    {t("Delete")}
                   </DropdownMenuItem>
                 )}
               </DropdownMenuContent>
@@ -229,11 +231,11 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
                 render={
                   <Badge variant="outline">
                     <CircleAlert />
-                    stdio disabled
+                    {t("stdio disabled")}
                   </Badge>
                 }
               />
-              <TooltipContent>{STDIO_DISABLED_MESSAGE}</TooltipContent>
+              <TooltipContent>{t(STDIO_DISABLED_MESSAGE)}</TooltipContent>
             </Tooltip>
           )}
           {oauthFlowUnset && (
@@ -242,13 +244,14 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
                 render={
                   <Badge variant="outline">
                     <CircleAlert />
-                    OAuth flow not set
+                    {t("OAuth flow not set")}
                   </Badge>
                 }
               />
               <TooltipContent>
-                This OAuth server has no flow set (Machine-to-Machine vs Interactive). Open it and choose an OAuth Flow
-                Type so LiteLLM authenticates it as you intend.
+                {t(
+                  "This OAuth server has no flow set (Machine-to-Machine vs Interactive). Open it and choose an OAuth Flow Type so LiteLLM authenticates it as you intend.",
+                )}
               </TooltipContent>
             </Tooltip>
           )}
@@ -257,11 +260,11 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
               render={
                 <Badge variant="outline">
                   <span className={cn("h-1.5 w-1.5 rounded-full", networkAccess.dotClassName)} />
-                  {networkAccess.label}
+                  {t(networkAccess.label)}
                 </Badge>
               }
             />
-            <TooltipContent>{networkAccess.description}</TooltipContent>
+            <TooltipContent>{t(networkAccess.description)}</TooltipContent>
           </Tooltip>
           {accessGroups.slice(0, 2).map((g) => (
             <Tooltip key={g}>
@@ -294,13 +297,14 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
                     render={
                       <span className="inline-flex items-center gap-1 font-semibold text-destructive">
                         <CircleAlert className="size-3.5" />
-                        {missing.length} user field
-                        {missing.length === 1 ? "" : "s"} missing
+                        {t(missing.length === 1 ? "{count} user field missing" : "{count} user fields missing", {
+                          count: missing.length,
+                        })}
                       </span>
                     }
                   />
                   <TooltipContent>
-                    <div className="mb-1 font-semibold">Missing user fields:</div>
+                    <div className="mb-1 font-semibold">{t("Missing user fields:")}</div>
                     <ul className="ml-3">
                       {missing.map((m) => (
                         <li key={m}>• {m}</li>
@@ -317,7 +321,7 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
                       onOpenFillFields();
                     }}
                   >
-                    Set
+                    {t("Set")}
                   </Button>
                 )}
               </div>
@@ -348,15 +352,20 @@ const HealthChip: FC<HealthChipProps> = ({
   error,
   dotClass,
 }) => {
+  const { t } = useLanguage();
   if (isLoadingHealth || isRechecking) {
     return (
       <Badge variant="outline" className="text-muted-foreground">
         <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground" />
-        Checking
+        {t("Checking")}
       </Badge>
     );
   }
   const hasHealthData = Boolean(lastCheck || error || status === "reachable");
+  // 仅翻译协议约定的状态，保留服务端新增或自定义状态原值。
+  const statusLabel = ["healthy", "reachable", "unhealthy", "unknown"].includes(status)
+    ? t(status.charAt(0).toUpperCase() + status.slice(1))
+    : status.charAt(0).toUpperCase() + status.slice(1);
   return (
     <Tooltip>
       <TooltipTrigger
@@ -374,49 +383,58 @@ const HealthChip: FC<HealthChipProps> = ({
             }
           >
             <span className={cn("h-1.5 w-1.5 rounded-full", dotClass)} />
-            {status.charAt(0).toUpperCase() + status.slice(1)}
+            {statusLabel}
           </Badge>
         }
       />
       <TooltipContent side="top" className="max-w-xs">
-        <div className="mb-1 font-semibold">Health: {status}</div>
-        {status === "reachable" && <div className="mb-1 text-xs">{MCP_REACHABLE_DESCRIPTION}</div>}
-        {lastCheck && <div className="mb-1 text-xs">Last check: {new Date(lastCheck).toLocaleString()}</div>}
+        <div className="mb-1 font-semibold">
+          {t("Health:")} {statusLabel}
+        </div>
+        {status === "reachable" && <div className="mb-1 text-xs">{t(MCP_REACHABLE_DESCRIPTION)}</div>}
+        {lastCheck && (
+          <div className="mb-1 text-xs">
+            {t("Last check:")} {new Date(lastCheck).toLocaleString()}
+          </div>
+        )}
         {error && (
           <div className="text-xs">
-            <div className="mb-1 font-medium">Error</div>
+            <div className="mb-1 font-medium">{t("Error")}</div>
             <div className="wrap-break-word">{error}</div>
           </div>
         )}
-        {!hasHealthData && <div className="text-xs">No health data</div>}
-        {onRecheck && <div className="mt-1 text-xs">Click to recheck</div>}
+        {!hasHealthData && <div className="text-xs">{t("No health data")}</div>}
+        {onRecheck && <div className="mt-1 text-xs">{t("Click to recheck")}</div>}
       </TooltipContent>
     </Tooltip>
   );
 };
 
-const UserFieldsRow: FC<{ onUpdate?: () => void }> = ({ onUpdate }) => (
-  <div className="flex items-center justify-between gap-2 text-xs">
-    <span className="text-muted-foreground">Per-user credentials</span>
-    <div className="flex items-center gap-2">
-      <Badge variant="outline">
-        <Check /> Set
-      </Badge>
-      {onUpdate && (
-        <Button
-          variant="link"
-          size="sm"
-          onClick={(e) => {
-            stop(e);
-            onUpdate();
-          }}
-        >
-          Update
-        </Button>
-      )}
+const UserFieldsRow: FC<{ onUpdate?: () => void }> = ({ onUpdate }) => {
+  const { t } = useLanguage();
+  return (
+    <div className="flex items-center justify-between gap-2 text-xs">
+      <span className="text-muted-foreground">{t("Per-user credentials")}</span>
+      <div className="flex items-center gap-2">
+        <Badge variant="outline">
+          <Check /> {t("Set")}
+        </Badge>
+        {onUpdate && (
+          <Button
+            variant="link"
+            size="sm"
+            onClick={(e) => {
+              stop(e);
+              onUpdate();
+            }}
+          >
+            {t("Update")}
+          </Button>
+        )}
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 interface ByokRowProps {
   connected: boolean;
@@ -424,13 +442,14 @@ interface ByokRowProps {
 }
 
 const ByokRow: FC<ByokRowProps> = ({ connected, onConnect }) => {
+  const { t } = useLanguage();
   if (connected) {
     return (
       <div className="flex items-center justify-between gap-2 text-xs">
-        <span className="text-muted-foreground">BYOK credential</span>
+        <span className="text-muted-foreground">{t("BYOK credential")}</span>
         <div className="flex items-center gap-2">
           <Badge variant="outline">
-            <Check /> Connected
+            <Check /> {t("Connected")}
           </Badge>
           {onConnect && (
             <Button
@@ -441,7 +460,7 @@ const ByokRow: FC<ByokRowProps> = ({ connected, onConnect }) => {
                 onConnect();
               }}
             >
-              Update
+              {t("Update")}
             </Button>
           )}
         </div>
@@ -450,7 +469,7 @@ const ByokRow: FC<ByokRowProps> = ({ connected, onConnect }) => {
   }
   return (
     <div className="flex items-center justify-between gap-2 text-xs">
-      <span className="text-muted-foreground">BYOK credential</span>
+      <span className="text-muted-foreground">{t("BYOK credential")}</span>
       {onConnect ? (
         <Button
           size="sm"
@@ -459,7 +478,7 @@ const ByokRow: FC<ByokRowProps> = ({ connected, onConnect }) => {
             onConnect();
           }}
         >
-          Connect
+          {t("Connect")}
         </Button>
       ) : (
         <span className="text-muted-foreground">—</span>

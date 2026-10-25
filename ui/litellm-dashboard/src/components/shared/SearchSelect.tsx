@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { useLanguage } from "@/contexts/LanguageContext";
 import {
   Combobox,
   ComboboxContent,
@@ -43,8 +44,8 @@ export function SearchSelect({
   options,
   value,
   onValueChange,
-  placeholder = "Select…",
-  emptyText = "No results",
+  placeholder,
+  emptyText,
   disabled = false,
   className,
   inputId,
@@ -52,6 +53,7 @@ export function SearchSelect({
   "aria-label": ariaLabel,
   id,
 }: SearchSelectProps) {
+  const { t } = useLanguage();
   const selected =
     value == null || value === "" ? null : options.find((option) => option.value === value) ?? { label: value, value };
   const items =
@@ -70,12 +72,12 @@ export function SearchSelect({
       <ComboboxInput
         id={id ?? inputId}
         aria-label={ariaLabel}
-        placeholder={placeholder}
+        placeholder={placeholder ?? t("Select…")}
         showClear={allowClear && value != null && value !== ""}
         className={`h-8 w-full text-sm ${className ?? ""}`}
       />
       <ComboboxContent side="bottom" collisionAvoidance={{ side: "shift", align: "shift", fallbackAxisSide: "none" }}>
-        <ComboboxEmpty>{emptyText}</ComboboxEmpty>
+        <ComboboxEmpty>{emptyText ?? t("No results")}</ComboboxEmpty>
         <ComboboxList>
           {(item: SearchSelectOption) => (
             <ComboboxItem key={item.value} value={item}>

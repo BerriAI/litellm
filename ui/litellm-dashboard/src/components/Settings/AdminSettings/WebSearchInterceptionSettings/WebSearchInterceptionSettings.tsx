@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useWebSearchInterceptionSettings } from "@/app/(dashboard)/hooks/webSearchInterceptionSettings/useWebSearchInterceptionSettings";
 import { useUpdateWebSearchInterceptionSettings } from "@/app/(dashboard)/hooks/webSearchInterceptionSettings/useUpdateWebSearchInterceptionSettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -126,6 +127,7 @@ interface WebSearchInterceptionFormProps {
 }
 
 function WebSearchInterceptionForm({ accessToken, initial, schema }: WebSearchInterceptionFormProps) {
+  const { t } = useLanguage();
   const {
     mutate: updateSettings,
     isPending: isUpdating,
@@ -139,7 +141,7 @@ function WebSearchInterceptionForm({ accessToken, initial, schema }: WebSearchIn
     updateSettings(formValues, {
       onSuccess: () => {
         form.reset(formValues);
-        toast.success("Settings updated successfully. Changes will be applied across all pods within 10 seconds.");
+        toast.success(t("Settings updated successfully. Changes will be applied across all pods within 10 seconds."));
       },
       onError: (saveError) => {
         toast.fromError(saveError);
@@ -151,7 +153,7 @@ function WebSearchInterceptionForm({ accessToken, initial, schema }: WebSearchIn
     <>
       {updateError && (
         <Alert variant="error" className="mb-4">
-          <AlertTitle>Could not update settings</AlertTitle>
+          <AlertTitle>{t("Could not update settings")}</AlertTitle>
           {updateError instanceof Error && <AlertDescription>{updateError.message}</AlertDescription>}
         </Alert>
       )}
@@ -165,8 +167,8 @@ function WebSearchInterceptionForm({ accessToken, initial, schema }: WebSearchIn
                   control={form.control}
                   name="enabled"
                   label={labelWithHint(
-                    "Enable Web Search Interception",
-                    "When enabled, web search tool calls are executed server-side through the selected search tool",
+                    t("Enable Web Search Interception"),
+                    t("When enabled, web search tool calls are executed server-side through the selected search tool"),
                   )}
                   description={schema?.properties?.enabled?.description}
                 >
@@ -179,8 +181,8 @@ function WebSearchInterceptionForm({ accessToken, initial, schema }: WebSearchIn
                   control={form.control}
                   name="enabled_providers"
                   label={labelWithHint(
-                    "Providers",
-                    "Which LLM providers to intercept for. Leave empty to intercept Bedrock only.",
+                    t("Providers"),
+                    t("Which LLM providers to intercept for. Leave empty to intercept Bedrock only."),
                   )}
                   description={schema?.properties?.enabled_providers?.description}
                 >
@@ -190,7 +192,7 @@ function WebSearchInterceptionForm({ accessToken, initial, schema }: WebSearchIn
                       options={PROVIDER_OPTIONS}
                       value={value}
                       onValueChange={onChange}
-                      placeholder="Select providers (defaults to Bedrock)"
+                      placeholder={t("Select providers (defaults to Bedrock)")}
                       allowCustomValues
                       disabled={isUpdating}
                     />
@@ -201,8 +203,8 @@ function WebSearchInterceptionForm({ accessToken, initial, schema }: WebSearchIn
                   control={form.control}
                   name="search_tool_name"
                   label={labelWithHint(
-                    "Search Tool",
-                    "Which configured search tool runs the searches. Leave empty to use the first one available.",
+                    t("Search Tool"),
+                    t("Which configured search tool runs the searches. Leave empty to use the first one available."),
                   )}
                   description={schema?.properties?.search_tool_name?.description}
                 >
@@ -212,7 +214,7 @@ function WebSearchInterceptionForm({ accessToken, initial, schema }: WebSearchIn
                       options={searchTools.map((name) => ({ label: name, value: name }))}
                       value={value}
                       onValueChange={onChange}
-                      placeholder="Select a search tool (defaults to the first available)"
+                      placeholder={t("Select a search tool (defaults to the first available)")}
                       disabled={isUpdating || loadingSearchTools}
                     />
                   )}
@@ -222,8 +224,10 @@ function WebSearchInterceptionForm({ accessToken, initial, schema }: WebSearchIn
                   control={form.control}
                   name="max_agentic_loops"
                   label={labelWithHint(
-                    "Max Agentic Loops",
-                    "How many follow-up model calls one intercepted request may chain. Leave empty for the default of 3.",
+                    t("Max Agentic Loops"),
+                    t(
+                      "How many follow-up model calls one intercepted request may chain. Leave empty for the default of 3.",
+                    ),
                   )}
                   description={schema?.properties?.max_agentic_loops?.description}
                 >
@@ -251,7 +255,7 @@ function WebSearchInterceptionForm({ accessToken, initial, schema }: WebSearchIn
               disabled={!isDirty || isUpdating}
             >
               {isUpdating ? <UiLoadingSpinner className="size-4" /> : <Save />}
-              Save Settings
+              {t("Save Settings")}
             </Button>
           </div>
         </form>
@@ -261,13 +265,14 @@ function WebSearchInterceptionForm({ accessToken, initial, schema }: WebSearchIn
 }
 
 export default function WebSearchInterceptionSettings() {
+  const { t } = useLanguage();
   const { accessToken } = useAuthorized();
   const { data, isLoading, isError, error } = useWebSearchInterceptionSettings();
 
   if (!accessToken) {
     return (
       <div className="p-6 text-center text-muted-foreground">
-        Please log in to configure web search interception settings.
+        {t("Please log in to configure web search interception settings.")}
       </div>
     );
   }
@@ -286,7 +291,7 @@ export default function WebSearchInterceptionSettings() {
   if (isError) {
     return (
       <Alert variant="error" className="mb-6">
-        <AlertTitle>Could not load web search interception settings</AlertTitle>
+        <AlertTitle>{t("Could not load web search interception settings")}</AlertTitle>
         {error instanceof Error && <AlertDescription>{error.message}</AlertDescription>}
       </Alert>
     );
@@ -300,22 +305,22 @@ export default function WebSearchInterceptionSettings() {
       {notAppliedHere && (
         <Alert variant="warning" className="mb-6">
           <TriangleAlert />
-          <AlertTitle>Not running on the proxy that answered this page</AlertTitle>
+          <AlertTitle>{t("Not running on the proxy that answered this page")}</AlertTitle>
           <AlertDescription>
-            Interception is switched on for the cluster, but the proxy serving this page has not applied it. That is
-            expected for about 10 seconds after a change or a restart. If it persists, check that proxy&apos;s logs:
-            requests it handles are not being intercepted.
+            {t(
+              "Interception is switched on for the cluster, but the proxy serving this page has not applied it. That is expected for about 10 seconds after a change or a restart. If it persists, check that proxy's logs: requests it handles are not being intercepted.",
+            )}
           </AlertDescription>
         </Alert>
       )}
 
       <Alert variant="info" className="mb-6">
         <Info />
-        <AlertTitle>Web Search Interception</AlertTitle>
+        <AlertTitle>{t("Web Search Interception")}</AlertTitle>
         <AlertDescription>
-          Serve web search tool calls from a configured search tool instead of passing them upstream, so models without
-          native web search can still answer with fresh results. Click &apos;Save Settings&apos; to apply changes across
-          all pods (takes effect within 10 seconds).
+          {t(
+            "Serve web search tool calls from a configured search tool instead of passing them upstream, so models without native web search can still answer with fresh results. Click 'Save Settings' to apply changes across all pods (takes effect within 10 seconds).",
+          )}
         </AlertDescription>
       </Alert>
 

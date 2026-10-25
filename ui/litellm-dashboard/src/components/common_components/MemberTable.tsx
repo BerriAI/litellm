@@ -1,3 +1,5 @@
+import { useLanguage } from "@/contexts/LanguageContext";
+import type { Translate } from "@/i18n/language";
 import type { ColumnDef, ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import { Crown, Info, User, UserPlus } from "lucide-react";
 import React, { useState } from "react";
@@ -70,10 +72,11 @@ function RoleHeaderTitle({ title, tooltip }: { title: string; tooltip?: string }
 }
 
 function ResetSpendAction({ disabledReason, onClick }: { disabledReason: string | null; onClick: () => void }) {
+  const { t } = useLanguage();
   return (
     <TableIconActionButton
       variant="Reset"
-      tooltipText="Reset spend"
+      tooltipText={t("Reset spend")}
       disabled={disabledReason !== null}
       disabledTooltipText={disabledReason ?? undefined}
       dataTestId="reset-member-spend"
@@ -85,6 +88,7 @@ function ResetSpendAction({ disabledReason, onClick }: { disabledReason: string 
 const ACTIONS_COLUMN_WIDTH = 120;
 
 interface MemberColumnDeps {
+  t: Translate;
   canEdit: boolean;
   onEdit: (member: Member) => void;
   onDelete: (member: Member) => void;
@@ -121,6 +125,7 @@ const extraColumnDef = (column: MemberTableColumn): ColumnDef<Member> => {
 };
 
 const buildColumns = ({
+  t,
   canEdit,
   onEdit,
   onDelete,
@@ -134,32 +139,32 @@ const buildColumns = ({
   {
     id: "user_alias",
     accessorFn: (member) => member.user_alias || undefined,
-    header: ({ column }) => <DataTableSortHeader column={column} title="Name" />,
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Name")} />,
     sortingFn: "text",
     sortUndefined: "last",
     enableGlobalFilter: true,
-    meta: { title: "Name" },
+    meta: { title: t("Name") },
     cell: ({ row }) => row.original.user_alias || <span className="text-muted-foreground">-</span>,
   },
   {
     id: "user_email",
     accessorFn: (member) => member.user_email || undefined,
-    header: ({ column }) => <DataTableSortHeader column={column} title="User Email" />,
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("User Email")} />,
     sortingFn: "text",
     sortUndefined: "last",
     enableGlobalFilter: true,
-    meta: { title: "User Email" },
+    meta: { title: t("User Email") },
     cell: ({ row }) => row.original.user_email || "-",
   },
   {
     id: "user_id",
     accessorFn: (member) => member.user_id ?? undefined,
-    header: "User ID",
+    header: t("User ID"),
     enableSorting: false,
     enableGlobalFilter: true,
     cell: ({ row }) =>
       row.original.user_id === "default_user_id" ? (
-        <StatusBadge tone="info" label="Default Proxy Admin" />
+        <StatusBadge tone="info" label={t("Default Proxy Admin")} />
       ) : (
         row.original.user_id || "-"
       ),
@@ -184,7 +189,7 @@ const buildColumns = ({
   ...extraColumns.map(extraColumnDef),
   {
     id: "actions",
-    header: "Actions",
+    header: t("Actions"),
     size: ACTIONS_COLUMN_WIDTH,
     enableSorting: false,
     enableGlobalFilter: false,
@@ -194,7 +199,7 @@ const buildColumns = ({
         <span className="inline-flex items-center gap-2">
           <TableIconActionButton
             variant="Edit"
-            tooltipText="Edit member"
+            tooltipText={t("Edit member")}
             dataTestId="edit-member"
             onClick={() => onEdit(row.original)}
           />
@@ -207,7 +212,7 @@ const buildColumns = ({
           {(!showDeleteForMember || showDeleteForMember(row.original)) && (
             <TableIconActionButton
               variant="Delete"
-              tooltipText="Delete member"
+              tooltipText={t("Delete member")}
               dataTestId="delete-member"
               onClick={() => onDelete(row.original)}
             />
@@ -223,7 +228,7 @@ export default function MemberTable({
   onEdit,
   onDelete,
   onAddMember,
-  roleColumnTitle = "Role",
+  roleColumnTitle,
   roleTooltip,
   extraColumns = [],
   showDeleteForMember,
@@ -231,6 +236,8 @@ export default function MemberTable({
   resetSpendDisabledReason,
   emptyText,
 }: MemberTableProps) {
+  const { t } = useLanguage();
+  const roleTitle = roleColumnTitle ?? t("Role");
   const [globalFilter, setGlobalFilter] = useState("");
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
@@ -249,10 +256,11 @@ export default function MemberTable({
   const changeSearch = backToFirstPage(setGlobalFilter);
 
   const columnDeps: MemberColumnDeps = {
+    t,
     canEdit,
     onEdit,
     onDelete,
-    roleColumnTitle,
+    roleColumnTitle: roleTitle,
     roleTooltip,
     extraColumns,
     showDeleteForMember,
@@ -261,7 +269,7 @@ export default function MemberTable({
   };
   const columns = buildColumns(columnDeps);
   const roleFilterItems = [
-    { value: ALL_ROLES, label: "All Roles" },
+    { value: ALL_ROLES, label: t("All Roles") },
     ...memberRoleOptions(members).map((role) => ({ value: role, label: role })),
   ];
 
@@ -270,7 +278,7 @@ export default function MemberTable({
   return (
     <div className="flex w-full flex-col gap-2">
       <span className="inline-flex text-sm text-foreground">
-        {members.length} Member{members.length !== 1 ? "s" : ""}
+        {t(members.length === 1 ? "{count} Member" : "{count} Members", { count: members.length })}
       </span>
       <DataTable
         data={members}
@@ -289,7 +297,7 @@ export default function MemberTable({
         onGlobalFilterChange={changeSearch}
         noDataMessage={
           <span className="text-muted-foreground">
-            {isNarrowed ? "No members match your search or filters" : emptyText ?? "No data"}
+            {isNarrowed ? t("No members match your search or filters") : emptyText ?? t("No data")}
           </span>
         }
         toolbar={(table) => (
@@ -298,7 +306,7 @@ export default function MemberTable({
               table={table}
               searchValue={globalFilter}
               onSearchChange={changeSearch}
-              searchPlaceholder="Search by name, email, or user ID"
+              searchPlaceholder={t("Search by name, email, or user ID")}
               onOpenFilters={() => setFiltersOpen(true)}
               showViewOptions={false}
             />
@@ -306,18 +314,18 @@ export default function MemberTable({
               table={table}
               open={filtersOpen}
               onOpenChange={setFiltersOpen}
-              title="Filters"
-              description="Narrow down members"
+              title={t("Filters")}
+              description={t("Narrow down members")}
             >
               {({ get, set }) => (
-                <DataTableFilterField label={roleColumnTitle}>
+                <DataTableFilterField label={roleTitle}>
                   <Select
                     items={roleFilterItems}
                     value={(get("role") as string | undefined) ?? ALL_ROLES}
                     onValueChange={(value) => set("role", value === ALL_ROLES ? undefined : value)}
                   >
                     <SelectTrigger className="w-full" data-testid="filter-role">
-                      <SelectValue placeholder="All Roles" />
+                      <SelectValue placeholder={t("All Roles")} />
                     </SelectTrigger>
                     <SelectContent>
                       {roleFilterItems.map((item) => (
@@ -336,7 +344,7 @@ export default function MemberTable({
       {onAddMember && canEdit && (
         <Button onClick={onAddMember} className="self-start">
           <UserPlus className="size-4" />
-          Add Member
+          {t("Add Member")}
         </Button>
       )}
     </div>

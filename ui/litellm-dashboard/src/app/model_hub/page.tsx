@@ -2,6 +2,7 @@
 import React, { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import PublicModelHubPage from "@/components/public_model_hub";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 function PublicModelHubContent() {
   const searchParams = useSearchParams()!;
@@ -19,8 +20,9 @@ function PublicModelHubContent() {
 }
 
 export default function PublicModelHub() {
+  const { t } = useLanguage();
   return (
-    <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
+    <Suspense fallback={<div className="flex items-center justify-center min-h-screen">{t("Loading...")}</div>}>
       <PublicModelHubContent />
     </Suspense>
   );

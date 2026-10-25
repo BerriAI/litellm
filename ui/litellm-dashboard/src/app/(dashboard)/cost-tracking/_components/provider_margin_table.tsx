@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useState } from "react";
 import { Check, SquarePen, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -26,6 +27,7 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
   onMarginChange,
   onRemoveProvider,
 }) => {
+  const { t } = useLanguage();
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
   const [editPercentage, setEditPercentage] = useState<string>("");
   const [editFixedAmount, setEditFixedAmount] = useState<string>("");
@@ -103,12 +105,12 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
       data={data}
       columns={[
         {
-          header: "Provider",
+          header: t("Provider"),
           cell: (row) => {
             if (row.provider === "global") {
               return (
                 <div className="flex items-center space-x-2">
-                  <span className="font-medium">Global (All Providers)</span>
+                  <span className="font-medium">{t("Global (All Providers)")}</span>
                 </div>
               );
             }
@@ -122,7 +124,7 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
           },
         },
         {
-          header: "Margin",
+          header: t("Margin"),
           numeric: true,
           cell: (row) => {
             const displayName = marginRowDisplayName(row.provider);
@@ -151,7 +153,7 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      aria-label={`Save margin for ${displayName}`}
+                      aria-label={t("Save margin for {value1}", { value1: String(displayName) })}
                       onClick={() => handleSaveEdit(row.provider)}
                       className="cursor-pointer text-success hover:text-success/80"
                     >
@@ -160,7 +162,7 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      aria-label={`Cancel editing margin for ${displayName}`}
+                      aria-label={t("Cancel editing margin for {value1}", { value1: String(displayName) })}
                       onClick={handleCancelEdit}
                       className="cursor-pointer text-muted-foreground hover:text-foreground"
                     >
@@ -173,7 +175,7 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      aria-label={`Edit margin for ${displayName}`}
+                      aria-label={t("Edit margin for {value1}", { value1: String(displayName) })}
                       onClick={() => handleStartEdit(row.provider, row.margin)}
                       className="cursor-pointer text-info hover:text-info/80"
                     >
@@ -187,14 +189,14 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
           width: "350px",
         },
         {
-          header: "Actions",
+          header: t("Actions"),
           cell: (row) => {
             const displayName = marginRowDisplayName(row.provider);
             return (
               <Button
                 variant="ghost"
                 size="icon-sm"
-                aria-label={`Remove margin for ${displayName}`}
+                aria-label={t("Remove margin for {value1}", { value1: String(displayName) })}
                 onClick={() => onRemoveProvider(row.provider, displayName)}
                 className="cursor-pointer hover:text-destructive"
               >
@@ -206,7 +208,7 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
         },
       ]}
       getRowKey={(row) => row.provider}
-      emptyMessage="No provider margins configured"
+      emptyMessage={t("No provider margins configured")}
     />
   );
 };

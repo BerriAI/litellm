@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import type { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
@@ -47,6 +48,7 @@ interface RequestLogsPanelProps {
 }
 
 export default function RequestLogsPanel({ accessToken, token, userRole, userID, isActive }: RequestLogsPanelProps) {
+  const { t } = useLanguage();
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: PAGE_SIZE });
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_LOGS_SORTING);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -321,19 +323,19 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         toolbarChildren={
           <LogsToolbar>
             <LogsTimeRangePicker value={timeRange} onValueChange={handleTimeRangeChange} />
-            <LogsToolbarSwitch label="Live Tail" checked={isLiveTail} onCheckedChange={setIsLiveTail} />
+            <LogsToolbarSwitch label={t("Live Tail")} checked={isLiveTail} onCheckedChange={setIsLiveTail} />
             {isLiveTail && pagination.pageIndex === 0 && (
               <span role="status" className="whitespace-nowrap text-xs text-muted-foreground">
-                Refreshing every 15s
+                {t("Refreshing every 15s")}
               </span>
             )}
             <LogsToolbarSwitch
-              label="Hide Health Checks"
+              label={t("Hide Health Checks")}
               checked={excludeInternalHealthChecks}
               onCheckedChange={handleExcludeInternalHealthChecksChange}
             />
             <Button variant="outline" size="sm" onClick={handleResetFilters}>
-              Reset Filters
+              {t("Reset Filters")}
             </Button>
           </LogsToolbar>
         }

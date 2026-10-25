@@ -1,5 +1,8 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { type ReactNode, useState } from "react";
 import { ArrowLeft, Check, ChevronDown, ChevronUp, Copy, X } from "lucide-react";
+import { formatDistanceToNow } from "date-fns";
+import { zhCN } from "date-fns/locale";
 import moment from "moment";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -53,6 +56,7 @@ export function DrawerHeader({
   onToggleSidebar,
   backTo,
 }: DrawerHeaderProps) {
+  const { t } = useLanguage();
   const provider = log.custom_llm_provider || "";
   const providerInfo = provider ? getProviderLogoAndName(provider) : null;
   const showToggleWithProvider = isSidebarCollapsed && Boolean(providerInfo || log.model);
@@ -75,7 +79,9 @@ export function DrawerHeader({
         <Button variant="outline" size="sm" onClick={onClose} className="mb-3 max-w-full">
           <ArrowLeft data-icon="inline-start" />
           {backTo.icon}
-          <span className="truncate">Back to {backTo.label}</span>
+          <span className="truncate">
+            {t("Back to")} {backTo.label}
+          </span>
         </Button>
       )}
       {/* Row 0: Model + Provider with Logo */}
@@ -102,7 +108,7 @@ export function DrawerHeader({
       >
         {showToggleWithRequestId && <SidebarToggle isCollapsed onToggle={onToggleSidebar} />}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <CopyableId value={log.request_id} label="Request ID" fontSize={FONT_SIZE_HEADER} />
+          <CopyableId value={log.request_id} label={t("Request ID")} fontSize={FONT_SIZE_HEADER} />
           {callId && (
             <div className="flex items-center gap-1">
               <span
@@ -180,6 +186,7 @@ function CopyableId({
   fontSize: number;
   muted?: boolean;
 }) {
+  const { t } = useLanguage();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -213,7 +220,7 @@ function CopyableId({
           {value}
           <button
             type="button"
-            aria-label={copied ? "Copied!" : `Copy ${label}`}
+            aria-label={copied ? t("Copied!") : t("Copy {value1}", { value1: label })}
             onClick={handleCopy}
             className="ml-1 align-middle text-muted-foreground hover:text-foreground"
           >
@@ -239,6 +246,7 @@ function NavigationSection({
   onNext: () => void;
   onClose: () => void;
 }) {
+  const { t } = useLanguage();
   const keyboardShortcutStyle = {
     border: "1px solid var(--color-border)",
     borderRadius: 4,
@@ -267,7 +275,7 @@ function NavigationSection({
           <TooltipTrigger render={<Button variant="ghost" size="icon-sm" onClick={onClose} />}>
             <X className="size-4" />
           </TooltipTrigger>
-          <TooltipContent>ESC to close</TooltipContent>
+          <TooltipContent>{t("ESC to close")}</TooltipContent>
         </Tooltip>
       </TooltipProvider>
     </div>
@@ -288,16 +296,25 @@ function StatusBar({
   statusColor: "error" | "success";
   environment: string;
 }) {
+  const { t, language } = useLanguage();
+  // 仅本地化展示，沿用 Moment 的时间解析和本地时区，不修改其全局语言。
+  const startedAt = moment(log.startTime);
+  const relativeTime =
+    language === "zh-CN" && startedAt.isValid()
+      ? formatDistanceToNow(startedAt.toDate(), { addSuffix: true, locale: zhCN })
+      : startedAt.fromNow();
   return (
     <div className="flex items-center gap-3">
       <Badge variant={statusColor === "error" ? "destructive" : "secondary"}>{statusLabel}</Badge>
-      <Badge variant="outline">Env: {environment}</Badge>
+      <Badge variant="outline">
+        {t("Env:")} {environment}
+      </Badge>
       <div className="flex items-center gap-2">
         <span className="text-muted-foreground" style={{ fontSize: FONT_SIZE_MEDIUM }}>
-          {moment(log.startTime).format("MMM D, YYYY h:mm:ss A")}
+          {startedAt.format(language === "zh-CN" ? "YYYY-MM-DD HH:mm:ss" : "MMM D, YYYY h:mm:ss A")}
         </span>
         <span className="text-muted-foreground" style={{ fontSize: FONT_SIZE_MEDIUM }}>
-          ({moment(log.startTime).fromNow()})
+          ({relativeTime})
         </span>
       </div>
     </div>

@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import { listMCPTools } from "../networking";
 import { MCPTool } from "../mcp_tools/types";
@@ -63,6 +64,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   disabled = false,
   preserveUnrestrictedServers = NO_SELECTION,
 }) => {
+  const { t } = useLanguage();
   const {
     data: allServers = [],
     isError: serversFailed,
@@ -211,10 +213,11 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
     <div className="space-y-4">
       {serversFailed && (
         <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-          <p className="text-sm text-yellow-800 font-medium">Unable to load MCP servers</p>
+          <p className="text-sm text-yellow-800 font-medium">{t("Unable to load MCP servers")}</p>
           <p className="text-sm text-yellow-700 mt-1">
-            This list is incomplete; servers granted directly or through an access group may be missing. Reload before
-            changing tool permissions
+            {t(
+              "This list is incomplete; servers granted directly or through an access group may be missing. Reload before changing tool permissions",
+            )}
           </p>
         </div>
       )}
@@ -223,19 +226,25 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
         accessGroupsLoaded &&
         emptyMcpAccessGroups(allServers, populatedAccessGroups, selectedAccessGroups).map((group) => (
           <div key={group} className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-            <p className="text-sm text-yellow-800 font-medium">Access group &quot;{group}&quot; has 0 servers</p>
+            <p className="text-sm text-yellow-800 font-medium">
+              {t('Access group "')}
+              {group}
+              {t('" has 0 servers')}
+            </p>
             <p className="text-sm text-yellow-700 mt-1">
-              No MCP server lists this group, so it grants nothing. A server defined in config.yaml joins a group
-              through its <code>access_groups</code> key; <code>mcp_access_groups</code> is ignored there
+              {t(
+                "No MCP server lists this group, so it grants nothing. A server defined in config.yaml joins a group through its",
+              )}{" "}
+              <code>access_groups</code> {t("key;")} <code>mcp_access_groups</code> {t("is ignored there")}
             </p>
           </div>
         ))}
 
       {toolsetsFailed && selectedToolsets.length > 0 && (
         <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-          <p className="text-sm text-yellow-800 font-medium">Unable to load toolsets</p>
+          <p className="text-sm text-yellow-800 font-medium">{t("Unable to load toolsets")}</p>
           <p className="text-sm text-yellow-700 mt-1">
-            Servers reached through the selected toolsets are not listed below
+            {t("Servers reached through the selected toolsets are not listed below")}
           </p>
         </div>
       )}
@@ -243,7 +252,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
       {serversLoading && (
         <div className="flex items-center justify-center py-6">
           <UiLoadingSpinner />
-          <p className="ml-3 text-sm text-muted-foreground">Loading MCP servers...</p>
+          <p className="ml-3 text-sm text-muted-foreground">{t("Loading MCP servers...")}</p>
         </div>
       )}
 
@@ -280,12 +289,15 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                 {server.description && <p className="text-sm text-muted-foreground">{server.description}</p>}
                 {grantsAll && (
                   <p className="text-sm text-muted-foreground mt-1">
-                    All tools allowed, including tools added to this server later
+                    {t("All tools allowed, including tools added to this server later")}
                   </p>
                 )}
                 {entry.ambiguousKeys.length > 0 && (
                   <p className="text-sm text-amber-700 mt-1">
-                    {`Also granted by ${entry.ambiguousKeys.map((key) => `"${key}"`).join(", ")}, which names another server too. Those tools stay allowed here until the servers no longer share that name`}
+                    {t(
+                      "Also granted by {value}, which names another server too. Those tools stay allowed here until the servers no longer share that name",
+                      { value: String(entry.ambiguousKeys.map((key) => `"${key}"`).join(", ")) },
+                    )}
                   </p>
                 )}
                 {toolsetTools.length > 0 && (
@@ -305,11 +317,11 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                   >
                     <label className="flex items-center gap-2 text-sm">
                       <RadioGroupItem value="crud" />
-                      Risk Groups
+                      {t("Risk Groups")}
                     </label>
                     <label className="flex items-center gap-2 text-sm">
                       <RadioGroupItem value="flat" />
-                      Flat List
+                      {t("Flat List")}
                     </label>
                   </RadioGroup>
                 )}
@@ -321,7 +333,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                       onClick={() => handleSelectAll(entry)}
                       disabled={isLoading}
                     >
-                      Select All
+                      {t("Select All")}
                     </button>
                     <button
                       type="button"
@@ -329,7 +341,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                       onClick={() => writeAllowedTools(entry, [])}
                       disabled={isLoading}
                     >
-                      Deselect All
+                      {t("Deselect All")}
                     </button>
                   </>
                 )}
@@ -342,14 +354,14 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
               {isLoading && (
                 <div className="flex items-center justify-center py-8">
                   <UiLoadingSpinner />
-                  <p className="ml-3 text-sm text-muted-foreground">Loading tools...</p>
+                  <p className="ml-3 text-sm text-muted-foreground">{t("Loading tools...")}</p>
                 </div>
               )}
 
               {/* Error */}
               {error && !isLoading && (
                 <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg text-center">
-                  <p className="text-sm text-destructive font-medium">Unable to load tools</p>
+                  <p className="text-sm text-destructive font-medium">{t("Unable to load tools")}</p>
                   <p className="text-sm text-destructive mt-1">{error}</p>
                 </div>
               )}
@@ -390,7 +402,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
                             <p className="text-sm font-medium text-foreground">{tool.name}</p>
-                            <p className="text-sm text-muted-foreground">- {tool.description || "No description"}</p>
+                            <p className="text-sm text-muted-foreground">- {tool.description || t("No description")}</p>
                           </div>
                         </div>
                       </div>
@@ -402,7 +414,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
               {/* Empty State */}
               {!isLoading && !error && tools.length === 0 && (
                 <div className="text-center py-6">
-                  <p className="text-sm text-muted-foreground">No tools available</p>
+                  <p className="text-sm text-muted-foreground">{t("No tools available")}</p>
                 </div>
               )}
             </div>

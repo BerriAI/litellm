@@ -10,6 +10,7 @@ import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { regenerateKeyCall, teamInfoCall } from "../networking";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 // Resolve debounced values synchronously so an applied filter lands in the useKeys query within the test tick.
 vi.mock("@tanstack/react-pacer/debouncer", async () => {
@@ -690,6 +691,21 @@ it("should display 'Unknown' for last_active when value is null", async () => {
   await waitFor(() => {
     expect(screen.getByText("Unknown")).toBeInTheDocument();
   });
+});
+
+it("中文密钥列表翻译日期空值并保留密钥名称和金额", async () => {
+  mockUseKeys.mockReturnValue(
+    keysResult([{ ...mockKey, key_alias: "Home", last_active: null, budget_reset_at: null }]),
+  );
+  renderWithProviders(
+    <LanguageProvider defaultLanguage="zh-CN" userId="key-list" storageScope="key-list-language">
+      <VirtualKeysTable />
+    </LanguageProvider>,
+  );
+  expect(await screen.findByText("未知")).toBeInTheDocument();
+  expect(screen.getByText("不重置")).toBeInTheDocument();
+  expect(screen.getByText("Home")).toBeInTheDocument();
+  expect(screen.getByText("预算 $100")).toBeInTheDocument();
 });
 
 describe("server-side filtering – the LIT-4080 regression guard", () => {

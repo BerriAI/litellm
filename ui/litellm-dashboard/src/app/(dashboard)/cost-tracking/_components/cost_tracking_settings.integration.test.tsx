@@ -4,6 +4,7 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import CostTrackingSettings from "./cost_tracking_settings";
+import { LanguageProvider, useLanguage } from "@/contexts/LanguageContext";
 
 const mockDiscountConfig = vi.fn(() => ({}));
 const mockMarginConfig = vi.fn(() => ({}));
@@ -23,13 +24,36 @@ const stableMarginCallbacks = {
   handleRemoveMargin: mockRemoveMargin,
   handleMarginChange: vi.fn().mockResolvedValue(undefined),
 };
+const stableUnpricedCallbacks = {
+  fetchBlockUnpriced: vi.fn().mockResolvedValue(undefined),
+  setBlockUnpriced: vi.fn().mockResolvedValue(undefined),
+};
+
+vi.mock("./use_block_unpriced_config", () => ({
+  useBlockUnpricedConfig: () => ({ blockUnpriced: false, isUpdating: false, ...stableUnpricedCallbacks }),
+}));
 
 vi.mock("./use_discount_config", () => ({
-  useDiscountConfig: () => ({ discountConfig: mockDiscountConfig(), ...stableDiscountCallbacks }),
+  useDiscountConfig: () => {
+    const { t } = useLanguage();
+    // 模拟真实 hook：错误提示使用 t，语言变化时回调引用也变化。
+    const fetchDiscountConfig = React.useMemo(() => {
+      void t;
+      return () => stableDiscountCallbacks.fetchDiscountConfig();
+    }, [t]);
+    return { discountConfig: mockDiscountConfig(), ...stableDiscountCallbacks, fetchDiscountConfig };
+  },
 }));
 
 vi.mock("./use_margin_config", () => ({
-  useMarginConfig: () => ({ marginConfig: mockMarginConfig(), ...stableMarginCallbacks }),
+  useMarginConfig: () => {
+    const { t } = useLanguage();
+    const fetchMarginConfig = React.useMemo(() => {
+      void t;
+      return () => stableMarginCallbacks.fetchMarginConfig();
+    }, [t]);
+    return { marginConfig: mockMarginConfig(), ...stableMarginCallbacks, fetchMarginConfig };
+  },
 }));
 
 vi.mock("./pricing_calculator/index", () => ({
@@ -60,11 +84,32 @@ const ADMIN_PROPS = {
   userRole: "proxy_admin",
   accessToken: "test-token",
 };
+
+function LanguageSwitch() {
+  const { setPreference } = useLanguage();
+  return <button onClick={() => setPreference("zh-CN")}>切换语言</button>;
+}
 describe("CostTrackingSettings submit paths", () => {
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     mockDiscountConfig.mockReturnValue({});
     mockMarginConfig.mockReturnValue({});
+  });
+
+  it("语言切换不重新加载折扣、加价或可用模型", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="en" userId="pricing-language-test" storageScope="pricing-language-test">
+        <LanguageSwitch />
+        <CostTrackingSettings {...ADMIN_PROPS} />
+      </LanguageProvider>,
+    );
+    await waitFor(() => expect(stableDiscountCallbacks.fetchDiscountConfig).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("button", { name: "切换语言" }));
+    expect(screen.getByText("费用跟踪设置")).toBeInTheDocument();
+    expect(stableDiscountCallbacks.fetchDiscountConfig).toHaveBeenCalledTimes(1);
+    expect(stableMarginCallbacks.fetchMarginConfig).toHaveBeenCalledTimes(1);
   });
 
   const openDiscountModal = async (user: ReturnType<typeof userEvent.setup>) => {

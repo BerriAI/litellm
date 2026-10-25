@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -7,6 +7,9 @@ import { listGuardrailSubmissions } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 import { TeamGuardrailsTab } from "./TeamGuardrailsTab";
+import { LanguageProvider } from "@/contexts/LanguageContext";
+import LanguageSelector from "@/components/LanguageSelector";
+import { translate } from "@/i18n/language";
 
 const mutateAsync = vi.fn();
 
@@ -79,6 +82,60 @@ describe("TeamGuardrailsTab submit payload", () => {
     vi.mocked(listGuardrailSubmissions).mockResolvedValue({
       submissions: [],
       summary: { total: 0, pending_review: 0, active: 0, rejected: 0 },
+    });
+  });
+
+  it.each([
+    { failure: null, english: "Failed to load submissions", chinese: "加载提交记录失败" },
+    { failure: new Error("Settings"), english: "Settings", chinese: "Settings" },
+  ])("切换语言只翻译本地加载错误，保留后端错误且不重复请求：$english", async ({ failure, english, chinese }) => {
+    localStorage.clear();
+    vi.mocked(listGuardrailSubmissions).mockRejectedValueOnce(failure);
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="en" userId="guardrail-load-error" storageScope="test">
+        <LanguageSelector />
+        <TeamGuardrailsTab accessToken="sk-test" />
+      </LanguageProvider>,
+    );
+    expect(await screen.findByText(english)).toBeVisible();
+    fireEvent.change(screen.getByRole("combobox", { name: "Interface language" }), { target: { value: "zh-CN" } });
+    expect(screen.getByText(chinese)).toBeVisible();
+    expect(listGuardrailSubmissions).toHaveBeenCalledTimes(1);
+  });
+
+  it("切换语言保留护栏名称草稿，并显示中文必填校验", async () => {
+    localStorage.clear();
+    const user = userEvent.setup();
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="en" userId="guardrail-validation" storageScope="test">
+        <LanguageSelector />
+        <TeamGuardrailsTab accessToken="sk-test" />
+      </LanguageProvider>,
+    );
+    await user.click(await screen.findByRole("button", { name: /Add Guardrail/ }));
+    await user.type(screen.getByPlaceholderText("e.g. pii-detection"), "Home");
+
+    // 更改语言不提交护栏，也不清空用户填写的名称。
+    fireEvent.change(screen.getByLabelText("Interface language"), { target: { value: "zh-CN" } });
+    expect(screen.getByDisplayValue("Home")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: translate("zh-CN", "Submit for Review") }));
+    expect(await screen.findByText("请输入 API 基础 URL")).toBeInTheDocument();
+    expect(mutateAsync).not.toHaveBeenCalled();
+
+    // 显示中文模式名称，但提交的枚举与护栏名称仍保留原值。
+    await user.type(screen.getByLabelText("team"), "team-1");
+    await user.type(
+      screen.getByPlaceholderText("https://your-guardrail-api.com/v1/check"),
+      "https://guard.example.com",
+    );
+    await user.click(screen.getByRole("combobox", { name: translate("zh-CN", "Mode") }));
+    await user.click(await screen.findByRole("option", { name: "调用中" }));
+    await user.click(screen.getByRole("button", { name: translate("zh-CN", "Submit for Review") }));
+    await vi.waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    expect(registeredPayload()).toMatchObject({
+      guardrail_name: "Home",
+      team_id: "team-1",
+      litellm_params: { mode: "during_call" },
     });
   });
 

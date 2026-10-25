@@ -107,9 +107,9 @@ export const seriesBy = (
   results: readonly DailyData[],
   dimension: BreakdownDimension,
   metric: UsageMetric,
-  options: number | { top?: number; colorByKey?: ReadonlyMap<string, string> } = 6,
+  options: number | { top?: number; colorByKey?: ReadonlyMap<string, string>; otherLabel?: string } = 6,
 ): Series => {
-  const { top = 6, colorByKey } = typeof options === "number" ? { top: options } : options;
+  const { top = 6, colorByKey, otherLabel = OTHER_SERIES } = typeof options === "number" ? { top: options } : options;
   const leaders = rollUpBreakdown(results, dimension)
     .filter((row) => rankValue(row, metric) > 0)
     .sort((a, b) => rankValue(b, metric) - rankValue(a, metric))
@@ -126,7 +126,8 @@ export const seriesBy = (
     return { day, values, other: remainder > 1e-6 ? remainder : 0 };
   });
   const hasOther = days.some(({ other }) => other > 0) || leaders.length === 0;
-  const labels = hasOther ? [...leaders, OTHER_SERIES] : leaders;
+  // 只翻译合成的剩余分组，真实名称为 Other 的模型仍保留原名。
+  const labels = hasOther ? [...leaders, otherLabel] : leaders;
   const keys = labels.map((_, index) => seriesKey(index));
   const data = days.map(({ day, values, other }) => ({
     date: day.date,

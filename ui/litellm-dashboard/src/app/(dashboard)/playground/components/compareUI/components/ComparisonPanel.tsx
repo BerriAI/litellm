@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Settings, X } from "lucide-react";
 import { useId, useState } from "react";
 import { ComparisonInstance } from "../CompareUI";
@@ -35,6 +36,7 @@ export function ComparisonPanel({
   endpointConfig,
   apiKey,
 }: ComparisonPanelProps) {
+  const { t } = useLanguage();
   const isA2AMode = isAgentEndpoint(endpointConfig.id);
   const currentSelection = getComparisonSelection(comparison, endpointConfig.id);
   const [popoverVisible, setPopoverVisible] = useState(false);
@@ -112,10 +114,10 @@ export function ComparisonPanel({
             id={syncId}
             checked={comparison.applyAcrossModels}
             onCheckedChange={handleSyncChange}
-            aria-label="Sync Settings Across Models"
+            aria-label={t("Sync Settings Across Models")}
           />
           <label htmlFor={syncId} className="cursor-pointer text-xs font-medium">
-            Sync Settings Across Models
+            {t("Sync Settings Across Models")}
           </label>
         </div>
 
@@ -123,10 +125,12 @@ export function ComparisonPanel({
 
         {/* General Settings */}
         <div>
-          <h4 className="text-xs font-semibold text-foreground mb-1.5 uppercase tracking-wide">General Settings</h4>
+          <h4 className="text-xs font-semibold text-foreground mb-1.5 uppercase tracking-wide">
+            {t("General Settings")}
+          </h4>
           <div className="space-y-2">
             <div>
-              <label className="text-xs font-medium text-muted-foreground block mb-0.5">Tags</label>
+              <label className="text-xs font-medium text-muted-foreground block mb-0.5">{t("Tags")}</label>
               <TagSelector
                 value={comparison.tags}
                 onChange={(value) => handleSettingChange("tags", value)}
@@ -134,7 +138,7 @@ export function ComparisonPanel({
               />
             </div>
             <div>
-              <label className="text-xs font-medium text-muted-foreground block mb-0.5">Vector Stores</label>
+              <label className="text-xs font-medium text-muted-foreground block mb-0.5">{t("Vector Stores")}</label>
               <VectorStoreSelector
                 value={comparison.vectorStores}
                 onChange={(value) => handleSettingChange("vectorStores", value)}
@@ -142,7 +146,7 @@ export function ComparisonPanel({
               />
             </div>
             <div>
-              <label className="text-xs font-medium text-muted-foreground block mb-0.5">Guardrails</label>
+              <label className="text-xs font-medium text-muted-foreground block mb-0.5">{t("Guardrails")}</label>
               <GuardrailSelector
                 value={comparison.guardrails}
                 onChange={(value) => handleSettingChange("guardrails", value)}
@@ -153,23 +157,25 @@ export function ComparisonPanel({
         </div>
         {/* Advanced Settings */}
         <div>
-          <h4 className="text-xs font-semibold text-foreground mb-1.5 uppercase tracking-wide">Advanced Settings</h4>
+          <h4 className="text-xs font-semibold text-foreground mb-1.5 uppercase tracking-wide">
+            {t("Advanced Settings")}
+          </h4>
           <div className="space-y-2">
             <div className="flex items-center gap-2 pb-1">
               <Checkbox
                 id={advancedParamsId}
                 checked={comparison.useAdvancedParams}
                 onCheckedChange={handleAdvancedParamsChange}
-                aria-label="Use Advanced Parameters"
+                aria-label={t("Use Advanced Parameters")}
               />
               <label htmlFor={advancedParamsId} className="cursor-pointer text-sm font-medium">
-                Use Advanced Parameters
+                {t("Use Advanced Parameters")}
               </label>
             </div>
             <div className="space-y-2 transition-opacity duration-200" style={{ opacity: disabledOpacity }}>
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className={`text-xs font-medium ${disabledTextColor}`}>Temperature</label>
+                  <label className={`text-xs font-medium ${disabledTextColor}`}>{t("Temperature")}</label>
                   <span className={`text-xs ${disabledTextColor}`}>{comparison.temperature.toFixed(2)}</span>
                 </div>
                 <Slider
@@ -187,7 +193,7 @@ export function ComparisonPanel({
               </div>
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className={`text-xs font-medium ${disabledTextColor}`}>Max Tokens</label>
+                  <label className={`text-xs font-medium ${disabledTextColor}`}>{t("Max Tokens")}</label>
                   <span className={`text-xs ${disabledTextColor}`}>{comparison.maxTokens}</span>
                 </div>
                 <Slider

@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Wrench, Copy, Check, Pencil } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -88,18 +89,25 @@ const markdownComponents: Components = {
   td: ({ node, ...props }) => <TableCell {...props} />,
 };
 
+function MarkdownImageOmitted({ alt }: { alt?: string }) {
+  const { t } = useLanguage();
+  // Markdown 的替代文字属于消息内容，仅为空时翻译固定占位文案。
+  return <span>{alt || t("Image omitted")}</span>;
+}
+
 const markdownWithoutImages: Components = {
   ...markdownComponents,
-  img: ({ alt }) => <span>{alt || "Image omitted"}</span>,
+  img: MarkdownImageOmitted,
 };
 
 function ChatImage({ image, allowImages }: { image: ChatImageAttachment; allowImages: boolean }) {
+  const { t } = useLanguage();
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   if (!allowImages) return <span className="text-sm text-muted-foreground">{image.name}</span>;
   if (!isChatImageUrl(image.url) || failedUrl === image.url) {
     return (
       <div className="rounded-xl border bg-muted p-4 text-sm text-muted-foreground">
-        {image.name} — image unavailable. Start a new chat and attach a saved copy to use it again.
+        {image.name} {t("— image unavailable. Start a new chat and attach a saved copy to use it again.")}
       </div>
     );
   }
@@ -122,7 +130,7 @@ function ChatImage({ image, allowImages }: { image: ChatImageAttachment; allowIm
         role="link"
         render={<a href={image.url} target="_blank" rel="noopener noreferrer" download={image.name} />}
       >
-        Open image
+        {t("Open image")}
       </Button>
     </figure>
   );
@@ -151,6 +159,7 @@ interface UserBubbleProps {
 }
 
 function UserBubble({ message, allowImages, onEdit, isStreaming }: UserBubbleProps) {
+  const { t } = useLanguage();
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(message.content);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -201,7 +210,7 @@ function UserBubble({ message, allowImages, onEdit, isStreaming }: UserBubblePro
           ) : null}
           <Textarea
             ref={textareaRef}
-            aria-label="Edit message"
+            aria-label={t("Edit message")}
             value={editValue}
             onChange={(e) => setEditValue(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -216,10 +225,10 @@ function UserBubble({ message, allowImages, onEdit, isStreaming }: UserBubblePro
                 setEditing(false);
               }}
             >
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button size="sm" onClick={handleSave} disabled={!editValue.trim() && !message.attachments?.length}>
-              Save & Send
+              {t("Save & Send")}
             </Button>
           </div>
         </div>
@@ -238,7 +247,7 @@ function UserBubble({ message, allowImages, onEdit, isStreaming }: UserBubblePro
                   <Button
                     variant="ghost"
                     size="icon-xs"
-                    aria-label="Edit message"
+                    aria-label={t("Edit message")}
                     onClick={() => {
                       setEditValue(message.content);
                       setEditing(true);
@@ -250,7 +259,7 @@ function UserBubble({ message, allowImages, onEdit, isStreaming }: UserBubblePro
                 }
               />
               <TooltipContent>
-                <p>Edit message</p>
+                <p>{t("Edit message")}</p>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -286,6 +295,7 @@ function AssistantBubble({
   mcpEvents,
   actions,
 }: AssistantBubbleProps) {
+  const { t } = useLanguage();
   const [reasoningKey, setReasoningKey] = useState(0);
   const prevStreamingRef = useRef<boolean>(isStreaming);
 
@@ -305,7 +315,7 @@ function AssistantBubble({
       return (
         <div role="status" className="w-full max-w-sm space-y-3">
           <Skeleton className="aspect-square w-full rounded-2xl" />
-          <p className="text-sm text-muted-foreground">Creating your image…</p>
+          <p className="text-sm text-muted-foreground">{t("Creating your image…")}</p>
         </div>
       );
     }
@@ -342,7 +352,7 @@ function AssistantBubble({
         >
           {mainContent}
         </ReactMarkdown>
-        {stoppedSuffix && <span className="text-muted-foreground italic"> [stopped]</span>}
+        {stoppedSuffix && <span className="text-muted-foreground italic"> {t("[stopped]")}</span>}
       </BubbleContent>
 
       {actions ?? (mainContent.trim() && <CopyButton text={mainContent} />)}
@@ -362,6 +372,7 @@ function AssistantBubble({
 }
 
 function CopyButton({ text }: { text: string }) {
+  const { t } = useLanguage();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
@@ -383,7 +394,7 @@ function CopyButton({ text }: { text: string }) {
               <Button
                 variant="ghost"
                 size="icon-xs"
-                aria-label={copied ? "Copied message" : "Copy message"}
+                aria-label={copied ? t("Copied message") : t("Copy message")}
                 onClick={handleCopy}
                 className={copied ? "text-success" : "text-muted-foreground hover:text-foreground"}
               >
@@ -392,7 +403,7 @@ function CopyButton({ text }: { text: string }) {
             }
           />
           <TooltipContent>
-            <p>{copied ? "Copied!" : "Copy"}</p>
+            <p>{copied ? t("Copied!") : t("Copy")}</p>
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
@@ -401,6 +412,7 @@ function CopyButton({ text }: { text: string }) {
 }
 
 function ThinkingPlaceholder() {
+  const { t } = useLanguage();
   return (
     <>
       <style>{`
@@ -413,7 +425,7 @@ function ThinkingPlaceholder() {
         }
       `}</style>
       <div className="inline-flex items-center gap-1.5 px-2.5 mb-2 bg-muted/50 border rounded-lg text-xs text-muted-foreground">
-        <span className="chat-thinking-text py-1">Thinking...</span>
+        <span className="chat-thinking-text py-1">{t("Thinking...")}</span>
       </div>
     </>
   );
@@ -449,6 +461,7 @@ interface ToolCardProps {
 }
 
 function ToolCard({ message }: ToolCardProps) {
+  const { t } = useLanguage();
   const redactedArgs = message.toolArgs ? redactSensitiveValues(message.toolArgs) : undefined;
   const [open, setOpen] = useState(false);
 
@@ -457,13 +470,13 @@ function ToolCard({ message }: ToolCardProps) {
       <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleTrigger className="flex items-center gap-1.5 text-[13px] px-3 py-2 border rounded-lg bg-muted/50 hover:bg-muted transition-colors w-full text-left">
           <Wrench className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="font-medium text-foreground">{message.toolName ?? "Tool call"}</span>
+          <span className="font-medium text-foreground">{message.toolName ?? t("Tool call")}</span>
         </CollapsibleTrigger>
         <CollapsibleContent className="border border-t-0 rounded-b-lg px-3 py-2 bg-muted/30">
           {redactedArgs !== undefined && (
             <div className={message.toolResult ? "mb-3" : ""}>
               <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
-                Arguments
+                {t("Arguments")}
               </div>
               <pre className="m-0 p-2 bg-muted rounded-md text-xs font-mono whitespace-pre-wrap break-words text-foreground">
                 {JSON.stringify(redactedArgs, null, 2)}
@@ -473,7 +486,7 @@ function ToolCard({ message }: ToolCardProps) {
           {message.toolResult && (
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
-                Result
+                {t("Result")}
               </div>
               <div className="text-[13px] text-foreground whitespace-pre-wrap break-words font-mono">
                 {message.toolResult}

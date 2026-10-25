@@ -5,6 +5,7 @@ import { Tooltip as TooltipPrimitive } from "@base-ui/react/tooltip";
 import { CircleHelp } from "lucide-react";
 
 import { cn } from "@/lib/cva.config";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 function TooltipProvider({ delay = 0, ...props }: TooltipPrimitive.Provider.Props) {
   return <TooltipPrimitive.Provider data-slot="tooltip-provider" delay={delay} {...props} />;
@@ -73,10 +74,11 @@ const triggerClassName = (className?: string): string =>
     className,
   );
 
-const defaultTrigger = <CircleHelp aria-label="question-circle" className="ml-1 size-4 text-muted-foreground" />;
-
-const SimpleTooltip: React.FC<SimpleTooltipProps> = ({ content, children, width = "auto", className, side }) =>
-  content === undefined || content === null || content === "" ? (
+const SimpleTooltip: React.FC<SimpleTooltipProps> = ({ content, children, width = "auto", className, side }) => {
+  const { t } = useLanguage();
+  // 默认图标随当前语言渲染，不翻译调用方提供的触发器或提示内容。
+  const defaultTrigger = <CircleHelp aria-label={t("Help")} className="ml-1 size-4 text-muted-foreground" />;
+  return content === undefined || content === null || content === "" ? (
     <span className={triggerClassName(className)}>{children ?? defaultTrigger}</span>
   ) : (
     <TooltipProvider>
@@ -90,5 +92,6 @@ const SimpleTooltip: React.FC<SimpleTooltipProps> = ({ content, children, width 
       </Tooltip>
     </TooltipProvider>
   );
+};
 
 export { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider, SimpleTooltip };

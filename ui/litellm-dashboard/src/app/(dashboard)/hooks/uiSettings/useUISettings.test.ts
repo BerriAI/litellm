@@ -38,6 +38,19 @@ describe("useUISettings", () => {
   const wrapper = ({ children }: { children: ReactNode }) =>
     React.createElement(QueryClientProvider, { client: queryClient }, children);
 
+  it("运行时配置未就绪时不请求，启用后再读取全站设置", async () => {
+    vi.mocked(getUiSettings).mockResolvedValue(mockUISettings);
+    const { result, rerender } = renderHook(({ enabled }) => useUISettings({ enabled }), {
+      initialProps: { enabled: false },
+      wrapper,
+    });
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(getUiSettings).not.toHaveBeenCalled();
+    rerender({ enabled: true });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(getUiSettings).toHaveBeenCalledTimes(1);
+  });
+
   it("should return UI settings data when query is successful", async () => {
     // Mock successful API call
     (getUiSettings as any).mockResolvedValue(mockUISettings);

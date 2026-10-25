@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { deploymentWarningContent } from "./DeploymentWarningContent";
+import { translate } from "@/i18n/language";
 
 const NOW = new Date("2026-10-14T12:00:00Z");
 
 describe("deploymentWarningContent", () => {
+  it("仅翻译社区警告，不改未知警告内容", () => {
+    const t = (message: string, values?: Readonly<Record<string, string | number>>) =>
+      translate("zh-CN", message, values);
+    expect(deploymentWarningContent("no_redis", NOW, t).title).toBe("未配置 Redis");
+    expect(deploymentWarningContent("Home", NOW, t)).toEqual({ title: "Home" });
+  });
   it.each([
     { expiry: "2026-10-14", title: "Your LiteLLM Enterprise license expires today (Oct 14, 2026)" },
     { expiry: "2026-10-15", title: "Your LiteLLM Enterprise license expires in 1 day (Oct 15, 2026)" },

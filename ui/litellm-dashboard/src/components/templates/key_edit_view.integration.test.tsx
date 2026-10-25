@@ -1,6 +1,6 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { MODEL_MAX_BUDGET_PREMIUM_HINT } from "../key_team_helpers/ModelMaxBudgetEditor";
@@ -13,8 +13,16 @@ import {
   listMCPTools,
   modelAvailableCall,
   vectorStoreListCall,
+  tagListCall,
 } from "../networking";
 import { KeyEditView } from "./key_edit_view";
+import { LanguageProvider } from "@/contexts/LanguageContext";
+import { toast } from "@/lib/toast";
+import LanguageSelector from "../LanguageSelector";
+import { Toaster } from "../ui/sonner";
+import { ApiError } from "@/lib/http/client";
+
+vi.unmock("@/lib/toast");
 
 const can = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
@@ -395,9 +403,87 @@ describe("KeyEditView", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     can.mockReturnValue(true);
     vi.mocked(getUiSettings).mockResolvedValue({ values: { enable_projects_ui: false } });
     testQueryClient.removeQueries({ queryKey: ["uiSettings"] });
+  });
+
+  afterEach(() => toast.dismiss());
+
+  // 复用当前文件的既有子组件替身，语言、表单校验和通知使用真实实现。
+  const renderLanguageKey = (language: "en" | "zh-CN", onSubmit = vi.fn().mockResolvedValue(undefined)) => {
+    renderWithProviders(
+      <LanguageProvider defaultLanguage={language} userId="key-language" storageScope="test">
+        <LanguageSelector />
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={vi.fn()}
+          onSubmit={onSubmit}
+          accessToken="token"
+          userID="user"
+          userRole="Admin"
+          premiumUser={true}
+        />
+        <Toaster expand />
+      </LanguageProvider>,
+    );
+    return onSubmit;
+  };
+
+  const changeLanguage = (value: "en" | "zh-CN") =>
+    fireEvent.change(screen.getByRole("combobox", { name: /Interface language|界面语言/ }), { target: { value } });
+
+  it.each([
+    new Error("Home"),
+    new Error(JSON.stringify({ error: { message: "Home" }, debug: "private-debug" })),
+    new ApiError("Home", 403, { detail: "Home" }),
+    { response: { status: 403, data: { detail: "Home", debug: "private-debug" } } },
+  ])("标签加载失败保留业务原文及状态，切换语言不重取或丢失草稿 %j", async (error) => {
+    const pending = Promise.withResolvers<Awaited<ReturnType<typeof tagListCall>>>();
+    vi.mocked(tagListCall).mockReturnValueOnce(pending.promise);
+    const onSubmit = renderLanguageKey("en");
+    fireEvent.change(screen.getByLabelText("Key Alias"), { target: { value: "Home" } });
+    changeLanguage("zh-CN");
+    await act(async () => pending.reject(error));
+    expect(await screen.findByText("Home", { exact: true })).toBeVisible();
+    const denied = error instanceof ApiError || "response" in error;
+    expect(screen.getByText(denied ? "无访问权限" : "错误", { exact: true })).toBeVisible();
+    expect(screen.queryByText(/private-debug|Error:|ApiError:|\[object Object\]/)).not.toBeInTheDocument();
+    changeLanguage("en");
+    expect(screen.getByText(denied ? "Access Denied" : "Error", { exact: true })).toBeVisible();
+    expect(screen.getByText("Home", { exact: true })).toBeVisible();
+    expect(screen.getByLabelText("Key Alias")).toHaveValue("Home");
+    expect(tagListCall).toHaveBeenCalledTimes(1);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("标签加载空错误通知显示后仍随语言变化", async () => {
+    vi.mocked(tagListCall).mockRejectedValueOnce(new Error(""));
+    const onSubmit = renderLanguageKey("en");
+    expect(await screen.findByText("Failed to fetch tags")).toBeVisible();
+    fireEvent.change(screen.getByLabelText("Key Alias"), { target: { value: "Home" } });
+    changeLanguage("zh-CN");
+    expect(screen.getByText("获取标签失败，请重试")).toBeVisible();
+    expect(screen.getByLabelText("密钥别名")).toHaveValue("Home");
+    expect(tagListCall).toHaveBeenCalledTimes(1);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it.each(["en", "zh-CN"] as const)("%s 元数据标签移动通知随语言变化且不修改业务值", async (language) => {
+    const onSubmit = renderLanguageKey(language);
+    const metadata = screen.getByLabelText(/^(Metadata|元数据)$/);
+    fireEvent.change(metadata, { target: { value: '{"tags": ["Home"], "env": "Home"}' } });
+    fireEvent.blur(metadata);
+    const english = "Moved Home from metadata to the Tags field";
+    const chinese = "已将 Home 从元数据移至标签字段";
+    expect(await screen.findByText(language === "en" ? english : chinese)).toBeVisible();
+    changeLanguage(language === "en" ? "zh-CN" : "en");
+    expect(screen.getByText(language === "en" ? chinese : english)).toBeVisible();
+    expect(screen.getByLabelText(/^(Metadata|元数据)$/)).toHaveValue('{\n  "env": "Home"\n}');
+    expect(screen.getByText("Home", { exact: true })).toBeVisible();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(tagListCall).toHaveBeenCalledTimes(1);
   });
 
   describe("policy and prompt fields", () => {
@@ -2239,6 +2325,69 @@ describe("KeyEditView", () => {
   });
 
   describe("estimated output tokens", () => {
+    it.each([false, true])("预计 Token 提交保留已修改字段，切换语言 %s", async (switchLanguage) => {
+      const onSubmit = renderLanguageKey("en");
+      await waitFor(() => expect(modelAvailableCall).toHaveBeenCalledTimes(1));
+      fireEvent.change(screen.getByLabelText("Key Alias"), { target: { value: "Home" } });
+      fireEvent.change(screen.getByLabelText("Estimated Output Tokens"), { target: { value: "2048" } });
+      fireEvent.change(screen.getByLabelText("Estimated Output Tokens Per Model"), {
+        target: { value: '{"Home": 4096}' },
+      });
+      if (switchLanguage) changeLanguage("zh-CN");
+      fireEvent.submit(screen.getByRole("button", { name: /Save Changes|保存更改/ }));
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+      expect(onSubmit.mock.calls[0][1]).toEqual(
+        expect.arrayContaining([
+          "key_alias",
+          "default_estimated_output_tokens",
+          "default_estimated_output_tokens_per_model",
+        ]),
+      );
+    });
+
+    it.each(["en", "zh-CN"] as const)("%s 已有预计 Token 错误双向切换且保留草稿及提交语义", async (language) => {
+      const onSubmit = renderLanguageKey(language);
+      const alias = await screen.findByLabelText(/^(Key Alias|密钥别名)$/);
+      await userEvent.click(alias);
+      const save = screen.getByRole("button", { name: /Save Changes|保存更改/ });
+      const estimate = screen.getByLabelText(/^(Estimated Output Tokens|预计输出 Token 数)$/);
+      const perModel = screen.getByPlaceholderText('{"gpt-4": 4096}');
+      fireEvent.change(alias, { target: { value: "Home" } });
+      fireEvent.change(estimate, { target: { value: "12.5" } });
+      fireEvent.change(perModel, { target: { value: '{"Home": -1}' } });
+      fireEvent.submit(save);
+      const english = ["Enter a positive integer", 'Enter a JSON object of positive integers, e.g. {"gpt-4": 4096}'];
+      const chinese = ["请输入正整数", '请输入由正整数组成的 JSON 对象，例如 {"gpt-4": 4096}'];
+      for (const message of language === "en" ? english : chinese) {
+        expect(await screen.findByText(message)).toBeVisible();
+      }
+      changeLanguage(language === "en" ? "zh-CN" : "en");
+      for (const message of language === "en" ? chinese : english) {
+        expect(screen.getByText(message)).toBeVisible();
+      }
+      expect(estimate).toHaveValue(12.5);
+      expect(perModel).toHaveValue('{"Home": -1}');
+      expect(screen.getByLabelText(/^(Key Alias|密钥别名)$/)).toHaveValue("Home");
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(tagListCall).toHaveBeenCalledTimes(1);
+      fireEvent.change(estimate, { target: { value: "2048" } });
+      fireEvent.change(perModel, { target: { value: '{"Home": 4096}' } });
+      fireEvent.submit(save);
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          key_alias: "Home",
+          default_estimated_output_tokens: 2048,
+          default_estimated_output_tokens_per_model: { Home: 4096 },
+        }),
+        expect.arrayContaining([
+          "key_alias",
+          "default_estimated_output_tokens",
+          "default_estimated_output_tokens_per_model",
+        ]),
+      );
+    });
+
     const renderEditView = (
       keyData: KeyResponse,
       onSubmit: (values: any) => Promise<void>,

@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, Info } from "lucide-react";
 
@@ -67,6 +68,7 @@ const SortableHead = ({
   sort: SortState;
   onSort: (column: SortColumn) => void;
 }) => {
+  const { t } = useLanguage();
   const active = sort.column === column;
   const ActiveArrow = sort.dir === "asc" ? ArrowUp : ArrowDown;
   const Arrow = active ? ActiveArrow : ArrowUpDown;
@@ -76,7 +78,7 @@ const SortableHead = ({
         <button
           type="button"
           onClick={() => onSort(column)}
-          aria-label={`Sort by ${label}`}
+          aria-label={t("Sort by {value1}", { value1: String(label) })}
           className="inline-flex items-center gap-1 font-medium hover:text-foreground"
         >
           {label}
@@ -89,6 +91,7 @@ const SortableHead = ({
 };
 
 const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
+  const { t } = useLanguage();
   const { results, loading } = activity;
   const [dimension, setDimension] = useState<CacheLeakageDimension>("key");
   const [sort, setSort] = useState<SortState>({ column: "potentialSavings", dir: "desc" });
@@ -111,13 +114,12 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
         : { column, dir: NATURAL_DIR[column] },
     );
 
-  const subject = dimension === "model" ? "Models" : "Keys";
-  const firstColumn = dimension === "model" ? "Model" : "Key";
-  const emptyNoun = dimension === "model" ? "model" : "key";
+  const subject = dimension === "model" ? t("Models") : t("Keys");
+  const firstColumn = dimension === "model" ? t("Model") : t("Key");
   const emptyMessage =
     dimension === "key" && keyLeakage.failed
-      ? "Could not load key usage for this range."
-      : `No ${emptyNoun} usage in this range.`;
+      ? t("Could not load key usage for this range.")
+      : t("No {entity} usage in this range.", { entity: dimension === "model" ? t("model") : t("key") });
 
   return (
     <TooltipProvider delay={300}>
@@ -125,25 +127,28 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
         <CardHeader>
           <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
             <div className="min-w-0">
-              <CardTitle>Cache leakage by {dimension === "model" ? "model" : "virtual key"}</CardTitle>
+              <CardTitle>
+                {t("Cache leakage by")} {dimension === "model" ? t("model") : t("virtual key")}
+              </CardTitle>
               <p className="mt-1 text-sm text-muted-foreground line-clamp-2">
-                {subject} sending large volumes of uncached input with a low cache hit rate are likely missing prompt
-                caching. Potential savings is approximate: uncached input priced at what your cached traffic nets per
-                cached token, after cache-write premiums.
+                {subject}{" "}
+                {t(
+                  "sending large volumes of uncached input with a low cache hit rate are likely missing prompt caching. Potential savings is approximate: uncached input priced at what your cached traffic nets per cached token, after cache-write premiums.",
+                )}
               </p>
             </div>
           </div>
           <Tabs value={dimension} onValueChange={(value) => setDimension(value === "model" ? "model" : "key")}>
             <TabsList>
-              <TabsTrigger value="key">By virtual key</TabsTrigger>
-              <TabsTrigger value="model">By model</TabsTrigger>
+              <TabsTrigger value="key">{t("By virtual key")}</TabsTrigger>
+              <TabsTrigger value="model">{t("By model")}</TabsTrigger>
             </TabsList>
           </Tabs>
         </CardHeader>
         <CardContent>
           {rows.length === 0 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">
-              {rowsLoading ? "Loading..." : emptyMessage}
+              {rowsLoading ? t("Loading...") : emptyMessage}
             </p>
           ) : (
             <Table>
@@ -152,22 +157,24 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
                   <TableHead>{firstColumn}</TableHead>
                   <SortableHead
                     column="uncachedPromptTokens"
-                    label="Uncached input tokens"
-                    info="Input tokens you sent in this range that weren't served from or written to the cache"
+                    label={t("Uncached input tokens")}
+                    info={t("Input tokens you sent in this range that weren't served from or written to the cache")}
                     sort={sort}
                     onSort={onSort}
                   />
                   <SortableHead
                     column="cacheHitRatio"
-                    label="Cache hit rate"
-                    info="Share of your input tokens that were served from the cache"
+                    label={t("Cache hit rate")}
+                    info={t("Share of your input tokens that were served from the cache")}
                     sort={sort}
                     onSort={onSort}
                   />
                   <SortableHead
                     column="potentialSavings"
-                    label="Potential savings"
-                    info="About how much you'd save if this uncached input used prompt caching. Estimated as uncached input tokens times what your cached traffic already nets per cached token (realized cache savings, after write premiums, ÷ cache read and write tokens). Blank when caching is not currently saving anything overall."
+                    label={t("Potential savings")}
+                    info={t(
+                      "About how much you'd save if this uncached input used prompt caching. Estimated as uncached input tokens times what your cached traffic already nets per cached token (realized cache savings, after write premiums, ÷ cache read and write tokens). Blank when caching is not currently saving anything overall.",
+                    )}
                     sort={sort}
                     onSort={onSort}
                   />

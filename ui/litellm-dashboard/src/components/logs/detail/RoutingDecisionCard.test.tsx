@@ -2,6 +2,7 @@ import React from "react";
 import { render, screen } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import { RoutingDecisionCard, type RoutingDecision } from "./RoutingDecisionCard";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 vi.mock("@/components/ui/badge", () => ({
   Badge: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
@@ -28,6 +29,21 @@ const forecast = {
 };
 
 describe("RoutingDecisionCard", () => {
+  it("中文翻译内建路由原因和阈值解释，但不翻译自定义名称与模型", () => {
+    localStorage.clear();
+    render(
+      <LanguageProvider defaultLanguage="zh-CN" userId="routing-language" storageScope="routing-test">
+        <RoutingDecisionCard
+          decision={{ ...heuristic, router_model_name: "Home", routed_model: "Settings", tier_label: "Home" }}
+        />
+      </LanguageProvider>,
+    );
+    expect(screen.getAllByText("Home")).toHaveLength(2);
+    expect(screen.getByText("Settings")).toBeInTheDocument();
+    expect(screen.getByText("启发式评分器")).toBeInTheDocument();
+    expect(screen.getByText("(不低于 0.6)")).toBeInTheDocument();
+    expect(screen.getByText("long (900 tokens)")).toBeInTheDocument();
+  });
   it("renders nothing when the request carried no routing decision", () => {
     const { container } = render(<RoutingDecisionCard decision={undefined} />);
     expect(container).toBeEmptyDOMElement();

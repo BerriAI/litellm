@@ -1,6 +1,8 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { ColumnDef } from "@tanstack/react-table";
+import { englishTranslate, type Translate } from "@/i18n/language";
 import { MoreHorizontal, Trash2, Wallet } from "lucide-react";
 
 import { getBudgetDurationLabel } from "@/components/common_components/budget_duration_dropdown";
@@ -41,13 +43,15 @@ interface AccessGroupRowActionsProps {
 }
 
 function AccessGroupRowActions({ accessGroup, canWrite, onSetBudget, onClearBudget }: AccessGroupRowActionsProps) {
+  const { t } = useLanguage();
   const hasBudget = accessGroup.budget != null;
-  const blocked = writeBlockedReason(accessGroup, canWrite);
+  const blockedReason = writeBlockedReason(accessGroup, canWrite);
+  const blocked = blockedReason ? t(blockedReason) : undefined;
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label={`Open budget actions for ${accessGroup.access_group}`}
+        aria-label={t("Open budget actions for {group}", { group: accessGroup.access_group })}
         data-testid={`access-group-actions-${accessGroup.access_group}`}
         className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "text-muted-foreground")}
       >
@@ -61,17 +65,17 @@ function AccessGroupRowActions({ accessGroup, canWrite, onSetBudget, onClearBudg
           onClick={() => onSetBudget(accessGroup)}
         >
           <Wallet />
-          {hasBudget ? "Edit budget" : "Set budget"}
+          {hasBudget ? t("Edit budget") : t("Set budget")}
         </DropdownMenuItem>
         <DropdownMenuItem
           variant="destructive"
           disabled={blocked !== undefined || !hasBudget}
           data-testid="access-group-action-clear-budget"
-          title={blocked ?? (hasBudget ? undefined : "This access group has no budget to clear")}
+          title={blocked ?? (hasBudget ? undefined : t("This access group has no budget to clear"))}
           onClick={() => onClearBudget(accessGroup)}
         >
           <Trash2 />
-          Clear budget
+          {t("Clear budget")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -79,12 +83,14 @@ function AccessGroupRowActions({ accessGroup, canWrite, onSetBudget, onClearBudg
 }
 
 interface AccessGroupBudgetColumnsDeps {
+  t?: Translate;
   canWrite: boolean;
   onSetBudget: (accessGroup: ModelAccessGroup) => void;
   onClearBudget: (accessGroup: ModelAccessGroup) => void;
 }
 
 export const getAccessGroupBudgetColumns = ({
+  t = englishTranslate,
   canWrite,
   onSetBudget,
   onClearBudget,
@@ -92,8 +98,8 @@ export const getAccessGroupBudgetColumns = ({
   {
     id: "access_group",
     accessorKey: "access_group",
-    meta: { title: "Access Group" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Access Group" />,
+    meta: { title: t("Access Group") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Access Group")} />,
     size: 220,
     enableSorting: true,
     cell: ({ row }) => (
@@ -104,8 +110,8 @@ export const getAccessGroupBudgetColumns = ({
   },
   {
     id: "models",
-    meta: { title: "Models", skeleton: "chips" },
-    header: "Models",
+    meta: { title: t("Models"), skeleton: "chips" },
+    header: t("Models"),
     size: 280,
     enableSorting: false,
     cell: ({ row }) => <ModelsCell models={row.original.model_names} />,
@@ -113,8 +119,8 @@ export const getAccessGroupBudgetColumns = ({
   {
     id: "deployment_count",
     accessorKey: "deployment_count",
-    meta: { title: "Deployments", numeric: true },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Deployments" />,
+    meta: { title: t("Deployments"), numeric: true },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Deployments")} />,
     size: 120,
     enableSorting: true,
     cell: ({ row }) => row.original.deployment_count,
@@ -122,8 +128,8 @@ export const getAccessGroupBudgetColumns = ({
   {
     id: "spend",
     accessorKey: "spend",
-    meta: { title: "Shared Spend" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Shared Spend" />,
+    meta: { title: t("Shared Spend") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Shared Spend")} />,
     size: 180,
     enableSorting: true,
     cell: ({ row }) => (
@@ -136,20 +142,20 @@ export const getAccessGroupBudgetColumns = ({
   },
   {
     id: "budget_duration",
-    meta: { title: "Resets" },
-    header: "Resets",
+    meta: { title: t("Budget reset period") },
+    header: t("Budget reset period"),
     size: 110,
     enableSorting: false,
     cell: ({ row }) => (
       <span className="text-sm text-muted-foreground">
-        {getBudgetDurationLabel(row.original.budget?.budget_duration)}
+        {getBudgetDurationLabel(row.original.budget?.budget_duration, t)}
       </span>
     ),
   },
   {
     id: "actions",
     meta: { className: "text-right", headerClassName: "text-right" },
-    header: () => <span className="sr-only">Actions</span>,
+    header: () => <span className="sr-only">{t("Actions")}</span>,
     size: 64,
     enableSorting: false,
     enableHiding: false,

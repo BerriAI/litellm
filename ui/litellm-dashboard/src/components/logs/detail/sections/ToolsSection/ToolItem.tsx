@@ -2,6 +2,7 @@
  * Individual tool item component with expandable details
  */
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useState } from "react";
 import { ChevronDown, ChevronRight, Wrench } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +15,7 @@ interface ToolItemProps {
 }
 
 export function ToolItem({ tool }: ToolItemProps) {
+  const { t } = useLanguage();
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -34,7 +36,7 @@ export function ToolItem({ tool }: ToolItemProps) {
         </div>
 
         <div className="flex items-center gap-2">
-          <Badge variant={tool.called ? "default" : "secondary"}>{tool.called ? "called" : "not called"}</Badge>
+          <Badge variant={tool.called ? "default" : "secondary"}>{tool.called ? t("called") : t("not called")}</Badge>
           {expanded ? (
             <ChevronDown className="size-3 text-muted-foreground" />
           ) : (

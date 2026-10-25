@@ -45,7 +45,12 @@ describe("ModelConnectionTest", () => {
     expect(screen.getByText("Testing connection to GPT-4o mini...")).toBeInTheDocument();
     await finishConnectionTest();
 
-    expect(prepareModelAddRequest).toHaveBeenCalledWith({ model: "gpt-4o-mini" }, "sk-test", null);
+    expect(prepareModelAddRequest).toHaveBeenCalledWith(
+      { model: "gpt-4o-mini" },
+      "sk-test",
+      null,
+      expect.any(Function),
+    );
     expect(testConnectionRequest).toHaveBeenCalledWith(
       "sk-test",
       { model: "openai/gpt-4o-mini" },

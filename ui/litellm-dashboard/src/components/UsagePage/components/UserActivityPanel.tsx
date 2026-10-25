@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Users } from "lucide-react";
 import React from "react";
 
@@ -14,9 +15,10 @@ interface UserActivityPanelProps {
 }
 
 const UserActivityPanel: React.FC<UserActivityPanelProps> = ({ fetchUserPage }) => {
+  const { t } = useLanguage();
   const page = useUserActivityPage(fetchUserPage, PAGE_SIZE);
   return (
-    <Panel icon={Users} title="User activity" className="overflow-hidden" bodyClassName="px-0 pt-3 pb-0">
+    <Panel icon={Users} title={t("User activity")} className="overflow-hidden" bodyClassName="px-0 pt-3 pb-0">
       <div className="px-4 pb-2">
         <UserActivityTable
           rows={page.rows}

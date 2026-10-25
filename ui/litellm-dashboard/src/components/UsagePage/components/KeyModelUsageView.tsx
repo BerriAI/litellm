@@ -1,10 +1,12 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { BarChart } from "@/components/shared/charts";
 import { DataTable } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import type { ColumnDef } from "@tanstack/react-table";
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
+import { englishTranslate, type Translate } from "@/i18n/language";
 import { TopModelData } from "../types";
 
 interface KeyModelUsageViewProps {
@@ -15,32 +17,33 @@ const VISIBLE_ROWS = 5;
 const COMPACT_TABLE_HEADER_HEIGHT = 33;
 const COMPACT_TABLE_ROW_HEIGHT = 32;
 
-const columns: ColumnDef<TopModelData>[] = [
+// 只翻译表头，模型名称与用量数据保持原样。
+const getModelColumns = (t: Translate = englishTranslate): ColumnDef<TopModelData>[] => [
   {
-    header: "Model",
+    header: t("Model"),
     accessorKey: "model",
     cell: ({ row }) => row.original.model || "-",
   },
   {
-    header: "Spend (USD)",
+    header: t("Spend (USD)"),
     accessorKey: "spend",
     meta: { numeric: true },
     cell: ({ row }) => <MoneyCell value={row.original.spend} decimals={2} />,
   },
   {
-    header: "Successful",
+    header: t("Successful"),
     accessorKey: "successful_requests",
     meta: { numeric: true },
     cell: ({ row }) => <span className="text-success">{row.original.successful_requests?.toLocaleString() || 0}</span>,
   },
   {
-    header: "Failed",
+    header: t("Failed"),
     accessorKey: "failed_requests",
     meta: { numeric: true },
     cell: ({ row }) => <span className="text-destructive">{row.original.failed_requests?.toLocaleString() || 0}</span>,
   },
   {
-    header: "Tokens",
+    header: t("Tokens"),
     accessorKey: "tokens",
     meta: { numeric: true },
     cell: ({ row }) => row.original.tokens?.toLocaleString() || 0,
@@ -48,6 +51,8 @@ const columns: ColumnDef<TopModelData>[] = [
 ];
 
 const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
+  const { t } = useLanguage();
+  const columns = useMemo(() => getModelColumns(t), [t]);
   const [viewMode, setViewMode] = useState<"chart" | "table">("table");
 
   if (topModels.length === 0) {
@@ -57,20 +62,20 @@ const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
   return (
     <Card className="mt-4">
       <CardHeader>
-        <CardTitle className="text-base font-semibold">Model Usage</CardTitle>
+        <CardTitle className="text-base font-semibold">{t("Model Usage")}</CardTitle>
         <CardAction>
           <div className="flex space-x-2">
             <button
               onClick={() => setViewMode("table")}
               className={`px-3 py-1 text-sm rounded-md ${viewMode === "table" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
             >
-              Table
+              {t("Table")}
             </button>
             <button
               onClick={() => setViewMode("chart")}
               className={`px-3 py-1 text-sm rounded-md ${viewMode === "chart" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
             >
-              Chart
+              {t("Chart")}
             </button>
           </div>
         </CardAction>
@@ -83,6 +88,7 @@ const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
               data={topModels.map((m) => ({ key: m.model, spend: m.spend }))}
               index="key"
               categories={["spend"]}
+              categoryLabels={{ spend: t("Spend") }}
               colors={["cyan"]}
               valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
               layout="vertical"

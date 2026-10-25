@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -101,62 +102,64 @@ function KeyInput({ value, taken, onCommit, label, placeholder }: KeyInputProps)
 }
 
 function ChoiceOptions({ question, onChange }: QuestionEditorProps<ChoiceQuestion>) {
+  const { t } = useLanguage();
   const labels = Object.keys(question.criteria);
   const writeCriteria = (criteria: Record<string, string>) => onChange({ ...question, criteria });
 
   return (
     <div className="grid gap-2">
-      <span className="text-sm font-medium">Options</span>
+      <span className="text-sm font-medium">{t("Options")}</span>
       {Object.entries(question.criteria).map(([label, description], index) => (
         <div key={index} className="flex items-start gap-2">
           <KeyInput
             key={label}
-            label="Option label"
+            label={t("Option label")}
             value={label}
             taken={labels}
             onCommit={(next) => writeCriteria(renameKey(question.criteria, label, next))}
           />
           <Input
-            aria-label={`Description of ${label}`}
+            aria-label={t("Description of {label}", { label: String(label) })}
             className="flex-2"
             value={description}
-            placeholder="Optional description"
+            placeholder={t("Optional description")}
             onChange={(event) => writeCriteria({ ...question.criteria, [label]: event.target.value })}
           />
           <RemoveButton
-            label={`Remove option ${label}`}
+            label={t("Remove option {label}", { label: String(label) })}
             onClick={() => writeCriteria(withoutKey(question.criteria, label))}
           />
         </div>
       ))}
       <AddButton onClick={() => writeCriteria({ ...question.criteria, [freeName(labels, "option")]: "" })}>
-        Add option
+        {t("Add option")}
       </AddButton>
     </div>
   );
 }
 
 function NoulCriteria({ question, onChange }: QuestionEditorProps<NoulQuestion>) {
+  const { t } = useLanguage();
   const yesId = useId();
   const noId = useId();
 
   return (
     <div className="grid gap-2 sm:grid-cols-2">
       <div className="grid gap-1.5">
-        <Label htmlFor={yesId}>Yes means</Label>
+        <Label htmlFor={yesId}>{t("Yes means")}</Label>
         <Input
           id={yesId}
           value={question.criteria?.true ?? ""}
-          placeholder="Optional"
+          placeholder={t("Optional")}
           onChange={(event) => onChange(withNoulCriterion(question, "true", event.target.value))}
         />
       </div>
       <div className="grid gap-1.5">
-        <Label htmlFor={noId}>No means</Label>
+        <Label htmlFor={noId}>{t("No means")}</Label>
         <Input
           id={noId}
           value={question.criteria?.false ?? ""}
-          placeholder="Optional"
+          placeholder={t("Optional")}
           onChange={(event) => onChange(withNoulCriterion(question, "false", event.target.value))}
         />
       </div>
@@ -165,27 +168,28 @@ function NoulCriteria({ question, onChange }: QuestionEditorProps<NoulQuestion>)
 }
 
 function ScoreLevels({ question, onChange }: QuestionEditorProps<ScoreQuestion>) {
+  const { t } = useLanguage();
   const writeCriteria = (criteria: string[]) => onChange({ ...question, criteria });
 
   return (
     <div className="grid gap-2">
-      <span className="text-sm font-medium">Levels, lowest first</span>
+      <span className="text-sm font-medium">{t("Levels, lowest first")}</span>
       {question.criteria.map((level, index) => (
         <div key={index} className="flex items-center gap-2">
           <span className="w-6 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{index}</span>
           <Input
-            aria-label={`Level ${index}`}
+            aria-label={t("Level {index}", { index: String(index) })}
             value={level}
-            placeholder="What this score means"
+            placeholder={t("What this score means")}
             onChange={(event) => writeCriteria(replaceAt(question.criteria, index, event.target.value))}
           />
           <RemoveButton
-            label={`Remove level ${index}`}
+            label={t("Remove level {index}", { index: String(index) })}
             onClick={() => writeCriteria(removeAt(question.criteria, index))}
           />
         </div>
       ))}
-      <AddButton onClick={() => writeCriteria([...question.criteria, ""])}>Add level</AddButton>
+      <AddButton onClick={() => writeCriteria([...question.criteria, ""])}>{t("Add level")}</AddButton>
     </div>
   );
 }
@@ -210,31 +214,35 @@ interface QuestionCardProps extends QuestionEditorProps<FormQuestion> {
 }
 
 function QuestionCard({ name, index, question, taken, onChange, onRename, onRemove }: QuestionCardProps) {
+  const { t } = useLanguage();
   const instructionsId = useId();
   const title = name === "" ? String(index + 1) : name;
 
   return (
-    <fieldset aria-label={`Question ${title}`} className="grid gap-3 rounded-lg border bg-muted/30 p-3">
+    <fieldset
+      aria-label={t("Question {title}", { title: String(title) })}
+      className="grid gap-3 rounded-lg border bg-muted/30 p-3"
+    >
       <QuestionCardHeader index={index} onRemove={onRemove} removeLabel={`Remove question ${title}`} />
       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_10rem]">
         <div className="grid gap-1.5">
-          <span className="text-sm font-medium">Name</span>
+          <span className="text-sm font-medium">{t("Name")}</span>
           <KeyInput
             key={name}
-            label="Question name"
+            label={t("Question name")}
             value={name}
             taken={taken}
             onCommit={onRename}
-            placeholder="e.g. area"
+            placeholder={t("e.g. area")}
           />
         </div>
         <div className="grid gap-1.5">
-          <span className="text-sm font-medium">Answer type</span>
+          <span className="text-sm font-medium">{t("Answer type")}</span>
           <Select
             value={question.type}
             onValueChange={(type) => isQuestionType(type) && onChange(retype(question, type))}
           >
-            <SelectTrigger className="w-full" aria-label="Answer type">
+            <SelectTrigger className="w-full" aria-label={t("Answer type")}>
               <SelectValue>{TYPE_LABELS[question.type]}</SelectValue>
             </SelectTrigger>
             <SelectContent>
@@ -248,12 +256,12 @@ function QuestionCard({ name, index, question, taken, onChange, onRename, onRemo
         </div>
       </div>
       <div className="grid gap-1.5">
-        <Label htmlFor={instructionsId}>Instructions</Label>
+        <Label htmlFor={instructionsId}>{t("Instructions")}</Label>
         <Textarea
           id={instructionsId}
           rows={2}
           value={question.instructions ?? ""}
-          placeholder="What should the model decide?"
+          placeholder={t("What should the model decide?")}
           onChange={(event) => onChange({ ...question, instructions: event.target.value })}
         />
       </div>
@@ -263,15 +271,16 @@ function QuestionCard({ name, index, question, taken, onChange, onRename, onRemo
 }
 
 export default function SystemOneForm({ value, onChange, validation, onReset }: SystemOneFormProps) {
+  const { t } = useLanguage();
   const stateId = useId();
   const form = useMemo(() => readForm(value), [value]);
 
   if (form === undefined) {
     return (
       <FormFrame validation={validation}>
-        <p className="text-sm text-muted-foreground">This request has a shape the form can&apos;t show.</p>
+        <p className="text-sm text-muted-foreground">{t("This request has a shape the form can't show.")}</p>
         <Button variant="outline" className="w-fit" onClick={onReset}>
-          Reset to example
+          {t("Reset to example")}
         </Button>
       </FormFrame>
     );
@@ -285,15 +294,15 @@ export default function SystemOneForm({ value, onChange, validation, onReset }: 
   return (
     <FormFrame validation={validation}>
       <div className="grid gap-1.5">
-        <Label htmlFor={stateId}>Input</Label>
+        <Label htmlFor={stateId}>{t("Input")}</Label>
         <p className="text-xs text-muted-foreground">
-          The text the model reads before it answers, such as a support ticket or a chat message.
+          {t("The text the model reads before it answers, such as a support ticket or a chat message.")}
         </p>
         <Textarea
           id={stateId}
           rows={4}
           value={form.state ?? ""}
-          placeholder="Paste the text the model should decide about"
+          placeholder={t("Paste the text the model should decide about")}
           onChange={(event) => write({ ...form, state: event.target.value })}
         />
       </div>
@@ -310,7 +319,7 @@ export default function SystemOneForm({ value, onChange, validation, onReset }: 
         />
       ))}
       <AddButton onClick={() => writeQuestions({ ...questions, [freeName(names, "question")]: blankQuestion() })}>
-        Add question
+        {t("Add question")}
       </AddButton>
     </FormFrame>
   );

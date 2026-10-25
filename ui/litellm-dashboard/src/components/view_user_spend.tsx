@@ -3,6 +3,7 @@ import React, { useEffect, useState } from "react";
 import { modelAvailableCall } from "./networking";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 // Define the props type
 interface ViewUserSpendProps {
@@ -11,6 +12,7 @@ interface ViewUserSpendProps {
   selectedTeam: any | null;
 }
 const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userSpend, userMaxBudget, selectedTeam }) => {
+  const { t } = useLanguage();
   const { accessToken, userRole, userId: userID } = useAuthorized();
   let [spend, setSpend] = useState(userSpend !== null ? userSpend : 0.0);
   const [maxBudget, setMaxBudget] = useState(
@@ -107,7 +109,10 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userSpend, userMaxBudget,
     modelsToDisplay = userModels;
   }
 
-  const displayMaxBudget = maxBudget !== null ? `$${formatNumberWithCommas(Number(maxBudget), 4)} limit` : "No limit";
+  const displayMaxBudget =
+    maxBudget !== null
+      ? t("{amount} limit", { amount: `$${formatNumberWithCommas(Number(maxBudget), 4)}` })
+      : t("No limit");
 
   const roundedSpend = spend !== undefined ? formatNumberWithCommas(spend, 4) : null;
 
@@ -115,11 +120,11 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userSpend, userMaxBudget,
     <div className="flex items-center">
       <div className="flex justify-between gap-x-6">
         <div>
-          <p className="text-sm text-muted-foreground">Total Spend</p>
+          <p className="text-sm text-muted-foreground">{t("Total Spend")}</p>
           <p className="text-2xl font-semibold text-foreground">${roundedSpend}</p>
         </div>
         <div>
-          <p className="text-sm text-muted-foreground">Max Budget</p>
+          <p className="text-sm text-muted-foreground">{t("Max Budget")}</p>
           <p className="text-2xl font-semibold text-foreground">{displayMaxBudget}</p>
         </div>
       </div>

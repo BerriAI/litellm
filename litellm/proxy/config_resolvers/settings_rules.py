@@ -41,6 +41,8 @@ class Resolved:
 
 
 _UI_SETTINGS_FIELDS: Final[tuple[str, ...]] = (
+    # 默认语言与其他界面设置使用同一存储行
+    "default_ui_language",
     "disable_model_add_for_internal_users",
     "allow_public_health_readiness_details",
     "forward_client_headers_to_llm_api",

@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import type { ComponentProps } from "react";
 
 import { cn } from "@/lib/cva.config";
@@ -25,10 +26,11 @@ export function PageHeaderDescription({ className, ...props }: ComponentProps<"p
 }
 
 export function PageHeaderControls({ className, ...props }: ComponentProps<"div">) {
+  const { t } = useLanguage();
   return (
     <div
       role="group"
-      aria-label="Page controls"
+      aria-label={t("Page controls")}
       className={cn("mt-5 flex min-h-9 items-center gap-2", className)}
       {...props}
     />

@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import type { ReactNode } from "react";
 
 import type { CredentialItem } from "@/components/networking";
@@ -32,8 +33,9 @@ interface AttachedCredentialProps {
 }
 
 export function AttachedCredential({ credentialName, credentials }: AttachedCredentialProps) {
+  const { t } = useLanguage();
   if (!credentialName) {
-    return <>Manual</>;
+    return <>{t("Manual")}</>;
   }
   return (
     <CredentialIdentity

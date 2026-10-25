@@ -596,7 +596,7 @@ describe("AllModelsTab", () => {
       await user.click(screen.getByTestId("models-team-select"));
       await user.click(await screen.findByRole("option", { name: "Engineering" }));
 
-      await screen.findByText(/select Team as "Engineering"/i);
+      await screen.findByText(/select team Engineering on the/i);
       expect(screen.getByRole("link", { name: "Virtual Keys page" })).toHaveAttribute("href", "/ui/api-keys");
     });
 
@@ -607,7 +607,7 @@ describe("AllModelsTab", () => {
       await user.click(screen.getByTestId("models-team-select"));
       await user.click(await screen.findByRole("option", { name: "Engineering" }));
 
-      expect(await screen.findByText(/select Team as "Engineering"/i)).toBeInTheDocument();
+      expect(await screen.findByText(/select team Engineering on the/i)).toBeInTheDocument();
     });
 
     it("hides the hint when viewing all available models", async () => {

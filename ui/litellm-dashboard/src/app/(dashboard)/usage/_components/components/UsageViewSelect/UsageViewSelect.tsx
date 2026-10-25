@@ -1,5 +1,6 @@
 import { BarChart3, Bot, Building2, Globe, LineChart, ShoppingCart, Tags, User, Users } from "lucide-react";
 import React from "react";
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { hasCapability, type Capability } from "@/utils/capabilities";
@@ -131,10 +132,11 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   userRole,
   canViewTagUsage = false,
   isOrgAdmin = false,
-  title = "Usage",
-  description = "Select the usage data you want to view",
+  title,
+  description,
   "data-id": dataId,
 }) => {
+  const { t } = useLanguage();
   const isAdmin = all_admin_roles.includes(userRole ?? "");
   const getFilteredOptions = () => {
     return visibleOptions(userRole, canViewTagUsage, isOrgAdmin).map((option) => {
@@ -148,10 +150,10 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
       }
       return {
         value: option.value,
-        label,
-        description: desc,
+        label: t(label),
+        description: t(desc),
         icon: option.icon,
-        badgeText: option.badgeText,
+        badgeText: option.badgeText ? t(option.badgeText) : undefined,
       };
     });
   };
@@ -161,7 +163,7 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
     <div className="flex items-center gap-3" data-id={dataId}>
       <h1 className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
         <BarChart3 aria-hidden="true" className="size-4" strokeWidth={2} />
-        {title}
+        {title ?? t("Usage")}
       </h1>
       <Select
         value={value}
@@ -169,7 +171,7 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
           if (next) onChange(next);
         }}
       >
-        <SelectTrigger aria-label={description} className="h-8 w-52">
+        <SelectTrigger aria-label={description ?? t("Select the usage data you want to view")} className="h-8 w-52">
           <SelectValue>
             {selectedOption && (
               <span className="flex items-center gap-2">

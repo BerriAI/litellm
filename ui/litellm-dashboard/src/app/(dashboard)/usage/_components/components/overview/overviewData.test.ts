@@ -43,6 +43,16 @@ const day = (date: string, total: number, models: Record<string, number>): Daily
   }) as unknown as DailyData;
 
 describe("seriesBy", () => {
+  it("只本地化合成分组，保留同名真实模型、数值和内部序列键", () => {
+    const input = [day("2026-10-01", 10, { Other: 4 })];
+    const english = seriesBy(input, "model_groups", "spend");
+    const chinese = seriesBy(input, "model_groups", "spend", { otherLabel: "其他" });
+    expect(chinese.labels).toEqual(["Other", "其他"]);
+    expect(chinese.keys).toEqual(english.keys);
+    expect(chinese.data).toEqual(english.data);
+    expect(chinese.colors).toEqual(english.colors);
+  });
+
   it("keeps a model named date, label or Other from overwriting the day's own fields or the remainder", () => {
     const series = seriesBy([day("2026-10-01", 10, { date: 3, label: 2, Other: 4 })], "model_groups", "spend");
     const [point] = series.data;

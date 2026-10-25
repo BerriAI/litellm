@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 
 import { useBudgetOptions } from "@/app/(dashboard)/hooks/budgets/useBudgetOptions";
@@ -18,10 +19,10 @@ interface EndUserBudgetSelectProps {
   readonly canEdit: boolean;
 }
 
-const budgetSublabel = (budget: budgetItem): string | undefined => {
+const budgetSublabel = (budget: budgetItem, t: ReturnType<typeof useLanguage>["t"]): string | undefined => {
   const parts = [
     budget.max_budget != null ? `$${budget.max_budget}` : null,
-    budget.budget_duration ? `resets ${budget.budget_duration}` : null,
+    budget.budget_duration ? t("resets {duration}", { duration: budget.budget_duration }) : null,
   ].filter((part): part is string => part !== null);
   return parts.length > 0 ? parts.join(", ") : undefined;
 };
@@ -33,19 +34,20 @@ export const EndUserBudgetSelect: React.FC<EndUserBudgetSelectProps> = ({
   onChange,
   canEdit,
 }) => {
+  const { t } = useLanguage();
   const { data: budgets } = useBudgetOptions(accessToken, canEdit);
   const options: SearchSelectOption[] = (budgets ?? []).map((budget) => ({
     label: budget.budget_id,
     value: budget.budget_id,
-    sublabel: budgetSublabel(budget),
+    sublabel: budgetSublabel(budget, t),
   }));
 
   return (
     <SearchSelect
       inputId={id}
-      aria-label="Default Customer Budget"
-      placeholder="No default budget"
-      emptyText="No budgets found. Create one under Budgets."
+      aria-label={t("Default Customer Budget")}
+      placeholder={t("No default budget")}
+      emptyText={t("No budgets found. Create one under Budgets.")}
       options={options}
       value={value}
       onValueChange={onChange}

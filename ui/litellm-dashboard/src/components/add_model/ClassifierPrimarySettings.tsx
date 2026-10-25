@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import { Label } from "@/components/ui/label";
 import { SearchSelect } from "@/components/shared/SearchSelect";
@@ -26,6 +27,7 @@ export default function ClassifierPrimarySettings({
   showValidationErrors?: boolean;
   section?: "all" | "judge" | "frequency";
 }) {
+  const { t } = useLanguage();
   const id = React.useId();
   const restriction = restrictedBy(value, "sessionAffinity");
   const frequency = classificationFrequency(value);
@@ -48,12 +50,12 @@ export default function ClassifierPrimarySettings({
     >
       {section !== "judge" && (
         <div className="space-y-2">
-          <Label htmlFor={`${id}-frequency`}>How often to classify</Label>
+          <Label htmlFor={`${id}-frequency`}>{t("How often to classify")}</Label>
           <Select
             items={[
-              { value: "every_request", label: "Every request" },
-              { value: "user_turn", label: "Every new user message" },
-              { value: "session", label: "Once per session" },
+              { value: "every_request", label: t("Every request") },
+              { value: "user_turn", label: t("Every new user message") },
+              { value: "session", label: t("Once per session") },
             ]}
             value={frequency}
             onValueChange={(frequency) => {
@@ -64,25 +66,25 @@ export default function ClassifierPrimarySettings({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="every_request">Every request</SelectItem>
-              <SelectItem value="user_turn">Every new user message</SelectItem>
+              <SelectItem value="every_request">{t("Every request")}</SelectItem>
+              <SelectItem value="user_turn">{t("Every new user message")}</SelectItem>
               <SelectItem value="session" disabled={Boolean(restriction)}>
-                Once per session
+                {t("Once per session")}
               </SelectItem>
             </SelectContent>
           </Select>
-          <p className="text-xs text-muted-foreground">{restriction?.reason ?? frequencyDescription}</p>
+          <p className="text-xs text-muted-foreground">{t(restriction?.reason ?? frequencyDescription)}</p>
         </div>
       )}
       {section !== "frequency" && usesJudge && (
         <div className="space-y-2">
-          <Label htmlFor={`${id}-judge`}>Judge model</Label>
+          <Label htmlFor={`${id}-judge`}>{t("Judge model")}</Label>
           <SearchSelect
             inputId={`${id}-judge`}
-            aria-label="Judge model"
+            aria-label={t("Judge model")}
             options={modelOptions}
             value={value.classifier_llm_config?.model ?? ""}
-            placeholder="Select the judge model"
+            placeholder={t("Select the judge model")}
             allowClear={false}
             className={missingJudge ? "border-destructive" : undefined}
             onValueChange={(model) => {
@@ -100,7 +102,7 @@ export default function ClassifierPrimarySettings({
           />
           {missingJudge && (
             <p role="alert" className="text-xs text-destructive">
-              A judge model is required
+              {t("A judge model is required")}
             </p>
           )}
         </div>

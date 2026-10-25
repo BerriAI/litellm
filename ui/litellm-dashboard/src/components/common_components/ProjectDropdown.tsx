@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
@@ -22,6 +23,7 @@ const ProjectDropdown: React.FC<ProjectDropdownProps> = ({
   teamId,
   id,
 }) => {
+  const { t } = useLanguage();
   const filtered = teamId ? projects?.filter((p) => p.team_id === teamId) : projects;
 
   return (
@@ -37,8 +39,8 @@ const ProjectDropdown: React.FC<ProjectDropdownProps> = ({
       }
       value={value}
       onValueChange={(projectId) => onChange?.(projectId)}
-      placeholder="Search or select a project"
-      emptyText={loading ? "Loading projects…" : "No projects found"}
+      placeholder={t("Search or select a project")}
+      emptyText={loading ? t("Loading projects…") : t("No projects found")}
       disabled={disabled}
       inputId={id}
     />

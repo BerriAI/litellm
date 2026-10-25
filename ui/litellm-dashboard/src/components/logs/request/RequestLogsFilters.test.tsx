@@ -7,6 +7,7 @@ import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../
 import { ERROR_CODE_OPTIONS } from "../constants";
 import { LOG_FILTER_IDS } from "./useLogFilterLogic";
 import { RequestLogsFilters } from "./RequestLogsFilters";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 vi.mock("@/app/(dashboard)/hooks/keys/useKeyAliases", () => ({
   useInfiniteKeyAliases: vi.fn(),
@@ -64,6 +65,7 @@ function StatefulFilters() {
 describe("RequestLogsFilters", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     testQueryClient.clear();
     vi.mocked(useInfiniteKeyAliases).mockReturnValue(
       emptyInfiniteQuery as unknown as ReturnType<typeof useInfiniteKeyAliases>,
@@ -77,6 +79,28 @@ describe("RequestLogsFilters", () => {
     vi.mocked(useInfiniteSpendLogEndUsers).mockReturnValue(
       emptyInfiniteQuery as unknown as ReturnType<typeof useInfiniteSpendLogEndUsers>,
     );
+  });
+
+  it("中文状态与错误码保持后端原值，密钥别名不被翻译", async () => {
+    const user = userEvent.setup();
+    const set = vi.fn();
+    vi.mocked(useInfiniteKeyAliases).mockReturnValue({
+      ...emptyInfiniteQuery,
+      data: { pages: [{ aliases: ["Home"] }], pageParams: [1] },
+    } as unknown as ReturnType<typeof useInfiniteKeyAliases>);
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="zh-CN" userId="filter-test" storageScope="filter-test">
+        <RequestLogsFilters get={() => undefined} set={set} teams={[]} logsWindow={LOGS_WINDOW} />
+      </LanguageProvider>,
+    );
+
+    await user.click(await screen.findByText("所有状态"));
+    await user.click(await screen.findByRole("option", { name: "失败" }));
+    expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.STATUS, "failure");
+    await chooseSelectOption(user, screen.getByPlaceholderText("选择或输入错误码"), "429 - 触发限速");
+    expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.ERROR_CODE, "429");
+    await chooseSelectOption(user, screen.getByPlaceholderText("搜索密钥别名"), "Home");
+    expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.KEY_ALIAS, "Home");
   });
 
   it("renders every backend-supported filter field", async () => {

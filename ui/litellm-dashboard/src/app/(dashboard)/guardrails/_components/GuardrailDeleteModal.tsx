@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useState } from "react";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import { deleteGuardrailCall } from "@/components/networking";
@@ -25,6 +26,7 @@ interface GuardrailDeleteModalProps {
 }
 
 export function GuardrailDeleteModal({ guardrail, accessToken, onClose, onDeleted }: GuardrailDeleteModalProps) {
+  const { t } = useLanguage();
   const [isDeleting, setIsDeleting] = useState(false);
   const guardrailName = guardrail ? guardrail.guardrail_name || guardrail.guardrail_id : "";
   const providerDisplayName = getGuardrailLogoAndName(guardrail?.litellm_params?.guardrail || "").displayName;
@@ -34,11 +36,11 @@ export function GuardrailDeleteModal({ guardrail, accessToken, onClose, onDelete
     setIsDeleting(true);
     try {
       await deleteGuardrailCall(accessToken, guardrail.guardrail_id);
-      toast.success(`Guardrail "${guardrailName}" deleted successfully`);
+      toast.success(t('Guardrail "{guardrailName}" deleted successfully', { guardrailName: String(guardrailName) }));
       onClose();
       onDeleted();
     } catch {
-      toast.fromError("Failed to delete guardrail");
+      toast.fromError(t("Failed to delete guardrail"));
       onClose();
     } finally {
       setIsDeleting(false);
@@ -48,7 +50,7 @@ export function GuardrailDeleteModal({ guardrail, accessToken, onClose, onDelete
   return (
     <DeleteResourceModal
       isOpen={guardrail !== null}
-      title="Delete Guardrail"
+      title={t("Delete Guardrail")}
       alertMessage={DANGLING_REFERENCE_WARNING}
       message={`Are you sure you want to delete guardrail: ${guardrailName}? This action cannot be undone.`}
       resourceInformationTitle="Guardrail Information"

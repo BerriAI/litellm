@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import { CircleCheck, CircleX, LoaderCircle } from "lucide-react";
 
@@ -19,6 +20,8 @@ interface AutoRouterConnectionTestProps {
 }
 
 type TargetResult = { status: "pending" } | ModelGroupConnectionResult;
+// 保存原始原因，避免切换语言时重新发送探测请求。
+type JevTargetResult = TargetResult | { status: "unreached"; cause?: string };
 
 const cleanErrorMessage = (error: string): string => {
   const mainError = error.split("stack trace:")[0].trim();
@@ -31,8 +34,9 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
   jevRequest,
   onTestComplete,
 }) => {
+  const { t } = useLanguage();
   const [results, setResults] = React.useState<TargetResult[]>(() => targets.map(() => ({ status: "pending" })));
-  const [jevResult, setJevResult] = React.useState<TargetResult>({ status: "pending" });
+  const [jevResult, setJevResult] = React.useState<JevTargetResult>({ status: "pending" });
 
   React.useEffect(() => {
     let cancelled = false;
@@ -49,8 +53,8 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
         decision.cause === "jev_classifier"
           ? { status: "success" }
           : {
-              status: "error",
-              error: `OSS classifier was not reached successfully (routing cause: ${decision.cause ?? "unknown"})`,
+              status: "unreached",
+              cause: decision.cause,
             },
       );
     };
@@ -79,7 +83,7 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
   if (targets.length === 0 && !jevRequest) {
     return (
       <p className="text-sm text-muted-foreground">
-        No complexity tiers are configured yet, so there is nothing to test.
+        {t("No complexity tiers are configured yet, so there is nothing to test.")}
       </p>
     );
   }
@@ -87,16 +91,21 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
   return (
     <div className="space-y-3">
       <p className="mb-2 text-sm text-muted-foreground">
-        Test Connection sends a minimal request to every configured tier, classifier, default, and embedding model. The
-        classifier probe includes its reasoning effort override.
+        {t(
+          "Test Connection sends a minimal request to every configured tier, classifier, default, and embedding model. The classifier probe includes its reasoning effort override.",
+        )}
       </p>
       {jevRequest && (
-        <div role="status" aria-label="OSS classifier connection" className="rounded-lg border p-3 text-sm">
-          <strong>OSS Classifier</strong>
+        <div role="status" aria-label={t("OSS classifier connection")} className="rounded-lg border p-3 text-sm">
+          <strong>{t("OSS Classifier")}</strong>
           <p>
-            {jevResult.status === "pending" && "Testing OSS classification"}
-            {jevResult.status === "success" && "OSS classification succeeded"}
+            {jevResult.status === "pending" && t("Testing OSS classification")}
+            {jevResult.status === "success" && t("OSS classification succeeded")}
             {jevResult.status === "error" && jevResult.error}
+            {jevResult.status === "unreached" &&
+              t("OSS classifier was not reached successfully (routing cause: {cause})", {
+                cause: jevResult.cause ?? t("unknown"),
+              })}
           </p>
         </div>
       )}
@@ -123,7 +132,7 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
               <span className="font-medium">{target.labels.join(", ")}</span>{" "}
               <span className="text-muted-foreground">
                 {"->"} {target.modelGroup}
-                {target.mode === "embedding" ? " (embedding)" : ""}
+                {target.mode === "embedding" ? t(" (embedding)") : ""}
               </span>
               {result.status === "error" && (
                 <p className="mt-1 text-xs text-destructive" data-testid="test-error-message">
@@ -146,16 +155,17 @@ export function AutoRouterConnectionTestDialog({
   testId,
   ...props
 }: AutoRouterConnectionTestProps & { open: boolean; onClose: () => void; testId: number }) {
+  const { t } = useLanguage();
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[700px]">
         <DialogHeader>
-          <DialogTitle>Connection Test Results</DialogTitle>
+          <DialogTitle>{t("Connection Test Results")}</DialogTitle>
         </DialogHeader>
         {open && <AutoRouterConnectionTest key={testId} {...props} />}
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
-            Close
+            {t("Close")}
           </Button>
         </DialogFooter>
       </DialogContent>

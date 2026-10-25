@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 import UsageBreakdownChart from "./UsageBreakdownChart";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 const metrics: SpendMetrics = {
   spend: 9,
@@ -31,6 +32,28 @@ const results: DailyData[] = [
 ];
 
 describe("UsageBreakdownChart", () => {
+  it("汉化图表控件并保留原始模型名称和指标切换行为", async () => {
+    const user = userEvent.setup();
+    const namedResults = results.map((day) => ({
+      ...day,
+      breakdown: { ...day.breakdown, model_groups: { Other: day.breakdown.model_groups["claude-sonnet-4"] } },
+    }));
+    render(
+      <LanguageProvider defaultLanguage="zh-CN" userId="overview-test" storageScope="overview-test">
+        <UsageBreakdownChart results={namedResults} loading={false} />
+      </LanguageProvider>,
+    );
+    expect(screen.getByRole("heading", { name: "每天用量" })).toBeInTheDocument();
+    expect(screen.getByText("Other")).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Token 数" }));
+    expect(screen.getByText("按模型统计每天Token 数（前 8 名，其余归入其他）")).toBeInTheDocument();
+    expect(within(screen.getByRole("listitem")).getByText("800")).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "每周" }));
+    expect(screen.getByRole("heading", { name: "每周用量" })).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "对数" }));
+    expect(screen.getByRole("radio", { name: "对数" })).toBeChecked();
+  });
+
   it("should render the current Usage chart controls and model leaderboard", () => {
     render(<UsageBreakdownChart results={results} loading={false} />);
 

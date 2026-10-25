@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import { ChartColumnStacked } from "lucide-react";
 import { BarChart, CustomTooltip } from "@/components/shared/charts";
@@ -16,6 +17,7 @@ const COLORS = [SUCCESS_COLOR, FAILED_COLOR] as const;
 const valueFormatter = (value: number) => value.toLocaleString();
 
 const EndpointUsageBarChart: React.FC<EndpointUsageBarChartProps> = ({ endpointData }) => {
+  const { t } = useLanguage();
   // Transform endpoint data into chart format
   const chartData = React.useMemo(() => {
     return Object.entries(endpointData || {}).map(([endpoint, data]) => ({
@@ -37,7 +39,7 @@ const EndpointUsageBarChart: React.FC<EndpointUsageBarChartProps> = ({ endpointD
   return (
     <Panel
       icon={ChartColumnStacked}
-      title="Success vs Failed Requests by Endpoint"
+      title={t("Success vs Failed Requests by Endpoint")}
       action={
         <div className="flex shrink-0 items-center gap-3 text-xs text-muted-foreground">
           {CATEGORIES.map((category, i) => (

@@ -4,6 +4,7 @@ import { $api } from "@/lib/http/api";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import type { components } from "@/lib/http/schema";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 interface KubernetesPodsCardProps {
   modelId: string;
@@ -17,6 +18,7 @@ interface KubernetesPodsCardContentProps {
 }
 
 function KubernetesPodsCardContent({ data, isError, isPending, apiErrorMessage }: KubernetesPodsCardContentProps) {
+  const { t } = useLanguage();
   const hasData = data !== undefined && !isError;
   const hasLookupError = hasData && data.error !== null;
   const showEmptyState = hasData && data.error === null && data.pod_ips.length === 0;
@@ -25,10 +27,12 @@ function KubernetesPodsCardContent({ data, isError, isPending, apiErrorMessage }
 
   return (
     <>
-      {podCount !== null && podCount > 0 && <p className="mt-4 text-sm">{podCount} ready pods</p>}
+      {podCount !== null && podCount > 0 && (
+        <p className="mt-4 text-sm">{t("{count} ready pods", { count: podCount })}</p>
+      )}
       {isPending && (
         <p className="mt-4 text-sm text-muted-foreground" role="status">
-          Loading Kubernetes pods
+          {t("Loading Kubernetes pods")}
         </p>
       )}
       {isError && (
@@ -41,9 +45,9 @@ function KubernetesPodsCardContent({ data, isError, isPending, apiErrorMessage }
           {data.error}
         </p>
       )}
-      {data && showEmptyState && <p className="mt-4 text-sm text-muted-foreground">No ready pods</p>}
+      {data && showEmptyState && <p className="mt-4 text-sm text-muted-foreground">{t("No ready pods")}</p>}
       {data && showPodIps && (
-        <ul aria-label="Ready Kubernetes pod IPs" className="mt-3 space-y-1 font-mono text-sm">
+        <ul aria-label={t("Ready Kubernetes pod IPs")} className="mt-3 space-y-1 font-mono text-sm">
           {data.pod_ips.map((ip) => (
             <li key={ip}>{ip}</li>
           ))}
@@ -54,6 +58,7 @@ function KubernetesPodsCardContent({ data, isError, isPending, apiErrorMessage }
 }
 
 export default function KubernetesPodsCard({ modelId }: KubernetesPodsCardProps) {
+  const { t } = useLanguage();
   const { data, error, isError, isPending, refetch } = $api.useQuery(
     "get",
     "/model/{model_id}/kubernetes_pods",
@@ -61,13 +66,13 @@ export default function KubernetesPodsCard({ modelId }: KubernetesPodsCardProps)
     { refetchInterval: 10_000 },
   );
   const apiErrorMessage =
-    error instanceof Error ? error.message : JSON.stringify(error) ?? "Failed to load Kubernetes pods";
+    error instanceof Error ? error.message : JSON.stringify(error) ?? t("Failed to load Kubernetes pods");
 
   return (
     <Card className="block p-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h3 className="text-lg font-medium">Kubernetes pods</h3>
+          <h3 className="text-lg font-medium">{t("Kubernetes pods")}</h3>
           {data && (
             <p className="mt-1 text-sm text-muted-foreground">
               {data.port === null ? data.service_host : `${data.service_host}:${data.port}`}
@@ -75,7 +80,7 @@ export default function KubernetesPodsCard({ modelId }: KubernetesPodsCardProps)
           )}
         </div>
         <Button type="button" variant="outline" onClick={() => void refetch()}>
-          Refresh
+          {t("Refresh")}
         </Button>
       </div>
       <KubernetesPodsCardContent

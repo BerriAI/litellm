@@ -13,9 +13,11 @@ const uiSettingsKeys = createQueryKeys("uiSettings");
  * cached copy stale; a screen that stays mounted and focused never refetches on its own,
  * so a caller that needs to notice a change also has to poll.
  */
-export const useUISettings = (options?: { staleTime?: number; refetchInterval?: number }) => {
+export const useUISettings = (options?: { staleTime?: number; refetchInterval?: number; enabled?: boolean }) => {
   return useQuery<Record<string, any>>({
     queryKey: uiSettingsKeys.list({}),
+    // 全局语言上下文可等待运行时代理配置，现有调用默认仍立即读取
+    enabled: options?.enabled ?? true,
     queryFn: async () => await getUiSettings(),
     staleTime: options?.staleTime ?? 60 * 60 * 1000, // 1 hour - data rarely changes
     gcTime: 60 * 60 * 1000, // 1 hour - keep in cache for 1 hour

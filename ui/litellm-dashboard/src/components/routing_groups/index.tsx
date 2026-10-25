@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -18,6 +19,7 @@ import { groupNameByModel } from "./modelOwnership";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const RoutingGroups: React.FC = () => {
+  const { t } = useLanguage();
   const { data, isLoading, refetch, isFetching } = useRoutingGroups();
   const { data: routerFields } = useRouterFields();
   const { data: modelHub } = useModelHub();
@@ -86,12 +88,12 @@ const RoutingGroups: React.FC = () => {
       await saveMutation.mutateAsync(next);
       toast.success(
         drawerMode === "create"
-          ? `Created routing group "${incoming.group_name}"`
-          : `Updated routing group "${incoming.group_name}"`,
+          ? t('Created routing group "{name}"', { name: incoming.group_name })
+          : t('Updated routing group "{name}"', { name: incoming.group_name }),
       );
       setDrawerOpen(false);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save routing group");
+      toast.error(err instanceof Error ? err.message : t("Failed to save routing group"));
     }
   };
 
@@ -100,10 +102,10 @@ const RoutingGroups: React.FC = () => {
     const next = groups.filter((g) => g.group_name !== deletingGroup.group_name);
     try {
       await saveMutation.mutateAsync(next);
-      toast.success(`Deleted routing group "${deletingGroup.group_name}"`);
+      toast.success(t('Deleted routing group "{name}"', { name: deletingGroup.group_name }));
       setDeletingGroup(null);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete routing group");
+      toast.error(err instanceof Error ? err.message : t("Failed to delete routing group"));
     }
   };
 
@@ -117,13 +119,13 @@ const RoutingGroups: React.FC = () => {
                 <Search className="size-4 text-muted-foreground" />
               </InputGroupAddon>
               <InputGroupInput
-                placeholder="Search groups..."
+                placeholder={t("Search groups...")}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
               {searchQuery && (
                 <InputGroupAddon align="inline-end">
-                  <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setSearchQuery("")}>
+                  <InputGroupButton size="icon-xs" aria-label={t("Clear search")} onClick={() => setSearchQuery("")}>
                     <X />
                   </InputGroupButton>
                 </InputGroupAddon>
@@ -137,14 +139,16 @@ const RoutingGroups: React.FC = () => {
                 aria-busy={isFetching && !isLoading}
               >
                 <RefreshCw />
-                Refresh
+                {t("Refresh")}
               </Button>
               <Button onClick={openCreate}>
                 <Plus />
-                Create Group
+                {t("Create Routing Group")}
               </Button>
               <span className="text-sm whitespace-nowrap text-muted-foreground">
-                Showing {filteredGroups.length} {filteredGroups.length === 1 ? "result" : "results"}
+                {t(filteredGroups.length === 1 ? "Showing {count} result" : "Showing {count} results", {
+                  count: filteredGroups.length,
+                })}
               </span>
             </div>
           </div>
@@ -176,24 +180,21 @@ const RoutingGroups: React.FC = () => {
       <Dialog open={Boolean(deletingGroup)} onOpenChange={(open) => !open && setDeletingGroup(null)}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Delete routing group?</DialogTitle>
+            <DialogTitle>{t("Delete routing group?")}</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-foreground">
-            {deletingGroup?.routing_strategy === "priority" ? (
-              <>
-                Calls to <span className="font-medium">{deletingGroup.group_name}</span> will stop working. Direct
-                requests to its member models keep their existing routing behavior. This cannot be undone.
-              </>
-            ) : (
-              <>
-                Models in <span className="font-medium">{deletingGroup?.group_name}</span> will fall back to the
-                proxy&apos;s top-level routing strategy. This cannot be undone.
-              </>
-            )}
+            {deletingGroup?.routing_strategy === "priority"
+              ? t(
+                  "Calls to {name} will stop working. Direct requests to its member models keep their existing routing behavior. This cannot be undone.",
+                  { name: deletingGroup.group_name },
+                )
+              : t("Models in {name} will fall back to the proxy's top-level routing strategy. This cannot be undone.", {
+                  name: deletingGroup?.group_name ?? "",
+                })}
           </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeletingGroup(null)}>
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button
               onClick={confirmDelete}
@@ -201,7 +202,7 @@ const RoutingGroups: React.FC = () => {
               disabled={saveMutation.isPending}
               aria-busy={saveMutation.isPending}
             >
-              Delete
+              {t("Delete")}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -2,6 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders, screen, testQueryClient } from "@/../tests/test-utils";
 import KubernetesPodsCard from "./KubernetesPodsCard";
+import { LanguageProvider, useLanguage } from "@/contexts/LanguageContext";
+
+function PodLanguageSwitch() {
+  const { setPreference } = useLanguage();
+  return <button onClick={() => setPreference("en")}>English</button>;
+}
 
 const podResponse = {
   model_id: "model-pods-1",
@@ -41,6 +47,24 @@ describe("KubernetesPodsCard", () => {
     expect(screen.getByText("10.0.0.1")).toBeInTheDocument();
     expect(screen.getByText("10.0.0.2")).toBeInTheDocument();
     expect(screen.getByText("10.0.0.3")).toBeInTheDocument();
+  });
+
+  it("切换语言更新 Pod 说明但保留服务主机和 IP", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="zh-CN" userId="kubernetes-language" storageScope="model-info-language">
+        <PodLanguageSwitch />
+        <KubernetesPodsCard modelId="model-pods-1" />
+      </LanguageProvider>,
+    );
+    expect(await screen.findByText("3 个就绪 Pod")).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "就绪 Kubernetes Pod 的 IP 地址" })).toBeInTheDocument();
+    expect(screen.getByText("vllm-headless.ns.svc.cluster.local:8000")).toBeInTheDocument();
+    expect(screen.getByText("10.0.0.1")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "English" }));
+    expect(screen.getByText("3 ready pods")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument();
+    expect(screen.getByText("10.0.0.1")).toBeInTheDocument();
   });
 
   it("shows an empty state when no pods are ready", async () => {

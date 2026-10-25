@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useRef, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from "react";
 import { ArrowUp, Code2, Database, Paperclip, Shield, Square } from "lucide-react";
 import { EndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
@@ -69,9 +70,10 @@ function AttachButton({
 }
 
 function SendButton({ draft, disabled }: { draft: DraftState; disabled: boolean }) {
+  const { t } = useLanguage();
   if (draft.isLoading)
     return (
-      <InputGroupButton size="icon-xs" variant="default" aria-label="Stop" onClick={draft.cancel}>
+      <InputGroupButton size="icon-xs" variant="default" aria-label={t("Stop")} onClick={draft.cancel}>
         <Square className="fill-current" />
       </InputGroupButton>
     );
@@ -79,7 +81,7 @@ function SendButton({ draft, disabled }: { draft: DraftState; disabled: boolean 
     <InputGroupButton
       size="icon-xs"
       variant="default"
-      aria-label="Send message"
+      aria-label={t("Send message")}
       disabled={disabled}
       onClick={() => void draft.send()}
     >
@@ -115,6 +117,7 @@ export function Composer({
   settingsControl: ReactNode;
   sendDisabled: boolean;
 }) {
+  const { t } = useLanguage();
   const isDirectCall = endpoint === EndpointType.MCP;
   const isRealtime = endpoint === EndpointType.REALTIME;
   const message = useRef<HTMLTextAreaElement>(null);
@@ -138,7 +141,7 @@ export function Composer({
       {directTool ? (
         <MCPToolArgumentsForm ref={toolArgsForm} tool={directTool} className="flex flex-col gap-3" />
       ) : (
-        <p className="text-sm text-muted-foreground">Pick a server and a tool above to fill in its arguments</p>
+        <p className="text-sm text-muted-foreground">{t("Pick a server and a tool above to fill in its arguments")}</p>
       )}
     </div>
   );
@@ -150,7 +153,7 @@ export function Composer({
       onKeyDown={handleKeyDown}
       placeholder={capabilities.placeholder}
       rows={2}
-      aria-label="Message"
+      aria-label={t("Message")}
       className="max-h-60"
     />
   );
@@ -168,21 +171,26 @@ export function Composer({
       <InputGroupAddon align="block-end" className="gap-1" onClick={focusMessage}>
         {capabilities.mcp && mcpControl}
         {capabilities.vectorStores && (
-          <ChecklistMenu label="Vector stores" icon={<Database />} emptyText="No vector stores yet" {...vectorStores} />
+          <ChecklistMenu
+            label={t("Vector stores")}
+            icon={<Database />}
+            emptyText={t("No vector stores yet")}
+            {...vectorStores}
+          />
         )}
         {capabilities.guardrails && (
-          <ChecklistMenu label="Guardrails" icon={<Shield />} emptyText="No guardrails yet" {...guardrails} />
+          <ChecklistMenu label={t("Guardrails")} icon={<Shield />} emptyText={t("No guardrails yet")} {...guardrails} />
         )}
         {capabilities.codeInterpreter && (
           <Toggle
             size="sm"
             pressed={codeInterpreter.enabled}
             onPressedChange={codeInterpreter.onToggle}
-            aria-label="Code interpreter"
+            aria-label={t("Code interpreter")}
             className="h-6 gap-1 px-1.5 text-xs"
           >
             <Code2 />
-            Code interpreter
+            {t("Code interpreter")}
           </Toggle>
         )}
         <span className="ml-auto flex items-center gap-1">

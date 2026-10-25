@@ -3,6 +3,9 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { LanguageProvider } from "@/contexts/LanguageContext";
+import LanguageSelector from "@/components/LanguageSelector";
+import { translate } from "@/i18n/language";
 
 const { GET, PUT, DELETE, userRole } = vi.hoisted(() => ({
   GET: vi.fn(),
@@ -56,10 +59,31 @@ const openActions = async (accessGroup: string) => {
 describe("AccessGroupBudgetsPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     userRole.current = "Admin";
     GET.mockResolvedValue({ data: { access_groups: [BUDGETED_GROUP, FREE_GROUP] } });
     PUT.mockResolvedValue({ data: { access_group: "shared", spend: 0, budget: null } });
     DELETE.mockResolvedValue({ data: { access_group: "premium", budget_deleted: true, message: "ok" } });
+  });
+
+  it("预算周期按界面语言显示但保留访问组与模型名称", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <LanguageProvider defaultLanguage="zh-CN" userId="group-budget" storageScope="group-budget-language">
+          <AccessGroupBudgetsPanel />
+        </LanguageProvider>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText("premium")).toBeInTheDocument();
+    expect(screen.getByText(translate("zh-CN", "monthly"))).toBeInTheDocument();
+    expect(screen.queryByText("monthly")).not.toBeInTheDocument();
+    expect(screen.getByText("premium-nano")).toBeInTheDocument();
+    await openActions("shared");
+    await userEvent.click(await screen.findByText(translate("zh-CN", "Set budget")));
+    expect(await screen.findByRole("combobox", { name: translate("zh-CN", "Reset Budget") })).toHaveTextContent(
+      "保持当前",
+    );
   });
 
   it("lists each group with the spend drawn against its shared budget", async () => {
@@ -154,6 +178,31 @@ describe("AccessGroupBudgetsPanel", () => {
 
     expect(await screen.findByText(/Set at least one of max budget/)).toBeInTheDocument();
     expect(PUT).not.toHaveBeenCalled();
+  });
+
+  it("预算本地错误随语言切换且不重新请求或提交预算", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <LanguageProvider defaultLanguage="en" userId="budget-error" storageScope="group-budget-language">
+          <LanguageSelector />
+          <AccessGroupBudgetsPanel />
+        </LanguageProvider>
+      </QueryClientProvider>,
+    );
+    await openActions("shared");
+    await userEvent.click(await screen.findByText("Set budget"));
+    fireEvent.click(await screen.findByRole("button", { name: "Save Budget" }));
+    const message = "Set at least one of max budget, soft budget or reset window";
+    expect(await screen.findByText(message)).toBeVisible();
+
+    fireEvent.change(screen.getByLabelText("Interface language"), { target: { value: "zh-CN" } });
+    expect(await screen.findByText(translate("zh-CN", message))).toBeVisible();
+    fireEvent.change(screen.getByLabelText("界面语言"), { target: { value: "en" } });
+    expect(await screen.findByText(message)).toBeVisible();
+    expect(GET).toHaveBeenCalledTimes(1);
+    expect(PUT).not.toHaveBeenCalled();
+    expect(DELETE).not.toHaveBeenCalled();
   });
 
   it("offers an admin viewer no way to start a write the proxy would reject with a 403", async () => {

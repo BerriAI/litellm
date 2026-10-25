@@ -6,6 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
 import AddAttachmentForm from "./add_attachment_form";
 import { Policy } from "@/components/policies/types";
+import { LanguageProvider } from "@/contexts/LanguageContext";
+import LanguageSelector from "@/components/LanguageSelector";
+import { translate } from "@/i18n/language";
+import { toast } from "@/lib/toast";
 
 vi.mock("@/components/networking");
 
@@ -50,6 +54,50 @@ describe("AddAttachmentForm", () => {
     vi.mocked(networking.teamListCall).mockResolvedValue([]);
     vi.mocked(networking.keyListCall).mockResolvedValue({ keys: [] });
     vi.mocked(networking.modelAvailableCall).mockResolvedValue({ data: [] });
+  });
+
+  it("切换语言保留关联优先级，并显示中文策略选择校验", async () => {
+    localStorage.clear();
+    const user = userEvent.setup();
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="en" userId="attachment-validation" storageScope="test">
+        <LanguageSelector />
+        <AddAttachmentForm {...defaultProps} />
+      </LanguageProvider>,
+    );
+    await waitFor(() => expect(networking.modelAvailableCall).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByRole("spinbutton"), { target: { value: "25" } });
+
+    // 语言切换只更新固定提示，不重复加载策略关联的数据。
+    fireEvent.change(screen.getByLabelText("Interface language"), { target: { value: "zh-CN" } });
+    expect(screen.getByRole("spinbutton")).toHaveValue(25);
+    await user.click(screen.getByRole("button", { name: translate("zh-CN", "Create Attachment") }));
+    expect(await screen.findByText("请至少选择一项策略")).toBeInTheDocument();
+    expect(networking.modelAvailableCall).toHaveBeenCalledTimes(1);
+    expect(defaultProps.createAttachment).not.toHaveBeenCalled();
+  });
+
+  it("批量创建关联后使用中文完整提示，策略名按原值提交", async () => {
+    localStorage.clear();
+    const user = userEvent.setup();
+    const createAttachment = vi.fn().mockResolvedValue({});
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="en" userId="attachment-success" storageScope="test">
+        <LanguageSelector />
+        <AddAttachmentForm {...defaultProps} createAttachment={createAttachment} />
+      </LanguageProvider>,
+    );
+    const policies = await screen.findByLabelText("Policies");
+    await user.click(policies);
+    await user.type(policies, "policy-alpha{Enter}");
+    await user.type(policies, "policy-beta{Enter}");
+    fireEvent.change(screen.getByLabelText("Interface language"), { target: { value: "zh-CN" } });
+
+    // 数量只作为模板参数，不通过拼接英文片段构造成功提示。
+    await user.click(screen.getByRole("button", { name: translate("zh-CN", "Create Attachment") }));
+    await waitFor(() => expect(createAttachment).toHaveBeenCalledTimes(2));
+    expect(createAttachment.mock.calls.map((call) => call[1].policy_name)).toEqual(["policy-alpha", "policy-beta"]);
+    expect(toast.success).toHaveBeenCalledWith("已成功创建 2 个关联");
   });
 
   it("should render the modal title when visible", async () => {

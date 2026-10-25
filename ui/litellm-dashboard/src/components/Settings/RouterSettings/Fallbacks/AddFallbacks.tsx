@@ -4,6 +4,7 @@
  * Works with forms - reads from and writes to router_settings.fallbacks
  */
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -25,6 +26,7 @@ interface AddFallbacksProps {
 }
 
 export default function AddFallbacks({ accessToken, value = [], onChange, disabledReason }: AddFallbacksProps) {
+  const { t } = useLanguage();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [modalKey, setModalKey] = useState(0); // Key to force remount of form when modal opens
@@ -83,7 +85,11 @@ export default function AddFallbacks({ accessToken, value = [], onChange, disabl
     // Validation
     const invalidGroups = groups.filter((g) => !g.primaryModel || g.fallbackModels.length === 0);
     if (invalidGroups.length > 0) {
-      toast.error(`Please complete configuration for all groups. ${invalidGroups.length} group(s) incomplete.`);
+      toast.error(
+        t("Please complete configuration for all groups. {count} group(s) incomplete.", {
+          count: invalidGroups.length,
+        }),
+      );
       return;
     }
 
@@ -103,7 +109,7 @@ export default function AddFallbacks({ accessToken, value = [], onChange, disabl
       setIsSaving(true);
       try {
         await onChange(updatedFallbacks);
-        toast.success(`${groups.length} fallback configuration(s) added successfully!`);
+        toast.success(t("{count} fallback configuration(s) added successfully!", { count: groups.length }));
         handleCancel();
       } catch (error) {
         // Error handling is done in handleFallbacksChange, so we don't need to show another notification here
@@ -112,7 +118,7 @@ export default function AddFallbacks({ accessToken, value = [], onChange, disabl
         setIsSaving(false);
       }
     } else {
-      toast.fromError("onChange callback not provided");
+      toast.fromError(t("onChange callback not provided"));
     }
   };
 
@@ -123,7 +129,7 @@ export default function AddFallbacks({ accessToken, value = [], onChange, disabl
           <TooltipTrigger render={<span className="inline-flex" tabIndex={0} />}>
             <Button className="mx-auto" disabled aria-disabled="true">
               <span>+</span>
-              Add Fallbacks
+              {t("Add Fallbacks")}
             </Button>
           </TooltipTrigger>
           <TooltipContent>{disabledReason}</TooltipContent>
@@ -131,7 +137,7 @@ export default function AddFallbacks({ accessToken, value = [], onChange, disabl
       ) : (
         <Button className="mx-auto" onClick={() => setIsModalVisible(true)}>
           <span>+</span>
-          Add Fallbacks
+          {t("Add Fallbacks")}
         </Button>
       )}
       <AddFallbacksModal open={isModalVisible} onCancel={handleCancel}>
@@ -147,11 +153,11 @@ export default function AddFallbacks({ accessToken, value = [], onChange, disabl
         {groups.length > 0 && (
           <div className="flex items-center justify-end space-x-3 pt-6 mt-6 border-t border-border">
             <Button variant="outline" onClick={handleCancel} disabled={isSaving}>
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button variant="outline" onClick={handleSaveAll} disabled={groups.length === 0 || isSaving}>
               {isSaving && <UiLoadingSpinner className="size-4" />}
-              {isSaving ? "Saving Configuration..." : "Save All Configurations"}
+              {isSaving ? t("Saving Configuration...") : t("Save All Configurations")}
             </Button>
           </div>
         )}

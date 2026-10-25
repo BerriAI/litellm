@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useState } from "react";
 import { Copy, Info } from "lucide-react";
 import { toast } from "@/lib/toast";
@@ -6,6 +7,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import GuardrailTestResults from "./GuardrailTestResults";
+import TranslatedMessage from "@/components/shared/TranslatedMessage";
+
+// 内外两层固定提示都在通知渲染时翻译，避免切语言后仍显示旧文本。
+function MetadataErrorMessage({ error }: { error: string }) {
+  const { t } = useLanguage();
+  return <>{t("Metadata: {error}", { error: t(error) })}</>;
+}
 
 interface GuardrailTestPanelProps {
   guardrailNames: string[];
@@ -24,6 +32,7 @@ export function GuardrailTestPanel({
   errors,
   onClose,
 }: GuardrailTestPanelProps) {
+  const { t } = useLanguage();
   const [inputText, setInputText] = useState("");
   const [metadataText, setMetadataText] = useState("");
   const [metadataError, setMetadataError] = useState<string | null>(null);
@@ -45,14 +54,16 @@ export function GuardrailTestPanel({
 
   const handleSubmit = () => {
     if (!inputText.trim()) {
-      toast.fromError("Please enter text to test");
+      toast.fromError("Please enter text to test", {
+        description: <TranslatedMessage message="Please enter text to test" />,
+      });
       return;
     }
 
     const { metadata, error } = parseMetadata(metadataText);
     if (error) {
       setMetadataError(error);
-      toast.fromError(`Metadata: ${error}`);
+      toast.fromError(`Metadata: ${error}`, { description: <MetadataErrorMessage error={error} /> });
       return;
     }
     setMetadataError(null);
@@ -98,9 +109,9 @@ export function GuardrailTestPanel({
   const handleCopyInput = async () => {
     const success = await copyToClipboard(inputText);
     if (success) {
-      toast.success("Input copied to clipboard");
+      toast.success(<TranslatedMessage message="Input copied to clipboard" />);
     } else {
-      toast.fromError("Failed to copy input");
+      toast.fromError("Failed to copy input", { description: <TranslatedMessage message="Failed to copy input" /> });
     }
   };
 
@@ -111,7 +122,7 @@ export function GuardrailTestPanel({
         <div className="flex items-center space-x-3">
           <div className="flex-1 min-w-0">
             <div className="mb-1 flex items-center space-x-2">
-              <h2 className="text-lg font-semibold">Test Guardrails:</h2>
+              <h2 className="text-lg font-semibold">{t("Test Guardrails:")}</h2>
               <div className="flex flex-wrap gap-2">
                 {guardrailNames.map((name) => (
                   <div
@@ -124,7 +135,11 @@ export function GuardrailTestPanel({
               </div>
             </div>
             <p className="text-sm text-muted-foreground">
-              Test {guardrailNames.length > 1 ? "guardrails" : "guardrail"} and compare results
+              {t(
+                guardrailNames.length > 1
+                  ? "Test guardrails and compare results"
+                  : "Test guardrail and compare results",
+              )}
             </p>
           </div>
         </div>
@@ -136,7 +151,7 @@ export function GuardrailTestPanel({
           <div>
             <div className="mb-2 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <label className="text-sm font-medium">Input Text</label>
+                <label className="text-sm font-medium">{t("Input Text")}</label>
                 <Tooltip>
                   <TooltipTrigger
                     render={
@@ -145,13 +160,13 @@ export function GuardrailTestPanel({
                       </span>
                     }
                   />
-                  <TooltipContent>Press Enter to submit. Use Shift+Enter for new line.</TooltipContent>
+                  <TooltipContent>{t("Press Enter to submit. Use Shift+Enter for new line.")}</TooltipContent>
                 </Tooltip>
               </div>
               {inputText && (
                 <Button size="sm" variant="secondary" onClick={handleCopyInput}>
                   <Copy />
-                  Copy Input
+                  {t("Copy Input")}
                 </Button>
               )}
             </div>
@@ -159,23 +174,26 @@ export function GuardrailTestPanel({
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Enter text to test with guardrails..."
+              placeholder={t("Enter text to test with guardrails...")}
               rows={8}
               className="font-mono text-sm field-sizing-fixed"
             />
             <div className="mt-1 flex items-center justify-between">
               <span className="text-xs text-muted-foreground">
-                Press <kbd className="rounded-sm border border-border bg-muted px-1 py-0.5 text-xs">Enter</kbd> to
-                submit • <kbd className="rounded-sm border border-border bg-muted px-1 py-0.5 text-xs">Shift+Enter</kbd>{" "}
-                for new line
+                {t("Press")} <kbd className="rounded-sm border border-border bg-muted px-1 py-0.5 text-xs">Enter</kbd>{" "}
+                {t("to submit •")}{" "}
+                <kbd className="rounded-sm border border-border bg-muted px-1 py-0.5 text-xs">Shift+Enter</kbd>{" "}
+                {t("for new line")}
               </span>
-              <span className="text-xs text-muted-foreground">Characters: {inputText.length}</span>
+              <span className="text-xs text-muted-foreground">
+                {t("Characters:")} {inputText.length}
+              </span>
             </div>
           </div>
 
           <div>
             <div className="mb-2 flex items-center gap-2">
-              <label className="text-sm font-medium">Metadata (optional)</label>
+              <label className="text-sm font-medium">{t("Metadata (optional)")}</label>
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -185,8 +203,9 @@ export function GuardrailTestPanel({
                   }
                 />
                 <TooltipContent>
-                  JSON object forwarded to the guardrail as request_data[&apos;metadata&apos;]. Custom guardrails can
-                  read per-request configuration from it.
+                  {t(
+                    "JSON object forwarded to the guardrail as request_data['metadata']. Custom guardrails can read per-request configuration from it.",
+                  )}
                 </TooltipContent>
               </Tooltip>
             </div>
@@ -203,7 +222,7 @@ export function GuardrailTestPanel({
               className="font-mono text-sm field-sizing-fixed"
               aria-invalid={metadataError ? true : undefined}
             />
-            {metadataError && <span className="text-xs text-destructive">{metadataError}</span>}
+            {metadataError && <span className="text-xs text-destructive">{t(metadataError)}</span>}
           </div>
 
           <div className="pt-2">
@@ -215,8 +234,12 @@ export function GuardrailTestPanel({
             >
               {isLoading && <UiLoadingSpinner className="size-4" />}
               {isLoading
-                ? `Testing ${guardrailNames.length} guardrail${guardrailNames.length > 1 ? "s" : ""}...`
-                : `Test ${guardrailNames.length} guardrail${guardrailNames.length > 1 ? "s" : ""}`}
+                ? t(guardrailNames.length > 1 ? "Testing {count} guardrails..." : "Testing {count} guardrail...", {
+                    count: guardrailNames.length,
+                  })
+                : t(guardrailNames.length > 1 ? "Test {count} guardrails" : "Test {count} guardrail", {
+                    count: guardrailNames.length,
+                  })}
             </Button>
           </div>
         </div>

@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProviderFields";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Input } from "@/components/ui/input";
@@ -97,6 +98,7 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
   onAuthTypeChange,
   fieldValidators,
 }) => {
+  const { t } = useLanguage();
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
   const form = useFormContext<MountedFormValues>();
   const authTypes = authTypesFor(selectedProvider);
@@ -282,7 +284,7 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
         <>
           <Button type="button" variant="outline" className="w-fit" onClick={() => credentialsFileRef.current?.click()}>
             <UploadIcon />
-            Click to Upload
+            {t("Click to Upload")}
           </Button>
           <input
             ref={credentialsFileRef}
@@ -345,7 +347,7 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
       {availableAuthTypes.length > 0 && selectedAuthType && (
         <div className="mb-4 flex flex-col gap-2">
           <label htmlFor={authTypeSelectId} className="text-sm font-medium">
-            {labelWithHint("Auth Type:", "Select how LiteLLM authenticates to this provider.")}
+            {labelWithHint(t("Auth Type:"), t("Select how LiteLLM authenticates to this provider."))}
           </label>
           <Select
             items={availableAuthTypes.map(({ id, label }) => ({ value: id, label }))}
@@ -368,9 +370,11 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
       )}
       {credentialOnlySelected ? (
         <>
-          <p className="mb-4 text-sm">This auth type is saved as an LLM credential and attached to this model.</p>
+          <p className="mb-4 text-sm">
+            {t("This auth type is saved as an LLM credential and attached to this model.")}
+          </p>
           <Button type="button" onClick={() => onCreateCredential?.(selectedAuthType.id)}>
-            Create credential
+            {t("Create credential")}
           </Button>
         </>
       ) : (
@@ -380,10 +384,10 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
           </MountedFormField>
         ))
       )}
-      {isLoading && allFields.length === 0 && <p className="text-sm mb-2">Loading provider fields...</p>}
+      {isLoading && allFields.length === 0 && <p className="text-sm mb-2">{t("Loading provider fields...")}</p>}
       {loadError && allFields.length === 0 && (
         <p className="text-sm mb-2 text-destructive">
-          {loadError instanceof Error ? loadError.message : "Failed to load provider credential fields"}
+          {loadError instanceof Error ? loadError.message : t("Failed to load provider credential fields")}
         </p>
       )}
       {allFields.map((field) => (
@@ -394,7 +398,7 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
             required={field.required}
             rules={{
               validate: {
-                ...(field.required ? { required: requiredRule("Required") } : {}),
+                ...(field.required ? { required: requiredRule(t("Required")) } : {}),
                 ...(fieldValidators?.[field.key] ? { provider: fieldValidators[field.key] } : {}),
               },
             }}
@@ -405,21 +409,21 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
 
           {/* Special case for Vertex Credentials help text */}
           {field.key === "vertex_credentials" && (
-            <p className="text-sm mb-3 mt-1">Give a gcp service account(.json file)</p>
+            <p className="text-sm mb-3 mt-1">{t("Give a gcp service account(.json file)")}</p>
           )}
 
           {/* Special case for Azure Base Model help text */}
           {field.key === "base_model" && (
             <div className="grid grid-cols-24">
               <p className="col-start-11 col-span-10 text-sm mb-2">
-                The actual model your azure deployment uses. Used for accurate cost tracking. Select name from{" "}
+                {t("The actual model your azure deployment uses. Used for accurate cost tracking. Select name from")}{" "}
                 <a
                   href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-primary underline-offset-4 hover:underline"
                 >
-                  here
+                  {t("here")}
                 </a>
               </p>
             </div>
@@ -430,8 +434,8 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
   );
 };
 
-const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = (props) => (
-  <ProviderSpecificFieldsContent key={props.selectedProvider ?? "no-provider"} {...props} />
-);
+const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = (props) => {
+  return <ProviderSpecificFieldsContent key={props.selectedProvider ?? "no-provider"} {...props} />;
+};
 
 export default ProviderSpecificFields;

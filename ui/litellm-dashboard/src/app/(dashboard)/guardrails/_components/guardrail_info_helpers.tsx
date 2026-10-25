@@ -1,3 +1,4 @@
+import { englishTranslate, type Translate } from "@/i18n/language";
 import airiaLogo from "../../../../../public/assets/logos/airia.svg";
 import aimSecurityLogo from "../../../../../public/assets/logos/aim_security.jpeg";
 import aktoLogo from "../../../../../public/assets/logos/akto.svg";
@@ -30,6 +31,34 @@ import straikerLogo from "../../../../../public/assets/logos/straiker.svg";
 import wingbackLogo from "../../../../../public/assets/logos/wingback.png";
 import xecguardLogo from "../../../../../public/assets/logos/xecguard.svg";
 import zscalerLogo from "../../../../../public/assets/logos/zscaler.svg";
+
+// 防护规则详情使用的服务端配置元数据，与表单草稿分开声明
+export interface GuardrailUISettings {
+  supported_entities: string[];
+  supported_actions: string[];
+  pii_entity_categories: Array<{
+    category: string;
+    entities: string[];
+  }>;
+  supported_modes: string[];
+  providers_without_directional_logging_only_scope?: string[];
+  content_filter_settings?: {
+    prebuilt_patterns: Array<{
+      name: string;
+      display_name: string;
+      category: string;
+      description: string;
+    }>;
+    pattern_categories: string[];
+    supported_actions: string[];
+    content_categories?: Array<{
+      name: string;
+      display_name: string;
+      description: string;
+      default_action: string;
+    }>;
+  };
+}
 
 // Legacy enum - keeping for backward compatibility
 export enum GuardrailProviders {
@@ -427,16 +456,18 @@ export const streamScopePayload = (
   return Object.fromEntries(Object.entries(perMode).filter((entry) => entry[1] !== "both"));
 };
 
-export const formatGuardrailStreamScope = (raw: unknown): string => {
+// 只翻译已知范围标签，执行模式名称保持原始协议值
+export const formatGuardrailStreamScope = (raw: unknown, t: Translate = englishTranslate): string => {
   if (isGuardrailStreamScope(raw)) {
-    return STREAM_SCOPE_OPTIONS.find((option) => option.value === raw)?.label ?? raw;
+    const label = STREAM_SCOPE_OPTIONS.find((option) => option.value === raw)?.label;
+    return label ? t(label) : raw;
   }
   if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
     const entries = Object.entries(raw as Record<string, unknown>).filter(
       (entry): entry is [string, GuardrailStreamScope] => isGuardrailStreamScope(entry[1]),
     );
     if (entries.length === 0) return "";
-    return entries.map(([mode, scope]) => `${mode}: ${formatGuardrailStreamScope(scope)}`).join(", ");
+    return entries.map(([mode, scope]) => `${mode}: ${formatGuardrailStreamScope(scope, t)}`).join(", ");
   }
   return "";
 };

@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import MakeModelPublicForm from "./MakeModelPublicForm";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 interface ModelGroupInfo {
   model_group: string;
@@ -91,6 +92,41 @@ describe("MakeModelPublicForm", () => {
 
   afterEach(() => {
     vi.resetAllMocks();
+  });
+
+  it("公开表单保留扩展模式，切换语言不丢选择且提交原始模型名", async () => {
+    localStorage.clear();
+    mockMakeModelGroupPublic.mockResolvedValue({});
+    const models = [
+      { ...mockProps.modelHubData[0], model_group: "model-home", mode: "Home", is_public_model_group: true },
+      { ...mockProps.modelHubData[0], model_group: "model-vision", mode: "Vision", is_public_model_group: true },
+      { ...mockProps.modelHubData[0], model_group: "model-chat", mode: "chat", is_public_model_group: true },
+      { ...mockProps.modelHubData[0], model_group: "model-decision", mode: "evaluation", is_public_model_group: true },
+    ];
+    const tree = (language: "zh-CN" | "en") => (
+      <LanguageProvider defaultLanguage={language} userId="publish-model" storageScope="publish-model-boundary">
+        <MakeModelPublicForm {...mockProps} modelHubData={models} />
+      </LanguageProvider>
+    );
+    const view = render(tree("zh-CN"));
+    expect(screen.getByText("Home", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("Vision", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("对话", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("决策", { exact: true })).toBeInTheDocument();
+    view.rerender(tree("en"));
+    expect(screen.getByText("Home", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("Vision", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("chat", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("decisions", { exact: true })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Select All (4)" })).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: "Make Public" }));
+    await waitFor(() =>
+      expect(mockMakeModelGroupPublic).toHaveBeenCalledWith(
+        "test-token",
+        models.map((model) => model.model_group),
+      ),
+    );
   });
 
   it("should render the component", () => {
@@ -474,7 +510,7 @@ describe("MakeModelPublicForm", () => {
     render(<MakeModelPublicForm {...mockProps} />);
 
     // Should show that 1 model is selected (gpt-3.5-turbo is preselected)
-    expect(screen.getByText("model selected")).toHaveTextContent("1 model selected");
+    expect(screen.getByText("1 model selected")).toBeInTheDocument();
   });
 
   it("should show confirmation step with selected models", async () => {

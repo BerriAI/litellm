@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useRef, type ReactNode } from "react";
 import { ArrowUp, BarChart3, Box, CreditCard, KeyRound, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -36,6 +37,7 @@ export function LiteAdminHomeComposer({
   modelPicker: ReactNode;
   usage?: boolean;
 }) {
+  const { t } = useLanguage();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   return (
     <InputGroup className="h-auto flex-col rounded-xl border-border bg-card shadow-xs">
@@ -49,8 +51,8 @@ export function LiteAdminHomeComposer({
             if (!submitDisabled && !isLoading) onSubmit();
           }
         }}
-        placeholder={usage ? "Ask Aria about spend, models, or usage…" : "What would you like to do?"}
-        aria-label={`Message ${ARIA_AGENT_LABEL}`}
+        placeholder={usage ? t("Ask Aria about spend, models, or usage…") : t("What would you like to do?")}
+        aria-label={t("Message {ARIA_AGENT_LABEL}", { ARIA_AGENT_LABEL: String(ARIA_AGENT_LABEL) })}
         disabled={disabled}
         rows={usage ? 1 : 2}
         className={`${usage ? "min-h-16" : "min-h-24"} max-h-48 w-full rounded-t-xl px-5 pt-5 pb-2 text-sm placeholder:text-muted-foreground [field-sizing:content]`}
@@ -78,14 +80,14 @@ export function LiteAdminHomeComposer({
         <div className="ml-auto flex min-w-0 max-w-full items-center gap-2">
           <div className="w-64 min-w-0 text-muted-foreground">{modelPicker}</div>
           {isLoading && onCancel ? (
-            <Button type="button" size="icon-sm" aria-label="Stop request" onClick={onCancel}>
+            <Button type="button" size="icon-sm" aria-label={t("Stop request")} onClick={onCancel}>
               <Square className="size-3.5 fill-current" />
             </Button>
           ) : (
             <Button
               type="button"
               size="icon-sm"
-              aria-label="Send message"
+              aria-label={t("Send message")}
               disabled={submitDisabled || isLoading}
               onClick={onSubmit}
               className="rounded-lg bg-info text-info-foreground shadow-xs hover:bg-info/90"

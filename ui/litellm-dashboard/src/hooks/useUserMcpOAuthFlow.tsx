@@ -13,6 +13,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useLanguage } from "@/contexts/LanguageContext";
 import {
   buildMcpOAuthAuthorizeUrl,
   exchangeMcpOAuthToken,
@@ -79,6 +80,12 @@ export const useUserMcpOAuthFlow = ({
   clientId: preClientId,
   onSuccess,
 }: UseUserMcpOAuthFlowOptions): UseUserMcpOAuthFlowResult => {
+  const { t } = useLanguage();
+  const translateRef = useRef(t);
+  // 语言更新只替换提示文案，不成为 OAuth 回调的重执行条件。
+  useEffect(() => {
+    translateRef.current = t;
+  }, [t]);
   const [status, setStatus] = useState<UserMcpOAuthStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const processingRef = useRef(false);
@@ -224,7 +231,7 @@ export const useUserMcpOAuthFlow = ({
 
       setStatus("success");
       setError(null);
-      toast.success("Connected successfully");
+      toast.success(translateRef.current("Connected successfully"));
       onSuccess();
     } catch (err) {
       const msg = extractErrorMessage(err);

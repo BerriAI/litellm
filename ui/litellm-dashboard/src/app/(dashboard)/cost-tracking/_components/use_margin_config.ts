@@ -1,9 +1,10 @@
-import { useState, useCallback } from "react";
+import { createElement, useState, useCallback } from "react";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import { toast } from "@/lib/toast";
 import { MarginConfig } from "./types";
 import { getProviderBackendValue } from "./provider_display_helpers";
 import { Providers } from "@/components/provider_info_helpers";
+import TranslatedMessage from "@/components/shared/TranslatedMessage";
 
 export interface UseMarginConfigProps {
   accessToken: string | null;
@@ -53,7 +54,10 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
       }
     } catch (error) {
       console.error("Error fetching margin config:", error);
-      toast.fromError("Failed to fetch margin configuration");
+      // 固定提示在通知树中翻译，异步回调不捕获语言。
+      toast.fromError(null, {
+        description: createElement(TranslatedMessage, { message: "Failed to fetch margin configuration" }),
+      });
     }
   }, [accessToken]);
 
@@ -73,16 +77,24 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
         });
 
         if (response.ok) {
-          toast.success("Margin configuration updated successfully");
+          toast.success(createElement(TranslatedMessage, { message: "Margin configuration updated successfully" }));
           await fetchMarginConfig();
         } else {
           const errorData = await response.json();
-          const errorMessage = errorData.detail?.error || errorData.detail || "Failed to update settings";
-          toast.fromError(errorMessage);
+          const errorMessage = errorData.detail?.error || errorData.detail;
+          // 保留响应状态和原始业务消息，只有缺少消息时使用本地提示。
+          toast.fromError(
+            { response: { status: response.status, data: errorData } },
+            errorMessage
+              ? undefined
+              : { description: createElement(TranslatedMessage, { message: "Failed to update settings" }) },
+          );
         }
       } catch (error) {
         console.error("Error updating margin config:", error);
-        toast.fromError("Failed to update margin configuration");
+        toast.fromError(null, {
+          description: createElement(TranslatedMessage, { message: "Failed to update margin configuration" }),
+        });
       }
     },
     [accessToken, fetchMarginConfig],
@@ -93,7 +105,9 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
       const { selectedProvider, marginType, percentageValue, fixedAmountValue } = params;
 
       if (!selectedProvider) {
-        toast.fromError("Please select a provider");
+        toast.fromError(null, {
+          description: createElement(TranslatedMessage, { message: "Please select a provider" }),
+        });
         return false;
       }
 
@@ -103,16 +117,27 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
       } else {
         const backendValue = getProviderBackendValue(selectedProvider);
         if (!backendValue) {
-          toast.fromError("Invalid provider selected");
+          toast.fromError(null, {
+            description: createElement(TranslatedMessage, { message: "Invalid provider selected" }),
+          });
           return false;
         }
         providerValue = backendValue;
       }
 
       if (marginConfig[providerValue]) {
-        const displayName =
-          providerValue === "global" ? "Global" : Providers[selectedProvider as keyof typeof Providers];
-        toast.fromError(`Margin for ${displayName} already exists. Edit it in the table above.`);
+        toast.fromError(null, {
+          description: createElement(TranslatedMessage, {
+            message:
+              providerValue === "global"
+                ? "Margin for Global already exists. Edit it in the table above."
+                : "Margin for {provider} already exists. Edit it in the table above.",
+            values:
+              providerValue === "global"
+                ? undefined
+                : { provider: Providers[selectedProvider as keyof typeof Providers] },
+          }),
+        });
         return false;
       }
 
@@ -120,14 +145,18 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
       if (marginType === "percentage") {
         const percentValue = parseFloat(percentageValue);
         if (isNaN(percentValue) || percentValue < 0 || percentValue > 1000) {
-          toast.fromError("Percentage must be between 0% and 1000%");
+          toast.fromError(null, {
+            description: createElement(TranslatedMessage, { message: "Percentage must be between 0% and 1000%" }),
+          });
           return false;
         }
         marginValue = percentValue / 100;
       } else {
         const fixedValue = parseFloat(fixedAmountValue);
         if (isNaN(fixedValue) || fixedValue < 0) {
-          toast.fromError("Fixed amount must be non-negative");
+          toast.fromError(null, {
+            description: createElement(TranslatedMessage, { message: "Fixed amount must be non-negative" }),
+          });
           return false;
         }
         marginValue = { fixed_amount: fixedValue };

@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useState } from "react";
 import {
   Bot,
@@ -82,6 +83,7 @@ const copyToClipboard = (text: string) => {
 };
 
 const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, totalLatency }) => {
+  const { t } = useLanguage();
   const [showDetails, setShowDetails] = useState(false);
 
   if (!a2aMetadata && !timeToFirstToken && !totalLatency) return null;
@@ -94,7 +96,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
       {/* A2A Metadata Header */}
       <div className="flex items-center mb-2 text-muted-foreground">
         <Bot className="mr-1.5 size-4 text-info" />
-        <span className="font-medium text-foreground">A2A Metadata</span>
+        <span className="font-medium text-foreground">{t("A2A Metadata")}</span>
       </div>
 
       {/* Main metrics row */}
@@ -127,7 +129,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
               <Clock className="mr-1 size-3" />
               {(totalLatency / 1000).toFixed(2)}s
             </TooltipTrigger>
-            <TooltipContent>Total latency</TooltipContent>
+            <TooltipContent>{t("Total latency")}</TooltipContent>
           </Tooltip>
         )}
 
@@ -135,9 +137,9 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
         {timeToFirstToken !== undefined && (
           <Tooltip>
             <TooltipTrigger render={<span className="flex items-center text-success" />}>
-              TTFT: {(timeToFirstToken / 1000).toFixed(2)}s
+              {t("TTFT:")} {(timeToFirstToken / 1000).toFixed(2)}s
             </TooltipTrigger>
-            <TooltipContent>Time to first token</TooltipContent>
+            <TooltipContent>{t("Time to first token")}</TooltipContent>
           </Tooltip>
         )}
       </div>
@@ -155,15 +157,17 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
                   size="xs"
                   className="h-auto p-0 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
                   onClick={() => copyToClipboard(taskId)}
-                  aria-label={`Copy task ID ${taskId}`}
+                  aria-label={t("Copy task ID {taskId}", { taskId: String(taskId) })}
                 />
               }
             >
               <FileText className="size-3" />
-              Task: {truncateId(taskId)}
+              {t("Task:")} {truncateId(taskId)}
               <Copy className="size-3 text-muted-foreground" />
             </TooltipTrigger>
-            <TooltipContent>Click to copy: {taskId}</TooltipContent>
+            <TooltipContent>
+              {t("Click to copy:")} {taskId}
+            </TooltipContent>
           </Tooltip>
         )}
 
@@ -178,15 +182,17 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
                   size="xs"
                   className="h-auto p-0 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
                   onClick={() => copyToClipboard(contextId)}
-                  aria-label={`Copy session ID ${contextId}`}
+                  aria-label={t("Copy session ID {contextId}", { contextId: String(contextId) })}
                 />
               }
             >
               <Link className="size-3" />
-              Session: {truncateId(contextId)}
+              {t("Session:")} {truncateId(contextId)}
               <Copy className="size-3 text-muted-foreground" />
             </TooltipTrigger>
-            <TooltipContent>Click to copy: {contextId}</TooltipContent>
+            <TooltipContent>
+              {t("Click to copy:")} {contextId}
+            </TooltipContent>
           </Tooltip>
         )}
 
@@ -204,7 +210,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
               }
             >
               {showDetails ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
-              Details
+              {t("Details")}
             </CollapsibleTrigger>
           </Collapsible>
         )}
@@ -217,7 +223,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
             {/* Status message */}
             {status?.message && (
               <div className="mb-2">
-                <span className="font-medium text-foreground">Status Message:</span>
+                <span className="font-medium text-foreground">{t("Status Message:")}</span>
                 <span className="ml-2">{status.message}</span>
               </div>
             )}
@@ -225,7 +231,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
             {/* Full IDs */}
             {taskId && (
               <div className="mb-1.5 flex items-center">
-                <span className="font-medium text-foreground w-24">Task ID:</span>
+                <span className="font-medium text-foreground w-24">{t("Task ID:")}</span>
                 <code className="ml-2 px-2 py-1 bg-card border border-border rounded-sm text-xs font-mono">
                   {taskId}
                 </code>
@@ -235,7 +241,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
                   size="icon-xs"
                   className="ml-2 text-muted-foreground hover:text-info"
                   onClick={() => copyToClipboard(taskId)}
-                  aria-label={`Copy task ID ${taskId}`}
+                  aria-label={t("Copy task ID {taskId}", { taskId: String(taskId) })}
                 >
                   <Copy className="size-3" />
                 </Button>
@@ -244,7 +250,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
 
             {contextId && (
               <div className="mb-1.5 flex items-center">
-                <span className="font-medium text-foreground w-24">Session ID:</span>
+                <span className="font-medium text-foreground w-24">{t("Session ID:")}</span>
                 <code className="ml-2 px-2 py-1 bg-card border border-border rounded-sm text-xs font-mono">
                   {contextId}
                 </code>
@@ -254,7 +260,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
                   size="icon-xs"
                   className="ml-2 text-muted-foreground hover:text-info"
                   onClick={() => copyToClipboard(contextId)}
-                  aria-label={`Copy session ID ${contextId}`}
+                  aria-label={t("Copy session ID {contextId}", { contextId: String(contextId) })}
                 >
                   <Copy className="size-3" />
                 </Button>
@@ -264,7 +270,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
             {/* Metadata fields */}
             {metadata && Object.keys(metadata).length > 0 && (
               <div className="mt-3">
-                <span className="font-medium text-foreground">Custom Metadata:</span>
+                <span className="font-medium text-foreground">{t("Custom Metadata:")}</span>
                 <pre className="mt-1.5 p-2 bg-card border border-border rounded-sm text-xs font-mono overflow-x-auto whitespace-pre-wrap">
                   {JSON.stringify(metadata, null, 2)}
                 </pre>

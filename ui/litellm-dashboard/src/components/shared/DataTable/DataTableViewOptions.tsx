@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Menu } from "@base-ui/react/menu";
 import type { Table } from "@tanstack/react-table";
 import { Check, Columns3 } from "lucide-react";
@@ -16,10 +17,11 @@ interface DataTableViewOptionsProps<TData> {
 
 export function DataTableViewOptions<TData>({
   table,
-  label = "View",
+  label,
   iconOnly = false,
   className,
 }: DataTableViewOptionsProps<TData>) {
+  const { t } = useLanguage();
   const hideableColumns = table.getAllLeafColumns().filter((column) => column.getCanHide());
 
   if (hideableColumns.length === 0) {
@@ -34,8 +36,8 @@ export function DataTableViewOptions<TData>({
             <Button
               variant="ghost"
               size="icon-xs"
-              aria-label={label}
-              title={label}
+              aria-label={label ?? t("View")}
+              title={label ?? t("View")}
               className={cn(
                 "text-muted-foreground/60 hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground",
                 className,
@@ -47,7 +49,7 @@ export function DataTableViewOptions<TData>({
           ) : (
             <Button variant="outline" size="sm" className={className} data-testid="view-options-trigger">
               <Columns3 />
-              {label}
+              {label ?? t("View")}
             </Button>
           )
         }

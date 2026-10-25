@@ -6,6 +6,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import UserEnvVarsModal from "./UserEnvVarsModal";
 import * as networking from "@/components/networking";
 import { MCPServer, MCPUserEnvVarsStatus } from "@/components/mcp_tools/types";
+import { LanguageProvider } from "@/contexts/LanguageContext";
+import type { Language } from "@/i18n/language";
 
 vi.mock("@/components/networking", () => ({
   getMCPUserEnvVars: vi.fn(),
@@ -40,6 +42,20 @@ const renderModal = (status: MCPUserEnvVarsStatus, onSaved = vi.fn(), onClose = 
 
 const save = (user: ReturnType<typeof setup>) => user.click(screen.getByRole("button", { name: "Save Credentials" }));
 
+const renderLocalizedModal = (status: MCPUserEnvVarsStatus) => {
+  vi.mocked(networking.getMCPUserEnvVars).mockResolvedValue(status);
+  const client = createQueryClient();
+  const tree = (language: Language) => (
+    <QueryClientProvider client={client}>
+      <LanguageProvider defaultLanguage={language} userId="env-language" storageScope="mcp-review">
+        <UserEnvVarsModal server={server} open accessToken="sk-test" onClose={vi.fn()} />
+      </LanguageProvider>
+    </QueryClientProvider>
+  );
+  const view = render(tree("zh-CN"));
+  return { setLanguage: (language: Language) => view.rerender(tree(language)) };
+};
+
 // Opening the modal remounts the form so nothing carries over from the last time it was open.
 // Settle that remount before handing back a node, or the caller holds a detached one.
 const fieldAfterOpen = async (label: RegExp): Promise<HTMLElement> => {
@@ -51,6 +67,46 @@ const fieldAfterOpen = async (label: RegExp): Promise<HTMLElement> => {
 describe("UserEnvVarsModal", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
+  });
+
+  it("中文必填校验保留字段名称，切回英文后仍不允许空值提交", async () => {
+    const user = setup();
+    const { setLanguage } = renderLocalizedModal(statusWith([{ name: "Home", description: null, is_set: false }]));
+    await fieldAfterOpen(/^Home/);
+    await user.click(screen.getByRole("button", { name: "保存凭据" }));
+    expect(await screen.findByText("必须填写 Home")).toBeVisible();
+    expect(networking.storeMCPUserEnvVars).not.toHaveBeenCalled();
+    setLanguage("en");
+    await save(user);
+    expect(await screen.findByText("Home is required")).toBeVisible();
+    expect(networking.storeMCPUserEnvVars).not.toHaveBeenCalled();
+  });
+
+  it("只翻译默认输入提示，切换语言保留草稿和原始提交字段", async () => {
+    const user = setup();
+    vi.mocked(networking.storeMCPUserEnvVars).mockResolvedValue(statusWith([]));
+    const { setLanguage } = renderLocalizedModal(
+      statusWith([
+        { name: "Home", description: null, is_set: false },
+        { name: "REGION", description: "Settings", is_set: false },
+      ]),
+    );
+    await fieldAfterOpen(/^Home/);
+    expect(screen.getByPlaceholderText("输入您的 Home")).toBeVisible();
+    fireEvent.change(screen.getByLabelText(/^Home/), { target: { value: "  draft-value  " } });
+    fireEvent.change(screen.getByPlaceholderText("Settings"), { target: { value: "eu-west-2" } });
+    setLanguage("en");
+    expect(screen.getByPlaceholderText("Enter your Home")).toHaveValue("  draft-value  ");
+    expect(screen.getByPlaceholderText("Settings")).toHaveValue("eu-west-2");
+    await save(user);
+    await waitFor(() =>
+      expect(networking.storeMCPUserEnvVars).toHaveBeenCalledWith("sk-test", "srv-1", {
+        Home: "draft-value",
+        REGION: "eu-west-2",
+      }),
+    );
+    expect(networking.getMCPUserEnvVars).toHaveBeenCalledTimes(1);
   });
 
   it("submits every declared field, trimmed, keyed by env var name", async () => {

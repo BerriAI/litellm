@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Menu } from "@base-ui/react/menu";
 import type { Column, SortDirection, Table } from "@tanstack/react-table";
 import { Check, ChevronDown, ChevronsUpDown, ChevronUp, X } from "lucide-react";
@@ -35,6 +36,7 @@ export function DataTableSortHeader<TData, TValue>({
   variant = "header-cycle",
   className,
 }: DataTableSortHeaderProps<TData, TValue>) {
+  const { t } = useLanguage();
   const sorted = column.getIsSorted();
 
   if (!column.getCanSort()) {
@@ -51,7 +53,7 @@ export function DataTableSortHeader<TData, TValue>({
               <button
                 type="button"
                 data-testid={`sort-trigger-${column.id}`}
-                aria-label={`Sort options for ${column.id}`}
+                aria-label={t("Sort options for {field}", { field: column.id })}
                 onClick={(event) => event.stopPropagation()}
                 className={cn(
                   "inline-flex size-6 items-center justify-center rounded-md hover:bg-muted",
@@ -66,13 +68,13 @@ export function DataTableSortHeader<TData, TValue>({
             <Menu.Positioner side="bottom" align="start" sideOffset={4} className="isolate z-popup">
               <Menu.Popup className="min-w-[9rem] rounded-md bg-popover p-1 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden">
                 <Menu.Item className={MENU_ITEM_CLASS} onClick={() => column.toggleSorting(false)}>
-                  <ChevronUp className="size-3.5" /> Ascending
+                  <ChevronUp className="size-3.5" /> {t("Ascending")}
                 </Menu.Item>
                 <Menu.Item className={MENU_ITEM_CLASS} onClick={() => column.toggleSorting(true)}>
-                  <ChevronDown className="size-3.5" /> Descending
+                  <ChevronDown className="size-3.5" /> {t("Descending")}
                 </Menu.Item>
                 <Menu.Item className={MENU_ITEM_CLASS} onClick={() => column.clearSorting()}>
-                  <X className="size-3.5" /> Reset
+                  <X className="size-3.5" /> {t("Reset")}
                 </Menu.Item>
               </Menu.Popup>
             </Menu.Positioner>
@@ -114,14 +116,27 @@ interface DataTableMultiSortHeaderProps<TData> {
  * without opening the menu. The chevron opens a menu offering each field in both directions.
  */
 export function DataTableMultiSortHeader<TData>({ table, fields, className }: DataTableMultiSortHeaderProps<TData>) {
+  const { t } = useLanguage();
   const active = table.getState().sorting[0];
   const activeField = active !== undefined && fields.some((field) => field.id === active.id) ? active : undefined;
   const activeDirection: SortDirection = activeField?.desc === true ? "desc" : "asc";
   const sorted: false | SortDirection = activeField === undefined ? false : activeDirection;
 
   const options = fields.flatMap((field) => [
-    { key: `${field.id}-asc`, id: field.id, desc: false, label: `${field.label} ascending`, Icon: ChevronUp },
-    { key: `${field.id}-desc`, id: field.id, desc: true, label: `${field.label} descending`, Icon: ChevronDown },
+    {
+      key: `${field.id}-asc`,
+      id: field.id,
+      desc: false,
+      label: t("{field} ascending", { field: t(field.label) }),
+      Icon: ChevronUp,
+    },
+    {
+      key: `${field.id}-desc`,
+      id: field.id,
+      desc: true,
+      label: t("{field} descending", { field: t(field.label) }),
+      Icon: ChevronDown,
+    },
   ]);
 
   const segmentClass = (isActive: boolean): string => {
@@ -134,7 +149,7 @@ export function DataTableMultiSortHeader<TData>({ table, fields, className }: Da
     const isActive = activeField?.id === field.id;
     const segment = (
       <span key={field.id} data-sort-field={field.id} className={segmentClass(isActive)}>
-        {field.label}
+        {t(field.label)}
       </span>
     );
     if (index === 0) return [segment];
@@ -155,7 +170,9 @@ export function DataTableMultiSortHeader<TData>({ table, fields, className }: Da
             <button
               type="button"
               data-testid={`sort-trigger-${fields[0]?.id ?? "field"}`}
-              aria-label={`Sort options for ${fields.map((field) => field.label).join(" or ")}`}
+              aria-label={t("Sort options for {field}", {
+                field: fields.map((field) => t(field.label)).join(t(" or ")),
+              })}
               onClick={(event) => event.stopPropagation()}
               className={cn(
                 "inline-flex size-6 items-center justify-center rounded-md hover:bg-muted",
@@ -183,7 +200,7 @@ export function DataTableMultiSortHeader<TData>({ table, fields, className }: Da
                 );
               })}
               <Menu.Item className={MENU_ITEM_CLASS} onClick={() => table.setSorting([])}>
-                <X className="size-3.5" /> Reset
+                <X className="size-3.5" /> {t("Reset")}
               </Menu.Item>
             </Menu.Popup>
           </Menu.Positioner>

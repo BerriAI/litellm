@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { DataTable } from "@/components/shared/DataTable";
 import { MCPToolset } from "@/components/mcp_tools/types";
 import { getMCPToolsetTableColumns } from "./MCPToolsetTableColumns";
+import { translate, type Language, type Translate } from "@/i18n/language";
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: () => "http://localhost:4000",
@@ -29,8 +30,14 @@ const serverPrefixById = new Map([
   ["srv-2", "exa"],
 ]);
 
-function renderTable({ isAdmin = true, onEditClick = vi.fn(), onDeleteClick = vi.fn() } = {}) {
-  const deps = { isAdmin, serverPrefixById, onEditClick, onDeleteClick };
+function renderTable({
+  isAdmin = true,
+  onEditClick = vi.fn(),
+  onDeleteClick = vi.fn(),
+  language = "en" as Language,
+} = {}) {
+  const t: Translate = (message, values) => translate(language, message, values);
+  const deps = { isAdmin, serverPrefixById, onEditClick, onDeleteClick, t };
   render(
     <DataTable
       data={[mockToolset]}
@@ -58,6 +65,14 @@ describe("getMCPToolsetTableColumns", () => {
     expect(screen.getByText("exa-fetch")).toBeInTheDocument();
     expect(screen.queryByText("exa-crawl")).not.toBeInTheDocument();
     expect(screen.getByText("+1 more")).toBeInTheDocument();
+  });
+
+  it("中文溢出数量使用完整文案，工具标识和显示上限不变", () => {
+    renderTable({ language: "zh-CN" });
+    expect(screen.getByText("另有 1 项")).toBeInTheDocument();
+    expect(screen.getByText("github-create_issue")).toBeInTheDocument();
+    expect(screen.getByText("exa-fetch")).toBeInTheDocument();
+    expect(screen.queryByText("exa-crawl")).not.toBeInTheDocument();
   });
 
   it("opens the edit modal when an admin clicks the toolset name", async () => {

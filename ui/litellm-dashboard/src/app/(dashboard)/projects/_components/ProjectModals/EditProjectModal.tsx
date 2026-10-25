@@ -1,9 +1,12 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useState } from "react";
 import { Save } from "lucide-react";
 
 import { toast } from "@/lib/toast";
+import TranslatedMessage from "@/components/shared/TranslatedMessage";
+import { extractProxyErrorMessage } from "@/lib/http/client";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
@@ -70,6 +73,8 @@ export const toFormValues = (project: ProjectResponse): ProjectFormValues => {
 };
 
 function EditProjectForm({ project, onClose, onSuccess }: Omit<EditProjectModalProps, "isOpen">) {
+  const { t } = useLanguage();
+  // 校验原文保持稳定，切换语言仅更新显示，不重置编辑内容。
   const form = useZodForm(projectFormSchema, { defaultValues: toFormValues(project) });
   const updateMutation = useUpdateProject();
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -94,12 +99,13 @@ function EditProjectForm({ project, onClose, onSuccess }: Omit<EditProjectModalP
       { projectId: project.project_id, params },
       {
         onSuccess: () => {
-          toast.success("Project updated successfully");
+          // 固定通知随实际渲染语言更新，服务端错误仍保持原文。
+          toast.success(<TranslatedMessage message="Project updated successfully" />);
           onSuccess?.();
           onClose();
         },
         onError: (error) => {
-          toast.error(error.message || "Failed to update project");
+          toast.error(extractProxyErrorMessage(error) || <TranslatedMessage message="Failed to update project" />);
         },
       },
     );
@@ -111,11 +117,11 @@ function EditProjectForm({ project, onClose, onSuccess }: Omit<EditProjectModalP
 
       <div className="mt-6 flex justify-end gap-2 border-t border-border pt-4">
         <Button type="button" variant="outline" onClick={onClose}>
-          Cancel
+          {t("Cancel")}
         </Button>
         <Button type="button" onClick={() => void handleSubmit()} disabled={updateMutation.isPending}>
           {updateMutation.isPending ? <UiLoadingSpinner /> : <Save />}
-          Save Changes
+          {t("Save Changes")}
         </Button>
       </div>
     </form>
@@ -123,11 +129,12 @@ function EditProjectForm({ project, onClose, onSuccess }: Omit<EditProjectModalP
 }
 
 export function EditProjectModal({ isOpen, project, onClose, onSuccess }: EditProjectModalProps) {
+  const { t } = useLanguage();
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[720px]">
         <DialogHeader>
-          <DialogTitle className="text-lg">Edit Project</DialogTitle>
+          <DialogTitle className="text-lg">{t("Edit Project")}</DialogTitle>
         </DialogHeader>
         <EditProjectForm key={project.project_id} project={project} onClose={onClose} onSuccess={onSuccess} />
       </DialogContent>

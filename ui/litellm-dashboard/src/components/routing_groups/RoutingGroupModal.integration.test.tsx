@@ -1,6 +1,10 @@
 import userEvent from "@testing-library/user-event";
 import { fireEvent } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { LanguageProvider } from "@/contexts/LanguageContext";
+import LanguageSelector from "@/components/LanguageSelector";
+import { translate } from "@/i18n/language";
+import { modelConflictError } from "./modelOwnership";
 
 import { renderWithProviders, screen } from "@/../tests/test-utils";
 
@@ -78,7 +82,7 @@ const renderModal = (overrides: Partial<React.ComponentProps<typeof RoutingGroup
 };
 
 const typeName = async (user: ReturnType<typeof userEvent.setup>, name: string) => {
-  const input = screen.getByLabelText("Group Name");
+  const input = screen.getByLabelText("Routing Group Name");
   await user.clear(input);
   await user.type(input, name);
 };
@@ -107,18 +111,92 @@ const save = async (user: ReturnType<typeof userEvent.setup>, name: string) =>
   await user.click(screen.getByRole("button", { name }));
 
 describe("RoutingGroupModal", () => {
+  beforeEach(() => localStorage.clear());
+
+  it.each(["required", "length", "duplicate", "models", "conflict", "json", "priorities"] as const)(
+    "%s 的本地校验即时切换语言，动态名称与草稿保持原值",
+    async (scenario) => {
+      const onSubmit = vi.fn();
+      const names: Partial<Record<typeof scenario, string>> = {
+        required: "",
+        length: "a".repeat(65),
+        duplicate: "Settings",
+      };
+      const strategies: Partial<Record<typeof scenario, string>> = {
+        json: "latency-based-routing",
+        priorities: "priority",
+      };
+      const groupName = names[scenario] ?? "draft";
+      const initialValue: RoutingGroup = {
+        group_name: scenario === "duplicate" ? "" : groupName,
+        models: scenario === "models" ? [] : ["Home"],
+        routing_strategy: strategies[scenario] ?? "simple-shuffle",
+        routing_strategy_args: null,
+        ...(scenario === "priorities" ? { model_priorities: { Home: 0 } } : {}),
+      };
+      const owners: Record<string, string> = scenario === "conflict" ? { Home: "Settings" } : {};
+      renderWithProviders(
+        <LanguageProvider defaultLanguage="en" userId="routing-validation" storageScope="routing">
+          <LanguageSelector />
+          <RoutingGroupModal
+            open
+            mode="create"
+            initialValue={initialValue}
+            availableStrategies={STRATEGIES}
+            strategyDescriptions={STRATEGY_DESCRIPTIONS}
+            modelOptions={["Home"]}
+            existingGroupNames={["Settings"]}
+            groupNameByModel={owners}
+            onClose={vi.fn()}
+            onSubmit={onSubmit}
+          />
+        </LanguageProvider>,
+      );
+      if (scenario === "duplicate") {
+        fireEvent.change(screen.getByLabelText("Routing Group Name"), { target: { value: groupName } });
+      }
+      if (scenario === "json") {
+        fireEvent.change(screen.getByLabelText("Strategy Arguments (JSON)"), { target: { value: "invalid" } });
+      }
+      fireEvent.click(screen.getByRole("button", { name: "Create Routing Group" }));
+      const messages = {
+        required: "Group name is required",
+        length: "Must be {count} characters or fewer",
+        duplicate: "A group with this name already exists",
+        models: "Select at least one model",
+        conflict: modelConflictError(["Home"], owners) ?? "",
+        json: "Must be valid JSON",
+        priorities: "Priorities must be whole numbers from 1 to 9007199254740991",
+      };
+      const message = messages[scenario];
+      const en = translate("en", message, { count: 64 });
+      await screen.findByText(en);
+      fireEvent.change(screen.getByLabelText("Interface language"), { target: { value: "zh-CN" } });
+      const chinese = (key: string, values?: Parameters<typeof translate>[2]) => translate("zh-CN", key, values);
+      const zh =
+        scenario === "conflict" ? modelConflictError(["Home"], owners, chinese) : chinese(message, { count: 64 });
+      expect(zh).not.toBe(en);
+      expect(await screen.findByText(zh ?? "")).toBeVisible();
+      expect(screen.getByLabelText("路由组名称")).toHaveValue(groupName);
+      if (scenario === "json") expect(screen.getByLabelText("策略参数（JSON）")).toHaveValue("invalid");
+      fireEvent.change(screen.getByLabelText("界面语言"), { target: { value: "en" } });
+      expect(await screen.findByText(en)).toBeVisible();
+      expect(onSubmit).not.toHaveBeenCalled();
+    },
+  );
+
   it("creates a priority group with editable defaults and members already used by another group", async () => {
     const user = userEvent.setup();
     const { onSubmit } = renderModal({ groupNameByModel: { "gpt-4o": "legacy-group" } });
 
-    fireEvent.change(screen.getByLabelText("Group Name"), { target: { value: "preferred-chat" } });
+    fireEvent.change(screen.getByLabelText("Routing Group Name"), { target: { value: "preferred-chat" } });
     await pickModels(user, "gpt-4o", "claude-sonnet");
     await pickStrategy(user, "Priority");
 
     expect(screen.getByLabelText("Priority for gpt-4o")).toHaveValue("1");
     expect(screen.getByLabelText("Priority for claude-sonnet")).toHaveValue("2");
     fireEvent.change(screen.getByLabelText("Priority for claude-sonnet"), { target: { value: "1" } });
-    await save(user, "Create Group");
+    await save(user, "Create Routing Group");
 
     const expected: RoutingGroup = {
       group_name: "preferred-chat",
@@ -263,7 +341,7 @@ describe("RoutingGroupModal", () => {
     const { onSubmit } = renderModal({ initialValue: SEEDED_CREATE });
 
     await typeName(user, "fast-chat");
-    await save(user, "Create Group");
+    await save(user, "Create Routing Group");
 
     const expected: RoutingGroup = {
       group_name: "fast-chat",
@@ -330,7 +408,7 @@ describe("RoutingGroupModal", () => {
       initialValue: { group_name: "", models: ["gemini-pro"], routing_strategy: "simple-shuffle" },
     });
 
-    await save(user, "Create Group");
+    await save(user, "Create Routing Group");
 
     expect(await screen.findByText("Group name is required")).toBeInTheDocument();
     expect(onSubmit).not.toHaveBeenCalled();
@@ -341,7 +419,7 @@ describe("RoutingGroupModal", () => {
     const { onSubmit } = renderModal();
 
     await typeName(user, "no-models");
-    await save(user, "Create Group");
+    await save(user, "Create Routing Group");
 
     expect(await screen.findByText("Select at least one model")).toBeInTheDocument();
     expect(onSubmit).not.toHaveBeenCalled();
@@ -354,7 +432,7 @@ describe("RoutingGroupModal", () => {
     });
 
     await typeName(user, "a".repeat(65));
-    await save(user, "Create Group");
+    await save(user, "Create Routing Group");
 
     expect(await screen.findByText("Must be 64 characters or fewer")).toBeInTheDocument();
     expect(onSubmit).not.toHaveBeenCalled();
@@ -367,7 +445,7 @@ describe("RoutingGroupModal", () => {
     });
 
     await typeName(user, "team a/fast chat");
-    await save(user, "Create Group");
+    await save(user, "Create Routing Group");
 
     expect(onSubmit).toHaveBeenCalledWith(EXPECTED_SLASH_AND_SPACE_PAYLOAD);
   });
@@ -379,7 +457,7 @@ describe("RoutingGroupModal", () => {
     });
 
     await typeName(user, "   ");
-    await save(user, "Create Group");
+    await save(user, "Create Routing Group");
 
     expect(await screen.findByText("Group name is required")).toBeInTheDocument();
     expect(onSubmit).not.toHaveBeenCalled();
@@ -392,7 +470,7 @@ describe("RoutingGroupModal", () => {
     });
 
     await typeName(user, "Other-Group");
-    await save(user, "Create Group");
+    await save(user, "Create Routing Group");
 
     expect(await screen.findByText("A group with this name already exists")).toBeInTheDocument();
     expect(onSubmit).not.toHaveBeenCalled();
@@ -401,8 +479,8 @@ describe("RoutingGroupModal", () => {
   it("locks the name in edit mode and pretty-prints the stored arguments", () => {
     renderModal({ mode: "edit", initialValue: STORED_GROUP });
 
-    expect(screen.getByLabelText("Group Name")).toHaveValue("already-taken");
-    expect(screen.getByLabelText("Group Name")).toBeDisabled();
+    expect(screen.getByLabelText("Routing Group Name")).toHaveValue("already-taken");
+    expect(screen.getByLabelText("Routing Group Name")).toBeDisabled();
     expect(screen.getByLabelText("Strategy Arguments (JSON)")).toHaveValue('{\n  "ttl": 3600\n}');
   });
 
@@ -414,7 +492,7 @@ describe("RoutingGroupModal", () => {
     await pickModels(user, "gpt-4o", "claude-sonnet");
     await pickStrategy(user, "latency-based-routing");
     await setArgs(user, '{{"ttl": 99}');
-    await save(user, "Create Group");
+    await save(user, "Create Routing Group");
 
     const expected: RoutingGroup = {
       group_name: "probe-group",
@@ -439,7 +517,7 @@ describe("RoutingGroupModal", () => {
 
     expect(screen.getByLabelText("Strategy Arguments (JSON)")).toHaveValue("");
 
-    await save(user, "Create Group");
+    await save(user, "Create Routing Group");
     const expected: RoutingGroup = {
       group_name: "probe-group",
       models: ["gpt-4o"],
@@ -456,7 +534,7 @@ describe("RoutingGroupModal", () => {
     await typeName(user, "security");
     await pickModels(user, "gpt-4o");
     await pickStrategy(user, "latency-based-routing");
-    await save(user, "Create Group");
+    await save(user, "Create Routing Group");
 
     expect(await screen.findByText(/Already claimed: gpt-4o/)).toBeInTheDocument();
     expect(onSubmit).not.toHaveBeenCalled();

@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { CircleHelp } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { z } from "zod";
@@ -14,6 +15,7 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 
+// 本地校验保留原文，由字段展示层翻译，切换语言不重置草稿或重新校验。
 const memorySchema = z.object({
   key: z.string().min(1, "Key is required"),
   value: z.string().min(1, "Value is required"),
@@ -43,6 +45,7 @@ interface MemoryEditModalProps {
 }
 
 export const MemoryEditModal: React.FC<MemoryEditModalProps> = ({ open, mode, initialRow, onClose, onSave }) => {
+  const { t } = useLanguage();
   const form = useZodForm(memorySchema, { defaultValues: EMPTY_MEMORY, mode: "onChange" });
   const [submitting, setSubmitting] = useState(false);
 
@@ -80,7 +83,9 @@ export const MemoryEditModal: React.FC<MemoryEditModalProps> = ({ open, mode, in
     >
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[640px]">
         <DialogHeader>
-          <DialogTitle>{mode === "create" ? "Create memory" : `Edit ${initialRow?.key ?? ""}`}</DialogTitle>
+          <DialogTitle>
+            {mode === "create" ? t("Create memory") : t("Edit {name}", { name: initialRow?.key ?? "" })}
+          </DialogTitle>
         </DialogHeader>
         <form onSubmit={(event) => event.preventDefault()} noValidate>
           <TooltipProvider>
@@ -88,23 +93,27 @@ export const MemoryEditModal: React.FC<MemoryEditModalProps> = ({ open, mode, in
               <FormField
                 control={form.control}
                 name="key"
+                renderError={(error) => error.message && t(error.message)}
                 label={labelWithHint(
-                  "Key",
-                  "Globally unique — two memories cannot share a key. Namespace your own keys if you need per-user isolation (e.g. user:123:notes).",
+                  t("Memory key"),
+                  t(
+                    "Globally unique — two memories cannot share a key. Namespace your own keys if you need per-user isolation (e.g. user:123:notes).",
+                  ),
                 )}
               >
                 {({ ref, ...field }) => (
-                  <Input {...field} ref={ref} placeholder="e.g. user_role" disabled={mode === "edit"} />
+                  <Input {...field} ref={ref} placeholder={t("e.g. user_role")} disabled={mode === "edit"} />
                 )}
               </FormField>
 
               <FormField
                 control={form.control}
                 name="value"
-                label={labelWithHint("Value", "Markdown/text injected into LLM context. Plain strings are fine.")}
+                renderError={(error) => error.message && t(error.message)}
+                label={labelWithHint(t("Value"), t("Markdown/text injected into LLM context. Plain strings are fine."))}
               >
                 {({ ref, ...field }) => (
-                  <Textarea {...field} ref={ref} rows={8} placeholder="What the agent should remember…" />
+                  <Textarea {...field} ref={ref} rows={8} placeholder={t("What the agent should remember…")} />
                 )}
               </FormField>
 
@@ -113,9 +122,9 @@ export const MemoryEditModal: React.FC<MemoryEditModalProps> = ({ open, mode, in
                 name="metadata"
                 label={labelWithHint(
                   <span>
-                    Metadata <span className="text-muted-foreground">(optional JSON)</span>
+                    {t("Metadata")} <span className="text-muted-foreground">{t("(optional JSON)")}</span>
                   </span>,
-                  "Optional structured metadata — must be valid JSON if provided.",
+                  t("Optional structured metadata — must be valid JSON if provided."),
                 )}
               >
                 {({ ref, ...field }) => (
@@ -133,10 +142,10 @@ export const MemoryEditModal: React.FC<MemoryEditModalProps> = ({ open, mode, in
               onClose();
             }}
           >
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button onClick={handleOk} disabled={submitting} aria-busy={submitting}>
-            {mode === "create" ? "Create" : "Save"}
+            {mode === "create" ? t("Create") : t("Save")}
           </Button>
         </DialogFooter>
       </DialogContent>

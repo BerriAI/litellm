@@ -1,3 +1,5 @@
+import { useLanguage } from "@/contexts/LanguageContext";
+import { englishTranslate, type Translate } from "@/i18n/language";
 import React from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
@@ -27,28 +29,32 @@ const BudgetDurationDropdown: React.FC<BudgetDurationDropdownProps> = ({
   onChange,
   className = "",
   style = {},
-  placeholder = "Never resets",
+  placeholder,
   showNeverResets = false,
 }) => {
+  const { t } = useLanguage();
+  const placeholderText = placeholder ?? t("Never resets");
+  // 标签本地化，选中值和提交周期仍使用原始协议值
+  const items = Object.fromEntries(Object.entries(DURATION_LABELS).map(([duration, label]) => [duration, t(label)]));
   return (
-    <Select items={DURATION_LABELS} value={value || null} onValueChange={onChange}>
+    <Select items={items} value={value || null} onValueChange={onChange}>
       <SelectTrigger id={id} className={`w-full ${className}`} style={style}>
-        <SelectValue placeholder={placeholder} />
+        <SelectValue placeholder={placeholderText} />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value={null}>{placeholder}</SelectItem>
-        {showNeverResets ? <SelectItem value={NEVER_RESETS_BUDGET_DURATION}>Never resets</SelectItem> : null}
-        <SelectItem value="1h">hourly</SelectItem>
-        <SelectItem value="24h">daily</SelectItem>
-        <SelectItem value="7d">weekly</SelectItem>
-        <SelectItem value="30d">monthly</SelectItem>
+        <SelectItem value={null}>{placeholderText}</SelectItem>
+        {showNeverResets ? <SelectItem value={NEVER_RESETS_BUDGET_DURATION}>{t("Never resets")}</SelectItem> : null}
+        <SelectItem value="1h">{t("hourly")}</SelectItem>
+        <SelectItem value="24h">{t("daily")}</SelectItem>
+        <SelectItem value="7d">{t("weekly")}</SelectItem>
+        <SelectItem value="30d">{t("monthly")}</SelectItem>
       </SelectContent>
     </Select>
   );
 };
 
-export const getBudgetDurationLabel = (value: string | null | undefined): string => {
-  if (!value) return "Not set";
+export const getBudgetDurationLabel = (value: string | null | undefined, t: Translate = englishTranslate): string => {
+  if (!value) return t("Not set");
 
   const budgetDurationMap: Record<string, string> = {
     "1h": "hourly",
@@ -57,7 +63,7 @@ export const getBudgetDurationLabel = (value: string | null | undefined): string
     "30d": "monthly",
   };
 
-  return budgetDurationMap[value] || value;
+  return Object.hasOwn(budgetDurationMap, value) ? t(budgetDurationMap[value]) : value;
 };
 
 export default BudgetDurationDropdown;

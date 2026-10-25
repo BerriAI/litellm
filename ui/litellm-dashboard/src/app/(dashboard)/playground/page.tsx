@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useState, useEffect } from "react";
 import { PlayCircle } from "lucide-react";
 import AgentBuilderView from "@/app/(dashboard)/playground/components/chat_ui/AgentBuilderView";
@@ -19,6 +20,7 @@ const PLAYGROUND_TABS = ["chat", "compare", "compliance", "system-one", "agent-b
 const TAB_TRIGGER = "h-full group-data-horizontal/tabs:after:-bottom-0.5";
 
 export default function PlaygroundPage() {
+  const { t } = useLanguage();
   const { accessToken, userRole, userId, disabledPersonalKeyCreation, token, isViewOnly } = useAuthorized();
   const [proxySettings, setProxySettings] = useState<ProxySettings | undefined>(undefined);
   const [activeTab, setActiveTab] = useUrlTab(PLAYGROUND_TABS, "chat");
@@ -42,9 +44,9 @@ export default function PlaygroundPage() {
   if (isViewOnly) {
     return (
       <div className="flex h-full w-full flex-col items-center justify-center gap-2 p-8 text-center">
-        <h1 className="text-2xl font-semibold">Access Denied</h1>
+        <h1 className="text-2xl font-semibold">{t("Access Denied")}</h1>
         <p className="text-muted-foreground">
-          Your role does not have access to the Playground. Ask your proxy admin for access to test models.
+          {t("Your role does not have access to the Playground. Ask your proxy admin for access to test models.")}
         </p>
       </div>
     );
@@ -55,28 +57,28 @@ export default function PlaygroundPage() {
       <PageHeader>
         <PageHeaderTitle>
           <PlayCircle />
-          Playground
+          {t("Playground")}
         </PageHeaderTitle>
         <PageHeaderDescription>
-          Send test requests through the gateway with any model, key, guardrail or tool
+          {t("Send test requests through the gateway with any model, key, guardrail or tool")}
         </PageHeaderDescription>
       </PageHeader>
       <PageTabs value={activeTab} onValueChange={setActiveTab} className="gap-0">
         <PageTabsList>
           <PageTabsTrigger value="chat" className={TAB_TRIGGER}>
-            Chat
+            {t("Chat")}
           </PageTabsTrigger>
           <PageTabsTrigger value="compare" className={TAB_TRIGGER}>
-            Compare
+            {t("Compare")}
           </PageTabsTrigger>
           <PageTabsTrigger value="compliance" className={TAB_TRIGGER}>
-            Compliance
+            {t("Compliance")}
           </PageTabsTrigger>
           <PageTabsTrigger value="system-one" className={TAB_TRIGGER}>
-            <BetaBadge>Decisions</BetaBadge>
+            <BetaBadge>{t("Decisions")}</BetaBadge>
           </PageTabsTrigger>
           <PageTabsTrigger value="agent-builder" className={TAB_TRIGGER}>
-            Agent builder
+            {t("Agent builder")}
           </PageTabsTrigger>
         </PageTabsList>
         <PageTabsContent value="chat" className="overflow-hidden data-hidden:hidden" keepMounted>

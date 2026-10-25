@@ -1,8 +1,11 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { toast } from "@/lib/toast";
+import { extractProxyErrorMessage } from "@/lib/http/client";
+import TranslatedMessage from "@/components/shared/TranslatedMessage";
 import { indexesListCall } from "@/components/networking";
 import { VectorStore } from "@/components/vector_store_management/types";
 
@@ -29,6 +32,7 @@ interface IndexesTabProps {
 }
 
 const IndexesTab: React.FC<IndexesTabProps> = ({ accessToken, vectorStores, onViewVectorStore }) => {
+  const { t } = useLanguage();
   const [indexes, setIndexes] = useState<VectorStoreIndex[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -55,7 +59,15 @@ const IndexesTab: React.FC<IndexesTabProps> = ({ accessToken, vectorStores, onVi
         setIndexes(response.data || []);
       } catch (error) {
         console.error("Error fetching indexes:", error);
-        toast.fromError("Error fetching indexes: " + error);
+        // 翻译延迟到通知渲染，语言切换不会重发索引请求或翻译错误详情。
+        toast.fromError("Error fetching indexes: " + error, {
+          description: (
+            <TranslatedMessage
+              message="Error fetching indexes: {error}"
+              values={{ error: extractProxyErrorMessage(error) }}
+            />
+          ),
+        });
       } finally {
         setIsLoading(false);
       }
@@ -66,26 +78,27 @@ const IndexesTab: React.FC<IndexesTabProps> = ({ accessToken, vectorStores, onVi
   return (
     <div className="w-full">
       <p className="mb-4 text-sm text-muted-foreground">
-        Vector store indexes registered on this proxy via the <code>/v1/indexes</code> API. See the{" "}
+        {t("Vector store indexes registered on this proxy via the")} <code>/v1/indexes</code> {t("API. See the")}{" "}
         <a
           href="https://docs.litellm.ai/docs/providers/azure_ai/azure_ai_vector_stores_passthrough"
           target="_blank"
           rel="noopener noreferrer"
           className="text-info hover:underline"
         >
-          vector store index docs
+          {t("vector store index docs")}
         </a>{" "}
-        for how this works. Index passthrough is supported for Azure AI Search and Milvus today; support for more
-        providers can be added, so please{" "}
+        {t(
+          "for how this works. Index passthrough is supported for Azure AI Search and Milvus today; support for more providers can be added, so please",
+        )}{" "}
         <a
           href="https://github.com/BerriAI/litellm/issues"
           target="_blank"
           rel="noopener noreferrer"
           className="text-info hover:underline"
         >
-          file a GitHub issue
+          {t("file a GitHub issue")}
         </a>{" "}
-        if you want your provider supported.
+        {t("if you want your provider supported.")}
       </p>
       <div className="grid grid-cols-1 gap-2 pt-2 pb-2 w-full">
         <IndexesTable

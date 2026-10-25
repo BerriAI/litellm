@@ -4,8 +4,27 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect } from "vitest";
 import { HistoryTree } from "./HistoryTree";
 import { ParsedMessage } from "./prettyMessagesTypes";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 describe("HistoryTree", () => {
+  it("中文只翻译标准角色标签，保留消息正文", async () => {
+    localStorage.clear();
+    render(
+      <LanguageProvider defaultLanguage="zh-CN" userId="history-language" storageScope="history-test">
+        <HistoryTree
+          messages={[
+            { role: "user", content: "Home" },
+            { role: "assistant", content: "Settings" },
+          ]}
+        />
+      </LanguageProvider>,
+    );
+    await userEvent.click(screen.getByRole("button"));
+    expect(screen.getByText("用户")).toBeInTheDocument();
+    expect(screen.getByText("助手")).toBeInTheDocument();
+    expect(screen.getByText("Home")).toBeVisible();
+    expect(screen.getByText("Settings")).toBeVisible();
+  });
   it("should return null when messages array is empty", () => {
     const { container } = render(<HistoryTree messages={[]} />);
     expect(container).toBeEmptyDOMElement();

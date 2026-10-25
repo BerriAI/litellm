@@ -3,6 +3,15 @@ import { fireEvent, renderWithProviders, screen, waitFor } from "../../../../../
 import userEvent from "@testing-library/user-event";
 import CacheSettings from "./index";
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
+import { LanguageProvider } from "@/contexts/LanguageContext";
+import LanguageSelector from "@/components/LanguageSelector";
+import { toast } from "@/lib/toast";
+import { translate } from "@/i18n/language";
+import { FormProvider, useForm } from "react-hook-form";
+import CacheFormField from "./CacheFormField";
+import { CACHE_FIELDS } from "./cacheSettingsFields";
+import CoordinationRedisFormField from "../coordination_redis_settings/CoordinationRedisFormField";
+import { COORDINATION_FIELDS } from "../coordination_redis_settings/coordinationRedisFields";
 
 const { getCacheSettingsCall, testCacheConnectionCall, updateCacheSettingsCall } = vi.hoisted(() => ({
   getCacheSettingsCall: vi.fn(),
@@ -35,12 +44,112 @@ const renderSettings = () => renderWithProviders(<CacheSettings accessToken="sk-
 const save = async (user: ReturnType<typeof userEvent.setup>) =>
   user.click(screen.getByRole("button", { name: /save changes/i }));
 
+// 同名服务端文案不能因本地校验错误接入翻译而被改写。
+const ServerErrorForm = ({ target }: { target: "cache" | "coordination" }) => {
+  const form = useForm({ defaultValues: { port: "99999" } });
+  const cachePort = CACHE_FIELDS.find((candidate) => candidate.name === "port")!;
+  const coordinationPort = COORDINATION_FIELDS.find((candidate) => candidate.name === "port")!;
+  return (
+    <FormProvider {...form}>
+      {target === "cache" ? (
+        <CacheFormField field={cachePort} embeddingModels={[]} />
+      ) : (
+        <CoordinationRedisFormField field={coordinationPort} isSecretConfigured={false} />
+      )}
+      <button
+        onClick={() =>
+          form.setError("port", { type: "server", message: "Port must be an integer between 1 and 65535" })
+        }
+      >
+        返回服务端错误
+      </button>
+    </FormProvider>
+  );
+};
+
 describe("CacheSettings advanced settings round-trip", () => {
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     getCacheSettingsCall.mockResolvedValue(LOADED_WITH_ADVANCED);
     updateCacheSettingsCall.mockResolvedValue({ status: "success" });
     testCacheConnectionCall.mockResolvedValue({ status: "success" });
+  });
+
+  it("中文连接测试错误翻译固定前缀，保留服务器详情", async () => {
+    testCacheConnectionCall.mockResolvedValue({ status: "error", message: "Settings" });
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="zh-CN" userId="cache-error" storageScope="test">
+        <CacheSettings accessToken="sk-test" userRole="Admin" userID="u1" />
+      </LanguageProvider>,
+    );
+    await screen.findByDisplayValue("redis.internal");
+    fireEvent.click(screen.getByRole("button", { name: translate("zh-CN", "Test Connection") }));
+    await waitFor(() => expect(toast.fromError).toHaveBeenCalledTimes(1));
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="zh-CN" userId="cache-error" storageScope="test">
+        {vi.mocked(toast.fromError).mock.calls[0][1]?.description}
+      </LanguageProvider>,
+    );
+    expect(screen.getByText("连接测试失败：Settings")).toBeVisible();
+  });
+
+  // 已出现的本地校验错误也要切换语言，且不能重载或提交配置。
+  it("切换语言即时更新端口校验错误并保留无效草稿", async () => {
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="en" userId="cache-validation" storageScope="test">
+        <LanguageSelector />
+        <CacheSettings accessToken="sk-test" userRole="Admin" userID="u1" />
+      </LanguageProvider>,
+    );
+    await screen.findByDisplayValue("redis.internal");
+    fireEvent.change(screen.getByLabelText("Port"), { target: { value: "99999" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Port must be an integer between 1 and 65535");
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Interface language" }), { target: { value: "zh-CN" } });
+    expect(screen.getByRole("alert")).toHaveTextContent("端口必须是 1 到 65535 之间的整数");
+    expect(screen.getByLabelText("端口")).toHaveValue("99999");
+    expect(screen.getByLabelText("端口")).toHaveAttribute("aria-invalid", "true");
+    fireEvent.change(screen.getByRole("combobox", { name: "界面语言" }), { target: { value: "en" } });
+    expect(screen.getByRole("alert")).toHaveTextContent("Port must be an integer between 1 and 65535");
+    expect(getCacheSettingsCall).toHaveBeenCalledTimes(1);
+    expect(updateCacheSettingsCall).not.toHaveBeenCalled();
+    expect(testCacheConnectionCall).not.toHaveBeenCalled();
+  });
+
+  it.each(["cache", "coordination"] as const)("%s 字段与本地校验同名的服务端错误不翻译", async (target) => {
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="en" userId="redis-server-error" storageScope="test">
+        <LanguageSelector />
+        <ServerErrorForm target={target} />
+      </LanguageProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "返回服务端错误" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Port must be an integer between 1 and 65535");
+    fireEvent.change(screen.getByRole("combobox", { name: "Interface language" }), { target: { value: "zh-CN" } });
+    expect(screen.getByRole("alert")).toHaveTextContent("Port must be an integer between 1 and 65535");
+    expect(screen.getByLabelText("端口")).toHaveValue("99999");
+  });
+
+  // 语言变化只更新标签，不能通过加载回调重置 Redis 配置草稿。
+  it("切换语言保留未保存的 Redis 地址且不重新加载或写入配置", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="en" userId="cache-test" storageScope="test">
+        <LanguageSelector />
+        <CacheSettings accessToken="sk-test" userRole="Admin" userID="u1" />
+      </LanguageProvider>,
+    );
+    expect(await screen.findByRole("textbox", { name: "Host", exact: true })).toHaveValue("redis.internal");
+    fireEvent.change(screen.getByRole("textbox", { name: "Host", exact: true }), {
+      target: { value: "draft.internal" },
+    });
+    await user.selectOptions(screen.getByRole("combobox", { name: "Interface language" }), "zh-CN");
+    expect(screen.getByRole("textbox", { name: "主机", exact: true })).toHaveValue("draft.internal");
+    expect(getCacheSettingsCall).toHaveBeenCalledTimes(1);
+    expect(updateCacheSettingsCall).not.toHaveBeenCalled();
+    expect(testCacheConnectionCall).not.toHaveBeenCalled();
   });
 
   it("keeps loaded advanced values in the payload when the section is never opened", async () => {

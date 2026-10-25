@@ -13,6 +13,7 @@ import type { OverviewTotals } from "./overviewData";
 import { Panel } from "./Primitives";
 import UsageStatStrip from "./UsageStatStrip";
 import UsageBreakdownChart from "./UsageBreakdownChart";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 interface UsageOverviewProps {
   results: readonly DailyData[];
@@ -39,6 +40,7 @@ export default function UsageOverview({
   providerBreakdown,
   budget,
 }: UsageOverviewProps) {
+  const { t } = useLanguage();
   return (
     <div className="grid gap-3">
       <UsageStatStrip
@@ -54,10 +56,10 @@ export default function UsageOverview({
       {topAgents}
       {providerBreakdown}
 
-      <Panel icon={KeyRound} title="Top Virtual Keys">
+      <Panel icon={KeyRound} title={t("Top Virtual Keys")}>
         {topKeys}
       </Panel>
-      <Panel icon={Users} title="Top Users by Spend">
+      <Panel icon={Users} title={t("Top Users by Spend")}>
         {topUsers}
       </Panel>
       {gatewayByEndpoint}

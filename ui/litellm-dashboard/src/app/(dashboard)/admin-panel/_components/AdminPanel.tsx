@@ -9,7 +9,7 @@ import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Info, TriangleAlert } from "lucide-react";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useBaseUrl } from "@/components/constants";
 import { toast } from "@/lib/toast";
 import { addAllowedIP, deleteAllowedIP, getAllowedIPs, getSSOSettings } from "@/components/networking";
@@ -36,6 +36,7 @@ import { FormField } from "@/components/shared/form/FormField";
 import { Input } from "@/components/ui/input";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 const allowedIPSchema = z.object({
   ip: z.string().min(1, "Please enter an IP address"),
@@ -65,6 +66,7 @@ interface AdminPanelProps {
 }
 
 const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
+  const { t } = useLanguage();
   const { premiumUser, accessToken, userId: userID } = useAuthorized();
   const form = useSSOSettingsForm("admin-panel");
   const [isAddSSOModalVisible, setIsAddSSOModalVisible] = useState(false);
@@ -83,7 +85,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
   let nonSssoUrl = baseUrl;
   nonSssoUrl += "/fallback/login";
 
-  const checkSSOConfiguration = async () => {
+  // 稳定加载函数，切换共享容器语言时不重新请求配置。
+  const checkSSOConfiguration = useCallback(async () => {
     if (accessToken) {
       try {
         const ssoData = await getSSOSettings(accessToken);
@@ -102,7 +105,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
         setSsoConfigured(false);
       }
     }
-  };
+  }, [accessToken]);
 
   const handleShowAllowedIPs = async () => {
     try {
@@ -380,7 +383,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
     },
     {
       key: "ui-settings",
-      label: "UI Settings",
+      label: t("UI Settings"),
       children: (
         <div className="flex flex-col gap-4">
           <UISettings />
@@ -391,7 +394,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
     },
     {
       key: "logging-settings",
-      label: "Logging Settings",
+      label: t("Logging Settings"),
       children: <LoggingSettings />,
     },
     {
@@ -406,20 +409,20 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
     },
     {
       key: "plugins",
-      label: "Plugins",
+      label: t("Plugins"),
       children: <PluginSettings />,
     },
     {
       key: "web-search-interception",
-      label: "Web Search Interception",
+      label: t("Web Search Interception"),
       children: <WebSearchInterceptionSettings />,
     },
   ];
 
   return (
     <div className="w-full m-2 mt-2 p-8">
-      <h2 className="mb-2 text-base font-semibold text-foreground">Admin Access</h2>
-      <p className="mb-4 text-sm text-foreground">Go to &apos;Internal Users&apos; page to add other admins.</p>
+      <h2 className="mb-2 text-base font-semibold text-foreground">{t("Admin Access")}</h2>
+      <p className="mb-4 text-sm text-foreground">{t("Go to 'Internal Users' page to add other admins.")}</p>
       <Tabs defaultValue={tabItems[0].key}>
         <TabsList variant="line" className="mb-4 h-auto flex-wrap">
           {tabItems.map((item) => (

@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { parseAsString, useQueryStates } from "nuqs";
@@ -89,6 +90,7 @@ const renderPanel = (key: string) => {
 };
 
 export default function ModelsAndEndpointsPage() {
+  const { t } = useLanguage();
   const { accessToken, userRole, userId: userID, premiumUser, isViewOnly } = useAuthorized();
   const { data: teams } = useTeams();
   const { data: uiSettings } = useUISettings();
@@ -146,17 +148,17 @@ export default function ModelsAndEndpointsPage() {
     void setPrefillParams({ provider: null, litellm_model: null });
   };
 
-  const allModelsLabel = isAdmin ? "Deployed Models" : "Your Models";
+  const allModelsLabel = isAdmin ? t("Deployed Models") : t("Your Models");
   const tabLabel = (slug: "" | ModelTabSlug): React.ReactNode => {
     if (!slug) return allModelsLabel;
     if (slug === "auto-routers" || slug === "access-group-budgets") {
       return (
         <span className="flex items-center gap-2">
-          {TAB_LABELS[slug]} <BetaBadge />
+          {t(TAB_LABELS[slug])} <BetaBadge />
         </span>
       );
     }
-    return TAB_LABELS[slug];
+    return t(TAB_LABELS[slug]);
   };
 
   const handleRefreshClick = () => {
@@ -189,12 +191,12 @@ export default function ModelsAndEndpointsPage() {
       <div className="mt-2 flex w-full flex-col gap-2 p-8">
         <div className="mb-4 flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold">Model Management</h2>
+            <h2 className="text-lg font-semibold">{t("Model Management")}</h2>
             {isAdmin ? (
-              <p className="text-sm text-muted-foreground">Add and manage models for the proxy</p>
+              <p className="text-sm text-muted-foreground">{t("Add and manage models for the proxy")}</p>
             ) : (
               <p className="text-sm text-muted-foreground">
-                View your models and manage routers for teams that allow it.
+                {t("View your models and manage routers for teams that allow it.")}
               </p>
             )}
           </div>
@@ -230,9 +232,11 @@ export default function ModelsAndEndpointsPage() {
               </div>
               <div className="flex shrink-0 items-center gap-2 pb-1">
                 {lastRefreshed && (
-                  <span className="text-xs text-muted-foreground">Last Refreshed: {lastRefreshed}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {t("Last Refreshed:")} {lastRefreshed}
+                  </span>
                 )}
-                <Button variant="ghost" size="icon-sm" onClick={handleRefreshClick} aria-label="Refresh models">
+                <Button variant="ghost" size="icon-sm" onClick={handleRefreshClick} aria-label={t("Refresh models")}>
                   <RefreshCw />
                 </Button>
               </div>

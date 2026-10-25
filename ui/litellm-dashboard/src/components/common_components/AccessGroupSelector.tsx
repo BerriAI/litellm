@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import { Users } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -32,6 +33,7 @@ const AccessGroupSelector: React.FC<AccessGroupSelectorProps> = ({
   showLabel = false,
   labelText = "Access Group",
 }) => {
+  const { t } = useLanguage();
   const { data: accessGroups, isLoading, isError } = useAccessGroups();
 
   // ── Loading skeleton ─────────────────────────────────────────────────────
@@ -69,7 +71,7 @@ const AccessGroupSelector: React.FC<AccessGroupSelectorProps> = ({
           value={value}
           onValueChange={onChange ?? (() => {})}
           placeholder={placeholder}
-          emptyText={isError ? "Failed to load access groups" : "No access groups found"}
+          emptyText={isError ? t("Failed to load access groups") : t("No access groups found")}
           disabled={disabled}
           className={`w-full rounded-md ${className ?? ""}`}
         />

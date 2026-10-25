@@ -21,6 +21,7 @@ import { isProxyAdminRole } from "@/utils/roles";
 import { ChevronsUpDown, Crown, IdCard, KeyRound, LogOut, Mail, ShieldCheck } from "lucide-react";
 import { useRouter } from "next/navigation";
 import React from "react";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 const RELEASE_NOTES_URL = "https://docs.litellm.ai/release_notes";
 
@@ -86,6 +87,7 @@ interface SidebarAccountMenuProps {
 }
 
 const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, collapsed = false }) => {
+  const { t } = useLanguage();
   const {
     userId,
     userEmail,
@@ -151,7 +153,7 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
   const initials = initialsFromIdentity(userEmail, userId);
   const hue = hueFromString(seed);
   const displayName = navAccountDisplayName(userEmail, userId);
-  const triggerLabel = `Account menu — ${userRole ?? "Unknown role"} — signed in as ${userEmail || userId || "unknown"}`;
+  const triggerLabel = t("Account menu, {identity}", { identity: userEmail || userId || "unknown" });
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -172,7 +174,7 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
           <>
             <span className="min-w-0 flex-1 leading-tight">
               <span className="block truncate text-[13px] font-medium text-sidebar-foreground">{displayName}</span>
-              {userRole && <span className="block truncate text-[11px] text-muted-foreground">{userRole}</span>}
+              {userRole && <span className="block truncate text-[11px] text-muted-foreground">{t(userRole)}</span>}
             </span>
             <ChevronsUpDown size={16} strokeWidth={1.75} className="shrink-0 text-muted-foreground" aria-hidden />
           </>
@@ -192,7 +194,7 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
             <span
               className="animate-bounce text-lg leading-none"
               style={{ animationDuration: "2s" }}
-              title="Thanks for using LiteLLM!"
+              title={t("Thanks for using LiteLLM!")}
               aria-hidden
             >
               🌴
@@ -211,7 +213,7 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
         </div>
 
         <div className="flex flex-col px-3 py-2">
-          <InfoRow icon={<Crown className="size-[17px]" />} label="Tier">
+          <InfoRow icon={<Crown className="size-[17px]" />} label={t("Subscription tier")}>
             {premiumUser ? (
               <Badge variant="outline" className="gap-1 border-warning/30 bg-warning/10 text-warning">
                 <Crown />
@@ -224,14 +226,14 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
               </Badge>
             )}
           </InfoRow>
-          <InfoRow icon={<ShieldCheck className="size-[17px]" />} label="Role">
-            <Badge variant="secondary">{userRole}</Badge>
+          <InfoRow icon={<ShieldCheck className="size-[17px]" />} label={t("Role")}>
+            <Badge variant="secondary">{userRole ? t(userRole) : userRole}</Badge>
           </InfoRow>
-          <InfoRow icon={<Mail className="size-[17px]" />} label="Email">
-            <MonoValue value={userEmail} copyLabel="Copy email" />
+          <InfoRow icon={<Mail className="size-[17px]" />} label={t("Email")}>
+            <MonoValue value={userEmail} copyLabel={t("Copy email")} />
           </InfoRow>
-          <InfoRow icon={<IdCard className="size-[17px]" />} label="User ID">
-            <MonoValue value={userId} copyLabel="Copy user ID" />
+          <InfoRow icon={<IdCard className="size-[17px]" />} label={t("User ID")}>
+            <MonoValue value={userId} copyLabel={t("Copy user ID")} />
           </InfoRow>
         </div>
 
@@ -240,12 +242,12 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
         <div className="py-1">
           {toggles.map((toggle) => (
             <div key={toggle.key} className="flex h-[38px] items-center justify-between gap-3 px-3">
-              <span className="text-[13px] text-foreground">{toggle.label}</span>
+              <span className="text-[13px] text-foreground">{t(toggle.label)}</span>
               <Switch
                 size="sm"
                 checked={toggle.checked}
                 onCheckedChange={toggle.onCheckedChange}
-                aria-label={toggle.ariaLabel}
+                aria-label={t(toggle.ariaLabel)}
               />
             </div>
           ))}
@@ -274,7 +276,7 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
             className="h-[42px] w-full justify-start gap-2.5 rounded-none px-3 text-sm font-medium text-foreground"
           >
             <KeyRound className="size-[19px] text-muted-foreground" />
-            Change Password
+            {t("Change Password")}
           </Button>
         )}
 
@@ -284,7 +286,7 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
           className="h-[42px] w-full justify-start gap-2.5 rounded-none px-3 text-sm font-medium text-foreground"
         >
           <LogOut className="size-[19px] text-muted-foreground" />
-          Logout
+          {t("Logout")}
         </Button>
       </PopoverContent>
     </Popover>

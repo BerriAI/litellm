@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import {
   Combobox,
@@ -34,6 +35,7 @@ const ModelChoiceCombobox: React.FC<ModelChoiceComboboxProps> = ({
   ariaInvalid,
   ariaDescribedBy,
 }) => {
+  const { t } = useLanguage();
   const selected = value ? choices.find((choice) => choice.value === value) ?? { value, label: value } : null;
 
   return (
@@ -53,7 +55,7 @@ const ModelChoiceCombobox: React.FC<ModelChoiceComboboxProps> = ({
         showClear={value != null && value !== ""}
       />
       <ComboboxContent>
-        <ComboboxEmpty>No models found</ComboboxEmpty>
+        <ComboboxEmpty>{t("No models found")}</ComboboxEmpty>
         <ComboboxList>
           {(choice: ModelChoice) => (
             <ComboboxItem key={choice.value} value={choice}>

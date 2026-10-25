@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders, screen, testQueryClient, waitFor, within } from "../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, testQueryClient, waitFor, within } from "../../../tests/test-utils";
+import UISettings from "@/components/Settings/AdminSettings/UISettings/UISettings";
 import { AuthProvider } from "@/contexts/AuthContext";
+import DashboardLanguageProvider from "@/contexts/DashboardLanguageProvider";
 import { Dialog, DialogClose, DialogContent, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import {
   AlertDialog,
@@ -17,6 +19,7 @@ vi.unmock("@/app/(dashboard)/hooks/useAuthorized");
 vi.unmock("@/lib/toast");
 let deploymentWarnings: { warnings: { id: string; severity: string; ignore: null }[]; ignore_available: boolean };
 let plugins: { name: string; display_name: string; url: string }[];
+let defaultLanguage: "en" | "zh-CN";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
@@ -29,6 +32,7 @@ beforeEach(() => {
   localStorage.clear();
   deploymentWarnings = { warnings: [], ignore_available: true };
   plugins = [];
+  defaultLanguage = "en";
   const claims = {
     key: "sk-layout-test",
     user_id: "layout-admin",
@@ -40,13 +44,21 @@ beforeEach(() => {
   document.cookie = `token=${token}; Path=/`;
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input instanceof Request ? input.url : String(input);
       const path = new URL(url, "http://localhost").pathname;
       switch (path) {
         case "/litellm/.well-known/litellm-ui-config":
           return Response.json({ server_root_path: "", proxy_base_url: "", admin_ui_disabled: false });
         case "/get/ui_settings":
+          return Response.json({
+            values: { default_ui_language: defaultLanguage },
+            source: { default_ui_language: "db" },
+            field_schema: { properties: { default_ui_language: { enum: ["en", "zh-CN"] } } },
+          });
+        case "/update/ui_settings":
+          defaultLanguage = JSON.parse(String(init?.body)).default_ui_language;
+          return Response.json({ status: "success" });
         case "/get/ui_theme_settings":
           return Response.json({ values: {} });
         case "/api/plugins":
@@ -108,6 +120,32 @@ afterEach(() => {
 });
 
 describe("dashboard overlay boundaries", () => {
+  it("全站语言保存后更新导航，个人选择优先并可恢复跟随", async () => {
+    defaultLanguage = "zh-CN";
+    renderWithProviders(
+      <AuthProvider>
+        {/* 与根布局一致，设置页和导航共用加载全站设置的语言上下文。 */}
+        <DashboardLanguageProvider>
+          <Layout>
+            <UISettings />
+          </Layout>
+        </DashboardLanguageProvider>
+      </AuthProvider>,
+    );
+    // 先等待认证后的页面挂载，再检查异步加载的全站语言
+    await screen.findByRole("combobox", { name: /^(Interface language|界面语言)$/ });
+    const siteLanguage = await screen.findByRole("combobox", { name: "全站默认语言" });
+    expect(screen.getByRole("link", { name: "虚拟密钥" })).toBeVisible();
+    fireEvent.change(siteLanguage, { target: { value: "en" } });
+    expect(await screen.findByRole("combobox", { name: "Default UI language" })).toHaveValue("en");
+    fireEvent.change(screen.getByRole("combobox", { name: "Interface language" }), { target: { value: "en" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Default UI language" }), { target: { value: "zh-CN" } });
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Default UI language" })).toHaveValue("zh-CN"));
+    expect(screen.getByRole("link", { name: "Virtual Keys" })).toBeVisible();
+    fireEvent.change(screen.getByRole("combobox", { name: "Interface language" }), { target: { value: "default" } });
+    expect(screen.getByRole("link", { name: "虚拟密钥" })).toBeVisible();
+  });
+
   it("should render the page with mobile navigation closed", async () => {
     renderWithProviders(
       <AuthProvider>
@@ -222,6 +260,12 @@ describe("deployment health in the dashboard shells", () => {
       </AuthProvider>,
     );
 
+    // 两种布局的认证就绪标志不同，插件布局不挂载普通网关页面。
+    if (pluginMode) {
+      await screen.findByRole("button", { name: "Switch workspace, current: Agent plane" });
+    } else {
+      await screen.findByRole("heading", { name: "Gateway page" });
+    }
     expect(
       (await screen.findAllByRole("button", { name: "Deployment health, 1 active warning" })).length,
     ).toBeGreaterThan(0);

@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Button } from "@/components/ui/button";
 import { Plus, Trash2 } from "lucide-react";
 import { useId, type ReactNode } from "react";
@@ -34,9 +35,12 @@ export function QuestionCardHeader({
   removeLabel: string;
   onRemove: () => void;
 }) {
+  const { t } = useLanguage();
   return (
     <div className="flex items-center justify-between gap-2">
-      <span className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Question {index + 1}</span>
+      <span className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+        {t("Question")} {index + 1}
+      </span>
       <RemoveButton label={removeLabel} onClick={onRemove} />
     </div>
   );

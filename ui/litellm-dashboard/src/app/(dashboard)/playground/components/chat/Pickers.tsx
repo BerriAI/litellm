@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useState, type ReactNode } from "react";
 import { Plus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -64,11 +65,12 @@ function GroupedOptions({ index, mono = false }: { index: ReadonlyMap<string, Pi
 }
 
 function CustomItem({ value }: { value: string }) {
+  const { t } = useLanguage();
   return (
     <ComboboxItem value={value} className="font-mono text-xs">
       <Plus />
       <span className="min-w-0 truncate">
-        <span className="font-sans">Use</span> {value}
+        <span className="font-sans">{t("Use")}</span> {value}
       </span>
     </ComboboxItem>
   );
@@ -102,6 +104,7 @@ export function ChecklistMenu({
   emptyText: string;
   defaultOpen?: boolean;
 }) {
+  const { t } = useLanguage();
   const index = optionIndex(groups);
   const items = toItems(groups);
   return (
@@ -120,10 +123,10 @@ export function ChecklistMenu({
         <CountBadge count={value.length} />
       </ComboboxTrigger>
       <ComboboxContent side="top" className="w-72">
-        <ComboboxInput showTrigger={false} placeholder={`Search ${label.toLowerCase()}`} />
+        <ComboboxInput showTrigger={false} placeholder={t("Search {value}", { value: String(label.toLowerCase()) })} />
         <ComboboxEmpty>
           {isLoading ? <Spinner className="size-3.5" /> : items.length === 0 && emptyText}
-          {!isLoading && items.length > 0 && "Nothing matches"}
+          {!isLoading && items.length > 0 && t("Nothing matches")}
         </ComboboxEmpty>
         <GroupedOptions index={index} />
       </ComboboxContent>
@@ -152,6 +155,7 @@ export function TargetPicker({
   allowCustom?: boolean;
   defaultOpen?: boolean;
 }) {
+  const { t } = useLanguage();
   const [query, setQuery] = useState("");
   const index = optionIndex(groups);
   const custom = query.trim();
@@ -182,7 +186,7 @@ export function TargetPicker({
         </span>
       </ComboboxTrigger>
       <ComboboxContent side="top" className="w-80">
-        <ComboboxInput showTrigger={false} placeholder={`Search ${label.toLowerCase()}s`} />
+        <ComboboxInput showTrigger={false} placeholder={t("Search {value}s", { value: String(label.toLowerCase()) })} />
         <ComboboxEmpty>
           {items.length === 0 && !custom ? emptyText : `No matching ${label.toLowerCase()}`}
         </ComboboxEmpty>

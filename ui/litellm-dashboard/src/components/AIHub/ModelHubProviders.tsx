@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import Image from "next/image";
 import { useState } from "react";
 
@@ -55,12 +56,13 @@ export default function ModelHubProviders({
   onSelect,
   loading = false,
 }: ModelHubProvidersProps) {
+  const { t } = useLanguage();
   const availableProviders = Array.from(new Set(providers)).filter(Boolean);
   const selectedProvider = selectedProviders[0] ?? "";
   const initialLoading = loading && availableProviders.length === 0;
-  const emptyLabel = initialLoading ? "Loading providers" : "All providers";
+  const emptyLabel = initialLoading ? t("Loading providers") : t("All providers");
   const items = [
-    { value: "", label: "All providers" },
+    { value: "", label: t("All providers") },
     ...availableProviders.map((provider) => ({
       value: provider,
       label: getProviderLogoAndName(provider).displayName,
@@ -75,7 +77,7 @@ export default function ModelHubProviders({
       disabled={initialLoading}
     >
       <SelectTrigger
-        aria-label="Provider"
+        aria-label={t("Provider")}
         aria-busy={loading}
         className="chat-model-filter-select chat-model-provider-select"
       >

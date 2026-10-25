@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,7 @@ function ProbabilityMeter({
   probability: number;
   selected?: boolean;
 }) {
+  const { t } = useLanguage();
   const percentage = Math.round(probability * 100);
   return (
     <div className="grid gap-1.5">
@@ -37,7 +39,7 @@ function ProbabilityMeter({
       </div>
       <div
         role="meter"
-        aria-label={`${label} probability`}
+        aria-label={t("{label} probability", { label: String(label) })}
         aria-valuenow={percentage}
         aria-valuetext={selected ? `${percentage}%, selected` : `${percentage}%`}
         aria-valuemin={0}
@@ -54,12 +56,16 @@ function ProbabilityMeter({
 }
 
 function AnswerDetails({ answer }: { answer: SystemOneAnswer }) {
+  const { t } = useLanguage();
   if (answer.type === "noul") {
     const percentage = Math.round(answer.noul * 100);
     return (
       <div className="grid gap-3">
-        <p className="text-sm font-medium">{percentage}% yes</p>
-        <ProbabilityMeter label="Yes" probability={answer.noul} />
+        <p className="text-sm font-medium">
+          {percentage}
+          {t("% yes")}
+        </p>
+        <ProbabilityMeter label={t("Yes")} probability={answer.noul} />
       </div>
     );
   }
@@ -69,10 +75,13 @@ function AnswerDetails({ answer }: { answer: SystemOneAnswer }) {
     return (
       <div className="grid gap-4">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-muted-foreground">Selected choice</span>
+          <span className="text-xs text-muted-foreground">{t("Selected choice")}</span>
           <Badge>{answer.choice}</Badge>
           {answer.confidence !== undefined && (
-            <Badge variant="outline">{Math.round(answer.confidence * 100)}% confidence</Badge>
+            <Badge variant="outline">
+              {Math.round(answer.confidence * 100)}
+              {t("% confidence")}
+            </Badge>
           )}
         </div>
         <div className="grid gap-3">
@@ -88,10 +97,13 @@ function AnswerDetails({ answer }: { answer: SystemOneAnswer }) {
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs text-muted-foreground">Score</span>
+        <span className="text-xs text-muted-foreground">{t("Score")}</span>
         <Badge>{SCORE_FORMAT.format(answer.score)}</Badge>
         {answer.confidence !== undefined && (
-          <Badge variant="outline">{Math.round(answer.confidence * 100)}% confidence</Badge>
+          <Badge variant="outline">
+            {Math.round(answer.confidence * 100)}
+            {t("% confidence")}
+          </Badge>
         )}
       </div>
       <div className="grid gap-3">
@@ -116,9 +128,10 @@ function AnswerDetails({ answer }: { answer: SystemOneAnswer }) {
 }
 
 function OpenAIAnswerDetails({ answer }: { answer: OpenAIDecisionsResponse["answers"][number] }) {
+  const { t } = useLanguage();
   switch (answer.type) {
     case "refusal":
-      return <p className="text-sm text-muted-foreground">Model refused to answer</p>;
+      return <p className="text-sm text-muted-foreground">{t("Model refused to answer")}</p>;
     case "predicate":
       return <AnswerDetails answer={{ type: "noul", noul: answer.probability }} />;
     case "choice":
@@ -152,8 +165,9 @@ function OpenAIAnswerDetails({ answer }: { answer: OpenAIDecisionsResponse["answ
 }
 
 function RawResponse({ response }: { response: NonNullable<ResponseViewProps["response"]> }) {
+  const { t } = useLanguage();
   return (
-    <section aria-label="Decisions response JSON">
+    <section aria-label={t("Decisions response JSON")}>
       <pre className="whitespace-pre-wrap wrap-anywhere rounded-md bg-muted p-3 font-mono text-xs">
         {JSON.stringify(response, null, 2)}
       </pre>
@@ -198,6 +212,7 @@ export default function ResponseView({
   error,
   isLoading,
 }: ResponseViewProps) {
+  const { t } = useLanguage();
   const [showRaw, setShowRaw] = useState(false);
 
   if (isLoading) {
@@ -205,7 +220,7 @@ export default function ResponseView({
       <Card>
         <CardContent className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
           <LoaderCircle className="size-4 animate-spin" />
-          Calculating calibrated probabilities
+          {t("Calculating calibrated probabilities")}
         </CardContent>
       </Card>
     );
@@ -214,7 +229,7 @@ export default function ResponseView({
   if (error) {
     return (
       <Alert variant="destructive">
-        <AlertTitle>Decisions request failed</AlertTitle>
+        <AlertTitle>{t("Decisions request failed")}</AlertTitle>
         <AlertDescription>{error}</AlertDescription>
       </Alert>
     );
@@ -224,13 +239,13 @@ export default function ResponseView({
     return (
       <Card className="gap-0 py-0">
         <CardHeader className="flex min-h-12 flex-row items-center border-b px-4 py-2 [.border-b]:pb-2">
-          <CardTitle className="text-sm font-medium">Response</CardTitle>
+          <CardTitle className="text-sm font-medium">{t("Response")}</CardTitle>
         </CardHeader>
         <CardContent className="flex min-h-[360px] flex-col items-center justify-center gap-3 p-4 text-center">
           <div className="flex size-10 items-center justify-center rounded-lg bg-muted">
             <Inbox className="size-5 text-muted-foreground" />
           </div>
-          <p className="text-sm text-muted-foreground">Send a request to see answers here</p>
+          <p className="text-sm text-muted-foreground">{t("Send a request to see answers here")}</p>
         </CardContent>
       </Card>
     );
@@ -241,7 +256,7 @@ export default function ResponseView({
   return (
     <Card className="gap-0 overflow-hidden py-0 wrap-anywhere">
       <CardHeader className="flex min-h-12 flex-row flex-wrap items-center justify-between gap-2 border-b px-4 py-2 [.border-b]:pb-2">
-        <CardTitle className="text-sm font-medium">{view === "curl" ? "Response JSON" : "Response"}</CardTitle>
+        <CardTitle className="text-sm font-medium">{view === "curl" ? t("Response JSON") : t("Response")}</CardTitle>
         <div className="flex flex-wrap items-center gap-1.5">
           {latencyMs !== undefined && (
             <Badge variant="outline" className="font-mono text-[11px] font-normal tabular-nums">
@@ -258,7 +273,7 @@ export default function ResponseView({
           )}
           {response.usage && (
             <Badge variant="outline" className="font-mono text-[11px] font-normal tabular-nums">
-              {response.usage.input_tokens} in / {response.usage.output_tokens} out
+              {response.usage.input_tokens} {t("in /")} {response.usage.output_tokens} {t("out")}
             </Badge>
           )}
         </div>
@@ -271,7 +286,7 @@ export default function ResponseView({
               render={
                 <Button variant="ghost" className="w-full justify-start rounded-none px-4 text-muted-foreground">
                   <ChevronRight className={`size-4 transition-transform ${showRaw ? "rotate-90" : ""}`} />
-                  Raw response
+                  {t("Raw response")}
                 </Button>
               }
             />

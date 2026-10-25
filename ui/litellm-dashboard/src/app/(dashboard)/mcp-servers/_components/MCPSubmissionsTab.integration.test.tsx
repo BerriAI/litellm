@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MCPServer, MCPSubmissionsSummary } from "@/components/mcp_tools/types";
 import { fetchMCPSubmissions, getGeneralSettingsCall, updateConfigFieldSetting } from "@/components/networking";
 import { MCPSubmissionsTab } from "./MCPSubmissionsTab";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 vi.mock("@/components/networking", () => ({
   approveMCPServer: vi.fn(),
@@ -58,6 +59,20 @@ describe("MCPSubmissionsTab", () => {
     vi.mocked(fetchMCPSubmissions).mockResolvedValue(submissionSummary);
     vi.mocked(getGeneralSettingsCall).mockResolvedValue(configuredRules);
     vi.mocked(updateConfigFieldSetting).mockResolvedValue(undefined);
+  });
+
+  it("中文审核数量和拒绝确认保留服务器别名及配置字段值", async () => {
+    const user = userEvent.setup();
+    render(
+      <LanguageProvider defaultLanguage="zh-CN" userId="mcp-review" storageScope="mcp-review-language">
+        <MCPSubmissionsTab accessToken={token} />
+      </LanguageProvider>,
+    );
+    expect(await screen.findByText("（3 个必填字段）")).toBeInTheDocument();
+    expect(screen.getByText("3 项通过，0 项未通过")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "拒绝", exact: true }));
+    expect(screen.getByText(/确定要拒绝“Submission server”吗？/)).toBeInTheDocument();
+    expect(updateConfigFieldSetting).not.toHaveBeenCalled();
   });
 
   it("renders configured submission rules and card compliance checks", async () => {

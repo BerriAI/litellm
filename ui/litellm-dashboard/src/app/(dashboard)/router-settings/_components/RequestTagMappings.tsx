@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -56,6 +57,7 @@ export const requestTagMappingsAreValid = (value: unknown) =>
   Array.isArray(value) && value.every(isMapping) && value.every((_, index) => problemAt(value, index) === null);
 
 export function RequestTagMappingsEditor({ value, onChange, disabled = false }: Props) {
+  const { t } = useLanguage();
   const rules = Array.isArray(value) ? value.filter(isMapping) : [];
   const update = (index: number, patch: Partial<RequestTagMapping>) =>
     onChange(rules.map((rule, position) => (position === index ? { ...rule, ...patch } : rule)));
@@ -63,7 +65,7 @@ export function RequestTagMappingsEditor({ value, onChange, disabled = false }: 
   return (
     <div className="min-w-80 space-y-4 whitespace-normal">
       <p className="text-xs text-muted-foreground">
-        Exact value mappings take priority over any-value rules for the same key.
+        {t("Exact value mappings take priority over any-value rules for the same key.")}
       </p>
       {rules.map((rule, index) => {
         const exact = isExact(rule);
@@ -107,7 +109,7 @@ export function RequestTagMappingsEditor({ value, onChange, disabled = false }: 
               </Button>
             </div>
             <label className="flex flex-col gap-1 text-xs">
-              Baggage key
+              {t("Baggage key")}
               <Input
                 aria-label={`${label} baggage key`}
                 placeholder="entrypoint"
@@ -118,7 +120,7 @@ export function RequestTagMappingsEditor({ value, onChange, disabled = false }: 
             {exact ? (
               <>
                 <label className="flex flex-col gap-1 text-xs">
-                  Match value
+                  {t("Match value")}
                   <Input
                     aria-label={`${label} match value`}
                     value={rule.value ?? ""}
@@ -126,7 +128,7 @@ export function RequestTagMappingsEditor({ value, onChange, disabled = false }: 
                   />
                 </label>
                 <label className="flex flex-col gap-1 text-xs">
-                  Tag
+                  {t("Tag")}
                   <Input
                     aria-label={`${label} tag`}
                     value={rule.tag ?? ""}
@@ -140,7 +142,7 @@ export function RequestTagMappingsEditor({ value, onChange, disabled = false }: 
             ) : (
               <>
                 <label className="flex flex-col gap-1 text-xs">
-                  Tag prefix
+                  {t("Tag prefix")}
                   <Input
                     aria-label={`${label} tag prefix`}
                     placeholder="usecase:"
@@ -155,7 +157,7 @@ export function RequestTagMappingsEditor({ value, onChange, disabled = false }: 
             )}
             {problem ? <p className="text-xs text-destructive">{problem}</p> : null}
             <label className="flex items-center justify-between gap-3 text-xs">
-              Require a mapped value
+              {t("Require a mapped value")}
               <Switch
                 aria-label={`${label} required`}
                 checked={rule.required ?? false}
@@ -163,7 +165,7 @@ export function RequestTagMappingsEditor({ value, onChange, disabled = false }: 
               />
             </label>
             <label className="flex items-center justify-between gap-3 text-xs">
-              Require an existing tag budget
+              {t("Require an existing tag budget")}
               <Switch
                 aria-label={`${label} require budget`}
                 checked={rule.require_budgeted_tag ?? false}
@@ -174,7 +176,9 @@ export function RequestTagMappingsEditor({ value, onChange, disabled = false }: 
         );
       })}
       {disabled ? (
-        <p className="text-xs text-muted-foreground">Managed in config.yaml. Edit the YAML to change these rules.</p>
+        <p className="text-xs text-muted-foreground">
+          {t("Managed in config.yaml. Edit the YAML to change these rules.")}
+        </p>
       ) : null}
       <Button
         disabled={disabled}
@@ -182,7 +186,7 @@ export function RequestTagMappingsEditor({ value, onChange, disabled = false }: 
         variant="outline"
         onClick={() => onChange([...rules, { header: "baggage", key: "", value: "", tag: "" }])}
       >
-        Add mapping
+        {t("Add mapping")}
       </Button>
     </div>
   );

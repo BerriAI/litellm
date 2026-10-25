@@ -11,15 +11,18 @@ import { Input } from "@/components/ui/input";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cn } from "@/lib/cva.config";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { useLanguage } from "@/contexts/LanguageContext";
+import LanguageSelector from "@/components/LanguageSelector";
 
 type OnboardingFormBodyProps = {
   variant: "signup" | "reset_password";
   userEmail: string;
   isPending: boolean;
-  claimError: string | null;
+  claimError: React.ReactNode;
   onSubmit: (values: { password: string }) => void;
 };
 
+// 共用字段只保存本地校验原文，渲染时翻译，外部 claimError 保持原节点。
 const onboardingSchema = z.object({
   password: z.string().min(1, "password required to sign up"),
 });
@@ -27,10 +30,11 @@ const onboardingSchema = z.object({
 type OnboardingFormValues = z.infer<typeof onboardingSchema>;
 
 export function OnboardingFormBody({ variant, userEmail, isPending, claimError, onSubmit }: OnboardingFormBodyProps) {
+  const { t } = useLanguage();
   const form = useZodForm(onboardingSchema, { defaultValues: { password: "" } });
   const emailFieldId = React.useId();
   const isResetPassword = variant === "reset_password";
-  const actionLabel = isResetPassword ? "Reset Password" : "Sign Up";
+  const actionLabel = isResetPassword ? t("Reset Password") : t("Sign Up");
 
   const handleSubmit = (values: OnboardingFormValues) => onSubmit({ password: values.password });
 
@@ -42,8 +46,8 @@ export function OnboardingFormBody({ variant, userEmail, isPending, claimError, 
           <h3 className="text-2xl font-semibold text-foreground">{actionLabel}</h3>
           <p className="text-sm text-foreground">
             {isResetPassword
-              ? "Reset your password to access Admin UI."
-              : "Claim your user account to login to Admin UI."}
+              ? t("Reset your password to access Admin UI.")
+              : t("Claim your user account to login to Admin UI.")}
           </p>
 
           {variant === "signup" && (
@@ -69,15 +73,16 @@ export function OnboardingFormBody({ variant, userEmail, isPending, claimError, 
           <form className="mt-10 mb-5" onSubmit={form.handleSubmit(handleSubmit)}>
             <FieldGroup>
               <Field>
-                <FieldLabel htmlFor={emailFieldId}>Email Address</FieldLabel>
+                <FieldLabel htmlFor={emailFieldId}>{t("Email Address")}</FieldLabel>
                 <Input id={emailFieldId} type="email" value={userEmail} readOnly disabled />
               </Field>
 
               <FormField
                 control={form.control}
                 name="password"
-                label="Password"
-                description={isResetPassword ? "Enter your new password" : "Create a password for your account"}
+                renderError={(error) => error.message && t(error.message)}
+                label={t("Password")}
+                description={isResetPassword ? t("Enter your new password") : t("Create a password for your account")}
               >
                 {({ ref, ...field }) => <PasswordInput {...field} ref={ref} />}
               </FormField>
@@ -92,11 +97,12 @@ export function OnboardingFormBody({ variant, userEmail, isPending, claimError, 
 
             <div className="mt-10">
               <Button type="submit" variant="outline" disabled={isPending}>
-                {isPending && <UiLoadingSpinner className="size-4" role="img" aria-label="loading" />}
+                {isPending && <UiLoadingSpinner className="size-4" role="img" aria-label={t("loading")} />}
                 {actionLabel}
               </Button>
             </div>
           </form>
+          <LanguageSelector />
         </CardContent>
       </Card>
     </div>

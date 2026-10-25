@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { FileText, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -8,6 +9,7 @@ interface FilePreviewCardProps {
 }
 
 function FilePreviewCard({ file, previewUrl, onRemove }: FilePreviewCardProps) {
+  const { t } = useLanguage();
   const isPdf = file.name.toLowerCase().endsWith(".pdf");
 
   return (
@@ -28,13 +30,13 @@ function FilePreviewCard({ file, previewUrl, onRemove }: FilePreviewCardProps) {
         </div>
         <div className="flex-1 min-w-0">
           <div className="text-sm font-medium text-foreground truncate">{file.name}</div>
-          <div className="text-xs text-muted-foreground">{isPdf ? "PDF" : "Image"}</div>
+          <div className="text-xs text-muted-foreground">{isPdf ? "PDF" : t("Image")}</div>
         </div>
         <Button
           type="button"
           variant="ghost"
           size="icon-xs"
-          aria-label={`Remove ${file.name}`}
+          aria-label={t("Remove {name}", { name: String(file.name) })}
           className="text-muted-foreground hover:text-foreground hover:bg-accent"
           onClick={onRemove}
         >

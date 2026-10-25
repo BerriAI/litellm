@@ -3,11 +3,14 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import LoginPage from "./LoginPage";
+import { LanguageProvider } from "@/contexts/LanguageContext";
+import type { Language } from "@/i18n/language";
 
 const mockPush = vi.fn();
 const mockReplace = vi.fn();
 const mockMutate = vi.fn();
 const mockSelectWorker = vi.fn();
+let mockLoginError: Error | null = null;
 
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(() => ({ push: mockPush, replace: mockReplace })),
@@ -37,7 +40,7 @@ vi.mock("@/components/networking", async (importOriginal) => {
 });
 
 vi.mock("@/app/(dashboard)/hooks/login/useLogin", () => ({
-  useLogin: vi.fn(() => ({ mutate: mockMutate, isPending: false, error: null })),
+  useLogin: vi.fn(() => ({ mutate: mockMutate, isPending: false, error: mockLoginError })),
 }));
 
 vi.mock("@/hooks/useWorker", () => ({
@@ -56,11 +59,13 @@ import { switchToWorkerUrl } from "@/components/networking";
 
 let WORKERS: { worker_id: string; name: string; url: string }[] = [];
 
-const renderLoginPage = () => {
+const renderLoginPage = (language: Language = "en") => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <LoginPage />
+      <LanguageProvider defaultLanguage={language} userId={null} storageScope="login-test">
+        <LoginPage />
+      </LanguageProvider>
     </QueryClientProvider>,
   );
 };
@@ -77,7 +82,9 @@ const originalLocation = window.location;
 describe("LoginPage submit payload", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     WORKERS = [];
+    mockLoginError = null;
     setSearch("");
     (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
       data: {
@@ -108,6 +115,24 @@ describe("LoginPage submit payload", () => {
     expect(switchToWorkerUrl).not.toHaveBeenCalled();
   });
 
+  it("中文界面显示本地校验消息，提交凭据保持原值并可切换回英文", async () => {
+    const user = userEvent.setup();
+    renderLoginPage("zh-CN");
+    await screen.findByRole("heading", { name: "登录" });
+    await user.click(screen.getByRole("button", { name: "登录", exact: true }));
+    expect(await screen.findByText("请输入用户名")).toBeVisible();
+    expect(mockMutate).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("用户名"), { target: { value: "Settings" } });
+    fireEvent.change(screen.getByLabelText("密码", { exact: true }), { target: { value: "Home" } });
+    await user.click(screen.getByRole("button", { name: "登录", exact: true }));
+    await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
+    expect(mockMutate.mock.calls[0][0]).toStrictEqual({ username: "Settings", password: "Home", useV3: false });
+    await user.selectOptions(screen.getByRole("combobox", { name: "界面语言" }), "en");
+    expect(screen.getByRole("heading", { name: "Login" })).toBeVisible();
+    expect(screen.getByLabelText("Username")).toHaveValue("Settings");
+    expect(screen.getByLabelText("Password", { exact: true })).toHaveValue("Home");
+  });
+
   it("submits on Enter from the password field", async () => {
     const user = userEvent.setup();
     renderLoginPage();
@@ -129,6 +154,36 @@ describe("LoginPage submit payload", () => {
 
     expect(await screen.findByText("Please enter your username")).toBeInTheDocument();
     expect(screen.getByText("Please enter your password")).toBeInTheDocument();
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
+
+  it("已显示的登录校验随语言切换且不会登录、跳转或清空用户名", async () => {
+    renderLoginPage();
+    await screen.findByRole("heading", { name: "Login" });
+    fireEvent.change(screen.getByLabelText("Username"), { target: { value: "Settings" } });
+    fireEvent.click(screen.getByRole("button", { name: "Login", exact: true }));
+    expect(await screen.findByText("Please enter your password")).toBeVisible();
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Interface language" }), { target: { value: "zh-CN" } });
+    expect(await screen.findByText("请输入密码")).toBeVisible();
+    expect(screen.getByLabelText("用户名")).toHaveValue("Settings");
+    expect(screen.queryByText("请输入用户名")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "界面语言" }), { target: { value: "en" } });
+    expect(await screen.findByText("Please enter your password")).toBeVisible();
+    expect(mockMutate).not.toHaveBeenCalled();
+    expect(mockPush).not.toHaveBeenCalled();
+    expect(mockReplace).not.toHaveBeenCalled();
+    expect(switchToWorkerUrl).not.toHaveBeenCalled();
+  });
+
+  it("登录接口的同名错误在切换语言后仍显示原文", async () => {
+    // 网络层错误与字段校验来源不同，即使恰好同名也不能翻译。
+    mockLoginError = new Error("Please enter your password");
+    renderLoginPage();
+    await screen.findByRole("heading", { name: "Login" });
+    fireEvent.change(screen.getByRole("combobox", { name: "Interface language" }), { target: { value: "zh-CN" } });
+    expect(screen.getByText("Please enter your password")).toBeVisible();
+    expect(screen.queryByText("请输入密码")).not.toBeInTheDocument();
     expect(mockMutate).not.toHaveBeenCalled();
   });
 

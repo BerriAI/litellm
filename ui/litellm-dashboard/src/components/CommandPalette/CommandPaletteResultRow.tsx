@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import { cn } from "@/lib/cva.config";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 export interface CommandPaletteRowData {
   id: string;
@@ -24,6 +25,7 @@ export function CommandPaletteResultRow({
   onActivate: () => void;
   onHover: () => void;
 }) {
+  const { t } = useLanguage();
   return (
     <button
       id={optionId}
@@ -44,7 +46,7 @@ export function CommandPaletteResultRow({
         <span className="truncate text-sm font-medium">{item.title}</span>
         {item.subtitle && <span className="truncate text-xs text-muted-foreground">{item.subtitle}</span>}
       </span>
-      <span className="shrink-0 text-xs text-muted-foreground">{item.typeLabel}</span>
+      <span className="shrink-0 text-xs text-muted-foreground">{t(item.typeLabel)}</span>
     </button>
   );
 }

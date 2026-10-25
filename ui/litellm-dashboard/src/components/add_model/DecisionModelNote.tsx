@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Info } from "lucide-react";
 import { useFormContext, useWatch } from "react-hook-form";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
@@ -23,6 +24,7 @@ const selectedModelNames = (value: unknown): string[] => {
 };
 
 export default function DecisionModelNote({ catalog, litellmProvider }: DecisionModelNoteProps) {
+  const { t } = useLanguage();
   const { control } = useFormContext<MountedFormValues>();
   const model = useWatch({ control, name: "model" });
 
@@ -31,21 +33,23 @@ export default function DecisionModelNote({ catalog, litellmProvider }: Decision
   }
 
   return (
-    <Alert variant="info" role="note" aria-label="Decision model notice" className="mb-4">
+    <Alert variant="info" role="note" aria-label={t("Decision model notice")} className="mb-4">
       <Info />
-      <AlertTitle>Decision model</AlertTitle>
+      <AlertTitle>{t("Decision model")}</AlertTitle>
       <AlertDescription>
         <p>
-          For decision requests, call <code>/v1/decisions</code> (OpenAI format) or <code>/v1/systemone</code> (System
-          One format).{" "}
+          {t("For decision requests, use {decisions} (OpenAI format) or {systemOne} (System One format).", {
+            decisions: "/v1/decisions",
+            systemOne: "/v1/systemone",
+          })}{" "}
           <a href={DECISIONS_DOCS_URL} target="_blank" rel="noopener noreferrer" className="underline">
-            How to call decision models
+            {t("How to call decision models")}
           </a>
         </p>
         <p>
-          After you add it,{" "}
+          {t("After you add it,")}{" "}
           <a href={uiHref(SYSTEM_ONE_PLAYGROUND_ROUTE)} className="underline">
-            test it in the Decisions playground
+            {t("test it in the Decisions playground")}
           </a>
         </p>
       </AlertDescription>

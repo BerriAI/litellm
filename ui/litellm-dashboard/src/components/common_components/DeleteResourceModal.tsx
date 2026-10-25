@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { CircleAlert } from "lucide-react";
 import React, { useState, useEffect } from "react";
 import { Alert, AlertTitle } from "@/components/shared/Alert";
@@ -35,6 +36,7 @@ export default function DeleteResourceModal({
   confirmLoading,
   requiredConfirmation,
 }: DeleteResourceModalProps) {
+  const { t } = useLanguage();
   const [requiredConfirmationInput, setRequiredConfirmationInput] = useState("");
 
   useEffect(() => {
@@ -78,7 +80,8 @@ export default function DeleteResourceModal({
           {requiredConfirmation && (
             <div className="mb-6 mt-4 pt-4 border-t border-border">
               <p className="block text-base font-medium text-foreground mb-2">
-                Type <span className="font-semibold text-destructive">{requiredConfirmation}</span> to confirm deletion:
+                {t("Type")} <span className="font-semibold text-destructive">{requiredConfirmation}</span>{" "}
+                {t("to confirm deletion:")}
               </p>
               <InputGroup className="rounded-md">
                 <InputGroupAddon>
@@ -96,14 +99,14 @@ export default function DeleteResourceModal({
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onCancel} disabled={confirmLoading}>
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button
             variant="destructive"
             onClick={onOk}
             disabled={(!!requiredConfirmation && requiredConfirmationInput !== requiredConfirmation) || confirmLoading}
           >
-            {confirmLoading ? "Deleting..." : "Delete"}
+            {confirmLoading ? t("Deleting...") : t("Delete")}
           </Button>
         </DialogFooter>
       </DialogContent>

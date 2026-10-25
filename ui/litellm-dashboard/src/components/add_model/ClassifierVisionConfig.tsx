@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -16,6 +17,7 @@ interface ClassifierVisionConfigProps {
 }
 
 const ClassifierVisionConfig: React.FC<ClassifierVisionConfigProps> = ({ value, onChange }) => {
+  const { t } = useLanguage();
   const [draftMaxImages, setDraftMaxImages] = React.useState<string | null>(null);
   const enabled = value.vision?.enabled ?? DEFAULT_CLASSIFIER_VISION_ENABLED;
 
@@ -49,17 +51,17 @@ const ClassifierVisionConfig: React.FC<ClassifierVisionConfigProps> = ({ value, 
               },
             });
           }}
-          aria-label="Use images for classification"
+          aria-label={t("Use images for classification")}
         />
-        <strong className="font-semibold">Use images for classification</strong>
+        <strong className="font-semibold">{t("Use images for classification")}</strong>
       </div>
       <span className="block text-xs text-muted-foreground">
-        Send inline image data to the classifier so it can choose a tier from what the image shows.
+        {t("Send inline image data to the classifier so it can choose a tier from what the image shows.")}
       </span>
       {enabled && (
         <div>
           <Label htmlFor={MAX_IMAGES_ID} className="block mb-1 font-semibold">
-            Maximum images per request
+            {t("Maximum images per request")}
           </Label>
           <Input
             id={MAX_IMAGES_ID}

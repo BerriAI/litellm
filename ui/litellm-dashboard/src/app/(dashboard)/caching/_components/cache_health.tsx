@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -74,6 +75,7 @@ interface ErrorDetails {
 
 // Update HealthCheckDetails component to handle errors
 const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
+  const { t } = useLanguage();
   // Initialize with safe default values
   let errorDetails: ErrorDetails | null = null;
   let parsedLitellmParams: any = {};
@@ -157,10 +159,10 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
       <Tabs defaultValue="summary">
         <TabsList className="border-b border-border px-4">
           <TabsTrigger value="summary" className="flex-none">
-            Summary
+            {t("Summary")}
           </TabsTrigger>
           <TabsTrigger value="raw" className="flex-none">
-            Raw Response
+            {t("Raw Response")}
           </TabsTrigger>
         </TabsList>
 
@@ -175,7 +177,10 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
               <p
                 className={`text-sm font-medium ${response?.status === "healthy" ? "text-success" : "text-destructive"}`}
               >
-                Cache Status: {response?.status || "unhealthy"}
+                {t("Cache Status:")}{" "}
+                {response?.status === "healthy" || response?.status === "unhealthy"
+                  ? t(response.status)
+                  : response?.status || t("unhealthy")}
               </p>
             </div>
 
@@ -186,23 +191,26 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
                   <>
                     <tr>
                       <td colSpan={2} className="pt-4 pb-2 font-semibold text-destructive">
-                        Error Details
+                        {t("Error Details")}
                       </td>
                     </tr>
-                    <TableClickableErrorField label="Error Message" value={errorDetails.message} />
-                    <TableClickableErrorField label="Traceback" value={errorDetails.traceback} />
+                    <TableClickableErrorField label={t("Error Message")} value={errorDetails.message} />
+                    <TableClickableErrorField label={t("Traceback")} value={errorDetails.traceback} />
                   </>
                 )}
 
                 {/* Always show cache details, regardless of error state */}
                 <tr>
                   <td colSpan={2} className="pt-4 pb-2 font-semibold">
-                    Cache Details
+                    {t("Cache Details")}
                   </td>
                 </tr>
-                <TableClickableErrorField label="Cache Configuration" value={String(parsedLitellmParams?.type)} />
-                <TableClickableErrorField label="Ping Response" value={String(response.ping_response)} />
-                <TableClickableErrorField label="Set Cache Response" value={response.set_cache_response || "N/A"} />
+                <TableClickableErrorField label={t("Cache Configuration")} value={String(parsedLitellmParams?.type)} />
+                <TableClickableErrorField label={t("Ping Response")} value={String(response.ping_response)} />
+                <TableClickableErrorField
+                  label={t("Set Cache Response")}
+                  value={response.set_cache_response || "N/A"}
+                />
                 <TableClickableErrorField
                   label="litellm_settings.cache_params"
                   value={JSON.stringify(parsedLitellmParams, null, 2)}
@@ -213,14 +221,14 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
                   <>
                     <tr>
                       <td colSpan={2} className="pt-4 pb-2 font-semibold">
-                        Redis Details
+                        {t("Redis Details")}
                       </td>
                     </tr>
-                    <TableClickableErrorField label="Redis Host" value={redisDetails.redis_host || "N/A"} />
-                    <TableClickableErrorField label="Redis Port" value={redisDetails.redis_port || "N/A"} />
-                    <TableClickableErrorField label="Redis Version" value={redisDetails.redis_version || "N/A"} />
-                    <TableClickableErrorField label="Startup Nodes" value={redisDetails.startup_nodes || "N/A"} />
-                    <TableClickableErrorField label="Namespace" value={redisDetails.namespace || "N/A"} />
+                    <TableClickableErrorField label={t("Redis Host")} value={redisDetails.redis_host || "N/A"} />
+                    <TableClickableErrorField label={t("Redis Port")} value={redisDetails.redis_port || "N/A"} />
+                    <TableClickableErrorField label={t("Redis Version")} value={redisDetails.redis_version || "N/A"} />
+                    <TableClickableErrorField label={t("Startup Nodes")} value={redisDetails.startup_nodes || "N/A"} />
+                    <TableClickableErrorField label={t("Namespace")} value={redisDetails.namespace || "N/A"} />
                   </>
                 )}
               </tbody>
@@ -271,6 +279,7 @@ export const CacheHealthTab: React.FC<{
   runCachingHealthCheck: () => void;
   responseTimeMs?: number | null;
 }> = ({ accessToken, healthCheckResponse, runCachingHealthCheck, responseTimeMs }) => {
+  const { t } = useLanguage();
   const [localResponseTimeMs, setLocalResponseTimeMs] = React.useState<number | null>(null);
   const [isLoading, setIsLoading] = React.useState<boolean>(false);
 
@@ -287,7 +296,7 @@ export const CacheHealthTab: React.FC<{
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <Button onClick={handleHealthCheck} disabled={isLoading}>
-          {isLoading ? "Running Health Check..." : "Run Health Check"}
+          {isLoading ? t("Running Health Check...") : t("Run Health Check")}
         </Button>
         <ResponseTimeIndicator responseTimeMs={localResponseTimeMs} />
       </div>

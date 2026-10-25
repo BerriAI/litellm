@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useState } from "react";
 import { Check, SquarePen, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,7 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
   onDiscountChange,
   onRemoveProvider,
 }) => {
+  const { t } = useLanguage();
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>("");
 
@@ -82,7 +84,7 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
       data={data}
       columns={[
         {
-          header: "Provider",
+          header: t("Provider"),
           cell: (row) => {
             const { displayName } = getProviderLogoAndName(row.provider);
             return (
@@ -94,16 +96,16 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
           },
         },
         {
-          header: "Models",
+          header: t("Models"),
           cell: (row) =>
             row.modelPattern ? (
               <span className="font-mono text-sm">{row.modelPattern}</span>
             ) : (
-              <span className="text-muted-foreground">All models</span>
+              <span className="text-muted-foreground">{t("All models")}</span>
             ),
         },
         {
-          header: "Discount Percentage",
+          header: t("Discount Percentage"),
           numeric: true,
           cell: (row) => {
             const label = rowLabel(row);
@@ -123,7 +125,7 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      aria-label={`Save discount for ${label}`}
+                      aria-label={t("Save discount for {value1}", { value1: String(label) })}
                       onClick={() => handleSaveEdit(row.key)}
                       className="cursor-pointer text-success hover:text-success/80"
                     >
@@ -132,7 +134,7 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      aria-label={`Cancel editing discount for ${label}`}
+                      aria-label={t("Cancel editing discount for {value1}", { value1: String(label) })}
                       onClick={handleCancelEdit}
                       className="cursor-pointer text-muted-foreground hover:text-foreground"
                     >
@@ -145,7 +147,7 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      aria-label={`Edit discount for ${label}`}
+                      aria-label={t("Edit discount for {value1}", { value1: String(label) })}
                       onClick={() => handleStartEdit(row.key, row.discount)}
                       className="cursor-pointer text-info hover:text-info/80"
                     >
@@ -159,14 +161,14 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
           width: "250px",
         },
         {
-          header: "Actions",
+          header: t("Actions"),
           cell: (row) => {
             const label = rowLabel(row);
             return (
               <Button
                 variant="ghost"
                 size="icon-sm"
-                aria-label={`Remove discount for ${label}`}
+                aria-label={t("Remove discount for {value1}", { value1: String(label) })}
                 onClick={() => onRemoveProvider(row.key, label)}
                 className="cursor-pointer hover:text-destructive"
               >
@@ -178,7 +180,7 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
         },
       ]}
       getRowKey={(row) => row.key}
-      emptyMessage="No provider discounts configured"
+      emptyMessage={t("No provider discounts configured")}
     />
   );
 };

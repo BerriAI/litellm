@@ -1,5 +1,7 @@
 "use client";
 
+import { englishTranslate, type Translate } from "@/i18n/language";
+import { useLanguage } from "@/contexts/LanguageContext";
 import { ColumnDef, FilterFn } from "@tanstack/react-table";
 import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 
@@ -34,10 +36,11 @@ function RateLimitCell({ value }: { value: number | null | undefined }) {
 }
 
 function BudgetDurationCell({ value }: { value: string | null | undefined }) {
+  const { t } = useLanguage();
   if (!value) {
-    return <span className="text-muted-foreground">Not set</span>;
+    return <span className="text-muted-foreground">{t("Not set")}</span>;
   }
-  return <span className="whitespace-nowrap">{getBudgetDurationLabel(value)}</span>;
+  return <span className="whitespace-nowrap">{getBudgetDurationLabel(value, t)}</span>;
 }
 
 interface BudgetRowActionsProps {
@@ -47,10 +50,11 @@ interface BudgetRowActionsProps {
 }
 
 function BudgetRowActions({ budget, onEditClick, onDeleteClick }: BudgetRowActionsProps) {
+  const { t } = useLanguage();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label="Open budget actions"
+        aria-label={t("Open budget actions")}
         data-testid={`budget-actions-${budget.budget_id}`}
         className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "text-muted-foreground")}
       >
@@ -59,7 +63,7 @@ function BudgetRowActions({ budget, onEditClick, onDeleteClick }: BudgetRowActio
       <DropdownMenuContent align="end" className="w-52">
         <DropdownMenuItem data-testid="budget-action-edit" onClick={() => onEditClick(budget)}>
           <Pencil />
-          Edit budget
+          {t("Edit budget")}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
@@ -68,7 +72,7 @@ function BudgetRowActions({ budget, onEditClick, onDeleteClick }: BudgetRowActio
           onClick={() => onDeleteClick(budget)}
         >
           <Trash2 />
-          Delete budget
+          {t("Delete budget")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -82,12 +86,14 @@ export const BUDGET_TABLE_HIDDEN_COLUMNS: Record<string, boolean> = {
 };
 
 interface BudgetTableColumnsDeps {
+  t?: Translate;
   canModify: boolean;
   onEditClick: (budget: budgetItem) => void;
   onDeleteClick: (budget: budgetItem) => void;
 }
 
 export const getBudgetTableColumns = ({
+  t = englishTranslate,
   canModify,
   onEditClick,
   onDeleteClick,
@@ -95,8 +101,8 @@ export const getBudgetTableColumns = ({
   {
     id: "budget_id",
     accessorKey: "budget_id",
-    meta: { title: "Budget ID" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Budget ID" />,
+    meta: { title: t("Budget ID") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Budget ID")} />,
     cell: ({ row }) => (
       <IdCell value={row.original.budget_id} variant="plain" truncate={false} copyable className="whitespace-nowrap" />
     ),
@@ -105,10 +111,10 @@ export const getBudgetTableColumns = ({
     id: "max_budget",
     accessorKey: "max_budget",
     filterFn: serverFilter,
-    meta: { title: "Max Budget", numeric: true },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Max Budget" />,
+    meta: { title: t("Max Budget"), numeric: true },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Max Budget")} />,
     size: 120,
-    cell: ({ row }) => <MoneyCell value={row.original.max_budget} decimals={2} showZero emptyText="Unlimited" />,
+    cell: ({ row }) => <MoneyCell value={row.original.max_budget} decimals={2} showZero emptyText={t("Unlimited")} />,
   },
   {
     id: "tpm_limit",
@@ -129,8 +135,8 @@ export const getBudgetTableColumns = ({
   {
     id: "tpd_limit",
     accessorKey: "tpd_limit",
-    meta: { title: "TPD (batch)", numeric: true },
-    header: ({ column }) => <DataTableSortHeader column={column} title="TPD (batch)" />,
+    meta: { title: t("TPD (batch)"), numeric: true },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("TPD (batch)")} />,
     size: 110,
     cell: ({ row }) => <RateLimitCell value={row.original.tpd_limit} />,
   },
@@ -138,9 +144,9 @@ export const getBudgetTableColumns = ({
     id: "budget_duration",
     accessorKey: "budget_duration",
     filterFn: serverFilter,
-    meta: { title: "Reset" },
+    meta: { title: t("Reset") },
     sortDescFirst: false,
-    header: ({ column }) => <DataTableSortHeader column={column} title="Reset" />,
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Reset")} />,
     size: 110,
     cell: ({ row }) => <BudgetDurationCell value={row.original.budget_duration} />,
   },
@@ -148,8 +154,8 @@ export const getBudgetTableColumns = ({
     id: "created_at",
     accessorKey: "created_at",
     filterFn: serverFilter,
-    meta: { title: "Created" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Created" />,
+    meta: { title: t("Created") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Created")} />,
     size: 160,
     cell: ({ row }) => <DateCell value={row.original.created_at} />,
   },
@@ -158,7 +164,7 @@ export const getBudgetTableColumns = ({
         {
           id: "actions",
           meta: { className: "text-right", headerClassName: "text-right" },
-          header: () => <span className="sr-only">Actions</span>,
+          header: () => <span className="sr-only">{t("Actions")}</span>,
           size: 64,
           enableSorting: false,
           enableHiding: false,

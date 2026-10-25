@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { ChatShellProvider } from "@/contexts/ChatShellContext";
+import { LanguageProvider } from "@/contexts/LanguageContext";
+import LanguageSelector from "@/components/LanguageSelector";
 import ChatConversationPage from "./page";
 
 vi.mock("next/navigation", () => ({
@@ -11,6 +13,7 @@ vi.mock("next/navigation", () => ({
 
 type RecordedRequest = { pathname: string; body: Record<string, unknown> };
 const requests: RecordedRequest[] = [];
+const modelListRequests: string[] = [];
 const pixel = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRZQAAAAASUVORK5CYII=";
 let models: { model_group: string; mode: string; providers: string[] }[];
 let imageResponse: () => Response;
@@ -37,8 +40,8 @@ function responseStream() {
   );
 }
 
-function renderChat() {
-  return renderWithProviders(
+function renderChat(language?: "en" | "zh-CN") {
+  const chat = (
     <ChatShellProvider
       accessToken="sk-media-test"
       userId="media-test-user"
@@ -47,7 +50,17 @@ function renderChat() {
       premiumUser={false}
     >
       <ChatConversationPage />
-    </ChatShellProvider>,
+    </ChatShellProvider>
+  );
+  return renderWithProviders(
+    language ? (
+      <LanguageProvider defaultLanguage={language} userId="media-test-user" storageScope="chat-test">
+        <LanguageSelector />
+        {chat}
+      </LanguageProvider>
+    ) : (
+      chat
+    ),
   );
 }
 
@@ -68,6 +81,7 @@ beforeEach(() => {
   localStorage.clear();
   testQueryClient.clear();
   requests.length = 0;
+  modelListRequests.length = 0;
   models = [
     { model_group: "research-chat", mode: "chat", providers: ["openai"] },
     { model_group: "studio-image", mode: "image_generation", providers: ["openai"] },
@@ -82,7 +96,10 @@ beforeEach(() => {
       const request =
         input instanceof Request ? input : new Request(new URL(String(input), window.location.origin), init);
       const pathname = new URL(request.url).pathname;
-      if (pathname.endsWith("/model_group/info")) return Response.json({ data: models });
+      if (pathname.endsWith("/model_group/info")) {
+        modelListRequests.push(pathname);
+        return Response.json({ data: models });
+      }
       if (pathname.endsWith("/v1/mcp/server")) {
         return Response.json([{ server_id: "research-tools", server_name: "research-tools" }]);
       }
@@ -116,6 +133,69 @@ afterEach(() => {
 });
 
 describe("chat image workflows", () => {
+  it("已显示的附件提示随语言切换更新，不清空草稿、附件或重新请求模型", async () => {
+    const user = userEvent.setup();
+    renderChat("en");
+    await screen.findByRole("button", { name: "research-chat" });
+    fireEvent.change(screen.getByRole("textbox", { name: "Message", exact: true }), {
+      target: { value: "Home Settings, untouched draft" },
+    });
+    await user.upload(screen.getByLabelText("Upload files"), new File(["draft"], "Home.txt", { type: "text/plain" }));
+    await screen.findByText("Home.txt");
+    const extraFiles = Array.from(
+      { length: 4 },
+      (_, index) => new File(["text"], `note-${index}.txt`, { type: "text/plain" }),
+    );
+    await user.upload(screen.getByLabelText("Upload files"), extraFiles);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Attach up to 4 files per message.");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Interface language" }), "zh-CN");
+    expect(screen.getByRole("alert")).toHaveTextContent("每条消息最多可附加 4 个文件。");
+    await user.selectOptions(screen.getByRole("combobox", { name: "界面语言" }), "en");
+    expect(screen.getByRole("alert")).toHaveTextContent("Attach up to 4 files per message.");
+    await chooseModel(user, "research-chat", "studio-image");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Remove the attached files before switching to image generation.",
+    );
+    await user.selectOptions(screen.getByRole("combobox", { name: "Interface language" }), "zh-CN");
+    expect(screen.getByRole("alert")).toHaveTextContent("切换到图片生成前，请先移除附件。");
+    expect(screen.getByRole("textbox", { name: "消息", exact: true })).toHaveValue("Home Settings, untouched draft");
+    expect(screen.getByRole("button", { name: "research-chat", exact: true })).toBeVisible();
+    expect(screen.getByRole("button", { name: "移除 Home.txt" })).toBeVisible();
+    expect(modelListRequests).toHaveLength(1);
+    expect(requests).toHaveLength(0);
+  });
+
+  // 切语言只更新文案，不能重复加载模型或重置当前草稿、所选模型与生成模式。
+  it("切换语言保留模型、图片模式和草稿，不重新请求模型列表或启动生成", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="en" userId="media-test-user" storageScope="chat-test">
+        <LanguageSelector />
+        <ChatShellProvider
+          accessToken="sk-media-test"
+          userId="media-test-user"
+          userEmail="researcher@example.com"
+          userRole="Internal Viewer"
+          premiumUser={false}
+        >
+          <ChatConversationPage />
+        </ChatShellProvider>
+      </LanguageProvider>,
+    );
+    await screen.findByRole("button", { name: "research-chat" });
+    await chooseModel(user, "research-chat", "studio-image");
+    fireEvent.change(screen.getByRole("textbox", { name: "Message" }), {
+      target: { value: "Home Settings, untouched draft" },
+    });
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Interface language" }), "zh-CN");
+    expect(screen.getByRole("button", { name: "生成图片" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "studio-image", exact: true })).toBeVisible();
+    expect(screen.getByPlaceholderText("描述您想生成的图片…")).toHaveValue("Home Settings, untouched draft");
+    expect(modelListRequests).toHaveLength(1);
+    expect(requests).toHaveLength(0);
+  });
+
   it("should render the permitted models and image controls for a research team member", async () => {
     renderChat();
     expect(await screen.findByRole("button", { name: "research-chat" })).toBeInTheDocument();

@@ -2,6 +2,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../../../tests/test-utils";
 import UserDropdown from "./UserDropdown";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 let mockUseAuthorizedImpl: () => {
   userId: string | null;
@@ -53,6 +54,7 @@ describe("UserDropdown", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     mockUseAuthorizedImpl = () => ({
       userId: "test-user-id",
       userEmail: "test@example.com",
@@ -70,6 +72,45 @@ describe("UserDropdown", () => {
   it("should render", () => {
     renderWithProviders(<UserDropdown onLogout={mockOnLogout} />);
     expect(getAccountTrigger()).toBeInTheDocument();
+  });
+
+  it("汉化账户占位名和固定角色，保留真实账户标识", async () => {
+    mockUseAuthorizedImpl = () => ({
+      userId: "default_user_id",
+      userEmail: null,
+      userRoleLabel: "Admin",
+      premiumUser: false,
+    });
+    const user = userEvent.setup();
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="zh-CN" userId="navbar-test" storageScope="navbar-test">
+        <UserDropdown onLogout={mockOnLogout} variant="sidebar" />
+      </LanguageProvider>,
+    );
+    const trigger = screen.getByRole("button", { name: "账户菜单，管理员，当前登录账户 default_user_id" });
+    expect(trigger).toHaveTextContent("账户");
+    await user.click(trigger);
+    expect(screen.getByText("default_user_id")).toBeInTheDocument();
+    expect(screen.getAllByText("管理员")).toHaveLength(2);
+  });
+
+  it("不把自定义角色和用户 ID 当作翻译键", async () => {
+    mockUseAuthorizedImpl = () => ({
+      userId: "Account",
+      userEmail: null,
+      userRoleLabel: "Home",
+      premiumUser: false,
+    });
+    const user = userEvent.setup();
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="zh-CN" userId="navbar-test" storageScope="navbar-test">
+        <UserDropdown onLogout={mockOnLogout} variant="sidebar" />
+      </LanguageProvider>,
+    );
+    const trigger = screen.getByRole("button", { name: "账户菜单，Home，当前登录账户 Account" });
+    expect(trigger).toHaveTextContent("Account");
+    await user.click(trigger);
+    expect(screen.getAllByText("Home")).toHaveLength(2);
   });
 
   it("should surface initials and account menu affordance", () => {

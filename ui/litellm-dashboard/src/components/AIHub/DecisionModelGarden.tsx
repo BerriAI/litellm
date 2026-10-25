@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useMemo, useState } from "react";
 import { BookOpen, Plus, Sparkles } from "lucide-react";
 
@@ -49,6 +50,7 @@ interface DecisionModelCardProps {
 }
 
 function DecisionModelCard({ row, canAddModels }: DecisionModelCardProps) {
+  const { t } = useLanguage();
   const { displayName } = getProviderLogoAndName(row.provider);
   const link = cardLink(row);
   return (
@@ -70,12 +72,12 @@ function DecisionModelCard({ row, canAddModels }: DecisionModelCardProps) {
           rel="noopener noreferrer"
           className="text-xs text-muted-foreground underline"
         >
-          {link.label}
+          {t(link.label)}
         </a>
         {canAddModels && (
           <Button size="xs" variant="outline" nativeButton={false} role="link" render={<a href={addModelHref(row)} />}>
             <Plus />
-            Add model
+            {t("Add model")}
           </Button>
         )}
       </div>
@@ -89,6 +91,7 @@ interface DecisionModelGardenProps {
 }
 
 const DecisionModelGarden: React.FC<DecisionModelGardenProps> = ({ accessToken, canAddModels }) => {
+  const { t } = useLanguage();
   const { data: costMap } = useModelCostMap(true, true);
   const { data: providerFields } = useProviderFields();
   const { data: proxyProviders, isLoading: proxyProvidersLoading } = useProxyDecisionProviders(accessToken);
@@ -110,6 +113,14 @@ const DecisionModelGarden: React.FC<DecisionModelGardenProps> = ({ accessToken, 
   const selfHostedCount = rows.filter((row) => row.route === "self-hosted").length;
   const needsUpgradeCount = rows.filter((row) => row.route === "needs-upgrade").length;
   const visibleRows = showAll ? rows : rows.slice(0, PREVIEW_COUNT);
+  const routedSummary = {
+    models: routedRows.length,
+    providers: routedProviderCount,
+    modelWord: plural(routedRows.length, "model", "models"),
+    providerWord: plural(routedProviderCount, "provider", "providers"),
+    answerWord: plural(routedRows.length, "answers", "answer"),
+    path: "/v1/decisions",
+  };
 
   return (
     <Card className="mt-6 px-6" data-testid="decision-model-garden">
@@ -118,15 +129,26 @@ const DecisionModelGarden: React.FC<DecisionModelGardenProps> = ({ accessToken, 
           <Sparkles className="size-4 text-muted-foreground" />
         </div>
         <div className="min-w-0 flex-1">
-          <h3 className="m-0 text-base font-semibold text-foreground">Decision models LiteLLM supports</h3>
+          <h3 className="m-0 text-base font-semibold text-foreground">{t("Decision models LiteLLM supports")}</h3>
           <p className="m-0 mt-0.5 text-sm text-muted-foreground">
-            {routedRows.length} decision {plural(routedRows.length, "model", "models")} across {routedProviderCount}{" "}
-            {plural(routedProviderCount, "provider", "providers")} {plural(routedRows.length, "answers", "answer")} on{" "}
-            <code>/v1/decisions</code>.
+            {t(
+              "{models} decision {modelWord} across {providers} {providerWord} {answerWord} on {path}.",
+              routedSummary,
+            )}
             {selfHostedCount > 0 &&
-              ` ${selfHostedCount} more ${plural(selfHostedCount, "is self-hosted and answers on its own route", "are self-hosted and answer on their own routes")}.`}
+              t(
+                selfHostedCount === 1
+                  ? " {count} more is self-hosted and answers on its own route."
+                  : " {count} more are self-hosted and answer on their own routes.",
+                { count: selfHostedCount },
+              )}
             {needsUpgradeCount > 0 &&
-              ` ${needsUpgradeCount} more ${plural(needsUpgradeCount, "needs", "need")} a newer LiteLLM version.`}
+              t(
+                needsUpgradeCount === 1
+                  ? " {count} more needs a newer LiteLLM version."
+                  : " {count} more need a newer LiteLLM version.",
+                { count: needsUpgradeCount },
+              )}
           </p>
         </div>
         <Button
@@ -137,7 +159,7 @@ const DecisionModelGarden: React.FC<DecisionModelGardenProps> = ({ accessToken, 
           render={<a href={DECISIONS_DOCS_URL} target="_blank" rel="noopener noreferrer" />}
         >
           <BookOpen />
-          Decisions docs
+          {t("Decisions docs")}
         </Button>
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -148,7 +170,7 @@ const DecisionModelGarden: React.FC<DecisionModelGardenProps> = ({ accessToken, 
       {rows.length > PREVIEW_COUNT && (
         <div className="mt-4 flex justify-center">
           <Button variant="ghost" type="button" onClick={() => setShowAll((value) => !value)}>
-            {showAll ? "Show fewer" : `Show all ${rows.length}`}
+            {showAll ? t("Show fewer") : t("Show all {count}", { count: rows.length })}
           </Button>
         </div>
       )}

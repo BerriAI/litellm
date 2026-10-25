@@ -1,3 +1,4 @@
+import { englishTranslate, type Translate } from "@/i18n/language";
 import { hydrateOssClassifier } from "@/components/add_model/jev_classifier_config";
 import {
   ComplexityRouterConfigPayload,
@@ -254,13 +255,14 @@ export const getReferencedModelsError = (
     defaultModel?: string;
   },
   availability: ModelAvailability,
+  t: Translate = englishTranslate,
 ): string | null => {
   if (
     params.classifierType === "jev" &&
     params.decisionDeploymentName &&
     !resolveAvailableModel(params.decisionDeploymentName, availability)
   ) {
-    return `Model(s) no longer available: ${params.decisionDeploymentName}`;
+    return t("Model(s) no longer available: {models}", { models: params.decisionDeploymentName });
   }
   const references = {
     tiers: params.tiers,
@@ -269,7 +271,7 @@ export const getReferencedModelsError = (
     embedding_model: params.semanticMatchingEnabled ? params.embeddingModel : undefined,
   };
   const missing = getMissingModels(references, availability);
-  return missing.length > 0 ? `Model(s) no longer available: ${missing.join(", ")}` : null;
+  return missing.length > 0 ? t("Model(s) no longer available: {models}", { models: missing.join(", ") }) : null;
 };
 
 // Every piece of AddAutoRouterTab's config state that a preset (or a reset to Custom) prefills in
