@@ -4060,6 +4060,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         )
 
                 if isinstance(callback, CustomLogger):  # custom logger class
+                    # Lazy: a module-level import of shadow_eval_logger is circular with this module
                     from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
                     model_call_details: dict = self.model_call_details

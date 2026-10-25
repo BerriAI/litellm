@@ -260,6 +260,7 @@ from litellm.proxy.policy_engine.pipeline_executor import (
 )
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
+from litellm.proxy.prompts.prompt_registry import parse_prompt_version
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.table_repositories import (
@@ -2898,8 +2899,6 @@ class ProxyLogging:
             and prompt_id is not None
             and (call_type == "completion" or call_type == "acompletion" or call_type == "aresponses")
         ):
-            from litellm.proxy.prompts.prompt_registry import parse_prompt_version
-
             await self._process_prompt_template(
                 data=data,
                 litellm_logging_obj=litellm_logging_obj,

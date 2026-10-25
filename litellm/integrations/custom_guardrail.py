@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
     redact_nested_match_and_regex_keys,
 )
+from litellm.llms import get_guardrail_translation_mapping
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.guardrails import (
     DEFAULT_GUARDRAIL_STREAM_SCOPE,
@@ -40,6 +41,7 @@ from litellm.types.utils import (
     GuardrailStatus,
     GuardrailTracingDetail,
     LLMResponseTypes,
+    ModelResponse,
     StandardLoggingGuardrailInformation,
 )
 
@@ -1056,8 +1058,6 @@ class CustomGuardrail(CustomLogger):
         call_type: str,
     ) -> tuple[dict, object]:  # mutable-ok: CustomLogger.async_logging_hook contract
         """logging_only: scan copies of the logged request and/or response according to logging_only_scope."""
-        from litellm.llms import get_guardrail_translation_mapping
-
         if not self.uses_apply_guardrail_interface():
             return kwargs, result
         if not self._event_hook_is_event_type(GuardrailEventHooks.logging_only):
@@ -1080,8 +1080,6 @@ class CustomGuardrail(CustomLogger):
         response: Final = (
             kwargs.get("async_complete_streaming_response") or kwargs.get("complete_streaming_response") or result
         )
-        from litellm.types.utils import ModelResponse
-
         output_translation: Final = (
             get_guardrail_translation_mapping(CallTypes.acompletion)()
             if isinstance(response, ModelResponse)
