@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.proxy.proxy_server import _should_include_fallback_errors
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
@@ -41,7 +42,9 @@ def test_apply_fallback_hidden_params_copies_from_fallback_response():
 
     Router._apply_fallback_hidden_params_to_item(
         fallback_item=chunk,
-        prepared_fallback_hidden_params=Router._prepare_fallback_hidden_params(fallback_response),
+        prepared_fallback_hidden_params=Router._prepare_fallback_hidden_params(
+            fallback_response
+        ),
     )
 
     assert chunk._hidden_params["api_base"] == "https://fallback.example"
@@ -190,10 +193,11 @@ def test_prepare_fallback_hidden_params_no_additional_headers():
     assert headers == {}
 
 
-def test_apply_fallback_hidden_params_keeps_chunk_response_cost():
-    chunk = litellm.ModelResponseStream(id="test", model="openai/fallback", choices=[])
-    chunk._hidden_params = {"response_cost": None}
-    fallback_response = litellm.ModelResponse()
+@pytest.mark.parametrize("chunk_cost", [0.0042, None])
+def test_apply_fallback_hidden_params_keeps_chunk_response_cost(chunk_cost):
+    chunk: Final = litellm.ModelResponseStream(id="test", model="openai/fallback", choices=[])
+    chunk._hidden_params = {"response_cost": chunk_cost}
+    fallback_response: Final = litellm.ModelResponse()
     fallback_response._hidden_params = {"response_cost": 0.0, "api_base": "https://fallback.example"}
 
     Router._apply_fallback_hidden_params_to_item(
@@ -201,12 +205,14 @@ def test_apply_fallback_hidden_params_keeps_chunk_response_cost():
         prepared_fallback_hidden_params=Router._prepare_fallback_hidden_params(fallback_response),
     )
 
-    assert chunk._hidden_params["response_cost"] is None
+    assert chunk._hidden_params["response_cost"] == chunk_cost
     assert chunk._hidden_params["api_base"] == "https://fallback.example"
 
 
 def test_apply_fallback_hidden_params_to_item_none_item():
-    Router._apply_fallback_hidden_params_to_item(None, ({"api_base": "http://fallback.example"}, {"x-custom": "value"}))
+    Router._apply_fallback_hidden_params_to_item(
+        None, ({"api_base": "http://fallback.example"}, {"x-custom": "value"})
+    )
 
 
 def test_apply_fallback_hidden_params_to_item_no_existing_additional_headers():
@@ -272,3 +278,52 @@ def test_should_include_fallback_errors_gated_by_operator_setting():
         assert _should_include_fallback_errors({}) is False
     finally:
         ps.general_settings = original
+
+
+async def _provider_stream_failing_before_first_chunk():
+    raise litellm.InternalServerError(message="provider failed", llm_provider="openai", model="gpt-fake")
+    yield
+
+
+@pytest.mark.asyncio
+async def test_streaming_fallback_chunks_do_not_report_zero_response_cost():
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary-model",
+                "litellm_params": {"model": "openai/gpt-fake", "api_key": "sk-fake"},
+            },
+            {
+                "model_name": "fallback-model",
+                "litellm_params": {
+                    "model": "openai/gpt-fake-2",
+                    "api_key": "sk-fake",
+                    "mock_response": "hello from the fallback",
+                    "input_cost_per_token": 0.01,
+                    "output_cost_per_token": 0.01,
+                },
+            },
+        ],
+        fallbacks=[{"primary-model": ["fallback-model"]}],
+    )
+    messages: Final = [{"role": "user", "content": "Hello"}]
+    # a real stream only to borrow a real logging object for the primary's wrapper
+    donor: Final = await litellm.acompletion(
+        model="openai/gpt-fake", messages=messages, stream=True, mock_response="x", api_key="sk-fake"
+    )
+
+    stream: Final = await router._acompletion_streaming_iterator(
+        model_response=CustomStreamWrapper(
+            completion_stream=_provider_stream_failing_before_first_chunk(),
+            model="gpt-fake",
+            custom_llm_provider="openai",
+            logging_obj=donor.logging_obj,
+        ),
+        messages=messages,
+        initial_kwargs={"model": "primary-model", "stream": True, "stream_options": {"include_usage": True}},
+    )
+    chunks: Final = [chunk async for chunk in stream]
+
+    # the fallback is priced, so the stream must never claim the call was free
+    assert chunks[-1].usage.cost > 0
+    assert all(chunk._hidden_params.get("response_cost") != 0.0 for chunk in chunks)
