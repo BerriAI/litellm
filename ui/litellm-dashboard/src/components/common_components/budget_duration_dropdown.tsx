@@ -27,7 +27,7 @@ const BudgetDurationDropdown: React.FC<BudgetDurationDropdownProps> = ({
   onChange,
   className = "",
   style = {},
-  placeholder = "n/a",
+  placeholder = "Never resets",
   showNeverResets = false,
 }) => {
   return (

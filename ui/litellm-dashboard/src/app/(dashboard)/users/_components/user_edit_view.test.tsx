@@ -322,6 +322,35 @@ describe("UserEditView", () => {
     expect(callArgs.metadata).toEqual(MOCK_USER_DATA.user_info.metadata);
   });
 
+  it("uses No change for an unset reset period in bulk edit", async () => {
+    const onSubmit = vi.fn();
+    const userDataWithUnsetResetPeriod = {
+      ...MOCK_USER_DATA,
+      user_info: {
+        ...MOCK_USER_DATA.user_info,
+        max_budget: null,
+        budget_duration: null,
+      },
+    };
+    renderWithProviders(
+      <UserEditView {...defaultProps} userData={userDataWithUnsetResetPeriod} onSubmit={onSubmit} isBulkEdit={true} />,
+    );
+
+    const resetPeriod = await screen.findByRole("combobox", { name: "Reset Budget" });
+    expect(resetPeriod).toHaveTextContent("No change");
+    await userEvent.click(resetPeriod);
+    await userEvent.click(await screen.findByRole("option", { name: "No change" }));
+
+    const unlimitedBudget = await screen.findByRole("checkbox", { name: "Unlimited Budget" });
+    await waitFor(() => expect(unlimitedBudget).toBeChecked());
+    await userEvent.click(unlimitedBudget);
+    fireEvent.change(screen.getByRole("spinbutton", { name: /max budget/i }), { target: { value: "12.5" } });
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ max_budget: "12.5", budget_duration: null });
+  });
+
   it("should set max_budget to null when unlimited budget is checked on submit", async () => {
     const onSubmitMock = vi.fn();
     const userDataWithNullBudget = {
