@@ -4590,6 +4590,7 @@ class LlmProviders(str, Enum):
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
     GDC = "gdc"
+    CLOUDGPU = "cloudgpu"
 
 
 # Create a set of all provider values for quick lookup

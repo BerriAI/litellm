@@ -249,5 +249,11 @@
       "/v1/responses",
       "/v1/messages"
     ]
+  },
+  "cloudgpu": {
+    "base_url": "https://cloudgpu.app/v1",
+    "api_key_env": "CGW_API_KEY",
+    "api_base_env": "CGW_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions"]
   }
 }
