@@ -6,7 +6,10 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
-from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
+from litellm.litellm_core_utils.core_helpers import (
+    copy_response_hidden_params,
+    set_provider_response_headers_in_hidden_params,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage
 from litellm.types.utils import ModelResponse
@@ -120,7 +123,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
                 choice["message"] = message
 
         returned_response: Final = ModelResponse(**response_json)
-        returned_response.hidden_params.update(model_response.hidden_params)
+        copy_response_hidden_params(model_response, returned_response)
         set_provider_response_headers_in_hidden_params(returned_response, response.headers)
 
         if custom_llm_provider is not None:

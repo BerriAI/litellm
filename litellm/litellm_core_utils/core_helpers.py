@@ -1010,6 +1010,12 @@ _HIDDEN_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _PROVIDER_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
 
 
+def copy_response_hidden_params(source: _CarriesHiddenParams, target: _CarriesHiddenParams) -> None:
+    """Preserve request metadata when a provider constructs a replacement response."""
+    hidden_params: Final = target.hidden_params
+    hidden_params.update(source.hidden_params)
+
+
 def set_provider_response_headers_in_hidden_params(
     response: _CarriesHiddenParams, headers: httpx.Headers | Mapping[str, str]
 ) -> None:
