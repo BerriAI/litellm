@@ -26,7 +26,9 @@ from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
     is_provider_error_chunk,
     parse_anthropic_error_event,
 )
+from litellm.llms.anthropic.pass_through.messages.transformation import AnthropicMessagesConfig
 from litellm.llms.anthropic.pass_through.safeguards import SafeguardsEvaluator
+from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
 from litellm.types.utils import Choices, Message, ModelResponse
 
 
@@ -1731,6 +1733,49 @@ async def _chunked(payload: bytes, size: int) -> AsyncIterator[bytes]:
 
 async def _drained(stream: AsyncIterator[bytes]) -> list[bytes]:
     return [chunk async for chunk in stream]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("config", (AnthropicMessagesConfig(), OpenAILikeAnthropicMessagesConfig()), ids=type)
+@pytest.mark.parametrize("stop_sequence", (None, ", 7"), ids=("null", "matched_stop"))
+async def test_native_stream_preserves_nullable_stop_fields_across_chunk_boundaries(
+    config: AnthropicMessagesConfig, stop_sequence: str | None
+) -> None:
+    logging_obj: Final = _make_logging_obj("native_stream_stop_fields")
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "model": logging_obj.model,
+                "content": [],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 19, "output_tokens": 0},
+            },
+        },
+        {
+            "type": "message_delta",
+            "delta": {
+                "stop_reason": "end_turn" if stop_sequence is None else "stop_sequence",
+                "stop_sequence": stop_sequence,
+            },
+            "usage": {"output_tokens": 0},
+        },
+        {"type": "message_stop"},
+    )
+    upstream: Final = b"".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events)
+    response: Final = httpx.Response(200, content=_chunked(upstream, 7))
+    stream: Final = config.get_async_streaming_response_iterator(
+        model=logging_obj.model,
+        httpx_response=response,
+        request_body={"model": logging_obj.model},
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert b"".join(await _drained(stream)) == upstream
 
 
 def _data_events(frames: Sequence[bytes]) -> list[Mapping[str, object]]:
