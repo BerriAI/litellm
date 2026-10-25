@@ -164,7 +164,7 @@ def coerce_numeric_form_fields(
 def _parse_binary_body(body: bytes) -> dict:
     """JSON sent under a binary content type still parses; real binary (protobuf) carries no params -> {}."""
     try:
-        parsed: Final = orjson.loads(body)
+        parsed: Final = _DECODED_JSON.validate_python(orjson.loads(body))
         if isinstance(parsed, dict):
             return parsed
     except orjson.JSONDecodeError:
@@ -189,6 +189,23 @@ def is_otlp_trace_request(request: HTTPConnection) -> bool:
     if request.scope.get("type") != "http":
         return False
     return request.scope.get("method") == "POST" and get_route_path(request.scope) in {"/v1/traces", "/v1/logs"}
+
+
+def _parse_form_metadata(raw_metadata: str) -> object:
+    """The JSON body path rejects a lone surrogate escape (``"\\ud800"``) with a
+    400 because no provider or database can encode it. ``json.loads`` accepts
+    the escape, so the multipart ``metadata`` field gets the same check."""
+    parsed: Final[object] = json.loads(raw_metadata)
+    try:
+        json.dumps(parsed, ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError as e:
+        raise ProxyException(
+            message=f"Invalid form payload: metadata {e}",
+            type="invalid_request_error",
+            param="metadata",
+            code=status.HTTP_400_BAD_REQUEST,
+        ) from e
+    return parsed
 
 
 async def read_request_body(request: Request | None) -> dict:
@@ -238,9 +255,13 @@ async def read_request_body(request: Request | None) -> dict:
                     param="request_body",
                     code=status.HTTP_400_BAD_REQUEST,
                 )
-            parsed_body = dict(form_data)
-            if "metadata" in parsed_body and isinstance(parsed_body["metadata"], str):
-                parsed_body["metadata"] = json.loads(parsed_body["metadata"])
+            form_body: Final = dict(form_data)
+            raw_metadata: Final = form_body.get("metadata")
+            parsed_body = (
+                {**form_body, "metadata": _parse_form_metadata(raw_metadata)}
+                if isinstance(raw_metadata, str)
+                else form_body
+            )
         else:
             # Read the request body
             body: Final = await request.body()
@@ -370,6 +391,16 @@ def safe_set_request_parsed_body(
 
 
 _safe_set_request_parsed_body: Final = safe_set_request_parsed_body
+
+
+def detach_request_parsed_body(
+    request: Request, request_data: Mapping[str, object]
+) -> dict[str, object]:  # mutable-ok: the client's body copy, which the base tag merges write into
+    client_body: Final = dict(request_data)
+    cached: Final[object] = request.scope.get("parsed_body")
+    if isinstance(cached, tuple) and cached[1] is request_data:
+        request.scope["parsed_body"] = (cached[0], client_body)  # rebind-ok: cache holds the client copy
+    return client_body
 
 
 def rewrite_request_model(

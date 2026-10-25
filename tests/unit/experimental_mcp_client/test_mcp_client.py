@@ -34,6 +34,7 @@ from mcp.types import (
     InitializeResult,
     JSONRPCError,
     JSONRPCMessage,
+    JSONRPCNotification,
     JSONRPCRequest,
     JSONRPCResponse,
     LoggingMessageNotificationParams,
@@ -61,8 +62,10 @@ from litellm.experimental_mcp_client.client import (
     strip_auth_scheme,
 )
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
+    ServerListFault,
     classify_list_exception,
     list_fault_http_status,
+    upstream_rate_limit,
 )
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     _format_byok_openapi_auth_header,
@@ -303,6 +306,36 @@ class _MockTransportClient(MCPClient):
         if self._transport_context is not None:
             return self._transport_context(self.server_url, http_client), http_client
         return streamable_http_client(self.server_url, http_client=http_client), http_client
+
+
+def _post_status_responder(failure_method: str, status_code: int) -> Callable[[httpx2.Request], httpx2.Response]:
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method != "POST":
+            return httpx2.Response(200)
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        assert isinstance(payload, (JSONRPCRequest, JSONRPCNotification))
+        if payload.method == "initialize":
+            assert isinstance(payload, JSONRPCRequest)
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "protocolVersion": LATEST_HANDSHAKE_VERSION,
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "status", "version": "1"},
+                    },
+                },
+            )
+        if payload.method == failure_method:
+            return httpx2.Response(status_code, headers={"Retry-After": "7"})
+        if payload.method == "tools/list":
+            assert isinstance(payload, JSONRPCRequest)
+            return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {"tools": []}})
+        return httpx2.Response(202)
+
+    return respond
 
 
 class _FakeExceptionGroup(Exception):
@@ -1467,8 +1500,8 @@ def test_mcp_extra_matches_proxy_extra_and_supports_streamable_http():
     }
 
     specifier: Final = Requirement(mcp_extra["mcp"]).specifier
-    assert not specifier.contains("1.28.1")
-    assert specifier.contains("2.2.0")
+    assert not specifier.contains("2.2.0")
+    assert specifier.contains("2.3.0")
     with (pyproject_path.parent / "uv.lock").open("rb") as f:
         locked = tomllib.load(f)
     mcp_versions: Final = [package["version"] for package in locked["package"] if package["name"] == "mcp"]
@@ -1860,6 +1893,32 @@ async def test_http_response_handler_preserves_success_and_http_errors(status_co
             with pytest.raises(httpx2.HTTPStatusError) as caught:
                 await asyncio.wait_for(operation, timeout=3)
             assert caught.value.response.status_code == status_code
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure_method,status_code",
+    [
+        ("notifications/initialized", 429),
+        ("notifications/initialized", 503),
+        ("tools/list", 429),
+    ],
+)
+async def test_list_tools_classifies_upstream_status_for_post_failures(failure_method: str, status_code: int) -> None:
+    client: Final = _MockTransportClient(
+        _post_status_responder(failure_method, status_code),
+        server_url="https://example.com/mcp",
+    )
+    with pytest.raises(httpx2.HTTPStatusError) as caught:
+        await client.list_tools(raise_on_error=True)
+
+    assert classify_list_exception(caught.value) == ServerListFault(tag="upstream_error", status_code=status_code)
+    rate_limit: Final = upstream_rate_limit(caught.value)
+    if status_code == 429:
+        assert rate_limit is not None
+        assert rate_limit.retry_after_seconds == 7
+    else:
+        assert rate_limit is None
 
 
 @pytest.mark.asyncio
@@ -4384,6 +4443,35 @@ async def test_persistent_tool_call_preserves_upstream_http_status_error() -> No
             assert caught.value.response.status_code == 401
             assert not session.reusable
         finally:
+            session.close()
+        await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [429, 503])
+async def test_persistent_tool_call_classifies_initialized_notification_status(status_code: int) -> None:
+    client: Final = _MockTransportClient(
+        _post_status_responder("notifications/initialized", status_code),
+        server_url="https://example.com/mcp",
+    )
+    session: Final = client.open_persistent_session()
+    try:
+        with pytest.raises(httpx2.HTTPStatusError) as caught:
+            await client.call_tool(
+                CallToolRequestParams(name="protected_tool", arguments={}),
+                raise_on_error=True,
+                persistent_session=session,
+            )
+
+        assert classify_list_exception(caught.value) == ServerListFault(tag="upstream_error", status_code=status_code)
+        rate_limit: Final = upstream_rate_limit(caught.value)
+        if status_code == 429:
+            assert rate_limit is not None
+            assert rate_limit.retry_after_seconds == 7
+        else:
+            assert rate_limit is None
+    finally:
+        if not session.closed:
             session.close()
         await asyncio.wait_for(session.wait_closed(), 5)
 

@@ -1,7 +1,8 @@
 """Support for OpenAI gpt-5 model family."""
 
 import re
-from typing import Final
+from collections.abc import Collection
+from typing import ClassVar, Final
 
 import litellm
 from litellm.utils import (
@@ -71,6 +72,10 @@ _get_effort_level = get_effort_level
 GPT_REASONING_SERIES_MARKERS: Final = ("gpt-5", "gpt-6")
 
 
+def unsupported_reasoning_effort_message(param: str, level: str, model: str) -> str:
+    return f"{param}={level} is not supported for {model}. To drop unsupported params set `litellm.drop_params = True`"
+
+
 def is_gpt_reasoning_series_name(model: str) -> bool:
     normalized: Final = model.split("/")[-1]
     return any(marker in model for marker in GPT_REASONING_SERIES_MARKERS) and "gpt-5-chat" not in normalized
@@ -85,6 +90,9 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
     - Dropping unsupported ``temperature`` values when requested.
     - Support for GPT-5-Codex models optimized for code generation.
     """
+
+    OPT_IN_REASONING_EFFORTS: ClassVar[frozenset[str]] = frozenset(("xhigh",))
+    ROUTE_SPECIFIC_REASONING_EFFORTS: ClassVar[frozenset[str]] = frozenset(("max",))
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
@@ -205,21 +213,49 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         return False
 
     @classmethod
-    def _is_reasoning_effort_level_explicitly_disabled(cls, model: str, level: str) -> bool:
+    def is_reasoning_effort_level_explicitly_disabled(cls, model: str, level: str) -> bool:
         """Return True only when the model map explicitly sets the capability to False.
 
-        Unlike ``_supports_reasoning_effort_level`` (which requires an explicit True),
-        this method returns True only when ``supports_{level}_reasoning_effort`` is
-        explicitly set to ``False`` in the model map.  A missing key is treated as
-        supported (i.e. this method returns False = not disabled).
-
-        Use this for opt-out checks where unknown models should be allowed through.
+        A missing key is not a disable. Unknown models pass through.
         """
         return is_explicitly_disabled_factory(
             model=cls._model_map_lookup_name(model),
             custom_llm_provider=None,
             key=f"supports_{level}_reasoning_effort",
         )
+
+    @classmethod
+    def _is_reasoning_effort_level_explicitly_disabled(cls, model: str, level: str) -> bool:
+        return cls.is_reasoning_effort_level_explicitly_disabled(model, level)
+
+    @classmethod
+    def refuses_reasoning_effort_level(cls, model: str, level: str) -> bool:
+        """The chat gate for any requested effort level, read off the model's map row alone.
+
+        An opt-in level (xhigh here; Azure adds none) is refused unless the row says true, since
+        the providers rejected it on most of the family when it arrived. Every other level is
+        refused only when the row says false: a model the map never heard of, or a row without the
+        flag, keeps forwarding what it was sent, and a level with no flag at all (medium, high) is
+        never refused. So a new model in the family needs its map row and no code change, the
+        row's supports_<level>_reasoning_effort flags being the whole contract.
+
+        A route-specific level (max) is never refused by either gate: the same model honors it
+        on Responses and refuses it on Chat Completions, so one row flag cannot gate it on
+        either route. Chat forwards it for the Responses bridge and a plain chat call gets the
+        provider's own 400, exactly as before the gate read every level.
+        """
+        if level in cls.ROUTE_SPECIFIC_REASONING_EFFORTS:
+            return False
+        if level in cls.OPT_IN_REASONING_EFFORTS:
+            return not cls._supports_reasoning_effort_level(model, level)
+        return cls.is_reasoning_effort_level_explicitly_disabled(model, level)
+
+    @classmethod
+    def row_disables_reasoning_effort_level(cls, model: str, level: str) -> bool:
+        """The Responses gate: opt-out for every level except the route-specific ones."""
+        if level in cls.ROUTE_SPECIFIC_REASONING_EFFORTS:
+            return False
+        return cls.is_reasoning_effort_level_explicitly_disabled(model, level)
 
     def get_supported_openai_params(self, model: str) -> list:
         if self.is_model_gpt_5_search_model(model):
@@ -270,6 +306,8 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
+        *,
+        declared_reasoning_efforts: Collection[str] = (),
     ) -> dict:
         if self.is_model_gpt_5_search_model(model):
             if "max_tokens" in non_default_params:
@@ -281,12 +319,12 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 drop_params=drop_params,
             )
 
-        # Get raw reasoning_effort and effective effort level for all guards.
-        # Use effective_effort (extracted string) for xhigh validation, "none" checks, and
-        # tool/sampling guards — dict inputs like {"effort": "none", "summary": "detailed"}
-        # must be treated as effort="none" to avoid incorrect tool-drop or sampling errors.
-        raw_reasoning_effort = non_default_params.get("reasoning_effort") or optional_params.get("reasoning_effort")
-        effective_effort: Final = get_effort_level(raw_reasoning_effort)
+        # Dict inputs like {"effort": "none", "summary": "detailed"} are judged by their effort
+        # string so the gate, the sampling guard, and the temperature guard all see one level.
+        raw_reasoning_effort: Final = non_default_params.get("reasoning_effort") or optional_params.get(
+            "reasoning_effort"
+        )
+        requested_effort: Final = get_effort_level(raw_reasoning_effort)
 
         # Normalize dict reasoning_effort to string for Chat Completions API.
         # Example: {"effort": "high", "summary": "detailed"} -> "high"
@@ -298,31 +336,24 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 if "reasoning_effort" in optional_params:
                     optional_params["reasoning_effort"] = normalized
 
-        if effective_effort == "xhigh":
-            # xhigh is an opt-in capability: only allow if model explicitly supports it.
-            if not self._supports_reasoning_effort_level(model, effective_effort):
-                if litellm.drop_params or drop_params:
-                    non_default_params.pop("reasoning_effort", None)
-                    optional_params.pop("reasoning_effort", None)
-                else:
-                    raise litellm.utils.UnsupportedParamsError(
-                        message=(f"reasoning_effort={effective_effort} is not supported for this model."),
-                        status_code=400,
-                    )
-        elif effective_effort in ("minimal", "low"):
-            # minimal/low are opt-out: unknown models pass through; only block when
-            # the model map explicitly sets supports_{level}_reasoning_effort=false.
-            # Example: gpt-5.5-pro only accepts {medium, high, xhigh}, so it sets
-            # supports_low_reasoning_effort=false (and supports_minimal=false).
-            if self._is_reasoning_effort_level_explicitly_disabled(model, effective_effort):
-                if litellm.drop_params or drop_params:
-                    non_default_params.pop("reasoning_effort", None)
-                    optional_params.pop("reasoning_effort", None)
-                else:
-                    raise litellm.utils.UnsupportedParamsError(
-                        message=(f"reasoning_effort={effective_effort} is not supported for this model."),
-                        status_code=400,
-                    )
+        if (
+            requested_effort is not None
+            and requested_effort not in declared_reasoning_efforts
+            and self.refuses_reasoning_effort_level(model, requested_effort)
+        ):
+            if litellm.drop_params or drop_params:
+                non_default_params.pop("reasoning_effort", None)
+                optional_params.pop("reasoning_effort", None)
+            else:
+                raise litellm.utils.UnsupportedParamsError(
+                    message=unsupported_reasoning_effort_message("reasoning_effort", requested_effort, model),
+                    status_code=400,
+                )
+
+        # The level the provider will see: None once dropped, so the guards below judge by the model's default effort
+        effective_effort: Final = get_effort_level(
+            non_default_params.get("reasoning_effort") or optional_params.get("reasoning_effort")
+        )
 
         ################################################################
         # max_tokens is not supported for gpt-5 models on OpenAI API

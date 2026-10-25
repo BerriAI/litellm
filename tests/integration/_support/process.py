@@ -893,7 +893,7 @@ def owned_proxy_process(
                 limits=GATEWAY_LIMITS,
             ) as client:
                 yield OwnedProxy(
-                    Gateway(client, gateway.key, gateway.upstream_url, owned.database_url),
+                    Gateway(client, gateway.key, gateway.upstream_url, owned.database_url, workers),
                     process,
                     launch.log,
                     healthcheck,

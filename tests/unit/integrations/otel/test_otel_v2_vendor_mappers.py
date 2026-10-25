@@ -7,6 +7,7 @@ backends, so one trace lights up every configured destination.
 
 import json
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from itertools import chain
 from typing import Final
 
@@ -578,6 +579,32 @@ def test_langfuse_usage_details_omit_zero_cache_and_reasoning_counts():
         }
     )
     assert usage == {"input": 12, "output": 8, "total": 20}
+
+
+def _langfuse_payload() -> dict[str, object]:
+    return {
+        "call_type": "acompletion",
+        "custom_llm_provider": "openai",
+        "model": "gpt-4o",
+        "completionStartTime": 1791547299.0,
+    }
+
+
+def test_langfuse_mapper_sends_the_completion_start_time_as_the_sdks_json_string():
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _langfuse_payload(), completion_start_seconds=1791547200.25
+    )
+
+    attrs: Final = LangfuseMapper().map(data)
+
+    sent: Final = datetime.fromisoformat(json.loads(attrs["langfuse.observation.completion_start_time"]))
+    assert sent == datetime(2026, 10, 9, 12, 0, 0, 250000, tzinfo=timezone.utc)
+
+
+def test_langfuse_mapper_ignores_the_payloads_end_time_fallback_when_litellm_recorded_no_completion_start():
+    attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(_langfuse_payload()))
+
+    assert "langfuse.observation.completion_start_time" not in attrs
 
 
 def test_langfuse_mapper_names_the_trace_from_the_caller():

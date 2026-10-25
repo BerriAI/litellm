@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 # them. The only caller strips the capture, which is what those `\s*` were doing.
 JSON_FENCE_RE: Final = re.compile(r"```(?:json)?(.*?)```", re.DOTALL | re.IGNORECASE)
 _OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def default_router_provider() -> Router | None:
@@ -44,13 +45,13 @@ def parse_json_verdict(raw: str) -> dict[str, object]:  # mutable-ok: plain pars
         text = fenced.group(1).strip()  # rebind-ok: progressively narrowed to the JSON payload
     parsed: object
     try:
-        parsed = json.loads(text)
+        parsed = _DECODED_JSON.validate_python(json.loads(text))
     except json.JSONDecodeError:
         start: Final = text.find("{")
         end: Final = text.rfind("}")
         if start == -1 or end <= start:
             raise
-        parsed = json.loads(text[start : end + 1])
+        parsed = _DECODED_JSON.validate_python(json.loads(text[start : end + 1]))
     if not isinstance(parsed, dict):
         raise ValueError("judge response is not a JSON object")
     return {str(k): v for k, v in parsed.items()}
