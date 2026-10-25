@@ -45,5 +45,30 @@ describe("MyUserTab", () => {
     expect(screen.getByText("member@example.com")).toBeInTheDocument();
     expect(screen.getByText("model-one")).toBeInTheDocument();
     expect(screen.getByText("TPM: 1,000")).toBeInTheDocument();
+    expect(screen.getByText("Never resets")).toBeInTheDocument();
+  });
+
+  it("shows the next reset time when the member budget has a reset window", () => {
+    vi.mocked(useMyTeamMember).mockReturnValue({
+      data: {
+        user_id: "user-1",
+        user_email: "member@example.com",
+        team_id: "team-1",
+        role: "user",
+        spend: 12.5,
+        total_spend: 30,
+        litellm_budget_table: {
+          max_budget: 100,
+          budget_duration: "30d",
+          budget_reset_at: new Date(2026, 6, 15, 12, 0, 0).toISOString(),
+        },
+      },
+      isLoading: false,
+      error: null,
+    } as ReturnType<typeof useMyTeamMember>);
+
+    renderWithProviders(<MyUserTab teamId="team-1" />);
+
+    expect(screen.getByText("Resets Jul 15, 2026 12:00")).toBeInTheDocument();
   });
 });

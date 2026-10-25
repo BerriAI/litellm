@@ -1128,7 +1128,10 @@ async def test_commit_spend_updates_to_db_writes_team_member_spend_in_one_roster
     assert "members_with_roles @> jsonb_build_array(jsonb_build_object('user_id', member.user_id))" in statement
     assert "ON CONFLICT (user_id, team_id) DO UPDATE" in statement
     assert 'spend = "LiteLLM_TeamMembership".spend + EXCLUDED.spend' in statement
-    assert 'total_spend = "LiteLLM_TeamMembership".total_spend + EXCLUDED.total_spend' in statement
+    assert (
+        'total_spend = GREATEST("LiteLLM_TeamMembership".total_spend, "LiteLLM_TeamMembership".spend)'
+        " + EXCLUDED.total_spend"
+    ) in statement
 
 
 @pytest.mark.asyncio

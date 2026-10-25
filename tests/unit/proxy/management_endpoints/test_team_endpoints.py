@@ -12562,6 +12562,36 @@ async def test_team_member_me_returns_caller_membership(mock_db_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "spend, stored_total, reported_total",
+    [(612.4, 148.1, 612.4), (12.25, 97.8, 97.8)],
+    ids=["legacy_row_floors_to_cycle_spend", "healthy_row_keeps_its_total"],
+)
+async def test_team_member_me_reports_total_spend_no_lower_than_cycle_spend(
+    mock_db_client, spend, stored_total, reported_total
+):
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_me
+
+    team_id = "team-me-floor"
+    caller_id = "alice@example.com"
+    team = _build_team_for_me(team_id, [{"user_id": caller_id, "user_email": None, "role": "user"}])
+    membership = _build_membership_for_me(caller_id, team_id, spend=spend).model_copy(
+        update={"total_spend": stored_total}
+    )
+    p_team, p_membership, p_user = _patch_member_me_helpers(team=team, membership=membership, user=None)
+    with p_team, p_membership, p_user:
+        response = await team_member_me(
+            http_request=MagicMock(spec=Request),
+            team_id=team_id,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id=caller_id),
+        )
+
+    assert (response.spend, response.total_spend) == (spend, reported_total)
+
+
+@pytest.mark.asyncio
 async def test_team_member_me_matches_email_only_member(mock_db_client):
     """
     Members onboarded by email may have user_id=None on the stored entry —
@@ -16608,7 +16638,7 @@ async def test_reset_team_member_spend_fn_success(monkeypatch):
         litellm_budget_table=LiteLLM_BudgetTable(budget_id="b1", max_budget=50.0),
     )
     mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=membership_row)
-    mock_prisma_client.db.litellm_teammembership.update = AsyncMock(return_value=membership_row)
+    mock_prisma_client.db.execute_raw = AsyncMock(return_value=1)
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", real_cache)
@@ -16631,13 +16661,74 @@ async def test_reset_team_member_spend_fn_success(monkeypatch):
     assert response["spend"] == 0.0
     assert response["previous_spend"] == 10.0
     assert response["max_budget"] == 50.0
-    mock_prisma_client.db.litellm_teammembership.update.assert_awaited_once_with(
-        where={"user_id_team_id": {"user_id": "member-1", "team_id": "team-1"}},
-        data={"spend": 0.0},
-    )
+    statement, reset_user_id, reset_team_id, reset_to = mock_prisma_client.db.execute_raw.await_args.args
+    assert (reset_user_id, reset_team_id, reset_to) == ("member-1", "team-1", 0.0)
+    assert "total_spend = GREATEST(total_spend, spend)" in statement
+    assert "spend >= $3" in statement
     assert await real_cache.async_get_cache(key="team-1_member-1") is None
     assert await real_cache.async_get_cache(key="team_membership:member-1:team-1") is None
     assert real_spend_counter_cache.in_memory_cache.get_cache(key="spend:team_member:member-1:team-1") == 0.0
+
+
+@pytest.mark.asyncio
+async def test_reset_team_member_spend_fn_stale_spend_returns_409_and_keeps_caches(monkeypatch):
+    """The reset validates reset_to against a spend it read a moment ago. If the row moved
+    underneath it (a flush landed, another admin reset first) the guarded UPDATE matches no
+    row, and the endpoint must say so instead of reporting a reset that never happened."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    mock_prisma_client = MagicMock()
+    real_cache = UserApiKeyCache()
+    await real_cache.async_set_cache(key="team_membership:member-1:team-1", value="cached-membership")
+    real_spend_counter_cache = DualCache()
+    real_spend_counter_cache.in_memory_cache.set_cache(key="spend:team_member:member-1:team-1", value=999.0)
+
+    membership_row = LiteLLM_TeamMembership(user_id="member-1", team_id="team-1", spend=10.0)
+    mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=membership_row)
+    mock_prisma_client.db.execute_raw = AsyncMock(return_value=0)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", real_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache)
+
+    with patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
+        "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+        AsyncMock(return_value=LiteLLM_TeamTable(team_id="team-1")),
+    ), pytest.raises(HTTPException) as exc_info:
+        await reset_team_member_spend_fn(
+            team_id="team-1",
+            user_id="member-1",
+            data=ResetSpendRequest(reset_to=5.0),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-user"
+            ),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert await real_cache.async_get_cache(key="team_membership:member-1:team-1") == "cached-membership"
+    assert real_spend_counter_cache.in_memory_cache.get_cache(key="spend:team_member:member-1:team-1") == 999.0
+
+
+@pytest.mark.asyncio
+async def test_get_all_team_memberships_floors_total_spend_at_current_cycle_spend():
+    """Rows written before total_spend existed carry their history only in spend. /team/info
+    and /team/list both read through this helper, so a legacy row reports its lifetime spend
+    as at least the current cycle, while a healthy row keeps its own total."""
+    from litellm.proxy.management_endpoints.team_endpoints import get_all_team_memberships
+
+    legacy_row = MagicMock()
+    legacy_row.model_dump = lambda: {"user_id": "legacy", "team_id": "team-1", "spend": 612.4, "total_spend": 148.1}
+    healthy_row = MagicMock()
+    healthy_row.model_dump = lambda: {"user_id": "healthy", "team_id": "team-1", "spend": 12.25, "total_spend": 97.8}
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teammembership.find_many = AsyncMock(return_value=[legacy_row, healthy_row])
+
+    legacy, healthy = await get_all_team_memberships(mock_prisma_client, ["team-1"])
+
+    assert (legacy.spend, legacy.total_spend) == (612.4, 612.4)
+    assert (healthy.spend, healthy.total_spend) == (12.25, 97.8)
 
 
 @pytest.mark.asyncio
@@ -16755,7 +16846,7 @@ async def test_reset_team_member_spend_fn_proxy_admin_can_reset_own_spend(monkey
 
     membership_row = LiteLLM_TeamMembership(user_id="admin-user", team_id="team-1", spend=10.0)
     mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=membership_row)
-    mock_prisma_client.db.litellm_teammembership.update = AsyncMock(return_value=membership_row)
+    mock_prisma_client.db.execute_raw = AsyncMock(return_value=1)
 
     with patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
         "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
@@ -17994,6 +18085,7 @@ async def test_update_team_team_admin_resending_stored_member_defaults_is_not_an
     disable_audit_logging_for_mocked_team,
 ):
     import contextlib
+
     from litellm.models.budget import LiteLLM_BudgetTable
 
     with contextlib.ExitStack() as stack:
