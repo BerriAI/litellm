@@ -839,7 +839,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
-            _store_response_cost_before_usage_flattening(completion_response, kwargs)
+            _store_response_cost_before_usage_flattening(
+                completion_response,
+                cast(Mapping[str, object], kwargs),  # cast-ok: framework kwargs are a string-keyed request mapping
+            )
             _record_bridged_model_response(logging_obj, completion_response)
             anthropic_response: Final = ANTHROPIC_ADAPTER.translate_completion_output_params(
                 cast(ModelResponse, completion_response),
@@ -985,7 +988,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
-            _store_response_cost_before_usage_flattening(completion_response, kwargs)
+            _store_response_cost_before_usage_flattening(
+                completion_response,
+                cast(Mapping[str, object], kwargs),  # cast-ok: framework kwargs are a string-keyed request mapping
+            )
             _record_bridged_model_response(logging_obj, completion_response)
             anthropic_response: Final = ANTHROPIC_ADAPTER.translate_completion_output_params(
                 cast(ModelResponse, completion_response),
