@@ -76,6 +76,7 @@ else:
 
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 _OBJECT_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_CHOICE_MAPPINGS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
@@ -958,6 +959,11 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
                     message=error_message,
                 )
             choices = chunk.get("choices", [])
+            if any(choice.get("finish_reason") == "abort" for choice in _CHOICE_MAPPINGS.validate_python(choices)):
+                raise OpenAIError(
+                    status_code=500,
+                    message="Upstream generation aborted (finish_reason=abort)",
+                )
             choices = self._map_reasoning_to_reasoning_content(choices)
             fingerprint: Final = _OBJECT_MAPPING.validate_python(chunk).get("system_fingerprint")
 

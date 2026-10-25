@@ -1557,6 +1557,12 @@ class CustomStreamWrapper:
         else:  # openai / azure chat model
             if isinstance(chunk, ChatCompletionChunk):
                 self._openai_handler_receives_chat_chunks = True
+                if any(str(choice.finish_reason) == "abort" for choice in chunk.choices):
+                    raise litellm.InternalServerError(
+                        message="Upstream generation aborted (finish_reason=abort)",
+                        model=chunk.model,
+                        llm_provider=self.custom_llm_provider,
+                    )
             if self.custom_llm_provider in [
                 LlmProviders.AZURE.value,
                 LlmProviders.AZURE_AI.value,
