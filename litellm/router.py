@@ -610,6 +610,7 @@ _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
+_TEXT_INPUT_BATCH_ADAPTER: Final = TypeAdapter(list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
@@ -14348,12 +14349,13 @@ class Router:
         from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
 
         input_data: Final = request_kwargs.get("input")
-        if (
-            not messages
-            and isinstance(input_data, list)
-            and all(isinstance(item, str) for item in input_data)
-        ):
-            return False
+        if not messages:
+            try:
+                _TEXT_INPUT_BATCH_ADAPTER.validate_python(input_data, strict=True)
+            except ValidationError:
+                pass
+            else:
+                return False
 
         structured: Final = resolve_structured_messages(
             messages=cast(list[dict[str, object]] | None, messages),  # cast-ok: chat messages are plain dicts
