@@ -119,6 +119,7 @@ import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
 import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity_router_config";
 import type { AutoRouterPresetsResponse } from "@/lib/autorouter_presets";
 import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
+import type { VectorStoreListResponse } from "./vector_store_management/types";
 import type { RoutingDecision } from "./logs/detail/RoutingDecisionCard";
 import type {
   SpanDetail,
@@ -5545,28 +5546,23 @@ export const vectorStoreCreateCall = async (accessToken: string, formValues: Rec
   }
 };
 
-export const vectorStoreListCall = async (
-  accessToken: string,
-  page: number = 1,
-  page_size: number = 100,
-): Promise<any> => {
+export const vectorStoreListCall = async (accessToken: string): Promise<Pick<VectorStoreListResponse, "data">> => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/vector_store/list` : `/vector_store/list`;
+    const fetchPage = (page: number) =>
+      apiClient.get<VectorStoreListResponse>("/vector_store/list", {
+        accessToken,
+        query: { page, page_size: 100 },
+      });
+    const firstPage = await fetchPage(1);
+    const data = [...firstPage.data];
 
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      },
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.detail || "Failed to list vector stores");
+    // Dashboard tables and selectors need the full catalog. Older gateways may already return it on page one.
+    for (let page = 2; page <= firstPage.total_pages && data.length < firstPage.total_count; page++) {
+      const response = await fetchPage(page);
+      data.push(...response.data);
     }
 
-    return await response.json();
+    return { data };
   } catch (error) {
     console.error("Error listing vector stores:", error);
     throw error;

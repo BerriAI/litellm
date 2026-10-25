@@ -1156,6 +1156,19 @@ describe("getUiConfig runtime backend discovery", () => {
     expect(requestUrl.pathname).toBe("/rag/ingest");
   });
 
+  it("keeps vector store inventory on the management backend", async () => {
+    const { networking, mockFetch } = await loadNetworkingWithGateway("https://gateway.example.com");
+    const inventory = { object: "list", data: [], total_count: 0, current_page: 1, total_pages: 0 };
+    mockFetch.mockResolvedValueOnce(new Response(JSON.stringify(inventory)));
+
+    const result = await networking.vectorStoreListCall("token");
+
+    expect(result.data).toEqual([]);
+    const requestUrl = new URL(String(mockFetch.mock.calls.at(-1)?.[0]));
+    expect(requestUrl.origin).toBe("https://backend.example.com");
+    expect(requestUrl.pathname).toBe("/vector_store/list");
+  });
+
   it("lists indexes from the gateway", async () => {
     const { networking, mockFetch } = await loadNetworkingWithGateway("https://gateway.example.com");
     await networking.indexesListCall("token");
@@ -1176,5 +1189,92 @@ describe("getUiConfig runtime backend discovery", () => {
       url: "https://agent.example.com",
       discovery_mode: "well_known_fallback",
     });
+  });
+});
+
+describe("vectorStoreListCall complete dashboard inventory", () => {
+  const stores = Array.from({ length: 203 }, (_, index) => ({
+    vector_store_id: `vs_${String(index).padStart(3, "0")}`,
+    custom_llm_provider: "openai",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  }));
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    Networking.setGlobalLitellmHeaderName("Authorization");
+  });
+
+  it("loads every page with the configured authentication header", async () => {
+    const requests: { path: string; page: string | null; pageSize: string | null; auth: string | null }[] = [];
+    const mockFetch = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
+      const request = {
+        path: url.pathname,
+        page: url.searchParams.get("page"),
+        pageSize: url.searchParams.get("page_size"),
+        auth: new Headers(init?.headers).get("x-litellm-key"),
+      };
+      requests.push(request);
+      const page = requests.length;
+      const inventory = {
+        object: "list",
+        data: stores.slice((page - 1) * 100, page * 100),
+        current_page: page,
+        total_count: stores.length,
+        total_pages: 3,
+      };
+      return new Response(JSON.stringify(inventory));
+    });
+    vi.stubGlobal("fetch", mockFetch);
+    Networking.setGlobalLitellmHeaderName("x-litellm-key");
+
+    const response = await Networking.vectorStoreListCall("inventory-token");
+
+    expect(response.data).toEqual(stores);
+    expect(requests).toEqual([
+      { path: "/vector_store/list", page: "1", pageSize: "100", auth: "Bearer inventory-token" },
+      { path: "/vector_store/list", page: "2", pageSize: "100", auth: "Bearer inventory-token" },
+      { path: "/vector_store/list", page: "3", pageSize: "100", auth: "Bearer inventory-token" },
+    ]);
+  });
+
+  it("does not duplicate an older backend's already-complete first response", async () => {
+    const inventory = { object: "list", data: stores, total_count: stores.length, current_page: 1, total_pages: 3 };
+    const mockFetch = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(inventory)));
+    vi.stubGlobal("fetch", mockFetch);
+
+    const response = await Networking.vectorStoreListCall("inventory-token");
+
+    expect(response.data).toEqual(stores);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an empty inventory empty without requesting another page", async () => {
+    const inventory = { object: "list", data: [], total_count: 0, current_page: 1, total_pages: 0 };
+    const mockFetch = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(inventory)));
+    vi.stubGlobal("fetch", mockFetch);
+
+    const response = await Networking.vectorStoreListCall("inventory-token");
+
+    expect(response.data).toEqual([]);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a later page error instead of returning a partial inventory", async () => {
+    const inventory = {
+      object: "list",
+      data: stores.slice(0, 100),
+      total_count: stores.length,
+      current_page: 1,
+      total_pages: 3,
+    };
+    const mockFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify(inventory)))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: "Catalog page unavailable" }), { status: 503 }));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await expect(Networking.vectorStoreListCall("inventory-token")).rejects.toThrow("Catalog page unavailable");
   });
 });

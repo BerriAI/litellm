@@ -22792,12 +22792,12 @@ export interface paths {
          * @description List all available vector stores with optional filtering and pagination.
          *     Combines both in-memory vector stores and those stored in the database.
          *     Database is the source of truth for stores it owns: deleted stores are removed from memory, updated stores
-         *     sync to memory. Stores declared in the config file are owned by the config file, are always listed, and are
-         *     never overwritten by database rows.
+         *     sync to memory. Stores declared in the config file are owned by the config file, remain in the catalog, and
+         *     are never overwritten by database rows. Accessible stores are ordered by vector_store_id before pagination.
          *
          *     Parameters:
-         *     - page: int - Page number for pagination (default: 1)
-         *     - page_size: int - Number of items per page (default: 100)
+         *     - page: int - Positive page number for pagination (default: 1)
+         *     - page_size: int - Positive number of items per page (default: 100)
          */
         get: operations["list_vector_stores_v1_vector_store_list_get"];
         put?: never;
@@ -24098,12 +24098,12 @@ export interface paths {
          * @description List all available vector stores with optional filtering and pagination.
          *     Combines both in-memory vector stores and those stored in the database.
          *     Database is the source of truth for stores it owns: deleted stores are removed from memory, updated stores
-         *     sync to memory. Stores declared in the config file are owned by the config file, are always listed, and are
-         *     never overwritten by database rows.
+         *     sync to memory. Stores declared in the config file are owned by the config file, remain in the catalog, and
+         *     are never overwritten by database rows. Accessible stores are ordered by vector_store_id before pagination.
          *
          *     Parameters:
-         *     - page: int - Page number for pagination (default: 1)
-         *     - page_size: int - Number of items per page (default: 100)
+         *     - page: int - Positive page number for pagination (default: 1)
+         *     - page_size: int - Positive number of items per page (default: 100)
          */
         get: operations["list_vector_stores_vector_store_list_get"];
         put?: never;

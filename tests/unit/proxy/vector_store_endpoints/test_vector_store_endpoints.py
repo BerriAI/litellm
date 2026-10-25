@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,7 +15,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
     LiteLLMVectorStoreEmbeddingExecutor,
     RouterVectorStoreEmbeddingExecutor,
 )
-from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, LiteLLM_ObjectPermissionTable, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.vector_store_endpoints.endpoints import (
     _update_request_data_with_litellm_managed_vector_store_registry,
     index_create,
@@ -23,6 +24,7 @@ from litellm.proxy.vector_store_endpoints.endpoints import (
 from litellm.proxy.vector_store_endpoints.management_endpoints import (
     _check_vector_store_access,
     create_vector_store_in_db,
+    list_vector_stores,
     new_vector_store,
 )
 from litellm.proxy.vector_store_endpoints.utils import (
@@ -36,6 +38,7 @@ from litellm.proxy.vector_store_files_endpoints.endpoints import (
 from litellm.types.utils import EmbeddingResponse, LlmProviders
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
 from litellm.vector_stores.main import _direct_vector_store_embedding_executor
+from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
 
 def _serialize_litellm_params(litellm_params):
@@ -3118,7 +3121,10 @@ class TestConfigOwnedVectorStores:
             first = await list_vector_stores(user_api_key_dict=self._admin())
             second = await list_vector_stores(user_api_key_dict=self._admin())
 
-        assert [(vs["vector_store_id"], vs["is_config"]) for vs in first["data"]] == [(self.DB_ID, False), (self.CONFIG_ID, True)]
+        assert [(vs["vector_store_id"], vs["is_config"]) for vs in first["data"]] == [
+            (self.CONFIG_ID, True),
+            (self.DB_ID, False),
+        ]
         assert second["data"] == first["data"]
         assert [vs["vector_store_id"] for vs in registry.vector_stores] == [self.CONFIG_ID, self.DB_ID]
 
@@ -3413,3 +3419,81 @@ def test_proxy_vector_store_writes_send_only_the_callers_metadata_when_the_raw_b
     assert response.status_code == 200, response.text
     assert len(sent_bodies) == 1
     assert sent_bodies[0].get("metadata") == CALLERS_METADATA
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("store_ids", "page", "expected_ids", "total_pages"),
+    [
+        (("vs_c", "vs_a", "vs_b"), 1, ("vs_a", "vs_b"), 2),
+        (("vs_b", "vs_c", "vs_a"), 1, ("vs_a", "vs_b"), 2),
+        (("vs_c", "vs_a", "vs_b"), 2, ("vs_c",), 2),
+        (("vs_c", "vs_a", "vs_b"), 3, (), 2),
+        (("vs_b", "vs_a"), 1, ("vs_a", "vs_b"), 1),
+        (("vs_b", "vs_a"), 2, (), 1),
+        ((), 1, (), 0),
+    ],
+)
+async def test_list_vector_stores_returns_the_requested_page_in_id_order(
+    monkeypatch: pytest.MonkeyPatch,
+    store_ids: tuple[str, ...],
+    page: int,
+    expected_ids: tuple[str, ...],
+    total_pages: int,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    stores: Final = [
+        LiteLLM_ManagedVectorStore(vector_store_id=identifier, custom_llm_provider="openai", is_config=True)
+        for identifier in store_ids
+    ]
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry(vector_stores=stores))
+    admin: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    response: Final = await list_vector_stores(user_api_key_dict=admin, page=page, page_size=2)
+
+    assert response == {
+        "object": "list",
+        "data": [
+            {"vector_store_id": identifier, "custom_llm_provider": "openai", "is_config": True, "litellm_params": None}
+            for identifier in expected_ids
+        ],
+        "total_count": len(store_ids),
+        "current_page": page,
+        "total_pages": total_pages,
+    }
+    assert tuple(store["vector_store_id"] for store in stores) == store_ids
+
+
+@pytest.mark.asyncio
+async def test_list_vector_stores_paginates_only_the_stores_granted_to_the_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    stores: Final = [
+        LiteLLM_ManagedVectorStore(vector_store_id=identifier, custom_llm_provider="openai", is_config=True)
+        for identifier in ("vs_c", "vs_b", "vs_a")
+    ]
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry(vector_stores=stores))
+    user: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-paged-catalog", vector_stores=["vs_a", "vs_c"]
+        ),
+    )
+
+    response: Final = await list_vector_stores(user_api_key_dict=user, page=2, page_size=1)
+
+    assert response == {
+        "object": "list",
+        "data": [
+            {"vector_store_id": "vs_c", "custom_llm_provider": "openai", "is_config": True, "litellm_params": None}
+        ],
+        "total_count": 2,
+        "current_page": 2,
+        "total_pages": 2,
+    }

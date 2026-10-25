@@ -1765,10 +1765,10 @@
       "count": 5
     },
     "no-restricted-syntax": {
-      "count": 139
+      "count": 138
     },
     "prefer-const": {
-      "count": 28
+      "count": 27
     }
   },
   "src/components/object_permissions_view.tsx": {

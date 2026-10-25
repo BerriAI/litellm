@@ -67,22 +67,42 @@ def assert_config_write_refused(gateway: Gateway) -> None:
         assert "config file" in str(error["error"]), refused.text
 
 
-def test_list_page_zero_returns_same_stores_as_page_one_and_page_size_zero_is_400(gateway: Gateway) -> None:
-    page_one: Final = gateway.request("GET", "/vector_store/list?page=1&page_size=100")
+@pytest.mark.parametrize("path", ["/vector_store/list", "/v1/vector_store/list"])
+@pytest.mark.parametrize(("parameter", "value"), [("page", 0), ("page", -1), ("page_size", 0), ("page_size", -1)])
+def test_list_rejects_non_positive_pagination(gateway: Gateway, path: str, parameter: str, value: int) -> None:
+    page_one: Final = gateway.request("GET", f"{path}?page=1&page_size=100")
     assert page_one.status_code == 200, page_one.text
-    page_zero: Final = gateway.request("GET", "/vector_store/list?page=0&page_size=100")
-    assert page_zero.status_code == 200, page_zero.text
-
     page_one_ids: Final = {str(row["vector_store_id"]) for row in listed_rows(page_one)}
-    page_zero_ids: Final = {str(row["vector_store_id"]) for row in listed_rows(page_zero)}
-    assert page_one_ids == page_zero_ids
     assert CONFIG_STORE_ID in page_one_ids
-    assert CONFIG_STORE_ID in page_zero_ids
-    assert object_value(page_zero.json())["current_page"] == 0, page_zero.text
 
-    zero_page_size: Final = gateway.request("GET", "/vector_store/list?page=1&page_size=0")
-    assert zero_page_size.status_code == 400, zero_page_size.text
-    assert "page_size must be >= 1" in zero_page_size.text, zero_page_size.text
+    invalid: Final = gateway.request("GET", f"{path}?{parameter}={value}")
+    assert invalid.status_code == 400, invalid.text
+    assert f"{parameter} must be >= 1" in invalid.text, invalid.text
+
+
+@pytest.mark.parametrize("path", ["/vector_store/list", "/v1/vector_store/list"])
+def test_list_pages_cover_config_and_database_stores_once(gateway: Gateway, path: str) -> None:
+    initial: Final = gateway.request("GET", f"{path}?page_size=100")
+    assert initial.status_code == 200, initial.text
+    initial_ids: Final = tuple(str(row["vector_store_id"]) for row in listed_rows(initial))
+    assert len(initial_ids) == object_value(initial.json())["total_count"], initial.text
+
+    with gateway.scenario() as scenario:
+        prefix: Final = f"vs_pagination_{uuid.uuid4().hex}"
+        created_ids: Final = tuple(f"{prefix}_{suffix}" for suffix in ("c", "a", "b"))
+        for vector_store_id in created_ids:
+            gateway.post("/vector_store/new", {"vector_store_id": vector_store_id, "custom_llm_provider": "openai"})
+            scenario.cleanups.callback(gateway.post, "/vector_store/delete", {"vector_store_id": vector_store_id})
+
+        expected_ids: Final = sorted((*initial_ids, *created_ids))
+        total_pages: Final = (len(expected_ids) + 1) // 2
+        for page in range(1, total_pages + 2):
+            response = gateway.request("GET", f"{path}?page={page}&page_size=2")
+            assert response.status_code == 200, response.text
+            body = object_value(response.json())
+            assert [row["vector_store_id"] for row in listed_rows(response)] == expected_ids[(page - 1) * 2 : page * 2]
+            assert body["object"] == "list" and body["current_page"] == page, response.text
+            assert body["total_count"] == len(expected_ids) and body["total_pages"] == total_pages, response.text
 
 
 def burst_list(gateway: Gateway) -> tuple[int, str]:

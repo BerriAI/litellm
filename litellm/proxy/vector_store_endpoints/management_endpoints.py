@@ -365,13 +365,18 @@ async def list_vector_stores(
     List all available vector stores with optional filtering and pagination.
     Combines both in-memory vector stores and those stored in the database.
     Database is the source of truth for stores it owns: deleted stores are removed from memory, updated stores
-    sync to memory. Stores declared in the config file are owned by the config file, are always listed, and are
-    never overwritten by database rows.
+    sync to memory. Stores declared in the config file are owned by the config file, remain in the catalog, and
+    are never overwritten by database rows. Accessible stores are ordered by vector_store_id before pagination.
 
     Parameters:
-    - page: int - Page number for pagination (default: 1)
-    - page_size: int - Number of items per page (default: 100)
+    - page: int - Positive page number for pagination (default: 1)
+    - page_size: int - Positive number of items per page (default: 100)
     """
+    if page < 1:
+        raise HTTPException(
+            status_code=400,
+            detail=f"page must be >= 1, got page={page}",
+        )
     if page_size < 1:
         raise HTTPException(
             status_code=400,
@@ -434,19 +439,24 @@ async def list_vector_stores(
                     )
 
         # Filter vector stores based on access control
-        accessible_vector_stores: Final = []
-        for vs in await filter_listable_vector_stores(vector_store_map.values(), user_api_key_dict):
-            redacted = _with_ownership(vs)
-            redacted["litellm_params"] = _redact_sensitive_litellm_params(vs.get("litellm_params"))
-            accessible_vector_stores.append(redacted)
-
+        accessible_vector_stores: Final = tuple(
+            sorted(
+                await filter_listable_vector_stores(vector_store_map.values(), user_api_key_dict),
+                key=lambda store: store.get("vector_store_id", ""),
+            )
+        )
         total_count: Final = len(accessible_vector_stores)
         total_pages: Final = (total_count + page_size - 1) // page_size
+        page_start: Final = (page - 1) * page_size
 
         # Format response using LiteLLM_ManagedVectorStoreListResponse
         response: Final = LiteLLM_ManagedVectorStoreListResponse(
             object="list",
-            data=accessible_vector_stores,
+            data=[
+                _with_ownership(vs)
+                | LiteLLM_ManagedVectorStore(litellm_params=_redact_sensitive_litellm_params(vs.get("litellm_params")))
+                for vs in accessible_vector_stores[page_start : page_start + page_size]
+            ],
             total_count=total_count,
             current_page=page,
             total_pages=total_pages,
