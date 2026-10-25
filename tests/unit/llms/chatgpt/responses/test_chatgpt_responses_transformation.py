@@ -32,6 +32,29 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Generator[None, Non
 
 class TestChatGPTResponsesAPITransformation:
     @pytest.mark.parametrize(
+        ("input_value", "expected_input"),
+        [
+            ("Reply with OK", [{"role": "user", "content": "Reply with OK"}]),
+            ("", [{"role": "user", "content": ""}]),
+            (
+                [{"role": "user", "content": "Reply with OK"}],
+                [{"role": "user", "content": "Reply with OK"}],
+            ),
+        ],
+    )
+    def test_chatgpt_wraps_string_input_for_codex_responses(self, input_value, expected_input) -> None:
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.3-codex",
+            input=input_value,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == expected_input
+
+    @pytest.mark.parametrize(
         ("requested_tier", "expected_tier"),
         [("default", "default"), ("priority", "priority"), ("fast", "priority")],
     )
