@@ -4841,9 +4841,10 @@ async def test_centralized_common_checks_runs_for_raw_passthrough_without_auth()
     common_checks ran. The registration side defaults the same key to True, so
     the two disagreed about the same config.
     """
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
 
     route = "/chat/completions"
     token = UserAPIKeyAuth(api_key="sk-test")
