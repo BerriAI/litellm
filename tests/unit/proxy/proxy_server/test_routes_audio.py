@@ -386,4 +386,8 @@ def test_audio_transcription_text_format_rejects_malformed_response(
             "code": "500",
         }
     }
-    assert proxy_server.proxy_logging_obj.post_call_failure_hook.await_count == 1
+    logging_obj: Final = proxy_server.proxy_logging_obj
+    assert isinstance(logging_obj, MagicMock)
+    failure_hook: Final = logging_obj.post_call_failure_hook
+    assert isinstance(failure_hook, AsyncMock)
+    assert failure_hook.await_count == 1
