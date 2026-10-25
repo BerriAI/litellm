@@ -87,7 +87,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         payload_to_check: Final = {
             k: v
             for k, v in without_server_streaming_classification(data).items()
-            if not k.startswith("_") and k not in ("metadata", "litellm_logging_obj")
+            if not k.startswith("_") and k not in ("metadata", "litellm_metadata", "litellm_logging_obj")
         }
         verbose_proxy_logger.debug("PassThroughEndpointHandler: Using full payload for guardrail")
         return safe_dumps(payload_to_check)
