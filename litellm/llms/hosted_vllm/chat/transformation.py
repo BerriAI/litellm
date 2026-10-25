@@ -3,8 +3,11 @@ Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
 import json
-from collections.abc import Coroutine
-from typing import Final, Literal, cast, overload
+from collections.abc import Coroutine, Mapping
+from typing import TYPE_CHECKING, Final, Literal, cast, overload
+
+import httpx
+from pydantic import JsonValue
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_image_mime_type_from_url,
@@ -22,9 +25,23 @@ from litellm.types.llms.openai import (
     ChatCompletionVideoObject,
     ChatCompletionVideoUrlObject,
 )
+from litellm.types.utils import Choices, ModelResponse
 
 from ....utils import remove_additional_properties, remove_strict_from_schema
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+_VLLM_CHOICE_FIELDS: Final = ("stop_reason", "token_ids")
+
+
+def _vllm_choice_fields(choice: Choices) -> Mapping[str, object]:
+    provider_fields: Final[Mapping[str, object]] = (
+        choice.provider_specific_fields or {} if "provider_specific_fields" in choice else {}
+    )
+    return {field: provider_fields[field] for field in _VLLM_CHOICE_FIELDS if field in provider_fields}
 
 
 class HostedVLLMChatConfig(OpenAIGPTConfig):
@@ -105,6 +122,38 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
             non_default_params["reasoning_effort"] = thinking_effort
 
         return super().map_openai_params(non_default_params, optional_params, model, drop_params)
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: "LiteLLMLoggingObj",
+        request_data: dict[str, JsonValue],  # mutable-ok: BaseConfig signature
+        messages: list[AllMessageValues],  # mutable-ok: BaseConfig signature
+        optional_params: dict[str, JsonValue],  # mutable-ok: BaseConfig signature
+        litellm_params: dict[str, JsonValue],  # mutable-ok: BaseConfig signature
+        encoding: "Tokenizer | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
+    ) -> ModelResponse:
+        response: Final = super().transform_response(  # pyright: ignore[reportUnknownMemberType]  # OpenAIGPTConfig.transform_response takes bare dicts
+            model=model,
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data=request_data,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            encoding=encoding,
+            api_key=api_key,
+            json_mode=json_mode,
+        )
+        for choice in response.choices:
+            for field, value in _vllm_choice_fields(choice).items():
+                choice[field] = value
+        return response
 
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
