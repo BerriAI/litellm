@@ -680,6 +680,23 @@ describe("EntityUsage", () => {
     expect(await within(card).findByText("Showing 51-60 of 60")).toBeInTheDocument();
   });
 
+  it("refetches the first page at the chosen size when rows per page changes", async () => {
+    const user = userEvent.setup();
+    render(<StatefulEntityUsage {...defaultProps} entityType="team" />);
+    await user.click(screen.getByRole("button", { name: "Team Multi Select" }));
+    const card = await screen.findByTestId("team-tag-spend-card");
+    await user.click(within(card).getByRole("button", { name: "Go to next page" }));
+    expect(await within(card).findByText("Showing 51-60 of 60")).toBeInTheDocument();
+
+    await user.click(within(card).getByTestId("pagination-page-size"));
+    await user.click(await screen.findByRole("option", { name: "100" }));
+
+    expect(await within(card).findByText("Showing 1-60 of 60")).toBeInTheDocument();
+    expect(mockDailyActivityTagPageCall).toHaveBeenLastCalledWith(
+      expect.objectContaining({ teamId: "team-1", offset: 0, limit: 100 }),
+    );
+  });
+
   it("asks for tag spend only for exactly one team in the team view", async () => {
     render(<StatefulEntityUsage {...defaultProps} entityType="team" />);
     await waitFor(() => {
