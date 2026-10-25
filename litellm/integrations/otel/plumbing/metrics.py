@@ -21,8 +21,8 @@ from litellm._logging import verbose_logger
 from litellm.integrations.opentelemetry import (
     METRIC_METADATA_KEYS,
     TOKEN_TYPE_ATTRIBUTE,
-    _build_metric_attribute_filter,
-    _resolve_metric_attribute_filter,
+    build_metric_attribute_filter,
+    resolve_metric_attribute_filter,
 )
 from litellm.integrations.otel.model.metadata import time_to_first_chunk_seconds
 from litellm.integrations.otel.model.semconv import (
@@ -173,6 +173,7 @@ class _MetricKwargs(TypedDict, total=False):
     response_cost: ReadOnly[float | None]
     completion_start_time: ReadOnly[datetime | float | str | None]
     api_call_start_time: ReadOnly[datetime | float | str | None]
+    end_time: ReadOnly[datetime | float | str | None]
 
 
 def resolve_error_type(kwargs: Mapping[str, Any]) -> str:
@@ -307,7 +308,7 @@ class GenAIMetricRecorder:
 
         return common_attrs
 
-    def _bounded_attributes(self, kwargs: Mapping[str, Any]) -> MetricAttributes:
+    def _bounded_attributes(self, kwargs: Mapping[str, object]) -> MetricAttributes:
         """The datapoint attributes, capped at :data:`METRIC_ATTRIBUTE_CEILING`.
 
         The cap runs BEFORE the operator's include/exclude filter so the filter can
@@ -322,15 +323,15 @@ class GenAIMetricRecorder:
         attributes = None
         if self._callback_name in (None, "otel"):
             otel_settings: Final = (litellm.callback_settings or {}).get("otel") or {}
-            raw: Final = otel_settings.get("attributes") if isinstance(otel_settings, dict) else None
+            raw: Final[object] = otel_settings.get("attributes") if isinstance(otel_settings, dict) else None
             if raw is not None:
-                attributes = _build_metric_attribute_filter(raw)
+                attributes = build_metric_attribute_filter(raw)
         # A bad filter (include_list + exclude_list both set, an unfilterable name)
         # raises here; the caller (logger._record_metrics) surfaces it once at ERROR
         # so the operator-fixable config error is visible. Not cached on the raise
         # path -- _filter_resolved stays False -- so a corrected config takes effect
         # without reconstructing the recorder.
-        self._include, self._exclude = _resolve_metric_attribute_filter(attributes)
+        self._include, self._exclude = resolve_metric_attribute_filter(attributes)
         self._filter_resolved = True
         self._warn_about_metric_ineligible_names()
 
@@ -414,15 +415,12 @@ class GenAIMetricRecorder:
         if generation_time > 0:
             self._metrics.time_per_output_token.record(generation_time / completion_tokens, attributes=common_attrs)
 
-    def _record_response_duration(self, kwargs: Mapping[str, Any], end_time: datetime, common_attrs: dict) -> None:
+    def _record_response_duration(self, kwargs: _MetricKwargs, end_time: datetime, common_attrs: dict) -> None:
         api_call_start_time: Final = kwargs.get("api_call_start_time")
         if api_call_start_time is None:
             return
-        _end_time = kwargs.get("end_time") or end_time
-        if _end_time is None:
-            _end_time = datetime.now()
         api_call_start: Final = to_seconds(api_call_start_time)
-        end_ts: Final = to_seconds(_end_time)
+        end_ts: Final = to_seconds(kwargs.get("end_time") or end_time)
         if api_call_start is None or end_ts is None:
             return
         duration: Final = end_ts - api_call_start

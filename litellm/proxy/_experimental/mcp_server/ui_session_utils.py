@@ -125,9 +125,9 @@ async def acting_user_auth(user_api_key_auth: UserAPIKeyAuth) -> UserAPIKeyAuth:
 
     if not is_ui_session_credential(user_api_key_auth):
         return user_api_key_auth
-    from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+    from litellm.proxy.management_endpoints.common_utils import user_api_key_has_admin_view
 
-    if _user_has_admin_view(user_api_key_auth):
+    if user_api_key_has_admin_view(user_api_key_auth):
         return user_api_key_auth
     admitted: Final = await admitted_user_context(user_api_key_auth)
     return admitted if admitted is not None else user_api_key_auth
