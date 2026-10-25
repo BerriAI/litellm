@@ -54934,6 +54934,21 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "zai/GLM-5.3": {
+        "cache_creation_input_token_cost": 0,
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "zai",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://docs.z.ai/guides/overview/pricing",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
     "zai/glm-5.3-flash": {
         "cache_creation_input_token_cost": 0,
         "cache_read_input_token_cost": 3e-08,
@@ -54948,6 +54963,46 @@
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "source": "https://docs.z.ai/guides/overview/pricing",
+        "supports_vision": true
+    },
+    "zai/GLM-5.3-Flash": {
+        "cache_creation_input_token_cost": 0,
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 5e-07,
+        "litellm_provider": "zai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "source": "https://docs.z.ai/guides/overview/pricing",
+        "supports_vision": true
+    },
+    "zai/glm-5v-turbo": {
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "zai",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://docs.z.ai/guides/overview/pricing",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "zai/GLM-5V-Turbo": {
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "zai",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://docs.z.ai/guides/overview/pricing",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "zai/glm-5.1": {
