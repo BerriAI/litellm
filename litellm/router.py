@@ -14347,6 +14347,14 @@ class Router:
         from litellm.litellm_core_utils.prompt_templates.common_utils import request_contains_image_content
         from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
 
+        input_data: Final = request_kwargs.get("input")
+        if (
+            not messages
+            and isinstance(input_data, list)
+            and all(isinstance(item, str) for item in cast(list[object], input_data))
+        ):
+            return False
+
         structured: Final = resolve_structured_messages(
             messages=cast(list[dict[str, object]] | None, messages),  # cast-ok: chat messages are plain dicts
             request_kwargs=cast(dict[str, object], request_kwargs),  # cast-ok: the resolver only reads the mapping

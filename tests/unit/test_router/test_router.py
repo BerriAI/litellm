@@ -30099,6 +30099,20 @@ def test_image_routing_drop_declared_text_only_legs_for_responses_input_image():
     assert _candidate_ids(router, request_kwargs={"input": _IMAGE_RESPONSES_INPUT}) == ["vision"]
 
 
+@pytest.mark.parametrize(
+    ("messages", "expected"),
+    [(None, ("vision", "declared-text")), (_IMAGE_CHAT, ("vision",))],
+    ids=["text-batch", "image-messages-take-precedence"],
+)
+def test_image_routing_handles_text_batch_input_without_overriding_messages(
+    messages: list[dict[str, object]] | None, expected: tuple[str, ...]
+) -> None:
+    router: Final = _mixed_router(_VISION_LEG, _DECLARED_TEXT_LEG)
+    assert tuple(
+        _candidate_ids(router, messages=messages, request_kwargs={"input": ["safe text", "more safe text"]})
+    ) == expected
+
+
 def test_image_routing_send_image_to_the_group_when_every_leg_is_declared_text_only():
     other_text_leg = {**_DECLARED_TEXT_LEG, "model_info": {"id": "declared-text-2", "supports_vision": False}}
     router: Final = _mixed_router(_DECLARED_TEXT_LEG, other_text_leg)
