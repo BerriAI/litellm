@@ -2,9 +2,15 @@
 Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
+from __future__ import annotations
+
 import json
-from collections.abc import Coroutine
-from typing import Final, Literal, cast, overload
+from collections.abc import Coroutine, Mapping, Sequence
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, Literal, cast, overload
+
+import httpx
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_image_mime_type_from_url,
@@ -22,12 +28,62 @@ from litellm.types.llms.openai import (
     ChatCompletionVideoObject,
     ChatCompletionVideoUrlObject,
 )
+from litellm.types.utils import Choices, ModelResponse
 
 from ....utils import remove_additional_properties, remove_strict_from_schema
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+
+_VLLM_CHOICE_FIELDS: Final[tuple[str, ...]] = ("stop_reason", "token_ids")
+_PROVIDER_FIELDS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _preserve_vllm_choice_fields(choice: Choices) -> Choices:
+    raw_provider_fields: Final[object] = getattr(choice, "provider_specific_fields", None)
+    if not isinstance(raw_provider_fields, Mapping):
+        return choice
+    provider_fields: Final = _PROVIDER_FIELDS.validate_python(raw_provider_fields)
+    direct_fields: Final[Mapping[str, object]] = MappingProxyType(
+        {field: provider_fields[field] for field in _VLLM_CHOICE_FIELDS if field in provider_fields}
+    )
+    return choice.model_copy(update=direct_fields) if direct_fields else choice
+
 
 class HostedVLLMChatConfig(OpenAIGPTConfig):
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: Mapping[str, object],
+        messages: Sequence[AllMessageValues],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        encoding: Tokenizer | None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
+    ) -> ModelResponse:
+        response: Final = super().transform_response(  # pyright: ignore[reportUnknownMemberType]  # base contract uses unparameterized dicts
+            model=model,
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data=dict(request_data),
+            messages=list(messages),
+            optional_params=dict(optional_params),
+            litellm_params=dict(litellm_params),
+            encoding=encoding,
+            api_key=api_key,
+            json_mode=json_mode,
+        )
+        choices: Final = [_preserve_vllm_choice_fields(choice) for choice in response.choices]
+        return response.model_copy(update=MappingProxyType({"choices": choices}))
+
     def _convert_custom_tools_to_function_tools(self, tools: list[dict[str, object]]) -> list[dict[str, object]]:
         """
         vLLM chat completions currently accepts only OpenAI function tools.
