@@ -7,6 +7,7 @@ import time
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import TypeAdapter
 from typing_extensions import TypedDict
 
 from litellm import verbose_logger
@@ -155,7 +156,10 @@ class CooldownCache:
         The in-memory record's `timestamp + cooldown_time`, the deadline routing reads. The in-memory TTL is not
         used because it is capped for an entry backfilled from Redis. Redis itself is not read.
         """
-        return _record_deadline(self.in_memory_cache.get_cache(cooldown_key))
+        stored: Final = TypeAdapter(object).validate_python(
+            self.in_memory_cache.get_cache(cooldown_key)  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache.get_cache is unannotated
+        )
+        return _record_deadline(stored)
 
     @staticmethod
     @functools.lru_cache(maxsize=1024)
