@@ -150,10 +150,8 @@ def iter_message_text(data: Mapping[str, object]) -> Iterator[str]:
     for message in _iter_inspection_messages(data):
         if not isinstance(message, dict):
             continue
-        yield from _iter_text_parts_in_content(message.get("content"))
-        reasoning = message.get("reasoning_content")
-        if isinstance(reasoning, str) and reasoning:
-            yield reasoning
+        for key in ("content", "reasoning_content"):
+            yield from _iter_text_parts_in_content(message.get(key))
 
 
 def walk_user_text(data: dict[str, object], visit: Callable[[str], str]) -> int:
