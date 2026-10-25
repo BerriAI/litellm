@@ -28,7 +28,7 @@ import type { Team } from "../key_team_helpers/key_list";
 import { type CredentialItem, type ProviderCreateInfo, credentialCreateCall, modelAvailableCall } from "../networking";
 import CredentialModal from "../model_add/CredentialModal";
 import { federatedProviderOf } from "../model_add/credential_federation";
-import { buildCredential, withoutRestrictedFields } from "../model_add/credential_form_helpers";
+import { buildCredential, type CredentialSubmission } from "../model_add/credential_form_helpers";
 import { ProviderLogo } from "../molecules/models/ProviderLogo";
 import AccessGroupTagsCombobox from "./AccessGroupTagsCombobox";
 import AdvancedSettings from "./advanced_settings";
@@ -38,6 +38,8 @@ import ConnectionErrorDisplay from "./model_connection_test";
 import ProviderSpecificFields from "./provider_specific_fields";
 import { authTypesFor } from "./provider_auth_types";
 import { TEST_MODES } from "./add_model_modes";
+import DecisionModelNote from "./DecisionModelNote";
+import { type DecisionCatalog } from "@/lib/decisionModels";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { credentialsKeys } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import { extractProxyErrorMessage } from "@/lib/http/client";
@@ -59,6 +61,7 @@ interface AddModelFormProps {
   setShowAdvancedSettings: (show: boolean) => void;
   teams: Team[] | null;
   credentials: CredentialItem[];
+  decisionCatalog: DecisionCatalog;
 }
 
 const connectionTestModelName = (values: MountedFormValues): string | undefined => {
@@ -82,6 +85,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   setShowAdvancedSettings,
   teams,
   credentials,
+  decisionCatalog,
 }) => {
   const [testMode, setTestMode] = useState<string>("chat");
   const [isResultModalVisible, setIsResultModalVisible] = useState<boolean>(false);
@@ -99,6 +103,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   const guardrailsList = guardrailsData?.guardrails.map((g) => g.guardrail_name);
   const { data: tagsList } = useTags();
   const selectedCredentialName = useWatch({ control: form.control, name: "litellm_credential_name" });
+  const pickedProvider = useWatch({ control: form.control, name: "custom_llm_provider" });
   const queryClient = useQueryClient();
   const [isCredentialModalOpen, setIsCredentialModalOpen] = useState(false);
   const [credentialModalAuthTypeId, setCredentialModalAuthTypeId] = useState<string | undefined>();
@@ -109,8 +114,8 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
     isProxyAdminRole(userRole ?? "") && federatedProviderOf(selectedProvider) !== null;
   const selectedAuthType = authTypesFor(selectedProvider).find(({ id }) => id === selectedAuthTypeId);
 
-  const handleCreateCredential = async (values: Record<string, unknown>) => {
-    const credential = buildCredential(values, withoutRestrictedFields(values));
+  const handleCreateCredential = async (submission: CredentialSubmission) => {
+    const credential = buildCredential(submission, submission.credential_values);
     try {
       await credentialCreateCall(accessToken, credential);
     } catch (error) {
@@ -129,15 +134,20 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
     setIsCredentialModalOpen(true);
   };
 
-  const handleSubmit = async () => {
-    if (selectedAuthType?.credentialOnly && !selectedCredentialName) {
+  const rejectMissingCredential = (): boolean => {
+    const missing = selectedAuthType?.credentialOnly === true && !selectedCredentialName;
+    if (missing) {
       toast.error("Create or select a credential for this auth type");
-      return false;
     }
-    return handleOk();
+    return missing;
   };
 
+  const handleSubmit = async () => (rejectMissingCredential() ? false : handleOk());
+
   const handleTestConnection = async () => {
+    if (rejectMissingCredential() || !(await form.trigger(registry.mountedNames() as string[]))) {
+      return;
+    }
     setIsTestingConnection(true);
     setConnectionTestId(`test-${Date.now()}`);
     setIsResultModalVisible(true);
@@ -173,6 +183,10 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
     [sortedProviderMetadata],
   );
 
+  const pickedLitellmProvider = sortedProviderMetadata.find(
+    (providerInfo) => providerInfo.provider === pickedProvider,
+  )?.litellm_provider;
+
   const credentialSelectOptions: SearchSelectOption[] = useMemo(() => credentialOptions(credentials), [credentials]);
 
   const applyProviderSelection = (provider: string | null) => {
@@ -188,7 +202,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
     : null;
 
   const isAdmin = all_admin_roles.includes(userRole);
-  const isTeamAdmin = isUserTeamAdminForAnyTeam(teams, userId);
+  const isTeamAdmin = isUserTeamAdminForAnyTeam(teams, userId ?? "");
   // Same owner the Auto-Routers tab uses, so the two creation forms cannot disagree about
   // who has to name a team. This form is only reachable when creation is allowed at all.
   const createScope = modelCreationScope(
@@ -274,6 +288,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                         providerModels={providerModels}
                         getPlaceholder={getPlaceholder}
                       />
+                      <DecisionModelNote catalog={decisionCatalog} litellmProvider={pickedLitellmProvider} />
 
                       {/* Conditionally Render "Public Model Name" */}
                       <ConditionalPublicModelName />

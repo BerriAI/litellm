@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
@@ -342,15 +343,18 @@ def test_router_deployment_stream_chunk_size_reaches_iter_bytes(
     client: Final = HTTPHandler()
     client.post = MagicMock(return_value=mock_response)
     router: Final = litellm.Router(
-        model_list=[{"model_name": "invoke-chunked", "litellm_params": {**INVOKE_DEPLOYMENT, **deployment_extras}}]
+        model_list=[{"model_name": "invoke-chunked", "litellm_params": {**INVOKE_DEPLOYMENT, **deployment_extras}}],
+        num_retries=0,
     )
 
-    router.completion(
-        model="invoke-chunked",
-        messages=[{"role": "user", "content": "hi"}],
-        stream=True,
-        client=client,
-    )
+    # the empty body is a stream that ends before its first chunk, which the Router now reports from the call
+    with pytest.raises(litellm.BadGatewayError):
+        router.completion(
+            model="invoke-chunked",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+        )
 
     mock_response.iter_bytes.assert_called_once_with(chunk_size=expected_chunk_size)
     data: Final = client.post.call_args.kwargs["data"]
@@ -400,6 +404,27 @@ def test_router_deployment_with_a_non_numeric_stream_chunk_size_gets_a_400_befor
     send.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("model", "expected_provider"),
+    [
+        pytest.param("us.anthropic.claude-3-5-sonnet-20240620-v1:0", "anthropic", id="region-prefixed-model-id"),
+        pytest.param(
+            "arn:aws:bedrock:us-east-1:123:inference-profile/us.meta.llama3-2-90b-instruct-v1:0",
+            "meta",
+            id="inference-profile-arn",
+        ),
+        pytest.param("my-anthropic-and-cohere-model", "cohere", id="two-providers-named-earliest-listed-wins"),
+        pytest.param("us.twelvelabs.pegasus-1-2-v1:0", "twelvelabs", id="provider-listed-late"),
+        pytest.param("unknown-model", None, id="no-provider-named"),
+        pytest.param("", None, id="empty-model"),
+    ],
+)
+def test_get_bedrock_invoke_provider_finds_a_provider_named_anywhere_in_the_model(
+    model: str, expected_provider: str | None
+) -> None:
+    assert AmazonInvokeConfig.get_bedrock_invoke_provider(model) == expected_provider
+
+
 @pytest.mark.respx(assert_all_called=False)
 def test_transform_request_meta_llama(monkeypatch, respx_mock):
     monkeypatch.setattr(litellm, "known_tokenizer_config", dict(litellm.known_tokenizer_config))
@@ -417,3 +442,52 @@ def test_transform_request_meta_llama(monkeypatch, respx_mock):
 
     expected_result = {"prompt": "Hello", "max_gen_len": 2048}
     assert result == expected_result
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_custom_prompt_roles_wrap_the_mistral_invoke_prompt(respx_mock: respx.Router) -> None:
+    route: Final = respx_mock.post(
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/mistral.OpenOrca/invoke"
+    ).mock(return_value=httpx.Response(200, json={"outputs": [{"text": "ok", "stop_reason": "stop"}]}))
+    response: Final = litellm.completion(
+        model="bedrock/mistral.OpenOrca",
+        messages=[{"role": "user", "content": "What's AWS?"}],
+        roles={
+            "system": {"pre_message": "<|im_start|>system\n", "post_message": "<|im_end|>"},
+            "assistant": {"pre_message": "<|im_start|>assistant\n", "post_message": "<|im_end|>"},
+            "user": {"pre_message": "<|im_start|>user\n", "post_message": "<|im_end|>"},
+        },
+        bos_token="<s>",
+        eos_token="<|im_end|>",
+        aws_access_key_id="AKIAEXAMPLEKEY",
+        aws_secret_access_key="example-secret-key",
+        aws_region_name="us-west-2",
+        client=HTTPHandler(),
+    )
+
+    assert json.loads(route.calls[0].request.content)["prompt"] == "<|im_start|>user\nWhat's AWS?<|im_end|>"
+    assert response.choices[0].message.content == "ok"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_imported_llama_model_arn_is_encoded_and_max_tokens_become_max_gen_len(respx_mock: respx.Router) -> None:
+    expected_url: Final = (
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/"
+        "arn%3Aaws%3Abedrock%3Aus-east-1%3A086734376398%3Aimported-model%2Fr4c4kewx2s0n/invoke"
+    )
+    route: Final = respx_mock.post(expected_url).mock(
+        return_value=httpx.Response(200, json={"generation": "Here's a joke...", "stop_reason": "stop"})
+    )
+
+    response: Final = litellm.completion(
+        model="bedrock/llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n",
+        messages=[{"role": "user", "content": "Tell me a joke"}],
+        max_tokens=100,
+        aws_access_key_id="AKIALLAMAKEY",
+        aws_secret_access_key="llama-secret",
+        client=HTTPHandler(),
+    )
+
+    assert response.choices[0].message.content == "Here's a joke..."
+    assert str(route.calls[0].request.url) == expected_url
+    assert json.loads(route.calls[0].request.content) == {"prompt": "Tell me a joke", "max_gen_len": 100}

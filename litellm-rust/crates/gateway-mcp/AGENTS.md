@@ -24,7 +24,7 @@ From the repository root, this loopback-only example runs the existing Python MC
 
 ```sh
 cargo run --manifest-path litellm-rust/Cargo.toml -p litellm-gateway-mcp --example stdio_proxy -- \
-  .venv/bin/python -c 'import runpy; runpy.run_path("tests/mcp_tests/mcp_e2e_upstream_server.py")["mcp"].run(transport="stdio")'
+  .venv/bin/python -c 'import runpy; runpy.run_path("tests/integration/_support/mcp_e2e_upstream_server.py")["mcp"].run(transport="stdio")'
 ```
 
 ```sh

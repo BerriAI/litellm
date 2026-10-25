@@ -44,7 +44,7 @@ fn run_ocr(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyResult
             let route = litellm_inference_ocr::OcrRoute::new(client);
             Ok(route.machine(request, None))
         },
-        OcrPythonHost::new(call.resolved()?.unbind()),
+        OcrPythonHost::new(call.view()?),
         hooks,
         asynchronous,
     )

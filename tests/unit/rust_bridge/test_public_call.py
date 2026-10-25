@@ -3,7 +3,7 @@ from typing import Final
 
 import pytest
 
-from litellm.rust_bridge.public_call import native_call, signature
+from litellm.rust_bridge.public_call import AsyncFlag, native_call, signature
 
 
 def _messages(
@@ -18,6 +18,7 @@ def _messages(
 
 
 _SIGNATURE: Final = signature(_messages)
+_FLAG: Final = AsyncFlag("aflag", sync=_SIGNATURE)
 
 
 @pytest.mark.parametrize("supplied", ({}, {"api_key": None}, {"api_key": "explicit"}))
@@ -62,3 +63,16 @@ def test_resolved_lays_the_keywords_over_the_base_and_equals_the_full_binding() 
     }
     assert call.resolved["metadata"] is metadata
     assert supplied == {"model": "keyword-model", "metadata": metadata}
+
+
+def test_flag_keywords_name_positionals_and_drop_only_the_flag() -> None:
+    messages: Final[Sequence[object]] = [{"role": "user", "content": "hello"}]
+
+    keywords: Final = _FLAG.keywords((128, messages), {"model": "m", "stream": True, "aflag": True})
+
+    assert keywords == {"max_tokens": 128, "messages": messages, "model": "m", "stream": True}
+
+
+def test_flag_keywords_reject_a_parameter_given_twice() -> None:
+    with pytest.raises(TypeError):
+        _FLAG.keywords((128,), {"max_tokens": 64})

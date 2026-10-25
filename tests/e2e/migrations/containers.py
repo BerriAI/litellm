@@ -41,6 +41,7 @@ def until(description: str, condition: Callable[[], bool], seconds: float = 150)
 @dataclass(frozen=True, slots=True)
 class Replica:
     name: str
+    identity: str
     transport: HttpTransport
     output: Path
 
@@ -171,7 +172,7 @@ class Containers:
             "model_list: []\ngeneral_settings:\n  master_key: os.environ/LITELLM_MASTER_KEY\n"
         )
         env: Final = {
-            "DATABASE_URL": prisma_url(database.container_url, database.schema),
+            "DATABASE_URL": prisma_url(database.container_url, database.schema, application_name=name),
             "LITELLM_MASTER_KEY": MASTER_KEY,
             "LITELLM_SALT_KEY": MASTER_KEY,
             "LITELLM_LOCAL_MODEL_COST_MAP": "True",
@@ -209,7 +210,12 @@ class Containers:
                 "4000",
             )
             port: Final = int(docker("port", name, "4000/tcp").rsplit(":", 1)[1])
-            replica: Final = Replica(name, HttpTransport(f"http://127.0.0.1:{port}", MASTER_KEY, 15), directory)
+            replica: Final = Replica(
+                name=name,
+                identity=name,
+                transport=HttpTransport(f"http://127.0.0.1:{port}", MASTER_KEY, 15),
+                output=directory,
+            )
             yield replica
         finally:
             try:
