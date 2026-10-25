@@ -7083,7 +7083,7 @@ class MCPServerManager:
             CallToolResult from the MCP server
         """
         start_time: Final = datetime.datetime.now()
-        mcp_server = self._resolve_mcp_server_for_tool_call(server_name, name)
+        mcp_server: Final = self._resolve_mcp_server_for_tool_call(server_name, name)
         effective_guardrail_auth: Final = await MCPRequestHandler.guardrail_auth_for_call(
             guardrail_auth=guardrail_auth,
             user_api_key_auth=user_api_key_auth,
