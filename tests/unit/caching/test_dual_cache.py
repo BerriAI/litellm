@@ -14,6 +14,47 @@ from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
 from litellm.types.caching import RedisPipelineIncrementOperation
 
 
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_refreshing_a_full_batch_throttle_preserves_other_keys(asynchronous: bool) -> None:
+    redis_cache: Final = MagicMock(spec=RedisCache)
+    redis_cache.batch_get_cache.return_value = {}
+    redis_cache.async_batch_get_cache = AsyncMock(return_value={})
+    cache: Final = DualCache(
+        redis_cache=redis_cache,
+        default_max_redis_batch_cache_size=3,
+        default_redis_batch_cache_expiry=10,
+    )
+
+    for timestamp, keys in (
+        (100.0, ("fresh", "expired")),
+        (110.0, ("fresh",)),
+        (111.0, ("filler",)),
+        (112.0, ("expired",)),
+        (112.0, ("expired",)),
+        (112.0, ("fresh",)),
+        (113.0, ("new",)),
+        (113.0, ("fresh",)),
+    ):
+        with patch("litellm.caching.dual_cache.time.time", return_value=timestamp):
+            result: Final = (
+                await cache.async_batch_get_cache(list(keys)) if asynchronous else cache.batch_get_cache(list(keys))
+            )
+        assert result == [None] * len(keys)
+
+    calls: Final = (
+        redis_cache.async_batch_get_cache.call_args_list if asynchronous else redis_cache.batch_get_cache.call_args_list
+    )
+    assert tuple(call.args[0] if asynchronous else call.kwargs["key_list"] for call in calls) == (
+        ["fresh", "expired"],
+        ["fresh"],
+        ["filler"],
+        ["expired"],
+        ["new"],
+        ["fresh"],
+    )
+
+
 @pytest.mark.asyncio
 async def test_dual_cache_async_batch_get_cache_coalesces_concurrent_redis_reads():
     dual_cache = DualCache(redis_cache=MagicMock(spec=RedisCache), default_redis_batch_cache_expiry=10)
