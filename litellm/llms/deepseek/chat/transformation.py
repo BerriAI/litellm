@@ -17,6 +17,8 @@ from litellm.utils import supports_reasoning, supports_vision
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
+SUPPORTED_REASONING_EFFORTS: Final = ("minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+
 
 class DeepSeekChatConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list:
@@ -30,10 +32,10 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
     def map_openai_params(
         self,
         non_default_params: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI params to DeepSeek params.
 
@@ -63,7 +65,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         if (
             optional_params.get("thinking") == {"type": "enabled"}
             and isinstance(reasoning_effort, str)
-            and reasoning_effort in ("minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+            and reasoning_effort in SUPPORTED_REASONING_EFFORTS
         ):
             return {**optional_params, "reasoning_effort": reasoning_effort}
 
