@@ -22,6 +22,7 @@ from litellm.integrations._types.open_inference import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.langtrace import LANGTRACE_TRACE_PATH
+from litellm.integrations.opentelemetry_utils.anthropic_messages import parse_anthropic_message
 from litellm.integrations.opentelemetry_utils.gen_ai_semconv import (
     OTEL_SEMCONV_STABILITY_OPT_IN_ENV,
     OTELGenAISemconvMixin,
@@ -2649,12 +2650,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 tools: Final = optional_params["tools"]
                 self.set_tools_attributes(span, tools)
 
-            if kwargs.get("messages"):
-                transformed_messages = self._transform_messages_to_otel_semantic_conventions(kwargs.get("messages"))
+            # The Anthropic-native /v1/messages route (call_type="anthropic_messages") keeps the
+            # messages on optional_params rather than kwargs.
+            input_messages: Final = kwargs.get("messages") or optional_params.get("messages")
+            if input_messages:
                 self.safe_set_attribute(
                     span=span,
                     key=SpanAttributes.GEN_AI_INPUT_MESSAGES.value,
-                    value=safe_dumps(transformed_messages),
+                    value=safe_dumps(self._transform_messages_to_otel_semantic_conventions(input_messages)),
                 )
 
             # Coalesce the different kwarg names that carry the system
@@ -2710,6 +2713,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             #############################################
             ########## LLM Response Attributes ##########
             #############################################
+            anthropic_output: Final = parse_anthropic_message(
+                cast("object", response_obj)  # cast-ok: response_obj is Any; the parser narrows it itself
+            )
             if response_obj is not None:
                 if response_obj.get("choices"):
                     transformed_choices: Final = self._transform_choices_to_otel_semantic_conventions(
@@ -2745,6 +2751,22 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                                         key=key,
                                         value=value,
                                     )
+
+                elif anthropic_output is not None:
+                    if anthropic_output.parts:
+                        self.safe_set_attribute(
+                            span=span,
+                            key=SpanAttributes.GEN_AI_OUTPUT_MESSAGES.value,
+                            value=safe_dumps([{"role": anthropic_output.role, "parts": list(anthropic_output.parts)}]),
+                        )
+                    for key, value in OpenTelemetry._tool_calls_kv_pair(list(anthropic_output.tool_calls)).items():
+                        self.safe_set_attribute(span=span, key=key, value=value)
+                    if anthropic_output.stop_reason:
+                        self.safe_set_attribute(
+                            span=span,
+                            key=SpanAttributes.GEN_AI_RESPONSE_FINISH_REASONS.value,
+                            value=safe_dumps([anthropic_output.stop_reason]),
+                        )
 
                 elif response_obj.get("output"):
                     # Responses API: ResponsesAPIResponse has an "output"
