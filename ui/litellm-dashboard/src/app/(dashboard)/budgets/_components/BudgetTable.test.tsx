@@ -129,18 +129,21 @@ describe("BudgetTable", () => {
     const user = userEvent.setup();
     renderWithProviders(<BudgetTable {...defaultProps} list={makeList()} />);
     await showColumn(user, "created_at");
-    for (const field of ["budget_id", "max_budget", "tpm_limit", "rpm_limit", "created_at"]) {
+    for (const field of ["budget_id", "max_budget", "tpm_limit", "rpm_limit", "tpd_limit", "created_at"]) {
       expect(screen.getByTestId(`sort-header-${field}`)).toBeInTheDocument();
     }
   });
 
-  it("should not make the reset column sortable", async () => {
+  it("should request duration sorting from the server", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<BudgetTable {...defaultProps} list={makeList()} />);
+    const onSortingChange = vi.fn();
+    renderWithProviders(<BudgetTable {...defaultProps} list={makeList({ onSortingChange })} />);
     await showColumn(user, "budget_duration");
     const headers = screen.getAllByRole("columnheader").map((header) => header.textContent);
     expect(headers).toContain("Reset");
-    expect(screen.queryByTestId("sort-header-budget_duration")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("sort-header-budget_duration"));
+    expect(onSortingChange).toHaveBeenCalled();
+    expect(onSortingChange.mock.calls[0][0]([])).toEqual([{ id: "budget_duration", desc: false }]);
   });
 
   it("should ask the list for a new sort when a sortable header is clicked", async () => {
@@ -152,9 +155,10 @@ describe("BudgetTable", () => {
   });
 
   it("should show n/a for missing rate limits and Unlimited for a missing max budget", () => {
-    const list = makeList({ rows: [makeBudget({ max_budget: null, tpm_limit: null, rpm_limit: null })] });
+    const noLimits = { max_budget: null, tpm_limit: null, rpm_limit: null, tpd_limit: null };
+    const list = makeList({ rows: [makeBudget(noLimits)] });
     renderWithProviders(<BudgetTable {...defaultProps} list={list} />);
-    expect(screen.getAllByText("n/a")).toHaveLength(2);
+    expect(screen.getAllByText("n/a")).toHaveLength(3);
     expect(screen.getByText("Unlimited")).toBeInTheDocument();
   });
 

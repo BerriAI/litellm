@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { deletePromptCall, getPromptsList } from "@/components/networking";
 
 import PromptsPanel from "./index";
+import { chooseSelectOption } from "../../../../../tests/test-utils";
 
 vi.mock("@/components/networking", () => ({
   getPromptsList: vi.fn(),
@@ -15,21 +16,31 @@ vi.mock("./PromptTable", () => ({
   __esModule: true,
   default: ({
     isLoading,
+    onPromptClick,
     onDeleteClick,
   }: {
     isLoading: boolean;
-    onDeleteClick: (id: string, name: string) => void;
+    onPromptClick: (id: string, environment: string) => void;
+    onDeleteClick: (id: string, name: string, environment: string) => void;
   }) => (
     <div data-testid="prompt-table">
       {isLoading ? "table-loading" : "table-loaded"}
-      <button type="button" onClick={() => onDeleteClick("prompt-1", "my-prompt")}>
+      <button type="button" onClick={() => onPromptClick("prompt-1", "staging")}>
+        row-open
+      </button>
+      <button type="button" onClick={() => onDeleteClick("prompt-1", "my-prompt", "staging")}>
         row-delete
       </button>
     </div>
   ),
 }));
 
-vi.mock("./prompt_info", () => ({ __esModule: true, default: () => <div>prompt-info-view</div> }));
+vi.mock("./prompt_info", () => ({
+  __esModule: true,
+  default: ({ initialEnvironment }: { initialEnvironment?: string }) => (
+    <div>prompt-info-view:{initialEnvironment ?? "none"}</div>
+  ),
+}));
 vi.mock("./add_prompt_form", () => ({
   __esModule: true,
   default: ({ visible }: { visible: boolean }) => (visible ? <div>add-prompt-form</div> : null),
@@ -118,8 +129,7 @@ describe("PromptsPanel toolbar", () => {
 
     expect(screen.getByText("All Environments")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByText("Production"));
+    await chooseSelectOption(user, screen.getByRole("combobox"), "Production");
 
     await waitFor(() => expect(mockGetPromptsList).toHaveBeenLastCalledWith("sk-test", "production"));
   });
@@ -131,15 +141,29 @@ describe("PromptsPanel toolbar", () => {
     renderPanel("Admin");
     await screen.findByText("table-loaded");
 
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByText("Production"));
+    await chooseSelectOption(user, screen.getByRole("combobox"), "Production");
     await waitFor(() => expect(screen.getByRole("combobox")).toHaveTextContent("Production"));
 
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByText("All Environments"));
+    await chooseSelectOption(user, screen.getByRole("combobox"), "All Environments");
 
     await waitFor(() => expect(screen.getByRole("combobox")).toHaveTextContent("All Environments"));
     await waitFor(() => expect(mockGetPromptsList).toHaveBeenLastCalledWith("sk-test", undefined));
+  });
+});
+
+describe("PromptsPanel row navigation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetPromptsList.mockResolvedValue({ prompts: [] } as never);
+  });
+
+  it("should open the info view preselected to the clicked row's environment", async () => {
+    const user = userEvent.setup();
+    renderPanel("Admin");
+
+    await user.click(await screen.findByRole("button", { name: "row-open" }));
+
+    expect(screen.getByText("prompt-info-view:staging")).toBeInTheDocument();
   });
 });
 
@@ -156,13 +180,13 @@ describe("PromptsPanel delete confirmation", () => {
 
     await user.click(await screen.findByRole("button", { name: "row-delete" }));
 
-    expect(await screen.findByText(/delete prompt: my-prompt/i)).toBeInTheDocument();
+    expect(await screen.findByText(/the staging copy of prompt: my-prompt/i)).toBeInTheDocument();
     expect(screen.getByText(/cannot be undone/i)).toBeInTheDocument();
     expect(mockDeletePromptCall).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: /^delete$/i }));
 
-    await waitFor(() => expect(mockDeletePromptCall).toHaveBeenCalledWith("sk-test", "prompt-1"));
+    await waitFor(() => expect(mockDeletePromptCall).toHaveBeenCalledWith("sk-test", "prompt-1", "staging"));
   });
 
   it("should abandon the delete when the confirmation is dismissed", async () => {
@@ -170,11 +194,11 @@ describe("PromptsPanel delete confirmation", () => {
     renderPanel("Admin");
 
     await user.click(await screen.findByRole("button", { name: "row-delete" }));
-    await screen.findByText(/delete prompt: my-prompt/i);
+    await screen.findByText(/the staging copy of prompt: my-prompt/i);
 
     await user.click(screen.getByRole("button", { name: /cancel/i }));
 
-    await waitFor(() => expect(screen.queryByText(/delete prompt: my-prompt/i)).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText(/the staging copy of prompt: my-prompt/i)).not.toBeInTheDocument());
     expect(mockDeletePromptCall).not.toHaveBeenCalled();
   });
 
@@ -189,14 +213,14 @@ describe("PromptsPanel delete confirmation", () => {
     renderPanel("Admin");
 
     await user.click(await screen.findByRole("button", { name: "row-delete" }));
-    await screen.findByText(/delete prompt: my-prompt/i);
+    await screen.findByText(/the staging copy of prompt: my-prompt/i);
     await user.click(screen.getByRole("button", { name: /^delete$/i }));
-    await waitFor(() => expect(mockDeletePromptCall).toHaveBeenCalledWith("sk-test", "prompt-1"));
+    await waitFor(() => expect(mockDeletePromptCall).toHaveBeenCalledWith("sk-test", "prompt-1", "staging"));
 
     await user.keyboard("{Escape}");
-    expect(screen.getByText(/delete prompt: my-prompt/i)).toBeInTheDocument();
+    expect(screen.getByText(/the staging copy of prompt: my-prompt/i)).toBeInTheDocument();
 
     finishDelete();
-    await waitFor(() => expect(screen.queryByText(/delete prompt: my-prompt/i)).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText(/the staging copy of prompt: my-prompt/i)).not.toBeInTheDocument());
   });
 });

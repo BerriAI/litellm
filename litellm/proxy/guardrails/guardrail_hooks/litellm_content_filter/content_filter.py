@@ -6,34 +6,52 @@ to detect and block/mask sensitive content.
 """
 
 import asyncio
+import contextvars
+import itertools
 import json
 import os
 import re
+import time
 from collections.abc import AsyncGenerator, Coroutine, Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import datetime
 from re import Pattern
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, cast
 
 import yaml
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.constants import (
+    CONTENT_FILTER_STREAMING_HOLDBACK_CHARS,
+    CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS,
+    DEFAULT_MAX_RECURSE_DEPTH,
+)
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.path_utils import is_within, try_safe_join
+from litellm.proxy.guardrails.content_filter_data import (
+    CATEGORIES_DIR,
+    DATA_DIR,
+    DATA_ROOTS,
+    find_category_file,
+)
 from litellm.types.utils import (
     CallTypes,
     Function,
     GenericGuardrailAPIInputs,
     GuardrailStatus,
     GuardrailTracingDetail,
+    Message,
     ModelResponse,
     ModelResponseStream,
 )
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 
 from litellm.types.guardrails import (
     BlockedWord,
@@ -59,7 +77,10 @@ from .competitor_intent import (
 from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
 
 MAX_KEYWORD_VALUE_GAP_WORDS: Final = 1
+_DECODED_ARGUMENTS: Final = TypeAdapter(object)
+_JSON_ENTRIES: Final = TypeAdapter(list[object])
 GAP_WORD_TOKENIZER: Final = re.compile(r"\b\w+\b")
+SENTENCE_TERMINATORS: Final = re.compile(r"[.!?]+")
 
 
 WORD_NUMBER_MAP: Final = {
@@ -82,6 +103,13 @@ WORD_NUMBER_SEQUENCE_PATTERN: Final = re.compile(
     re.IGNORECASE,
 )
 WORD_NUMBER_TOKEN_FINDER: Final = re.compile(rf"(?:{WORD_NUMBER_TOKEN_REGEX})", re.IGNORECASE)
+
+_logging_only_scan_guardrail: Final[contextvars.ContextVar["ContentFilterGuardrail | None"]] = contextvars.ContextVar(
+    "litellm_content_filter_logging_only_scan", default=None
+)
+_logging_only_scan_would_reject: Final[contextvars.ContextVar[bool]] = contextvars.ContextVar(
+    "litellm_content_filter_logging_only_scan_would_reject", default=False
+)
 
 
 class ConditionalCategoryConfig(TypedDict):
@@ -109,6 +137,22 @@ class _CategoryConfigView(TypedDict):
     enabled: object
     action: object
     category_file: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _StreamedChoiceState:
+    buffered_text: str = ""
+    yielded_masked_text_len: int = 0
+    committed_detections: tuple[ContentFilterDetection, ...] = ()
+    latest_detections: tuple[ContentFilterDetection, ...] = ()
+    next_trim_len: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class _StreamedScanPlan:
+    context_chars: int
+    exception_phrases: tuple[str, ...]
+    conditional_words: tuple[str, ...]
 
 
 class CategoryFileData(TypedDict, total=False):
@@ -342,21 +386,14 @@ class ContentFilterGuardrail(CustomGuardrail):
         }
 
     @staticmethod
-    def _assert_within_categories_dir(path: str, categories_dir: str) -> None:
-        """Raise ValueError if path escapes the categories directory."""
-        resolved: Final = os.path.realpath(path)
-        allowed: Final = os.path.realpath(categories_dir)
-        try:
-            common: Final = os.path.commonpath([resolved, allowed])
-        except ValueError:
-            # commonpath() raises ValueError on Windows when paths span different drives
-            raise ValueError(f"Category file path '{path}' is outside the allowed categories directory")
-        if common != allowed:
+    def _assert_within_data_roots(path: str, roots: tuple[str, ...]) -> None:
+        """Raise ValueError unless path sits inside one of the category data roots."""
+        if not any(is_within(path, root) for root in roots):
             raise ValueError(
-                f"Category file path '{path}' is outside the allowed categories directory '{categories_dir}'"
+                f"Category file path '{path}' is outside the allowed categories directory ({', '.join(roots)})"
             )
 
-    def _resolve_category_file_path(self, file_path: str) -> str:
+    def _resolve_category_file_path(self, file_path: str, roots: tuple[str, ...] = DATA_ROOTS) -> str:
         """
         Resolve a category file path that may be relative.
 
@@ -364,13 +401,16 @@ class ContentFilterGuardrail(CustomGuardrail):
         relative paths like "litellm/proxy/.../policy_templates/file.yaml".
         These only work when the CWD is the project root. In production
         (Docker, installed packages, etc.) the CWD is different, so the
-        file isn't found.
+        file isn't found. Paths recorded before the data moved out of the
+        guardrail package still resolve because only the trailing
+        ``policy_templates/<file>`` or ``categories/<file>`` suffix has to match,
+        and the old package directory stays a search root for files a
+        deployment copied there itself.
 
         Resolution order:
-        1. Return as-is if absolute or already exists (jailed to module dir).
-        2. Try joining the full path relative to this module's directory (jailed).
-        3. Progressively strip leading path components and try each suffix
-           relative to this module's directory (jailed).
+        1. Return as-is if absolute or already exists (jailed to the roots).
+        2. Try the full path, then progressively shorter suffixes, under each
+           root in turn (jailed).
 
         The directory jail can be disabled for deployments that legitimately
         store category files outside the package (e.g. mounted volumes) by
@@ -381,54 +421,49 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         Args:
             file_path: The file path to resolve (absolute or relative).
+            roots: Directories a category file may live under, bundled first.
 
         Returns:
             The resolved absolute-ish path, or the original path if
             resolution fails (caller should check existence).
 
         Raises:
-            ValueError: If the resolved path escapes the module directory
+            ValueError: If the resolved path escapes every root
                 and ``LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS`` is not set.
         """
-        module_dir: Final = os.path.dirname(__file__)
         allow_external: Final = os.environ.get("LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS", "").lower() == "true"
 
         if os.path.isabs(file_path) or os.path.exists(file_path):
-            if not allow_external:
-                self._assert_within_categories_dir(file_path, module_dir)
-            else:
+            if allow_external:
                 verbose_proxy_logger.warning(
                     "LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS is set — "
                     "skipping directory jail for category_file '%s'",
                     file_path,
                 )
+                return file_path
+            self._assert_within_data_roots(file_path, roots)
             return file_path
 
-        # Try the full relative path joined to the module directory
-        candidate = os.path.join(module_dir, file_path)
-        if os.path.exists(candidate):
-            if not allow_external:
-                self._assert_within_categories_dir(candidate, module_dir)
-            return candidate
-
-        # Progressively strip leading components to find a matching suffix
         parts: Final = file_path.split("/")
-        for i in range(1, len(parts)):
-            suffix = os.path.join(*parts[i:])
-            candidate = os.path.join(module_dir, suffix)
-            if os.path.exists(candidate):
-                if not allow_external:
-                    self._assert_within_categories_dir(candidate, module_dir)
-                return candidate
+        suffixes: Final = tuple(os.path.join(*parts[i:]) for i in range(len(parts)))
+        search: Final = tuple(itertools.product(suffixes, roots))
+        if allow_external:
+            unjailed: Final = (os.path.join(root, suffix) for suffix, root in search)
+            return next((c for c in unjailed if os.path.exists(c)), file_path)
 
-        # File not found via any resolution strategy — jail the module-relative
-        # path anyway to reject traversal attempts (e.g. "../../../../etc/passwd")
-        # regardless of CWD or whether the target file exists.
-        if not allow_external:
-            self._assert_within_categories_dir(os.path.join(module_dir, file_path), module_dir)
+        jailed: Final = (try_safe_join(root, suffix) for suffix, root in search)
+        found: Final = next((c for c in jailed if c is not None and os.path.exists(c)), None)
+        if found is not None:
+            return found
+
+        # Nothing matched: jail the data-relative path anyway so "../../etc/passwd" is
+        # rejected regardless of CWD or whether the target exists.
+        self._assert_within_data_roots(os.path.join(DATA_DIR, file_path), roots)
         return file_path
 
-    def _load_categories(self, categories: list[ContentFilterCategoryConfig]) -> None:
+    def _load_categories(
+        self, categories: list[ContentFilterCategoryConfig], roots: tuple[str, ...] = DATA_ROOTS
+    ) -> None:
         """
         Load content categories from configuration.
 
@@ -439,9 +474,8 @@ class ContentFilterGuardrail(CustomGuardrail):
                   action: "BLOCK"
                   severity_threshold: "medium"
                   category_file: "/path/to/custom_file.yaml"  # optional override
+            roots: Directories a category file may live under, bundled first.
         """
-        categories_dir: Final = os.path.join(os.path.dirname(__file__), "categories")
-
         for cat_config in categories:
             view = self._category_config_view(cat_config)
             category_name = view["category"]
@@ -468,22 +502,16 @@ class ContentFilterGuardrail(CustomGuardrail):
             # Load category file (custom or default)
             if custom_file:
                 try:
-                    category_file_path = self._resolve_category_file_path(custom_file)
+                    category_file_path = self._resolve_category_file_path(custom_file, roots)
                 except ValueError as e:
                     verbose_proxy_logger.warning(
                         "Category %s: invalid category_file path, skipping. %s", category_name, e
                     )
                     continue
             else:
-                # Try .yaml first, then .json (e.g. harm_toxic_abuse.json)
-                yaml_path = os.path.join(categories_dir, f"{category_name}.yaml")
-                json_path = os.path.join(categories_dir, f"{category_name}.json")
-                if os.path.exists(yaml_path):
-                    category_file_path = yaml_path
-                elif os.path.exists(json_path):
-                    category_file_path = json_path
-                else:
-                    category_file_path = yaml_path  # will trigger "not found" below
+                category_file_path = find_category_file(category_name, roots) or os.path.join(
+                    CATEGORIES_DIR, f"{category_name}.yaml"
+                )
 
             if not os.path.exists(category_file_path):
                 verbose_proxy_logger.warning("Category file not found: %s, skipping", category_file_path)
@@ -505,7 +533,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                         category_config_obj,
                         category_action,
                         severity_threshold,
-                        categories_dir,
+                        roots,
                     )
 
                 # Add always_block_keywords if present
@@ -549,7 +577,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         category_config_obj: CategoryConfig,
         category_action: ContentFilterAction,
         severity_threshold: str,
-        categories_dir: str,
+        roots: tuple[str, ...],
     ) -> None:
         """
         Load a conditional category that uses identifier_words + block_words.
@@ -560,7 +588,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             category_config_obj: CategoryConfig object with identifier_words
             category_action: Action to take when match is found
             severity_threshold: Minimum severity threshold
-            categories_dir: Directory containing category files
+            roots: Directories the inherited category file may live under
         """
         try:
             block_words: Final[list[str]] = []
@@ -570,24 +598,14 @@ class ContentFilterGuardrail(CustomGuardrail):
             if inherit_from:
                 # Remove .json or .yaml extension if included
                 inherit_base: Final = inherit_from.replace(".json", "").replace(".yaml", "")
-
-                # Find the inherited category file
-                inherit_yaml_path: Final = os.path.join(categories_dir, f"{inherit_base}.yaml")
-                inherit_json_path: Final = os.path.join(categories_dir, f"{inherit_base}.json")
-
-                inherit_file_path = None
-                if os.path.exists(inherit_yaml_path):
-                    inherit_file_path = inherit_yaml_path
-                elif os.path.exists(inherit_json_path):
-                    inherit_file_path = inherit_json_path
-                else:
+                inherit_file_path: Final = find_category_file(inherit_base, roots)
+                if inherit_file_path is None:
                     verbose_proxy_logger.warning(
-                        "Category %s: inherit_from '%s' file not found at %s",
+                        "Category %s: inherit_from '%s' file not found under %s",
                         category_name,
                         inherit_from,
-                        categories_dir,
+                        ", ".join(roots),
                     )
-                    verbose_proxy_logger.debug("Tried paths: %s, %s", inherit_yaml_path, inherit_json_path)
 
                 if inherit_file_path:
                     # Load the inherited category
@@ -682,9 +700,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         Severity mapping: 4,3 -> high; 2 -> medium; 1 -> low.
         """
         with open(file_path, "r") as f:
-            entries = json.load(f)
-        if not isinstance(entries, list):
-            entries = [entries]
+            decoded: Final = _DECODED_ARGUMENTS.validate_python(json.load(f))
+        entries: Final = _JSON_ENTRIES.validate_python(decoded) if isinstance(decoded, list) else [decoded]
         # Derive category name from filename (e.g. harm_toxic_abuse.json -> harm_toxic_abuse)
         category_name: Final = os.path.splitext(os.path.basename(file_path))[0]
         severity_map: Final = {4: "high", 3: "high", 2: "medium", 1: "low"}
@@ -789,7 +806,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         """
         try:
             with open(file_path, "r") as f:
-                data: Final = yaml.safe_load(f)
+                data: Final = _DECODED_ARGUMENTS.validate_python(yaml.safe_load(f))
 
             if not isinstance(data, dict) or "blocked_words" not in data:
                 raise ValueError("Invalid format: file must contain 'blocked_words' key with list of words")
@@ -975,7 +992,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         # Split text into sentences for more precise matching
         # Simple sentence splitting on common terminators
-        sentences: Final = re.split(r"[.!?]+", text)
+        sentences: Final = SENTENCE_TERMINATORS.split(text)
 
         for category_name, config in self.conditional_categories.items():
             identifier_words = config["identifier_words"]
@@ -1201,6 +1218,18 @@ class ContentFilterGuardrail(CustomGuardrail):
                 return (keyword, action, description)
         return None
 
+    def _is_logging_only_scan(self) -> bool:
+        return _logging_only_scan_guardrail.get() is self
+
+    def _enforces_block(self, action: ContentFilterAction) -> bool:
+        return action == ContentFilterAction.BLOCK and not self._is_logging_only_scan()
+
+    @staticmethod
+    def _asks_to_block(detection: ContentFilterDetection) -> bool:
+        if detection["type"] == "competitor_intent":
+            return detection["action_hint"] in ("refuse", "reframe")
+        return detection["action"] == ContentFilterAction.BLOCK.value
+
     def _handle_conditional_match(
         self,
         matched_phrase: str,
@@ -1220,7 +1249,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             }
             detections.append(category_detection)
 
-        if action == ContentFilterAction.BLOCK:
+        if self._enforces_block(action):
             error_msg: Final = (
                 f"Content blocked: {category_name} conditional match '{matched_phrase}' detected (severity: {severity})"
             )
@@ -1261,7 +1290,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             }
             detections.append(category_detection)
 
-        if action == ContentFilterAction.BLOCK:
+        if self._enforces_block(action):
             error_msg = f"Content blocked: {category_name} category keyword '{keyword}' detected (severity: {severity})"
             verbose_proxy_logger.warning(error_msg)
             raise HTTPException(
@@ -1304,7 +1333,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             }
             detections.append(pattern_detection)
 
-        if action == ContentFilterAction.BLOCK:
+        if self._enforces_block(action):
             error_msg: Final = f"Content blocked: {pattern_name} pattern detected"
             verbose_proxy_logger.warning(error_msg)
             raise HTTPException(
@@ -1338,7 +1367,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             }
             detections.append(blocked_word_detection)
 
-        if action == ContentFilterAction.BLOCK:
+        if self._enforces_block(action):
             error_msg = f"Content blocked: keyword '{keyword}' detected"
             if description:
                 error_msg += f" ({description})"
@@ -1511,7 +1540,7 @@ class ContentFilterGuardrail(CustomGuardrail):
     @staticmethod
     def _describe_image_response_content(response: ModelResponse) -> str | None:
         choice = response.choices[0]
-        message = getattr(choice, "message", None)
+        message: Final[Message | None] = getattr(choice, "message", None)
         if message and getattr(message, "content", None):
             return message.content
         return None
@@ -1611,7 +1640,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         - Number of entities masked
         - Whether the guardrail blocked the request (max risk)
         """
-        if status == "guardrail_intervened":
+        if status in ("guardrail_intervened", "guardrail_flagged"):
             return 10.0
 
         total_masked: Final = sum(masked_entity_count.values()) if masked_entity_count else 0
@@ -1657,6 +1686,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         }
         detections.append(detection)
 
+        if self._is_logging_only_scan():
+            return
         if action_hint_val == "refuse":
             msg = "Content blocked: competitor comparison or ranking intent detected."
             if self._competitor_intent_checker and getattr(
@@ -1702,6 +1733,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         start_time: datetime,
         masked_entity_count: dict[str, int],
         exception_str: str,
+        duration: float | None = None,
     ) -> None:
         """
         Log guardrail information to request_data metadata.
@@ -1713,6 +1745,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             start_time: Start time of guardrail execution
             masked_entity_count: Count of masked entities by type
             exception_str: Exception string if guardrail failed
+            duration: Seconds spent inside the guardrail; defaults to the wall clock since start_time
         """
         # Convert TypedDict detections to regular dicts for JSON serialization
         guardrail_json_response: Exception | str | dict | list[dict] = [dict(detection) for detection in detections]
@@ -1741,7 +1774,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             guardrail_status=status,
             start_time=start_time.timestamp(),
             end_time=datetime.now().timestamp(),
-            duration=(datetime.now() - start_time).total_seconds(),
+            duration=(datetime.now() - start_time).total_seconds() if duration is None else duration,
             masked_entity_count=masked_entity_count,
             tracing_detail=GuardrailTracingDetail(**tracing_kw),
         )
@@ -1753,18 +1786,18 @@ class ContentFilterGuardrail(CustomGuardrail):
             return raw_name
         return None
 
+    def _reject(self, error: str) -> None:
+        """Raise the 400 an enforcing mode returns, or note it on the leg a logging_only scan is observing."""
+        if self._is_logging_only_scan():
+            _logging_only_scan_would_reject.set(True)
+            return
+        raise HTTPException(status_code=400, detail={"error": error})
+
     def _assert_argument_label_clean(
         self, text: str, detections: list[ContentFilterDetection], context_label: str
     ) -> None:
         if self._filter_single_text(text, detections=detections) != text:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": (
-                        f"Content blocked: {context_label} argument matched a masking rule on a non-rewritable field"
-                    )
-                },
-            )
+            self._reject(f"Content blocked: {context_label} argument matched a masking rule on a non-rewritable field")
 
     def _filter_argument_value(
         self,
@@ -1774,10 +1807,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         depth: int = 0,
     ) -> object:
         if depth > DEFAULT_MAX_RECURSE_DEPTH:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": f"Content blocked: {context_label} arguments exceed the maximum nesting depth"},
-            )
+            self._reject(f"Content blocked: {context_label} arguments exceed the maximum nesting depth")
+            return value
         if isinstance(value, str):
             return self._filter_single_text(value, detections=detections)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -1843,7 +1874,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         detections: list[ContentFilterDetection],  # mutable-ok: _filter_single_text appends into a caller-owned list
     ) -> str:
         try:
-            parsed: Final[object] = json.loads(arguments)
+            parsed: Final = _DECODED_ARGUMENTS.validate_python(json.loads(arguments))
         except (json.JSONDecodeError, TypeError, ValueError):
             return self._filter_single_text(arguments, detections=detections)
         if not isinstance(parsed, (dict, list)):
@@ -1863,6 +1894,21 @@ class ContentFilterGuardrail(CustomGuardrail):
             filtered_arguments = self._filter_tool_call_arguments(arguments, detections)
             if filtered_arguments != arguments:
                 self._set_tool_call_arguments(tool_call, filtered_arguments)
+
+    async def _scan_logged_call(
+        self,
+        kwargs: dict[str, object],  # mutable-ok: CustomLogger.async_logging_hook contract
+        response: object | None,
+        translation: "BaseTranslation",
+        output_translation: "BaseTranslation",
+        scratch_metadata: dict[str, object],  # mutable-ok: apply_guardrail records its verdict into request metadata
+    ) -> None:
+        """Scan the logged call with every BLOCK match recorded instead of raised."""
+        token: Final = _logging_only_scan_guardrail.set(self)
+        try:
+            await super()._scan_logged_call(kwargs, response, translation, output_translation, scratch_metadata)
+        finally:
+            _logging_only_scan_guardrail.reset(token)
 
     async def apply_guardrail(
         self,
@@ -1894,6 +1940,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         masked_entity_count: Final[dict[str, int]] = {}
         status: GuardrailStatus = "success"
         exception_str: str = ""
+        would_reject_token: Final = _logging_only_scan_would_reject.set(False)
 
         try:
             texts: Final = inputs.get("texts", [])
@@ -1937,15 +1984,92 @@ class ContentFilterGuardrail(CustomGuardrail):
             exception_str = str(e)
             raise e
         finally:
+            would_reject: Final = _logging_only_scan_would_reject.get() or any(map(self._asks_to_block, detections))
+            _logging_only_scan_would_reject.reset(would_reject_token)
             # Log guardrail information
             self._log_guardrail_information(
                 request_data=request_data,
                 detections=detections,
-                status=status,
+                status="guardrail_flagged" if status == "success" and would_reject else status,
                 start_time=start_time,
                 masked_entity_count=masked_entity_count,
                 exception_str=exception_str,
             )
+
+    def _streamed_scan_plan(self) -> _StreamedScanPlan:
+        """
+        Per-stream inputs for buffer trimming: the retained tail length (the default
+        context, widened to the longest configured keyword), the category exception
+        phrases, which suppress matches anywhere in the scanned text, and the conditional
+        category words, which only match when paired inside one sentence.
+        """
+        longest_keyword: Final = max(
+            map(len, (*self.blocked_words, *self.category_keywords, *self.always_block_category_keywords)),
+            default=0,
+        )
+        return _StreamedScanPlan(
+            context_chars=max(CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS, longest_keyword),
+            exception_phrases=tuple(
+                phrase for category in self.loaded_categories.values() for phrase in category.exceptions
+            ),
+            conditional_words=tuple(
+                word
+                for config in self.conditional_categories.values()
+                for word in (*config["identifier_words"], *config["block_words"])
+            ),
+        )
+
+    @staticmethod
+    def _cut_breaks_wider_context(buffered_text: str, head: str, tail: str, plan: _StreamedScanPlan) -> bool:
+        buffered_lower: Final = buffered_text.lower()
+        tail_lower: Final = tail.lower()
+        if any(phrase in buffered_lower and phrase not in tail_lower for phrase in plan.exception_phrases):
+            return True
+        cut_sentence: Final = (
+            SENTENCE_TERMINATORS.split(head.lower())[-1] + SENTENCE_TERMINATORS.split(tail_lower, maxsplit=1)[0]
+        )
+        return any(word in cut_sentence for word in plan.conditional_words)
+
+    def _trim_streamed_choice_buffer(
+        self, state: _StreamedChoiceState, masked_text: str, plan: _StreamedScanPlan
+    ) -> _StreamedChoiceState:
+        """
+        Bound the per-choice buffer rescanned on every streamed chunk.
+
+        Once the buffer exceeds twice the scan context, drop everything but the last
+        context-sized tail, provided no exception phrase or unfinished conditional sentence
+        would leave the buffer, the two halves mask to the same output as the whole (so no
+        match or phrase straddles the cut), and the dropped prefix has already been yielded.
+        Otherwise keep the buffer and retry once it has grown by another context length.
+
+        Detections found in the dropped prefix move to the state's committed detections.
+        """
+        if len(state.buffered_text) <= max(2 * plan.context_chars, state.next_trim_len):
+            return state
+        deferred: Final = replace(state, next_trim_len=len(state.buffered_text) + plan.context_chars)
+        head: Final = state.buffered_text[: -plan.context_chars]
+        tail: Final = state.buffered_text[-plan.context_chars :]
+        if self._cut_breaks_wider_context(state.buffered_text, head, tail, plan):
+            return deferred
+        head_detections: Final[list[ContentFilterDetection]] = []  # mutable-ok: filled by _filter_single_text
+        try:
+            masked_head: Final = self._filter_single_text(head, detections=head_detections)
+            masked_tail: Final = self._filter_single_text(tail)
+        except Exception:
+            return deferred
+        if masked_head + masked_tail != masked_text or len(masked_head) > state.yielded_masked_text_len:
+            return deferred
+        return replace(
+            state,
+            buffered_text=tail,
+            yielded_masked_text_len=state.yielded_masked_text_len - len(masked_head),
+            committed_detections=state.committed_detections + tuple(head_detections),
+            next_trim_len=0,
+        )
+
+    @staticmethod
+    def _merge_detections(detections: Sequence[ContentFilterDetection]) -> tuple[ContentFilterDetection, ...]:
+        return tuple(detection for index, detection in enumerate(detections) if detection not in detections[:index])
 
     async def async_post_call_streaming_iterator_hook(
         self,
@@ -1965,12 +2089,11 @@ class ContentFilterGuardrail(CustomGuardrail):
         and the UI Request Lifecycle panel. Mirrors apply_guardrail's finally-block
         contract.
         """
-        accumulated_text_by_choice: Final[dict[int, str]] = {}
-        yielded_masked_text_len_by_choice: Final[dict[int, int]] = {}
-        latest_detections_by_choice: Final[dict[int, list[ContentFilterDetection]]] = {}
-        buffer_size: Final = 50  # Increased buffer to catch patterns split across many chunks
+        state_by_choice: Final[dict[int, _StreamedChoiceState]] = {}
+        plan: Final = self._streamed_scan_plan()
 
         start_time: Final = datetime.now()
+        scan_seconds: float = 0.0  # rebind-ok: accumulates per-chunk scan time across the stream
         detections: list[ContentFilterDetection] = []
         masked_entity_count: Final[dict[str, int]] = {}
         status: GuardrailStatus = "success"
@@ -1993,66 +2116,60 @@ class ContentFilterGuardrail(CustomGuardrail):
 
                         content = getattr(choice.delta, "content", None)
                         is_final = bool(getattr(choice, "finish_reason", None))
-                        if isinstance(content, str) and content:
-                            accumulated_text_by_choice[choice_index] = (
-                                accumulated_text_by_choice.get(choice_index, "") + content
-                            )
-                        elif not is_final:
+                        new_content = content if isinstance(content, str) else ""
+                        if not new_content and not is_final:
                             continue
 
-                        text_to_check = accumulated_text_by_choice.get(choice_index, "")
-                        if not text_to_check:
+                        previous_state = state_by_choice.get(choice_index, _StreamedChoiceState())
+                        buffered_text = previous_state.buffered_text + new_content
+                        if not buffered_text:
                             continue
 
                         # Add a space at the end if it's the final chunk to trigger word boundaries (\b)
-                        text_to_scan = text_to_check + (" " if is_final else "")
+                        text_to_scan = buffered_text + (" " if is_final else "")
                         choice_detections: list[ContentFilterDetection] = []
+                        scan_started = time.perf_counter()
 
                         try:
-                            # _filter_single_text scans the whole accumulated
-                            # choice buffer every chunk, so previous-chunk
-                            # matches are guaranteed to be re-found. Keeping
-                            # only each choice's latest scan avoids duplicate
-                            # detections in the final log row.
                             masked_text = self._filter_single_text(text_to_scan, detections=choice_detections)
                             if is_final and masked_text.endswith(" "):
                                 masked_text = masked_text[:-1]
-                            latest_detections_by_choice[choice_index] = choice_detections
+                            latest_detections = tuple(choice_detections)
                         except HTTPException:
-                            latest_detections_by_choice[choice_index] = choice_detections
+                            state_by_choice[choice_index] = replace(
+                                previous_state, latest_detections=tuple(choice_detections)
+                            )
                             raise
                         except Exception as e:
                             verbose_proxy_logger.error("ContentFilterGuardrail: Error in masking: %s", e)
                             masked_text = text_to_scan  # Fallback to current text
+                            latest_detections = previous_state.latest_detections
+                        finally:
+                            scan_seconds += time.perf_counter() - scan_started
 
-                        # Determine how much can be safely yielded
+                        safe_to_yield_len = max(
+                            previous_state.yielded_masked_text_len,
+                            len(masked_text) - (0 if is_final else CONTENT_FILTER_STREAMING_HOLDBACK_CHARS),
+                        )
+                        choice.delta.content = masked_text[previous_state.yielded_masked_text_len : safe_to_yield_len]
+                        next_state = replace(
+                            previous_state,
+                            buffered_text=buffered_text,
+                            yielded_masked_text_len=safe_to_yield_len,
+                            latest_detections=latest_detections,
+                        )
                         if is_final:
-                            safe_to_yield_len = len(masked_text)
-                        else:
-                            safe_to_yield_len = max(0, len(masked_text) - buffer_size)
+                            state_by_choice[choice_index] = next_state
+                            continue
 
-                        yielded_masked_text_len = yielded_masked_text_len_by_choice.get(choice_index, 0)
-                        if safe_to_yield_len > yielded_masked_text_len:
-                            new_masked_content = masked_text[yielded_masked_text_len:safe_to_yield_len]
-                            choice.delta.content = new_masked_content
-                            yielded_masked_text_len_by_choice[choice_index] = safe_to_yield_len
-                        else:
-                            # Hold content by yielding empty content on this choice
-                            # while preserving chunk metadata and other choices.
-                            choice.delta.content = ""
+                        trim_started = time.perf_counter()
+                        state_by_choice[choice_index] = self._trim_streamed_choice_buffer(next_state, masked_text, plan)
+                        scan_seconds += time.perf_counter() - trim_started
 
                     yield item
                 else:
                     # Not a ModelResponseStream or no choices - yield as is
                     yield item
-
-            # Any remaining content (should have been handled by is_final, but just in case)
-            if any(
-                yielded_masked_text_len_by_choice.get(choice_index, 0) < len(accumulated_text)
-                for choice_index, accumulated_text in accumulated_text_by_choice.items()
-            ):
-                # We already reached the end of the generator
-                pass
         except HTTPException:
             status = "guardrail_intervened"
             raise
@@ -2063,8 +2180,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         finally:
             detections = [
                 detection
-                for choice_detections in latest_detections_by_choice.values()
-                for detection in choice_detections
+                for state in state_by_choice.values()
+                for detection in self._merge_detections((*state.committed_detections, *state.latest_detections))
             ]
             self._count_masked_entities(detections, masked_entity_count)
             self._log_guardrail_information(
@@ -2074,6 +2191,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 start_time=start_time,
                 masked_entity_count=masked_entity_count,
                 exception_str=exception_str,
+                duration=scan_seconds,
             )
 
     @staticmethod
