@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
@@ -71,6 +73,83 @@ func TestResourceLiteLLMFallbackCreate(t *testing.T) {
 	}
 	if !reflect.DeepEqual(createPayload, want) {
 		t.Fatalf("unexpected create payload: %+v, want %+v", createPayload, want)
+	}
+}
+
+func TestResourceLiteLLMFallbackCreate_RetriesReadUntilReplicaHasFallback(t *testing.T) {
+	var reads int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/fallback", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"model":"gpt-4","fallback_models":["claude-3"],"fallback_type":"general","message":"ok"}`))
+	})
+	mux.HandleFunc("/fallback/gpt-4", func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&reads, 1) == 1 {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"model":"gpt-4","fallback_models":["claude-3"],"fallback_type":"general"}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := newFallbackTestResourceData(t, "gpt-4", []interface{}{"claude-3"}, "general")
+
+	if err := resourceLiteLLMFallbackCreate(d, client); err != nil {
+		t.Fatalf("expected nil error, got: %v", err)
+	}
+	if d.Id() != "gpt-4" {
+		t.Fatalf("expected ID 'gpt-4' after the second read found the fallback, got %q", d.Id())
+	}
+	if got := atomic.LoadInt32(&reads); got != 2 {
+		t.Fatalf("expected 2 reads (404 then 200), got %d", got)
+	}
+}
+
+func TestRetryFallbackRead_ErrorsAndKeepsIDWhenFallbackNeverAppears(t *testing.T) {
+	var reads int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&reads, 1)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := newFallbackTestResourceData(t, "gpt-4", []interface{}{"claude-3"}, "general")
+	d.SetId("gpt-4")
+
+	err := retryFallbackRead(d, client, 2)
+	if err == nil || !strings.Contains(err.Error(), "gpt-4") {
+		t.Fatalf("expected an error naming the model, got: %v", err)
+	}
+	if d.Id() != "gpt-4" {
+		t.Fatalf("expected ID to stay 'gpt-4' so Terraform keeps tracking the written fallback, got %q", d.Id())
+	}
+	if got := atomic.LoadInt32(&reads); got != 2 {
+		t.Fatalf("expected 2 reads, got %d", got)
+	}
+}
+
+func TestRetryFallbackRead_DoesNotRetryServerErrors(t *testing.T) {
+	var reads int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&reads, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error": "internal server error"}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := newFallbackTestResourceData(t, "gpt-4", []interface{}{"claude-3"}, "general")
+	d.SetId("gpt-4")
+
+	if err := retryFallbackRead(d, client, 3); err == nil {
+		t.Fatal("expected error for 500 response, got nil")
+	}
+	if got := atomic.LoadInt32(&reads); got != 1 {
+		t.Fatalf("expected 1 read (no retry on a 500), got %d", got)
 	}
 }
 
