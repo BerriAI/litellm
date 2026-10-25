@@ -1,6 +1,7 @@
 import asyncio
 import json
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -191,13 +192,13 @@ async def test_requests_use_selected_subscription(
     )
 
     async def request(index: int, path: Path) -> str:
-        params: Final = (
-            {"model": f"account-{index}"}
-            if router
-            else {"model": "chatgpt/gpt-6.1-sol", "chatgpt_auth_file": str(path)}
+        params: Final = MappingProxyType(
+            {
+                "model": f"account-{index}" if router else "chatgpt/gpt-6.1-sol",
+                **({"chatgpt_auth_file": str(path)} if router is None else {}),
+                **({"prompt_id": "account-check"} if with_prompt else {}),
+            }
         )
-        if with_prompt:
-            params["prompt_id"] = "account-check"
         if endpoint == "chat":
             result: Final = await (router.acompletion if router else litellm.acompletion)(
                 **params, messages=[{"role": "user", "content": "Hello"}]
