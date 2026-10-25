@@ -7,6 +7,7 @@ are normalized to match the OpenAI streaming spec:
 - Deduplication of "closing" chunks with repeated id/name
 """
 
+import json
 from pathlib import Path
 from typing import Final
 
@@ -219,3 +220,31 @@ def test_chatgpt_config_streams_parallel_tool_calls_with_distinct_indices(
     results: Final = list(ChatGPTConfig().post_stream_processing(iter(chunks)))
 
     assert [result.choices[0].delta.tool_calls[0].index for result in results] == [0, 1]
+
+
+@pytest.mark.parametrize("source_indices", [(2, 7), (0, 1)])
+def test_chatgpt_consumer_reassembles_interleaved_tool_call_arguments_by_source_index(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, source_indices: tuple[int, int]
+):
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    weather_index: Final = source_indices[0]
+    time_index: Final = source_indices[1]
+    chunks: Final = (
+        _make_chunk(tool_calls=[_make_tc(index=weather_index, id="call_weather", name="get_weather")]),
+        _make_chunk(tool_calls=[_make_tc(index=time_index, id="call_time", name="get_time")]),
+        _make_chunk(tool_calls=[_make_tc(index=time_index, arguments='{"timezone":')]),
+        _make_chunk(tool_calls=[_make_tc(index=weather_index, arguments='{"location":')]),
+        _make_chunk(tool_calls=[_make_tc(index=time_index, arguments='"EST"}')]),
+        _make_chunk(tool_calls=[_make_tc(index=weather_index, arguments='"NYC"}')]),
+    )
+
+    results: Final = list(ChatGPTConfig().post_stream_processing(iter(chunks)))
+    tool_calls: Final = tuple(result.choices[0].delta.tool_calls[0] for result in results)
+
+    assert {
+        tool_call.function.name: json.loads(
+            "".join(delta.function.arguments or "" for delta in tool_calls if delta.index == tool_call.index)
+        )
+        for tool_call in tool_calls
+        if tool_call.id
+    } == {"get_weather": {"location": "NYC"}, "get_time": {"timezone": "EST"}}

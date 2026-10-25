@@ -36,19 +36,21 @@ class ChatGPTToolCallNormalizer:
     """
     Wraps a streaming response and fixes tool_call index/dedup issues.
 
-    The ChatGPT backend API (chatgpt.com/backend-api) sends non-spec-compliant
-    streaming tool call chunks:
-    1. `index` is always 0, even for multiple parallel tool calls
-    2. `id` and `name` get repeated in "closing" chunks that shouldn't exist
+    The ChatGPT backend API (chatgpt.com/backend-api) can send tool_call chunks
+    with:
+    1. `index` values that are sparse or repeated across parallel tool calls
+    2. `id` and `name` repeated in "closing" chunks that shouldn't exist
 
-    This wrapper normalizes the stream to match the OpenAI spec before yielding
-    chunks to the consumer.
+    This wrapper maps unique source indices to sequential output indices and
+    uses the last identified call when repeated indices make a continuation
+    ambiguous.
     """
 
     def __init__(self, stream: ChatGPTChunkStream):
         self._stream: Final = stream
         self._seen_ids: dict[str, int] = {}  # tool_call_id -> assigned_index
         self._next_index: int = 0
+        self._source_index_to_output_index: dict[int, int | None] = {}
         self._last_id: str | None = None  # tracks which tool call the next delta belongs to
 
     def __getattr__(self, name: str) -> object:
@@ -87,6 +89,11 @@ class ChatGPTToolCallNormalizer:
         for tc in delta.tool_calls:
             if tc.id and tc.id not in self._seen_ids:
                 # New tool call — assign correct index
+                if tc.index in self._source_index_to_output_index:
+                    # Preserve the last-id fallback for repeated source indices.
+                    self._source_index_to_output_index[tc.index] = None
+                else:
+                    self._source_index_to_output_index[tc.index] = self._next_index
                 self._seen_ids[tc.id] = self._next_index
                 tc.index = self._next_index
                 self._last_id = tc.id
@@ -96,8 +103,11 @@ class ChatGPTToolCallNormalizer:
                 # Duplicate "closing" chunk — skip it
                 continue
             else:
-                # Continuation delta (id=None) — fix index
-                if self._last_id:
+                # Continuation delta (id=None) — use its source index when unambiguous
+                normalized_index: Final = self._source_index_to_output_index.get(tc.index)
+                if normalized_index is not None:
+                    tc.index = normalized_index
+                elif self._last_id:
                     tc.index = self._seen_ids[self._last_id]
                 normalized.append(tc)
 
