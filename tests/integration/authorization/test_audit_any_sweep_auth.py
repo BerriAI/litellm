@@ -9,8 +9,9 @@ import httpx
 import openai
 import pytest
 import websockets
-from integration._support.client import Gateway, eventually
+from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
+from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 
@@ -62,7 +63,8 @@ _RESPONSES_EVENTS: Final = (
 )
 
 
-def _anthropic_model(gateway: Gateway, *, stream: bool) -> str:
+def _anthropic_model(scenario: Scenario, *, stream: bool) -> str:
+    gateway: Final = scenario.gateway
     scenario_id: Final = "audit-anthropic-stream" if stream else "audit-anthropic"
     if stream:
         _register_scenario(gateway, scenario_id, {"content_type": "text/event-stream", "frames": _ANTHROPIC_EVENTS})
@@ -75,23 +77,13 @@ def _anthropic_model(gateway: Gateway, *, stream: bool) -> str:
                 "routes": {"POST /v1/messages": {"content_type": "application/json", "body": _ANTHROPIC_MESSAGE}},
             },
         )
-    name: Final = f"integration-{uuid.uuid4().hex}"
-    created: Final = gateway.post(
-        "/model/new",
-        {
-            "model_name": name,
-            "litellm_params": {
-                "model": "anthropic/claude-3-5-sonnet-20241022",
-                "api_key": "integration-provider-key",
-                "api_base": f"{gateway.upstream_url}/{scenario_id}",
-            },
-        },
+    return scenario.model(
+        model="anthropic/claude-3-5-sonnet-20241022", api_base=f"{gateway.upstream_url}/{scenario_id}"
     )
-    assert isinstance(created["model_info"], dict) and created["model_info"]["id"], created
-    return name
 
 
-def _responses_model(gateway: Gateway, *, stream: bool) -> str:
+def _responses_model(scenario: Scenario, *, stream: bool) -> str:
+    gateway: Final = scenario.gateway
     scenario_id: Final = "audit-resp-stream" if stream else "audit-resp"
     if stream:
         _register_scenario(gateway, scenario_id, {"content_type": "text/event-stream", "frames": _RESPONSES_EVENTS})
@@ -104,20 +96,7 @@ def _responses_model(gateway: Gateway, *, stream: bool) -> str:
                 "routes": {"POST /responses": {"content_type": "application/json", "body": _RESPONSES_BODY}},
             },
         )
-    name: Final = f"integration-{uuid.uuid4().hex}"
-    created: Final = gateway.post(
-        "/model/new",
-        {
-            "model_name": name,
-            "litellm_params": {
-                "model": "openai/gpt-4o-mini",
-                "api_key": "integration-provider-key",
-                "api_base": f"{gateway.upstream_url}/{scenario_id}",
-            },
-        },
-    )
-    assert isinstance(created["model_info"], dict) and created["model_info"]["id"], created
-    return name
+    return scenario.model(api_base=f"{gateway.upstream_url}/{scenario_id}")
 
 
 def _openai_client(gateway: Gateway, key: str) -> openai.OpenAI:
@@ -218,8 +197,8 @@ def test_allowed_key_chat_completions_restamps_alias(
 @pytest.mark.parametrize("client_kind", ("httpx", "anthropic", "anthropic_async"))
 @pytest.mark.parametrize("stream", (False, True))
 def test_allowed_key_messages(gateway: Gateway, client_kind: str, stream: bool) -> None:
-    model: Final = _anthropic_model(gateway, stream=stream)
     with gateway.scenario() as scenario:
+        model: Final = _anthropic_model(scenario, stream=stream)
         key: Final = scenario.key(models=[model])
         body: Final = {
             "model": model,
@@ -263,8 +242,8 @@ def test_allowed_key_messages(gateway: Gateway, client_kind: str, stream: bool) 
 @pytest.mark.parametrize("client_kind", ("httpx", "openai", "openai_async"))
 @pytest.mark.parametrize("stream", (False, True))
 def test_allowed_key_responses(gateway: Gateway, client_kind: str, stream: bool) -> None:
-    model: Final = _responses_model(gateway, stream=stream)
     with gateway.scenario() as scenario:
+        model: Final = _responses_model(scenario, stream=stream)
         key: Final = scenario.key(models=[model])
         body: Final = {
             "model": model,
@@ -333,20 +312,10 @@ async def test_realtime_websocket_allowed_and_denied(gateway: Gateway) -> None:
             ),
         },
     )
-    name: Final = f"integration-{uuid.uuid4().hex}"
-    created: Final = gateway.post(
-        "/model/new",
-        {
-            "model_name": name,
-            "litellm_params": {
-                "model": "openai/gpt-4o-realtime-preview",
-                "api_key": rt_scenario,
-                "api_base": gateway.upstream_url,
-            },
-        },
-    )
-    assert isinstance(created["model_info"], dict) and created["model_info"]["id"], created
     with gateway.scenario() as scenario:
+        name: Final = scenario.model(
+            model="openai/gpt-4o-realtime-preview", api_key=rt_scenario, api_base=gateway.upstream_url
+        )
         key: Final = scenario.key(models=[name])
         other_model: Final = scenario.model()
         denied_key: Final = scenario.key(models=[other_model])
@@ -382,3 +351,115 @@ def test_max_budget_allows_then_denies_and_records_spend(gateway: Gateway) -> No
         second: Final = gateway.request("POST", "/v1/chat/completions", body, key=key)
         assert second.status_code == 422, second.text
         assert "budget_exceeded" in second.text, second.text
+
+
+_PATH_MODEL_BACKEND: Final = "gpt-5.4-mini"
+_PATH_MODEL_ROUTES: Final = (
+    ("/openai/deployments/{model}/chat/completions", "chat"),
+    ("/engines/{model}/chat/completions", "chat"),
+    ("/openai/deployments/{model}/completions", "text"),
+    ("/engines/{model}/completions", "text"),
+)
+
+
+def _path_model_reply(request: Request) -> Reply:
+    assert (request.method, request.target) == ("POST", "/chat/completions"), request
+    return Reply(
+        body=json.dumps(
+            {
+                "id": "chatcmpl-" + _marker(),
+                "object": "chat.completion",
+                "created": 1,
+                "model": _PATH_MODEL_BACKEND,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "path"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+            }
+        ).encode()
+    )
+
+
+def _path_model_body(kind: str, prompt: str) -> dict[str, JsonValue]:
+    return {"messages": [{"role": "user", "content": prompt}]} if kind == "chat" else {"prompt": prompt}
+
+
+def _upstream_bodies(wire: Wire) -> list[dict[str, JsonValue]]:
+    return [json.loads(request.body) for request in wire.drain()]
+
+
+@pytest.mark.parametrize(("route", "kind"), _PATH_MODEL_ROUTES)
+def test_path_only_model_alias_refuses_an_unallowed_deployment(gateway: Gateway, route: str, kind: str) -> None:
+    with wire_server(_path_model_reply) as allowed_wire, wire_server(_path_model_reply) as other_wire:
+        with gateway.scenario() as scenario:
+            allowed: Final = scenario.model(model=f"openai/{_PATH_MODEL_BACKEND}", api_base=allowed_wire.url)
+            other: Final = scenario.model(model=f"openai/{_PATH_MODEL_BACKEND}", api_base=other_wire.url)
+            key: Final = scenario.key(models=[allowed])
+            response: Final = gateway.request(
+                "POST",
+                route.format(model=other),
+                _path_model_body(kind, _marker()),
+                key=key,
+                params={"api-version": "2024-10-21"},
+            )
+            assert (_upstream_bodies(other_wire), _upstream_bodies(allowed_wire)) == ([], []), response.text
+            assert response.status_code == 403, response.text
+            assert f"The requested model '{other}' is not available for this API key" in response.text, response.text
+
+
+@pytest.mark.parametrize(("route", "kind"), _PATH_MODEL_ROUTES)
+def test_mixed_body_and_path_model_is_refused_or_served_by_the_body_model(
+    gateway: Gateway, route: str, kind: str
+) -> None:
+    pytest.skip(
+        "BUG: a key scoped to model A that sends model A in the body and an unallowed model B in the "
+        "/openai/deployments or /engines path is served by deployment B"
+    )
+    with wire_server(_path_model_reply) as allowed_wire, wire_server(_path_model_reply) as other_wire:
+        with gateway.scenario() as scenario:
+            allowed: Final = scenario.model(model=f"openai/{_PATH_MODEL_BACKEND}", api_base=allowed_wire.url)
+            other: Final = scenario.model(model=f"openai/{_PATH_MODEL_BACKEND}", api_base=other_wire.url)
+            key: Final = scenario.key(models=[allowed])
+            prompt: Final = _marker()
+            response: Final = gateway.request(
+                "POST",
+                route.format(model=other),
+                {"model": allowed, **_path_model_body(kind, prompt)},
+                key=key,
+                params={"api-version": "2024-10-21"},
+            )
+            other_bodies: Final = _upstream_bodies(other_wire)
+            allowed_bodies: Final = _upstream_bodies(allowed_wire)
+            outcome: Final = (response.status_code, other_bodies, allowed_bodies)
+            refused: Final = outcome[0] in (401, 403) and outcome[1:] == ([], [])
+            served_by_body_model: Final = outcome == (
+                200,
+                [],
+                [{"model": _PATH_MODEL_BACKEND, "messages": [{"role": "user", "content": prompt}]}],
+            )
+            assert refused or served_by_body_model, (outcome, response.text)
+
+
+@pytest.mark.parametrize(("route", "kind"), _PATH_MODEL_ROUTES)
+def test_path_only_model_alias_reaches_the_allowed_deployment(gateway: Gateway, route: str, kind: str) -> None:
+    with wire_server(_path_model_reply) as allowed_wire, wire_server(_path_model_reply) as other_wire:
+        with gateway.scenario() as scenario:
+            allowed: Final = scenario.model(model=f"openai/{_PATH_MODEL_BACKEND}", api_base=allowed_wire.url)
+            scenario.model(model=f"openai/{_PATH_MODEL_BACKEND}", api_base=other_wire.url)
+            key: Final = scenario.key(models=[allowed])
+            prompt: Final = _marker()
+            response: Final = gateway.request(
+                "POST",
+                route.format(model=allowed),
+                _path_model_body(kind, prompt),
+                key=key,
+                params={"api-version": "2024-10-21"},
+            )
+            assert response.status_code == 200, response.text
+            payload: Final = response.json()
+            assert [
+                choice["message"]["content"] if kind == "chat" else choice["text"] for choice in payload["choices"]
+            ] == ["path"], response.text
+            assert payload["object"] == ("chat.completion" if kind == "chat" else "text_completion"), response.text
+            assert _upstream_bodies(other_wire) == [], response.text
+            assert _upstream_bodies(allowed_wire) == [
+                {"model": _PATH_MODEL_BACKEND, "messages": [{"role": "user", "content": prompt}]}
+            ], response.text

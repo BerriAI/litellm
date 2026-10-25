@@ -239,3 +239,81 @@ func TestResourceUserDelete_SendsUserIDs(t *testing.T) {
 		t.Fatalf("expected ID to be cleared after delete, got %q", d.Id())
 	}
 }
+
+func TestResourceUserUpdate_NeverSendsBlocked(t *testing.T) {
+	for name, config := range map[string]map[string]interface{}{
+		"unset": {"user_role": "internal_user"},
+		"true":  {"user_role": "internal_user", "blocked": true},
+		"false": {"user_role": "internal_user", "blocked": false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/user/update":
+					var payload map[string]interface{}
+					if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+						t.Fatalf("failed to decode update payload: %v", err)
+					}
+					if _, ok := payload["blocked"]; ok {
+						w.WriteHeader(http.StatusBadRequest)
+						w.Write([]byte(`{"error": "Could not find field at upsertOneLiteLLM_UserTable.create.blocked"}`))
+						return
+					}
+					w.Write([]byte(`{"user_id": "u-7"}`))
+				case "/user/info":
+					w.Write(userInfoBody("u-7", map[string]interface{}{"user_role": "internal_user"}))
+				default:
+					t.Errorf("unexpected request to %s", r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer srv.Close()
+
+			d := schema.TestResourceDataRaw(t, resourceLiteLLMUser().Schema, config)
+			d.SetId("u-7")
+
+			if err := resourceLiteLLMUserUpdate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+				t.Fatalf("update failed: %v", err)
+			}
+		})
+	}
+}
+
+func TestResourceUserCreate_AlwaysSendsBlocked(t *testing.T) {
+	for name, tc := range map[string]struct {
+		config      map[string]interface{}
+		wantBlocked interface{}
+	}{
+		"unset": {config: map[string]interface{}{}, wantBlocked: false},
+		"false": {config: map[string]interface{}{"blocked": false}, wantBlocked: false},
+		"true":  {config: map[string]interface{}{"blocked": true}, wantBlocked: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var createPayload map[string]interface{}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/user/new":
+					if err := json.NewDecoder(r.Body).Decode(&createPayload); err != nil {
+						t.Fatalf("failed to decode create payload: %v", err)
+					}
+					w.Write([]byte(`{"user_id": "u-1", "key": "sk-generated"}`))
+				case "/user/info":
+					w.Write(userInfoBody("u-1", map[string]interface{}{"user_role": "internal_user"}))
+				default:
+					t.Errorf("unexpected request to %s", r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer srv.Close()
+
+			d := schema.TestResourceDataRaw(t, resourceLiteLLMUser().Schema, tc.config)
+
+			if err := resourceLiteLLMUserCreate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+				t.Fatalf("create failed: %v", err)
+			}
+			if got := createPayload["blocked"]; got != tc.wantBlocked {
+				t.Errorf("expected blocked %v in create payload, got %v", tc.wantBlocked, got)
+			}
+		})
+	}
+}

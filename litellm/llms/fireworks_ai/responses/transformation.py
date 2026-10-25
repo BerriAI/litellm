@@ -6,10 +6,14 @@ from urllib.parse import unquote
 import httpx
 from openai.types.responses import EasyInputMessageParam, ResponseInputContentParam, ResponseInputItemParam
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.fireworks_ai.common_utils import (
+    FIREWORKS_FORWARD_USER_ID_PARAM,
+    get_fireworks_forwarded_user_id,
     resolve_fireworks_api_key,
     resolve_fireworks_resource_name,
     with_fireworks_session_affinity,
+    without_caller_user,
 )
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
@@ -28,6 +32,16 @@ def _session_params(litellm_params: GenericLiteLLMParams) -> Mapping[str, object
     extras: Final[Mapping[str, object]] = litellm_params.model_extra or MappingProxyType({})
     return MappingProxyType(
         {"litellm_session_id": extras.get("litellm_session_id"), "metadata": extras.get("litellm_metadata")}
+    )
+
+
+def _forwarded_user_params(litellm_params: GenericLiteLLMParams) -> Mapping[str, object]:
+    extras: Final[Mapping[str, object]] = litellm_params.model_extra or MappingProxyType({})
+    return MappingProxyType(
+        {
+            FIREWORKS_FORWARD_USER_ID_PARAM: litellm_params.fireworks_forward_user_id,
+            "litellm_metadata": extras.get("litellm_metadata"),
+        }
     )
 
 
@@ -137,8 +151,8 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return dict(pinned)
 
     def get_complete_url(self, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
-        base: Final = (api_base or get_secret_str("FIREWORKS_API_BASE") or FIREWORKS_AI_DEFAULT_API_BASE).rstrip("/")
-        return f"{base}/responses"
+        base: Final = api_base or get_secret_str("FIREWORKS_API_BASE") or FIREWORKS_AI_DEFAULT_API_BASE
+        return join_api_base(base, "responses")
 
     def transform_responses_api_request(
         self,
@@ -163,13 +177,24 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 *instruction_entries,
             )
         }
-        return super().transform_responses_api_request(
+        request: Final = super().transform_responses_api_request(
             model=resolve_fireworks_resource_name(model),
             input=folded_input,
             response_api_optional_request_params=folded_params,
             litellm_params=litellm_params,
             headers=headers,
         )
+        forwarded_user_id: Final = get_fireworks_forwarded_user_id(_forwarded_user_params(litellm_params))
+        return request if forwarded_user_id is None else {**request, "user": forwarded_user_id}
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object]:
+        return without_caller_user(extra_body, get_fireworks_forwarded_user_id(_forwarded_user_params(litellm_params)))
 
     def transform_delete_response_api_response(
         self,

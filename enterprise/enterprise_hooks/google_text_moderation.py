@@ -6,7 +6,10 @@
 # +-----------------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
+from typing import Final
+
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -15,8 +18,10 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails._content_utils import iter_message_text
 from litellm.types.utils import CallTypesLiteral
 
+_THRESHOLD_VALUE: Final = TypeAdapter(object)
 
-class _ENTERPRISE_GoogleTextModeration(CustomLogger):
+
+class ENTERPRISE_GoogleTextModeration(CustomLogger):
     user_api_key_cache = None
     confidence_categories = [
         "toxic",
@@ -69,9 +74,11 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
                     f"{category}_confidence_threshold",
                     default_confidence_threshold,
                 )
-            set_confidence_value = getattr(
-                self,
-                f"{category}_confidence_threshold",
+            set_confidence_value = _THRESHOLD_VALUE.validate_python(
+                getattr(
+                    self,
+                    f"{category}_confidence_threshold",
+                )
             )
             verbose_proxy_logger.info(
                 f"Google Text Moderation: {category}_confidence_threshold: {set_confidence_value}"
@@ -125,9 +132,10 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
                     )
             # Handle the response
             return data
+_ENTERPRISE_GoogleTextModeration = ENTERPRISE_GoogleTextModeration
 
 
-# google_text_moderation_obj = _ENTERPRISE_GoogleTextModeration()
+# google_text_moderation_obj = ENTERPRISE_GoogleTextModeration()
 # asyncio.run(
 #     google_text_moderation_obj.async_moderation_hook(
 #         data={"messages": [{"role": "user", "content": "Hey, how's it going?"}]}
