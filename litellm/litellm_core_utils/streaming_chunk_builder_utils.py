@@ -1350,18 +1350,11 @@ def stream_chunk_builder_text_completion(
     return TextCompletionResponse(**response)
 
 
-_CALCULATOR_PRICED_REPORTED_COST_PROVIDERS: Final = frozenset({LlmProviders.XAI.value})
-
-
 def _logged_provider(logging_obj: Optional["Logging"]) -> object:
     if logging_obj is None:
         return None
     provider: Final[object] = logging_obj.model_call_details.get("custom_llm_provider")
     return provider
-
-
-def _reported_cost_is_priced_by_calculator(logging_obj: Optional["Logging"]) -> bool:
-    return _logged_provider(logging_obj) in _CALCULATOR_PRICED_REPORTED_COST_PROVIDERS
 
 
 def _stream_builder_response_cost(
@@ -1374,9 +1367,6 @@ def _stream_builder_response_cost(
             for chunk in reversed(chunks)
         )
         return next((cost for cost in reported if cost is not None), None)
-    usage_cost: Final = getattr(getattr(response, "usage", None), "cost", None)
-    if isinstance(usage_cost, (int, float)) and not _reported_cost_is_priced_by_calculator(logging_obj):
-        return float(usage_cost)
     if logging_obj is not None:
         return None
     provider_hint: Final = response._hidden_params.get(  # pyright: ignore[reportPrivateUsage]  # no public accessor

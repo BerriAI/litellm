@@ -15,6 +15,7 @@ import pytest
 
 # Add the project root to Python path
 import litellm
+from litellm.cost_calculator import cost_per_token as billed_cost_per_token
 from litellm.llms.perplexity.cost_calculator import (
     cost_per_token as perplexity_cost_per_token,
 )
@@ -109,13 +110,13 @@ class TestPerplexityCostCalculator:
             "total_cost": 0.008,
         }
 
-        prompt_cost, completion_cost = perplexity_cost_per_token(model="sonar-pro", usage=usage)
+        prompt_cost, completion_cost = billed_cost_per_token(
+            model="perplexity/sonar-pro", custom_llm_provider="perplexity", usage_object=usage
+        )
 
-        # When Perplexity provides total_cost, we use it directly
-        # prompt_cost should be 0, completion_cost should be total_cost
-        assert prompt_cost == 0.0
-        assert completion_cost == 0.008
-        assert prompt_cost + completion_cost == 0.008
+        # When Perplexity provides total_cost, that total is the bill
+        assert math.isclose(prompt_cost + completion_cost, 0.008, rel_tol=1e-10)
+        assert prompt_cost > 0.0 and completion_cost > 0.0
 
     def test_uses_perplexity_provided_cost_when_normalized_to_float(self):
         """
@@ -135,10 +136,11 @@ class TestPerplexityCostCalculator:
         usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
         usage.cost = 0.008
 
-        prompt_cost, completion_cost = perplexity_cost_per_token(model="sonar-pro", usage=usage)
+        prompt_cost, completion_cost = billed_cost_per_token(
+            model="perplexity/sonar-pro", custom_llm_provider="perplexity", usage_object=usage
+        )
 
-        assert prompt_cost == 0.0
-        assert completion_cost == 0.008
+        assert math.isclose(prompt_cost + completion_cost, 0.008, rel_tol=1e-10)
 
     OFF_PEAK_MODEL = "sonar-off-peak-test"
     OFF_PEAK_WINDOW = "14:00-00:00"

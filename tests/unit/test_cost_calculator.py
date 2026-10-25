@@ -10522,3 +10522,169 @@ def test_bedrock_registered_cache_prices_preserve_dynamic_threshold_rates(
     assert entry is not None
     assert entry[1]["input_cost_per_token_above_300k_tokens"] == 0.03
     assert entry[1][tier_field] == (tier_override if tier_override is not None else 0.007)
+
+
+_REPORTED_USAGE: Final = {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120, "cost": 0.037}
+_REPORTED_COST_FIXTURE_MODEL: Final = "openai/reported-cost-fixture"
+_REPORTED_COST_FIXTURE_RATES: Final = {
+    "litellm_provider": "openai",
+    "mode": "chat",
+    "input_cost_per_token": 1e-6,
+    "output_cost_per_token": 3e-6,
+}
+
+
+def _reported_cost_logging(stream: bool, litellm_params: Mapping[str, object]) -> Logging:
+    logging_obj: Final = Logging(
+        model=_REPORTED_COST_FIXTURE_MODEL,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=stream,
+        call_type="completion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="reported-cost",
+        function_id="reported-cost",
+    )
+    logging_obj.update_from_kwargs(
+        kwargs={}, optional_params={}, litellm_params={"custom_llm_provider": "openai", **litellm_params}
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+    return logging_obj
+
+
+def _reported_cost_stream_chunk(content: str | None, finish_reason: str | None, usage: Usage | None) -> object:
+    return litellm.ModelResponseStream(
+        id="chatcmpl-reported",
+        model="reported-cost-fixture",
+        created=1,
+        object="chat.completion.chunk",
+        choices=[litellm.types.utils.StreamingChoices(index=0, delta=litellm.types.utils.Delta(content=content), finish_reason=finish_reason)],
+        usage=usage,
+    )
+
+
+def _bill_reported_cost(stream: bool, litellm_params: Mapping[str, object], hidden_params: Mapping[str, object]) -> float | None:
+    """The spend the proxy logs for one upstream reply carrying usage.cost, streamed or not."""
+    logging_obj: Final = _reported_cost_logging(stream, litellm_params)
+    if stream:
+        response: Final[object] = litellm.stream_chunk_builder(
+            [
+                _reported_cost_stream_chunk("hi", None, None),
+                _reported_cost_stream_chunk(None, "stop", None),
+                _reported_cost_stream_chunk(None, None, Usage(**_REPORTED_USAGE)),
+            ],
+            messages=[{"role": "user", "content": "hi"}],
+            logging_obj=logging_obj,
+        )
+    else:
+        response = ModelResponse(
+            id="chatcmpl-reported",
+            model="reported-cost-fixture",
+            choices=[Choices(index=0, message=Message(role="assistant", content="hi"), finish_reason="stop")],
+            usage=Usage(**_REPORTED_USAGE),
+        )
+    assert isinstance(response, ModelResponse)
+    response._hidden_params.update({"custom_llm_provider": "openai", **hidden_params})
+    return logging_obj.response_cost_calculator(result=response)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("mapped", [False, True])
+def test_provider_reported_usage_cost_is_billed_on_stream_and_non_stream(
+    monkeypatch: pytest.MonkeyPatch, stream: bool, mapped: bool
+) -> None:
+    """Regression for #47533: a plain openai-compatible deployment billed usage.cost on streams and $0 on non-stream."""
+    if mapped:
+        monkeypatch.setitem(litellm.model_cost, _REPORTED_COST_FIXTURE_MODEL, _REPORTED_COST_FIXTURE_RATES)
+    else:
+        monkeypatch.delitem(litellm.model_cost, _REPORTED_COST_FIXTURE_MODEL, raising=False)
+
+    assert _bill_reported_cost(stream, {}, {}) == pytest.approx(0.037)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_deployment_pricing_beats_the_provider_reported_usage_cost(monkeypatch: pytest.MonkeyPatch, stream: bool) -> None:
+    """Streams used to bill usage.cost even when the operator priced the deployment; both paths bill the operator's rates."""
+    deployment_id: Final = "reported-cost-deployment-priced-by-the-operator"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        deployment_id,
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 2e-6, "output_cost_per_token": 6e-6},
+    )
+    litellm_params: Final = {
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 6e-6,
+        "model_info": {"id": deployment_id},
+    }
+
+    assert _bill_reported_cost(stream, litellm_params, {"model_id": deployment_id}) == pytest.approx(
+        100 * 2e-6 + 20 * 6e-6
+    )
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_base_model_pricing_beats_the_provider_reported_usage_cost(monkeypatch: pytest.MonkeyPatch, stream: bool) -> None:
+    base_model: Final = "openai/reported-cost-base-model-fixture"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        base_model,
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 5e-6, "output_cost_per_token": 7e-6},
+    )
+
+    assert _bill_reported_cost(stream, {"base_model": base_model}, {}) == pytest.approx(100 * 5e-6 + 20 * 7e-6)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_provider_reported_usage_cost_takes_discount_then_margin(monkeypatch: pytest.MonkeyPatch, stream: bool) -> None:
+    monkeypatch.setattr(litellm, "cost_discount_config", {"openai": 0.2})
+    monkeypatch.setattr(litellm, "cost_margin_config", {"global": {"percentage": 0.5, "fixed_amount": 0.001}})
+
+    assert _bill_reported_cost(stream, {}, {}) == pytest.approx(0.037 * 0.8 * 1.5 + 0.001)
+
+
+def test_provider_reported_usage_cost_splits_input_and_output_by_the_token_math_ratio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, _REPORTED_COST_FIXTURE_MODEL, _REPORTED_COST_FIXTURE_RATES)
+    usage: Final = Usage(**_REPORTED_USAGE)
+
+    prompt_cost, completion_cost = cost_per_token(
+        model=_REPORTED_COST_FIXTURE_MODEL, custom_llm_provider="openai", usage_object=usage
+    )
+
+    priced_prompt: Final = 100 * 1e-6
+    priced_completion: Final = 20 * 3e-6
+    assert prompt_cost + completion_cost == pytest.approx(0.037)
+    assert prompt_cost == pytest.approx(0.037 * priced_prompt / (priced_prompt + priced_completion))
+
+
+def test_provider_reported_usage_cost_without_rates_is_all_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delitem(litellm.model_cost, _REPORTED_COST_FIXTURE_MODEL, raising=False)
+
+    assert cost_per_token(
+        model=_REPORTED_COST_FIXTURE_MODEL, custom_llm_provider="openai", usage_object=Usage(**_REPORTED_USAGE)
+    ) == (0.0, 0.037)
+
+
+@pytest.mark.parametrize("reported", [-0.037, float("nan"), float("inf"), True])
+def test_unusable_provider_reported_usage_cost_falls_back_to_the_token_math(
+    monkeypatch: pytest.MonkeyPatch, reported: object
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, _REPORTED_COST_FIXTURE_MODEL, _REPORTED_COST_FIXTURE_RATES)
+    usage: Final = Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120)
+    setattr(usage, "cost", reported)
+
+    assert cost_per_token(model=_REPORTED_COST_FIXTURE_MODEL, custom_llm_provider="openai", usage_object=usage) == (
+        pytest.approx(100 * 1e-6),
+        pytest.approx(20 * 3e-6),
+    )
+
+
+def test_caller_supplied_custom_cost_per_token_beats_the_provider_reported_usage_cost() -> None:
+    assert cost_per_token(
+        model=_REPORTED_COST_FIXTURE_MODEL,
+        custom_llm_provider="openai",
+        prompt_tokens=100,
+        completion_tokens=20,
+        usage_object=Usage(**_REPORTED_USAGE),
+        custom_cost_per_token={"input_cost_per_token": 0.001, "output_cost_per_token": 0.002},
+    ) == (pytest.approx(0.1), pytest.approx(0.04))

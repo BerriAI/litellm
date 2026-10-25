@@ -11878,7 +11878,89 @@ GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM: Final = GPT_5_6_TERRA_MESSAGES_BRIDGED_JS
     }
 )
 
+
+# An OpenAI-compatible gateway that reports what it charged under usage.cost (#47533). The reported total is the bill,
+# split across input and output by the ratio of the cost map rates (100 * 1e-6 : 20 * 3e-6), on plain and streamed
+# replies alike. A deployment the operator priced keeps the operator's rates on both.
+_GATEWAY_REPORTED_USAGE: Final = {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120, "cost": 0.037}
+_GATEWAY_REPORTED_EXPECTED: Final = ExactExpected(
+    spend=0.037, input_cost=0.023125, output_cost=0.013875, prompt_tokens=100, completion_tokens=20
+)
+_GATEWAY_OPERATOR_PRICED: Final = Deployment(input_cost_per_token=2e-06, output_cost_per_token=6e-06)
+_GATEWAY_OPERATOR_PRICED_EXPECTED: Final = ExactExpected(
+    spend=0.00032, input_cost=0.0002, output_cost=0.00012, prompt_tokens=100, completion_tokens=20
+)
+_GATEWAY_CHUNK: Final = {
+    "id": "chatcmpl-$REQUEST_ID",
+    "object": "chat.completion.chunk",
+    "created": 1,
+    "model": "gateway-reported-cost-fixture",
+}
+
+GATEWAY_REPORTED_COST: Final = CostTrackingTestCase(
+    name="gateway-reported-cost",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gateway-reported-cost-fixture",
+    endpoint="/v1/chat/completions",
+    request={"model": "$MODEL", "messages": [{"role": "user", "content": "reported cost"}], "stream": False},
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gateway-reported-cost-fixture",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": _GATEWAY_REPORTED_USAGE,
+        },
+    ),
+    expected=_GATEWAY_REPORTED_EXPECTED,
+)
+
+GATEWAY_REPORTED_COST_STREAM: Final = CostTrackingTestCase(
+    name="gateway-reported-cost-stream",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gateway-reported-cost-fixture",
+    endpoint="/v1/chat/completions",
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "reported cost"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {**_GATEWAY_CHUNK, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}}]},
+            {**_GATEWAY_CHUNK, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            {**_GATEWAY_CHUNK, "choices": [], "usage": _GATEWAY_REPORTED_USAGE},
+            done=True,
+        ),
+    ),
+    expected=_GATEWAY_REPORTED_EXPECTED,
+)
+
+GATEWAY_REPORTED_COST_OPERATOR_PRICED: Final = GATEWAY_REPORTED_COST.model_copy(
+    update={
+        "name": "gateway-reported-cost-operator_priced",
+        "deployment": _GATEWAY_OPERATOR_PRICED,
+        "expected": _GATEWAY_OPERATOR_PRICED_EXPECTED,
+    }
+)
+
+GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM: Final = GATEWAY_REPORTED_COST_STREAM.model_copy(
+    update={
+        "name": "gateway-reported-cost-operator_priced-stream",
+        "deployment": _GATEWAY_OPERATOR_PRICED,
+        "expected": _GATEWAY_OPERATOR_PRICED_EXPECTED,
+    }
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    GATEWAY_REPORTED_COST,
+    GATEWAY_REPORTED_COST_STREAM,
+    GATEWAY_REPORTED_COST_OPERATOR_PRICED,
+    GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM,
     GPT_5_6_SLASH_ALIAS,
     GPT_5_6_SLASH_ALIAS_STREAM,
     GPT_6_SOL_RESPONSES_DEPLOYMENT_JSON,
@@ -12120,6 +12202,10 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
+    StreamParityTestCase(plain=GATEWAY_REPORTED_COST, streamed=GATEWAY_REPORTED_COST_STREAM),
+    StreamParityTestCase(
+        plain=GATEWAY_REPORTED_COST_OPERATOR_PRICED, streamed=GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM
+    ),
     StreamParityTestCase(plain=GPT_5_3_CODEX_INPUT_TEXT, streamed=GPT_5_3_CODEX_STREAM),
     StreamParityTestCase(plain=GPT_5_3_CODEX_INPUT_TEXT, streamed=GPT_5_3_CODEX_STREAM_INCOMPLETE),
     StreamParityTestCase(plain=GPT_5_3_CODEX_INPUT_TEXT, streamed=GPT_5_3_CODEX_STREAM_UNVALIDATED),

@@ -6,6 +6,7 @@ import math
 import os
 
 import litellm
+from litellm.cost_calculator import cost_per_token as billed_cost_per_token
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
@@ -115,7 +116,9 @@ class TestXAICostCalculator:
             model="grok-4.7", usage=Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300)
         )
 
-        prompt_cost, completion_cost = cost_per_token(model="grok-4.7", usage=usage)
+        prompt_cost, completion_cost = billed_cost_per_token(
+            model="xai/grok-4.7", custom_llm_provider="xai", usage_object=usage
+        )
 
         assert math.isclose(prompt_cost + completion_cost, 0.0037756, rel_tol=1e-10)
         assert math.isclose(prompt_cost / completion_cost, priced_prompt / priced_completion, rel_tol=1e-10)
@@ -165,7 +168,10 @@ class TestXAICostCalculator:
         """A reported zero is a real answer, not a missing value."""
         usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300, cost=0.0)
 
-        assert cost_per_token(model="grok-4-latest", usage=usage) == (0.0, 0.0)
+        assert billed_cost_per_token(model="xai/grok-4-latest", custom_llm_provider="xai", usage_object=usage) == (
+            0.0,
+            0.0,
+        )
 
     def test_custom_pricing_beats_the_reported_cost(self):
         response = ModelResponse(

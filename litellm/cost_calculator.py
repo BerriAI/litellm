@@ -5,7 +5,7 @@ import math
 import time
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from functools import lru_cache
+from functools import lru_cache, partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
 
@@ -22,7 +22,7 @@ from litellm.constants import (
     OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES,
     REALTIME_METERED_USAGE_KEY,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, provider_reported_usage_cost
 from litellm.litellm_core_utils.cost_discount import resolve_cost_discount
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, is_decisions_call_type
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
@@ -408,7 +408,101 @@ def _per_second_pricing_cost(
     return resolved_cost_per_second * seconds, 0.0
 
 
+def _billable_reported_cost(usage_object: Usage | None) -> float | None:
+    return _billable_header_cost(provider_reported_usage_cost(usage_object, None))
+
+
+def _split_reported_cost(reported_cost: float, priced: tuple[float, float] | None) -> tuple[float, float]:
+    """Providers report one total, so attribute it to input and output in the ratio the token math gives."""
+    priced_total: Final = (priced[0] + priced[1]) if priced is not None else 0.0
+    if priced is None or priced_total <= 0:
+        return 0.0, reported_cost
+    input_cost: Final = reported_cost * priced[0] / priced_total
+    return input_cost, reported_cost - input_cost
+
+
 def cost_per_token(
+    model: str = "",
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    response_time_ms: float | None = 0.0,
+    custom_llm_provider: str | None = None,
+    region_name=None,
+    ### CHARACTER PRICING ###
+    prompt_characters: int | None = None,
+    completion_characters: int | None = None,
+    ### PROMPT CACHING PRICING ### - used for anthropic
+    cache_creation_input_tokens: int | None = 0,
+    cache_read_input_tokens: int | None = 0,
+    ### CUSTOM PRICING ###
+    custom_cost_per_token: CostPerToken | None = None,
+    custom_cost_per_second: float | None = None,
+    ### NUMBER OF QUERIES ###
+    number_of_queries: int | None = None,
+    ### USAGE OBJECT ###
+    usage_object: Usage | None = None,  # just read the usage object if provided
+    ### BILLED UNITS ###
+    rerank_billed_units: RerankBilledUnits | None = None,
+    ### CALL TYPE ###
+    call_type: CallTypesLiteral = "completion",
+    audio_transcription_file_duration: float = 0.0,  # for audio transcription calls - the file time in seconds
+    ### SERVICE TIER ###
+    service_tier: str | None = None,  # for OpenAI service tier pricing
+    ### DATA RESIDENCY ###
+    data_residency: str | None = None,  # for OpenAI regional-processing uplift (e.g. "eu", "us")
+    ### VERTEX LOCATION ###
+    vertex_location: str | None = None,  # for Vertex AI regional-endpoint uplift (e.g. "us-east5", "global")
+    response: object | None = None,
+    ### REQUEST MODEL ###
+    request_model: str | None = None,  # original request model for router detection
+    custom_model_info: OCRPricing | None = None,
+    bedrock_model_info: ModelInfo | None = None,
+) -> tuple[float, float]:
+    """Cost in USD for prompt and completion tokens.
+
+    A numeric ``usage.cost`` the provider reported is the bill, split by the ratio of our own token math,
+    unless the caller priced the call itself with ``custom_cost_per_token`` or ``custom_cost_per_second``.
+    Without a reported cost the token math is the bill.
+    """
+    priced_by_caller: Final = custom_cost_per_token is not None or custom_cost_per_second is not None
+    reported_cost: Final = None if priced_by_caller else _billable_reported_cost(usage_object)
+    rated: Final = partial(
+        _cost_per_token_from_rates,
+        model=model,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        response_time_ms=response_time_ms,
+        custom_llm_provider=custom_llm_provider,
+        region_name=region_name,
+        prompt_characters=prompt_characters,
+        completion_characters=completion_characters,
+        cache_creation_input_tokens=cache_creation_input_tokens,
+        cache_read_input_tokens=cache_read_input_tokens,
+        custom_cost_per_token=custom_cost_per_token,
+        custom_cost_per_second=custom_cost_per_second,
+        number_of_queries=number_of_queries,
+        usage_object=usage_object,
+        rerank_billed_units=rerank_billed_units,
+        call_type=call_type,
+        audio_transcription_file_duration=audio_transcription_file_duration,
+        service_tier=service_tier,
+        data_residency=data_residency,
+        vertex_location=vertex_location,
+        response=response,
+        request_model=request_model,
+        custom_model_info=custom_model_info,
+        bedrock_model_info=bedrock_model_info,
+    )
+    if reported_cost is None:
+        return rated()
+    try:
+        return _split_reported_cost(reported_cost, rated())
+    except Exception:  # noqa: BLE001  # an unmapped model has no rates to split by, the reported total still bills
+        verbose_logger.debug("No rates for model=%s, billing the provider reported cost %s", model, reported_cost)
+        return _split_reported_cost(reported_cost, None)
+
+
+def _cost_per_token_from_rates(
     model: str = "",
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
@@ -1610,7 +1704,9 @@ def completion_cost(
         audio_transcription_file_duration: float = 0.0
         provider_usage_object: Final = get_usage_object(completion_response=completion_response)
         cost_per_token_usage_object: Final[Usage | None] = (
-            _without_provider_stated_cost(provider_usage_object) if custom_pricing else provider_usage_object
+            _without_provider_stated_cost(provider_usage_object)
+            if custom_pricing or base_model is not None
+            else provider_usage_object
         )
         rerank_billed_units: RerankBilledUnits | None = None
 
