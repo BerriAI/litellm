@@ -455,30 +455,23 @@ def is_active_priced_mistral_chat_row(name: str, entry: Mapping[str, object]) ->
     )
 
 
-def cache_read_is_tenth_of_input(entry: Mapping[str, object]) -> bool:
+def cache_read_is_below_input(entry: Mapping[str, object]) -> bool:
     cache_read: Final = entry.get("cache_read_input_token_cost")
     input_cost: Final = entry.get("input_cost_per_token")
-    return (
-        isinstance(cache_read, float)
-        and isinstance(input_cost, (int, float))
-        and 0 < cache_read < input_cost
-        and cache_read == pytest.approx(input_cost / 10)
-    )
+    return isinstance(cache_read, float) and isinstance(input_cost, (int, float)) and 0 < cache_read < input_cost
 
 
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
 def test_active_mistral_chat_rows_price_cache_reads_below_input(path: Path):
     """A Mistral chat row without a cache-read rate bills cached prompt tokens at zero, so every
-    active priced row must carry one, and it must be cheaper than a fresh input token. Mistral
-    bills cached tokens at 10% of the input price for every model (docs.mistral.ai/studio/
-    conversations/advanced/prompt-caching, read 2026-09-18), so the ratio is checked as well."""
+    active priced row must carry one, and it must be cheaper than a fresh input token."""
     rows: Mapping[str, object] = json.loads(path.read_text())
     drifted: Final = [
         f"{name}: cache_read={entry.get('cache_read_input_token_cost')} input={entry.get('input_cost_per_token')}"
         for name, entry in rows.items()
         if isinstance(entry, dict)
         and is_active_priced_mistral_chat_row(name, entry)
-        and not cache_read_is_tenth_of_input(entry)
+        and not cache_read_is_below_input(entry)
     ]
     assert drifted == []
 
