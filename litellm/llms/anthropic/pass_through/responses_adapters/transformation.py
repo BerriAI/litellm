@@ -242,7 +242,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     @staticmethod
     def _summary_part_text(part: object) -> str:
         if isinstance(part, Mapping):
-            mapping: Final = cast(Mapping[str, Any], part)  # cast-ok: summary parts are untyped provider json
+            mapping: Final = cast(Mapping[str, object], part)  # cast-ok: summary parts are untyped provider json
             return str(mapping.get("text") or "")
         return str(getattr(part, "text", None) or "")
 
@@ -673,7 +673,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             output_config = anthropic_request.get("output_config")
             reasoning: Final = self.translate_thinking_to_reasoning(
                 thinking,
-                output_config=cast(dict[str, Any] | None, output_config),
+                output_config=cast(dict[str, object] | None, output_config),
                 auto_summary_level=auto_summary_level,
                 drop_params=drop_params,
             )
