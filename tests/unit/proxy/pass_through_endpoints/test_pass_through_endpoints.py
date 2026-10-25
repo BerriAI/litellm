@@ -6866,7 +6866,7 @@ async def test_passthrough_records_model_reported_by_upstream(request_body: Mapp
     payloads, _ = await _run_upstream_reporting_passthrough(_UPSTREAM_SUMMARIZER_HEADERS, request_body=request_body)
 
     assert len(payloads) == 1
-    logged = cast(types_utils.StandardLoggingPayload, payloads[0])
+    logged: Final = cast(types_utils.StandardLoggingPayload, payloads[0])
     assert (logged["model"], logged["response_cost"], logged["total_tokens"]) == (
         "support-summarizer",
         0.0123,
@@ -6900,7 +6900,7 @@ async def test_passthrough_records_upstream_reported_model_on_error_response():
     )
 
     mock_proxy_logging.post_call_failure_hook.assert_awaited_once()
-    request_data = mock_proxy_logging.post_call_failure_hook.await_args.kwargs["request_data"]
+    request_data: Final = mock_proxy_logging.post_call_failure_hook.await_args.kwargs["request_data"]
     assert (request_data["model"], request_data["response_cost"], request_data["combined_usage_object"]) == (
         "support-summarizer",
         0.0123,

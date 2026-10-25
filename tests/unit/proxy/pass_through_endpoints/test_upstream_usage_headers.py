@@ -1,3 +1,5 @@
+from typing import Final
+
 import httpx
 import pytest
 
@@ -148,7 +150,9 @@ def test_parse_returns_no_model_when_upstream_sends_none():
 
 
 def test_parse_uses_the_first_value_of_a_repeated_model_header():
-    headers = httpx.Headers([("x-litellm-upstream-model", "support-summarizer"), ("x-litellm-upstream-model", "other")])
+    headers: Final = httpx.Headers(
+        [("x-litellm-upstream-model", "support-summarizer"), ("x-litellm-upstream-model", "other")]
+    )
 
     assert parse_upstream_reported_model(headers) == "support-summarizer"
 
@@ -167,7 +171,7 @@ def test_parse_cuts_a_long_model_name_to_the_spend_log_limit(raw_model: str, exp
 
 
 def _logging_obj_for_model(model: str) -> LiteLLMLoggingObj:
-    logging_obj = _logging_obj()
+    logging_obj: Final = _logging_obj()
     logging_obj.update_environment_variables(
         model=model, user="unknown", optional_params={}, litellm_params={}, call_type="pass_through_endpoint"
     )
@@ -175,9 +179,9 @@ def _logging_obj_for_model(model: str) -> LiteLLMLoggingObj:
 
 
 def test_apply_model_replaces_the_request_model():
-    logging_obj = _logging_obj_for_model("gpt-4o")
+    logging_obj: Final = _logging_obj_for_model("gpt-4o")
 
-    reported = apply_upstream_reported_model(
+    reported: Final = apply_upstream_reported_model(
         logging_obj=logging_obj,
         headers=_headers(**{"x-litellm-upstream-model": "support-summarizer"}),
     )
@@ -187,7 +191,7 @@ def test_apply_model_replaces_the_request_model():
 
 
 def test_apply_model_leaves_request_model_alone_when_header_is_blank():
-    logging_obj = _logging_obj_for_model("gpt-4o")
+    logging_obj: Final = _logging_obj_for_model("gpt-4o")
 
     assert (
         apply_upstream_reported_model(logging_obj=logging_obj, headers=_headers(**{"x-litellm-upstream-model": " "}))
@@ -199,8 +203,8 @@ def test_apply_model_leaves_request_model_alone_when_header_is_blank():
 def test_model_header_alone_does_not_make_the_upstream_own_the_cost():
     """The model name is a label: without a cost or token header the request
     must still fall back to cost_per_request, not be recorded at 0."""
-    logging_obj = _logging_obj()
-    headers = _headers(**{"x-litellm-upstream-model": "support-summarizer"})
+    logging_obj: Final = _logging_obj()
+    headers: Final = _headers(**{"x-litellm-upstream-model": "support-summarizer"})
 
     apply_upstream_reported_usage(logging_obj=logging_obj, headers=headers)
     apply_upstream_reported_model(logging_obj=logging_obj, headers=headers)
