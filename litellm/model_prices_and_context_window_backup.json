@@ -15663,6 +15663,28 @@
             "/v1/images/generations"
         ]
     },
+    "cerebras/llama-3.1-70b": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "cerebras",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "cerebras/llama-3.1-8b": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "cerebras",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
     "cerebras/llama-3.3-70b": {
         "input_cost_per_token": 8.5e-07,
         "litellm_provider": "cerebras",
