@@ -50,7 +50,7 @@ class ChatGPTToolCallNormalizer:
         self._stream: Final = stream
         self._seen_ids: dict[str, int] = {}  # tool_call_id -> assigned_index
         self._next_index: int = 0
-        self._source_index_to_output_index: dict[int, int | None] = {}
+        self._source_index_to_output_index: dict[int, int | None] = {}  # mutable-ok: incremental per-stream state
         self._last_id: str | None = None  # tracks which tool call the next delta belongs to
 
     def __getattr__(self, name: str) -> object:
