@@ -48046,7 +48046,7 @@
             }
         ]
     },
-    "topxai/kimi-k3": {
+    "topxai/kimi-k3.1-pro": {
         "cache_creation_input_token_cost": 2.4e-06,
         "cache_read_input_token_cost": 2.4e-07,
         "input_cost_per_token": 2.4e-06,
@@ -48056,13 +48056,11 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 1.2e-05,
-        "source": "https://ai.topxea.com/pricing/kimi-k3",
+        "source": "https://ai.topxea.com/pricing/kimi-k3.1-pro",
         "supports_function_calling": true,
         "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_tool_choice": true,
         "supports_vision": true
     },
     "topxai/GLM-5.3-Abliterated": {
@@ -48083,44 +48081,16 @@
         "supports_tool_choice": true,
         "supports_vision": false
     },
-    "topxai/deepseek-flash": {
-        "cache_read_input_token_cost": 4.8e-09,
-        "input_cost_per_token": 2.4e-07,
+    "topxai/deepseek-flash-Abliterated": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 1.2e-06,
         "litellm_provider": "topxai",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 393216,
-        "max_tokens": 393216,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
         "mode": "chat",
-        "off_peak_pricing": {
-            "cache_read_input_token_cost": 2.4e-09,
-            "input_cost_per_token": 1.2e-07,
-            "output_cost_per_token": 4.8e-07,
-            "windows": [
-                {
-                    "hours_utc": [
-                        "00:00-01:00",
-                        "04:00-06:00",
-                        "10:00-00:00"
-                    ],
-                    "weekdays": [
-                        1,
-                        2,
-                        3,
-                        4,
-                        5
-                    ]
-                },
-                {
-                    "hours_utc": "00:00-00:00",
-                    "weekdays": [
-                        6,
-                        7
-                    ]
-                }
-            ]
-        },
-        "output_cost_per_token": 9.6e-07,
-        "source": "https://ai.topxea.com/pricing/deepseek-flash",
+        "output_cost_per_token": 2.4e-06,
+        "source": "https://ai.topxea.com/pricing/deepseek-flash-abliterated",
         "supports_function_calling": true,
         "supports_pdf_input": false,
         "supports_prompt_caching": true,
@@ -48128,52 +48098,6 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
-    },
-    "topxai/deepseek-v4-pro": {
-        "cache_read_input_token_cost": 3.52e-08,
-        "input_cost_per_token": 1.056e-06,
-        "litellm_provider": "topxai",
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 393216,
-        "max_tokens": 393216,
-        "mode": "chat",
-        "off_peak_pricing": {
-            "cache_read_input_token_cost": 1.76e-08,
-            "input_cost_per_token": 5.28e-07,
-            "output_cost_per_token": 1.584e-06,
-            "windows": [
-                {
-                    "hours_utc": [
-                        "00:00-01:00",
-                        "04:00-06:00",
-                        "10:00-00:00"
-                    ],
-                    "weekdays": [
-                        1,
-                        2,
-                        3,
-                        4,
-                        5
-                    ]
-                },
-                {
-                    "hours_utc": "00:00-00:00",
-                    "weekdays": [
-                        6,
-                        7
-                    ]
-                }
-            ]
-        },
-        "output_cost_per_token": 3.168e-06,
-        "source": "https://ai.topxea.com/pricing/deepseek-v4-pro",
-        "supports_function_calling": true,
-        "supports_pdf_input": false,
-        "supports_prompt_caching": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_tool_choice": true,
-        "supports_vision": false
     },
     "snowflake/claude-3-5-sonnet": {
         "litellm_provider": "snowflake",
