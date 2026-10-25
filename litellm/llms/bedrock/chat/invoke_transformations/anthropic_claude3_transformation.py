@@ -5,6 +5,7 @@ import httpx
 from pydantic import TypeAdapter
 
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
 )
@@ -421,8 +422,8 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             api_key=api_key,
             json_mode=json_mode,
         )
-        body: Final = raw_response.json()
-        trace: Final = body.get(BEDROCK_INVOKE_TRACE_FIELD) if isinstance(body, dict) else None
-        if isinstance(trace, dict):
+        body: Final = object_mapping(raw_response.json()) or {}
+        trace: Final = object_mapping(body.get(BEDROCK_INVOKE_TRACE_FIELD))
+        if trace is not None:
             setattr(response, BEDROCK_INVOKE_TRACE_FIELD, trace)
         return response

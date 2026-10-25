@@ -1610,7 +1610,7 @@ class CustomStreamWrapper:
         return _ProviderChunkParsed(response_obj)
 
     def chunk_creator(self, chunk: Any):
-        if isinstance(chunk, ModelResponseStream) and chunk.provider_specific_fields and self.logging_obj is not None:
+        if isinstance(chunk, ModelResponseStream) and chunk.provider_specific_fields:
             self.logging_obj.record_native_bedrock_guardrail(chunk.provider_specific_fields)
         if self.custom_llm_provider != "cached_response" and isinstance(
             chunk, (ChatCompletionChunk, ModelResponseStream)

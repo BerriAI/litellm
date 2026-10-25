@@ -13,6 +13,7 @@ from litellm.caching.caching import InMemoryCache
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
 from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.common_utils import native_redacted_thinking_data
@@ -963,10 +964,10 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
             response_format_schema=response_format_schema,
         )
 
-    def _chunk_parser(self, chunk_data: dict) -> ModelResponseStream:
+    def _chunk_parser(self, chunk_data: dict[str, object]) -> ModelResponseStream:
         parsed: Final = self.anthropic_model_response_iterator.chunk_parser(chunk=chunk_data)
-        trace: Final = chunk_data.get(BEDROCK_INVOKE_TRACE_FIELD)
-        if not isinstance(trace, dict):
+        trace: Final = object_mapping(chunk_data.get(BEDROCK_INVOKE_TRACE_FIELD))
+        if trace is None:
             return parsed
         return parsed.model_copy(
             update={

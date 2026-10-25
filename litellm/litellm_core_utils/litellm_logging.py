@@ -100,7 +100,9 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     bedrock_guardrail_trace,
     cost_breakdown_with_guardrail,
     guardrail_information_cost,
+    is_str_keyed_dict,
     native_bedrock_guardrail_information,
+    object_mapping,
     with_guardrail_entry,
 )
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
@@ -2734,26 +2736,22 @@ class Logging(LiteLLMLoggingBaseClass):
         trace: Final = bedrock_guardrail_trace(result)
         if trace is None:
             return
-        raw_optional_params: Final = getattr(self, "optional_params", None)
-        optional_params: Final = raw_optional_params if isinstance(raw_optional_params, dict) else {}
-        guardrail_config: Final = optional_params.get("guardrailConfig")
-        identifier: Final = guardrail_config.get("guardrailIdentifier") if isinstance(guardrail_config, dict) else None
-        litellm_params_in: Final = getattr(self, "litellm_params", None)
-        region: Final = optional_params.get("aws_region_name") or (
-            litellm_params_in.get("aws_region_name") if isinstance(litellm_params_in, dict) else None
-        )
+        optional_params: Final = object_mapping(getattr(self, "optional_params", None)) or {}
+        guardrail_config: Final = object_mapping(optional_params.get("guardrailConfig")) or {}
+        identifier: Final = guardrail_config.get("guardrailIdentifier")
+        litellm_params_in: Final = object_mapping(getattr(self, "litellm_params", None)) or {}
+        region: Final = optional_params.get("aws_region_name") or litellm_params_in.get("aws_region_name")
         entry: Final = native_bedrock_guardrail_information(
             trace,
             aws_region_name=region if isinstance(region, str) else None,
             guardrail_identifier=identifier if isinstance(identifier, str) else None,
         )
-        litellm_params: Final = self.model_call_details.get("litellm_params")
-        if entry is None or not isinstance(litellm_params, dict):
+        litellm_params: Final[object] = self.model_call_details.get("litellm_params")
+        if entry is None or not is_str_keyed_dict(litellm_params):
             return
-        metadata: Final = litellm_params.get("metadata")
-        if not isinstance(metadata, dict):
-            litellm_params["metadata"] = {}
-        with_guardrail_entry(litellm_params["metadata"], entry)
+        metadata: Final[object] = litellm_params.setdefault("metadata", {})
+        if is_str_keyed_dict(metadata):
+            with_guardrail_entry(metadata, entry)
 
     def _merge_hidden_params_from_response_into_metadata(self, logging_result: object) -> None:
         """

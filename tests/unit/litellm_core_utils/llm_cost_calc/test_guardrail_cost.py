@@ -1,3 +1,4 @@
+import json
 from typing import Final
 
 import pytest
@@ -330,3 +331,16 @@ def test_with_guardrail_entry_records_the_same_trace_once() -> None:
     guardrail_cost.with_guardrail_entry(metadata, entry)  # pyright: ignore[reportArgumentType]  # partial entry
     guardrail_cost.with_guardrail_entry(metadata, entry)  # pyright: ignore[reportArgumentType]  # partial entry
     assert metadata["standard_logging_guardrail_information"] == [{"guardrail_name": "hook"}, entry]
+
+
+def test_native_trace_entry_redacts_the_pii_matches_before_they_reach_spend_logs(monkeypatch) -> None:
+    monkeypatch.setattr(litellm, "model_cost", _TRACE_PRICING)
+    trace = _converse_trace()
+    trace["guardrail"]["inputAssessment"]["gid"]["sensitiveInformationPolicy"] = {
+        "piiEntities": [{"type": "US_SSN", "match": "123-45-6789", "action": "ANONYMIZED"}]
+    }
+    entry = guardrail_cost.native_bedrock_guardrail_information(trace, aws_region_name=None, guardrail_identifier=None)
+    assert entry is not None
+    assert entry["guardrail_status"] == "guardrail_intervened"
+    assert "123-45-6789" not in json.dumps(entry["guardrail_response"])
+    assert entry["guardrail_usage"]["sensitiveInformationPolicyUnits"] == 2

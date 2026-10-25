@@ -28,7 +28,7 @@ import litellm
 
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 240)
 
-_MODEL_ID: Final = "anthropic.claude-sonnet-5-v1:0"
+_MODEL_ID: Final = "anthropic.claude-sonnet-4-5-20250929-v1:0"
 _EVENT_STREAM: Final = "application/vnd.amazon.eventstream"
 _GUARDRAIL_ID: Final = "native-guardrail"
 _INPUT_COST_PER_TOKEN: Final = 0.001
@@ -107,6 +107,30 @@ def _bedrock(request: Request) -> Reply:
             **converse_trace,
         }
         return Reply(body=json.dumps(body).encode())
+    if action == "converse-stream" and "toolConfig" in json.loads(request.body):
+        return Reply(
+            chunks=(
+                _aws_event_frame("messageStart", {"role": "assistant"}, "sc", "u"),
+                _aws_event_frame(
+                    "contentBlockStart",
+                    {"start": {"toolUse": {"toolUseId": "tool-1", "name": "lookup"}}, "contentBlockIndex": 0},
+                    "sc",
+                    "u",
+                ),
+                _aws_event_frame(
+                    "contentBlockDelta",
+                    {"delta": {"toolUse": {"input": '{"q": "x"}'}}, "contentBlockIndex": 0},
+                    "sc",
+                    "u",
+                ),
+                _aws_event_frame("contentBlockStop", {"contentBlockIndex": 0}, "sc", "u"),
+                _aws_event_frame("messageStop", {"stopReason": "tool_use"}, "sc", "u"),
+                _aws_event_frame(
+                    "metadata", {"usage": usage, "metrics": {"latencyMs": 3}, **converse_trace}, "sc", "u"
+                ),
+            ),
+            content_type=_EVENT_STREAM,
+        )
     if action == "converse-stream":
         return Reply(
             chunks=(
@@ -123,7 +147,7 @@ def _bedrock(request: Request) -> Reply:
     invoke_trace: Final = {"amazon-bedrock-trace": _invoke_trace()} if traced else {}
     if action == "invoke":
         message: Final = {
-            "id": "msg_bedrock",
+            "id": f"msg_{uuid.uuid4().hex[:12]}",
             "type": "message",
             "role": "assistant",
             "model": "claude",
@@ -138,7 +162,7 @@ def _bedrock(request: Request) -> Reply:
         {
             "type": "message_start",
             "message": {
-                "id": "msg_bedrock",
+                "id": f"msg_{uuid.uuid4().hex[:12]}",
                 "type": "message",
                 "role": "assistant",
                 "model": "claude",
@@ -347,3 +371,53 @@ def test_disabled_trace_bills_only_the_tokens(rig: Rig) -> None:
     row: Final = _spend_row(rig.proxy, key)
     assert row.spend == pytest.approx(_llm_cost())
     assert row.guardrail_information == ()
+
+
+def _messages_body(model: str, stream: bool) -> dict[str, JsonValue]:
+    return {
+        "model": model,
+        "messages": [{"role": "user", "content": f"hello from the messages api, stream={stream}"}],
+        "max_tokens": 16,
+        "stream": stream,
+    }
+
+
+def test_messages_non_streaming_response_applies_the_guardrail_and_prices_its_trace(rig: Rig) -> None:
+    key: Final = rig.key()
+    response: Final = rig.proxy.request("POST", "/v1/messages", _messages_body(rig.invoke_model, False), key=key)
+    assert response.is_success, response.text[:400]
+    assert "amazon-bedrock-trace" in response.json()
+    _assert_billed_as_guardrail_cost(_spend_row(rig.proxy, key))
+
+
+def test_messages_streamed_response_prices_the_trace_of_the_message_stop_event(rig: Rig) -> None:
+    key: Final = rig.key()
+    with rig.proxy.client.stream(
+        "POST",
+        "/v1/messages",
+        json=_messages_body(rig.invoke_model, True),
+        headers={"Authorization": f"Bearer {key}"},
+        timeout=case_timeout_seconds(),
+    ) as response:
+        body: Final = b"".join(response.iter_bytes())
+    assert response.is_success and b"message_stop" in body, body[:400]
+    _assert_billed_as_guardrail_cost(_spend_row(rig.proxy, key))
+
+
+def test_passthrough_streamed_tool_call_prices_the_trace_of_the_final_event(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key: Final = rig.key()
+    runtime: Final = rig.runtime(monkeypatch, key)
+    tool_config: Final = {
+        "tools": [{"toolSpec": {"name": "lookup", "inputSchema": {"json": {"type": "object", "properties": {}}}}}]
+    }
+    events: Final = list(
+        getattr(runtime, "converse_stream")(
+            modelId=rig.converse_model,
+            messages=[{"role": "user", "content": [{"text": "hello"}]}],
+            toolConfig=tool_config,
+        )["stream"]
+    )
+    assert any("contentBlockStart" in event for event in events)
+    _assert_billed_as_guardrail_cost(_spend_row(rig.proxy, key))

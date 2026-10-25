@@ -70,7 +70,11 @@ from litellm.litellm_core_utils.get_supported_openai_params import (
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
+    guardrail_entries,
+    guardrail_information_cost,
+    object_mapping,
+)
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
@@ -306,25 +310,21 @@ async def close_guarded_stream(stream: object) -> None:
             )
 
 
-def _guardrail_entries_for_headers(request_metadata_bucket: dict, logging_obj: LiteLLMLoggingObj) -> tuple[object, ...]:
+def _guardrail_entries_for_headers(
+    request_metadata_bucket: object, logging_obj: LiteLLMLoggingObj
+) -> tuple[object, ...]:
     """Guardrail entries the proxy hooks wrote on the request plus the ones the call recorded on its own logging
     object (a Bedrock deployment's native guardrail trace), each once: the hooks copy theirs into the logging object."""
-    litellm_params: Final = logging_obj.model_call_details.get("litellm_params")
-    logging_metadata: Final = litellm_params.get("metadata") if isinstance(litellm_params, dict) else None
+    litellm_params: Final = object_mapping(logging_obj.model_call_details.get("litellm_params")) or {}
+    buckets: Final = (object_mapping(request_metadata_bucket), object_mapping(litellm_params.get("metadata")))
     entries: Final = tuple(
         chain.from_iterable(
-            _guardrail_entries(metadata.get("standard_logging_guardrail_information"))
-            for metadata in (request_metadata_bucket, logging_metadata)
-            if isinstance(metadata, dict)
+            guardrail_entries(metadata.get("standard_logging_guardrail_information"))
+            for metadata in buckets
+            if metadata is not None
         )
     )
     return tuple(entry for index, entry in enumerate(entries) if entry not in entries[:index])
-
-
-def _guardrail_entries(raw: object) -> tuple[object, ...]:
-    if isinstance(raw, (list, tuple)):
-        return tuple(raw)
-    return (raw,) if isinstance(raw, dict) else ()
 
 
 def resolve_litellm_call_id(client_call_id: str | None) -> str:
@@ -3258,9 +3258,9 @@ class ProxyBaseLLMRequestProcessing:
             else computed_cost_for_headers
         )
         logging_obj.record_native_bedrock_guardrail(response)
-        _, request_metadata_bucket = get_or_create_metadata_bucket(self.data)
+        request_metadata_bucket: Final[object] = get_or_create_metadata_bucket(self.data)[1]  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # self.data is an untyped dict
         guardrail_cost_for_headers: Final = guardrail_information_cost(
-            _guardrail_entries_for_headers(request_metadata_bucket, logging_obj)
+            _guardrail_entries_for_headers(request_metadata_bucket, logging_obj)  # pyright: ignore[reportUnknownArgumentType]  # bucket comes from the untyped request dict
         )
         response_cost_for_headers: Final = (
             (llm_cost_for_headers if isinstance(llm_cost_for_headers, (int, float)) else 0.0)

@@ -1,12 +1,17 @@
 import math
 from collections.abc import Iterator, Mapping, Sequence
+from functools import partial
 from itertools import chain
 from typing import Annotated, Final
 
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
+from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import (
+    redact_nested_match_and_regex_keys,  # pyright: ignore[reportUnknownVariableType]  # signature uses bare dict
+)
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import CostBreakdown, GuardrailStatus, StandardLoggingGuardrailInformation
@@ -100,22 +105,60 @@ def bedrock_guardrail_cost(usage_units: Mapping[str, int], aws_region_name: str 
     return guardrail_cost_total(bedrock_guardrail_cost_by_unit(usage_units, aws_region_name))
 
 
+_OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_OBJECT_ITEMS: Final = TypeAdapter(tuple[object, ...])
+
+
+def object_mapping(value: object) -> Mapping[str, object] | None:
+    """``value`` as a str-keyed mapping, None for anything else. Vendor JSON arrives untyped, so this is the one place
+    that turns it into something the rest of the module can read without guessing."""
+    try:
+        return _OBJECT_MAPPING.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def object_items(value: object) -> tuple[object, ...]:
+    if isinstance(value, (str, bytes, Mapping)):
+        return ()
+    try:
+        return _OBJECT_ITEMS.validate_python(value)
+    except ValidationError:
+        return ()
+
+
+def is_str_keyed_dict(
+    value: object,
+) -> TypeIs[dict[str, object]]:  # guard-ok: JSON object keys are str  # mutable-ok: the caller edits this dict in place
+    return isinstance(value, dict)
+
+
+def _trace_field(response: object, field: str) -> Mapping[str, object] | None:
+    source: Final = object_mapping(response)
+    trace: Final = object_mapping(source.get(field) if source is not None else getattr(response, field, None))
+    if trace is None or object_mapping(trace.get("guardrail")) is None:
+        return None
+    return trace
+
+
 def bedrock_guardrail_trace(response: object) -> Mapping[str, object] | None:
     """The guardrail trace a Bedrock response carries: Converse puts it under ``trace``, Invoke under
     ``amazon-bedrock-trace``. Returned as is, or None when the response has no guardrail section."""
-    for field in BEDROCK_TRACE_FIELDS:
-        trace: object = response.get(field) if isinstance(response, Mapping) else getattr(response, field, None)
-        if isinstance(trace, Mapping) and isinstance(trace.get("guardrail"), Mapping):
-            return trace
-    return None
+    traces: Final = map(partial(_trace_field, response), BEDROCK_TRACE_FIELDS)
+    return next((trace for trace in traces if trace is not None), None)
 
 
 def _keyed_assessments(by_id: object) -> Iterator[tuple[str, Mapping[str, object]]]:
-    if not isinstance(by_id, Mapping):
+    mapping: Final = object_mapping(by_id)
+    if mapping is None:
         return
-    for guardrail_id, assessment in by_id.items():
-        if isinstance(assessment, Mapping):
-            yield str(guardrail_id), assessment
+    pairs: Final = ((guardrail_id, object_mapping(assessment)) for guardrail_id, assessment in mapping.items())
+    yield from ((guardrail_id, assessment) for guardrail_id, assessment in pairs if assessment is not None)
+
+
+def _listed_assessments(guardrail_id: str, assessments: object) -> Iterator[tuple[str, Mapping[str, object]]]:
+    candidates: Final = map(object_mapping, object_items(assessments))
+    yield from ((guardrail_id, assessment) for assessment in candidates if assessment is not None)
 
 
 def _assessments(guardrail: Mapping[str, object]) -> Iterator[tuple[str, Mapping[str, object]]]:
@@ -123,22 +166,21 @@ def _assessments(guardrail: Mapping[str, object]) -> Iterator[tuple[str, Mapping
     ``outputAssessments`` {id: [a, ...]}, Invoke ``input`` {id: a} and ``outputs`` [{id: a}, ...]."""
     yield from _keyed_assessments(guardrail.get("inputAssessment"))
     yield from _keyed_assessments(guardrail.get("input"))
-    output_assessments: Final = guardrail.get("outputAssessments")
-    if isinstance(output_assessments, Mapping):
-        for guardrail_id, assessments in output_assessments.items():
-            if isinstance(assessments, list):
-                yield from ((str(guardrail_id), a) for a in assessments if isinstance(a, Mapping))
-    outputs: Final = guardrail.get("outputs")
-    if isinstance(outputs, list):
-        yield from chain.from_iterable(map(_keyed_assessments, outputs))
+    output_assessments: Final = object_mapping(guardrail.get("outputAssessments")) or {}
+    yield from chain.from_iterable(_listed_assessments(*item) for item in output_assessments.items())
+    yield from chain.from_iterable(map(_keyed_assessments, object_items(guardrail.get("outputs"))))
 
 
 def _assessment_usage(assessment: Mapping[str, object]) -> Mapping[str, int]:
-    metrics: Final = assessment.get("invocationMetrics")
-    usage: Final = metrics.get("usage") if isinstance(metrics, Mapping) else None
-    if not isinstance(usage, Mapping):
+    metrics: Final = object_mapping(assessment.get("invocationMetrics"))
+    usage: Final = object_mapping(metrics.get("usage")) if metrics is not None else None
+    if usage is None:
         return {}
-    return {str(k): v for k, v in usage.items() if str(k).endswith("Units") and isinstance(v, int) and not isinstance(v, bool)}
+    return {
+        counter: units
+        for counter, units in usage.items()
+        if counter.endswith("Units") and isinstance(units, int) and not isinstance(units, bool)
+    }
 
 
 def _summed_usage(usages: Sequence[Mapping[str, int]]) -> Mapping[str, int]:
@@ -147,13 +189,14 @@ def _summed_usage(usages: Sequence[Mapping[str, int]]) -> Mapping[str, int]:
 
 
 def _actions(node: object) -> Iterator[str]:
-    if isinstance(node, Mapping):
-        action: Final = node.get("action")
-        if isinstance(action, str):
-            yield action
-        yield from chain.from_iterable(map(_actions, node.values()))
-    elif isinstance(node, list):
-        yield from chain.from_iterable(map(_actions, node))
+    mapping: Final = object_mapping(node)
+    if mapping is None:
+        yield from chain.from_iterable(map(_actions, object_items(node)))
+        return
+    action: Final = mapping.get("action")
+    if isinstance(action, str):
+        yield action
+    yield from chain.from_iterable(map(_actions, mapping.values()))
 
 
 def native_bedrock_guardrail_information(
@@ -162,8 +205,8 @@ def native_bedrock_guardrail_information(
     """The guardrail entry for a trace Bedrock returned because the deployment's ``guardrailConfig`` ran with
     ``trace: enabled``: every assessment's ``invocationMetrics.usage`` summed and priced like the proxy-side Bedrock
     guardrail. None when the trace carries no usage, which is what ``trace: disabled`` leaves."""
-    guardrail: Final = trace.get("guardrail")
-    if not isinstance(guardrail, Mapping):
+    guardrail: Final = object_mapping(trace.get("guardrail"))
+    if guardrail is None:
         return None
     pairs: Final = tuple(_assessments(guardrail))
     usage: Final = _summed_usage(tuple(_assessment_usage(assessment) for _, assessment in pairs))
@@ -182,7 +225,7 @@ def native_bedrock_guardrail_information(
         "guardrail_id": name,
         "guardrail_provider": "bedrock",
         "guardrail_mode": GuardrailEventHooks.during_call,
-        "guardrail_response": dict(guardrail),
+        "guardrail_response": _redacted_guardrail_response(guardrail),
         "guardrail_status": status,
         "guardrail_usage": usage,
         "guardrail_cost": guardrail_cost_total(cost_by_unit),
@@ -190,15 +233,29 @@ def native_bedrock_guardrail_information(
     }
 
 
-def with_guardrail_entry(metadata: dict, entry: StandardLoggingGuardrailInformation) -> None:
+def _redacted_guardrail_response(
+    guardrail: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: StandardLoggingGuardrailInformation.guardrail_response is a dict
+    redacted: Final[object] = redact_nested_match_and_regex_keys(dict(guardrail))
+    return dict(object_mapping(redacted) or guardrail)
+
+
+def guardrail_entries(raw: object) -> tuple[object, ...]:
+    """The entries under ``standard_logging_guardrail_information``, which older writers stored as one dict."""
+    single: Final = object_mapping(raw)
+    return (single,) if single is not None else object_items(raw)
+
+
+def with_guardrail_entry(
+    metadata: dict[str, object],  # mutable-ok: the proxy's own request metadata, read later for headers and spend
+    entry: StandardLoggingGuardrailInformation,
+) -> None:
     """Append ``entry`` to the metadata's ``standard_logging_guardrail_information`` once, so the same trace recorded
     from the response headers path and again from the success handler bills a single time."""
-    existing: Final = metadata.get("standard_logging_guardrail_information")
-    if isinstance(existing, list):
-        if entry not in existing:
-            existing.append(entry)
+    existing: Final = guardrail_entries(metadata.get("standard_logging_guardrail_information"))
+    if entry in existing:
         return
-    metadata["standard_logging_guardrail_information"] = [existing, entry] if isinstance(existing, dict) else [entry]
+    metadata["standard_logging_guardrail_information"] = [*existing, entry]  # rebind-ok: appending here is the job
 
 
 AZURE_PROMPT_SHIELD_TEXT_RECORD_UNIT: Final = "text_records"

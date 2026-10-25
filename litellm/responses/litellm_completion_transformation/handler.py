@@ -134,7 +134,7 @@ class LiteLLMCompletionTransformationHandler:
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
             **acompletion_args,
         )
-        logging_obj: Final = kwargs.get("litellm_logging_obj")
+        logging_obj: Final[object] = kwargs.get("litellm_logging_obj")  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # kwargs is untyped
         if isinstance(litellm_completion_response, ModelResponse) and isinstance(logging_obj, LiteLLMLoggingObj):
             logging_obj.record_native_bedrock_guardrail(litellm_completion_response)
 
