@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Final, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
@@ -83,11 +84,22 @@ class BulkUpdateTeamMemberPermissionsResponse(LiteLLMBaseModel):
     permissions_appended: list[str] | None = None
 
 
+class TeamListCallerMembership(LiteLLMBaseModel):
+    """The calling user's own spend and effective member budget in a team."""
+
+    spend: float = 0.0
+    max_budget: float | None = None
+    budget_reset_at: datetime | None = None
+
+    model_config = ConfigDict(frozen=True)
+
+
 class TeamListItem(LiteLLM_TeamTable):
     """A team item in the paginated list response, enriched with computed fields."""
 
     members_count: int = 0
     keys_count: int = 0
+    caller_membership: TeamListCallerMembership | None = None
     # Resources inherited from access groups (separate from direct assignments)
     access_group_models: list[str] | None = None
     access_group_mcp_server_ids: list[str] | None = None
