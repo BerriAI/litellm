@@ -21,7 +21,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceTypes
 from litellm.constants import SPEND_ROLLUP_LOCK_TIMEOUT_MS
-from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendUpdateQueueItem
+from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendLogsPayload, SpendUpdateQueueItem
 from litellm.proxy.db.db_spend_update_writer import (
     _TEAM_ADVISORY_LOCK_SQL,
     _TEAM_MEMBER_SPEND_SQL,
@@ -1494,16 +1494,12 @@ async def test_add_spend_log_transaction_to_daily_tag_transaction_with_request_i
             )
 
 
-@pytest.mark.asyncio
-async def test_one_tag_from_two_teams_is_queued_as_two_team_attributed_entries():
-    writer = DBSpendUpdateWriter()
-    prisma = MagicMock()
-    prisma.get_request_status = MagicMock(return_value="success")
-
-    def tagged(team_id: str | None, spend: float) -> dict:
-        return {
-            "request_id": f"req-{team_id}",
-            "request_tags": '["cost-center:cc-42"]',
+def _tagged_spend_log(tag: str, team_id: str | None, spend: float) -> SpendLogsPayload:
+    return cast(
+        SpendLogsPayload,
+        {
+            "request_id": f"req-{tag}-{team_id}",
+            "request_tags": json.dumps([tag]),
             "team_id": team_id,
             "user": "user-1",
             "startTime": "2026-10-17T00:00:00",
@@ -1515,20 +1511,48 @@ async def test_one_tag_from_two_teams_is_queued_as_two_team_attributed_entries()
             "completion_tokens": 5,
             "spend": spend,
             "metadata": '{"usage_object": {}}',
-        }
+        },
+    )
 
-    for team_id, spend in (("team-a", 1.0), ("team-b", 2.0), (None, 0.5)):
+
+@pytest.mark.parametrize(
+    ("requests", "expected"),
+    [
+        (
+            (
+                ("cost-center:cc-42", "team-a", 1.0),
+                ("cost-center:cc-42", "team-b", 2.0),
+                ("cost-center:cc-42", None, 0.5),
+            ),
+            [
+                ("cost-center:cc-42", "", 0.5),
+                ("cost-center:cc-42", "team-a", 1.0),
+                ("cost-center:cc-42", "team-b", 2.0),
+            ],
+        ),
+        (
+            (("cost_center", "west", 1.0), ("cost", "center_west", 2.0)),
+            [("cost", "center_west", 2.0), ("cost_center", "west", 1.0)],
+        ),
+    ],
+    ids=["one-tag-two-teams", "underscore-joined-names-collide"],
+)
+async def test_each_tag_and_team_pair_is_queued_as_its_own_entry(
+    requests: tuple[tuple[str, str | None, float], ...],
+    expected: list[tuple[str, str, float]],
+) -> None:
+    writer: Final = DBSpendUpdateWriter()
+    prisma: Final = MagicMock()
+    prisma.get_request_status = MagicMock(return_value="success")
+
+    for tag, team_id, spend in requests:
         await writer.add_spend_log_transaction_to_daily_tag_transaction(
-            payload=tagged(team_id, spend), prisma_client=prisma
+            payload=_tagged_spend_log(tag, team_id, spend), prisma_client=prisma
         )
 
-    queued = await writer.daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+    queued: Final = await writer.daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
 
-    assert sorted((txn["tag"], txn["team_id"], txn["spend"]) for txn in queued.values()) == [
-        ("cost-center:cc-42", "", 0.5),
-        ("cost-center:cc-42", "team-a", 1.0),
-        ("cost-center:cc-42", "team-b", 2.0),
-    ], queued
+    assert sorted((txn["tag"], txn["team_id"], txn["spend"]) for txn in queued.values()) == expected, queued
 
 
 @pytest.mark.asyncio

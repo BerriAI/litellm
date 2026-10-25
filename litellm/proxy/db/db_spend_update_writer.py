@@ -3101,7 +3101,17 @@ class DBSpendUpdateWriter:
             if tag is None:
                 continue
             endpoint_str = base_daily_transaction.get("endpoint") or ""
-            daily_transaction_key = f"{tag}_{team_id}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}_{endpoint_str}"
+            daily_transaction_key = json.dumps(
+                [
+                    tag,
+                    team_id,
+                    base_daily_transaction["date"],
+                    payload["api_key"],
+                    payload["model"],
+                    payload["custom_llm_provider"],
+                    endpoint_str,
+                ]
+            )
             daily_transaction = DailyTagSpendTransaction(
                 tag=tag, team_id=team_id, **base_daily_transaction, request_id=payload["request_id"]
             )
