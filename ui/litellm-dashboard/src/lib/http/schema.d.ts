@@ -2099,6 +2099,7 @@ export interface paths {
          *     - rpm_limit: Optional[int] - The requests per minute limit for the budget.
          *     - tpd_limit: Optional[int] - The tokens per day limit for the budget. Charged by batch submissions instead of tpm_limit/rpm_limit.
          *     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
+         *       Send null or {} to clear all per-model limits. Omit this field to keep them unchanged.
          *     - budget_reset_at: Optional[datetime] - Update the Datetime when the budget was last reset.
          */
         post: operations["update_budget_budget_update_post"];
