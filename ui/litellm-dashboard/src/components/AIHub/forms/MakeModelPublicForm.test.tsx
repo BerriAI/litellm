@@ -329,6 +329,19 @@ describe("MakeModelPublicForm", () => {
     expect(screen.getAllByText("openai")).toHaveLength(2);
   });
 
+  it("labels an evaluation-mode model as decisions, matching the mode filter", () => {
+    const decisionModel = {
+      ...mockProps.modelHubData[0],
+      model_group: "jev-latest",
+      providers: ["typesafe"],
+      mode: "evaluation",
+    };
+    render(<MakeModelPublicForm {...mockProps} modelHubData={[decisionModel]} />);
+
+    expect(screen.getByText("decisions")).toBeInTheDocument();
+    expect(screen.queryByText("evaluation")).not.toBeInTheDocument();
+  });
+
   it("should handle submit error properly", async () => {
     const errorMessage = "Network error";
     mockMakeModelGroupPublic.mockRejectedValueOnce(new Error(errorMessage));

@@ -2,14 +2,15 @@ import json
 from typing import Final, Literal
 
 import anyio
-from mcp import ClientSession
+from mcp import ClientSession, MCPError
+from mcp.types import INTERNAL_ERROR, PaginatedRequestParams
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
-from mcp.types import PaginatedRequestParams
 from mcp.types import Tool as MCPTool
 from openai.types.chat import ChatCompletionToolParam
 from openai.types.responses.function_tool_param import FunctionToolParam
 from openai.types.shared_params.function_definition import FunctionDefinition
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
@@ -19,6 +20,8 @@ from litellm.constants import (
 )
 from litellm.types.llms.anthropic import AnthropicMessagesTool
 from litellm.types.utils import ChatCompletionMessageToolCall
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 ########################################################
@@ -99,7 +102,7 @@ def transform_mcp_tool_to_anthropic_tool(mcp_tool: MCPTool) -> AnthropicMessages
 
 
 async def list_tools_with_pagination(
-    session: ClientSession, listing_deadline: float | None = None
+    session: ClientSession, listing_deadline: float | None = None, *, require_complete: bool = False
 ) -> list[MCPTool]:  # mutable-ok: list return contract
     """Collect tools from every tools/list page by following nextCursor.
 
@@ -137,6 +140,10 @@ async def list_tools_with_pagination(
                     "MCP server repeated a tools/list cursor while listing tools; returning %s tools collected so far",
                     len(tools),
                 )
+                if require_complete:
+                    raise MCPError(
+                        code=INTERNAL_ERROR, message="Upstream tool discovery is incomplete: repeated cursor"
+                    )
                 return tools
             seen_cursors.add(next_cursor)
             cursor = next_cursor
@@ -146,6 +153,8 @@ async def list_tools_with_pagination(
             MCP_TOOL_LISTING_MAX_PAGES,
             len(tools),
         )
+        if require_complete:
+            raise MCPError(code=INTERNAL_ERROR, message="Upstream tool discovery is incomplete: pagination limit")
         return tools
 
     verbose_logger.warning(
@@ -153,6 +162,8 @@ async def list_tools_with_pagination(
         effective_deadline,
         len(tools),
     )
+    if require_complete:
+        raise MCPError(code=INTERNAL_ERROR, message="Upstream tool discovery is incomplete: listing deadline")
     return tools
 
 
@@ -192,15 +203,18 @@ async def call_mcp_tool(
     return tool_result
 
 
+def _decode_json_arguments(arguments: str) -> object:
+    try:
+        return _DECODED_JSON.validate_python(json.loads(arguments))
+    except json.JSONDecodeError:
+        return {}
+
+
 def _get_function_arguments(function: FunctionDefinition) -> dict:
     """Helper to safely get and parse function arguments."""
-    arguments = function.get("arguments", {})
-    if isinstance(arguments, str):
-        try:
-            arguments = json.loads(arguments)
-        except json.JSONDecodeError:
-            arguments = {}
-    return arguments if isinstance(arguments, dict) else {}
+    arguments: Final = function.get("arguments", {})
+    decoded: Final = _decode_json_arguments(arguments) if isinstance(arguments, str) else arguments
+    return decoded if isinstance(decoded, dict) else {}
 
 
 def transform_openai_tool_call_request_to_mcp_tool_call_request(

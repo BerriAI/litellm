@@ -1,4 +1,5 @@
 import re
+from collections.abc import Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
@@ -8,11 +9,9 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
-from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-    ModelResponseIterator as GeminiModelResponseIterator,
-)
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
+    GeminiSseChunkParser,
     VertexPassthroughLoggingHandler,
 )
 from litellm.types.utils import (
@@ -79,8 +78,8 @@ class GeminiPassthroughLoggingHandler:
 
             # Set response_cost in _hidden_params to prevent recalculation
             if not hasattr(litellm_video_response, "_hidden_params"):
-                litellm_video_response._hidden_params = {}
-            litellm_video_response._hidden_params["response_cost"] = response_cost
+                litellm_video_response.hidden_params = {}
+            litellm_video_response.hidden_params["response_cost"] = response_cost
 
             kwargs["response_cost"] = response_cost
             kwargs["model"] = model
@@ -182,31 +181,25 @@ class GeminiPassthroughLoggingHandler:
 
     @staticmethod
     def _build_complete_streaming_response(
-        all_chunks: list[str],
+        all_chunks: Sequence[str],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
         url_route: str,
     ) -> ModelResponse | TextCompletionResponse | None:
-        parsed_chunks = []
         if "generateContent" in url_route or "streamGenerateContent" in url_route:
-            gemini_iterator: Final[Any] = GeminiModelResponseIterator(
+            gemini_iterator: Final = GeminiSseChunkParser(
                 streaming_response=None,
                 sync_stream=False,
                 logging_obj=litellm_logging_obj,
             )
-            chunk_parsing_logic: Final[Any] = gemini_iterator._common_chunk_parsing_logic
-            parsed_chunks = [chunk_parsing_logic(chunk) for chunk in all_chunks]
+            parsed_chunks: Final = [gemini_iterator.parse_sse_chunk(chunk) for chunk in all_chunks]
         else:
             return None
 
         if len(parsed_chunks) == 0:
             return None
 
-        all_openai_chunks: Final = []
-        for parsed_chunk in parsed_chunks:
-            if parsed_chunk is None:
-                continue
-            all_openai_chunks.append(parsed_chunk)
+        all_openai_chunks: Final = [parsed_chunk for parsed_chunk in parsed_chunks if parsed_chunk is not None]
 
         complete_streaming_response: Final = litellm.stream_chunk_builder(chunks=all_openai_chunks)
 
@@ -252,5 +245,4 @@ class GeminiPassthroughLoggingHandler:
         logging_obj.model = litellm_model_response.model or model
         logging_obj.model_call_details["model"] = logging_obj.model
         logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
-        logging_obj.model_call_details["response_cost"] = response_cost
         return kwargs

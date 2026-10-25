@@ -66,17 +66,17 @@ describe("TopKeyView", () => {
 
   it("should render", () => {
     render(<TopKeyView {...baseProps} />);
-    expect(screen.getByRole("button", { name: "Table View" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Table View" })).toBeInTheDocument();
   });
 
-  it("should display table view button", () => {
+  it("should display table view toggle", () => {
     render(<TopKeyView {...baseProps} />);
-    expect(screen.getByRole("button", { name: "Table View" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Table View" })).toBeInTheDocument();
   });
 
-  it("should display chart view button", () => {
+  it("should display chart view toggle", () => {
     render(<TopKeyView {...baseProps} />);
-    expect(screen.getByRole("button", { name: "Chart View" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Chart View" })).toBeInTheDocument();
   });
 
   it("should display base table column headers", () => {
@@ -179,13 +179,13 @@ describe("TopKeyView", () => {
     const user = userEvent.setup();
     render(<TopKeyView {...baseProps} />);
 
-    const chartViewButton = screen.getByRole("button", { name: "Chart View" });
+    const chartViewButton = screen.getByRole("radio", { name: "Chart View" });
     await user.click(chartViewButton);
 
-    expect(chartViewButton).toHaveClass("bg-info/15");
+    expect(chartViewButton).toBeChecked();
   });
 
-  it("renders cyan bars with truncated aliases in chart view and opens the key info modal on bar click", async () => {
+  it("renders brand-blue bars with truncated aliases in chart view and opens the key info modal on bar click", async () => {
     const mockKeyInfo = { key: "info" };
     const mockTransformedData = { transformed: "data" } as unknown as KeyResponse;
     mockKeyInfoV1Call.mockResolvedValue(mockKeyInfo);
@@ -206,11 +206,11 @@ describe("TopKeyView", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Chart View" }));
+    await user.click(screen.getByRole("radio", { name: "Chart View" }));
 
     const bars = chartBars(container);
     expect(bars).toHaveLength(1);
-    expect(bars[0]).toHaveAttribute("fill", "var(--color-cyan-500, #06b6d4)");
+    expect(bars[0]).toHaveAttribute("fill", "#2b3fd6");
     expect(screen.getAllByText("A Very Lon...").length).toBeGreaterThan(0);
 
     fireEvent.click(bars[0]);
@@ -229,13 +229,13 @@ describe("TopKeyView", () => {
     const user = userEvent.setup();
     render(<TopKeyView {...baseProps} />);
 
-    const chartViewButton = screen.getByRole("button", { name: "Chart View" });
-    const tableViewButton = screen.getByRole("button", { name: "Table View" });
+    const chartViewButton = screen.getByRole("radio", { name: "Chart View" });
+    const tableViewButton = screen.getByRole("radio", { name: "Table View" });
 
     await user.click(chartViewButton);
     await user.click(tableViewButton);
 
-    expect(tableViewButton).toHaveClass("bg-info/15");
+    expect(tableViewButton).toBeChecked();
   });
 
   it("should call setTopKeysLimit when limit is changed via the segmented control", async () => {
@@ -253,7 +253,7 @@ describe("TopKeyView", () => {
         {...baseProps}
         topKeys={[
           {
-            api_key: "sk-1234567890abcdef",
+            api_key: "sk-9876543210fedcba",
             key_alias: "Test Key",
             user: null,
             spend: 100,
@@ -261,7 +261,7 @@ describe("TopKeyView", () => {
         ]}
       />,
     );
-    const keyId = screen.getByText("sk-1234567890abcdef");
+    const keyId = screen.getByText("sk-9876543210fedcba");
     expect(keyId).toBeInTheDocument();
     expect(keyId).toHaveClass("truncate");
   });
@@ -512,7 +512,7 @@ describe("TopKeyView", () => {
     expect(screen.queryByRole("button", { name: "session-key" })).not.toBeInTheDocument();
     await user.click(screen.getByText("session-key"));
 
-    await user.click(screen.getByRole("button", { name: "Chart View" }));
+    await user.click(screen.getByRole("radio", { name: "Chart View" }));
     const bars = chartBars(container);
     expect(bars).toHaveLength(2);
     bars.forEach((bar) => fireEvent.click(bar));

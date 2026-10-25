@@ -2,8 +2,14 @@
 Unit tests for OVHCloud AI Endpoints chat integration.
 """
 
+import json
+from typing import Final
 
+import httpx
 import pytest
+import respx
+
+import litellm
 
 from litellm.llms.ovhcloud.utils import OVHCloudException
 from litellm.utils import get_optional_params
@@ -44,6 +50,7 @@ class TestOvhCloudChatCompletionStreamingHandler:
         assert result.usage.completion_tokens == chunk["usage"]["completion_tokens"]
         assert result.usage.total_tokens == chunk["usage"]["total_tokens"]
         assert len(result.choices) == 1
+        assert result.choices[0]["delta"]["content"] == "test content"
         assert result.choices[0]["delta"]["reasoning_content"] == "test reasoning"
 
     def test_chunk_parser_error_response(self):
@@ -248,3 +255,49 @@ class TestOVHCloudReasoningFieldMigration:
         }
         result = handler.chunk_parser(chunk)
         assert result.choices[0]["delta"]["reasoning_content"] == "legacy field"
+
+
+def test_custom_api_base_uses_chat_completions_endpoint(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "https://custom.ovh.test/v1"
+    request_messages: Final = [{"role": "user", "content": "Hello"}]
+    route: Final = respx_mock.post(f"{api_base}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-ovh",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-oss-120b",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "OVH reply"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="ovhcloud/gpt-oss-120b",
+        messages=request_messages,
+        api_key="offline",
+        api_base=api_base,
+        max_tokens=10,
+        num_retries=0,
+        max_retries=0,
+    )
+
+    request: Final = route.calls.last.request
+    request_body: Final = json.loads(request.content)
+    assert str(request.url) == f"{api_base}/chat/completions"
+    assert request_body == {
+        "max_tokens": 10,
+        "messages": request_messages,
+        "model": "gpt-oss-120b",
+    }
+    assert response.choices[0].message.content == "OVH reply"
+    assert response.model == "gpt-oss-120b"
+    assert response.usage.total_tokens == 3

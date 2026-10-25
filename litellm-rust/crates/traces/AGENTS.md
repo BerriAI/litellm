@@ -1,6 +1,0 @@
-- Own OTLP decoding, normalization, shared authorization and named query contracts; remain independent of storage and Python
-- Never depend on `litellm-traces-clickhouse` or `litellm-storage-clickhouse`
-- Preserve decoding limits, normalization precedence and shared resource identity
-- Keep ClickHouse schema, row encoding and queries in `litellm-traces-clickhouse`; keep PyO3 conversion in `python-bridge`
-- Test decoding and normalization through the public API
-- Expose one top-level `Error` enum in `src/error.rs` for decoding and normalization failures

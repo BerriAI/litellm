@@ -122,6 +122,7 @@ class TestCoherePassthroughLoggingHandler:
         assert "kwargs" in result
         assert result["kwargs"]["model"] == "embed-english-v3.0"
         assert result["kwargs"]["custom_llm_provider"] == "cohere"
+        assert result["result"].hidden_params["response_cost"] == 3.6e-07
 
         # Verify cost calculation was called with correct parameters
         mock_completion_cost.assert_called_once()

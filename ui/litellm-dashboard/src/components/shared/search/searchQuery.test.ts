@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { NOTE_QUERY } from "./__fixtures__/notes";
+import { EXACT_NOTE_QUERY, NOTE_QUERY } from "./__fixtures__/notes";
 import { parseQuery } from "./language";
 import { toSearchQuery } from "./searchQuery";
 
@@ -22,6 +22,13 @@ describe("toSearchQuery", () => {
   it("drops a key still waiting for its value and empty quoted terms, so typing never blanks the list", () => {
     expect(query('tag: -title: ""')).toEqual({ text: [], filters: [] });
     expect(query("refund tag:")).toEqual({ text: ["refund"], filters: [] });
+  });
+
+  it("only ever emits eq for an equality-only language", () => {
+    expect(toSearchQuery(parseQuery(EXACT_NOTE_QUERY, "-tag:cron tag:*bill*"))).toEqual({
+      text: ["-tag:cron"],
+      filters: [{ field: "tag", op: "eq", value: "*bill*" }],
+    });
   });
 
   it("keeps an unknown key as free text", () => {

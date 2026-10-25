@@ -1,5 +1,5 @@
 import asyncio
-from typing import Any, AsyncIterator, Dict, List
+from typing import Any, AsyncIterator, Dict, Final, List
 
 import pytest
 
@@ -10,10 +10,13 @@ import litellm
 from litellm._internal_context import in_post_response_phase
 from litellm.caching.caching import Cache, LiteLLMCacheType
 from litellm.caching.caching_handler import LLMCachingHandler
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.anthropic.pass_through.messages import handler
 from litellm.llms.anthropic.pass_through.messages.response_cache import (
     AnthropicMessagesStreamCacheWriter,
+    CachedAnthropicMessagesStreamIterator,
 )
 
 STREAM_EVENTS: List[bytes] = [
@@ -161,6 +164,26 @@ async def test_streaming_cache_is_not_shared_with_non_streaming(local_cache, req
 
 
 @pytest.mark.asyncio
+async def test_stream_without_content_blocks_is_not_cached(local_cache, request_kwargs, monkeypatch):
+    empty_events = [STREAM_EVENTS[0], STREAM_EVENTS[4], STREAM_EVENTS[5]]
+    fake_handler = _CountingHandler(
+        [_byte_stream(empty_events), _byte_stream(STREAM_EVENTS), _byte_stream([b"event: never_used\n\n"])]
+    )
+    monkeypatch.setattr(handler, "anthropic_messages_handler", fake_handler)
+
+    empty = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+    await asyncio.sleep(0)
+    refilled = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+    await asyncio.sleep(0)
+    replayed = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+
+    assert empty == empty_events
+    assert refilled == STREAM_EVENTS
+    assert replayed == STREAM_EVENTS
+    assert len(fake_handler.calls) == 2
+
+
+@pytest.mark.asyncio
 async def test_failed_stream_is_not_cached(local_cache, request_kwargs, monkeypatch):
     error_events = STREAM_EVENTS[:3] + [
         b'event: error\ndata: {"type": "error", "error": {"type": "overloaded_error", "message": "overloaded"}}\n\n'
@@ -269,7 +292,7 @@ async def test_cached_stream_replay_logs_once_when_polled_after_exhaustion():
 
     with patch.object(
         PassThroughStreamingHandler,
-        "_route_streaming_logging_to_handler",
+        "route_streaming_logging_to_handler",
         new=AsyncMock(),
     ) as mock_route:
         assert await _collect(iterator) == STREAM_EVENTS
@@ -279,6 +302,58 @@ async def test_cached_stream_replay_logs_once_when_polled_after_exhaustion():
         await asyncio.sleep(0)
 
     mock_route.assert_called_once()
+
+
+class _ReplayRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: list[object] = []
+
+    async def async_log_success_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self.logged.append(kwargs.get("completion_start_time"))
+
+
+@pytest.mark.asyncio
+async def test_cached_stream_replay_logs_when_its_first_event_was_replayed():
+    recorder: Final = _ReplayRecorder()
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="claude-sonnet-4-5",
+        messages=[{"role": "user", "content": "which greek letter?"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime(2026, 10, 20, 12, 0, 0),
+        litellm_call_id="cached-replay",
+        function_id="cached-replay",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="claude-sonnet-4-5",
+        user="",
+        optional_params={},
+        litellm_params={"custom_llm_provider": "anthropic"},
+        custom_llm_provider="anthropic",
+    )
+    iterator: Final = CachedAnthropicMessagesStreamIterator(
+        events=[event.decode("utf-8") for event in STREAM_EVENTS],
+        litellm_logging_obj=logging_obj,
+        request_body={"model": "claude-sonnet-4-5", "stream": True},
+    )
+
+    _ = await iterator.__anext__()
+    first_event_at: Final = iterator.completion_start_time
+    _ = await _collect(iterator)
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    assert first_event_at is not None
+    assert recorder.logged == [first_event_at]
+
+
 class _HeldBackStream:
     has_buffered_provider_output = True
 

@@ -6,7 +6,7 @@ use axum::{
     extract::{Path, State},
     response::{IntoResponse, Response},
 };
-use litellm_core::chat_completions::types::ChatCompletionsCall;
+use litellm_inference_chat::types::ChatCompletionsCall;
 use serde_json::{Map, Value};
 
 use crate::{Error, Gateway, JsonObject, request};

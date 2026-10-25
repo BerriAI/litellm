@@ -4,6 +4,7 @@ and ``_handle_logging_proxy_only_error``."""
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import datetime
 from types import MappingProxyType
 from typing import Final
@@ -17,7 +18,7 @@ from litellm.constants import PROXY_REJECTED_BEFORE_ROUTING_KEY
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import REJECTED_BEFORE_REQUEST_SETUP, REJECTED_BEFORE_REQUEST_SETUP_KEY, ProxyLogging
 from litellm.types.utils import CachingDetails
 
 
@@ -64,6 +65,48 @@ def test_is_proxy_only_llm_api_truth_table(proxy_logging):
         "auth_short_circuit": True,
         "guardrail_raised_on_llm_route": True,
     }
+
+
+def test_is_proxy_only_llm_api_skips_dashboard_session_info_route_failures(proxy_logging):
+    """An expired Admin UI session key refetching dashboard info routes must not
+    write Request Log failure rows, while its LLM calls and other keys still do."""
+
+    def decide(route: str, team_id: str | None) -> bool:
+        return proxy_logging._is_proxy_only_llm_api_error(
+            original_exception=Exception("Authentication Error - Expired Key"),
+            error_type=ProxyErrorTypes.auth_error,
+            route=route,
+            team_id=team_id,
+        )
+
+    assert {
+        "dashboard_key_list": decide("/key/list", "litellm-dashboard"),
+        "dashboard_user_info": decide("/v2/user/info", "litellm-dashboard"),
+        "dashboard_model_info": decide("/v2/model/info", "litellm-dashboard"),
+        "dashboard_chat": decide("/chat/completions", "litellm-dashboard"),
+        "team_key_list": decide("/key/list", "team-1"),
+        "teamless_key_list": decide("/key/list", None),
+    } == {
+        "dashboard_key_list": False,
+        "dashboard_user_info": False,
+        "dashboard_model_info": False,
+        "dashboard_chat": True,
+        "team_key_list": True,
+        "teamless_key_list": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_skips_logging_for_dashboard_session_info_route(proxy_logging):
+    proxy_logging._handle_logging_proxy_only_error = AsyncMock()
+    await proxy_logging.post_call_failure_hook(
+        request_data={},
+        original_exception=Exception("Authentication Error - Expired Key"),
+        user_api_key_dict=UserAPIKeyAuth(team_id="litellm-dashboard", request_route="/key/list"),
+        error_type=ProxyErrorTypes.auth_error,
+        route="/key/list",
+    )
+    proxy_logging._handle_logging_proxy_only_error.assert_not_awaited()
 
 
 def test_is_proxy_only_llm_api_missing_exception_raises(proxy_logging):
@@ -151,7 +194,9 @@ async def test_post_call_failure_hook_attributes_single_router_deployment(
 
 
 @pytest.mark.asyncio
-async def test_pre_routing_reject_spend_log_keeps_public_model_group(proxy_logging, make_user_api_key_auth, monkeypatch):
+async def test_pre_routing_reject_spend_log_keeps_public_model_group(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
     from litellm.proxy import proxy_server
     from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 
@@ -880,6 +925,48 @@ async def test_post_call_failure_hook_falls_back_to_body_shape_without_a_route(p
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_type, body",
+    [
+        ("anthropic_messages", {"model": "m", "messages": [{"role": "user", "content": "hi"}]}),
+        ("aresponses", {"model": "m", "input": [{"role": "user", "content": "hi"}]}),
+        ("acompact_responses", {"model": "m", "input": [{"role": "user", "content": "hi"}]}),
+    ],
+)
+async def test_post_call_failure_hook_keeps_the_call_type_request_setup_logged(
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    call_type: str,
+    body: dict[str, object],
+) -> None:
+    """A request rejected after request setup already carries its endpoint's call type, so the body
+    shape must not relabel a /v1/messages rejection as a chat completion or a list-input /v1/responses
+    rejection as an embedding."""
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    proxy_logging.alert_types = []
+    request_data: Final = {
+        **body,
+        "litellm_logging_obj": LiteLLMLoggingObj(
+            model="m",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type=call_type,
+            start_time=datetime.now(),
+            litellm_call_id=f"test_keeps_{call_type}",
+            function_id=f"test_keeps_{call_type}",
+        ),
+        "metadata": {},
+    }
+    await proxy_logging.post_call_failure_hook(
+        request_data=request_data,
+        original_exception=HTTPException(status_code=400, detail="tools must be a list"),
+        user_api_key_dict=make_user_api_key_auth(request_route="/v1/messages"),
+    )
+    assert request_data["call_type"] == call_type
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("route", ["/v1/files", "/files/file-abc", "/v1/containers"])
 async def test_post_call_failure_hook_keeps_the_route_for_multi_operation_routes(
     proxy_logging, make_user_api_key_auth, route
@@ -916,7 +1003,9 @@ async def test_post_call_failure_hook_guardrail_block_fires_failure_callback(
             self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
         ) -> None:
             standard_logging_object = kwargs.get("standard_logging_object")
-            recorded.append(standard_logging_object.get("status") if isinstance(standard_logging_object, dict) else None)
+            recorded.append(
+                standard_logging_object.get("status") if isinstance(standard_logging_object, dict) else None
+            )
 
     monkeypatch.setattr(litellm, "_async_failure_callback", [_StatusRecorder()])
     logging_obj = LiteLLMLoggingObj(
@@ -944,3 +1033,52 @@ async def test_post_call_failure_hook_guardrail_block_fires_failure_callback(
     await asyncio.sleep(0)
     await asyncio.sleep(0)
     assert recorded == ["failure"]
+
+
+@pytest.mark.asyncio
+async def test_handle_logging_proxy_only_path_flags_requests_that_died_before_request_setup(
+    proxy_logging, make_user_api_key_auth
+):
+    """A reject before the pipeline set up logging (bad key, bad body) reaches the failure hook with no logging
+    object. The handler mints a ``litellm_call_id`` so error logs can carry it, and marks the request with a
+    server-owned sentinel so spend tracking can tell it apart from a guardrail block, which arrives with the
+    pipeline's logging object. ``request_data`` is the client body, so a client-sent call id or marker value must
+    not change either outcome."""
+    rejected_before_setup: dict[str, object] = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "x"}],
+        "metadata": {},
+        "litellm_call_id": "client-supplied",
+    }
+    await proxy_logging._handle_logging_proxy_only_error(
+        request_data=rejected_before_setup,
+        user_api_key_dict=make_user_api_key_auth(),
+        route="/chat/completions",
+        original_exception=HTTPException(status_code=401, detail="bad key"),
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.call_type = "acompletion"
+    logging_obj.model_call_details = {}
+    logging_obj.async_failure_handler = AsyncMock()
+    blocked_by_guardrail: dict[str, object] = {
+        "litellm_logging_obj": logging_obj,
+        "litellm_call_id": "call-1",
+        "model": "m",
+        "messages": [{"role": "user", "content": "x"}],
+        "metadata": {},
+        REJECTED_BEFORE_REQUEST_SETUP_KEY: True,
+    }
+    await proxy_logging._handle_logging_proxy_only_error(
+        request_data=blocked_by_guardrail,
+        user_api_key_dict=make_user_api_key_auth(),
+        route="/chat/completions",
+        original_exception=HTTPException(status_code=400, detail="blocked"),
+    )
+
+    assert (
+        rejected_before_setup.get(REJECTED_BEFORE_REQUEST_SETUP_KEY) is REJECTED_BEFORE_REQUEST_SETUP,
+        rejected_before_setup["litellm_call_id"],
+        blocked_by_guardrail.get(REJECTED_BEFORE_REQUEST_SETUP_KEY) is REJECTED_BEFORE_REQUEST_SETUP,
+        blocked_by_guardrail["litellm_call_id"],
+    ) == (True, "client-supplied", False, "call-1")
