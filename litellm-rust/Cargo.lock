@@ -4273,6 +4273,7 @@ dependencies = [
  "litellm-inference-messages",
  "litellm-inference-ocr",
  "litellm-inference-responses",
+ "litellm-inference-tokenize",
  "litellm-inference-transcription",
  "litellm-llms",
  "litellm-llms-types",

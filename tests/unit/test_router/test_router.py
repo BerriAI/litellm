@@ -2191,13 +2191,15 @@ async def test_ageneric_api_call_deployment_model_overrides_alias():
 
 
 @pytest.mark.asyncio
-async def test_ageneric_api_call_resolves_realtime_session_model():
+async def test_ageneric_api_call_resolves_realtime_session_model_for_generic_handler():
     """
     Regression for #36742: realtime client secret requests carry the model inside `session` too, and the proxy
     fills it with the pre-routing model group name. The underlying litellm function reads session.model first,
     so it must see the resolved deployment, while a caller's nested transcription model stays untouched.
     """
-    routed: Final = AsyncMock(return_value={"result": "ok"})
+
+    async def generic_handler(**kwargs: object) -> tuple[object, object]:
+        return kwargs.get("model"), kwargs.get("session")
 
     router = litellm.Router(
         model_list=[
@@ -2212,9 +2214,9 @@ async def test_ageneric_api_call_resolves_realtime_session_model():
         ]
     )
 
-    await router._ageneric_api_call_with_fallbacks(
+    routed: Final = await router._ageneric_api_call_with_fallbacks(
         model="my-realtime-group",
-        original_function=routed,
+        original_function=generic_handler,
         session={
             "type": "realtime",
             "model": "my-realtime-group",
@@ -2222,10 +2224,14 @@ async def test_ageneric_api_call_resolves_realtime_session_model():
         },
     )
 
-    sent: Final = routed.call_args.kwargs
-    assert sent["model"] == "openai/gpt-realtime-2.1-mini"
-    assert sent["session"]["model"] == "openai/gpt-realtime-2.1-mini"
-    assert sent["session"]["audio"]["input"]["transcription"]["model"] == "gpt-4o-transcribe"
+    assert routed == (
+        "openai/gpt-realtime-2.1-mini",
+        {
+            "type": "realtime",
+            "model": "openai/gpt-realtime-2.1-mini",
+            "audio": {"input": {"transcription": {"model": "gpt-4o-transcribe"}}},
+        },
+    )
 
 
 @pytest.mark.asyncio

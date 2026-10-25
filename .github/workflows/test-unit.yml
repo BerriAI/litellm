@@ -444,6 +444,7 @@ jobs:
               tests/test_litellm_rust/messages/test_dispatch.py
               tests/test_litellm_rust/ocr/test_dispatch.py
               tests/test_litellm_rust/responses/test_dispatch.py
+              tests/test_litellm_rust/tokenize
               tests/unit/compression
               tests/unit/harness
               tests/unit/rust_bridge

@@ -458,6 +458,7 @@ def test_default_max_retries_env_var_reaches_azure_sdk_client():
             "arealtime",
             "anthropic_messages",
             "aanthropic_messages",
+            "atokenize",
             "add_message",
             "arun_thread_stream",
             "aresponses",

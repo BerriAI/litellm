@@ -609,6 +609,9 @@ _NO_DEFAULT_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_TOKENIZE_MODEL_NAME_ADAPTER: Final[TypeAdapter[str]] = TypeAdapter(str)
+
+
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
@@ -2625,6 +2628,11 @@ class Router:
 
         self.aocr = self.factory_function(aocr, call_type="aocr")
         self.ocr = self.factory_function(ocr, call_type="ocr")
+
+        from litellm.tokenize import atokenize, tokenize
+
+        self.atokenize = self.factory_function(atokenize, call_type="atokenize")  # pyright: ignore[reportUnknownMemberType]  # factory_function takes a bare Callable
+        self.tokenize = self.factory_function(tokenize, call_type="tokenize")  # pyright: ignore[reportUnknownMemberType]  # factory_function takes a bare Callable
 
         from litellm.search import asearch, search
 
@@ -6201,6 +6209,9 @@ class Router:
         Helper function to make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
         """
 
+        from litellm.tokenize.routing import deployment_kwargs as tokenize_deployment_kwargs
+
+        caller_fields: Final = frozenset(kwargs)
         passthrough_on_no_deployment: Final = kwargs.pop("passthrough_on_no_deployment", False)
         function_name: Final = "_ageneric_api_call_with_fallbacks"
         handler_name: Final[str | None] = getattr(original_generic_function, "__name__", None)
@@ -6239,21 +6250,41 @@ class Router:
             custom_llm_provider: Final = provider_for_generic_call(data)
             generic_function_name: Final[str] = getattr(original_generic_function, "__name__", "")
 
-            response_kwargs: Final = {
-                **data,
-                "caching": self.cache_responses,
-                **kwargs,
-                "model": model_name,
-                **_with_router_resolved_session_model(kwargs.get("session"), model_name),
-                **(
-                    {"turn_admission": partial(self.async_admit_deployment_turn, model, deployment, kwargs)}
-                    if generic_function_name == "_aresponses_websocket"
-                    else {}
-                ),
-            }
-            # Only set custom_llm_provider if it's not None
-            if custom_llm_provider is not None:
-                response_kwargs["custom_llm_provider"] = custom_llm_provider
+            effective_kwargs: Final = MappingProxyType(
+                _LITELLM_PARAMS_ADAPTER.validate_python(
+                    {
+                        **data,
+                        "caching": self.cache_responses,
+                        **kwargs,
+                        "model": model_name,
+                        **(
+                            _with_router_resolved_session_model(
+                                _LITELLM_PARAMS_ADAPTER.validate_python(kwargs).get("session"),
+                                _TOKENIZE_MODEL_NAME_ADAPTER.validate_python(model_name),
+                            )
+                        ),
+                    }
+                )
+            )
+            response_kwargs: Final = MappingProxyType(
+                {
+                    **(
+                        tokenize_deployment_kwargs(
+                            _LITELLM_PARAMS_ADAPTER.validate_python(data),
+                            _LITELLM_PARAMS_ADAPTER.validate_python(effective_kwargs),
+                            caller_fields=caller_fields,
+                        )
+                        if handler_name == "atokenize"
+                        else effective_kwargs
+                    ),
+                    **(
+                        {"turn_admission": partial(self.async_admit_deployment_turn, model, deployment, kwargs)}
+                        if generic_function_name == "_aresponses_websocket"
+                        else {}
+                    ),
+                    **({"custom_llm_provider": custom_llm_provider} if custom_llm_provider is not None else {}),
+                }
+            )
 
             compacted_input: Final = await compact_to_fit(
                 self,
@@ -6967,6 +6998,9 @@ class Router:
         Returns:
             The response from the handler function
         """
+        from litellm.tokenize.routing import deployment_kwargs as tokenize_deployment_kwargs
+
+        caller_fields: Final = frozenset(kwargs)
         handler_name: Final = original_function.__name__
         metadata_variable_name: Final = get_router_metadata_variable_name(function_name="generic_api_call")
         try:
@@ -7009,14 +7043,38 @@ class Router:
 
             custom_llm_provider: Final = provider_for_generic_call(data)
 
-            response: Final = original_function(
-                **{
-                    **data,
-                    "custom_llm_provider": custom_llm_provider,
-                    "caching": self.cache_responses,
-                    **kwargs,
+            effective_kwargs: Final = MappingProxyType(
+                _LITELLM_PARAMS_ADAPTER.validate_python(
+                    {
+                        **data,
+                        "custom_llm_provider": custom_llm_provider,
+                        "caching": self.cache_responses,
+                        **kwargs,
+                        **(
+                            _with_router_resolved_session_model(
+                                _LITELLM_PARAMS_ADAPTER.validate_python(kwargs).get("session"),
+                                _TOKENIZE_MODEL_NAME_ADAPTER.validate_python(model_name),
+                            )
+                            if handler_name == "tokenize"
+                            else {}
+                        ),
+                    }
+                )
+            )
+            response_kwargs: Final = MappingProxyType(
+                {
+                    **(
+                        tokenize_deployment_kwargs(
+                            _LITELLM_PARAMS_ADAPTER.validate_python(data),
+                            _LITELLM_PARAMS_ADAPTER.validate_python(effective_kwargs),
+                            caller_fields=caller_fields,
+                        )
+                        if handler_name == "tokenize"
+                        else effective_kwargs
+                    )
                 }
             )
+            response: Final = original_function(**response_kwargs)
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info("%s(model=%s)\x1b[32m 200 OK\x1b[0m", handler_name, model_name)
@@ -7846,6 +7904,8 @@ class Router:
             "vector_store_file_delete",
             "aocr",
             "ocr",
+            "atokenize",
+            "tokenize",
             "asearch",
             "search",
             "adecisions",
@@ -7926,6 +7986,7 @@ class Router:
             "generate_content",
             "generate_content_stream",
             "ocr",
+            "tokenize",
             "search",
             "decisions",
             "systemone",
@@ -8097,6 +8158,8 @@ class Router:
                 "agenerate_content_stream",
                 "aocr",
                 "ocr",
+                "atokenize",
+                "tokenize",
                 "adecisions",
                 "asystemone",
                 "aextraction",
