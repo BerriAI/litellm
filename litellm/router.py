@@ -14351,7 +14351,7 @@ class Router:
         if (
             not messages
             and isinstance(input_data, list)
-            and all(isinstance(item, str) for item in cast(list[object], input_data))
+            and all(isinstance(item, str) for item in input_data)
         ):
             return False
 
