@@ -765,9 +765,9 @@ async def test_role_only_lead_chunk_does_not_open_text_block_before_reasoning_co
 def test_finish_first_chunk_is_not_deferred_sync():
     """A stream whose first upstream chunk is already the finish event must not
     be skipped by the blank-delta deferral. ``_is_blank_delta`` returns False
-    for a finish chunk so the message_delta still flows (with an empty text
-    block opened and closed first); without that guard the deferral would drop
-    the terminal event entirely.
+    for a finish chunk so the message_delta still flows directly without
+    opening/closing a spurious empty text block (Issue #47576); without that
+    guard the deferral would drop the terminal event entirely.
     """
     chunks = [_make_chunk(Delta(content=None), finish_reason="stop")]
     wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
@@ -775,8 +775,6 @@ def test_finish_first_chunk_is_not_deferred_sync():
 
     assert [e["type"] for e in events] == [
         "message_start",
-        "content_block_start",
-        "content_block_stop",
         "message_delta",
         "message_stop",
     ]
@@ -1317,3 +1315,121 @@ async def test_signature_only_thinking_chunk_before_text_leaks_no_signature(is_a
     assert "signature" not in text_starts[0]
     assert _text_deltas(events) == ["Hello"]
     _assert_deltas_match_their_block_type(events)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_finish_only_first_chunk_emits_no_synthetic_content_block(is_async: bool):
+    """A stream whose first choice chunk is finish-only (0-output stream) must
+    not synthesize a fake empty text block {"type": "text", "text": ""}.
+    The emitted sequence must strictly be message_start -> message_delta -> message_stop.
+    Regression test for issue #47576."""
+    chunks = [
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    if is_async:
+        wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="claude-x")
+        events = await _drain_async(wrapper)
+    else:
+        wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+        events = _drain_sync(wrapper)
+
+    event_types = [e.get("type") for e in events]
+    assert event_types == ["message_start", "message_delta", "message_stop"]
+    assert not any(e.get("type") == "content_block_start" for e in events)
+    assert not any(e.get("type") == "content_block_stop" for e in events)
+    message_delta = next(e for e in events if e.get("type") == "message_delta")
+    assert message_delta["delta"]["stop_reason"] == "end_turn"
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_finish_only_chunk_with_trailing_usage_emits_no_synthetic_content_block(is_async: bool):
+    """A 0-output stream with a trailing usage chunk must not emit synthetic
+    content blocks and must correctly merge usage into the terminal message_delta.
+    Regression test for issue #47576."""
+    usage_chunk = MagicMock()
+    usage_chunk.choices = []
+    usage_chunk.usage = Usage(prompt_tokens=15, completion_tokens=0, total_tokens=15)
+    usage_chunk._hidden_params = {}
+
+    chunks = [
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+        usage_chunk,
+    ]
+    if is_async:
+        wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="claude-x")
+        events = await _drain_async(wrapper)
+    else:
+        wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+        events = _drain_sync(wrapper)
+
+    event_types = [e.get("type") for e in events]
+    assert event_types == ["message_start", "message_delta", "message_stop"]
+    assert not any(e.get("type") == "content_block_start" for e in events)
+    assert not any(e.get("type") == "content_block_stop" for e in events)
+    message_delta = next(e for e in events if e.get("type") == "message_delta")
+    assert message_delta["delta"]["stop_reason"] == "end_turn"
+    assert message_delta["usage"]["input_tokens"] == 15
+    assert message_delta["usage"]["output_tokens"] == 0
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_thinking_only_then_finish_chunk_emits_no_synthetic_text_block(is_async: bool):
+    """When a stream produces only thinking blocks before terminating on finish_reason,
+    the thinking block must cleanly open and close at index 0, and NO synthetic
+    text block must be emitted at index 1.
+    Regression test for issue #47576."""
+    chunks = [
+        _thinking_chunk("Reasoning through the question..."),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    if is_async:
+        wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="claude-x")
+        events = await _drain_async(wrapper)
+    else:
+        wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+        events = _drain_sync(wrapper)
+
+    event_types = [e.get("type") for e in events]
+    assert event_types == [
+        "message_start",
+        "content_block_start",
+        "content_block_delta",
+        "content_block_stop",
+        "message_delta",
+        "message_stop",
+    ]
+    # Verify thinking block is at index 0 and no text block was opened
+    starts = [e for e in events if e.get("type") == "content_block_start"]
+    assert len(starts) == 1
+    assert starts[0]["index"] == 0
+    assert starts[0]["content_block"]["type"] == "thinking"
+    stops = [e for e in events if e.get("type") == "content_block_stop"]
+    assert len(stops) == 1
+    assert stops[0]["index"] == 0
+    message_delta = next(e for e in events if e.get("type") == "message_delta")
+    assert message_delta["delta"]["stop_reason"] == "end_turn"
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_blank_deltas_before_finish_chunk_emit_no_synthetic_content_block(is_async: bool):
+    """Blank deltas before the terminal chunk must be skipped, and the finish
+    chunk must not open a synthetic content block.
+    Regression test for issue #47576."""
+    chunks = [
+        _make_chunk(Delta(content=None)),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    if is_async:
+        wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="claude-x")
+        events = await _drain_async(wrapper)
+    else:
+        wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+        events = _drain_sync(wrapper)
+
+    event_types = [e.get("type") for e in events]
+    assert event_types == ["message_start", "message_delta", "message_stop"]
+    assert not any(e.get("type") == "content_block_start" for e in events)
