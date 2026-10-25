@@ -18,6 +18,7 @@ litellm-inference-responses.workspace = true
 litellm-inference-messages.workspace = true
 litellm-inference-chat.workspace = true
 litellm-inference-ocr.workspace = true
+litellm-inference-tokenize.workspace = true
 litellm-host-http.workspace = true
 litellm-host.workspace = true
 litellm-http.workspace = true
