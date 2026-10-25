@@ -5062,7 +5062,7 @@ def test_stream_chunk_builder_prices_alias_from_openai_sdk_usage_chunk():
     assert response._hidden_params["response_cost"] == pytest.approx(0.000704)
 
 
-def test_stream_chunk_builder_leaves_xai_reported_cost_to_the_calculator(monkeypatch: pytest.MonkeyPatch):
+def test_stream_chunk_builder_stamps_the_margin_priced_bill_over_the_xai_reported_cost(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "cost_margin_config", {"xai": 0.5})
     usage_chunk: Final = _stream_builder_text_chunk("grok-4", "")
     usage_chunk.usage = Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7, cost=0.42)
@@ -5078,9 +5078,10 @@ def test_stream_chunk_builder_leaves_xai_reported_cost_to_the_calculator(monkeyp
     )
 
     assert response is not None
-    assert getattr(response.usage, "cost", None) == pytest.approx(0.42)
-    assert response._hidden_params.get("response_cost") is None
+    assert getattr(response.usage, "cost", None) == pytest.approx(0.63)
+    assert response._hidden_params.get("response_cost") == pytest.approx(0.63)
     assert logging_obj.response_cost_calculator(result=response) == pytest.approx(0.63)
+    assert logging_obj.response_cost_calculator(result=response, ignore_stamped_cost=True) == pytest.approx(0.63)
 
 
 def test_speech_mistral_dispatches_and_decodes_audio(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch):

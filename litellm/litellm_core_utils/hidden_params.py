@@ -136,15 +136,20 @@ def get_or_create_hidden_params(obj: object) -> MutableMapping[str, object]:
     raise TypeError(f"unsupported hidden params storage: {type(hidden_params).__name__}")
 
 
-USAGE_COST_STAMPED_BY_LITELLM: Final = "usage_cost_stamped_by_litellm"
+USAGE_COST_BEFORE_LITELLM_STAMP: Final = "usage_cost_before_litellm_stamp"
 
 
 def stamp_billed_usage_cost(obj: object, usage: object, cost: float) -> None:
-    """usage.cost becomes what litellm billed, marked so the calculator never re-bills it as a provider's report."""
-    setattr(usage, "cost", cost)
-    set_hidden_param(obj, USAGE_COST_STAMPED_BY_LITELLM, True)
-
-
-def usage_cost_stamped_by_litellm(obj: object) -> bool:
+    """usage.cost becomes what litellm billed; the provider's own figure is kept so a later pricing pass bills the same."""
     hidden_params: Final = get_hidden_params(obj)
-    return hidden_params is not None and hidden_params.get(USAGE_COST_STAMPED_BY_LITELLM) is True
+    if hidden_params is None or USAGE_COST_BEFORE_LITELLM_STAMP not in hidden_params:
+        set_hidden_param(obj, USAGE_COST_BEFORE_LITELLM_STAMP, getattr(usage, "cost", None))
+    setattr(usage, "cost", cost)
+
+
+def provider_stated_usage_cost(obj: object, usage_cost: object) -> object:
+    """What the provider itself put in usage.cost, looking past a bill litellm stamped there."""
+    hidden_params: Final = get_hidden_params(obj)
+    if hidden_params is None or USAGE_COST_BEFORE_LITELLM_STAMP not in hidden_params:
+        return usage_cost
+    return hidden_params.get(USAGE_COST_BEFORE_LITELLM_STAMP)
