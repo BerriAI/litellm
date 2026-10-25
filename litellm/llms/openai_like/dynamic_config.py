@@ -106,12 +106,9 @@ def create_config_class(provider: SimpleProviderConfig):
             if provider.provider_info.get("supports_function_calling") is False:
                 return False
 
-            if is_explicitly_disabled_factory(
+            return not is_explicitly_disabled_factory(
                 model=model, custom_llm_provider=provider.slug, key="supports_function_calling"
-            ):
-                return False
-
-            return True
+            )
 
         def get_supported_openai_params(self, model: str) -> list:
             """Get supported OpenAI params, excluding tool-related params for models

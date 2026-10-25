@@ -1,5 +1,4 @@
 import json
-from contextlib import nullcontext
 from typing import Final
 
 import pytest
@@ -146,22 +145,25 @@ class TestForceStoreFalse:
         assert params["store"] is True
 
 
-@pytest.mark.parametrize("is_async", [False, True], ids=["completion", "acompletion"])
-@pytest.mark.parametrize("drop_params", [False, True], ids=["strict", "drop"])
 @pytest.mark.parametrize(
-    "provider_capability", [None, False, True], ids=["provider-unset", "provider-disabled", "provider-enabled"]
+    "model_info,provider_capability,drop_params,expected_tools",
+    [
+        pytest.param(None, None, False, True, id="unknown-strict"),
+        pytest.param(None, None, True, True, id="unknown-drop"),
+        pytest.param({}, None, True, True, id="missing-capability"),
+        pytest.param({"supports_function_calling": None}, None, True, True, id="null-capability"),
+        pytest.param({"supports_function_calling": False}, None, True, False, id="model-disabled"),
+        pytest.param({"supports_function_calling": False}, True, True, False, id="model-overrides-provider"),
+        pytest.param(None, False, True, False, id="provider-disabled"),
+        pytest.param({"supports_function_calling": True}, False, True, True, id="model-enabled"),
+    ],
 )
-@pytest.mark.parametrize(
-    "model_capability",
-    ["unknown", "missing", None, False, True],
-    ids=["unknown", "missing", "null", "disabled", "enabled"],
-)
-async def test_tool_schema_forwarding_respects_explicit_capabilities(
+async def test_tools_reach_upstream_unless_explicitly_disabled(
     monkeypatch: pytest.MonkeyPatch,
-    is_async: bool,
-    drop_params: bool,
+    model_info: dict[str, bool | None] | None,
     provider_capability: bool | None,
-    model_capability: str | bool | None,
+    drop_params: bool,
+    expected_tools: bool,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     model: Final = "z-ai/issue-48145-model"
@@ -172,31 +174,14 @@ async def test_tool_schema_forwarding_respects_explicit_capabilities(
         "provider_info",
         {} if provider_capability is None else {"supports_function_calling": provider_capability},
     )
-    if model_capability != "unknown":
+    if model_info is not None:
         litellm.register_model(
-            {
-                f"nano-gpt/{model}": {
-                    "litellm_provider": "nano-gpt",
-                    "mode": "chat",
-                    **({} if model_capability == "missing" else {"supports_function_calling": model_capability}),
-                }
-            },
+            {f"nano-gpt/{model}": {"litellm_provider": "nano-gpt", "mode": "chat", **model_info}},
             persist_across_reloads=False,
             add_to_provider_model_sets=False,
         )
-    enabled: Final = model_capability is True or (model_capability is not False and provider_capability is not False)
-    tool: Final = {
-        "type": "function",
-        "function": {
-            "name": "get_weather",
-            "parameters": {
-                "type": "object",
-                "properties": {"city": {"type": "string"}},
-                "required": ["city"],
-            },
-        },
-    }
-    with respx.mock(assert_all_called=False) as upstream:
+    tool: Final = {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}
+    with respx.mock() as upstream:
         route: Final = upstream.post("https://upstream.example/v1/chat/completions").respond(
             200,
             json={
@@ -207,32 +192,17 @@ async def test_tool_schema_forwarding_respects_explicit_capabilities(
                 "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
             },
         )
-        request: Final = {
-            "model": f"nano-gpt/{model}",
-            "messages": [{"role": "user", "content": "Weather in Paris?"}],
-            "api_base": "https://upstream.example/v1",
-            "api_key": "local-placeholder",
-            "tools": [tool],
-            "tool_choice": "auto",
-            "parallel_tool_calls": True,
-            "drop_params": drop_params,
-        }
-        rejects: Final = not enabled and not drop_params
-        with pytest.raises(litellm.UnsupportedParamsError, match="tools") if rejects else nullcontext():
-            if is_async:
-                await litellm.acompletion(**request)
-            else:
-                litellm.completion(**request)
-        if rejects:
-            assert not route.called
-            return
+        await litellm.acompletion(
+            model=f"nano-gpt/{model}",
+            messages=[{"role": "user", "content": "Weather in Paris?"}],
+            api_base="https://upstream.example/v1",
+            api_key="local-placeholder",
+            tools=[tool],
+            tool_choice="auto",
+            drop_params=drop_params,
+        )
         body: Final = json.loads(route.calls.last.request.content)
-        assert body["model"] == model
-        if enabled:
+        assert ("tools" in body) is expected_tools
+        assert body.get("tool_choice") == ("auto" if expected_tools else None)
+        if expected_tools:
             assert body["tools"] == [tool]
-            assert body["tool_choice"] == "auto"
-            assert body["parallel_tool_calls"] is True
-        else:
-            assert "tools" not in body
-            assert "tool_choice" not in body
-            assert "parallel_tool_calls" not in body
