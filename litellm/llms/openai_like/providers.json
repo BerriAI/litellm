@@ -302,5 +302,10 @@
       "preserve_cache_control": true
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "mallard": {
+    "base_url": "https://api.mallardai.co.uk/v1",
+    "api_key_env": "MALLARD_API_KEY",
+    "api_base_env": "MALLARD_API_BASE"
   }
 }
