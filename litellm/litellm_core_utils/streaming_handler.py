@@ -1220,12 +1220,11 @@ class CustomStreamWrapper:
                 else:
                     ## else
                     if model_response_str or (
-                        completion_obj.get("reasoning_content") is None
-                        and completion_obj.get("tool_calls") is None
+                        completion_obj.get("reasoning_content") is None and completion_obj.get("tool_calls") is None
                     ):
-                        completion_obj["content"] = model_response_str
+                        completion_obj["content"] = model_response_str  # rebind-ok: builds delta payload
                     else:
-                        completion_obj["content"] = None
+                        completion_obj["content"] = None  # rebind-ok: builds delta payload
                     if self.sent_first_chunk is False:
                         completion_obj["role"] = "assistant"
                         self.sent_first_chunk = True
@@ -1367,8 +1366,13 @@ class CustomStreamWrapper:
                     raise StopIteration
             anthropic_response_obj: Final[GChunk] = cast(GChunk, chunk)
             completion_obj["content"] = anthropic_response_obj["text"]
-            if "reasoning_content" in anthropic_response_obj and anthropic_response_obj["reasoning_content"] is not None:
-                completion_obj["reasoning_content"] = anthropic_response_obj["reasoning_content"]
+            if (
+                "reasoning_content" in anthropic_response_obj
+                and anthropic_response_obj["reasoning_content"] is not None
+            ):
+                completion_obj["reasoning_content"] = anthropic_response_obj[  # rebind-ok: forwards reasoning
+                    "reasoning_content"
+                ]
             if anthropic_response_obj["is_finished"]:
                 self.received_finish_reason = anthropic_response_obj["finish_reason"]
 
@@ -1383,9 +1387,9 @@ class CustomStreamWrapper:
                 )
 
             if "tool_calls" in anthropic_response_obj and anthropic_response_obj["tool_calls"] is not None:
-                completion_obj["tool_calls"] = anthropic_response_obj["tool_calls"]
+                completion_obj["tool_calls"] = anthropic_response_obj["tool_calls"]  # rebind-ok: forwards tool calls
             elif "tool_use" in anthropic_response_obj and anthropic_response_obj["tool_use"] is not None:
-                completion_obj["tool_calls"] = [anthropic_response_obj["tool_use"]]
+                completion_obj["tool_calls"] = [anthropic_response_obj["tool_use"]]  # rebind-ok: forwards tool calls
 
             if (
                 "provider_specific_fields" in anthropic_response_obj
@@ -2793,13 +2797,17 @@ def convert_generic_chunk_to_model_response_stream(
 ) -> ModelResponseStream:
     from litellm.types.utils import Delta
 
-    tool_calls = chunk.get("tool_calls", None)
-    if tool_calls is None and chunk.get("tool_use") is not None:
-        tool_calls = [chunk["tool_use"]]
+    raw_tool_calls: Final = chunk.get("tool_calls", None)
+    tool_calls: Final = (
+        [chunk["tool_use"]] if raw_tool_calls is None and chunk.get("tool_use") is not None else raw_tool_calls
+    )
 
-    content = chunk["text"]
-    if not content and (chunk.get("reasoning_content") is not None or tool_calls is not None):
-        content = None
+    raw_content: Final = chunk["text"]
+    content: Final = (
+        None
+        if not raw_content and (chunk.get("reasoning_content") is not None or tool_calls is not None)
+        else raw_content
+    )
 
     model_response_stream: Final = ModelResponseStream(
         id=str(uuid.uuid4()),

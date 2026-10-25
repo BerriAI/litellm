@@ -222,4 +222,3 @@ def test_real_stream_keeps_reasoning_multi_tool_calls_and_terminal_usage():
     assert chunks[4].usage.completion_tokens == 64
     assert chunks[4].usage.prompt_tokens == 10
     assert chunks[4].usage.completion_tokens_details.reasoning_tokens == 30
-

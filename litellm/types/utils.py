@@ -498,8 +498,8 @@ class ModelInfo(ModelInfoBase, total=False):
 class GenericStreamingChunk(TypedDict, total=False):
     text: Required[str]
     tool_use: ChatCompletionToolCallChunk | None
-    tool_calls: list[ChatCompletionToolCallChunk] | None
-    reasoning_content: str | None
+    tool_calls: ReadOnly[Sequence[ChatCompletionToolCallChunk] | None]
+    reasoning_content: ReadOnly[str | None]
     is_finished: Required[bool]
     finish_reason: Required[str]
     usage: Required[ChatCompletionUsageBlock | None]
