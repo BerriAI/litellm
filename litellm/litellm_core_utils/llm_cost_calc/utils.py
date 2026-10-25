@@ -104,7 +104,8 @@ _BATCH_RATE_PREFIXES: Final = (
     "cache_read_input_token_cost",
     "cache_creation_input_token_cost",
 )
-_BATCH_TIER_KEY: Final = re.compile(rf"^({'|'.join(_BATCH_RATE_PREFIXES)})_above_(\d+k?)_tokens{_BATCH_KEY_SUFFIX}$")
+_BATCH_TIER_PREFIXES: Final = (*_BATCH_RATE_PREFIXES, *_TTL_PRICED_CACHE_WRITE_RATE_KEYS.values())
+_BATCH_TIER_KEY: Final = re.compile(rf"^({'|'.join(_BATCH_TIER_PREFIXES)})_above_(\d+k?)_tokens{_BATCH_KEY_SUFFIX}$")
 _NON_STANDARD_THRESHOLD_SUFFIXES: Final = (*_SERVICE_TIER_SUFFIXES, _BATCH_KEY_SUFFIX)
 
 
@@ -314,6 +315,7 @@ class BatchCostRates:
     output: float | None
     cache_read: float | None
     cache_creation: float | None
+    cache_creation_rates_by_ttl: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
 
 
 def _batch_rate(model_info: ModelInfo, key: str) -> float | None:
@@ -369,6 +371,13 @@ def get_batch_cost_rates(model_info: ModelInfo, usage: Usage, custom_llm_provide
         output=_batch_rate_for_prefix(model_info, "output_cost_per_token", usage, inclusive),
         cache_read=_batch_rate_for_prefix(model_info, "cache_read_input_token_cost", usage, inclusive),
         cache_creation=_batch_rate_for_prefix(model_info, "cache_creation_input_token_cost", usage, inclusive),
+        cache_creation_rates_by_ttl=MappingProxyType(
+            {
+                ttl: rate
+                for ttl, key in _TTL_PRICED_CACHE_WRITE_RATE_KEYS.items()
+                if (rate := _batch_rate_for_prefix(model_info, key, usage, inclusive)) is not None
+            }
+        ),
     )
 
 

@@ -35,7 +35,7 @@ from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import HttpxBinaryResponseContent, OpenAIRealtimeStreamList, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.rerank import RerankResponse
-from litellm.types.utils import CallTypes, Choices, CompletionTokensDetailsWrapper, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import CacheCreationTokenDetails, CallTypes, Choices, CompletionTokensDetailsWrapper, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
 from litellm.types.videos.main import VideoObject
 from litellm.utils import supports_prompt_caching
 import os
@@ -5945,6 +5945,110 @@ def test_batch_cost_calculator_bills_cache_write_tokens_at_the_batch_input_rate_
     )
 
     assert prompt_cost == pytest.approx(300_048 * 3e-6)
+
+
+_TWELVE_HOUR_BATCH_MODEL_INFO: Final = cast(
+    ModelInfo,
+    {
+        "input_cost_per_token_batches": 1e-6,
+        "input_cost_per_token_above_272k_tokens_batches": 3e-6,
+        "cache_creation_input_token_cost_batches": 1.25e-6,
+        "cache_creation_input_token_cost_above_272k_tokens_batches": 3.75e-6,
+        "cache_creation_input_token_cost_above_12hr_batches": 2.5e-6,
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches": 7.5e-6,
+        "output_cost_per_token_batches": 4e-6,
+    },
+)
+
+
+def _twelve_hour_cache_write_usage(prompt_tokens: int) -> Usage:
+    return Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=4,
+        total_tokens=prompt_tokens + 4,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=0,
+            cache_creation_tokens=500,
+            cache_creation_token_details=CacheCreationTokenDetails(
+                ephemeral_30m_input_tokens=300, ephemeral_12h_input_tokens=200
+            ),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("prompt_tokens", "input_rate", "write_rate", "twelve_hour_rate"),
+    [(1_000, 1e-6, 1.25e-6, 2.5e-6), (272_000, 1e-6, 1.25e-6, 2.5e-6), (300_000, 3e-6, 3.75e-6, 7.5e-6)],
+)
+def test_batch_cost_calculator_bills_12h_cache_writes_at_the_12h_batch_rate_for_the_crossed_tier(
+    prompt_tokens: int, input_rate: float, write_rate: float, twelve_hour_rate: float
+) -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=_twelve_hour_cache_write_usage(prompt_tokens),
+        model="lit-12h-batch-model",
+        custom_llm_provider="openai",
+        model_info=_TWELVE_HOUR_BATCH_MODEL_INFO,
+    )
+
+    assert prompt_cost == pytest.approx((prompt_tokens - 500) * input_rate + 300 * write_rate + 200 * twelve_hour_rate)
+    assert completion_cost_value == pytest.approx(4 * 4e-6)
+
+
+@pytest.mark.parametrize(
+    ("prompt_tokens", "input_rate", "twelve_hour_write_rate"), [(1_000, 1e-6, 2.5e-6), (300_000, 3e-6, 7.5e-6)]
+)
+def test_batch_cost_calculator_bills_12h_cache_writes_once_when_only_the_12h_batch_key_exists(
+    prompt_tokens: int, input_rate: float, twelve_hour_write_rate: float
+) -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+
+    model_info: Final = cast(
+        ModelInfo,
+        {
+            key: rate
+            for key, rate in _TWELVE_HOUR_BATCH_MODEL_INFO.items()
+            if not key.startswith("cache_creation_input_token_cost_")
+            or key.startswith("cache_creation_input_token_cost_above_12hr")
+        },
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_twelve_hour_cache_write_usage(prompt_tokens),
+        model="lit-12h-batch-model",
+        custom_llm_provider="openai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx((prompt_tokens - 200) * input_rate + 200 * twelve_hour_write_rate)
+
+
+@pytest.mark.parametrize(("prompt_tokens", "write_rate"), [(1_000, 1.25e-6), (300_000, 3.75e-6)])
+def test_batch_cost_calculator_bills_12h_cache_writes_at_the_batch_cache_write_rate_without_a_12h_batch_key(
+    prompt_tokens: int, write_rate: float
+) -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+
+    model_info: Final = cast(
+        ModelInfo,
+        {
+            key: rate
+            for key, rate in _TWELVE_HOUR_BATCH_MODEL_INFO.items()
+            if not key.startswith("cache_creation_input_token_cost_above_12hr")
+        },
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_twelve_hour_cache_write_usage(prompt_tokens),
+        model="lit-12h-batch-model",
+        custom_llm_provider="openai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(
+        (prompt_tokens - 500) * (1e-6 if prompt_tokens <= 272_000 else 3e-6) + 500 * write_rate
+    )
 
 
 def test_batch_cost_calculator_prices_modalities_and_cached_tokens_together_in_the_crossed_tier() -> None:
