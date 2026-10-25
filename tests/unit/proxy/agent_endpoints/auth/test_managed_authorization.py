@@ -588,6 +588,6 @@ def test_registered_inference_routes_have_an_explicit_managed_access_decision(ro
         "/vector_stores", "/vector_store/", "/search", "/containers", "/skills", "/claude-code/",
         "/interactions", "/agents", "/responses/{", "/responses/input_tokens",
         "/realtime/client_secrets", "/realtime/calls", "/realtime/transcription_sessions",
-    )) or normalized in ("/models", "/cursor/models", "/cursor/v1/models")
+    )) or normalized in ("/models", "/cursor/models", "/cursor/v1/models", "/claude_code_gateway/v1/models")
     concrete: Final = route.split("?")[0].replace("{model}", "model").replace("{model_name:path}", "model")
     assert managed_agent_route_allowed(concrete, None) is not unsupported, route
