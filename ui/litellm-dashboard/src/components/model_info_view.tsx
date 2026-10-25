@@ -63,6 +63,9 @@ interface ModelInfoViewProps {
   modelAccessGroups: string[] | null;
 }
 
+const numericRoutingParam = (value: string | number | null | undefined): number | null =>
+  value === undefined || value === null || value === "" ? null : Number(value);
+
 export default function ModelInfoView({
   modelId,
   onClose,
@@ -294,6 +297,18 @@ export default function ModelInfoView({
         stream_timeout: values.stream_timeout,
         tags: values.tags,
       };
+
+      // Weight/Order are only sent when actually changed, so an untouched save
+      // never clears a stored value. A changed-but-empty value sends null, which
+      // the backend treats as an explicit clear.
+      const storedWeight: string | number | null = localModelData?.litellm_params?.weight ?? null;
+      const storedOrder: string | number | null = localModelData?.litellm_params?.order ?? null;
+      if (numericRoutingParam(values.weight) !== numericRoutingParam(storedWeight)) {
+        updatedLitellmParams.weight = numericRoutingParam(values.weight);
+      }
+      if (numericRoutingParam(values.order) !== numericRoutingParam(storedOrder)) {
+        updatedLitellmParams.order = numericRoutingParam(values.order);
+      }
 
       if (isFieldTouched("input_cost")) {
         updatedLitellmParams.input_cost_per_token = values.input_cost;
