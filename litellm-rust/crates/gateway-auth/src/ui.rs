@@ -3,8 +3,7 @@ use std::{convert::Infallible, sync::Arc};
 use axum::extract::FromRequestParts;
 use axum::http::{header::AUTHORIZATION, request::Parts};
 use axum_login::{AuthUser, AuthnBackend, UserId};
-use litellm_auth_types::SecretValue;
-use serde::Deserialize;
+use litellm_auth_types::{SecretValue, UiCredentials};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use tower_sessions::Session;
@@ -36,12 +35,6 @@ impl AuthUser for UiUser {
     fn session_auth_hash(&self) -> &[u8] {
         &self.password_hash
     }
-}
-
-#[derive(Deserialize)]
-pub struct UiCredentials {
-    pub username: String,
-    pub password: SecretValue,
 }
 
 #[derive(Clone)]

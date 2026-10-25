@@ -3,7 +3,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use litellm_config::Config;
+use litellm_config_load::Environment;
 use litellm_gateway_auth::UiBackend;
 use litellm_tracing::{Level, Logger, Metadata, Record, Sink};
 use serde_json::json;
@@ -41,14 +41,15 @@ impl Sink for StderrSink {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let settings: Settings = settings::from_iter(std::env::vars_os())?;
+    let environment = Environment::from_os(std::env::vars_os());
+    let settings: Settings = settings::from_environment(&environment)?;
     let level = settings.log_level();
     Logger::new(StderrSink { level }).install_global()?;
-    let config = Config::load(settings.litellm_config)?;
-    let inference = litellm_gateway::build_inference(&config)?;
-    let ui = match std::env::var_os("LITELLM_UI_PATH") {
+    let config = litellm_config_load::load(settings.litellm_config)?;
+    let inference = litellm_gateway::build_inference(&config, &environment)?;
+    let ui = match environment.var("LITELLM_UI_PATH") {
         Some(directory) => {
-            let ui_settings: UiSettings = settings::from_iter(std::env::vars_os())?;
+            let ui_settings: UiSettings = settings::from_environment(&environment)?;
             let backend = UiBackend::new(ui_settings.ui_username, ui_settings.ui_password)?;
             Some(
                 litellm_gateway_ui::router(
@@ -85,11 +86,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             litellm_gateway_mcp::HttpConfig {
                 allowed_hosts: config
                     .general_settings
+                    .mcp
                     .mcp_allowed_hosts
                     .as_deref()
                     .map(Vec::from)
                     .unwrap_or(defaults.allowed_hosts),
-                allowed_origins: config.general_settings.mcp_allowed_origins.to_vec(),
+                allowed_origins: config.general_settings.mcp.mcp_allowed_origins.to_vec(),
                 cancellation_token: shutdown.clone(),
                 server_info: defaults.server_info,
             },

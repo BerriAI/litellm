@@ -315,7 +315,9 @@ mod tests {
     use rustls::NamedGroup;
 
     use super::*;
-    use crate::{HttpSettings, Resolution};
+    use litellm_http_types::HttpSettings;
+
+    use crate::Resolution;
 
     fn config(settings: HttpSettings) -> HttpClientConfig {
         Resolution::from(&settings).config

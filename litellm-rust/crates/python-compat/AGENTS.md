@@ -6,6 +6,7 @@
   - `cache-disk`: diskcache's pickled values (`pickle`), falsy-is-miss (`truthy`)
   - Cache-key derivation: sha256 over `str(value)` must match Python byte for byte (`repr::to_str`)
   - Byte-identical writes where Python compares raw values (`json::dumps`, `repr`)
+- `read` holds Python's config reading shapes (`Spelled`, `one_or_many`). No setting names or config keys here, those stay with the crate that reads them
 - Relation to [`py_literal`](https://docs.rs/py_literal/latest/py_literal/): replaced, do not reintroduce
   - Its pest grammar backtracks: parse time doubles per nested `[`/`{` (105 ms at depth 16). Ours is linear (19 µs at depth 128)
   - Its formatter is not `repr` (`2e-1`, always single quotes, escapes non-ASCII). It also lost `-0.0`, `(1+2j)`, `set()`
@@ -20,4 +21,4 @@
   - `scripts/verify_rust_pickles.py` checks CPython reads Rust pickles, with class resolution disabled. CI does not run Python
 - Decoders recurse, so they reject nesting beyond `MAX_DEPTH` for stack safety: deliberately stricter than CPython, whose parser takes ~200 levels and whose unpickler has no limit (pinned as `nested_150`)
   - Formatters (`repr`, `json`) are unbounded. Values from the decoders are already capped, a hand-built `Value` is the caller's responsibility
-  - `literal_eval` must stay linear in depth: `tests/limits.rs` times the deepest parse, `benches/formats.rs` measures the curve but is manual, since CI runs no Rust bench
+  - `literal_eval` must stay linear in depth: the tests in `src/literal.rs` time the deepest parse, `benches/formats.rs` measures the curve but is manual, since CI runs no Rust bench

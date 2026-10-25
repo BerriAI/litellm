@@ -126,7 +126,7 @@ impl MediaFetcher {
         config: &HttpClientConfig,
         url_policy: UrlPolicy,
     ) -> Result<Self, crate::Error> {
-        let uses_proxy: ProxyMatch = Arc::new(config.proxies.matcher());
+        let uses_proxy: ProxyMatch = Arc::new(crate::proxy::matcher(&config.proxies));
         Self::with_resolution(
             pool,
             config,
@@ -375,7 +375,9 @@ mod tests {
     };
 
     use super::*;
-    use crate::{HttpSettings, Resolution};
+    use litellm_http_types::HttpSettings;
+
+    use crate::Resolution;
 
     async fn serve(response: &'static [u8]) -> (Url, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0")

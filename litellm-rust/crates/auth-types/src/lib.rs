@@ -7,6 +7,7 @@ mod params;
 mod policy;
 mod secret;
 mod token;
+mod ui;
 
 use serde::{Deserialize, Serialize};
 
@@ -57,3 +58,4 @@ pub use params::{AwsParams, ParamSpec, VertexParams};
 pub use policy::{CredentialPlanKind, CredentialRule, ExistingHeaderBehavior, ProviderAuthPolicy};
 pub use secret::SecretValue;
 pub use token::{ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};
+pub use ui::UiCredentials;

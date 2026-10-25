@@ -185,3 +185,62 @@ impl<'de> Visitor<'de> for Seed {
         Ok(Value::Dict(entries))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::{dumps, loads};
+    use crate::{Error, MAX_DEPTH, Value, literal::literal_eval};
+
+    fn nested_list(depth: usize) -> Value {
+        (0..depth).fold(Value::from(1), |value, _| Value::List(vec![value]))
+    }
+
+    /// A protocol 3 pickle of `depth` nested lists around `1`: `EMPTY_LIST` per level, then
+    /// `BININT1 1`, then `APPEND` per level. Written by hand because `dumps` refuses the depth.
+    fn nested_list_pickle(depth: usize) -> Vec<u8> {
+        let mut data = vec![0x80, 3];
+        data.extend(std::iter::repeat_n(b']', depth));
+        data.extend([b'K', 1]);
+        data.extend(std::iter::repeat_n(b'a', depth));
+        data.push(b'.');
+        data
+    }
+
+    #[rstest]
+    fn loads_accepts_the_limit_and_rejects_past_it() {
+        assert_eq!(
+            loads(&nested_list_pickle(MAX_DEPTH)).unwrap(),
+            nested_list(MAX_DEPTH)
+        );
+        assert!(matches!(
+            loads(&nested_list_pickle(MAX_DEPTH + 1)),
+            Err(Error::InvalidPickle(_))
+        ));
+    }
+
+    #[rstest]
+    fn dumps_accepts_the_limit_and_rejects_past_it() {
+        assert!(dumps(&nested_list(MAX_DEPTH)).is_ok());
+        assert!(matches!(
+            dumps(&nested_list(MAX_DEPTH + 2)),
+            Err(Error::TooDeep)
+        ));
+    }
+
+    #[rstest]
+    #[case::set("{1, 2}", "set")]
+    #[case::complex("1+2j", "complex")]
+    fn dumps_refuses_types_it_would_change(#[case] source: &str, #[case] type_name: &str) {
+        let value = literal_eval(source).expect("source is a literal");
+        assert!(matches!(dumps(&value), Err(Error::NotPicklable(name)) if name == type_name));
+    }
+
+    #[rstest]
+    #[case::class_reference(b"\x80\x02c__builtin__\ncomplex\nq\x00.".to_vec())]
+    #[case::trailing_data({ let mut data = dumps(&Value::from(1)).unwrap(); data.push(b'.'); data })]
+    fn loads_rejects(#[case] data: Vec<u8>) {
+        assert!(matches!(loads(&data), Err(Error::InvalidPickle(_))));
+    }
+}

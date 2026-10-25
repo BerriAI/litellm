@@ -8,7 +8,7 @@ use litellm_core_utils::{
     settings::{Layer, Lookup, merge},
 };
 
-use crate::proxy::EnvironmentProxies;
+use crate::EnvironmentProxies;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SslVerify {
@@ -34,6 +34,16 @@ pub struct TcpKeepalive {
     pub retries: u32,
 }
 
+impl Default for TcpKeepalive {
+    fn default() -> Self {
+        Self {
+            idle: Duration::from_secs(60),
+            interval: Duration::from_secs(30),
+            retries: 5,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HttpSettingsLayer {
     pub ssl_verify: Option<SslVerify>,
@@ -47,15 +57,19 @@ pub struct HttpSettingsLayer {
     pub disable_aiohttp_trust_env: Option<bool>,
     pub disable_aiohttp_transport: Option<bool>,
     pub user_agent: Option<String>,
-    pub tcp_keepalive: Option<TcpKeepalive>,
+    pub tcp_keepalive: Option<bool>,
+    pub tcp_keepalive_idle: Option<Duration>,
+    pub tcp_keepalive_interval: Option<Duration>,
+    pub tcp_keepalive_retries: Option<u32>,
     pub pool_idle_timeout: Option<Duration>,
     pub proxies: Option<EnvironmentProxies>,
 }
 
 impl HttpSettingsLayer {
     pub fn from_environment(env: &impl Lookup) -> Self {
-        let seconds = |name: &str, default: u32| {
-            Duration::from_secs(u64::from(env.parsed::<u32>(name).unwrap_or(default)))
+        let seconds = |name: &str| {
+            env.parsed::<u32>(name)
+                .map(|value| Duration::from_secs(u64::from(value)))
         };
         Self {
             ssl_verify: env.get("SSL_VERIFY").map(|value| SslVerify::parse(&value)),
@@ -63,22 +77,19 @@ impl HttpSettingsLayer {
             ssl_certificate: env.get("SSL_CERTIFICATE").map(PathBuf::from),
             ssl_security_level: env.get("SSL_SECURITY_LEVEL"),
             ssl_ecdh_curve: env.get("SSL_ECDH_CURVE"),
-            force_ipv4: None,
             http2: env.enabled("LITELLM_HTTP2"),
             aiohttp_trust_env: env.enabled("AIOHTTP_TRUST_ENV"),
             disable_aiohttp_trust_env: env.enabled("DISABLE_AIOHTTP_TRUST_ENV"),
             disable_aiohttp_transport: env.enabled("DISABLE_AIOHTTP_TRANSPORT"),
             user_agent: env.get("LITELLM_USER_AGENT"),
-            tcp_keepalive: env.enabled("AIOHTTP_SO_KEEPALIVE").map(|_| TcpKeepalive {
-                idle: seconds("AIOHTTP_TCP_KEEPIDLE", 60),
-                interval: seconds("AIOHTTP_TCP_KEEPINTVL", 30),
-                retries: env.parsed("AIOHTTP_TCP_KEEPCNT").unwrap_or(5),
-            }),
-            pool_idle_timeout: env
-                .parsed::<u32>("AIOHTTP_KEEPALIVE_TIMEOUT")
-                .map(|timeout| Duration::from_secs(u64::from(timeout))),
+            tcp_keepalive: env.enabled("AIOHTTP_SO_KEEPALIVE"),
+            tcp_keepalive_idle: seconds("AIOHTTP_TCP_KEEPIDLE"),
+            tcp_keepalive_interval: seconds("AIOHTTP_TCP_KEEPINTVL"),
+            tcp_keepalive_retries: env.parsed("AIOHTTP_TCP_KEEPCNT"),
+            pool_idle_timeout: seconds("AIOHTTP_KEEPALIVE_TIMEOUT"),
             proxies: Some(EnvironmentProxies::from_environment(env))
                 .filter(|proxies| *proxies != EnvironmentProxies::default()),
+            ..Self::default()
         }
     }
 }
@@ -102,6 +113,9 @@ impl Layer for HttpSettingsLayer {
                 .or(lower.disable_aiohttp_transport),
             user_agent: self.user_agent.or(lower.user_agent),
             tcp_keepalive: self.tcp_keepalive.or(lower.tcp_keepalive),
+            tcp_keepalive_idle: self.tcp_keepalive_idle.or(lower.tcp_keepalive_idle),
+            tcp_keepalive_interval: self.tcp_keepalive_interval.or(lower.tcp_keepalive_interval),
+            tcp_keepalive_retries: self.tcp_keepalive_retries.or(lower.tcp_keepalive_retries),
             pool_idle_timeout: self.pool_idle_timeout.or(lower.pool_idle_timeout),
             proxies: self.proxies.or(lower.proxies),
         }
@@ -120,7 +134,6 @@ pub struct HttpSettings {
     pub user_agent: Option<String>,
     pub trust_proxy_env: bool,
     pub proxies: EnvironmentProxies,
-    pub connect_timeout: Duration,
     pub tcp_keepalive: Option<TcpKeepalive>,
     pub pool_idle_timeout: Duration,
 }
@@ -138,7 +151,6 @@ impl Default for HttpSettings {
             user_agent: None,
             trust_proxy_env: true,
             proxies: EnvironmentProxies::default(),
-            connect_timeout: Duration::from_secs(10),
             tcp_keepalive: None,
             pool_idle_timeout: Duration::from_secs(15),
         }
@@ -152,6 +164,7 @@ impl HttpSettings {
         let merged = merge(highest_precedence_first);
         let defaults = Self::default();
         let http2 = merged.http2.unwrap_or(defaults.http2);
+        let keepalive = TcpKeepalive::default();
         Self {
             ssl_verify: merged.ssl_verify,
             ssl_cert_file: merged.ssl_cert_file,
@@ -165,7 +178,14 @@ impl HttpSettings {
                 || merged.aiohttp_trust_env.unwrap_or(false)
                 || merged.disable_aiohttp_transport.unwrap_or(false)
                 || http2,
-            tcp_keepalive: merged.tcp_keepalive,
+            tcp_keepalive: merged
+                .tcp_keepalive
+                .filter(|enabled| *enabled)
+                .map(|_| TcpKeepalive {
+                    idle: merged.tcp_keepalive_idle.unwrap_or(keepalive.idle),
+                    interval: merged.tcp_keepalive_interval.unwrap_or(keepalive.interval),
+                    retries: merged.tcp_keepalive_retries.unwrap_or(keepalive.retries),
+                }),
             pool_idle_timeout: merged
                 .pool_idle_timeout
                 .unwrap_or(defaults.pool_idle_timeout),
@@ -322,6 +342,36 @@ mod tests {
             })
         );
         assert_eq!(tuned.pool_idle_timeout, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn keepalive_tuning_composes_across_layers_and_an_explicit_off_wins() {
+        let enabling = HttpSettingsLayer {
+            tcp_keepalive: Some(true),
+            ..HttpSettingsLayer::default()
+        };
+        let tuned = HttpSettingsLayer {
+            tcp_keepalive: Some(true),
+            tcp_keepalive_idle: Some(Duration::from_secs(45)),
+            tcp_keepalive_retries: Some(9),
+            ..HttpSettingsLayer::default()
+        };
+        assert_eq!(
+            HttpSettings::from_layers([enabling, tuned.clone()]).tcp_keepalive,
+            Some(TcpKeepalive {
+                idle: Duration::from_secs(45),
+                interval: Duration::from_secs(30),
+                retries: 9,
+            })
+        );
+        let disabling = HttpSettingsLayer {
+            tcp_keepalive: Some(false),
+            ..HttpSettingsLayer::default()
+        };
+        assert_eq!(
+            HttpSettings::from_layers([disabling, tuned]).tcp_keepalive,
+            None
+        );
     }
 
     #[test]

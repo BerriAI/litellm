@@ -8,6 +8,7 @@ description = "The types of litellm/types/router.py: a deployment's litellm_para
 
 [dependencies]
 litellm-auth-types.workspace = true
+litellm-python-compat.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_with.workspace = true
