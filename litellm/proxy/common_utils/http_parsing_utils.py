@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 from collections.abc import Collection, Mapping
@@ -163,7 +164,10 @@ def coerce_numeric_form_fields(
 
 _ORJSON_INT_MIN: Final = -(2**63)
 _ORJSON_INT_MAX: Final = 2**64 - 1
+_JSON_PARSE_THREAD_THRESHOLD: Final = 64 * 1024
+_JSON_LONG_DIGITS: Final = re.compile(rb"[0-9]{19}")
 _JSON_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
+_JSON_BODY_BYTES: Final = TypeAdapter(bytes)
 # Consume unterminated strings through EOF to avoid rescanning every escaped quote in malformed bodies.
 _JSON_STRING_OR_NUMBER: Final = re.compile(
     rb'"[^"\\]*(?:\\.[^"\\]*)*(?:"|\\?$)|(-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)', re.DOTALL
@@ -171,6 +175,8 @@ _JSON_STRING_OR_NUMBER: Final = re.compile(
 
 
 def _has_int_outside_orjson_range(body: bytes) -> bool:
+    if _JSON_LONG_DIGITS.search(body) is None:
+        return False
     for token in _JSON_STRING_OR_NUMBER.finditer(body):
         if (
             (number := token.group(1)) is None
@@ -194,10 +200,16 @@ def _loads_json_body(body: bytes) -> Mapping[str, object]:
     return parsed
 
 
-def _parse_binary_body(body: bytes) -> dict:
+async def _loads_json_body_async(body: bytes) -> Mapping[str, object]:
+    if len(body) > _JSON_PARSE_THREAD_THRESHOLD:
+        return await asyncio.to_thread(_loads_json_body, body)
+    return _loads_json_body(body)
+
+
+async def _parse_binary_body(body: bytes) -> dict:
     """JSON sent under a binary content type still parses; real binary (protobuf) carries no params -> {}."""
     try:
-        parsed: Final = _DECODED_JSON.validate_python(_loads_json_body(body))
+        parsed: Final = _DECODED_JSON.validate_python(await _loads_json_body_async(body))
         if isinstance(parsed, dict):
             return parsed
     except orjson.JSONDecodeError:
@@ -269,7 +281,7 @@ async def read_request_body(request: Request | None) -> dict:
         if _normalize_media_type(content_type) in _BINARY_CONTENT_TYPES:
             binary_body: Final = await request.body()
             _mark_body_received(len(binary_body))
-            parsed_body = _parse_binary_body(binary_body)
+            parsed_body = await _parse_binary_body(binary_body)
         elif _is_form_content_type(content_type):
             try:
                 form_data: Final = await request.form()
@@ -305,7 +317,7 @@ async def read_request_body(request: Request | None) -> dict:
                 parsed_body = {}
             else:
                 try:
-                    parsed_body = dict(_loads_json_body(body))
+                    parsed_body = dict(await _loads_json_body_async(body))
                 except orjson.JSONDecodeError as e:
                     # The surrogate-repair fallback below runs two full-body re.sub
                     # passes, which block the event loop on multi-MB malformed bodies.
@@ -436,6 +448,14 @@ def detach_request_parsed_body(
     return client_body
 
 
+def _dumps_json_body(body: Mapping[str, object]) -> bytes:
+    try:
+        encoded: Final = _JSON_BODY_BYTES.validate_python(orjson.dumps(body))
+    except TypeError:
+        return json.dumps(body, separators=(",", ":")).encode("utf-8")
+    return encoded
+
+
 def rewrite_request_model(
     request_data: dict[str, object],  # mutable-ok: the request body is rewritten in place for every downstream reader
     request: Request | None,
@@ -448,10 +468,12 @@ def rewrite_request_model(
     if request is None:
         return
     cached_body: Final = _safe_get_request_parsed_body(request=request)
-    body: Final = {**cached_body, "model": model} if cached_body is not None else request_data
+    body: Final = (
+        {**_JSON_REQUEST_BODY.validate_python(cached_body), "model": model} if cached_body is not None else request_data
+    )
     safe_set_request_parsed_body(request=request, parsed_body=body)
     request._json = body  # pyright: ignore[reportPrivateUsage]  # Starlette JSON cache
-    request._body = orjson.dumps(body)  # pyright: ignore[reportPrivateUsage]  # Starlette body cache
+    request._body = _dumps_json_body(body)  # pyright: ignore[reportPrivateUsage]  # Starlette body cache
 
 
 def safe_get_request_headers(request: Request | None) -> dict:

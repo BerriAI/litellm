@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
 import pytest
+from pydantic import TypeAdapter
 from fastapi.testclient import TestClient
 from starlette.datastructures import FormData
 from starlette.requests import Request
@@ -128,6 +129,27 @@ async def test_read_request_body_keeps_large_integers_exact(body: bytes, content
     assert parsed == json.loads(body)
     assert json.dumps(parsed).encode() == json.dumps(json.loads(body)).encode()
     assert await read_request_body(request) == parsed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("padding", [0, 100_000])
+@pytest.mark.parametrize("content_type", ["application/json", "application/x-protobuf"])
+async def test_model_rewrite_keeps_large_integers_in_every_body_reader(padding: int, content_type: str) -> None:
+    body: Final = {
+        "model": "integer-alias",
+        "input": [12345678901234567890123, -9223372036854775809, {"nested": 10**400}],
+        "text": "escaped \"quote\" and backslash \\" + "x" * padding,
+    }
+    request: Final = _starlette_request(json.dumps(body).encode(), content_type)
+    parsed: Final = dict(TypeAdapter(Mapping[str, object]).validate_python(await read_request_body(request)))
+
+    http_parsing_utils.rewrite_request_model(parsed, request, "integer-target")
+
+    expected: Final = {**body, "model": "integer-target"}
+    assert parsed == expected
+    assert await read_request_body(request) == expected
+    assert await request.json() == expected
+    assert json.loads(await request.body()) == expected
 
 
 @pytest.mark.asyncio
