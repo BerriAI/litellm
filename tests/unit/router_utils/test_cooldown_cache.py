@@ -3,6 +3,8 @@ Unit tests for CooldownCache exception masking functionality
 """
 
 import time
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
@@ -629,53 +631,152 @@ class TestCooldownStoreCallsDeclareTheirKeyFamily:
         assert seen == [("mget", "router_cooldowns"), ("mget", "router_cooldowns")]
 
 
+_CLOCK_START: Final = 1_000_000.0
+
+
+class _Clock:
+    """Stands in for `time.time`, which CooldownCache and its InMemoryCache both read at call time."""
+
+    def __init__(self, now: float) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.fixture
+def clock(monkeypatch: pytest.MonkeyPatch) -> _Clock:
+    fake: Final = _Clock(_CLOCK_START)
+    monkeypatch.setattr(time, "time", fake)
+    return fake
+
+
+def _cool(cc: CooldownCache, cooldown_time: float, status: int = 429) -> None:
+    cc.add_deployment_to_cooldown(
+        model_id="dep", original_exception=Exception(str(status)), exception_status=status, cooldown_time=cooldown_time
+    )
+
+
+def _active_record(cc: CooldownCache) -> CooldownCacheValue | None:
+    active: Final = cc.get_active_cooldowns(["dep"], parent_otel_span=None)
+    return active[0][1] if active else None
+
+
 class TestCooldownExtension:
-    """A second failure asking for a longer cooldown must move the deadline out."""
+    """A second cooldown on a deployment keeps whichever deadline is later, read the way routing reads it."""
 
     @staticmethod
     def _cache() -> CooldownCache:
         return CooldownCache(cache=DualCache(), default_cooldown_time=60.0)
 
-    def test_longer_cooldown_extends_the_deadline(self):
-        cc = self._cache()
-        key = CooldownCache.get_cooldown_cache_key("dep-a")
+    def test_longer_cooldown_extends_the_deadline(self, clock: _Clock):
+        cc: Final = self._cache()
+        _cool(cc, 2.0)
+        clock.advance(1.0)
+        _cool(cc, 60.0)
 
-        cc.add_deployment_to_cooldown(
-            model_id="dep-a", original_exception=Exception("429"), exception_status=429, cooldown_time=2.0
+        clock.advance(1.5)  # t=2.5, past the first deadline (t=2)
+        assert _active_record(cc) is not None, "the longer cooldown was dropped"
+        clock.advance(58.4)  # t=60.9
+        assert _active_record(cc) is not None
+        clock.advance(0.2)  # t=61.1, past the second deadline (t=61)
+        assert _active_record(cc) is None
+
+    def test_equal_cooldown_moves_the_deadline_out(self, clock: _Clock):
+        cc: Final = self._cache()
+        _cool(cc, 1.0)
+        clock.advance(0.6)
+        _cool(cc, 1.0)
+
+        clock.advance(0.6)  # t=1.2, past the first deadline (t=1)
+        assert _active_record(cc) is not None, "the re-cooldown kept the first deadline"
+        clock.advance(0.5)  # t=1.7, past the second deadline (t=1.6)
+        assert _active_record(cc) is None
+
+    def test_shorter_cooldown_does_not_cut_an_active_one_short(self, clock: _Clock):
+        cc: Final = self._cache()
+        _cool(cc, 60.0, status=429)
+        clock.advance(0.3)
+        _cool(cc, 1.0, status=500)
+
+        clock.advance(1.5)  # t=1.8, past the short deadline (t=1.3), long before the first one (t=60)
+        record: Final = _active_record(cc)
+        assert record is not None, "a brief cooldown cut a long one short"
+        assert (record["timestamp"], record["cooldown_time"], record["status_code"]) == (_CLOCK_START, 60.0, "429")
+
+    def test_shorter_cooldown_does_not_reach_a_sibling_replica(self, clock: _Clock):
+        redis: Final = SharedRedisDouble()
+        writer: Final = CooldownCache(
+            cache=DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis), default_cooldown_time=60.0
         )
-        first_expiry = cc.in_memory_cache.ttl_dict[key]
+        _cool(writer, 60.0, status=429)
+        clock.advance(0.3)
+        _cool(writer, 1.0, status=500)
 
-        started = time.time()
-        cc.add_deployment_to_cooldown(
-            model_id="dep-a", original_exception=Exception("429"), exception_status=429, cooldown_time=60.0
+        clock.advance(1.5)  # t=1.8, past the short deadline
+        sibling: Final = CooldownCache(
+            cache=DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis), default_cooldown_time=60.0
         )
-        second_expiry = cc.in_memory_cache.ttl_dict[key]
+        record: Final = _active_record(sibling)  # nothing in its memory yet, so this reads Redis
+        assert record is not None, "the brief cooldown replaced the long one in Redis"
+        assert record["cooldown_time"] == 60.0
 
-        assert second_expiry > first_expiry, "the longer cooldown was dropped"
-        assert second_expiry - started == pytest.approx(60.0, abs=2.0)
-
-    def test_shorter_cooldown_does_not_cut_an_active_one_short(self):
-        cc = self._cache()
-        key = CooldownCache.get_cooldown_cache_key("dep-b")
-
-        cc.add_deployment_to_cooldown(
-            model_id="dep-b", original_exception=Exception("429"), exception_status=429, cooldown_time=60.0
+    def test_backfilled_longer_cooldown_is_not_shortened_through_its_capped_ttl(self, clock: _Clock):
+        redis: Final = SharedRedisDouble()
+        writer: Final = CooldownCache(
+            cache=DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis), default_cooldown_time=60.0
         )
-        long_expiry = cc.in_memory_cache.ttl_dict[key]
-
-        cc.add_deployment_to_cooldown(
-            model_id="dep-b", original_exception=Exception("500"), exception_status=500, cooldown_time=1.0
+        reader: Final = CooldownCache(
+            cache=DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis), default_cooldown_time=60.0
         )
+        _cool(writer, 300.0, status=429)
+        assert _active_record(reader) is not None  # backfills the reader's memory, with its TTL capped at 60 s
+        _cool(reader, 120.0, status=500)
 
-        assert cc.in_memory_cache.ttl_dict[key] == long_expiry, "a brief cooldown shortened a long one"
-
-    def test_first_cooldown_is_unaffected(self):
-        cc = self._cache()
-        key = CooldownCache.get_cooldown_cache_key("dep-c")
-
-        started = time.time()
-        cc.add_deployment_to_cooldown(
-            model_id="dep-c", original_exception=Exception("429"), exception_status=429, cooldown_time=30.0
+        clock.advance(150.0)  # past the 120 s deadline, inside the 300 s one
+        sibling: Final = CooldownCache(
+            cache=DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis), default_cooldown_time=60.0
         )
+        record: Final = _active_record(sibling)
+        assert record is not None, "the capped in-memory TTL let a shorter cooldown replace a longer one in Redis"
+        assert record["cooldown_time"] == 300.0
 
-        assert cc.in_memory_cache.ttl_dict[key] - started == pytest.approx(30.0, abs=2.0)
+    def test_first_cooldown_is_unaffected(self, clock: _Clock):
+        cc: Final = self._cache()
+        _cool(cc, 30.0)
+
+        clock.advance(29.9)
+        assert _active_record(cc) is not None
+        clock.advance(0.2)
+        assert _active_record(cc) is None
+
+    @pytest.mark.parametrize(
+        "stored",
+        [
+            pytest.param(
+                {
+                    "exception_received": "429",
+                    "status_code": "429",
+                    "timestamp": _CLOCK_START - 120.0,
+                    "cooldown_time": 60.0,
+                },
+                id="deadline-passed-under-a-live-ttl",
+            ),
+            pytest.param({"timestamp": _CLOCK_START}, id="no-cooldown-time"),
+            pytest.param({"timestamp": "now", "cooldown_time": 60.0}, id="non-numeric-timestamp"),
+        ],
+    )
+    def test_stale_or_malformed_record_does_not_block_a_fresh_cooldown(
+        self, clock: _Clock, stored: Mapping[str, object]
+    ):
+        cc: Final = self._cache()
+        cc.in_memory_cache.set_cache(CooldownCache.get_cooldown_cache_key("dep"), dict(stored), ttl=600)
+        _cool(cc, 30.0)
+
+        clock.advance(10.0)
+        record: Final = _active_record(cc)
+        assert record is not None, "the stored record blocked the new cooldown"
+        assert (record["timestamp"], record["cooldown_time"]) == (_CLOCK_START, 30.0)

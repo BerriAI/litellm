@@ -38,6 +38,14 @@ _MAX_CORRECTED_IN_MEMORY_TTL_SECONDS: Final = 60.0
 ROUTER_COOLDOWNS_TARGET: Final = "router_cooldowns"
 
 
+def _record_deadline(stored: object) -> float | None:
+    match stored:
+        case {"timestamp": int() | float() as timestamp, "cooldown_time": int() | float() as cooldown_time}:
+            return timestamp + cooldown_time
+        case _:
+            return None
+
+
 class CooldownCache:
     def __init__(
         self,
@@ -119,8 +127,19 @@ class CooldownCache:
                 cooldown_time=_cooldown_time,
             )
 
+            live_deadline: Final = self._in_memory_deadline(cooldown_key)
+            new_deadline: Final = cooldown_data["timestamp"] + cooldown_data["cooldown_time"]
+            if live_deadline is not None and live_deadline >= new_deadline:
+                verbose_logger.debug(
+                    "CooldownCache::add_deployment_to_cooldown - keeping %s's cooldown until %s over a new one until %s",
+                    cooldown_key,
+                    live_deadline,
+                    new_deadline,
+                )
+                return
+            # InMemoryCache keeps a live key's TTL on overwrite, so the new TTL lands only on a deleted entry
+            self.in_memory_cache.delete_cache(cooldown_key)
             # Set the cache with a TTL equal to the cooldown time
-            self._drop_in_memory_entry_if_extending(cooldown_key, _cooldown_time)
             with service_target(ROUTER_COOLDOWNS_TARGET):
                 self.cooldown_store.set_cache(
                     value=cooldown_data,
@@ -131,13 +150,12 @@ class CooldownCache:
             verbose_logger.error("CooldownCache::add_deployment_to_cooldown - Exception occurred - %s", e)
             raise e
 
-    def _drop_in_memory_entry_if_extending(self, cooldown_key: str, new_cooldown_time: float) -> None:
-        """InMemoryCache keeps a live key's expiry, so a longer cooldown lands only if the entry is deleted first."""
-        current_expiry: Final = self.in_memory_cache.ttl_dict.get(cooldown_key)
-        if current_expiry is None:
-            return
-        if float(current_expiry) < time.time() + float(new_cooldown_time):
-            self.in_memory_cache.delete_cache(cooldown_key)
+    def _in_memory_deadline(self, cooldown_key: str) -> float | None:
+        """
+        The in-memory record's `timestamp + cooldown_time`, the deadline routing reads. The in-memory TTL is not
+        used because it is capped for an entry backfilled from Redis. Redis itself is not read.
+        """
+        return _record_deadline(self.in_memory_cache.get_cache(cooldown_key))
 
     @staticmethod
     @functools.lru_cache(maxsize=1024)
