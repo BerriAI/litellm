@@ -2815,6 +2815,32 @@ def test_stream_chunk_builder_fragmented_single_object_tool_call() -> None:
 
 def test_get_combined_tool_content_direct_single_dict_and_object() -> None:
     """Directly test get_combined_tool_content with a single dict and single object tool call."""
+    # Empty delta / None delta chunk to ensure robust skipping of choices without deltas or empty tool calls
+    empty_delta_chunk: Final = {
+        "choices": [
+            {
+                "index": 0,
+                "delta": None,
+            },
+            {
+                "index": 1,
+                "delta": {},
+            },
+            {
+                "index": 2,
+                "delta": {"tool_calls": None},
+            },
+            {
+                "index": 3,
+                "delta": {"tool_calls": []},
+            },
+            {
+                "index": 4,
+                "delta": {"tool_calls": [None]},
+            },
+        ]
+    }
+
     # Single dict tool_call
     dict_chunk: Final = {
         "choices": [
@@ -2834,8 +2860,8 @@ def test_get_combined_tool_content_direct_single_dict_and_object() -> None:
             }
         ]
     }
-    processor: Final = ChunkProcessor(chunks=[dict_chunk])
-    result_dict: Final = processor.get_combined_tool_content([dict_chunk])
+    processor: Final = ChunkProcessor(chunks=[dict_chunk, empty_delta_chunk])
+    result_dict: Final = processor.get_combined_tool_content([dict_chunk, empty_delta_chunk])
     assert len(result_dict) == 1
     assert result_dict[0].id == "call_direct_dict"
     assert result_dict[0].function.name == "lookup"
@@ -2857,8 +2883,55 @@ def test_get_combined_tool_content_direct_single_dict_and_object() -> None:
             }
         ]
     }
-    result_obj: Final = processor.get_combined_tool_content([obj_chunk])
+    result_obj: Final = processor.get_combined_tool_content([obj_chunk, empty_delta_chunk])
     assert len(result_obj) == 1
     assert result_obj[0].id == "call_direct_obj"
     assert result_obj[0].function.name == "search"
     assert result_obj[0].function.arguments == '{"q": "test"}'
+
+
+def test_stream_chunk_builder_empty_delta_choice() -> None:
+    """Test that stream_chunk_builder handles choices with empty delta alongside tool call choices."""
+    chunks: Final = [
+        {
+            "id": "chatcmpl-empty-delta",
+            "object": "chat.completion.chunk",
+            "created": 1234567890,
+            "model": "gpt-4",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "tool_calls": {
+                            "index": 0,
+                            "id": "call_empty_delta",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"location": "Tokyo"}',
+                            },
+                        },
+                    },
+                    "finish_reason": "tool_calls",
+                },
+                {
+                    "index": 1,
+                    "delta": {},
+                    "finish_reason": None,
+                },
+            ],
+        }
+    ]
+
+    rebuilt_response: Final = stream_chunk_builder(chunks=chunks)
+
+    assert isinstance(rebuilt_response, ModelResponse)
+    assert len(rebuilt_response.choices) > 0
+    tool_calls = rebuilt_response.choices[0].message.tool_calls
+    assert tool_calls is not None
+    assert len(tool_calls) == 1
+    assert tool_calls[0].id == "call_empty_delta"
+    assert tool_calls[0].function.name == "get_weather"
+    assert tool_calls[0].function.arguments == '{"location": "Tokyo"}'
+
