@@ -137,7 +137,7 @@ export function LiteAdminFrame({ children }: { children: ReactNode }) {
           : null
       }
     >
-      {children}
+      <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", configured && "pb-16")}>{children}</div>
       {configured && !open && <AriaLauncher show={show} buttonRef={launcherRef} />}
       {configured && showPanel && (
         <AriaPopup key={configured.key} session={configured.session} open={open} close={() => setOpen(false)} />

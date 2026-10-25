@@ -2,7 +2,14 @@ import { test, expect, type APIRequestContext, type Locator, type Page as Playwr
 import { ADMIN_STORAGE_PATH } from "../../constants";
 import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
-import { CHAT_MODEL_A, createVirtualKey, sendChatCompletion, waitForSpendLog } from "../../helpers/traffic";
+import { Role, users } from "../../fixtures/users";
+import {
+  CHAT_MODEL_A,
+  createVirtualKey,
+  deleteVirtualKey,
+  sendChatCompletion,
+  waitForSpendLog,
+} from "../../helpers/traffic";
 
 /**
  * Session-grouped pagination (#38060): a page of N rows must render exactly N session rows, a
@@ -18,6 +25,55 @@ const requestLogsRows = (page: PlaywrightPage): Locator =>
   page.locator("table").filter({ visible: true }).first().locator("tbody tr");
 
 const visibleTestId = (page: PlaywrightPage, id: string): Locator => page.getByTestId(id).filter({ visible: true });
+
+test.describe("Logs pagination with the assistant visible", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  for (const viewport of [
+    { width: 1440, height: 900 },
+    { width: 390, height: 844 },
+  ]) {
+    test(`can reach the next page at ${viewport.width}px`, async ({ page, request }) => {
+      await page.setViewportSize(viewport);
+      const alias = `e2e-logs-launcher-${uniqueSuffix()}`;
+      const key = await createVirtualKey(request, { key_alias: alias });
+
+      try {
+        const requestIds = await Promise.all(
+          Array.from({ length: 26 }, (_, index) =>
+            sendChatCompletion(request, {
+              model: CHAT_MODEL_A,
+              prompt: `${alias}-${index}`,
+              apiKey: key.key,
+            }),
+          ),
+        );
+        await waitForSpendLog(request, requestIds[requestIds.length - 1]);
+
+        await page.goto("/ui/login");
+        await page.getByPlaceholder("Enter your username").fill(users[Role.ProxyAdmin].email);
+        await page.getByPlaceholder("Enter your password").fill(users[Role.ProxyAdmin].password);
+        await page.getByRole("button", { name: "Login", exact: true }).click();
+        await expect(page.getByRole("button", { name: "Launch Aria Agent" })).toBeVisible();
+
+        await openLogs(page);
+        await applyKeyAliasFilter(page, await openFilterDrawer(page), alias);
+        await setRowsPerPage(page, "25");
+        await expect(visibleTestId(page, "pagination-range")).toHaveText("Showing 1-25 of 26", { timeout: 30_000 });
+        await expect(page.getByRole("button", { name: "Launch Aria Agent" })).toBeVisible();
+
+        await visibleTestId(page, "pagination-next").click();
+        await expect(visibleTestId(page, "pagination-range")).toHaveText("Showing 26-26 of 26");
+        await expect(requestLogsRows(page)).toHaveCount(1);
+
+        await visibleTestId(page, "pagination-first").click();
+        await expect(visibleTestId(page, "pagination-range")).toHaveText("Showing 1-25 of 26");
+      } finally {
+        await deleteVirtualKey(request, key.token);
+      }
+    });
+  }
+});
 
 async function openLogs(page: PlaywrightPage): Promise<void> {
   await navigateToPage(page, Page.Logs);
