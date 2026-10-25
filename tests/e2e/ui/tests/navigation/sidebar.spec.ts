@@ -7,11 +7,13 @@ import {
   clickSidebarLink,
   dismissFeedbackPopup,
   expectUiRoute,
+  hideLiteAdmin,
   navigateToPage,
   sidebarLink,
 } from "../../helpers/navigation";
 import { MIGRATED_E2E_PAGES } from "../../fixtures/migratedPages";
 import type { Page as PlaywrightPage } from "@playwright/test";
+import { ARIA_AGENT_LABEL } from "../../../../../ui/litellm-dashboard/src/components/liteadmin/aria-brand";
 
 const sidebarButtons = {
   [Role.ProxyAdmin]: [
@@ -41,6 +43,36 @@ const roles = [{ role: Role.ProxyAdmin, storage: ADMIN_STORAGE_PATH }];
 for (const { role, storage } of roles) {
   test.describe(`${role} sidebar`, () => {
     test.use({ storageState: storage });
+
+    test("should hide the assistant launcher and keep it hidden on repeated setup", async ({
+      page,
+    }) => {
+      await page.goto("/ui/");
+      await dismissFeedbackPopup(page);
+      await page.getByRole("button", { name: /Account menu/i }).click();
+      const panel = page.getByTestId("sidebar-account-menu-panel");
+      const toggle = panel.getByRole("switch", {
+        name: `Toggle hide ${ARIA_AGENT_LABEL}`,
+        exact: true,
+      });
+      await expect(toggle).toHaveAttribute("aria-checked", "true");
+      await toggle.click();
+      await expect(toggle).toHaveAttribute("aria-checked", "false");
+      await page.keyboard.press("Escape");
+      await expect(panel).toBeHidden();
+
+      const launcher = page.getByRole("button", {
+        name: `Launch ${ARIA_AGENT_LABEL}`,
+        exact: true,
+      });
+      await expect(launcher).toBeVisible();
+
+      await hideLiteAdmin(page);
+      await expect(launcher).toBeHidden();
+
+      await hideLiteAdmin(page);
+      await expect(launcher).toBeHidden();
+    });
 
     test("should navigate to correct URL when clicking sidebar menu items from homepage", async ({ page }) => {
       await page.goto("/ui");
