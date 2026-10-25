@@ -1745,6 +1745,9 @@ if TYPE_CHECKING:
     from .llms.typesafe.decisions.transformation import (
         TypeSafeDecisionsConfig as TypeSafeDecisionsConfig,
     )
+    from .llms.decisionmodels.decisions.transformation import (
+        DecisionModelsDecisionsConfig as DecisionModelsDecisionsConfig,
+    )
     from .llms.openrouter.decisions.transformation import (
         OpenRouterDecisionsConfig as OpenRouterDecisionsConfig,
     )
