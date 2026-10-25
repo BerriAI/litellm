@@ -1,8 +1,14 @@
-import pytest
+import json
+from contextlib import nullcontext
+from typing import Final
 
+import pytest
+import respx
+
+import litellm
 from litellm.llms.openai_like import dynamic_config
 from litellm.llms.openai_like.dynamic_config import create_responses_config_class
-from litellm.llms.openai_like.json_loader import SimpleProviderConfig
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry, SimpleProviderConfig
 from litellm.types.router import GenericLiteLLMParams
 
 _BASE = {"base_url": "https://api.example.com/v1", "api_key_env": "EXAMPLE_API_KEY"}
@@ -20,7 +26,6 @@ def _isolate_generated_class_cache():
 
 
 class TestClassCaching:
-
     def test_cache_is_keyed_on_slug_not_on_the_provider_instance(self):
         first = create_responses_config_class(_provider("cache_by_slug"))
         second = create_responses_config_class(_provider("cache_by_slug"))
@@ -139,3 +144,95 @@ class TestForceStoreFalse:
             headers={},
         )
         assert params["store"] is True
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["completion", "acompletion"])
+@pytest.mark.parametrize("drop_params", [False, True], ids=["strict", "drop"])
+@pytest.mark.parametrize(
+    "provider_capability", [None, False, True], ids=["provider-unset", "provider-disabled", "provider-enabled"]
+)
+@pytest.mark.parametrize(
+    "model_capability",
+    ["unknown", "missing", None, False, True],
+    ids=["unknown", "missing", "null", "disabled", "enabled"],
+)
+async def test_tool_schema_forwarding_respects_explicit_capabilities(
+    monkeypatch: pytest.MonkeyPatch,
+    is_async: bool,
+    drop_params: bool,
+    provider_capability: bool | None,
+    model_capability: str | bool | None,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    model: Final = "z-ai/issue-48145-model"
+    provider: Final = JSONProviderRegistry.get("nano-gpt")
+    assert provider is not None
+    monkeypatch.setattr(
+        provider,
+        "provider_info",
+        {} if provider_capability is None else {"supports_function_calling": provider_capability},
+    )
+    if model_capability != "unknown":
+        litellm.register_model(
+            {
+                f"nano-gpt/{model}": {
+                    "litellm_provider": "nano-gpt",
+                    "mode": "chat",
+                    **({} if model_capability == "missing" else {"supports_function_calling": model_capability}),
+                }
+            },
+            persist_across_reloads=False,
+            add_to_provider_model_sets=False,
+        )
+    enabled: Final = model_capability is True or (model_capability is not False and provider_capability is not False)
+    tool: Final = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+        },
+    }
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post("https://upstream.example/v1/chat/completions").respond(
+            200,
+            json={
+                "id": "chatcmpl-tools",
+                "object": "chat.completion",
+                "created": 1,
+                "model": model,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            },
+        )
+        request: Final = {
+            "model": f"nano-gpt/{model}",
+            "messages": [{"role": "user", "content": "Weather in Paris?"}],
+            "api_base": "https://upstream.example/v1",
+            "api_key": "local-placeholder",
+            "tools": [tool],
+            "tool_choice": "auto",
+            "parallel_tool_calls": True,
+            "drop_params": drop_params,
+        }
+        rejects: Final = not enabled and not drop_params
+        with pytest.raises(litellm.UnsupportedParamsError, match="tools") if rejects else nullcontext():
+            if is_async:
+                await litellm.acompletion(**request)
+            else:
+                litellm.completion(**request)
+        if rejects:
+            assert not route.called
+            return
+        body: Final = json.loads(route.calls.last.request.content)
+        assert body["model"] == model
+        if enabled:
+            assert body["tools"] == [tool]
+            assert body["tool_choice"] == "auto"
+            assert body["parallel_tool_calls"] is True
+        else:
+            assert "tools" not in body
+            assert "tool_choice" not in body
+            assert "parallel_tool_calls" not in body
