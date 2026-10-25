@@ -4864,7 +4864,7 @@ async def test_centralized_common_checks_runs_for_raw_passthrough_without_auth()
         for attribute, value in attrs.items():
             setattr(_proxy_server_mod, attribute, value)
         with pytest.raises(ProxyException) as exc_info:
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={
