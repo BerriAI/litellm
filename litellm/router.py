@@ -5737,7 +5737,7 @@ class Router:
         prompt: str,
         **kwargs: object,  # kwargs-ok: forwarded verbatim to litellm.text_completion, like _completion
     ) -> TextCompletionResponse | TextCompletionStreamWrapper | ModelResponse | CustomStreamWrapper:
-        model_name: str | None = None
+        model_name: str | None = None  # rebind-ok: set once the deployment is picked; read in except for fail_calls
         try:
             verbose_router_logger.debug("Inside _text_completion()- model: %s; kwargs: %s", model, kwargs)
             deployment: Final = self.get_available_deployment(
@@ -5749,7 +5749,7 @@ class Router:
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
             data: Final = deployment["litellm_params"].copy()
-            model_name = data["model"]
+            model_name = data["model"]  # rebind-ok: assigned inside try so except can attribute the failure
             self.total_calls[model_name] += 1
 
             ### DEPLOYMENT-SPECIFIC PRE-CALL CHECKS ### (e.g. update rpm pre-call. Raise error, if deployment over limit)
