@@ -5932,9 +5932,9 @@ class MCPServerManager:
         return blocked.get(name) if blocked is not None else None
 
     def _has_cached_catalog_tool(self, server: MCPServer, name: str) -> bool:
-        return any(name in tools for tools in self._listed_tools_by_server_id.get(server.server_id, {}).values()) or any(
-            name in tools for tools in self._blocked_tools_by_server_id.get(server.server_id, {}).values()
-        )
+        return any(
+            name in tools for tools in self._listed_tools_by_server_id.get(server.server_id, {}).values()
+        ) or any(name in tools for tools in self._blocked_tools_by_server_id.get(server.server_id, {}).values())
 
     def _create_prefixed_prompts(
         self, prompts: Sequence[Prompt], server: MCPServer, add_prefix: bool = True
