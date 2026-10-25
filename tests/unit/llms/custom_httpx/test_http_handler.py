@@ -2244,6 +2244,31 @@ async def test_swapping_litellm_aclient_session_gets_a_fresh_handler(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_an_explicit_transport_wins_over_litellm_aclient_session(monkeypatch):
+    """A caller that passes its own transport, like the in-process ASGI client, keeps it
+    when a session is configured, so its requests never leave through the session."""
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.utils import LlmProviders
+
+    session_seen: list[str] = []
+    transport_seen: list[str] = []
+    session = httpx.AsyncClient(transport=_recording_transport(session_seen))
+    monkeypatch.setattr(litellm, "aclient_session", session)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+
+    handler = get_async_httpx_client(
+        llm_provider=LlmProviders.ANTHROPIC, params={"transport": _recording_transport(transport_seen)}
+    )
+    await handler.post("https://example.invalid/v1/messages", json={})
+
+    assert handler.client is not session
+    assert transport_seen == ["https://example.invalid/v1/messages"]
+    assert session_seen == []
+    await handler.close()
+    await session.aclose()
+
+
+@pytest.mark.asyncio
 async def test_acompletion_anthropic_goes_through_litellm_aclient_session(monkeypatch):
     """Providers on the HTTP handler path (here Anthropic) send through the configured session,
     not through a connection of their own: the mock answers, so nothing reaches 127.0.0.1:9."""

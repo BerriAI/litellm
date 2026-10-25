@@ -1767,8 +1767,8 @@ def get_async_httpx_client(
             except Exception:
                 pass
 
-    # A caller-supplied session is part of the key, so swapping it never serves a stale handler.
-    session: Final = litellm.aclient_session
+    # An explicit transport (in-process ASGI, pinned egress) wins over the session; the key holds the session so a swap never serves a stale handler.
+    session: Final = litellm.aclient_session if params is None or "transport" not in params else None
     _session_key_name: Final = f"_session{id(session)}" if session is not None else ""
     _cache_key_name: Final = "async_httpx_client" + _params_key_name + llm_provider + _session_key_name
 
@@ -1789,8 +1789,7 @@ def get_async_httpx_client(
         # Filter out params that are only used for cache key, not for AsyncHTTPHandler.__init__
         handler_params: Final = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
         handler_params["shared_session"] = shared_session
-        handler_params["client"] = session
-        _new_client = AsyncHTTPHandler(**handler_params)
+        _new_client = AsyncHTTPHandler(**handler_params, client=session)
     else:
         _new_client = AsyncHTTPHandler(
             timeout=_default_cached_client_timeout(),
