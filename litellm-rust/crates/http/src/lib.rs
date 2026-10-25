@@ -1,12 +1,27 @@
+#![allow(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "this crate is the one place reqwest clients are built"
+)]
+
+mod client;
 mod config;
 mod error;
+#[cfg(feature = "mcp")]
+mod mcp;
+pub mod media;
+pub mod outbound;
 mod pool;
 mod proxy;
+pub mod request;
 mod settings;
 mod tls;
+pub mod transport;
+pub mod websocket;
 
-pub use config::{HttpClientConfig, Resolution, Verify};
-pub use error::Error;
+pub use client::Client;
+pub use config::{ClientIdentity, HttpClientConfig, Resolution, Verify};
+pub use error::{Error, TlsSource};
 pub use pool::{ClientVariant, HttpClientPool};
 pub use proxy::EnvironmentProxies;
 pub use settings::{HttpSettings, HttpSettingsLayer, SslVerify, TcpKeepalive};

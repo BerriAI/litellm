@@ -1,23 +1,23 @@
 use litellm_core_utils::{
     call_arguments::{CallArguments, parse_options},
-    serde_compat::LaxI64,
     url_utils::ApiUrl,
 };
+use litellm_llms_types::serde_compat::LaxI64;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use serde_with::serde_as;
 
-use crate::{
-    base_llm::ocr::{
-        document::InlineDocument,
-        error::Error,
-        transformation::{
-            BaseOcrConfig, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES, OcrConnection, OcrDocument,
-            OcrPage, OcrPageImage, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
-            credential_env, decode_and_normalize_response, decode_response_value,
-        },
+use crate::base_llm::ocr::{
+    document::InlineDocument,
+    error::Error,
+    handler::OcrClient,
+    transformation::{
+        BaseOcrConfig, OCR_INLINE_MAX_BYTES, OcrConnection, PreparedOcrRequest,
+        decode_and_normalize_response, decode_response_value,
     },
-    custom_httpx::llm_http_handler::OcrClient,
+};
+use litellm_llms_types::formats::ocr::{
+    LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageImage, OcrResponseFormat, OcrUsageInfo,
 };
 
 const COHERE_PARSE_API_BASE: &str = "https://api.cohere.com";
@@ -25,11 +25,13 @@ const COHERE_API_KEY_ENV: &str = "COHERE_API_KEY";
 
 const COHERE_PARSE_HEALTH_CHECK_IMAGE_DATA_URI: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC";
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, strum::IntoStaticStr)]
 #[serde(rename_all = "lowercase")]
 pub enum OutputFormat {
     #[default]
+    #[strum(serialize = "markdown")]
     Markdown,
+    #[strum(serialize = "blocks")]
     Blocks,
 }
 
@@ -104,6 +106,10 @@ impl BaseOcrConfig for CohereParseConfig {
         Some(COHERE_API_KEY_ENV)
     }
 
+    fn secret_names(&self) -> Vec<&'static str> {
+        vec![COHERE_API_KEY_ENV]
+    }
+
     fn get_health_check_document(&self) -> OcrDocument {
         OcrDocument::ImageUrl {
             image_url: COHERE_PARSE_HEALTH_CHECK_IMAGE_DATA_URI.into(),
@@ -124,7 +130,9 @@ impl BaseOcrConfig for CohereParseConfig {
         request: &PreparedOcrRequest,
         _client: &OcrClient,
     ) -> Result<Self::Environment, Error> {
-        self.resolve_headers(&request.connection, &credential_env)
+        self.resolve_headers(&request.connection, &|name: &str| {
+            request.connection.secret(name)
+        })
     }
 
     fn get_complete_url(
@@ -163,7 +171,7 @@ impl BaseOcrConfig for CohereParseConfig {
     }
 
     fn validate_request_body(&self, body: &Value) -> Result<(), Error> {
-        validate_document(&crate::custom_httpx::llm_http_handler::body_document(body)?)
+        validate_document(&crate::base_llm::ocr::handler::body_document(body)?)
     }
 }
 
@@ -173,8 +181,7 @@ impl CohereParseConfig {
         connection: &OcrConnection,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<Vec<(String, String)>, Error> {
-        if crate::custom_httpx::http_handler::has_header(&connection.extra_headers, "authorization")
-        {
+        if litellm_http::request::has_header(&connection.extra_headers, "authorization") {
             return Ok(connection.extra_headers.clone());
         }
         let key = connection
@@ -262,11 +269,7 @@ fn build_request(model: &str, image_url: String, params: &CohereOptions) -> Cohe
     CohereRequest {
         model: model.into(),
         document: CohereParseDocument::ImageUrl { image_url },
-        output_format: match params.output_format.unwrap_or_default() {
-            OutputFormat::Markdown => "markdown",
-            OutputFormat::Blocks => "blocks",
-        }
-        .into(),
+        output_format: <&'static str>::from(params.output_format.unwrap_or_default()).into(),
     }
 }
 
@@ -558,10 +561,10 @@ mod tests {
     #[rstest]
     fn response_types_documented_block_variants(
         #[values(
-            crate::base_llm::ocr::transformation::OcrResponseFormat::Litellm,
-            crate::base_llm::ocr::transformation::OcrResponseFormat::Native
+            litellm_llms_types::formats::ocr::OcrResponseFormat::Litellm,
+            litellm_llms_types::formats::ocr::OcrResponseFormat::Native
         )]
-        response_format: crate::base_llm::ocr::transformation::OcrResponseFormat,
+        response_format: litellm_llms_types::formats::ocr::OcrResponseFormat,
     ) {
         let payload = json!({
             "pages": [{
@@ -631,10 +634,10 @@ mod tests {
             Some(1)
         );
         match response_format {
-            crate::base_llm::ocr::transformation::OcrResponseFormat::Litellm => {
+            litellm_llms_types::formats::ocr::OcrResponseFormat::Litellm => {
                 assert!(normalized.provider_native_response.is_none());
             }
-            crate::base_llm::ocr::transformation::OcrResponseFormat::Native => {
+            litellm_llms_types::formats::ocr::OcrResponseFormat::Native => {
                 assert_eq!(
                     normalized.provider_native_response.as_ref(),
                     payload.as_object()

@@ -42,6 +42,9 @@ class ChatGPTConfig(OpenAIConfig):
                 message=str(e),
             )
 
+    def api_base_without_login(self) -> str:
+        return self.authenticator.get_api_base()
+
     def _get_openai_compatible_provider_info(
         self,
         model: str,
@@ -54,6 +57,16 @@ class ChatGPTConfig(OpenAIConfig):
         dynamic_api_base: Final = authenticator.get_api_base()
         dynamic_api_key: Final = self._get_access_token_or_raise(authenticator, model, custom_llm_provider)
         return dynamic_api_base, dynamic_api_key, custom_llm_provider
+
+    def get_openai_compatible_provider_info(
+        self,
+        model: str,
+        api_base: str | None,
+        api_key: str | None,
+        custom_llm_provider: str,
+        litellm_params: Mapping[str, object] | GenericLiteLLMParams | None = None,
+    ) -> tuple[str | None, str | None, str]:
+        return self._get_openai_compatible_provider_info(model, api_base, api_key, custom_llm_provider, litellm_params)
 
     def validate_environment(
         self,
@@ -80,7 +93,7 @@ class ChatGPTConfig(OpenAIConfig):
         default_headers: Final = get_chatgpt_default_headers(resolved_api_key or "", account_id, session_id)
         return {**default_headers, **validated_headers}
 
-    def post_stream_processing(self, stream: Any) -> Any:
+    def post_stream_processing(self, stream: Any) -> ChatGPTToolCallNormalizer:
         return ChatGPTToolCallNormalizer(stream)
 
     def map_openai_params(

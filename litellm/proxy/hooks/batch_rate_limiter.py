@@ -22,17 +22,19 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, TypeAlias
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi import HTTPException
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+from pydantic import Field, TypeAdapter, ValidationError
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.batch_utils import (
-    _count_entry_tokens,
-    _estimate_batch_entry_tokens,
-    _extract_file_access_credentials,
-    _iter_batch_input_lines,
+    count_entry_tokens,
+    estimate_batch_entry_tokens,
+    extract_file_access_credentials,
+    iter_batch_input_lines,
 )
 from litellm.constants import BATCH_TPD_DESCRIPTOR_SUFFIX, BATCH_TPD_WINDOW_SECONDS
 from litellm.exceptions import RateLimitErrorCategory
@@ -61,19 +63,20 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     get_or_create_request_stash,
 )
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
     from litellm.caching.caching import DualCache
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        PROXY_MaxParallelRequestsHandler_v3 as _ParallelRequestLimiter,
+    )
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
         RateLimitDescriptor as _RateLimitDescriptor,
     )
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
         RateLimitStatus as _RateLimitStatus,
-    )
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-        _PROXY_MaxParallelRequestsHandler_v3 as _ParallelRequestLimiter,
     )
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
     from litellm.router import Router as _Router
@@ -97,10 +100,32 @@ else:
 _BATCH_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 _WINDOW_START_ADAPTER: Final[TypeAdapter[int | float | str | None]] = TypeAdapter(int | float | str | None)
 
+
+def _batch_create_routing_model(data: Mapping[str, object]) -> str | None:
+    body_model: Final = data.get("model")
+    if isinstance(body_model, str) and body_model:
+        return body_model
+    proxy_server_request: Final = data.get("proxy_server_request")
+    if not isinstance(proxy_server_request, Mapping):
+        return None
+    request_line: Final = _BATCH_BODY_ADAPTER.validate_python(proxy_server_request)
+    url: Final = request_line.get("url")
+    query_model: Final = (
+        parse_qs(urlsplit(url).query, keep_blank_values=True).get("model", [None])[-1] if isinstance(url, str) else None
+    )
+    if query_model:
+        return query_model
+    headers: Final = request_line.get("headers")
+    header_model: Final = (
+        _BATCH_BODY_ADAPTER.validate_python(headers).get("x-litellm-model") if isinstance(headers, Mapping) else None
+    )
+    return header_model if isinstance(header_model, str) and header_model else None
+
+
 IncrementAmounts: TypeAlias = dict[Literal["requests", "tokens"], int]
 
 
-class BatchFileUsage(BaseModel):
+class BatchFileUsage(LiteLLMBaseModel):
     """
     Internal model for batch file usage tracking, used for batch rate limiting
     """
@@ -114,9 +139,7 @@ class BatchFileUsage(BaseModel):
     # each target a different model, so the project's per-model ITPM/OTPM
     # quota for a row's actual model must be charged with that row's own
     # tokens -- see `_create_project_io_descriptors_for_models`.
-    per_model_usage: dict[str, dict[str, int]] = Field(
-        default_factory=dict
-    )  # mutable-ok: accumulated incrementally per row while parsing the batch file
+    per_model_usage: dict[str, dict[str, int]] = Field(default_factory=dict)
 
 
 class _PROXY_BatchRateLimiter(CustomLogger):
@@ -164,16 +187,16 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             return None
 
         from litellm.proxy.openai_files_endpoints.common_utils import (
-            _is_base64_encoded_unified_file_id,
             decode_model_from_file_id,
             get_models_from_unified_file_id,
+            is_base64_encoded_unified_file_id,
         )
 
         model_from_file_id: Final = decode_model_from_file_id(input_file_id)
         if model_from_file_id:
             return model_from_file_id
 
-        unified_file_id: Final = _is_base64_encoded_unified_file_id(input_file_id)
+        unified_file_id: Final = is_base64_encoded_unified_file_id(input_file_id)
         if unified_file_id:
             target_model_names: Final = get_models_from_unified_file_id(unified_file_id)
             if target_model_names:
@@ -250,7 +273,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         minute with the submission. The daily descriptor uses its own key so
         its 24h window never collides with the online limiter's counters.
         """
-        descriptors: Final = self.parallel_request_limiter._create_rate_limit_descriptors(
+        descriptors: Final = self.parallel_request_limiter.create_rate_limit_descriptors(
             user_api_key_dict=user_api_key_dict,
             data=data,
             rpm_limit_type=None,
@@ -328,7 +351,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             for descriptor in model_descriptors:
                 extra_descriptors.append(descriptor)
                 extra_increments.append(
-                    {  # mutable-ok: atomic limiter API requires mutable increment records
+                    {
                         "requests": 0,
                         "tokens": usage.get("output_tokens", 0)
                         if descriptor["key"] == PROJECT_OTPM_DESCRIPTOR_KEY
@@ -465,7 +488,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         body: Final[Mapping[str, object]] = (
             MappingProxyType(_BATCH_BODY_ADAPTER.validate_python(raw_body))
             if isinstance(raw_body, Mapping)
-            else MappingProxyType({})  # mutable-ok: immediately frozen empty fallback
+            else MappingProxyType({})
         )
         # `max_tokens`/`max_completion_tokens` cap chat completions; `/v1/responses`
         # rows cap output with `max_output_tokens` instead -- omitting it here
@@ -509,6 +532,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         file_id: str,
         custom_llm_provider: str,
         data: dict,
+        user_api_key_dict: UserAPIKeyAuth | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """
         Map proxy-facing file IDs to provider file IDs and credentials.
@@ -519,12 +543,14 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         """
         from litellm.proxy.openai_files_endpoints.common_utils import (
             decode_model_from_file_id,
+            explicit_request_credentials,
             get_credentials_for_model,
             get_original_file_id,
+            get_team_provider_credentials,
         )
         from litellm.proxy.proxy_server import llm_router
 
-        fetch_kwargs: Final[dict[str, Any]] = {
+        fetch_kwargs: Final[dict[str, object]] = {
             "custom_llm_provider": custom_llm_provider,
         }
 
@@ -537,7 +563,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                         model_id=model_from_file_id,
                         operation_context="batch input file read (rate limiting)",
                     )
-                    fetch_kwargs.update(_extract_file_access_credentials(credentials))
+                    fetch_kwargs.update(extract_file_access_credentials(credentials))
                     fetch_kwargs["model"] = model_from_file_id
                     provider = credentials.get("custom_llm_provider")
                     if provider:
@@ -546,22 +572,36 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     pass
             return get_original_file_id(file_id), fetch_kwargs
 
-        request_model: Final = data.get("model")
-        if isinstance(request_model, str) and request_model and llm_router is not None:
-            try:
-                credentials = get_credentials_for_model(
-                    llm_router=llm_router,
-                    model_id=request_model,
-                    operation_context="batch input file read (rate limiting)",
-                )
-                fetch_kwargs.update(_extract_file_access_credentials(credentials))
-                fetch_kwargs["model"] = request_model
-                provider = credentials.get("custom_llm_provider")
-                if provider:
-                    fetch_kwargs["custom_llm_provider"] = provider
-            except HTTPException:
-                pass
+        request_model: Final = _batch_create_routing_model(data)
+        if request_model is not None:
+            if llm_router is not None:
+                try:
+                    credentials = get_credentials_for_model(
+                        llm_router=llm_router,
+                        model_id=request_model,
+                        operation_context="batch input file read (rate limiting)",
+                    )
+                    fetch_kwargs.update(extract_file_access_credentials(credentials))
+                    fetch_kwargs["model"] = request_model
+                    provider = credentials.get("custom_llm_provider")
+                    if provider:
+                        fetch_kwargs["custom_llm_provider"] = provider
+                except HTTPException:
+                    pass
+            return file_id, fetch_kwargs
 
+        team_credentials: Final = (
+            get_team_provider_credentials(
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+                custom_llm_provider=custom_llm_provider,
+            )
+            if user_api_key_dict is not None
+            else None
+        )
+        fetch_kwargs.update(
+            extract_file_access_credentials({**(team_credentials or {}), **explicit_request_credentials(data)})
+        )
         return file_id, fetch_kwargs
 
     async def _reserve_batch_enqueued_tokens(
@@ -746,7 +786,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             )
 
         increments: list[IncrementAmounts] = [  # mutable-ok: reassigned below to append project IO increments
-            {  # mutable-ok: atomic limiter API requires mutable increment records
+            {
                 "requests": batch_usage.request_count,
                 "tokens": batch_usage.total_tokens,
             }
@@ -842,6 +882,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             if (descriptor := tpd_descriptors_by_counter.get(counter_key)) is not None
         )
 
+    @with_service_target("rate_limits")
     async def count_input_file_usage(
         self,
         file_id: str,
@@ -891,13 +932,13 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         try:
             # Check if this is a managed file (base64 encoded unified file ID)
             from litellm.proxy.openai_files_endpoints.common_utils import (
-                _is_base64_encoded_unified_file_id,
                 get_models_from_unified_file_id,
+                is_base64_encoded_unified_file_id,
             )
 
             # Managed files require bypassing the HTTP endpoint (which runs access-check hooks)
             # and calling the managed files hook directly with the user's credentials.
-            is_managed_file: Final = _is_base64_encoded_unified_file_id(file_id)
+            is_managed_file: Final = is_base64_encoded_unified_file_id(file_id)
             # For managed files the unified file id encodes the proxy model
             # alias(es) the file was uploaded for; auth validates against those.
             target_model_names: Final = get_models_from_unified_file_id(is_managed_file) if is_managed_file else []
@@ -911,6 +952,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     file_id=file_id,
                     custom_llm_provider=custom_llm_provider,
                     data=data or {},
+                    user_api_key_dict=user_api_key_dict,
                 )
                 # For non-managed files, use the standard litellm.afile_content
                 file_content = await litellm.afile_content(
@@ -946,12 +988,12 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             total_tokens = 0
             output_tokens = 0  # rebind-ok: accumulated per JSONL row in the loop below
             request_count = 0
-            for raw_line in _iter_batch_input_lines(file_content_bytes):
+            for raw_line in iter_batch_input_lines(file_content_bytes):
                 request_count += 1
                 try:
                     entry = json.loads(raw_line)
                 except Exception:
-                    entry_total_tokens = _estimate_batch_entry_tokens(raw_line)
+                    entry_total_tokens = estimate_batch_entry_tokens(raw_line)
                     entry_output_tokens = self.parallel_request_limiter.no_max_tokens_output_floor(
                         min_configured_otpm_limit
                     )
@@ -972,9 +1014,9 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 output_tokens += entry_output_tokens
 
                 try:
-                    entry_total_tokens = _count_entry_tokens(entry)
+                    entry_total_tokens = count_entry_tokens(entry)
                 except Exception:
-                    entry_total_tokens = _estimate_batch_entry_tokens(raw_line)
+                    entry_total_tokens = estimate_batch_entry_tokens(raw_line)
                 total_tokens += entry_total_tokens
 
                 if model:
@@ -1038,11 +1080,11 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         enforces on `/chat/completions` apply here.
         """
         from litellm.proxy.auth.auth_checks import (
-            _check_team_member_model_access,
-            _key_access_group_grants_model,
             can_key_call_model,
             can_team_access_model,
+            check_team_member_model_access,
             get_team_object,
+            key_access_group_grants_model,
         )
         from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_logging_obj, user_api_key_cache
 
@@ -1091,14 +1133,14 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     except ProxyException as team_denial:
                         if team_denial.type != ProxyErrorTypes.team_model_access_denied:
                             raise
-                        if not await _key_access_group_grants_model(
+                        if not await key_access_group_grants_model(
                             model=model_to_check,
                             valid_token=user_api_key_dict,
                             team_object=team_object,
                             llm_router=llm_router,
                         ):
                             raise
-                    await _check_team_member_model_access(
+                    await check_team_member_model_access(
                         model=model_to_check,
                         team_object=team_object,
                         valid_token=user_api_key_dict,
@@ -1126,6 +1168,24 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                         )
                     },
                 )
+
+    @staticmethod
+    async def _check_managed_file_ownership(
+        managed_files_obj: object,
+        file_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> None:
+        """Deny before the input file is read, so a caller cannot make the proxy
+        download, count, or charge its own limits for another tenant's file."""
+        from litellm.proxy.openai_files_endpoints.common_utils import ManagedResourceAccessChecker
+
+        if not isinstance(managed_files_obj, ManagedResourceAccessChecker):
+            raise HTTPException(status_code=500, detail="Managed resource ownership validation is unavailable.")
+        if not await managed_files_obj.can_user_call_unified_file_id(file_id, user_api_key_dict):
+            raise HTTPException(
+                status_code=403,
+                detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
+            )
 
     async def _fetch_managed_file_content(
         self,
@@ -1169,6 +1229,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         if llm_router is None:
             raise ValueError("llm_router not available. Cannot access managed files.")
 
+        await self._check_managed_file_ownership(managed_files_obj, file_id, user_api_key_dict)
+
         # Use the managed files hook to get file content
         # This properly handles user permissions and file ownership
         file_content: Final = await managed_files_obj.afile_content(
@@ -1179,6 +1241,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         return file_content
 
+    @with_service_target("rate_limits")
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -1279,3 +1342,6 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             verbose_proxy_logger.error("Error in batch rate limiting: %s", e, exc_info=True)
             # Don't block the request if rate limiting fails
             return data
+
+
+PROXY_BatchRateLimiter = _PROXY_BatchRateLimiter

@@ -4,10 +4,21 @@ Azure Anthropic transformation config - extends AnthropicConfig with Azure authe
 
 from typing import Final
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
+
+
+def azure_anthropic_messages_url(api_base: str) -> str:
+    base: Final = api_base.rstrip("/")
+    if base.endswith("/v1/messages"):
+        return base
+    path_start: Final = base.find("/", base.find("://") + len("://")) if "://" in base else 0
+    anthropic_start: Final = base.find("/anthropic", path_start) if path_start >= 0 else -1
+    anthropic_root: Final = base[:anthropic_start] if anthropic_start >= 0 else base
+    return join_api_base(anthropic_root, "anthropic/v1/messages")
 
 
 def _promote_extra_body_to_optional_params(optional_params: dict) -> None:
@@ -73,7 +84,7 @@ class AzureAnthropicConfig(AnthropicConfig):
                 litellm_params_obj.api_key = api_key
 
         # Use Azure authentication logic
-        headers = BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
+        headers = BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         # Get tools and other anthropic-specific setup
         tools: Final = optional_params.get("tools")

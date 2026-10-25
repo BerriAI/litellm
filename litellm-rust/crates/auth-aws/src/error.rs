@@ -22,7 +22,7 @@ pub enum Error {
     AwsMissingWebIdentityCredentials,
 }
 
-impl From<Error> for litellm_auth::Error {
+impl From<Error> for litellm_auth_types::Error {
     fn from(error: Error) -> Self {
         Self::ProviderAuthentication(error.to_string())
     }
@@ -34,11 +34,11 @@ mod tests {
 
     #[test]
     fn converts_to_shared_auth_error_without_losing_context() {
-        let error = litellm_auth::Error::from(Error::AwsProfile("profile not found".into()));
+        let error = litellm_auth_types::Error::from(Error::AwsProfile("profile not found".into()));
 
         assert_eq!(
             error,
-            litellm_auth::Error::ProviderAuthentication(
+            litellm_auth_types::Error::ProviderAuthentication(
                 "AWS profile credentials failed: profile not found".into()
             )
         );
