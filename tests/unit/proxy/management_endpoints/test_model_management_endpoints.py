@@ -5205,6 +5205,9 @@ class TestPatchModelBlockedAuthGate:
         mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
             return_value=existing_row
         )
+        write_authorization = AsyncMock(
+            side_effect=AssertionError("blocked changes must be refused before member write authorization")
+        )
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
@@ -5213,7 +5216,7 @@ class TestPatchModelBlockedAuthGate:
             patch("litellm.proxy.proxy_server.premium_user", True),
             patch(
                 "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
-                new=AsyncMock(return_value=None),
+                new=write_authorization,
             ),
         ):
             with pytest.raises(Exception, match="Only proxy admins can change a model's blocked flag\\.") as exc_info:
@@ -5225,6 +5228,7 @@ class TestPatchModelBlockedAuthGate:
             err = exc_info.value
             assert getattr(err, "param", "") == "blocked"
             assert "proxy admin" in getattr(err, "message", "").lower()
+            write_authorization.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_proxy_admin_can_toggle_blocked(self):

@@ -851,10 +851,6 @@ def test_only_proxy_admin_reads_or_changes_credentials(
 def test_non_team_admin_patching_the_blocked_flag_gets_the_blocked_flag_refusal(
     request: pytest.FixtureRequest, fixture: str, caller: Caller
 ) -> None:
-    pytest.skip(
-        'BUG: PATCH /model/{id}/update {"blocked": ...} by a non-team-admin returns the auto-router refusal '
-        "instead of the blocked-flag refusal (https://github.com/BerriAI/litellm/issues/44792)"
-    )
     with gateway_from_environment() as gateway, gateway.scenario() as scenario:
         s: Final = _admin_only_team(request, fixture, scenario)
         model_id, _ = _team_model(s)
