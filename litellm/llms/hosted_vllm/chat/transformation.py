@@ -5,7 +5,9 @@ Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 import copy
 import json
 from collections.abc import Coroutine
-from typing import Final, Literal, cast, overload
+from typing import TYPE_CHECKING, Final, Literal, cast, overload
+
+import httpx
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_image_mime_type_from_url,
@@ -23,12 +25,52 @@ from litellm.types.llms.openai import (
     ChatCompletionVideoObject,
     ChatCompletionVideoUrlObject,
 )
+from litellm.types.utils import ModelResponse
 
 from ....utils import remove_additional_properties, remove_strict_from_schema
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
 
 class HostedVLLMChatConfig(OpenAIGPTConfig):
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: "LiteLLMLoggingObj",
+        request_data: dict,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: "Tokenizer | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
+    ) -> ModelResponse:
+        response: Final = super().transform_response(
+            model=model,
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data=request_data,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            encoding=encoding,
+            api_key=api_key,
+            json_mode=json_mode,
+        )
+        for choice in response.choices:
+            provider_fields: Final = getattr(choice, "provider_specific_fields", None)
+            if isinstance(provider_fields, dict):
+                for field in ("stop_reason", "token_ids"):
+                    if field in provider_fields:
+                        choice[field] = provider_fields[field]
+        return response
+
     def _convert_custom_tools_to_function_tools(self, tools: list[dict[str, object]]) -> list[dict[str, object]]:
         """
         vLLM chat completions currently accepts only OpenAI function tools.
