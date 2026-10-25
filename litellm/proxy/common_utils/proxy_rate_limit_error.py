@@ -37,7 +37,7 @@ This module provides a single proxy-side error class that:
 
 import json
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import Final
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
@@ -171,7 +171,7 @@ class ProxyRateLimitError(HTTPException, RateLimitError):
 
     def __init__(
         self,
-        detail: Any,
+        detail: object,
         headers: Mapping[str, object] | None = None,
         category: str | RateLimitErrorCategory = RateLimitErrorCategory.LITELLM_RATE_LIMIT,
         rate_limit_type: str | RateLimitType | None = None,

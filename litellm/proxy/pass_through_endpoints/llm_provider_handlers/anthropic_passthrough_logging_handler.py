@@ -1,15 +1,20 @@
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import ANTHROPIC_BATCHES_ROUTE
+from litellm.litellm_core_utils.core_helpers import (
+    native_messages_reported_cost,
+    override_stamped_response_cost,
+    response_cost_in_hidden_params,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -51,6 +56,38 @@ else:
     EndpointType = Any
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
+def _event_payload(event: str) -> Mapping[str, object] | None:
+    data_lines: Final = tuple(
+        line.strip()[len("data:") :].strip() for line in event.splitlines() if line.strip().startswith("data:")
+    )
+    if not data_lines or data_lines[0] in ("", "[DONE]"):
+        return None
+    try:
+        return _JSON_OBJECT.validate_json(data_lines[0])
+    except ValidationError:
+        return None
+
+
+def _message_delta_usages(all_chunks: Sequence[str | bytes]) -> Iterator[object]:
+    for chunk in reversed(all_chunks):
+        yield from (
+            payload.get("usage")
+            for payload in map(_event_payload, reversed(split_sse_chunk_into_events(chunk)))
+            if payload is not None and payload.get("type") == "message_delta"
+        )
+
+
+def _stamp_reported_stream_cost(
+    response: ModelResponse, all_chunks: Sequence[str | bytes], logging_obj: LiteLLMLoggingObj
+) -> None:
+    """The final ``message_delta`` is where a provider that prices its own responses reports the cost."""
+    provider: Final = logging_obj.model_call_details.get("custom_llm_provider")
+    costs: Final = (native_messages_reported_cost(usage, provider) for usage in _message_delta_usages(all_chunks))
+    reported: Final = next((cost for cost in costs if cost is not None), None)
+    if reported is not None:
+        override_stamped_response_cost(response, reported)
 
 
 class AnthropicPassthroughLoggingHandler:
@@ -222,6 +259,7 @@ class AnthropicPassthroughLoggingHandler:
         )
         if not isinstance(response, ModelResponse):
             return response
+        _stamp_reported_stream_cost(response, all_chunks, litellm_logging_obj)
         recovered_usage: Final = AnthropicPassthroughLoggingHandler._recover_interrupted_stream_output_tokens(
             response=response, all_chunks=all_chunks, model=model
         )
@@ -286,13 +324,21 @@ class AnthropicPassthroughLoggingHandler:
             if custom_llm_provider and not model.startswith(f"{custom_llm_provider}/")
             else model
         )
+        custom_pricing: Final = use_custom_pricing_for_model(
+            litellm_params=(logging_obj.litellm_params if hasattr(logging_obj, "litellm_params") else None)
+        )
+        reported_cost: Final = (
+            response_cost_in_hidden_params(litellm_model_response)
+            if isinstance(litellm_model_response, ModelResponse)
+            else None
+        )
+        if reported_cost is not None and not custom_pricing:
+            return reported_cost
         return litellm.completion_cost(
             completion_response=litellm_model_response,
             model=model_for_cost,
             custom_llm_provider=custom_llm_provider,
-            custom_pricing=use_custom_pricing_for_model(
-                litellm_params=(logging_obj.litellm_params if hasattr(logging_obj, "litellm_params") else None)
-            ),
+            custom_pricing=custom_pricing,
             router_model_id=logging_obj.get_router_model_id(),
         )
 

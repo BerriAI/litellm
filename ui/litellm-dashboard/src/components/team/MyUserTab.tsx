@@ -1,4 +1,4 @@
-import { formatBudgetReset } from "@/utils/budgetUtils";
+import { describeBudgetResetSchedule } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Badge } from "@/components/ui/badge";
@@ -67,7 +67,7 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
   const totalSpend = data.total_spend ?? 0;
   const tpmLimit = budgetTable?.tpm_limit ?? null;
   const rpmLimit = budgetTable?.rpm_limit ?? null;
-  const budgetReset = formatBudgetReset(budgetTable?.budget_reset_at);
+  const budgetReset = describeBudgetResetSchedule(budgetTable?.budget_duration, budgetTable?.budget_reset_at);
   const allowedModels = budgetTable?.allowed_models ?? null;
 
   return (
@@ -93,17 +93,16 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Card>
           <CardContent>
-            {labelWithTooltip(
-              "Current Cycle Spend (USD)",
-              "Spend for the current budget cycle. Resets to $0 when the budget window rolls over.",
-            )}
+            {labelWithTooltip("Current Cycle Spend (USD)", budgetReset.tooltip)}
             <div className="mt-2">
               <h3 className="text-2xl font-semibold">${formatNumber(spend, 4)}</h3>
               <span className="text-muted-foreground">
                 of {maxBudget === null ? "Unlimited" : `$${formatNumber(maxBudget, 4)}`}
               </span>
             </div>
-            {budgetReset && <div className="mt-1 text-muted-foreground">Resets {budgetReset}</div>}
+            <div className="mt-1 text-muted-foreground">
+              {budgetReset.resetAt ? `Resets ${budgetReset.label}` : budgetReset.label}
+            </div>
           </CardContent>
         </Card>
 
@@ -120,7 +119,10 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
 
         <Card>
           <CardContent>
-            {labelWithTooltip("Total Spend (USD)", "Cumulative spend across all budget cycles within this team.")}
+            {labelWithTooltip(
+              "Total Spend (USD)",
+              "Cumulative spend across budget cycles within this team. This is a lower bound: lifetime tracking began 2026-04-21, so cycles completed before then are not included. It is never less than Current Cycle Spend.",
+            )}
             <h4 className="mt-2 text-xl font-semibold">${formatNumber(totalSpend, 4)}</h4>
           </CardContent>
         </Card>

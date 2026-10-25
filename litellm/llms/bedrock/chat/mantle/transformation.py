@@ -21,6 +21,7 @@ from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -134,7 +135,7 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "ModelResponseIterator":
         return self.get_model_response_iterator_for_request(
             streaming_response=streaming_response, sync_stream=sync_stream, json_mode=json_mode, optional_params={}
         )
@@ -145,7 +146,8 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         sync_stream: bool,
         json_mode: bool | None,
         optional_params: Mapping[str, object],
-    ) -> object:
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> "ModelResponseIterator":
         from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 
         return ModelResponseIterator(
