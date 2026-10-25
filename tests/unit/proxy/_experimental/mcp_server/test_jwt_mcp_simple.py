@@ -64,7 +64,7 @@ async def test_simple_jwt_mcp_permissions_enforced():
         ),
         patch.object(
             MCPRequestHandler,
-            "_get_mcp_servers_from_access_groups",
+            "get_mcp_servers_from_access_groups",
             new_callable=AsyncMock,
             return_value=[],
         ),
@@ -143,7 +143,7 @@ async def test_simple_jwt_team_id_required_for_mcp_permissions():
         ) as mock_get_team,
         patch.object(
             MCPRequestHandler,
-            "_get_mcp_servers_from_access_groups",
+            "get_mcp_servers_from_access_groups",
             new_callable=AsyncMock,
             return_value=[],
         ),

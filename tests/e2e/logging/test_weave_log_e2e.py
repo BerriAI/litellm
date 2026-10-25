@@ -21,11 +21,13 @@ query API; nothing is mocked.
 from __future__ import annotations
 
 import time
+from typing import Final
 
 import pytest
 
 from e2e_config import CHEAP_ANTHROPIC_MODEL, unique_marker
 from e2e_http import StreamingResponse
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from logging_client import (
     INVALID_UPSTREAM_API_KEY,
@@ -39,6 +41,8 @@ from models import LiteLLMParamsBody
 from weave_reader import WeaveCall, WeaveReader, build_weave_reader
 
 pytestmark = pytest.mark.e2e
+
+UNREACHABLE_ANTHROPIC_BACKEND: Final = "anthropic/claude-haiku-4-5"
 
 
 @pytest.fixture(scope="session")
@@ -79,6 +83,14 @@ WEAVE_STAGE_RED_REASON = (
 class TestWeaveLogDelivery:
     @pytest.mark.skip(reason=WEAVE_STAGE_RED_REASON)
     @pytest.mark.covers("logging.niche_integrations.success.logs_spend", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_ANTHROPIC_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_chat_completions_delivers_one_call_with_spend(
         self,
         client: LoggingClient,
@@ -121,6 +133,14 @@ class TestWeaveLogDelivery:
 
     @pytest.mark.skip(reason=WEAVE_STAGE_RED_REASON)
     @pytest.mark.covers("logging.niche_integrations.failure.logs_spend", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            providers=(Provider.ANTHROPIC,),
+            models=(UNREACHABLE_ANTHROPIC_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_failed_chat_completions_delivers_one_error_call(
         self,
         client: LoggingClient,
@@ -135,7 +155,7 @@ class TestWeaveLogDelivery:
         model_name = f"weave-err-{unique_marker()}"
         model_id = client.create_model(
             model_name,
-            LiteLLMParamsBody(model="anthropic/claude-haiku-4-5", api_key=INVALID_UPSTREAM_API_KEY),
+            LiteLLMParamsBody(model=UNREACHABLE_ANTHROPIC_BACKEND, api_key=INVALID_UPSTREAM_API_KEY),
         )
         resources.defer(lambda: client.delete_model(model_id))
         key = client.key_with_alias(

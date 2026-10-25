@@ -30,7 +30,7 @@ RUN uv venv --python python && \
       "google-cloud-aiplatform==1.133.0" \
       "google-genai==1.37.0" \
       "anthropic[vertex]==0.84.0" \
-      "grpcio==1.78.0" \
+      "grpcio==1.84.1" \
       "prometheus-client==0.20.0" \
       "langfuse==2.59.7" \
       "opentelemetry-api==1.28.0" \

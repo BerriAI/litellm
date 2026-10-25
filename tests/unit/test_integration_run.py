@@ -1,6 +1,8 @@
 from typing import Final
 
-from tests.integration.run import select, uncollected
+import pytest
+
+from tests.integration.run import GROUPS, select, uncollected, worker_settings
 
 _GROUP: Final = (
     "tests/integration/cost_calculation/test_cost_tracking.py",
@@ -34,3 +36,13 @@ def test_a_node_id_whose_file_collected_tests_is_not_empty() -> None:
 
 def test_a_selected_file_that_collected_nothing_is_reported() -> None:
     assert uncollected(_GROUP, frozenset({_CELL})) == ("tests/integration/cost_calculation/test_rollups.py",)
+
+
+@pytest.mark.parametrize("group", tuple(GROUPS))
+def test_every_group_run_by_several_workers_gives_each_worker_its_own_stack(group: str) -> None:
+    assert worker_settings(group, 2)["INTEGRATION_WORKER_ISOLATION"] == "1"
+
+
+@pytest.mark.parametrize("group", tuple(GROUPS))
+def test_a_single_worker_run_keeps_the_supplied_deployment(group: str) -> None:
+    assert worker_settings(group, 1) == {}
