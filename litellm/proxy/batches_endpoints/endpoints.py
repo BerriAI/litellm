@@ -56,12 +56,14 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     encode_batch_response_ids,
     encode_file_id_with_model,
     ensure_batch_response_managed_file_ids,
+    explicit_request_credentials,
     get_authorized_credentials_for_model,
     get_batch_from_database,
     get_batch_id_from_unified_batch_id,
     get_model_id_from_unified_batch_id,
     get_models_from_unified_file_id,
     get_original_file_id,
+    get_team_provider_credentials,
     is_base64_encoded_unified_file_id,
     is_litellm_executed_batch,
     prepare_data_with_credentials,
@@ -925,7 +927,34 @@ async def list_batches(
 
         # Try to use managed objects table for listing batches (returns encoded IDs).
         managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
-        if managed_files_obj is not None and hasattr(managed_files_obj, "list_user_batches"):
+        has_managed_files_batch_listing: Final = managed_files_obj is not None and hasattr(
+            managed_files_obj, "list_user_batches"
+        )
+        provider_only_filter: Final = (
+            provider
+            if (
+                provider
+                and not target_model_names
+                and not data.get("target_model_names")
+                and not data.get("model")
+                and not request.query_params.get("model")
+                and not request.headers.get("x-litellm-model")
+            )
+            else None
+        )
+        # Provider listing is account-wide; only a provider credential owned by
+        # the caller's team may bypass the owner-filtered managed listing.
+        team_provider_credentials: Final = (
+            get_team_provider_credentials(
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+                custom_llm_provider=provider_only_filter,
+                include_accessible_deployments=False,
+            )
+            if has_managed_files_batch_listing and provider_only_filter is not None
+            else None
+        )
+        if has_managed_files_batch_listing and team_provider_credentials is None:
             verbose_proxy_logger.debug("Using managed objects table for batch listing")
             response = await cast(Any, managed_files_obj).list_user_batches(
                 user_api_key_dict=user_api_key_dict,
@@ -986,12 +1015,18 @@ async def list_batches(
                 or get_custom_llm_provider_from_request_query(request=request)
                 or "openai"
             )
-            apply_team_provider_credentials(
-                data=data,
-                llm_router=llm_router,
-                user_api_key_dict=user_api_key_dict,
-                custom_llm_provider=custom_llm_provider,
-            )
+            if team_provider_credentials is not None:
+                prepare_data_with_credentials(
+                    data=data,
+                    credentials={**team_provider_credentials, **explicit_request_credentials(data)},
+                )
+            else:
+                apply_team_provider_credentials(
+                    data=data,
+                    llm_router=llm_router,
+                    user_api_key_dict=user_api_key_dict,
+                    custom_llm_provider=custom_llm_provider,
+                )
             response = await litellm.alist_batches(
                 custom_llm_provider=custom_llm_provider,
                 after=after,

@@ -1972,7 +1972,7 @@ async def test_retrieve__exception_calls_failure_hook(retrieve_harness, openai_e
 #   GET /v1/batches  -  list_batches routing-contract tests                    #
 #                                                                             #
 #   Branch order (first match wins):                                          #
-#     1. managed_files hook present  -> managed_files_obj.list_user_batches    #
+#     1. managed list unless provider filter has team-scoped credentials      #
 #     2. model from body/query/header -> litellm.alist_batches + id encode     #
 #     3. target_model_names (param or body) -> llm_router.alist_batches        #
 #     4. fallback -> litellm.alist_batches via env-var custom_llm_provider     #
@@ -2118,8 +2118,8 @@ async def call_list(
 
 
 # --------------------------------------------------------------------------- #
-# Branch 1 - ManagedObjectTable listing. This is the default production path
-# (the managed_files hook is registered) and wins over every other branch.
+# Branch 1 - ManagedObjectTable listing. Provider-wide listing may bypass it
+# only when the caller has a team-scoped provider credential.
 # --------------------------------------------------------------------------- #
 
 
@@ -2134,8 +2134,6 @@ async def test_list__managed_files_path(list_harness):
         user=user,
         limit=7,
         after="batch-cursor",
-        provider="openai",
-        target_model_names="m1,m2",
     )
 
     # DISPATCH - managed-files seam fired, neither provider seam did.
@@ -2143,13 +2141,99 @@ async def test_list__managed_files_path(list_harness):
         user_api_key_dict=user,
         limit=7,
         after="batch-cursor",
-        provider="openai",
-        target_model_names="m1,m2",
+        provider=None,
+        target_model_names=None,
         llm_router=list_harness.router,
     )
     list_harness.litellm_alist.assert_not_called()
     list_harness.router_alist.assert_not_called()
     assert resp is page
+
+
+@pytest.mark.asyncio
+async def test_list__provider_filter_uses_team_scoped_credentials(list_harness):
+    page = FakeListPage([make_batch(id="batch-1")])
+    list_user_batches = list_harness.set_managed_files(FakeListPage([]))
+    list_harness.litellm_alist.return_value = page
+    user = UserAPIKeyAuth(api_key="sk-test", team_id="team-1")
+    team_credentials = {"api_key": "team-provider-key", "custom_llm_provider": "openai"}
+
+    with patch.object(
+        endpoints, "get_team_provider_credentials", return_value=team_credentials
+    ) as get_team_credentials:
+        resp = await call_list(list_harness, provider="openai", limit=7, after="batch-cursor", user=user)
+
+    get_team_credentials.assert_called_once_with(
+        llm_router=list_harness.router,
+        user_api_key_dict=user,
+        custom_llm_provider="openai",
+        include_accessible_deployments=False,
+    )
+    list_user_batches.assert_not_called()
+    assert list_harness.alist_kwargs() == {
+        "custom_llm_provider": "openai",
+        "api_key": "team-provider-key",
+        "after": "batch-cursor",
+        "limit": 7,
+    }
+    assert resp is page
+
+
+@pytest.mark.asyncio
+async def test_list__target_model_names_stays_managed_with_db(list_harness):
+    list_user_batches = list_harness.set_managed_files(FakeListPage([]))
+
+    await call_list(list_harness, target_model_names="m1,m2", limit=7, after="batch-cursor")
+
+    list_user_batches.assert_called_once()
+    list_harness.router_alist.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_list__target_model_names_from_body_stays_managed_with_db(list_harness):
+    list_user_batches = list_harness.set_managed_files(FakeListPage([]))
+
+    await call_list(list_harness, body={"target_model_names": "m1,m2"}, limit=7, after="batch-cursor")
+
+    list_user_batches.assert_called_once()
+    list_harness.router_alist.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_list__provider_filter_without_team_credentials_stays_managed(list_harness):
+    list_user_batches = list_harness.set_managed_files(FakeListPage([]))
+    list_user_batches.side_effect = ProxyException(
+        message="Filtering by 'provider' is not supported when using managed batches.",
+        type="invalid_request_error",
+        param="provider",
+        code=400,
+    )
+    user = UserAPIKeyAuth(api_key="sk-test", user_id="user-1")
+
+    with patch.object(endpoints, "get_team_provider_credentials", return_value=None) as get_team_credentials:
+        with pytest.raises(ProxyException) as exc:
+            await call_list(list_harness, provider="openai", user=user)
+
+    get_team_credentials.assert_called_once_with(
+        llm_router=list_harness.router,
+        user_api_key_dict=user,
+        custom_llm_provider="openai",
+        include_accessible_deployments=False,
+    )
+    assert exc.value.code == "400"
+    list_user_batches.assert_called_once()
+    list_harness.litellm_alist.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_list__provider_filter_with_model_selection_stays_managed(list_harness):
+    list_user_batches = list_harness.set_managed_files(FakeListPage([]))
+
+    await call_list(list_harness, provider="openai", body={"model": "gpt-4o"})
+
+    list_user_batches.assert_called_once()
+    list_harness.litellm_alist.assert_not_called()
+    list_harness.creds_resolver.assert_not_called()
 
 
 @pytest.mark.asyncio
