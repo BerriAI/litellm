@@ -48,6 +48,8 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.proxy.utils import CallInfo
+from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PASS_THROUGH_ENDPOINT_MARKER
 
 
@@ -1061,6 +1063,95 @@ async def test_virtual_key_soft_budget_check(spend, soft_budget, expect_alert):
     assert (
         alert_triggered == expect_alert
     ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+
+
+@pytest.mark.parametrize(
+    "cached_spend, counter_spend, soft_budget, expected_spend",
+    [
+        (0.0, 100.0, 50.0, 100.0),
+        (0.0, 50.0, 50.0, 50.0),
+        (100.0, 25.0, 50.0, None),
+        (100.0, 0.0, 50.0, None),
+        (100.0, None, 50.0, 100.0),
+        (0.0, 100.0, None, None),
+        (0.0, 100.0, 0.0, None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_soft_budget_alert_uses_current_spend_without_blocking_requests(
+    monkeypatch: pytest.MonkeyPatch,
+    cached_spend: float,
+    counter_spend: float | None,
+    soft_budget: float | None,
+    expected_spend: float | None,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    counter: Final = DualCache()
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", counter)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {"fail_closed_budget_enforcement": True})
+    monkeypatch.setenv("WEBHOOK_URL", "https://alerts.example.test/budget")
+    if counter_spend is not None:
+        counter.in_memory_cache.set_cache(key="spend:key:soft-budget-key", value=counter_spend)
+    received: Final[list[httpx.Request]] = []
+
+    def receive(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(200, text="ok")
+
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(receive))
+    logging: Final = ProxyLogging(UserApiKeyCache())
+    logging.alerting = ["webhook"]
+    logging.slack_alerting_instance = SlackAlerting(alerting=["webhook"], async_http_handler=handler)
+    token: Final = UserAPIKeyAuth(
+        token="soft-budget-key",
+        spend=cached_spend,
+        soft_budget=soft_budget,
+        user_id="budget-user",
+        org_id="budget-org",
+        key_alias="budget-key",
+    )
+    tasks_before: Final = asyncio.all_tasks()
+    try:
+        await virtual_key_soft_budget_check(
+            token, logging, LiteLLM_UserTable(user_id="budget-user", user_email="owner@example.test")
+        )
+        await asyncio.gather(*(asyncio.all_tasks() - tasks_before))
+        expected: Final = (
+            []
+            if expected_spend is None
+            else [
+                {
+                    "spend": expected_spend,
+                    "max_budget": None,
+                    "soft_budget": soft_budget,
+                    "token": "soft-budget-key",
+                    "customer_id": None,
+                    "user_id": "budget-user",
+                    "team_id": None,
+                    "team_alias": None,
+                    "organization_id": "budget-org",
+                    "user_email": "owner@example.test",
+                    "key_alias": "budget-key",
+                    "projected_exceeded_date": None,
+                    "projected_spend": None,
+                    "event_group": "key",
+                    "alert_emails": None,
+                    "max_budget_alert_emails": None,
+                    "event": "soft_budget_crossed",
+                    "event_message": f"Soft Budget Crossed: Total Soft Budget:`{soft_budget}`",
+                }
+            ]
+        )
+        assert [json.loads(request.content) for request in received] == expected
+        assert token.spend == cached_spend
+    finally:
+        pending: Final = asyncio.all_tasks() - tasks_before
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        await handler.close()
 
 
 @pytest.mark.parametrize(

@@ -6801,16 +6801,25 @@ async def virtual_key_soft_budget_check(
 
     """
 
-    if valid_token.soft_budget and valid_token.spend >= valid_token.soft_budget:
+    if not valid_token.soft_budget:
+        return
+
+    from litellm.proxy.proxy_server import get_current_spend
+
+    spend: Final = await get_current_spend(
+        counter_key=f"spend:key:{valid_token.token}",
+        fallback_spend=valid_token.spend or 0.0,
+    )
+    if spend >= valid_token.soft_budget:
         verbose_proxy_logger.debug(
             "Crossed Soft Budget for token %s, spend %s, soft_budget %s",
             valid_token.token,
-            valid_token.spend,
+            spend,
             valid_token.soft_budget,
         )
         call_info: Final = CallInfo(
             token=valid_token.token,
-            spend=valid_token.spend,
+            spend=spend,
             max_budget=valid_token.max_budget,
             soft_budget=valid_token.soft_budget,
             user_id=valid_token.user_id,
