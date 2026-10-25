@@ -2,6 +2,8 @@
 Test for GitHub issue #11267 - System message format issue with Ollama + tools
 """
 
+from copy import deepcopy
+from typing import Final
 from unittest.mock import patch
 
 
@@ -31,6 +33,7 @@ def test_system_message_format_issue_reproduction():
         },
     ]
 
+    messages_before_call: Final = deepcopy(messages)
     temperature = 1
 
     # Add tools to trigger the bug - this is what causes the issue
@@ -57,7 +60,7 @@ def test_system_message_format_issue_reproduction():
         mock_response=True,
     )
 
-    assert len(messages[1]["content"]) == 2
+    assert messages == messages_before_call
 
 
 if __name__ == "__main__":

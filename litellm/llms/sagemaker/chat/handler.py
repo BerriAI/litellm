@@ -6,6 +6,7 @@ from typing import Final
 import httpx
 
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, pop_aws_auth_params
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.utils import ModelResponse, get_secret
@@ -19,10 +20,9 @@ class SagemakerChatHandler(BaseAWSLLM):
         self,
         optional_params: dict,
     ):
-        try:
-            from botocore.credentials import Credentials
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        ensure_optional_import("botocore")
+        from botocore.credentials import Credentials
+
         auth_params: Final = pop_aws_auth_params(optional_params)
         aws_region_name = optional_params.pop("aws_region_name", None)
         optional_params.pop("aws_bedrock_runtime_endpoint", None)
@@ -54,11 +54,9 @@ class SagemakerChatHandler(BaseAWSLLM):
         aws_region_name: str,
         extra_headers: dict | None = None,
     ):
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        ensure_optional_import("botocore")
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
 
         sigv4: Final = SigV4Auth(credentials, "sagemaker", aws_region_name)
         dns_suffix: Final = get_aws_dns_suffix(aws_region_name)

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -19,7 +20,8 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 ROOT: Final = Path(__file__).resolve().parents[1]
 TOOLING: Final = ROOT / "scripts/trace_codegen"
-GENERATED: Final = ROOT / "litellm/rust_bridge/trace/generated"
+GENERATED: Final = ROOT / "litellm/tracing/generated"
+ASSETS: Final = ROOT / "scripts/lens_assets"
 SCHEMAS: Final = TypeAdapter(dict[str, dict[str, JsonValue]])
 
 
@@ -34,26 +36,24 @@ class GeneratorConfig(BaseModel):
     options: tuple[str, ...]
 
 
-def export(crate: str) -> Mapping[str, Mapping[str, JsonValue]]:
-    result: Final = subprocess.run(
-        (
-            "cargo",
-            "run",
-            "--locked",
-            "--manifest-path",
-            str(ROOT / "litellm-rust/Cargo.toml"),
-            "-p",
-            f"litellm-{crate}",
-            "--bin",
-            f"export-{crate}-schema",
-            "--features",
-            "schema",
-        ),
-        check=True,
-        stdout=subprocess.PIPE,
-        text=True,
-    )
-    return MappingProxyType(SCHEMAS.validate_json(result.stdout))
+class LensSource(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    repository: str
+    revision: str
+    schema_groups: Mapping[str, Mapping[str, str]]
+    fixtures: Mapping[str, Mapping[str, str]]
+
+
+def frozen_schemas(group: str, source: LensSource) -> Mapping[str, Mapping[str, JsonValue]]:
+    return MappingProxyType(dict(frozen_schema(path, digest) for path, digest in source.schema_groups[group].items()))
+
+
+def frozen_schema(relative_path: str, expected_digest: str) -> tuple[str, Mapping[str, JsonValue]]:
+    path: Final = ASSETS / relative_path
+    content: Final = path.read_bytes()
+    if hashlib.sha256(content).hexdigest() != expected_digest:
+        raise ValueError(f"Lens contract checksum mismatch: {relative_path}")
+    return path.stem, TypeAdapter(dict[str, JsonValue]).validate_json(content)
 
 
 def definitions(schemas: Mapping[str, Mapping[str, JsonValue]]) -> Iterator[tuple[str, Mapping[str, JsonValue]]]:
@@ -98,9 +98,11 @@ def generate(
         else (
             "--output-model-type",
             "pydantic_v2.BaseModel",
+            "--base-class",
+            "litellm.types.llms.base.LiteLLMBaseModel",
             "--enable-faux-immutability",
             "--additional-imports",
-            "collections.abc.Mapping,typing.TypeAlias",
+            "collections.abc.Mapping,typing.TypeAlias,pydantic.JsonValue",
         )
     )
     subprocess.run(
@@ -143,30 +145,22 @@ def publish(path: Path, content: str, check: bool) -> bool:
     return True
 
 
-def reconcile_schemas(expected: frozenset[Path], check: bool) -> bool:
-    obsolete: Final = tuple(path for path in (TOOLING / "schemas").rglob("*.json") if path not in expected)
-    if check:
-        for path in obsolete:
-            sys.stderr.write(f"obsolete: {path.relative_to(ROOT)}\n")
-        return not obsolete
-    for path in obsolete:
-        path.unlink()
-    return True
-
-
 def main() -> int:
-    parser: Final = argparse.ArgumentParser(description="Regenerate trace schemas and Python wire contracts")
-    parser.add_argument("--check", action="store_true", help="compare fresh schemas and Python with committed files")
+    parser: Final = argparse.ArgumentParser(description="Regenerate Python HTTP contracts from pinned Lens schemas")
+    parser.add_argument("--check", action="store_true", help="compare generated Python with committed files")
     args: Final = Arguments.model_validate(vars(parser.parse_args()))
     config: Final = GeneratorConfig.model_validate_json((TOOLING / "config.json").read_text())
     if version("datamodel-code-generator") != config.version:
         sys.stderr.write(f"requires datamodel-code-generator=={config.version}\n")
         return 1
-    domain: Final = export("traces")
-    clickhouse: Final = export("traces-clickhouse")
-    exported: Final = tuple(schema_files(domain, clickhouse))
-    schema_results: Final = tuple(publish(path, content, args.check) for path, content in exported)
-    schema_set_matches: Final = reconcile_schemas(frozenset(path for path, _ in exported), args.check)
+    source: Final = LensSource.model_validate_json((ASSETS / "source.json").read_text())
+    for path, entry in source.fixtures.items():
+        if hashlib.sha256((ASSETS / path).read_bytes()).hexdigest() != entry["sha256"]:
+            raise ValueError(f"Lens fixture checksum mismatch: {path}")
+    domain: Final = frozen_schemas("types", source)
+    requests: Final = frozen_schemas("requests", source)
+    responses: Final = frozen_schemas("responses", source)
+    clickhouse: Final = frozen_schemas("models", source)
     with TemporaryDirectory(prefix="trace-codegen-") as temporary:
         directory: Final = Path(temporary)
         types: Final = generate({**domain, "ReadQueryName": clickhouse["ReadQueryName"]}, "types", directory, config)
@@ -176,20 +170,15 @@ def main() -> int:
             directory,
             config,
         )
+        request_models: Final = generate(requests, "requests", directory, config)
+        response_models: Final = generate(responses, "responses", directory, config)
         python_results: Final = (
             publish(GENERATED / "types.py", types.read_text(), args.check),
             publish(GENERATED / "models.py", models.read_text(), args.check),
+            publish(GENERATED / "requests.py", request_models.read_text(), args.check),
+            publish(GENERATED / "responses.py", response_models.read_text(), args.check),
         )
-    return 0 if all((schema_set_matches, *schema_results, *python_results)) else 1
-
-
-def schema_files(
-    domain: Mapping[str, Mapping[str, JsonValue]],
-    clickhouse: Mapping[str, Mapping[str, JsonValue]],
-) -> Iterator[tuple[Path, str]]:
-    for crate, schemas in (("traces", domain), ("traces-clickhouse", clickhouse)):
-        for name, schema in schemas.items():
-            yield TOOLING / "schemas" / crate / f"{name}.json", json.dumps(schema, indent=2, sort_keys=True) + "\n"
+    return 0 if all(python_results) else 1
 
 
 if __name__ == "__main__":

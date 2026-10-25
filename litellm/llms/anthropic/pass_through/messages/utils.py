@@ -1,7 +1,17 @@
 from collections.abc import Iterable, Mapping, Sequence
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Final, cast, get_type_hints
+from typing import TYPE_CHECKING, Final, cast, get_type_hints
 
+from pydantic import JsonValue, TypeAdapter, ValidationError
+
+from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.llms.anthropic.common_utils import (
+    flatten_unencrypted_web_search_results_in_anthropic_messages,
+    sanitize_tool_use_ids_in_anthropic_messages,
+    strip_empty_content_blocks_from_anthropic_messages,
+)
+from litellm.llms.anthropic.pass_through.utils import is_reasoning_auto_summary_enabled
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequestOptionalParams,
     AnthropicStopDetails,
@@ -21,7 +31,7 @@ INCOMPLETE_STREAM_ERROR_MESSAGE: Final = (
 )
 
 
-def get_safeguard_refusal_stop_details(response: object) -> Mapping[str, Any] | None:
+def get_safeguard_refusal_stop_details(response: object) -> Mapping[str, object] | None:
     """
     Return the ``stop_details`` of an Anthropic Messages response refused by a
     safeguard (``stop_reason: "refusal"`` carrying ``stop_details``:
@@ -37,6 +47,95 @@ def get_safeguard_refusal_stop_details(response: object) -> Mapping[str, Any] | 
 def refusal_stop_details(explanation: str | None) -> AnthropicStopDetails:
     """The ``stop_details`` object accompanying a translated ``stop_reason: "refusal"``."""
     return AnthropicStopDetails(type="refusal", category=None, explanation=explanation)
+
+
+MESSAGE_DELTA_OPTIONAL_KEYS: Final = ("stop_details", "safeguard_results")
+
+
+def anthropic_message_delta(
+    response: Mapping[str, object], optional_fields: Mapping[str, object] | None = None
+) -> Mapping[str, object]:
+    """
+    The ``delta`` of the ``message_delta`` event synthesized from a complete
+    Anthropic Messages response. A real stream carries ``stop_details`` and
+    ``safeguard_results`` there, so a client that asked to stream reads them
+    from this event and nowhere else. ``optional_fields`` replaces the
+    response's own when it was rebuilt from a stream that carried them.
+    """
+    optional_source: Final = response if optional_fields is None else optional_fields
+    present_optional: Final = {
+        key: value for key in MESSAGE_DELTA_OPTIONAL_KEYS if (value := optional_source.get(key)) is not None
+    }
+    return {
+        "stop_reason": response.get("stop_reason"),
+        "stop_sequence": response.get("stop_sequence"),
+        **present_optional,
+    }
+
+
+_SAFEGUARD_RESULT_ITEMS: Final = TypeAdapter(tuple[object, ...])
+
+
+def redacted_stop_details(raw: object, keep_explanations: bool) -> object:
+    """``stop_details`` as a rewritten stream may deliver it: its free-text ``explanation`` can quote
+    the text a guardrail rewrote, so it is nulled unless the rewrite changed no text."""
+    stop_details: Final = as_str_mapping(raw)
+    if keep_explanations or stop_details is None or "explanation" not in stop_details:
+        return raw
+    return {**stop_details, "explanation": None}
+
+
+def _without_explanation(raw: object) -> object:
+    mapping: Final = as_str_mapping(raw)
+    if mapping is None:
+        return raw
+    return {key: value for key, value in mapping.items() if key != "explanation"}
+
+
+def _status_without_explanations(raw: object) -> object:
+    status: Final = as_str_mapping(_without_explanation(raw))
+    if status is None:
+        return raw
+    tool_uses: Final = as_str_mapping(status.get("tool_uses"))
+    if tool_uses is None:
+        return status
+    return {
+        **status,
+        "tool_uses": {tool_use_id: _without_explanation(verdict) for tool_use_id, verdict in tool_uses.items()},
+    }
+
+
+def _result_without_explanations(raw: object) -> object:
+    result: Final = as_str_mapping(_without_explanation(raw))
+    if result is None:
+        return raw
+    if "status" not in result:
+        return result
+    return {**result, "status": _status_without_explanations(result["status"])}
+
+
+def _kept_tool_use_verdicts(raw: object, kept_tool_use_ids: frozenset[str]) -> object:
+    result: Final = as_str_mapping(raw)
+    status: Final = as_str_mapping(result.get("status")) if result is not None else None
+    tool_uses: Final = as_str_mapping(status.get("tool_uses")) if status is not None else None
+    if result is None or status is None or tool_uses is None:
+        return raw
+    kept_tool_uses: Final = {
+        tool_use_id: verdict for tool_use_id, verdict in tool_uses.items() if tool_use_id in kept_tool_use_ids
+    }
+    return {**result, "status": {**status, "tool_uses": kept_tool_uses}}
+
+
+def filtered_safeguard_results(raw: object, kept_tool_use_ids: frozenset[str], keep_explanations: bool) -> object:
+    """``safeguard_results`` as a rewritten stream may deliver them: a ``tool_uses`` verdict survives only
+    for a tool call the client gets with the input the classifier judged, and the free-text ``explanation`` of a
+    result, its status and each verdict is dropped unless the rewrite changed no text."""
+    try:
+        results: Final = _SAFEGUARD_RESULT_ITEMS.validate_python(raw)
+    except ValidationError:
+        return raw if keep_explanations else None
+    kept: Final = tuple(_kept_tool_use_verdicts(result, kept_tool_use_ids) for result in results)
+    return kept if keep_explanations else tuple(_result_without_explanations(result) for result in kept)
 
 
 def _mapping_field(container: object, key: str) -> object | None:
@@ -119,8 +218,41 @@ def anthropic_system_to_openai_message(system: object) -> ChatCompletionSystemMe
     return ChatCompletionSystemMessage(role="system", content=system)
 
 
+def normalize_native_messages(messages: Sequence[object]) -> list[dict[str, object]]:
+    """Apply the block rewrites every /v1/messages request gets before it reaches a provider."""
+    return flatten_unencrypted_web_search_results_in_anthropic_messages(
+        sanitize_tool_use_ids_in_anthropic_messages(strip_empty_content_blocks_from_anthropic_messages(messages))
+    )
+
+
+def prepare_native_messages(
+    messages: list[dict[str, JsonValue]],
+    system: str | list[dict[str, JsonValue]] | None,
+    kwargs: dict[str, object],
+    *,
+    model: str,
+    custom_llm_provider: str | None = None,
+    tools: list[dict[str, JsonValue]] | None = None,
+    api_base: str | None = None,
+    presanitized: bool = False,
+) -> tuple[list[dict[str, JsonValue]], str | list[dict[str, JsonValue]] | None]:
+    normalized: Final = messages if presanitized else normalize_native_messages(messages)
+    return cast(  # cast-ok: legacy normalizers and injection preserve the JSON message and system shapes
+        tuple[list[dict[str, JsonValue]], str | list[dict[str, JsonValue]] | None],
+        AnthropicCacheControlHook.maybe_inject_cache_control(
+            normalized,
+            system,
+            kwargs,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            tools=tools,
+            api_base=api_base,
+        ),
+    )
+
+
 @lru_cache(maxsize=1)
-def _anthropic_messages_optional_param_keys() -> frozenset[str]:
+def anthropic_messages_optional_param_keys() -> frozenset[str]:
     """
     Valid AnthropicMessagesRequestOptionalParams keys.
 
@@ -134,7 +266,7 @@ def _anthropic_messages_optional_param_keys() -> frozenset[str]:
 class AnthropicMessagesRequestUtils:
     @staticmethod
     def get_requested_anthropic_messages_optional_param(
-        params: dict[str, Any],
+        params: Mapping[str, object],
         *,
         model: str | None = None,
         drop_params: bool = False,
@@ -152,16 +284,21 @@ class AnthropicMessagesRequestUtils:
         Returns:
             AnthropicMessagesRequestOptionalParams instance with only the valid parameters
         """
-        valid_keys: Final = _anthropic_messages_optional_param_keys()
+        valid_keys: Final = anthropic_messages_optional_param_keys()
         filtered_params: Final = {k: v for k, v in params.items() if k in valid_keys and v is not None}
         if model is not None:
             from litellm.llms.anthropic.chat.transformation import AnthropicConfig
             from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-            AnthropicConfig._maybe_drop_speed_param(
+            AnthropicConfig.maybe_drop_speed_param(
                 model=model,
                 optional_params=filtered_params,
                 drop_params=drop_params,
+                custom_llm_provider=custom_llm_provider,
+            )
+            AnthropicConfig.maybe_drop_service_tier_param(
+                model=model,
+                optional_params=filtered_params,
                 custom_llm_provider=custom_llm_provider,
             )
             for param in ("temperature", "top_p", "top_k"):
@@ -174,6 +311,18 @@ class AnthropicMessagesRequestUtils:
                         drop_params=drop_params,
                         output_key=param,
                     )
+        if is_reasoning_auto_summary_enabled():
+            thinking_param: Final = filtered_params.get("thinking")
+            thinking_mapping: Final = as_str_mapping(thinking_param)
+            if (
+                isinstance(thinking_param, dict)
+                and thinking_mapping is not None
+                and thinking_mapping.get("type") != "disabled"
+            ):
+                return cast(
+                    AnthropicMessagesRequestOptionalParams,
+                    {**filtered_params, "thinking": {**thinking_mapping, "display": "summarized"}},
+                )
         return cast(AnthropicMessagesRequestOptionalParams, filtered_params)
 
 

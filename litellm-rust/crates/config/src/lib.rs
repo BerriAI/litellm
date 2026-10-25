@@ -10,13 +10,14 @@ use std::{fmt, path::Path};
 use serde::Deserialize;
 
 pub use error::Error;
+pub use litellm_router_types::{LitellmParams, Spelled};
 pub use mcp::{McpAuth, McpServer, McpTransport};
-pub use model::{LiteLlmParams, Model};
+pub use model::Model;
 pub use settings::{
     ClickHouseStoreSettings, GeneralSettings, LiteLlmSettings, RouterSettings, TracingSettings,
     TracingStoreSettings,
 };
-pub use value::{AdditionalFields, Flag, NumberOrString, Object, OneOrMany, Value};
+pub use value::{AdditionalFields, Object, Value};
 
 #[derive(Clone, Default, Deserialize)]
 #[serde(default)]

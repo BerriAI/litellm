@@ -9,6 +9,8 @@ with deployment credentials, bypassing the managed files access-control hooks.
 """
 
 import base64
+import json
+from typing import Final
 import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -39,9 +41,9 @@ def _make_managed_files_instance(
     unified_file_id: str,
     file_team_id=None,
 ):
-    """Create a _PROXY_LiteLLMManagedFiles with a mocked DB that returns a file owned by file_created_by."""
+    """Create a PROXY_LiteLLMManagedFiles with a mocked DB that returns a file owned by file_created_by."""
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
 
     mock_db_record = MagicMock()
@@ -53,7 +55,7 @@ def _make_managed_files_instance(
         return_value=mock_db_record
     )
 
-    instance = _PROXY_LiteLLMManagedFiles(
+    instance = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(),
         prisma_client=mock_prisma,
     )
@@ -176,7 +178,7 @@ def _make_managed_files_instance_with_object_store():
     """Managed-files hook backed by an in-memory stand-in for the managed
     object table, so create and retrieve exercise the same stored row."""
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
 
     store = {}
@@ -194,7 +196,7 @@ def _make_managed_files_instance_with_object_store():
     )
 
     return (
-        _PROXY_LiteLLMManagedFiles(
+        PROXY_LiteLLMManagedFiles(
             internal_usage_cache=DualCache(),
             prisma_client=mock_prisma,
         ),
@@ -367,13 +369,14 @@ async def test_check_batch_cost_should_call_afile_content_directly_with_credenti
         # managed_files_obj.afile_content should NOT have been called
         mock_managed_files_hook.afile_content.assert_not_called()
 
-        # Verify the DB update writes batch_processed, status, and file_object
-        mock_prisma.db.litellm_managedobjecttable.update.assert_called_once()
-        update_call_kwargs = (
-            mock_prisma.db.litellm_managedobjecttable.update.call_args.kwargs
+        claim_data: Final = next(
+            call.kwargs["data"]
+            for call in mock_prisma.db.litellm_managedobjecttable.update_many.call_args_list
+            if call.kwargs["where"].get("id") == mock_job.id
         )
-        assert update_call_kwargs["data"]["batch_processed"] is True
-        assert update_call_kwargs["data"]["status"] == "complete"
-        assert (
-            "file_object" in update_call_kwargs["data"]
-        ), "file_object must be written to DB so list_batches reads updated status"
+        assert claim_data["batch_processed"] is True
+        assert claim_data["status"] == "complete"
+        persisted_batch: Final = json.loads(claim_data["file_object"])
+        assert persisted_batch["status"] == "completed"
+        assert persisted_batch["usage"]["prompt_tokens"] == 10
+        assert persisted_batch["usage"]["completion_tokens"] == 5

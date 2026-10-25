@@ -221,3 +221,6 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
             local_only=True,
         )
         return new_value
+
+
+PROXY_MaxIterationsHandler: Final = _PROXY_MaxIterationsHandler

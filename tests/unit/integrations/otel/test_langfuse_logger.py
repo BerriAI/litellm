@@ -4,6 +4,7 @@ stamped from the request task while the root span is still recording, so Langfus
 import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
+from datetime import datetime, timezone
 from typing import Final
 
 import pytest
@@ -11,11 +12,13 @@ import pytest
 pytest.importorskip("opentelemetry")
 
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter  # noqa: E402
+from opentelemetry.trace import SpanKind  # noqa: E402
 
 import litellm  # noqa: E402
 from litellm.caching.dual_cache import DualCache  # noqa: E402
 from litellm.integrations.otel.logger import OpenTelemetryV2, build_otel_v2_logger  # noqa: E402
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config, is_otel_v2_enabled  # noqa: E402
+from litellm.integrations.otel.model.destination import OtelDestination  # noqa: E402
 from litellm.integrations.otel.model.spans import LITELLM_PROXY_REQUEST_SPAN_NAME, SpanRole  # noqa: E402
 from litellm.integrations.otel.plumbing import context as otel_context  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
@@ -42,6 +45,7 @@ from litellm.types.utils import (  # noqa: E402
 INPUT_ATTR: Final = "langfuse.observation.input"
 OUTPUT_ATTR: Final = "langfuse.observation.output"
 TRACE_NAME_ATTR: Final = "langfuse.trace.name"
+COMPLETION_START_ATTR: Final = "langfuse.observation.completion_start_time"
 TRACE_CONTROL_ATTRS: Final = (TRACE_NAME_ATTR, "user.id", "session.id", "langfuse.trace.tags")
 CHAT_DATA: Final = {"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "ping"}]}
 
@@ -153,6 +157,25 @@ def test_chat_request_stamps_root_observation_input_and_output():
     assert json.loads(attrs[INPUT_ATTR]) == [{"role": "user", "content": "ping"}]
     output = json.loads(attrs[OUTPUT_ATTR])
     assert [(turn["role"], turn["content"]) for turn in output] == [("assistant", "pong")]
+
+
+def test_content_on_destination_stamps_langfuse_root_io_when_global_capture_is_off() -> None:
+    logger, exporter = _logger(capture="no_content")
+    destination: Final = OtelDestination(
+        endpoint="https://team.example.com/api/public/otel",
+        callback_name="langfuse_otel",
+        capture_message_content="span_only",
+    )
+    token: Final = otel_context.set_request_destinations((destination,))
+    try:
+        response: Final = ModelResponse(choices=[Choices(message=Message(role="assistant", content="pong"))])
+        _run_request(logger, CHAT_DATA, "acompletion", response)
+    finally:
+        otel_context.reset_request_destinations(token)
+
+    attrs: Final = _root_attrs(exporter)
+    assert json.loads(attrs[INPUT_ATTR]) == [{"role": "user", "content": "ping"}]
+    assert json.loads(attrs[OUTPUT_ATTR]) == [{"role": "assistant", "content": "pong"}]
 
 
 def test_responses_request_folds_instructions_into_input_and_stamps_output_items():
@@ -461,7 +484,9 @@ def test_a_request_without_trace_controls_stamps_none_of_them():
     logger, exporter = _logger()
 
     root_attrs, generation_attrs = _run_named_request(
-        logger, exporter, {"metadata": {"user_api_key_team_id": "t1", "tags": []}, "proxy_server_request": {"headers": {}}}
+        logger,
+        exporter,
+        {"metadata": {"user_api_key_team_id": "t1", "tags": []}, "proxy_server_request": {"headers": {}}},
     )
 
     assert set(TRACE_CONTROL_ATTRS).isdisjoint(root_attrs)
@@ -472,7 +497,7 @@ def test_a_request_without_trace_controls_stamps_none_of_them():
     ("capture", "mappers"),
     [("no_content", ("genai", "langfuse")), ("span_only", ("genai",))],
 )
-def test_factory_keeps_the_base_logger_unless_langfuse_content_capture_is_on(capture, mappers):
+def test_langfuse_root_io_requires_global_or_destination_capture(capture: str, mappers: tuple[str, ...]) -> None:
     logger, exporter = _logger(capture=capture, mappers=mappers)
 
     _run_request(logger, CHAT_DATA, "acompletion", ModelResponse())
@@ -484,13 +509,13 @@ def test_factory_keeps_the_base_logger_unless_langfuse_content_capture_is_on(cap
     ("capture", "mappers", "relays_streams"),
     [
         ("span_only", ("genai", "langfuse"), True),
-        ("no_content", ("genai", "langfuse"), False),
+        ("no_content", ("genai", "langfuse"), True),
         ("span_only", ("genai",), False),
     ],
 )
-def test_only_langfuse_content_capture_takes_proxy_streams_off_the_fast_path(
-    monkeypatch, capture, mappers, relays_streams
-):
+def test_langfuse_mapper_relays_streams_for_per_request_content_capture(
+    monkeypatch: pytest.MonkeyPatch, capture: str, mappers: tuple[str, ...], relays_streams: bool
+) -> None:
     logger, _ = _logger(capture=capture, mappers=mappers)
     monkeypatch.setattr(litellm, "callbacks", [logger])
 
@@ -519,3 +544,53 @@ def test_langfuse_otel_preset_builds_a_logger_that_stamps_the_root(monkeypatch):
         assert INPUT_ATTR in attrs and OUTPUT_ATTR in attrs
     finally:
         is_otel_v2_enabled.cache_clear()
+
+
+def _llm_call_kwargs(optional_params: Mapping[str, object], completion_start: datetime | None) -> dict[str, object]:
+    return {
+        "standard_logging_object": {
+            "litellm_call_id": "call_1",
+            "call_type": "acompletion",
+            "custom_llm_provider": "openai",
+            "model": "gpt-5.4-mini",
+            "stream": bool(optional_params.get("stream")),
+            "status": "success",
+            "completionStartTime": datetime(2026, 10, 9, 12, 0, 9, tzinfo=timezone.utc).timestamp(),
+        },
+        "litellm_params": {"metadata": {}},
+        "optional_params": optional_params,
+        "api_call_start_time": datetime(2026, 10, 9, 12, 0, 0, tzinfo=timezone.utc),
+        "completion_start_time": completion_start,
+    }
+
+
+def _generation_attrs(kwargs: dict[str, object], *, fail: bool = False) -> Mapping[str, object]:
+    logger, exporter = _logger()
+    logger.log_pre_api_call(model="gpt-5.4-mini", messages=[], kwargs=kwargs)
+    hook: Final = logger.async_log_failure_event if fail else logger.async_log_success_event
+    asyncio.run(hook(kwargs, None, None, None))
+    (generation,) = [span for span in exporter.get_finished_spans() if span.kind is SpanKind.CLIENT]
+    return dict(generation.attributes or {})
+
+
+@pytest.mark.parametrize(
+    "optional_params",
+    [
+        pytest.param({"stream": True}, id="streamed"),
+        pytest.param({}, id="not_streamed_or_pass_through_stream"),
+    ],
+)
+def test_generation_carries_litellms_completion_start_time_like_the_default_emitter(
+    optional_params: Mapping[str, object],
+) -> None:
+    completion_start: Final = datetime(2026, 10, 9, 12, 0, 0, 250000, tzinfo=timezone.utc)
+
+    attrs: Final = _generation_attrs(_llm_call_kwargs(optional_params, completion_start))
+
+    assert datetime.fromisoformat(json.loads(attrs[COMPLETION_START_ATTR])) == completion_start
+
+
+def test_failed_generation_without_a_first_chunk_has_no_completion_start_time() -> None:
+    attrs: Final = _generation_attrs(_llm_call_kwargs({"stream": True}, None), fail=True)
+
+    assert COMPLETION_START_ATTR not in attrs
