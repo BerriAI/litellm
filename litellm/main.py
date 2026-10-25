@@ -4597,7 +4597,7 @@ def _complete_ollama(ctx: CompletionDispatchContext) -> _CompletionDispatchResul
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
-    api_base = litellm.api_base or api_base or get_secret("OLLAMA_API_BASE") or "http://localhost:11434"
+    api_base = api_base or litellm.api_base or get_secret("OLLAMA_API_BASE") or "http://localhost:11434"
     if api_key is not None and "Authorization" not in headers:
         headers["Authorization"] = f"Bearer {api_key}"
 
@@ -4637,7 +4637,7 @@ def _complete_ollama_chat(ctx: CompletionDispatchContext) -> _CompletionDispatch
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
-    api_base = litellm.api_base or api_base or get_secret("OLLAMA_API_BASE") or "http://localhost:11434"
+    api_base = api_base or litellm.api_base or get_secret("OLLAMA_API_BASE") or "http://localhost:11434"
 
     api_key = api_key or litellm.ollama_key or os.environ.get("OLLAMA_API_KEY") or litellm.api_key
     if api_key is not None and "Authorization" not in headers:
@@ -7280,7 +7280,7 @@ def embedding(
                 api_key=api_key,
             )
         elif custom_llm_provider == "ollama":
-            api_base = litellm.api_base or api_base or get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
+            api_base = api_base or litellm.api_base or get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
 
             if isinstance(input, str):
                 input = [input]

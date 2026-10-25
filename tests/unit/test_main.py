@@ -96,6 +96,70 @@ WHITE_PNG: Final = (Path(__file__).parents[1] / "white_100x100.png").read_bytes(
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize(
+    ("provider", "endpoint"),
+    [("ollama", "generate"), ("ollama_chat", "chat"), ("ollama", "embed")],
+)
+@pytest.mark.parametrize(
+    ("explicit_base", "global_base", "env_base", "expected_base"),
+    [
+        ("http://explicit.example", "http://global.example", "http://env.example", "http://explicit.example"),
+        (None, "http://global.example", "http://env.example", "http://global.example"),
+        ("", "http://global.example", "http://env.example", "http://global.example"),
+        (None, None, "http://env.example", "http://env.example"),
+        (None, None, None, "http://localhost:11434"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_ollama_requests_respect_api_base_precedence(
+    asynchronous: bool,
+    provider: str,
+    endpoint: str,
+    explicit_base: str | None,
+    global_base: str | None,
+    env_base: str | None,
+    expected_base: str,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "api_base", global_base)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OLLAMA_API_BASE", env_base or "")
+    respx_mock.post(url__regex=r".*/api/show").respond(json={"model_info": {}, "capabilities": ["completion"]})
+    route: Final = respx_mock.post(url__regex=rf".*/api/{endpoint}").respond(
+        json={
+            "model": "routing-test",
+            "created_at": "2026-01-01T00:00:00Z",
+            "response": "OK",
+            "message": {"role": "assistant", "content": "OK"},
+            "embeddings": [[0.1, 0.2, 0.3]],
+            "done": True,
+            "done_reason": "stop",
+            "prompt_eval_count": 3,
+            "eval_count": 1,
+        }
+    )
+    args: Final = {"model": f"{provider}/routing-test", "api_base": explicit_base}
+    if endpoint == "embed":
+        response: Final = (
+            await litellm.aembedding(**args, input="hello")
+            if asynchronous
+            else litellm.embedding(**args, input="hello")
+        )
+        assert response.data == [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]}]
+    else:
+        messages: Final = [{"role": "user", "content": "hello"}]
+        completion_response: Final = (
+            await litellm.acompletion(**args, messages=messages)
+            if asynchronous
+            else litellm.completion(**args, messages=messages)
+        )
+        assert completion_response.choices[0].message.content == "OK"
+    assert route.call_count == 1
+    assert str(route.calls[0].request.url) == f"{expected_base}/api/{endpoint}"
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize(
     ("client_base", "explicit_header", "expected_session"),

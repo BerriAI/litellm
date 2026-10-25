@@ -697,7 +697,7 @@ def _get_openai_compatible_provider_info(
         api_base = api_base or get_secret("NEBIUS_API_BASE") or "https://api.studio.nebius.ai/v1"
         dynamic_api_key = api_key or get_secret_str("NEBIUS_API_KEY")
     elif custom_llm_provider == "ollama":
-        api_base = api_base or get_secret("OLLAMA_API_BASE") or "http://localhost:11434"
+        api_base = api_base or litellm.api_base or get_secret("OLLAMA_API_BASE") or "http://localhost:11434"
         dynamic_api_key = api_key or get_secret_str("OLLAMA_API_KEY")
     elif (custom_llm_provider == "ai21_chat") or (custom_llm_provider == "ai21" and model in litellm.ai21_chat_models):
         api_base = api_base or get_secret("AI21_API_BASE") or "https://api.ai21.com/studio/v1"
