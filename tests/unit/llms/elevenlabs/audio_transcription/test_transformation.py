@@ -315,3 +315,20 @@ class TestElevenLabsTextToSpeechTransformation:
 
         assert voice_id in url
         assert "output_format=pcm_44100" in url
+
+    def test_map_openai_params_maps_wav_format(self, config):
+        kwargs: Dict[str, Any] = {}
+        mapped_voice, mapped_params = config.map_openai_params(
+            model="eleven_multilingual_v2",
+            optional_params={
+                "response_format": "wav",
+                "model_id": "eleven_multilingual_v2",
+            },
+            voice="alloy",
+            kwargs=kwargs,
+        )
+
+        assert (
+            kwargs[config.ELEVENLABS_QUERY_PARAMS_KEY]["output_format"]
+            == "wav_44100_16"
+        )
