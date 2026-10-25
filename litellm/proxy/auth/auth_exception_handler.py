@@ -41,7 +41,7 @@ DB_UNAVAILABLE_FALLBACK_USER_ID: Final = "__db_unavailable_fallback__"
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
 
@@ -191,6 +191,8 @@ class UserAPIKeyAuthExceptionHandler:
             )
         else:
             # raise the exception to the caller
+            if not isinstance(request_data, dict):
+                request_data = {}
             requester_ip: Final = get_request_ip_address(
                 request=request,
                 use_x_forwarded_for=general_settings.get("use_x_forwarded_for") is True,
