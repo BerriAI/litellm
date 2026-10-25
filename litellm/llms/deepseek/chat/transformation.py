@@ -32,10 +32,10 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
     def map_openai_params(
         self,
         non_default_params: dict,
-        optional_params: dict[str, object],
+        optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:
+    ) -> dict:
         """
         Map OpenAI params to DeepSeek params.
 
@@ -62,12 +62,13 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         elif reasoning_effort is not None:
             optional_params["thinking"] = {"type": "disabled" if reasoning_effort == "none" else "enabled"}
 
+        mapped_params: Final = cast(dict[str, object], optional_params)
         if (
-            optional_params.get("thinking") == {"type": "enabled"}
+            mapped_params.get("thinking") == {"type": "enabled"}
             and isinstance(reasoning_effort, str)
             and reasoning_effort in SUPPORTED_REASONING_EFFORTS
         ):
-            return {**optional_params, "reasoning_effort": reasoning_effort}
+            return {**mapped_params, "reasoning_effort": reasoning_effort}
 
         return optional_params
 
