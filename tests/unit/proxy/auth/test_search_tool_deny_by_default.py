@@ -3,6 +3,7 @@ from typing import Final, TypedDict
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
 
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy import proxy_server
@@ -268,3 +269,26 @@ def test_unregistered_search_fallback_follows_search_tool_deny_by_default(
     with pytest.raises(ProxyException) as exc_info:
         check_unregistered_search_fallback(caller, general_settings)
     assert (exc_info.value.type, exc_info.value.code) == (expected, "403")
+
+
+@pytest.mark.parametrize("general_settings", [{}, {"search_tool_deny_by_default": False}, _DENY_ON])
+@pytest.mark.parametrize("key_tools, expected", [(None, None), (["search-a"], None), (["search-b"], _LEGACY)])
+@pytest.mark.asyncio
+async def test_dashboard_search_skips_missing_sentinel_team_and_preserves_key_grants(
+    general_settings: dict[str, bool], key_tools: list[str] | None, expected: ProxyErrorTypes | None
+) -> None:
+    load_team: Final = AsyncMock(
+        side_effect=HTTPException(status_code=404, detail="Team doesn't exist in db. Team=litellm-dashboard")
+    )
+    caller: Final = _caller(virtual_key=False, team_id=UI_TEAM_ID, key_tools=key_tools)
+    assert await _denied_by(general_settings, caller, load_team) == expected
+    load_team.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_search_preserves_missing_real_team_error_without_deny_by_default() -> None:
+    missing_team: Final = HTTPException(status_code=404, detail="Team doesn't exist in db. Team=team-1")
+    load_team: Final = AsyncMock(side_effect=missing_team)
+    with pytest.raises(HTTPException) as exc_info:
+        await can_caller_call_search_tool("search-a", _caller(team_id="team-1"), {}, load_team)
+    assert exc_info.value is missing_team

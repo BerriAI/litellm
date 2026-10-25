@@ -6511,7 +6511,7 @@ async def resolve_search_tool_grants(
     must each list the tool, and a missing record, `null`, `[]`, or a team or user that fails to load grants nothing
     """
     if not is_search_tool_deny_by_default_applied(valid_token, general_settings):
-        team_object: Final = await load_team_object()
+        team_object: Final = None if valid_token.team_id == UI_TEAM_ID else await load_team_object()
         return SearchToolGrants(
             grants=MappingProxyType(
                 {"key": valid_token.object_permission, "team": team_object.object_permission if team_object else None}
