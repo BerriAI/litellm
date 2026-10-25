@@ -351,16 +351,19 @@ class TestTheNormalizedTierIsTheTierSent:
             ("gpt-6-astra", "azure"),
             ("us/gpt-6-astra", "azure"),
             ("eu/gpt-6-astra", "azure"),
+            ("gpt-5.6-sol", "azure"),
+            ("gpt-5.6-terra", "azure"),
+            ("gpt-5.6-luna", "azure"),
         ],
     )
-    def test_an_azure_hosted_astra_deployment_drops_to_the_tier_its_chat_route_accepts(
-        self, local_model_cost_map: None, model: str, provider: str
+    @pytest.mark.parametrize("effort", ("max", {"effort": "max", "summary": "detailed"}))
+    def test_an_azure_hosted_deployment_preserves_its_declared_max_before_endpoint_selection(
+        self, local_model_cost_map: None, model: str, provider: str, effort: object
     ) -> None:
-        """A Foundry gpt-6-astra answers a Chat Completions ``max`` with a 400 naming low through
-        xhigh while honoring the same level on the Responses route (2026-10-01). The row's flag is
-        route-blind, so it keeps max off and the adapter, which cannot know which route the call
-        takes, sends the tier below instead of the level chat rejects."""
-        assert _reasoning_effort_sent(model, provider, "max") == "xhigh"
+        """The shared normalizer runs before the final endpoint is known. Preserve a declared
+        max for Responses; callers choosing plain Chat Completions remain subject to its limits."""
+        expected: Final = _reasoning_effort_sent("gpt-6-astra", "openai", effort)
+        assert _reasoning_effort_sent(model, provider, effort) == expected
 
     def test_the_openai_hosted_twin_still_sends_max(self, local_model_cost_map):
         assert _reasoning_effort_sent("gpt-6-astra", "openai", "max") == "max"
