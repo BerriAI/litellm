@@ -82,9 +82,10 @@ class AsyncAwareTransformer(RestrictingNodeTransformer):
         return bounded
 
     def visit_AsyncFor(self, node: ast.AsyncFor) -> ast.AST:
-        transformed: Final = self.visit_For(node)
-        _use_async_iter_guards(transformed)
-        return transformed
+        # `guard_iter` rewrites `node.iter` on the node it is given and returns it.
+        self.visit_For(node)
+        _use_async_iter_guards(node)
+        return node
 
     def visit_AsyncWith(self, node: ast.AsyncWith) -> ast.AST:
         return self.visit_With(node)
