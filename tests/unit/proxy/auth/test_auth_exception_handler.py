@@ -1223,3 +1223,49 @@ def test_as_proxy_exception_keeps_jwt_scope_denial_message_shape():
 
     assert converted.to_dict() == plain.to_dict()
     assert converted.internal_message == denial.internal_message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "non_dict_body",
+    [
+        [],
+        [1, 2],
+        "a string",
+        123,
+        True,
+        None,
+    ],
+)
+async def test_auth_failure_handles_non_object_json_body(non_dict_body: object) -> None:
+    """Non-object JSON bodies (lists, numbers, strings, bools, null) must not 500 in auth failure handling."""
+    mock_post_call_hook = AsyncMock(return_value=None)
+    with (
+        patch("litellm.proxy.auth.auth_exception_handler.seed_request_identity") as mock_seed,
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            mock_post_call_hook,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
+                ProxyException(
+                    message="Invalid API key",
+                    type=ProxyErrorTypes.auth_error,
+                    param=None,
+                    code=status.HTTP_401_UNAUTHORIZED,
+                ),
+                _http_request(),
+                non_dict_body,  # type: ignore
+                "/v1/chat/completions",
+                None,
+                "sk-bad-key",
+            )
+        assert str(exc_info.value.code) == str(status.HTTP_401_UNAUTHORIZED)
+        assert mock_seed.call_args[1]["model"] is None
+        logged_data = mock_post_call_hook.call_args[1]["request_data"]
+        assert isinstance(logged_data, dict)

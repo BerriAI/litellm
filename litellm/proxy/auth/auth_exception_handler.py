@@ -93,6 +93,16 @@ def _with_client_context(
 ) -> dict[str, object]:
     """Auth gate rejections are raised before `add_litellm_data_to_request` records the
     caller IP and User-Agent, so their failure logs would otherwise carry neither."""
+    if not isinstance(request_data, dict):  # pyright: ignore[reportUnnecessaryIsInstance] # runtime guard against non-dict payload
+        if requester_ip or user_agent:
+            non_dict_stamped: Final = {
+                name: value
+                for name, value in (("requester_ip_address", requester_ip), ("user_agent", user_agent))
+                if value
+            }
+            if non_dict_stamped:
+                return {"metadata": non_dict_stamped}
+        return {}
     key: Final = "litellm_metadata" if "litellm_metadata" in request_data else "metadata"
     metadata: Final = request_data.get(key)
     base: Final[Mapping[str, object]] = metadata if isinstance(metadata, Mapping) else EMPTY_MAPPING
@@ -229,7 +239,7 @@ class UserAPIKeyAuthExceptionHandler:
             # without this the failed trace would carry no team/key attributes.
             seed_request_identity(
                 user_api_key_dict,
-                model=request_data.get("model"),
+                model=request_data.get("model") if isinstance(request_data, dict) else None,  # pyright: ignore[reportUnnecessaryIsInstance] # runtime guard against non-dict payload
             )
 
             # Budget checks live in tenant-scoped helpers (key / team / org / tag)
@@ -242,7 +252,7 @@ class UserAPIKeyAuthExceptionHandler:
                     resolve_llm_provider_for_rate_limit,
                 )
 
-                budget_model: Final = request_data.get("model")
+                budget_model: Final = request_data.get("model") if isinstance(request_data, dict) else None  # pyright: ignore[reportUnnecessaryIsInstance] # runtime guard against non-dict payload
                 _, e.llm_provider = resolve_llm_provider_for_rate_limit(
                     budget_model if isinstance(budget_model, str) else None
                 )
