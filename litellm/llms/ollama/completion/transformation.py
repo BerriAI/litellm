@@ -247,7 +247,7 @@ class OllamaConfig(BaseConfig):
             elif param == "frequency_penalty":
                 optional_params["frequency_penalty"] = value
             elif param == "stop":
-                optional_params["stop"] = value
+                optional_params["stop"] = [value] if isinstance(value, str) else value
             elif param == "reasoning_effort" and value is not None:
                 if model.startswith("gpt-oss"):
                     optional_params["think"] = value

@@ -27,6 +27,17 @@ from litellm.types.utils import Choices, EmbeddingResponse, Message, ModelRespon
 from unittest import mock
 
 
+@pytest.mark.parametrize(
+    "stop, expected",
+    [("END", ["END"]), ("", [""]), (["END", "STOP"], ["END", "STOP"]), ([], [])],
+)
+def test_stop_is_sent_as_an_array(stop: str | list[str], expected: list[str]) -> None:
+    optional_params: Final = get_optional_params(
+        model="test-model", custom_llm_provider="ollama_chat", stop=stop
+    )
+    assert optional_params["stop"] == expected
+
+
 class TestEvent(BaseModel):
     name: str
     value: int

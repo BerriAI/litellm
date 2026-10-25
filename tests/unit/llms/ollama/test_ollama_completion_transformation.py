@@ -19,6 +19,17 @@ from litellm.llms.ollama.completion.transformation import (
 from litellm.types.utils import Message, ModelResponse, ModelResponseStream
 
 
+@pytest.mark.parametrize(
+    "stop, expected",
+    [("END", ["END"]), ("", [""]), (["END", "STOP"], ["END", "STOP"]), ([], [])],
+)
+def test_stop_is_sent_as_an_array(stop: str | list[str], expected: list[str]) -> None:
+    optional_params: Final = litellm.utils.get_optional_params(
+        model="test-model", custom_llm_provider="ollama", stop=stop
+    )
+    assert optional_params["stop"] == expected
+
+
 class TestOllamaConfig:
     def test_transform_response_standard(self):
         # Initialize config
