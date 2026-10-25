@@ -17,6 +17,8 @@ from litellm.utils import supports_reasoning, supports_vision
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
+SUPPORTED_REASONING_EFFORTS: Final = ("minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+
 
 class DeepSeekChatConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list:
@@ -33,7 +35,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI params to DeepSeek params.
 
@@ -59,6 +61,13 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         # Otherwise fall back to reasoning_effort: "none" disables, anything else enables
         elif reasoning_effort is not None:
             optional_params["thinking"] = {"type": "disabled" if reasoning_effort == "none" else "enabled"}
+
+        if (
+            isinstance(reasoning_effort, str)
+            and reasoning_effort in SUPPORTED_REASONING_EFFORTS
+            and optional_params["thinking"] == {"type": "enabled"}
+        ):
+            return {**optional_params, "reasoning_effort": reasoning_effort}
 
         return optional_params
 
