@@ -28,6 +28,8 @@ _PROJECTED_FIELDS: Final = frozenset(
 _OPERATIONAL_FIELDS: Final = frozenset(
     {
         "client",
+        "client_side_timeout",
+        "headers",
         "shared_session",
         "request_timeout",
         "max_retries",

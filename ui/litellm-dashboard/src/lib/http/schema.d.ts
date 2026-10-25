@@ -17922,6 +17922,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tokenize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Tokenize
+         * @description Tokenize raw text and return its count with explicitly requested representations.
+         */
+        post: operations["tokenize_tokenize_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/toolset/{toolset_name}/mcp": {
         parameters: {
             query?: never;
@@ -22433,6 +22453,26 @@ export interface paths {
          *     API Reference: https://platform.openai.com/docs/api-reference/runs/createRun
          */
         post: operations["run_thread_v1_threads__thread_id__runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tokenize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Tokenize
+         * @description Tokenize raw text and return its count with explicitly requested representations.
+         */
+        post: operations["tokenize_v1_tokenize_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -41926,6 +41966,19 @@ export interface components {
              */
             user: string | null;
         };
+        /** ProxyTokenizeRequest */
+        ProxyTokenizeRequest: {
+            /** Add Special Tokens */
+            add_special_tokens?: boolean;
+            /** Include */
+            include?: ("token_ids" | "tokens")[];
+            /** Model */
+            model: string;
+            /** Prompt */
+            prompt: string;
+        } & {
+            [key: string]: unknown;
+        };
         /** PublicModelHubInfo */
         PublicModelHubInfo: {
             /** Custom Docs Description */
@@ -47166,6 +47219,17 @@ export interface components {
             tokenizer_type: string;
             /** Total Tokens */
             total_tokens: number;
+        };
+        /** TokenizeResponse */
+        TokenizeResponse: {
+            /** Count */
+            count: number;
+            /** Model */
+            model: string;
+            /** Token Ids */
+            token_ids?: number[] | null;
+            /** Tokens */
+            tokens?: string[] | null;
         };
         /**
          * ToolChoiceAllowedParam
@@ -74917,6 +74981,39 @@ export interface operations {
             };
         };
     };
+    tokenize_tokenize_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProxyTokenizeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenizeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     toolset_mcp_route_toolset__toolset_name__mcp_get: {
         parameters: {
             query?: never;
@@ -81887,6 +81984,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tokenize_v1_tokenize_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProxyTokenizeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenizeResponse"];
                 };
             };
             /** @description Validation Error */

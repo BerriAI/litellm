@@ -34,6 +34,7 @@ _MANAGED_MODEL_ROUTES: Final = frozenset(
             "systemone",
             "extraction",
             "ocr",
+            "tokenize",
         ),
     )
 ) | frozenset(
