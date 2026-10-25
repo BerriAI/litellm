@@ -1357,12 +1357,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 "includeThoughts": False,
             }
         else:
-            should_drop: Final[bool] = (
-                drop_params is True
-                or getattr(litellm, "drop_params", False) is True
-                or drops_unsupported_params(drop_params)
-            )
-            if should_drop:
+            if drops_unsupported_params(drop_params):
                 verbose_logger.debug("Dropping unsupported reasoning_effort: %s", reasoning_effort)
                 return None
             raise _unsupported_reasoning_effort(reasoning_effort)
@@ -1410,12 +1405,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 "includeThoughts": False,
             }
         else:
-            should_drop: Final[bool] = (
-                drop_params is True
-                or getattr(litellm, "drop_params", False) is True
-                or drops_unsupported_params(drop_params)
-            )
-            if should_drop:
+            if drops_unsupported_params(drop_params):
                 verbose_logger.debug("Dropping unsupported reasoning_effort: %s", reasoning_effort)
                 return None
             raise _unsupported_reasoning_effort(reasoning_effort)
@@ -1723,12 +1713,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     effort_value = value.get("effort")
 
                 if effort_value is not None:
-                    should_drop: bool = (
-                        drop_params is True
-                        or optional_params.get("drop_params") is True
-                        or getattr(litellm, "drop_params", False) is True
-                        or drops_unsupported_params(drop_params)
-                        or drops_unsupported_params(optional_params.get("drop_params"))
+                    should_drop: bool = drops_unsupported_params(drop_params) or (
+                        "drop_params" in optional_params and optional_params["drop_params"] in (True, "true", "True")
                     )
                     thinking_config = VertexGeminiConfig._map_reasoning_effort(
                         effort=effort_value,
