@@ -113,7 +113,10 @@ def _reported_memberships(gateway: Gateway, path: str, params: dict[str, str]) -
     assert response.status_code == 200, f"GET {path}: {response.status_code} {response.text}"
     body: Final = JSON_VALUE.validate_json(response.content)
     teams: Final = [object_value(body)] if isinstance(body, dict) else [object_value(team) for team in list_value(body)]
-    return dict(_membership_figures(row) for team in teams for row in list_value(team["team_memberships"]))
+    rows: Final = [
+        row for team in teams for row in list_value(team["team_memberships"])
+    ]  # comprehension-ok: flatten memberships across teams
+    return dict(_membership_figures(row) for row in rows)
 
 
 def test_a_flush_lifts_a_legacy_total_to_the_cycle_spend_and_leaves_a_healthy_row_on_its_baseline(
