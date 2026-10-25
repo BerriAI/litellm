@@ -31,7 +31,7 @@ from RestrictedPython.Eval import default_guarded_getitem
 from RestrictedPython.Guards import (
     full_write_guard,
     guarded_iter_unpack_sequence,
-    guarded_unpack_sequence,
+    guarded_unpack_sequence,  # pyright: ignore[reportUnknownVariableType]  # RestrictedPython is untyped
     safer_getattr,
 )
 from RestrictedPython.transformer import copy_locations
