@@ -229,7 +229,7 @@ def test_completion_cost_prefers_exact_route_price_over_capability_generalizatio
     assert cost == usage.prompt_tokens * input_rate + usage.completion_tokens * output_rate
 
 
-def test_completion_cost_keeps_priced_generalization_before_later_exact_candidate(
+def test_completion_cost_explicit_model_precedes_response_token_generalization(
     _local_model_cost_map: None,
     _priced_claude_family_generalization: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -255,7 +255,7 @@ def test_completion_cost_keeps_priced_generalization_before_later_exact_candidat
         custom_llm_provider="bedrock",
     )
 
-    assert cost == pytest.approx(usage.prompt_tokens * 0.0000321 + usage.completion_tokens * 0.0000765)
+    assert cost == pytest.approx(usage.prompt_tokens * 0.0000123 + usage.completion_tokens * 0.0000456)
 
 
 @pytest.fixture
@@ -276,7 +276,7 @@ def _per_second_priced_claude_family_generalization() -> Iterator[None]:
         set_fallback_generalizations(previous_rules)
 
 
-def test_completion_cost_keeps_per_second_priced_generalization_before_later_exact_candidate(
+def test_completion_cost_explicit_model_precedes_response_per_second_generalization(
     _local_model_cost_map: None,
     _per_second_priced_claude_family_generalization: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -307,7 +307,7 @@ def test_completion_cost_keeps_per_second_priced_generalization_before_later_exa
         total_time=2000,
     )
 
-    assert cost == pytest.approx(0.25 * 2)
+    assert cost == pytest.approx(17 * 0.0000123 + 9 * 0.0000456)
 
 
 @pytest.fixture
@@ -10418,3 +10418,52 @@ def test_bedrock_registered_cache_prices_preserve_dynamic_threshold_rates(
     assert entry is not None
     assert entry[1]["input_cost_per_token_above_300k_tokens"] == 0.03
     assert entry[1][tier_field] == (tier_override if tier_override is not None else 0.007)
+
+
+@pytest.mark.parametrize("explicit_model", [None, "groq/openai/gpt-oss-120b"])
+def test_completion_cost_preserves_groq_provider(explicit_model: str | None) -> None:
+    response: Final = ModelResponse(
+        model="openai/gpt-oss-120b", choices=[],
+        usage=Usage(prompt_tokens=77, completion_tokens=19, total_tokens=96),
+    )
+    response.hidden_params["custom_llm_provider"] = "groq"
+    assert completion_cost(completion_response=response, model=explicit_model) == pytest.approx(2.295e-05)
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"model": "groq/openai/gpt-oss-120b"},
+    {"custom_llm_provider": "groq"},
+    {"model": "groq/openai/gpt-oss-120b", "custom_llm_provider": "groq"},
+])
+def test_completion_cost_explicit_identity_overrides_response_metadata(kwargs: dict[str, str]) -> None:
+    response: Final = ModelResponse(
+        model="openai/gpt-oss-120b", choices=[],
+        usage=Usage(prompt_tokens=77, completion_tokens=19, total_tokens=96),
+    )
+    response.hidden_params["custom_llm_provider"] = "openai"
+    assert completion_cost(completion_response=response, **kwargs) == pytest.approx(2.295e-05)
+
+
+def test_completion_cost_explicit_model_reprices_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(litellm.model_cost, "openai/repricing-original", {
+        "litellm_provider": "openai", "mode": "chat",
+        "input_cost_per_token": 0.01, "output_cost_per_token": 0.02,
+    })
+    monkeypatch.setitem(litellm.model_cost, "openai/repricing-override", {
+        "litellm_provider": "openai", "mode": "chat",
+        "input_cost_per_token": 0.03, "output_cost_per_token": 0.04,
+    })
+    response: Final = ModelResponse(
+        model="openai/repricing-original", choices=[],
+        usage=Usage(prompt_tokens=2, completion_tokens=1, total_tokens=3),
+    )
+    assert completion_cost(completion_response=response, model="openai/repricing-override") == pytest.approx(0.10)
+
+
+def test_completion_cost_does_not_reuse_failed_candidate_provider() -> None:
+    response: Final = ModelResponse(
+        model="groq/openai/gpt-oss-120b", choices=[],
+        usage=Usage(prompt_tokens=77, completion_tokens=19, total_tokens=96),
+    )
+    response.hidden_params["provider_response_model"] = "openai/unmapped-cost-candidate"
+    assert completion_cost(completion_response=response) == pytest.approx(2.295e-05)

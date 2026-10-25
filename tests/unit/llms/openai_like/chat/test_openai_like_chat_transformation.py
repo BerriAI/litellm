@@ -82,3 +82,30 @@ def test_transform_response_surfaces_provider_headers_as_llm_provider_headers():
     )
 
     assert response._hidden_params["additional_headers"]["llm_provider-x-amzn-requestid"] == "req_abc123"
+
+
+def test_transform_response_preserves_request_metadata() -> None:
+    from unittest.mock import Mock
+    from typing import Final
+
+    import httpx
+    from litellm import ModelResponse
+
+    original: Final = ModelResponse()
+    original.hidden_params["custom_llm_provider"] = "groq"
+    original.hidden_params["region_name"] = "test-region"
+    response: Final = OpenAILikeChatConfig().transform_response(
+        model="openai/gpt-oss-120b",
+        raw_response=httpx.Response(200, json={
+            "model": "openai/gpt-oss-120b", "choices": [],
+            "usage": {"prompt_tokens": 77, "completion_tokens": 19, "total_tokens": 96},
+        }),
+        model_response=original,
+        logging_obj=Mock(), request_data={}, messages=[], optional_params={},
+        litellm_params={}, encoding=None,
+    )
+    assert response.model == "openai/gpt-oss-120b"
+    assert response.hidden_params["custom_llm_provider"] == "groq"
+    assert response.hidden_params["region_name"] == "test-region"
+    response.hidden_params["region_name"] = "other-region"
+    assert original.hidden_params["region_name"] == "test-region"

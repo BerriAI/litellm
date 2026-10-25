@@ -1545,6 +1545,9 @@ def completion_cost(
     `litellm.model_cost` unless `custom_cost_per_token` or `custom_cost_per_second` is given. `total_time`
     is in milliseconds and only matters for per-second pricing such as Replicate and SageMaker.
 
+    Explicit model and provider arguments take precedence over response metadata. If the requested model
+    has no pricing, response model candidates remain available for deployment and router aliases.
+
     Raises if no candidate model name resolves to pricing. Register the model via `litellm.register_model`
     or add it to model_prices_and_context_window.json.
     """
@@ -1658,20 +1661,26 @@ def completion_cost(
             explicit_pricing,
         )
         requested_model: Final = model
-        request_pricing_provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
-        raw_candidates: Final = (
+        request_pricing_provider: Final = _get_provider_for_cost_calc(model, custom_llm_provider)
+        response_candidates: Final = (
             (
                 selected_model,
                 base_model_provider if base_model_provider is not None else request_pricing_provider,
             ),
             (_get_response_model(completion_response), request_pricing_provider),
-            *(((model, request_pricing_provider),) if model is not None else ()),
+        )
+        requested_candidate: Final = ((model, request_pricing_provider),) if model is not None else ()
+        raw_candidates: Final = (
+            (*requested_candidate, *response_candidates)
+            if base_model is None and custom_pricing is not True
+            else (*response_candidates, *requested_candidate)
         )
         potential_model_names: Final = (
             raw_candidates if custom_pricing is True else _priced_candidates_before_unpriced_rules(raw_candidates)
         )
 
         for idx, (model, candidate_pricing_provider) in enumerate(potential_model_names):
+            custom_llm_provider = candidate_pricing_provider  # rebind-ok: reset candidate inference
             try:
                 if verbose_logger.isEnabledFor(logging.DEBUG):
                     verbose_logger.debug("selected model name for cost calculation: %s", model)
@@ -1742,9 +1751,7 @@ def completion_cost(
 
                     hidden_params = getattr(completion_response, "_hidden_params", None)
                     if hidden_params is not None:
-                        custom_llm_provider = pricing_provider or hidden_params.get(
-                            "custom_llm_provider", custom_llm_provider or None
-                        )
+                        custom_llm_provider = custom_llm_provider or hidden_params.get("custom_llm_provider")
                         region_name = hidden_params.get("region_name", region_name)
 
                 else:

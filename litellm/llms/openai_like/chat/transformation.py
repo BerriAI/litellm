@@ -120,6 +120,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
                 choice["message"] = message
 
         returned_response: Final = ModelResponse(**response_json)
+        returned_response.hidden_params.update(model_response.hidden_params)
         set_provider_response_headers_in_hidden_params(returned_response, response.headers)
 
         if custom_llm_provider is not None:
