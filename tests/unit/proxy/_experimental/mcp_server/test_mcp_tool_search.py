@@ -10,7 +10,10 @@ Covers:
 - call_tool_rest_api intercepts mcp_tool_call calls
 """
 
+import asyncio
 import json
+import os
+import sys
 from collections.abc import Mapping, Sequence
 from types import SimpleNamespace
 from typing import Any, Final
@@ -34,6 +37,7 @@ from litellm.proxy._experimental.mcp_server.tool_search import (
     coerce_top_k,
     get_virtual_tool_definitions,
     handle_mcp_tool_search,
+    rank_mcp_tools,
     search_mcp_tools,
     search_tools,
 )
@@ -190,6 +194,19 @@ class RecordingEmbedder:
         return tuple(FAKE_VECTORS[text] for text in texts)
 
 
+class OversizedRecordingEmbedder:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, ...]] = []  # mutable-ok: test spy recording embed inputs
+
+    async def __call__(self, texts: Sequence[str]) -> Sequence[Vector]:
+        self.calls.append(tuple(texts))
+        if any("OVERSIZED" in text for text in texts):
+            raise litellm.ContextWindowExceededError(
+                message="input is too long", model="text-embedding-3-large", llm_provider="openai"
+            )
+        return tuple((1.0, 0.0) if "weather" in text.lower() else (0.0, 1.0) for text in texts)
+
+
 def _ranker(embedder: RecordingEmbedder | None = None) -> SemanticToolRanker:
     return SemanticToolRanker(embed=embedder or RecordingEmbedder(), embedding_model="emb", index=SemanticTextIndex())
 
@@ -200,6 +217,26 @@ def _names(results: Sequence[ToolSearchResult] | EmbeddingFailed) -> list[str]:
 
 
 class TestSearchMcpTools:
+    @pytest.mark.asyncio
+    async def test_rank_mcp_tools_omits_oversized_description(self) -> None:
+        tools: Final = _make_tools(
+            [
+                ("get_weather", "Get the current weather forecast for a city"),
+                ("send_email", "Send an email to a recipient"),
+                ("list_files", "List files in a directory"),
+                ("huge_tool", "OVERSIZED description"),
+            ]
+        )
+        embedder = OversizedRecordingEmbedder()
+        ranker = SemanticToolRanker(embed=embedder, embedding_model="emb", index=SemanticTextIndex())
+
+        hits: Final = await rank_mcp_tools("weather", tools, 5, MCPToolSearchSettings(embedding_model="emb"), ranker)
+
+        assert not isinstance(hits, EmbeddingFailed)
+        names: Final = [hit.tool.name for hit in hits]
+        assert names[0] == "get_weather"
+        assert "huge_tool" not in names
+
     @pytest.mark.asyncio
     async def test_semantic_mode_finds_foreign_exchange_tool_for_fx(self) -> None:
         keyword_only = await search_mcp_tools("FX", CATALOG, 5, MCPToolSearchSettings(), ranker=None)
@@ -1247,7 +1284,12 @@ class TestCaptureHostProgressCallback:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("token", ["tok12345", 12345, 0])
-    async def test_forwards_wire_progress_token(self, _mcp_request_ctx, token) -> None:
+    @pytest.mark.parametrize("message", [None, "halfway"])
+    @pytest.mark.parametrize("delivery_error", [None, RuntimeError("request stream closed")])
+    async def test_forwards_progress_on_originating_request(self, _mcp_request_ctx, token, message, delivery_error) -> None:
+        from mcp.server.connection import Connection
+        from mcp.server.session import ServerSession
+        from mcp.shared.dispatcher import DispatchContext
         from mcp.types import CallToolRequestParams
 
         from litellm.proxy._experimental.mcp_server.server import _capture_host_progress_callback
@@ -1255,13 +1297,14 @@ class TestCaptureHostProgressCallback:
         params = CallToolRequestParams.model_validate(
             {"name": "tool", "_meta": {"progressToken": token}}, by_name=False
         )
-        session = AsyncMock()
+        channel = AsyncMock(spec=DispatchContext, progress=AsyncMock(side_effect=delivery_error))
+        connection = MagicMock(spec=Connection, protocol_version="2025-11-25", outbound=AsyncMock())
+        session = ServerSession(channel, connection, request_meta=params.meta)
         callback = _capture_host_progress_callback(_mcp_request_ctx(meta=params.meta, session=session))
         assert callback is not None
-        await callback(0.5, 1.0)
-        session.send_progress_notification.assert_awaited_once_with(
-            progress_token=token, progress=0.5, total=1.0
-        )
+        await callback(0.5, 1.0, message)
+        channel.progress.assert_awaited_once_with(0.5, 1.0, message)
+        connection.outbound.notify.assert_not_awaited()
 
 
 class TestHandleListToolsVirtual:
@@ -1386,3 +1429,42 @@ async def test_mcp_tool_search_leaves_the_listed_tools_slot_empty(monkeypatch: p
     assert result.is_error is False
     assert [hit["name"] for hit in json.loads(result.content[0].text)] == ["search-slot-echo"]
     assert listed == [None, None]
+
+
+@pytest.mark.asyncio
+async def test_cold_concurrent_schema_validation_accepts_valid_arguments() -> None:
+    import psutil
+
+    from litellm.proxy._experimental.mcp_server.tool_search import (
+        _MAX_VALIDATION_WORKERS,
+        _tool_argument_validation_error,
+    )
+
+    schema: Final = {
+        "type": "object",
+        "$defs": {"amount": {"type": "number", "multipleOf": 0.25}},
+        "properties": {"amount": {"$ref": "#/$defs/amount"}},
+    }
+    original_affinity: Final = os.sched_getaffinity(0) if sys.platform == "linux" else None
+    existing_children: Final = frozenset(child.pid for child in psutil.Process().children())
+    try:
+        if original_affinity is not None:
+            os.sched_setaffinity(0, {min(original_affinity)})
+        for _ in range(2):
+            results: Final = await asyncio.gather(
+                *(_tool_argument_validation_error(schema, {"amount": 0.75}, timeout_seconds=90.0) for _ in range(8))
+            )
+            assert results == [None] * 8, "Cold and warm workers must accept valid concurrent tool arguments"
+        workers: Final = tuple(
+            child
+            for child in psutil.Process().children()
+            if child.pid not in existing_children and "anyio.to_process" in child.cmdline()
+        )
+        assert 1 <= len(workers) <= (1 if original_affinity is not None else _MAX_VALIDATION_WORKERS), (
+            "Validation must not start more cold workers than the CPUs it can run on"
+        )
+    finally:
+        if original_affinity is not None:
+            os.sched_setaffinity(0, original_affinity)
+
+

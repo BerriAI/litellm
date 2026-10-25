@@ -21,12 +21,12 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import SamplingMessage, TextContent
-from mcp_tests.mcp_e2e_upstream_server import add, multiply
+from integration._support.mcp_e2e_upstream_server import add, multiply
 from pydantic import BaseModel, JsonValue
 from sse_starlette.sse import AppStatus
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response
-from starlette.types import Message, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 Transport = Literal["http", "sse", "stdio"]
 STDIO_PEER: Final = Path(__file__).with_name("mcp_stdio_peer.py")
@@ -140,6 +140,70 @@ def _capturing(app: Callable[[Scope, Receive, Send], object], observed: queue.Qu
     return capture
 
 
+def _acknowledge_notifications_after_dispatch(app: ASGIApp) -> ASGIApp:
+    in_flight: Final[dict[bytes, set[asyncio.Event]]] = {}
+
+    async def dispatch(scope: Scope, receive: Receive, send: Send, dispatched: asyncio.Event | None = None) -> None:
+        if scope["type"] != "http" or scope["method"] != "POST":
+            await app(scope, receive, send)
+            return
+        pending: Final[list[Message]] = []
+
+        async def capture(message: Message) -> None:
+            if not pending and message["type"] == "http.response.start" and message["status"] == 202:
+                pending.append(message)
+            elif pending:
+                if (
+                    len(pending) != 1
+                    or message["type"] != "http.response.body"
+                    or message.get("body", b"")
+                    or message.get("more_body", False)
+                ):
+                    raise RuntimeError("MCP notification acknowledgement must be a single empty response")
+                pending.append(message)
+            else:
+                if dispatched is not None and message["type"] == "http.response.start":
+                    dispatched.set()
+                await send(message)
+
+        try:
+            await app(scope, receive, capture)
+        finally:
+            if dispatched is not None:
+                dispatched.set()
+        if pending:
+            if len(pending) != 2:
+                raise RuntimeError("MCP notification acknowledgement did not complete")
+            for message in pending:
+                await send(message)
+
+    async def ordered(scope: Scope, receive: Receive, send: Send) -> None:
+        session: Final = next(
+            (value for name, value in scope.get("headers", ()) if name.lower() == b"mcp-session-id"), None
+        )
+        if scope["type"] != "http" or session is None:
+            await dispatch(scope, receive, send)
+            return
+        if scope["method"] == "DELETE":
+            while pending := tuple(done for done in in_flight.get(session, ()) if not done.is_set()):
+                await asyncio.gather(*(done.wait() for done in pending))
+        if scope["method"] != "POST":
+            await dispatch(scope, receive, send)
+            return
+        done: Final = asyncio.Event()
+        active: Final = in_flight.setdefault(session, set())
+        active.add(done)
+        try:
+            await dispatch(scope, receive, send, done)
+        finally:
+            active.remove(done)
+            if not active:
+                del in_flight[session]
+            done.set()
+
+    return ordered
+
+
 def _drain_sse_streams() -> None:
     AppStatus.should_exit = True
 
@@ -218,6 +282,7 @@ class ScriptedTool:
     respond: Callable[[JsonRpc], Reply | JsonRpc]
     description: str | Callable[[Mapping[str, str]], str] | None = None
     input_schema: JsonRpc = field(default_factory=lambda: {"type": "object"})
+    event_stream: bool = False
 
     def listing(self, headers: Mapping[str, str]) -> JsonRpc:
         described: Final = self.description(headers) if callable(self.description) else self.description
@@ -270,7 +335,10 @@ def scripted_peer(*tools: ScriptedTool) -> Iterator[McpPeer]:
         if tool is None:
             return jsonrpc_error(identity, -32602, "unknown tool")
         produced: Final = tool.respond(body["params"])
-        return produced if isinstance(produced, Reply) else jsonrpc_reply(identity, produced)
+        reply: Final = produced if isinstance(produced, Reply) else jsonrpc_reply(identity, produced)
+        if not tool.event_stream:
+            return reply
+        return Reply(content_type="text/event-stream", body=b"event: message\ndata: " + reply.body + b"\n\n")
 
     with wire_server(provider) as wire:
         yield McpPeer(wire.url + "/mcp", observed)
@@ -565,6 +633,7 @@ class McpCaller:
     entry: EntryPoint
     alias: str | None = None
     headers: Mapping[str, str] = field(default_factory=dict)
+    protocol_version: str | None = None
 
     def _path(self) -> str:
         if self.entry == "server_mcp":
@@ -582,10 +651,23 @@ class McpCaller:
     def rpc(self, method: str, params: JsonRpc | None = None) -> httpx.Response:
         if self.entry == "sse":
             return _legacy_sse_rpc(self.gateway, self._headers(), method, params)
+        modern: Final = self.protocol_version == "2026-07-28"
+        arguments: Final = dict(params or {})
         return self.gateway.client.post(
             self._path(),
-            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": dict(params or {})},
-            headers=self._headers(),
+            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {
+                **arguments,
+                **({"_meta": {
+                    "io.modelcontextprotocol/protocolVersion": self.protocol_version,
+                    "io.modelcontextprotocol/clientInfo": {"name": "integration-caller", "version": "1"},
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                }} if modern else {}),
+            }},
+            headers={**self._headers(), **({
+                "MCP-Protocol-Version": self.protocol_version,
+                "Mcp-Method": method,
+                "Mcp-Name": str(arguments.get("name", arguments.get("uri", ""))),
+            } if modern else {})},
         )
 
     def initialize(self) -> Outcome:

@@ -3,10 +3,9 @@ import base64
 import json
 import os
 import re
-import signal
 import threading
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from queue import SimpleQueue
@@ -22,11 +21,13 @@ import pytest
 import yaml
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.process import graceful_stop_seconds, owned_proxy_process
+from integration._support.process import graceful_stop_seconds, isolated_gateway, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 _API_KEY: Final = "synthetic-mantle-bearer"
 _SIGNING_KEY: Final = os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt")
@@ -251,6 +252,7 @@ def _deployment(
     *,
     base: str = _OPENAI_BASE,
     api_key: str = _API_KEY,
+    model_info: Mapping[str, JsonValue] | None = _CHAT_INFO,
     **extra: JsonValue,
 ) -> str:
     reasoning: Final[Mapping[str, JsonValue]] = (
@@ -261,7 +263,7 @@ def _deployment(
         custom_llm_provider="bedrock_mantle",
         api_base=wire.url + base,
         api_key=api_key,
-        model_info=_CHAT_INFO,
+        model_info=model_info,
         **reasoning,
         **extra,
     )
@@ -317,6 +319,15 @@ def _spend_statuses(model: str, expected: int) -> list[JsonValue]:
     )
     assert len({row["request_id"] for row in rows}) == len(rows), rows
     return [row["status"] for row in rows]
+
+
+@pytest.fixture(scope="module")
+def gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    with (
+        pytest.MonkeyPatch.context() as environment,
+        isolated_gateway(tmp_path_factory.mktemp("gateway"), environment) as owned,
+    ):
+        yield owned
 
 
 def _proxy_url(gateway: Gateway) -> str:
@@ -421,7 +432,7 @@ def test_stream_with_tools_carries_the_deployment_limit_as_max_completion_tokens
         text: Final = _stream_text(
             gateway,
             "/v1/chat/completions",
-            _chat_body(model, marker, stream=True, stream_options={"include_usage": True}, tools=_TOOLS),
+            _chat_body(model, marker, stream=True, stream_options={"include_usage": True}, tools=list(_TOOLS)),
         )
         assert f"marker-{marker}" in text and text.rstrip().endswith("data: [DONE]"), text
         (attempt,) = _attempts(wire)
@@ -461,6 +472,22 @@ async def test_async_anthropic_sdk_messages_stream_reaches_mantle_as_max_complet
         assert attempt.body["stream"] is True, attempt.body
         _renamed(attempt, 1000)
         _assert_logged(message.id, model, "success")
+
+
+def test_a_chat_mode_deployment_leaves_its_unpinned_sibling_on_the_responses_api(gateway: Gateway) -> None:
+    pinned_marker: Final = uuid.uuid4().hex
+    sibling_marker: Final = uuid.uuid4().hex
+    with wire_server(_mantle) as wire, gateway.scenario() as scenario:
+        pinned: Final = _deployment(scenario, wire, _GPT56)
+        sibling: Final = _deployment(scenario, wire, _GPT56, model_info=None)
+        for model, marker in ((pinned, pinned_marker), (sibling, sibling_marker)):
+            response = gateway.request("POST", "/v1/chat/completions", _chat_body(model, marker))
+            assert response.status_code == 200, response.text
+            assert _answer(marker) in response.text, response.text
+        pinned_attempt, sibling_attempt = _attempts(wire)
+        assert (pinned_attempt.target, _marker_in(pinned_attempt)) == (_CHAT_TARGET, pinned_marker), pinned_attempt
+        assert sibling_attempt.target in _RESPONSES_TARGETS, sibling_attempt
+        assert _marker_in(sibling_attempt) == sibling_marker, sibling_attempt
 
 
 def test_responses_max_output_tokens_is_forwarded_natively_on_both_legs(gateway: Gateway) -> None:
@@ -939,7 +966,7 @@ def _chaos_budget(boots: int, stops: int) -> float:
     return (boots + stops) * graceful_stop_seconds() + _CHAOS_TRAFFIC_SECONDS
 
 
-@pytest.mark.timeout(_chaos_budget(boots=2, stops=1))
+@pytest.mark.timeout(_chaos_budget(boots=3, stops=1))
 async def test_worker_sigkill_mid_burst_leaves_the_sibling_renaming_the_yaml_limit(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -969,18 +996,18 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_renaming_the_yaml_lim
             held_by: Final = MappingProxyType({pid: _open_upstream_connections(pid, wire.url) for pid in workers})
             assert sum(held_by.values()) == 20, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            release.set()
-            outcome: Final = await burst
-            assert held_by[survivor_pid] >= 10, held_by
-            assert (len(outcome.served), outcome.lost) == (held_by[survivor_pid], held_by[victim_pid]), (
-                held_by,
-                outcome,
-            )
-            for item in outcome.served:
-                _assert_answered_with_its_own_marker(item)
+            with owned.replacing_worker(victim_pid) as kill:
+                kill.freeze()
+                await asyncio.to_thread(kill)
+                release.set()
+                outcome: Final = await burst
+                assert held_by[survivor_pid] >= 10, held_by
+                assert (len(outcome.served), outcome.lost) == (held_by[survivor_pid], held_by[victim_pid]), (
+                    held_by,
+                    outcome,
+                )
+                for item in outcome.served:
+                    _assert_answered_with_its_own_marker(item)
             follow_up: Final = _Call(endpoint="chat", stream=False, marker=uuid.uuid4().hex)
             (answered,) = (
                 await _burst(_proxy_url(candidate), candidate.key, _CONFIG_MODEL, (follow_up,), limit=None)
@@ -1011,7 +1038,7 @@ async def test_proxy_restart_mid_burst_loses_only_in_flight_requests_and_renames
                 )
             )
             await asyncio.to_thread(eventually, held_markers.qsize, lambda size: size == 20, 60)
-            first.process.terminate()
+            first.begin_shutdown()
             release.set()
             outcome: Final = await burst
         assert len(outcome.served) + outcome.lost == len(calls), outcome

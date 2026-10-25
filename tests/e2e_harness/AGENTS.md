@@ -1,6 +1,6 @@
 # e2e harness tests
 
-Tests of the harness under `tests/e2e/` (the transport, the clients, the fixture bundle and replay edge, the stack lock, the IdP launcher, the coverage collector, the JUnit properties, the load aggregation helpers and the Claude Code driver), not of the product. They live outside `tests/e2e/` because the Buildkite e2e run copies that folder into the runner image and runs every test in it, so a harness test in there counts as a product test in the nightly numbers. Nothing here needs a proxy, provider keys or the network
+Tests of the harness under `tests/e2e/` (the transport, the clients, the fixture bundle and replay edge, the stack lock, the IdP launcher, the coverage collector, the JUnit properties and the Claude Code driver), not of the product. They live outside `tests/e2e/` because the Buildkite e2e run copies that folder into the runner image and runs every test in it, so a harness test in there counts as a product test in the nightly numbers. Nothing here needs a proxy, provider keys or the network
 
 The layout mirrors `tests/e2e/`: `test_e2e_http.py` covers `tests/e2e/e2e_http.py`, `logging/test_datadog_reader.py` covers `tests/e2e/logging/datadog_reader.py`, and `claude_code/` covers the driver, builder, probe and version resolver. Put a new harness test under the folder that mirrors the suite folder whose module it covers
 

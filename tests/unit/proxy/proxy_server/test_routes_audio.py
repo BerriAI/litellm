@@ -10,11 +10,14 @@ Pins (PR2):
 from __future__ import annotations
 
 import io
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 
 from litellm.proxy import proxy_server
 from litellm.types.llms.openai import HttpxBinaryResponseContent
@@ -187,7 +190,9 @@ def patched_transcription_http(monkeypatch: pytest.MonkeyPatch, request: pytest.
 
     monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
 
-    async def _llm_call() -> TranscriptionResponse:
+    async def _llm_call() -> TranscriptionResponse | dict[str, str]:
+        if not isinstance(transcript, str):
+            return {"text": "not a TranscriptionResponse"}
         response: Final = TranscriptionResponse(text=transcript)
         response.hidden_params = {
             "litellm_call_id": "transcription-call-id",
@@ -356,3 +361,29 @@ def test_audio_transcription_json_formats_keep_body_and_headers(
     assert response.headers["x-litellm-cache-key"] == "transcription-cache-key"
     assert response.headers["x-callback-trace"] == "callback-value"
     assert route_request.await_args.kwargs["data"].get("response_format") == response_format
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"], ids=["v1", "alias"])
+@pytest.mark.parametrize("patched_transcription_http", [None], indirect=True, ids=["malformed-response"])
+def test_audio_transcription_text_format_rejects_malformed_response(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[None]],
+    patched_transcription_http: tuple[object, AsyncMock],
+    path: str,
+):
+    files: Final = {"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")}
+    data: Final = {"model": "whisper-1", "response_format": "text"}
+    with auth_as():
+        response: Final = client.post(path, files=files, data=data)
+
+    assert response.status_code == 500
+    assert response.headers["content-type"] == "application/json"
+    assert response.json() == {
+        "error": {
+            "message": "Audio transcription response must be a TranscriptionResponse",
+            "type": "None",
+            "param": "None",
+            "code": "500",
+        }
+    }
+    assert proxy_server.proxy_logging_obj.post_call_failure_hook.await_count == 1

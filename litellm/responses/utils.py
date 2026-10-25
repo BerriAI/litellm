@@ -1,18 +1,21 @@
 import base64
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from functools import reduce
 from typing import Any, Final, Optional, TypeVar, Union, cast, get_type_hints, overload
 
 from pydantic import BaseModel, TypeAdapter
+from typing_extensions import TypedDict as ExtraItemsTypedDict
 from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire payloads without a runtime conversion
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, iter_items
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
-from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig, ReasoningSummaryLevel
 from litellm.types.llms.openai import (
     AllMessageValues,
+    InputTokensDetails,
     OutputTokensDetails,
     ResponseAPIUsage,
     ResponseInputParam,
@@ -23,12 +26,17 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.responses.main import DecodedResponseId
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     CompletionTokensDetailsWrapper,
     PromptTokensDetailsWrapper,
     SpecialEnums,
     Usage,
     text_tokens_without_nested_reasoning,
 )
+
+
+class _UsageExtraFields(ExtraItemsTypedDict, total=False, extra_items=object):
+    pass
 
 
 def _apply_nested_drop_params(params: dict[str, object], additional_drop_params: list[str] | None) -> dict[str, object]:
@@ -41,6 +49,17 @@ def _output_token_detail(details: object, field: str) -> int | None:
     return value if isinstance(value, int) else None
 
 
+def _cache_write_lifetimes(cache_write_tokens_details: object) -> CacheCreationTokenDetails | None:
+    """OpenAI Responses splits `cache_write_tokens` into `ttl_30m_tokens` and `ttl_12h_tokens`."""
+    ttl_30m_tokens: Final = _output_token_detail(cache_write_tokens_details, "ttl_30m_tokens")
+    ttl_12h_tokens: Final = _output_token_detail(cache_write_tokens_details, "ttl_12h_tokens")
+    if ttl_30m_tokens is None and ttl_12h_tokens is None:
+        return None
+    return CacheCreationTokenDetails(
+        ephemeral_30m_input_tokens=ttl_30m_tokens, ephemeral_12h_input_tokens=ttl_12h_tokens
+    )
+
+
 def _is_object_sequence(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: a list is a Sequence of anything
     return isinstance(value, list)
 
@@ -49,6 +68,28 @@ def _is_object_dict(
     value: object,
 ) -> TypeIs[dict[str, object]]:  # guard-ok: wire dicts have str keys  # mutable-ok: callers rewrite ids in place
     return isinstance(value, dict)
+
+
+def _prompt_tokens_details_wrapper(details: object) -> PromptTokensDetailsWrapper:
+    if _is_object_dict(details):
+        input_details: Final = InputTokensDetails.model_validate(details)
+        return PromptTokensDetailsWrapper(
+            **input_details.model_dump(exclude={"cache_write_tokens_details"}),
+            cache_creation_token_details=_cache_write_lifetimes(input_details.cache_write_tokens_details),
+        )
+    return PromptTokensDetailsWrapper(
+        cached_tokens=getattr(details, "cached_tokens", None),
+        audio_tokens=getattr(details, "audio_tokens", None),
+        text_tokens=getattr(details, "text_tokens", None),
+        image_tokens=getattr(details, "image_tokens", None),
+        cached_tokens_details=getattr(details, "cached_tokens_details", None),
+        video_tokens=getattr(details, "video_tokens", None),
+        cache_write_tokens=getattr(details, "cache_write_tokens", None),
+        cache_creation_token_details=_cache_write_lifetimes(getattr(details, "cache_write_tokens_details", None)),
+        cache_type=getattr(details, "cache_type", None),
+        web_search_requests=getattr(details, "web_search_requests", None),
+        google_maps_grounding_requests=getattr(details, "google_maps_grounding_requests", None),
+    )
 
 
 def normalize_responses_api_stream_options(
@@ -73,6 +114,26 @@ def _as_input_text_part(part: object) -> object:
 
 
 _RequestInputT: Final = TypeVar("_RequestInputT")
+
+
+def _provider_mapped_params(
+    config: BaseResponsesAPIConfig,
+    params: ResponsesAPIOptionalRequestParams,
+    model: str,
+    drop_params: bool,
+    declared_reasoning_efforts: Collection[str],
+) -> Mapping[str, object]:
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+
+    if (
+        declared_reasoning_efforts
+        and isinstance(config, OpenAIResponsesAPIConfig)
+        and type(config).map_openai_params is OpenAIResponsesAPIConfig.map_openai_params
+    ):
+        return config.map_openai_params_for_deployment(
+            params, model, drop_params, declared_reasoning_efforts=declared_reasoning_efforts
+        )
+    return config.map_openai_params(response_api_optional_params=params, model=model, drop_params=drop_params)
 
 
 class ResponsesAPIRequestUtils:
@@ -202,6 +263,7 @@ class ResponsesAPIRequestUtils:
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         allowed_openai_params: list[str] | None = None,
         drop_params: bool | None = None,
+        declared_reasoning_efforts: Collection[str] = (),
     ) -> dict:
         """
         Get optional parameters for the responses API.
@@ -234,10 +296,12 @@ class ResponsesAPIRequestUtils:
 
         # Map parameters to provider-specific format
         mapped_params: Final[dict[str, object]] = TypeAdapter(dict[str, object]).validate_python(
-            responses_api_provider_config.map_openai_params(
-                response_api_optional_params=response_api_optional_params,
-                model=model,
-                drop_params=should_drop_params,
+            _provider_mapped_params(
+                responses_api_provider_config,
+                response_api_optional_params,
+                model,
+                should_drop_params,
+                declared_reasoning_efforts,
             ),
             strict=True,
         )
@@ -1024,7 +1088,7 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def _update_container_ids_in_response(
-        responses_api_response: ResponsesAPIResponse | dict[str, Any],
+        responses_api_response: ResponsesAPIResponse | dict[str, object],
         custom_llm_provider: str | None,
         litellm_metadata: dict[str, Any] | None = None,
     ) -> ResponsesAPIResponse | dict[str, object]:
@@ -1038,15 +1102,16 @@ class ResponsesAPIRequestUtils:
         model_id: Final = model_info.get("id")
 
         # Get the output list
-        if isinstance(responses_api_response, dict):
-            output = responses_api_response.get("output", [])
-        else:
-            output = getattr(responses_api_response, "output", [])
+        output: Final = (
+            responses_api_response.get("output", [])
+            if isinstance(responses_api_response, dict)
+            else attribute_or_none(responses_api_response, "output")
+        )
 
         if not output:
             return responses_api_response
 
-        for item in output:
+        for item in iter_items(output):
             ResponsesAPIRequestUtils.encode_container_id_on_output_item(
                 item=item,
                 custom_llm_provider=custom_llm_provider,
@@ -1221,26 +1286,11 @@ class ResponseAPILoggingUtils:
             response_api_usage = usage_input
         prompt_tokens: Final[int] = response_api_usage.input_tokens or 0
         completion_tokens: Final[int] = response_api_usage.output_tokens or 0
-        prompt_tokens_details: PromptTokensDetailsWrapper | None = None
-        if response_api_usage.input_tokens_details:
-            if isinstance(response_api_usage.input_tokens_details, dict):
-                prompt_tokens_details = PromptTokensDetailsWrapper(**response_api_usage.input_tokens_details)
-            else:
-                prompt_tokens_details = PromptTokensDetailsWrapper(
-                    cached_tokens=getattr(response_api_usage.input_tokens_details, "cached_tokens", None),
-                    audio_tokens=getattr(response_api_usage.input_tokens_details, "audio_tokens", None),
-                    text_tokens=getattr(response_api_usage.input_tokens_details, "text_tokens", None),
-                    image_tokens=getattr(response_api_usage.input_tokens_details, "image_tokens", None),
-                    cached_tokens_details=getattr(
-                        response_api_usage.input_tokens_details, "cached_tokens_details", None
-                    ),
-                    video_tokens=getattr(response_api_usage.input_tokens_details, "video_tokens", None),
-                    cache_write_tokens=getattr(response_api_usage.input_tokens_details, "cache_write_tokens", None),
-                    web_search_requests=getattr(response_api_usage.input_tokens_details, "web_search_requests", None),
-                    google_maps_grounding_requests=getattr(
-                        response_api_usage.input_tokens_details, "google_maps_grounding_requests", None
-                    ),
-                )
+        prompt_tokens_details: Final = (
+            _prompt_tokens_details_wrapper(response_api_usage.input_tokens_details)
+            if response_api_usage.input_tokens_details
+            else None
+        )
         completion_tokens_details: CompletionTokensDetailsWrapper | None = None
         output_tokens_details: Final[OutputTokensDetails | None] = getattr(
             response_api_usage, "output_tokens_details", None
@@ -1264,20 +1314,22 @@ class ResponseAPILoggingUtils:
                 audio_tokens=audio_tokens,
             )
 
-        extra_usage_fields: Final = {
-            key: value
-            for key, value in (response_api_usage.model_extra or {}).items()
-            if key
-            not in (
-                "input_token_details",
-                "output_token_details",
-                "prompt_tokens",
-                "completion_tokens",
-                "total_tokens",
-                "prompt_tokens_details",
-                "completion_tokens_details",
-            )
-        }
+        extra_usage_fields: Final = _UsageExtraFields(
+            **{
+                key: value
+                for key, value in (as_str_mapping(response_api_usage.model_extra) or {}).items()
+                if key
+                not in (
+                    "input_token_details",
+                    "output_token_details",
+                    "prompt_tokens",
+                    "completion_tokens",
+                    "total_tokens",
+                    "prompt_tokens_details",
+                    "completion_tokens_details",
+                )
+            }
+        )
         chat_usage: Final = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -1294,3 +1346,19 @@ class ResponseAPILoggingUtils:
         return chat_usage
 
     _transform_response_api_usage_to_chat_usage = transform_response_api_usage_to_chat_usage
+
+
+def auto_reasoning_summary(model: str, custom_llm_provider: object) -> ReasoningSummaryLevel:
+    """The summary level the auto summary injects for a target, read from its Responses API config."""
+    from litellm.utils import ProviderConfigManager
+
+    try:
+        provider: Final = (
+            custom_llm_provider if isinstance(custom_llm_provider, str) else litellm.get_llm_provider(model=model)[1]
+        )
+    except litellm.exceptions.BadRequestError:
+        return "detailed"
+    responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(
+        provider, model.removeprefix(f"{provider}/")
+    )
+    return "detailed" if responses_config is None else responses_config.auto_reasoning_summary()

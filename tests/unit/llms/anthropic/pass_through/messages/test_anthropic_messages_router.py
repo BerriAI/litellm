@@ -11,6 +11,7 @@ from zlib import crc32
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -617,3 +618,248 @@ async def test_tool_search_forwards_deferred_tools_and_beta_header(
     assert [block for block in response["content"] if block["type"] == "tool_use"] == [
         {"type": "tool_use", "id": "toolu_1", "name": tool_name, "input": tool_input}
     ]
+
+
+async def _native_output_config_sent(
+    respx_mock: respx.MockRouter, effort: str, model_info: Mapping[str, object] | None, **params: object
+) -> object:
+    route: Final = respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
+        return_value=httpx.Response(200, json=_anthropic_body("claude-sonnet-4-6"))
+    )
+    deployment: Final = {
+        "model_name": _ALIAS,
+        "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "fake-key"},
+        **({"model_info": model_info} if model_info is not None else {}),
+    }
+    await Router(model_list=[deployment]).aanthropic_messages(
+        messages=[{"role": "user", "content": _PROMPT}],
+        model=_ALIAS,
+        max_tokens=100,
+        thinking={"type": "adaptive"},
+        output_config={"effort": effort},
+        **params,
+    )
+    return json.loads(route.calls.last.request.read()).get("output_config")
+
+
+@pytest.mark.asyncio
+async def test_native_messages_round_output_config_effort_onto_the_deployment_declaration(
+    respx_mock: respx.MockRouter,
+) -> None:
+    declared: Final = {"reasoning_effort_levels": ["low", "high"]}
+
+    assert await _native_output_config_sent(respx_mock, "medium", declared) == {"effort": "high"}
+    assert await _native_output_config_sent(respx_mock, "medium", None) == {"effort": "medium"}
+
+
+@pytest.mark.asyncio
+async def test_native_messages_drop_an_undeclared_effort_under_drop_params(respx_mock: respx.MockRouter) -> None:
+    declared: Final = {"reasoning_effort_levels": ["low", "high"]}
+
+    assert await _native_output_config_sent(respx_mock, "turbo", declared, drop_params=True) is None
+    assert await _native_output_config_sent(respx_mock, "turbo", declared) == {"effort": "turbo"}
+
+
+_DECLARING_LOW_AND_HIGH: Final = {"reasoning_effort_levels": ["low", "high"]}
+
+
+async def _native_opus_body_sent(
+    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, **params: object
+) -> Mapping[str, object]:
+    route: Final = respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
+        return_value=httpx.Response(200, json=_anthropic_body("claude-opus-5-5"))
+    )
+    deployment: Final = {
+        "model_name": _ALIAS,
+        "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "fake-key"},
+        **({"model_info": model_info} if model_info is not None else {}),
+    }
+    await Router(model_list=[deployment]).aanthropic_messages(
+        messages=[{"role": "user", "content": _PROMPT}], model=_ALIAS, max_tokens=4096, **params
+    )
+    return json.loads(route.calls.last.request.read())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_info, expected_effort", [(_DECLARING_LOW_AND_HIGH, "high"), (None, "medium")])
+async def test_native_messages_round_a_thinking_budget_on_an_adaptive_claude_deployment(
+    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, expected_effort: str
+) -> None:
+    sent: Final = await _native_opus_body_sent(
+        respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": 2048, "display": "summarized"}
+    )
+
+    assert sent["output_config"] == {"effort": expected_effort}
+    assert sent["thinking"] == {"type": "adaptive", "display": "summarized"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dropped_effort", ["turbo", "none"])
+async def test_native_messages_drop_params_leave_the_thinking_budget_to_set_the_effort_beside_a_dropped_level(
+    respx_mock: respx.MockRouter, dropped_effort: str
+) -> None:
+    budget: Final = {"type": "enabled", "budget_tokens": 2048}
+
+    dropped: Final = await _native_opus_body_sent(
+        respx_mock,
+        _DECLARING_LOW_AND_HIGH,
+        thinking=budget,
+        output_config={"effort": dropped_effort, "format": {"type": "json_schema", "schema": {"type": "object"}}},
+        drop_params=True,
+    )
+    budget_alone: Final = await _native_opus_body_sent(
+        respx_mock,
+        _DECLARING_LOW_AND_HIGH,
+        thinking=budget,
+        output_config={"format": {"type": "json_schema", "schema": {"type": "object"}}},
+        drop_params=True,
+    )
+
+    assert budget_alone["output_config"] == {
+        "effort": "high",
+        "format": {"type": "json_schema", "schema": {"type": "object"}},
+    }
+    assert dropped == budget_alone
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("declared", [["none"], []])
+async def test_native_messages_drop_params_drop_a_budget_effort_the_deployment_does_not_declare(
+    respx_mock: respx.MockRouter, declared: list[str]
+) -> None:
+    model_info: Final = {"reasoning_effort_levels": declared}
+
+    sent: Final = await _native_opus_body_sent(
+        respx_mock,
+        model_info,
+        thinking={"type": "enabled", "budget_tokens": 2048, "display": "summarized"},
+        drop_params=True,
+    )
+
+    assert "output_config" not in sent
+    assert sent["thinking"] == {"type": "adaptive", "display": "summarized"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", [False, True])
+async def test_native_messages_send_no_effort_for_a_default_effort_beside_a_thinking_budget(
+    respx_mock: respx.MockRouter, drop_params: bool
+) -> None:
+    sent: Final = await _native_opus_body_sent(
+        respx_mock,
+        _DECLARING_LOW_AND_HIGH,
+        thinking={"type": "enabled", "budget_tokens": 2048},
+        output_config={"effort": "default"},
+        drop_params=drop_params,
+    )
+
+    assert "output_config" not in sent
+    assert sent["thinking"] == {"type": "adaptive"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_info", [None, _DECLARING_LOW_AND_HIGH])
+@pytest.mark.parametrize("drop_globally", [False, True])
+async def test_native_messages_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model_info: Mapping[str, object] | None,
+    drop_globally: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_globally)
+    request_drop: Final = {} if drop_globally else {"drop_params": True}
+
+    dropped: Final = await _native_opus_body_sent(
+        respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": "lots"}, **request_drop
+    )
+    adaptive_alone: Final = await _native_opus_body_sent(
+        respx_mock, model_info, thinking={"type": "adaptive"}, **request_drop
+    )
+
+    assert "output_config" not in adaptive_alone
+    assert dropped == adaptive_alone
+
+
+_MIXED_GROUP: Final = "gpt-5.6-mixed"
+_MIXED_AZURE_API_BASE: Final = "https://mixed-group.openai.azure.com"
+_MIXED_AZURE_CHAT_URL: Final = r".*mixed-group\.openai\.azure\.com/openai/deployments/.*/chat/completions.*"
+_MIXED_DEPLOYMENT_IDS: Final = ("mixed-openai-responses-bridge", "mixed-azure-chat-bridge")
+_MIXED_AZURE_CHAT_BODY: Final = {
+    "id": "chatcmpl-mixed",
+    "object": "chat.completion",
+    "created": 1700000000,
+    "model": "gpt-5.6",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": _JOKE}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+}
+
+
+def _mixed_openai_azure_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": _MIXED_GROUP,
+                "litellm_params": {"model": "openai/gpt-5.6", "api_key": "fake-key"},
+                "model_info": {"id": _MIXED_DEPLOYMENT_IDS[0]},
+            },
+            {
+                "model_name": _MIXED_GROUP,
+                "litellm_params": {"model": "azure/gpt-5.6", "api_key": "fake-key", "api_base": _MIXED_AZURE_API_BASE},
+                "model_info": {"id": _MIXED_DEPLOYMENT_IDS[1]},
+            },
+        ],
+        num_retries=0,
+    )
+
+
+async def _null_tool_result_text_rejection(router: Router, deployment_id: str) -> litellm.BadRequestError:
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        await router.aanthropic_messages(
+            model=deployment_id,
+            max_tokens=64,
+            messages=[
+                {"role": "user", "content": "run the build"},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "toolu_build", "name": "bash", "input": {"cmd": "make"}}],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_build",
+                            "content": [{"type": "text", "text": "build ok"}, {"type": "text", "text": None}],
+                        }
+                    ],
+                },
+            ],
+        )
+    return rejected.value
+
+
+@pytest.mark.asyncio
+async def test_mixed_openai_azure_group_answers_the_same_400_for_a_null_tool_result_text_on_either_deployment(
+    respx_mock,
+):
+    openai_route: Final = respx_mock.post(url__regex=_OPENAI_RESPONSES_URL).mock(
+        return_value=httpx.Response(200, json=_OPENAI_BODY)
+    )
+    azure_route: Final = respx_mock.post(url__regex=_MIXED_AZURE_CHAT_URL).mock(
+        return_value=httpx.Response(200, json=_MIXED_AZURE_CHAT_BODY)
+    )
+    router: Final = _mixed_openai_azure_router()
+
+    rejections: Final = [
+        await _null_tool_result_text_rejection(router, deployment_id) for deployment_id in _MIXED_DEPLOYMENT_IDS
+    ]
+
+    assert [(rejection.status_code, rejection.llm_provider) for rejection in rejections] == [
+        (400, "openai"),
+        (400, "azure"),
+    ]
+    assert {rejection.message.partition("\n\n")[0] for rejection in rejections} == {
+        "litellm.BadRequestError: tool_result toolu_build content.1.text: Input should be a valid string"
+    }
+    assert openai_route.call_count == 0
+    assert azure_route.call_count == 0
