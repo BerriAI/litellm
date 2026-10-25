@@ -104,7 +104,7 @@ class ChatGPTToolCallNormalizer:
                 continue
             else:
                 # Continuation delta (id=None) — use its source index when unambiguous
-                normalized_index: Final = self._source_index_to_output_index.get(tc.index)
+                normalized_index = self._source_index_to_output_index.get(tc.index)
                 if normalized_index is not None:
                     tc.index = normalized_index
                 elif self._last_id:
