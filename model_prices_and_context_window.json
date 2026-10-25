@@ -10730,7 +10730,7 @@
     "azure/gpt-image-1": {
         "cache_read_input_image_token_cost": 2.5e-06,
         "cache_read_input_token_cost": 1.25e-06,
-        "deprecation_date": "2026-10-23",
+        "deprecation_date": "2026-10-28",
         "input_cost_per_image_token": 1e-05,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure",
@@ -10764,91 +10764,100 @@
         "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     "azure/high/1024-x-1024/gpt-image-1": {
-        "deprecation_date": "2026-10-23",
+        "deprecation_date": "2026-10-28",
         "input_cost_per_pixel": 1.59263611e-07,
         "litellm_provider": "azure",
         "mode": "image_generation",
         "output_cost_per_pixel": 0.0,
+        "source": "https://learn.microsoft.com/en-us/rest/api/aiservices/accountmanagement/models/list",
         "supported_endpoints": [
             "/v1/images/generations"
         ]
     },
     "azure/high/1024-x-1536/gpt-image-1": {
-        "deprecation_date": "2026-10-23",
+        "deprecation_date": "2026-10-28",
         "input_cost_per_pixel": 1.58945719e-07,
         "litellm_provider": "azure",
         "mode": "image_generation",
         "output_cost_per_pixel": 0.0,
+        "source": "https://learn.microsoft.com/en-us/rest/api/aiservices/accountmanagement/models/list",
         "supported_endpoints": [
             "/v1/images/generations"
         ]
     },
     "azure/high/1536-x-1024/gpt-image-1": {
-        "deprecation_date": "2026-10-23",
+        "deprecation_date": "2026-10-28",
         "input_cost_per_pixel": 1.58945719e-07,
         "litellm_provider": "azure",
         "mode": "image_generation",
         "output_cost_per_pixel": 0.0,
+        "source": "https://learn.microsoft.com/en-us/rest/api/aiservices/accountmanagement/models/list",
         "supported_endpoints": [
             "/v1/images/generations"
         ]
     },
     "azure/low/1024-x-1024/gpt-image-1": {
-        "deprecation_date": "2026-10-23",
+        "deprecation_date": "2026-10-28",
         "input_cost_per_pixel": 1.0490417e-08,
         "litellm_provider": "azure",
         "mode": "image_generation",
         "output_cost_per_pixel": 0.0,
+        "source": "https://learn.microsoft.com/en-us/rest/api/aiservices/accountmanagement/models/list",
         "supported_endpoints": [
             "/v1/images/generations"
         ]
     },
     "azure/low/1024-x-1536/gpt-image-1": {
-        "deprecation_date": "2026-10-23",
+        "deprecation_date": "2026-10-28",
         "input_cost_per_pixel": 1.0172526e-08,
         "litellm_provider": "azure",
         "mode": "image_generation",
         "output_cost_per_pixel": 0.0,
+        "source": "https://learn.microsoft.com/en-us/rest/api/aiservices/accountmanagement/models/list",
         "supported_endpoints": [
             "/v1/images/generations"
         ]
     },
     "azure/low/1536-x-1024/gpt-image-1": {
-        "deprecation_date": "2026-10-23",
+        "deprecation_date": "2026-10-28",
         "input_cost_per_pixel": 1.0172526e-08,
         "litellm_provider": "azure",
         "mode": "image_generation",
         "output_cost_per_pixel": 0.0,
+        "source": "https://learn.microsoft.com/en-us/rest/api/aiservices/accountmanagement/models/list",
         "supported_endpoints": [
             "/v1/images/generations"
         ]
     },
     "azure/medium/1024-x-1024/gpt-image-1": {
-        "deprecation_date": "2026-10-23",
+        "deprecation_date": "2026-10-28",
         "input_cost_per_pixel": 4.0054321e-08,
         "litellm_provider": "azure",
         "mode": "image_generation",
         "output_cost_per_pixel": 0.0,
+        "source": "https://learn.microsoft.com/en-us/rest/api/aiservices/accountmanagement/models/list",
         "supported_endpoints": [
             "/v1/images/generations"
         ]
     },
     "azure/medium/1024-x-1536/gpt-image-1": {
-        "deprecation_date": "2026-10-23",
+        "deprecation_date": "2026-10-28",
         "input_cost_per_pixel": 4.0054321e-08,
         "litellm_provider": "azure",
         "mode": "image_generation",
         "output_cost_per_pixel": 0.0,
+        "source": "https://learn.microsoft.com/en-us/rest/api/aiservices/accountmanagement/models/list",
         "supported_endpoints": [
             "/v1/images/generations"
         ]
     },
     "azure/medium/1536-x-1024/gpt-image-1": {
-        "deprecation_date": "2026-10-23",
+        "deprecation_date": "2026-10-28",
         "input_cost_per_pixel": 4.0054321e-08,
         "litellm_provider": "azure",
         "mode": "image_generation",
         "output_cost_per_pixel": 0.0,
+        "source": "https://learn.microsoft.com/en-us/rest/api/aiservices/accountmanagement/models/list",
         "supported_endpoints": [
             "/v1/images/generations"
         ]
@@ -71241,7 +71250,7 @@
         "cache_creation_input_audio_token_cost": 4e-07,
         "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
-        "deprecation_date": "2026-10-31",
+        "deprecation_date": "2027-01-20",
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_image_token": 5e-06,
         "input_cost_per_token": 4e-06,
@@ -75439,7 +75448,7 @@
         "supports_vision": true
     },
     "azure/whisper": {
-        "deprecation_date": "2026-12-15",
+        "deprecation_date": "2027-02-26",
         "input_cost_per_second": 0.0001,
         "litellm_provider": "azure",
         "mode": "audio_transcription",
