@@ -1366,13 +1366,9 @@ class CustomStreamWrapper:
                     raise StopIteration
             anthropic_response_obj: Final[GChunk] = cast(GChunk, chunk)
             completion_obj["content"] = anthropic_response_obj["text"]
-            if (
-                "reasoning_content" in anthropic_response_obj
-                and anthropic_response_obj["reasoning_content"] is not None
-            ):
-                completion_obj["reasoning_content"] = anthropic_response_obj[  # rebind-ok: forwards reasoning
-                    "reasoning_content"
-                ]
+            reasoning_chunk: Final = anthropic_response_obj.get("reasoning_content")
+            if reasoning_chunk is not None:
+                completion_obj["reasoning_content"] = reasoning_chunk  # rebind-ok: forwards reasoning
             if anthropic_response_obj["is_finished"]:
                 self.received_finish_reason = anthropic_response_obj["finish_reason"]
 
@@ -1386,10 +1382,12 @@ class CustomStreamWrapper:
                     litellm.Usage(**anthropic_response_obj["usage"]),
                 )
 
-            if "tool_calls" in anthropic_response_obj and anthropic_response_obj["tool_calls"] is not None:
-                completion_obj["tool_calls"] = anthropic_response_obj["tool_calls"]  # rebind-ok: forwards tool calls
-            elif "tool_use" in anthropic_response_obj and anthropic_response_obj["tool_use"] is not None:
-                completion_obj["tool_calls"] = [anthropic_response_obj["tool_use"]]  # rebind-ok: forwards tool calls
+            tool_calls_chunk: Final = anthropic_response_obj.get("tool_calls")
+            legacy_tool_chunk: Final = anthropic_response_obj.get("tool_use")
+            if tool_calls_chunk is not None:
+                completion_obj["tool_calls"] = tool_calls_chunk  # rebind-ok: forwards tool calls
+            elif legacy_tool_chunk is not None:
+                completion_obj["tool_calls"] = [legacy_tool_chunk]  # rebind-ok: forwards tool calls
 
             if (
                 "provider_specific_fields" in anthropic_response_obj
@@ -2798,9 +2796,8 @@ def convert_generic_chunk_to_model_response_stream(
     from litellm.types.utils import Delta
 
     raw_tool_calls: Final = chunk.get("tool_calls", None)
-    tool_calls: Final = (
-        [chunk["tool_use"]] if raw_tool_calls is None and chunk.get("tool_use") is not None else raw_tool_calls
-    )
+    legacy_tool_use: Final = chunk.get("tool_use", None)
+    tool_calls: Final = [legacy_tool_use] if raw_tool_calls is None and legacy_tool_use is not None else raw_tool_calls
 
     raw_content: Final = chunk["text"]
     content: Final = (

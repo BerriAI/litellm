@@ -54,8 +54,8 @@ class ModelResponseIterator:
             tool_calls_list: list[ChatCompletionToolCallChunk] = []  # mutable-ok: accumulates delta calls
             if choice_delta.tool_calls is not None:
                 for tc in choice_delta.tool_calls:
-                    tc_fn: Final = getattr(tc, "function", None)
-                    fn_chunk: Final = (
+                    tc_fn = getattr(tc, "function", None)
+                    fn_chunk = (
                         ChatCompletionToolCallFunctionChunk(
                             name=getattr(tc_fn, "name", None),
                             arguments=getattr(tc_fn, "arguments", "") or "",
@@ -63,7 +63,7 @@ class ModelResponseIterator:
                         if tc_fn is not None
                         else ChatCompletionToolCallFunctionChunk(name=None, arguments="")
                     )
-                    call_chunk: Final = ChatCompletionToolCallChunk(
+                    call_chunk = ChatCompletionToolCallChunk(
                         id=getattr(tc, "id", None),
                         type="function",
                         function=fn_chunk,
