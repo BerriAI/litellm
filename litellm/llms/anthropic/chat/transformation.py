@@ -1976,14 +1976,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     custom_llm_provider=self._resolved_provider,
                     llm_provider=self._resolved_provider,
                 )
-                if mapped_thinking is None:
+                if mapped_thinking is None or mapped_thinking.get("type") == "disabled":
                     optional_params.pop("thinking", None)
                     optional_params.pop("output_config", None)
-                else:
+                if mapped_thinking is not None:
                     optional_params["thinking"] = mapped_thinking
-                    if mapped_thinking["type"] == "disabled":
-                        optional_params.pop("output_config", None)
-                    elif mapped_thinking["type"] == "adaptive":
+                    if mapped_thinking.get("type") == "adaptive":
                         mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(effort_value)
                         if mapped_effort is None:
                             AnthropicConfig._raise_invalid_reasoning_effort(

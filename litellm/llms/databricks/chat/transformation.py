@@ -494,14 +494,12 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 llm_provider="databricks",
                 drop_params=drop_params,
             )
-            if mapped_thinking is None:
+            if mapped_thinking is None or mapped_thinking.get("type") == "disabled":
                 optional_params.pop("thinking", None)
                 optional_params.pop("output_config", None)
-            else:
+            if mapped_thinking is not None:
                 optional_params["thinking"] = mapped_thinking
-                if mapped_thinking["type"] == "disabled":
-                    optional_params.pop("output_config", None)
-                elif mapped_thinking["type"] == "adaptive":
+                if mapped_thinking.get("type") == "adaptive":
                     mapped_effort: str | None = None
                     if isinstance(reasoning_effort_value, str):
                         mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort_value)

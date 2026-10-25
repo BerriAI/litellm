@@ -443,19 +443,16 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         except _BadRequestError as e:
             raise AnthropicError(message=str(e.message), status_code=400)
 
-        if mapped_thinking is None:
+        if mapped_thinking is None or reasoning_effort == "none":
             optional_params.pop("thinking", None)
             optional_params.pop("output_config", None)
+            if mapped_thinking is not None:
+                optional_params["thinking"] = mapped_thinking  # rebind-ok: request out-param
             return
 
         fitted_thinking: Final = AnthropicConfig.cap_thinking_budget_to_max_tokens(mapped_thinking, max_tokens)
         if fitted_thinking is None:
             verbose_logger.warning(DROP_UNFITTING_REASONING_EFFORT_WARNING, reasoning_effort, model, max_tokens)
-            return
-
-        if reasoning_effort == "none":
-            optional_params["thinking"] = fitted_thinking  # rebind-ok: normalize the caller's request params in place
-            optional_params.pop("output_config", None)
             return
 
         optional_params.setdefault("thinking", fitted_thinking)
