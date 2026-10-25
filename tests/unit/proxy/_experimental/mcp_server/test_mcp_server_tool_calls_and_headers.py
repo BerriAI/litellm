@@ -8527,13 +8527,13 @@ async def test_exact_call_lists_and_guards_a_fresh_unscanned_catalog(monkeypatch
         )
 
         async def list_and_guard(
-            _manager=manager,
-            _server=server,
-            _poisoned=poisoned,
-            _proxy_logging=proxy_logging,
-            _auth=auth,
-            **_kwargs,  # kwargs-ok: mirrors the catalog loader's dynamic keyword boundary
-        ):
+            _manager: MCPServerManager = manager,
+            _server: MCPServer = server,
+            _poisoned: MCPTool = poisoned,
+            _proxy_logging: ProxyLogging = proxy_logging,
+            _auth: UserAPIKeyAuth = auth,
+            **_kwargs: object,  # kwargs-ok: mirrors the catalog loader's dynamic keyword boundary
+        ) -> None:
             await _manager._guard_tool_catalog(
                 server=_server,
                 tools=[_poisoned],
@@ -8544,13 +8544,13 @@ async def test_exact_call_lists_and_guards_a_fresh_unscanned_catalog(monkeypatch
             )
 
         async def invoke(
-            _route=route,
-            _server=server,
-            _auth=auth,
-            _poisoned=poisoned,
-        ):
+            _route: Literal["direct", "virtual"] = route,
+            _server: MCPServer = server,
+            _auth: UserAPIKeyAuth = auth,
+            _poisoned: MCPTool = poisoned,
+        ) -> None:
             if _route == "direct":
-                return await mcp_operations.execute_mcp_tool(
+                await mcp_operations.execute_mcp_tool(
                     name=_poisoned.name,
                     arguments={},
                     allowed_mcp_servers=[_server],
@@ -8558,13 +8558,14 @@ async def test_exact_call_lists_and_guards_a_fresh_unscanned_catalog(monkeypatch
                     requested_server_id=_server.server_id,
                     user_api_key_auth=_auth,
                 )
-            return await mcp_operations._dispatch_virtual_mcp_tool(
-                name="mcp_tool_call",
-                arguments={"tool_name": _poisoned.name, "arguments": {}},
-                user_api_key_auth=_auth,
-                client_ip=None,
-                mcp_servers=[_server.server_id],
-            )
+            else:
+                await mcp_operations._dispatch_virtual_mcp_tool(
+                    name="mcp_tool_call",
+                    arguments={"tool_name": _poisoned.name, "arguments": {}},
+                    user_api_key_auth=_auth,
+                    client_ip=None,
+                    mcp_servers=[_server.server_id],
+                )
 
         monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
         monkeypatch.setattr(manager_module, "global_mcp_server_manager", manager)
@@ -8584,11 +8585,14 @@ async def test_exact_call_lists_and_guards_a_fresh_unscanned_catalog(monkeypatch
                 await invoke()
 
             upstream.assert_not_awaited()
-            assert manager.get_guardrail_tool(
-                server,
-                poisoned.name,
-                ListedToolsCaller(user_api_key_auth=auth),
-            ) == poisoned
+            assert (
+                manager.get_guardrail_tool(
+                    server,
+                    poisoned.name,
+                    ListedToolsCaller(user_api_key_auth=auth),
+                )
+                == poisoned
+            )
 
 
 @pytest.mark.asyncio
