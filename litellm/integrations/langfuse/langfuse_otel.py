@@ -206,7 +206,7 @@ class LangfuseOtelLogger(OpenTelemetry):
 
         output: Final = response_obj.get("output", [])
         if output:
-            output_items_data: Final[list[dict]] = []
+            output_items_data: Final[list[Mapping[str, object]]] = []
             for item in output:
                 if hasattr(item, "type"):
                     item_type = item.type
