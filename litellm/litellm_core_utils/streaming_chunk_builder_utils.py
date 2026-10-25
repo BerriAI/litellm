@@ -1413,8 +1413,6 @@ def _set_stream_builder_response_cost(
 def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
     if logging_obj is None:
         return
-    if isinstance(getattr(usage, "cost", None), (int, float)):
-        return
     computed_cost: Final = logging_obj.response_cost_calculator(result=response)
     if not isinstance(computed_cost, (int, float)) or computed_cost <= 0:
         return
