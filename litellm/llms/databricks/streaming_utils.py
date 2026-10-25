@@ -33,6 +33,8 @@ class ModelResponseIterator:
 
             text = ""
             tool_use: ChatCompletionToolCallChunk | None = None
+            tool_calls: list[ChatCompletionToolCallChunk] | None = None
+            reasoning_content: str | None = None
             is_finished = False
             finish_reason = ""
             usage: ChatCompletionUsageBlock | None = None
@@ -54,21 +56,34 @@ class ModelResponseIterator:
             if processed_chunk.choices[0].delta.content is not None:
                 text = processed_chunk.choices[0].delta.content
 
+            delta_reasoning: Final[str | None] = getattr(processed_chunk.choices[0].delta, "reasoning_content", None)
+            if delta_reasoning is not None:
+                reasoning_content = delta_reasoning
+
             if (
                 processed_chunk.choices[0].delta.tool_calls is not None
                 and len(processed_chunk.choices[0].delta.tool_calls) > 0
-                and processed_chunk.choices[0].delta.tool_calls[0].function is not None
-                and processed_chunk.choices[0].delta.tool_calls[0].function.arguments is not None
             ):
-                tool_use = ChatCompletionToolCallChunk(
-                    id=processed_chunk.choices[0].delta.tool_calls[0].id,
-                    type="function",
-                    function=ChatCompletionToolCallFunctionChunk(
-                        name=processed_chunk.choices[0].delta.tool_calls[0].function.name,
-                        arguments=processed_chunk.choices[0].delta.tool_calls[0].function.arguments,
-                    ),
-                    index=processed_chunk.choices[0].delta.tool_calls[0].index,
-                )
+                tool_calls = []
+                for tc in processed_chunk.choices[0].delta.tool_calls:
+                    tc_fn = getattr(tc, "function", None)
+                    fn_chunk = (
+                        ChatCompletionToolCallFunctionChunk(
+                            name=getattr(tc_fn, "name", None),
+                            arguments=getattr(tc_fn, "arguments", "") or "",
+                        )
+                        if tc_fn is not None
+                        else ChatCompletionToolCallFunctionChunk(name=None, arguments="")
+                    )
+                    call_chunk = ChatCompletionToolCallChunk(
+                        id=getattr(tc, "id", None),
+                        type="function",
+                        function=fn_chunk,
+                        index=getattr(tc, "index", 0) if getattr(tc, "index", None) is not None else 0,
+                    )
+                    tool_calls.append(call_chunk)
+                if tool_calls:
+                    tool_use = tool_calls[0]
 
             if processed_chunk.choices[0].finish_reason is not None:
                 is_finished = True
@@ -78,7 +93,7 @@ class ModelResponseIterator:
             if usage_chunk is not None:
                 usage = _usage_block(usage_chunk)
 
-            return GenericStreamingChunk(
+            generic_chunk: Final[GenericStreamingChunk] = GenericStreamingChunk(
                 text=text,
                 tool_use=tool_use,
                 is_finished=is_finished,
@@ -86,6 +101,12 @@ class ModelResponseIterator:
                 usage=usage,
                 index=0,
             )
+            if reasoning_content is not None:
+                generic_chunk["reasoning_content"] = reasoning_content
+            if tool_calls is not None:
+                generic_chunk["tool_calls"] = tool_calls
+
+            return generic_chunk
         except json.JSONDecodeError:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
 
