@@ -151,9 +151,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         json_mode: bool | None = None,
     ) -> ModelResponse:
         resolved_custom_llm_provider = (
-            litellm_params.get("custom_llm_provider")
-            if isinstance(litellm_params, dict)
-            else None
+            litellm_params.get("custom_llm_provider") if isinstance(litellm_params, dict) else None
         ) or (
             getattr(model_response, "_hidden_params", {}).get("custom_llm_provider")
             if hasattr(model_response, "_hidden_params") and isinstance(getattr(model_response, "_hidden_params"), dict)

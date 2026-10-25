@@ -1659,9 +1659,7 @@ def completion_cost(
         )
         requested_model: Final = model
         request_pricing_provider: Final = (
-            custom_llm_provider
-            if isinstance(custom_llm_provider, str)
-            else _get_provider_for_cost_calc(model)
+            custom_llm_provider if isinstance(custom_llm_provider, str) else _get_provider_for_cost_calc(model)
         )
         raw_candidates: Final = (
             (
@@ -1686,9 +1684,7 @@ def completion_cost(
 
         for idx, (model, candidate_pricing_provider) in enumerate(potential_model_names):
             try:
-                candidate_custom_llm_provider: str | None = (
-                    candidate_pricing_provider or request_pricing_provider
-                )
+                candidate_custom_llm_provider: str | None = candidate_pricing_provider or request_pricing_provider
                 if verbose_logger.isEnabledFor(logging.DEBUG):
                     verbose_logger.debug("selected model name for cost calculation: %s", model)
 

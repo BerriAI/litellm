@@ -122,4 +122,3 @@ def test_groq_openai_aliased_completion_cost():
     )
     c_raw = litellm.completion_cost(completion_response=raw_resp, model="groq/openai/gpt-oss-120b")
     assert c_raw == pytest.approx(2.295e-05)
-
