@@ -15,7 +15,11 @@ if sys.version_info < (3, 11):
     from exceptiongroup import ExceptionGroup
 
 
-from litellm.proxy._experimental.mcp_server.exceptions import MCPServerListError, MCPUpstreamAuthError
+from litellm.proxy._experimental.mcp_server.exceptions import (
+    TOKEN_EXCHANGE_SUBJECT_ERROR,
+    MCPServerListError,
+    MCPUpstreamAuthError,
+)
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _extract_upstream_auth_failure,
@@ -216,15 +220,23 @@ async def test_fetch_tools_from_passthrough_returns_tools_on_success():
     assert tools == [tool]
 
 
-def test_to_http_exception_preserves_upstream_www_authenticate():
+@pytest.mark.parametrize("status_code", [401, 403])
+@pytest.mark.parametrize("public_detail", [None, TOKEN_EXCHANGE_SUBJECT_ERROR, "private failure", {"secret": "private"}])
+def test_to_http_exception_preserves_upstream_www_authenticate(public_detail: object, status_code: int):
     err = MCPUpstreamAuthError(
-        status_code=401,
+        status_code=status_code,
         www_authenticate='Bearer resource_metadata="https://upstream/.well-known/oauth-protected-resource"',
         server_name="sample_docs",
+        public_detail=public_detail,
     )
 
     http_exc = err.to_http_exception()
-    assert http_exc.status_code == 401
+    assert http_exc.status_code == status_code
+    assert http_exc.detail == (
+        TOKEN_EXCHANGE_SUBJECT_ERROR
+        if public_detail == TOKEN_EXCHANGE_SUBJECT_ERROR
+        else "Forbidden" if status_code == 403 else "Unauthorized"
+    )
     assert http_exc.headers == {
         "www-authenticate": 'Bearer resource_metadata="https://upstream/.well-known/oauth-protected-resource"'
     }

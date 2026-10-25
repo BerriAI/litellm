@@ -13,7 +13,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import JSON_OBJECT, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
-from integration.cost_calculation.cost_tracking_case import CostTrackingTestCase, StoredResponse
+from integration.cost_calculation.cost_tracking_case import ALIAS_MARKER, CostTrackingTestCase, StoredResponse
 from pydantic import BaseModel, ConfigDict
 
 
@@ -289,7 +289,10 @@ def register_scenario_deployment(
         case.response if response is None else response,
     )
     scenario.cleanups.callback(delete_scenario, handle)
-    registered_model_name: Final = f"cost-{marker}{marker_suffix}-{run_marker}"
+    unique_marker: Final = f"{marker}{marker_suffix}-{run_marker}"
+    registered_model_name: Final = (
+        case.alias.replace(ALIAS_MARKER, unique_marker) if case.alias is not None else f"cost-{unique_marker}"
+    )
     parameters: Final = {
         "model": case.litellm_model,
         "api_key": case.api_key,
@@ -330,7 +333,14 @@ def register_scenario_deployment(
             {
                 "model_name": registered_model_name,
                 "litellm_params": parameters,
-                "model_info": ({"base_model": case.base_model} if case.base_model is not None else {}),
+                "model_info": {
+                    **({"base_model": case.base_model} if case.base_model is not None else {}),
+                    **(
+                        {"off_peak_pricing": case.deployment.off_peak_pricing.model_dump()}
+                        if case.deployment is not None and case.deployment.off_peak_pricing is not None
+                        else {}
+                    ),
+                },
             }
         ),
     )

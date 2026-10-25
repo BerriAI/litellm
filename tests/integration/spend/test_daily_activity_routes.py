@@ -37,6 +37,8 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 
 def _delete_organization(gateway: Gateway, organization_id: str) -> None:
     response: Final = gateway.request("DELETE", "/organization/delete", {"organization_ids": [organization_id]})
@@ -390,6 +392,7 @@ def _daily_tag_metrics(
     return {
         "spend": spend,
         "flat_cost": 0.0,
+        "ptu_hours": 0.0,
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "cache_read_input_tokens": 0,

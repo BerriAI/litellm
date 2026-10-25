@@ -13,7 +13,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.policy_validator import PolicyValidator
-from litellm.types.proxy.policy_engine import PolicyValidationResponse
+from litellm.types.proxy.policy_engine import Policy, PolicyValidationResponse, ResolvedPolicy
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -235,29 +235,15 @@ def get_policies_summary() -> dict[str, object]:
 
     resolved: Final = PolicyResolver.get_all_resolved_policies()
 
-    summary: Final[dict[str, Any]] = {
+    return {
         "initialized": True,
         "policy_count": len(resolved),
         "attachment_count": len(attachment_registry.get_all_attachments()),
-        "policies": {},
-        "attachments": [],
-    }
-
-    for policy_name, resolved_policy in resolved.items():
-        policy = policy_registry.get_policy(policy_name)
-        summary["policies"][policy_name] = {
-            "inherit": policy.inherit if policy else None,
-            "description": policy.description if policy else None,
-            "guardrails_add": policy.guardrails.get_add() if policy else [],
-            "guardrails_remove": policy.guardrails.get_remove() if policy else [],
-            "condition": (policy.condition.model_dump() if policy and policy.condition else None),
-            "resolved_guardrails": resolved_policy.guardrails,
-            "inheritance_chain": resolved_policy.inheritance_chain,
-        }
-
-    # Add attachment info
-    for attachment in attachment_registry.get_all_attachments():
-        summary["attachments"].append(
+        "policies": {
+            policy_name: _policy_summary_entry(policy_registry.get_policy(policy_name), resolved_policy)
+            for policy_name, resolved_policy in resolved.items()
+        },
+        "attachments": [
             {
                 "policy": attachment.policy,
                 "scope": attachment.scope,
@@ -265,6 +251,18 @@ def get_policies_summary() -> dict[str, object]:
                 "keys": attachment.keys,
                 "models": attachment.models,
             }
-        )
+            for attachment in attachment_registry.get_all_attachments()
+        ],
+    }
 
-    return summary
+
+def _policy_summary_entry(policy: Policy | None, resolved_policy: ResolvedPolicy) -> Mapping[str, object]:
+    return {
+        "inherit": policy.inherit if policy else None,
+        "description": policy.description if policy else None,
+        "guardrails_add": policy.guardrails.get_add() if policy else [],
+        "guardrails_remove": policy.guardrails.get_remove() if policy else [],
+        "condition": (policy.condition.model_dump() if policy and policy.condition else None),
+        "resolved_guardrails": resolved_policy.guardrails,
+        "inheritance_chain": resolved_policy.inheritance_chain,
+    }

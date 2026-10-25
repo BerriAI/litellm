@@ -168,6 +168,31 @@ class TestLangfuseOtelIntegration:
 
         assert span.attributes["langfuse.environment"] == "team-a-env"
 
+    @pytest.mark.parametrize(
+        "completion_start_time",
+        [
+            datetime(2026, 10, 9, 12, 0, 0, 250000, tzinfo=timezone.utc),
+            datetime(2026, 10, 9, 12, 0, 0, 250000),
+        ],
+        ids=["aware", "naive_local_time"],
+    )
+    def test_set_langfuse_specific_attributes_completion_start_time(self, completion_start_time: datetime):
+        """The first-token time goes out the way the Langfuse SDK sends it: a JSON string, with an explicit offset."""
+        span: Final = TracerProvider().get_tracer(__name__).start_span("litellm_request")
+
+        LangfuseOtelLogger._set_langfuse_specific_attributes(span, {"completion_start_time": completion_start_time}, {})
+
+        sent: Final = datetime.fromisoformat(json.loads(span.attributes["langfuse.observation.completion_start_time"]))
+        assert sent.tzinfo is not None
+        assert sent.timestamp() == completion_start_time.timestamp()
+
+    def test_set_langfuse_specific_attributes_without_completion_start_time(self):
+        span: Final = TracerProvider().get_tracer(__name__).start_span("litellm_request")
+
+        LangfuseOtelLogger._set_langfuse_specific_attributes(span, {}, {})
+
+        assert "langfuse.observation.completion_start_time" not in span.attributes
+
     def test_extract_langfuse_metadata_basic(self):
         """Ensure metadata is correctly pulled from litellm_params."""
         metadata_in = {"generation_name": "my-gen", "custom": "data"}
@@ -488,6 +513,22 @@ class TestLangfuseOtelIntegration:
             # Endpoint assertion removed as side effect is gone
 
 
+def _exported_auth_headers(exporter):
+    import requests_mock
+    from opentelemetry.sdk.trace.export import SpanExportResult
+
+    with requests_mock.Mocker() as collector:
+        collector.post(requests_mock.ANY, status_code=200)
+        assert exporter.export(()) is SpanExportResult.SUCCESS
+    return [
+        (
+            request.url,
+            {name: request.headers[name] for name in ("Authorization", "x-langfuse-ingestion-version")},
+        )
+        for request in collector.request_history
+    ]
+
+
 class TestLangfuseOtelKeyDynamicConfig:
     """Key/team-scoped Langfuse credentials must define the full export target
     (OTLP endpoint + auth), not just auth headers on the init-time exporter."""
@@ -592,15 +633,15 @@ class TestLangfuseOtelKeyDynamicConfig:
 
         exporter = span_processors[0].span_exporter
         assert isinstance(exporter, OTLPSpanExporter)
-        assert exporter._endpoint == "https://langfuse.example.com/api/public/otel/v1/traces"
-
         import base64
 
         expected_auth = base64.b64encode(b"key_public:key_secret").decode()
-        assert exporter._headers == {
-            "Authorization": f"Basic {expected_auth}",
-            "x-langfuse-ingestion-version": "4",
-        }
+        assert _exported_auth_headers(exporter) == [
+            (
+                "https://langfuse.example.com/api/public/otel/v1/traces",
+                {"Authorization": f"Basic {expected_auth}", "x-langfuse-ingestion-version": "4"},
+            )
+        ]
 
     def test_key_dynamic_params_reuse_cached_provider(self):
         with self._clean_env():
@@ -653,10 +694,12 @@ class TestLangfuseOtelKeyDynamicConfig:
         provider = next(iter(logger._tracer_provider_cache.values())).provider
         exporter = provider._active_span_processor._span_processors[0].span_exporter
         assert isinstance(exporter, OTLPSpanExporter)
-        assert exporter._headers == {
-            "Authorization": f"Basic {secret}",
-            "x-langfuse-ingestion-version": "4",
-        }
+        assert _exported_auth_headers(exporter) == [
+            (
+                "https://langfuse.example.com/api/public/otel/v1/traces",
+                {"Authorization": f"Basic {secret}", "x-langfuse-ingestion-version": "4"},
+            )
+        ]
 
 
 class TestLangfuseOtelResponsesAPI:

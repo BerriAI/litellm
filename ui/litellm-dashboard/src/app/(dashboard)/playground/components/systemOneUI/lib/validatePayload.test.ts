@@ -11,11 +11,8 @@ const requestWith = (fields: Record<string, unknown> = {}) =>
 
 describe("validateSystemOnePayload", () => {
   it("rejects empty input", () => {
-    expect(validateSystemOnePayload(" ").issues).toContainEqual({
-      path: "root",
-      message: "Payload cannot be empty.",
-      severity: "error",
-    });
+    const emptyIssue = { path: "root", label: "Request", message: "Payload cannot be empty.", severity: "error" };
+    expect(validateSystemOnePayload(" ").issues).toContainEqual(emptyIssue);
   });
 
   it("reports JSON syntax errors", () => {
@@ -249,6 +246,17 @@ describe("validateSystemOnePayload", () => {
     );
   });
 
+  it("labels a score-level warning by its question key even when the key is all digits", () => {
+    const result = validateSystemOnePayload(
+      requestWith({
+        questions: {
+          "2": { type: "score", instructions: "Rate urgency", criteria: Array.from({ length: 11 }, () => "Level") },
+        },
+      }),
+    );
+    expect(result.issues.map((issue) => issue.label)).toEqual(['Question "2" options']);
+  });
+
   it("accepts a score question with two levels", () => {
     expect(
       validateSystemOnePayload(
@@ -346,11 +354,19 @@ describe("blank context", () => {
     expect(validateSystemOnePayload(raw, "/v1/systemone").issues.map((issue) => issue.path)).toEqual(["state"]);
     const filled = validateSystemOnePayload(raw.replace('"state":""', '"state":"A ticket"'), "/v1/systemone");
     expect(filled.isValid).toBe(false);
-    expect(filled.issues).toContainEqual({
-      path: "questions",
-      message: "Give every question a name.",
-      severity: "error",
+    expect(filled.issues).toEqual([
+      { path: "questions", label: "Questions", message: "Give every question a name.", severity: "error" },
+    ]);
+  });
+
+  it("labels a /v1/systemone question by its key even when the key is all digits", () => {
+    const raw = JSON.stringify({
+      state: "A ticket",
+      questions: { "2": { type: "choice", instructions: "", criteria: {} } },
     });
+    const labels = validateSystemOnePayload(raw, "/v1/systemone").issues.map((issue) => issue.label);
+    expect(labels).toContain('Question "2" options');
+    expect(labels.some((label) => label.startsWith("Question 3"))).toBe(false);
   });
 
   it("accepts /v1/systemone once the state carries text", () => {
@@ -363,6 +379,25 @@ describe("blank context", () => {
     const result = validateOpenAIDecisionsPayload(raw);
     expect(result.isValid).toBe(false);
     expect(result.issues.map((issue) => issue.path)).toEqual(["input"]);
+  });
+
+  it("labels a /v1/decisions issue by the question's position", () => {
+    const duplicateChoices = [{ value: "a" }, { value: "a" }];
+    const raw = JSON.stringify({
+      input: "Ship it?",
+      questions: [
+        { type: "predicate", name: "q", instructions: "Is it?" },
+        { type: "choice", name: "pick", instructions: "Pick one", choices: duplicateChoices },
+      ],
+    });
+    expect(validateOpenAIDecisionsPayload(raw).issues).toEqual([
+      {
+        path: "questions.1.choices",
+        label: "Question 2 choices",
+        message: "Choice values must be unique, including their string representations.",
+        severity: "error",
+      },
+    ]);
   });
 
   it("accepts /v1/decisions once the input carries text", () => {

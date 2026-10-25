@@ -2,7 +2,7 @@ import json
 import os
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, TypeVar
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
@@ -26,6 +26,15 @@ _EFFORT_DEGRADATION_CHAIN: Final[Mapping[str, tuple[str, ...]]] = MappingProxyTy
     }
 )
 _THINKING_OFF: Final = "none"
+
+_JsonValue: Final = TypeVar("_JsonValue")
+
+
+def json_copy_or_original(value: _JsonValue) -> _JsonValue:
+    try:
+        return json.loads(json.dumps(value, default=dict))
+    except (TypeError, ValueError, RecursionError):
+        return value
 
 
 class _ClaudeCodeUserId(LiteLLMBaseModel):
@@ -184,8 +193,12 @@ def normalize_reasoning_effort_value(
     effort: str,
     model: str,
     custom_llm_provider: str | None = None,
+    deployment_model_info: object = None,
 ) -> str:
     """Lower a tier the deployment does not accept to the nearest one it does, leaving others alone.
+
+    A deployment whose own reasoning_effort_levels name a strength tier keeps the tier as sent, since
+    completion() and responses() round it onto those levels.
 
     The accepted set is resolved by the same owner that answers ``/model_group/info``, so a level
     the proxy advertises is a level this path forwards.
@@ -201,7 +214,13 @@ def normalize_reasoning_effort_value(
     if chain is None:
         return effort
 
-    from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
+    from litellm.router_utils.reasoning_effort_capability import (
+        deployment_rounds_reasoning_effort,
+        resolve_supported_reasoning_efforts,
+    )
+
+    if deployment_rounds_reasoning_effort(deployment_model_info):
+        return effort
     from litellm.utils import get_model_info
 
     try:

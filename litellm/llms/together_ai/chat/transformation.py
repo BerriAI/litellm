@@ -9,7 +9,6 @@ from types import MappingProxyType
 from typing import (
     Final,
     Literal,
-    cast,  # noqa: TID251  # rebuilding a TypedDict minus keys has no checked spelling
     overload,
 )
 
@@ -18,6 +17,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.prompt_templates.common_utils import strip_litellm_response_only_fields
 from litellm.router_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import supports_function_calling, supports_reasoning, supports_response_schema
@@ -25,7 +25,6 @@ from litellm.utils import supports_function_calling, supports_reasoning, support
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 TOOL_CALLING_PARAMS: Final = ("tools", "tool_choice", "function_call")
-LITELLM_INTERNAL_ASSISTANT_FIELDS: Final = frozenset({"thinking_blocks", "provider_specific_fields"})
 FUNCTION_CALLING_DOCS_URL: Final = "https://docs.together.ai/docs/function-calling"
 STRUCTURED_OUTPUTS_DOCS_URL: Final = "https://docs.together.ai/docs/inference/chat/structured-outputs"
 
@@ -174,12 +173,9 @@ def _drop_response_format(passed_params: Container[str], model: str, drop_params
 
 
 def _without_litellm_internal_fields(message: AllMessageValues) -> AllMessageValues:
-    if message["role"] != "assistant" or LITELLM_INTERNAL_ASSISTANT_FIELDS.isdisjoint(message):
+    if message["role"] != "assistant":
         return message
-    return cast(  # cast-ok: rebuilding the same TypedDict minus internal keys loses the narrowed type
-        "AllMessageValues",
-        {key: value for key, value in message.items() if key not in LITELLM_INTERNAL_ASSISTANT_FIELDS},
-    )
+    return strip_litellm_response_only_fields(message)
 
 
 class TogetherAIChatConfig(OpenAIGPTConfig):

@@ -1,33 +1,13 @@
-### Hide pydantic namespace conflict warnings globally ###
 from __future__ import annotations
 
-import warnings
+from litellm._process_defaults import apply_process_defaults as _apply_process_defaults
 
-warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
-# Suppress Pydantic 2.11+ deprecation warning about accessing model_fields on instances
-# This warning can accumulate during streaming and cause memory leaks
-warnings.filterwarnings("ignore", message=".*Accessing the.*attribute on the instance is deprecated.*")
-# ReadOnly on TypedDict fields is repo-wide static discipline (LIT012); pydantic warns it
-# cannot enforce it at runtime, which floods proxy boot once such a type is schema-walked
-warnings.filterwarnings("ignore", message=".*`ReadOnly` qualifier.*")
+_apply_process_defaults()
+
 ### INIT VARIABLES #########################
 import threading
 import os
-
-# Load .env before any other litellm imports so env vars (e.g. LITELLM_UI_SESSION_DURATION) are available
-import dotenv as _dotenv
-
-
-def _dev_env_hot_reload_enabled() -> bool:
-    """The proxy exports this flag when started with ``--reload``. A reloaded
-    worker is a fresh process that inherits the reloader's environment, so an
-    edited ``.env`` value stays masked by the stale inherited one unless we
-    let the file win; overriding makes the edit take effect on reload."""
-    return os.getenv("LITELLM_DEV_ENV_HOT_RELOAD") == "True"
-
-
-if os.getenv("LITELLM_MODE", "DEV") == "DEV":
-    _dotenv.load_dotenv(override=_dev_env_hot_reload_enabled())
+import datetime
 
 from collections.abc import Mapping, Sequence
 from typing import (
@@ -83,7 +63,6 @@ from litellm.constants import (
     modelscope_models,
     empower_models,
     together_ai_models,
-    baseten_models,
     WANDB_MODELS,
     REPEATED_STREAMING_CHUNK_LIMIT,
     request_timeout,
@@ -118,6 +97,7 @@ success_callback: List[CALLBACK_TYPES] = []
 failure_callback: List[CALLBACK_TYPES] = []
 service_callback: List[CALLBACK_TYPES] = []
 audit_log_callbacks: List[CALLBACK_TYPES] = []
+batch_line_item_callbacks: Sequence[CALLBACK_TYPES] = ()
 # logging_callback_manager is lazy-loaded via __getattr__
 _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
@@ -195,7 +175,7 @@ argilla_batch_size: Optional[int] = None
 datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload.
 gcs_pub_sub_use_v1: Optional[bool] = False  # if you want to use v1 gcs pubsub logged payload
 generic_api_use_v1: Optional[bool] = False  # if you want to use v1 generic api logged payload
-argilla_transformation_object: Optional[Dict[str, Any]] = None
+argilla_transformation_object: Mapping[str, str] | None = None
 _async_input_callback: List[Union[str, Callable[..., object], "CustomLogger"]] = (  # CustomLogger is lazy-loaded
     []
 )  # internal variable - async custom callbacks are routed here.
@@ -206,7 +186,7 @@ _async_failure_callback: List[Union[str, Callable[..., object], "CustomLogger"]]
     []
 )  # internal variable - async custom callbacks are routed here.
 pre_call_rules: List[Callable] = []
-post_call_rules: List[Callable] = []
+post_call_rules: List[Callable[..., object]] = []
 turn_off_message_logging: Optional[bool] = False
 standard_logging_payload_excluded_fields: Optional[List[str]] = (
     None  # Fields to exclude from StandardLoggingPayload before callbacks receive it
@@ -353,7 +333,7 @@ in_memory_llm_clients_cache: "LLMClientCache"
 safe_memory_mode: bool = False
 enable_azure_ad_token_refresh: Optional[bool] = False
 # Proxy Authentication - auto-obtain/refresh OAuth2/JWT tokens for LiteLLM Proxy
-proxy_auth: Optional[Any] = None
+proxy_auth: _ProxyAuthHandlerType | None = None
 ### DEFAULT AZURE API VERSION ###
 AZURE_DEFAULT_API_VERSION = "2025-02-01-preview"  # this is updated to the latest
 ### DEFAULT WATSONX API VERSION ###
@@ -374,6 +354,7 @@ llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 guardrail_name_config_map: Dict[str, GuardrailItem] = {}
 include_cost_in_streaming_usage: bool = False
 reasoning_auto_summary: bool = False
+reasoning_effort_rounding: Literal["up", "down"] = "up"
 ### PROMPTS ####
 from litellm.types.prompts.init_prompts import PromptSpec
 
@@ -392,6 +373,7 @@ key_alias_pattern: str | None = None
 enable_gemini_default_thinking_level_low: bool = (
     False  # opt-in: force thinkingLevel low/minimal for Gemini 3 thinking param mapping
 )
+gemini_include_thoughts_default: bool = True
 ####################
 logging: bool = True
 enable_loadbalancing_on_batch_endpoints: Optional[bool] = None
@@ -521,7 +503,7 @@ skill_search_embedding_model: Optional[str] = None
 # Supports both old format (Dict[str, str]) and new format (Dict[str, Dict[str, Any]])
 # New format: { "displayName": { "url": "...", "index": 0 } }
 # Old format: { "displayName": "url" } (for backward compatibility)
-public_model_groups_links: Dict[str, Union[str, Dict[str, Any]]] = {}
+public_model_groups_links: dict[str, str | dict[str, object]] = {}
 #### REQUEST PRIORITIZATION #######
 priority_reservation: Optional[Dict[str, Union[float, "PriorityReservationDict"]]] = None
 # priority_reservation_settings is lazy-loaded via __getattr__
@@ -569,6 +551,7 @@ from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map, ma
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
 cost_discount_config: Dict[str, float] = {}  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
+apply_search_free_tier: bool = False
 cost_margin_config: Dict[
     str, Union[float, Dict[str, float]]
 ] = {}  # Provider-specific or global cost margins. Examples:
@@ -643,6 +626,7 @@ bedrock_models: Set = set()
 bedrock_converse_models: Set = set(BEDROCK_CONVERSE_MODELS)
 fal_ai_models: Set = set()
 fireworks_ai_models: Set = set()
+baseten_models: Set[str] = set()
 fireworks_ai_embedding_models: Set = set()
 deepinfra_models: Set = set()
 perplexity_models: Set = set()
@@ -695,8 +679,10 @@ qwen_ai_platform_models: Set = set()
 moonshot_models: Set = set()
 publicai_models: Set = set()
 darkbloom_models: Set = set()
+openinfer_models: Final[Set[str]] = set()
 v0_models: Set = set()
 morph_models: Set = set()
+opencode_go_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 lambda_ai_models: Set = set()
 inception_models: Set = set()
 hyperbolic_models: Set = set()
@@ -760,8 +746,18 @@ def is_openai_finetune_model(key: str) -> bool:
     return key.startswith("ft:") and not key.count(":") > 1
 
 
+def _is_past_deprecation_date(value: Mapping[str, object]) -> bool:
+    deprecation_date: Final = value.get("deprecation_date")
+    if not isinstance(deprecation_date, str):
+        return False
+    try:
+        return datetime.date.fromisoformat(deprecation_date) <= datetime.date.today()
+    except ValueError:
+        return False
+
+
 def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
-    for key, value in model_cost_map.items():
+    for key, value in tuple(model_cost_map.items()):
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(key):
             open_ai_chat_completion_models.add(key)
         elif value.get("litellm_provider") == "text-completion-openai":
@@ -860,6 +856,11 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
             if "-to-" not in key and "fireworks-ai-default" not in key:
                 fireworks_ai_models.add(key)
+        elif value.get("litellm_provider") == "baseten":
+            if _is_past_deprecation_date(value):
+                baseten_models.discard(key)
+            else:
+                baseten_models.add(key)
         elif value.get("litellm_provider") == "fireworks_ai-embedding-models":
             # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
             if "-to-" not in key:
@@ -964,10 +965,14 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             publicai_models.add(key)
         elif value.get("litellm_provider") == "darkbloom":
             darkbloom_models.add(key)
+        elif value.get("litellm_provider") == "openinfer":
+            openinfer_models.add(key)
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
         elif value.get("litellm_provider") == "morph":
             morph_models.add(key)
+        elif value.get("litellm_provider") == "opencode_go":
+            opencode_go_models.add(key)
         elif value.get("litellm_provider") == "lambda_ai":
             lambda_ai_models.add(key)
         elif value.get("litellm_provider") == "inception":
@@ -1132,8 +1137,10 @@ model_list = list(
     | moonshot_models
     | publicai_models
     | darkbloom_models
+    | openinfer_models
     | v0_models
     | morph_models
+    | opencode_go_models
     | lambda_ai_models
     | inception_models
     | black_forest_labs_models
@@ -1175,7 +1182,9 @@ def _build_models_by_provider() -> dict:
         "edenai": edenai_models,
         "datarobot": datarobot_models,
         "vertex_ai": vertex_chat_models
+        | vertex_code_chat_models
         | vertex_text_models
+        | vertex_code_text_models
         | vertex_anthropic_models
         | vertex_vision_models
         | vertex_language_models
@@ -1183,7 +1192,7 @@ def _build_models_by_provider() -> dict:
         | vertex_minimax_models
         | vertex_moonshot_models
         | vertex_zai_models,
-        "ai21": ai21_models,
+        "ai21": ai21_models | ai21_chat_models,
         "bedrock": bedrock_models | bedrock_converse_models,
         "petals": petals_models,
         "ollama": ollama_models,
@@ -1246,8 +1255,10 @@ def _build_models_by_provider() -> dict:
         "moonshot": moonshot_models,
         "publicai": publicai_models,
         "darkbloom": darkbloom_models,
+        "openinfer": openinfer_models,
         "v0": v0_models,
         "morph": morph_models,
+        "opencode_go": opencode_go_models,
         "lambda_ai": lambda_ai_models,
         "inception": inception_models,
         "hyperbolic": hyperbolic_models,
@@ -1414,6 +1425,7 @@ from .exceptions import (
     InvalidRequestError,
     BadRequestError,
     ImageFetchError,
+    MalformedRequestFieldError as MalformedRequestFieldError,
     VectorStoreSearchError,
     NotFoundError,
     PermissionDeniedError,
@@ -1498,6 +1510,7 @@ from .rag.main import *
 from .sandbox.main import *
 from .decisions.main import *
 from .systemone.main import *
+from .extraction.main import *
 from .tool_loop import ToolLoopMaxRoundsExceeded, arun_tool_loop, run_tool_loop
 from .search.main import *
 from .realtime_api.main import (
@@ -1689,6 +1702,9 @@ if TYPE_CHECKING:
     from .llms.perplexity.decisions.transformation import (
         PerplexityDecisionsConfig as PerplexityDecisionsConfig,
     )
+    from .llms.nace.decisions.transformation import (
+        NaceDecisionsConfig as NaceDecisionsConfig,
+    )
     from .llms.typesafe.decisions.transformation import (
         TypeSafeDecisionsConfig as TypeSafeDecisionsConfig,
     )
@@ -1700,6 +1716,9 @@ if TYPE_CHECKING:
     )
     from .llms.cloudflare.decisions.transformation import (
         CloudflareDecisionsConfig as CloudflareDecisionsConfig,
+    )
+    from .llms.cloudflare.extraction.transformation import (
+        CloudflareExtractionConfig as CloudflareExtractionConfig,
     )
     from .llms.strands_decider.decisions.transformation import (
         StrandsDeciderDecisionsConfig as StrandsDeciderDecisionsConfig,
@@ -2275,6 +2294,10 @@ if TYPE_CHECKING:
         LiteLLM_UpperboundKeyGenerateParams,
     )
     from litellm.utils import ModelResponseListIterator as _ModelResponseListIterator
+    from collections.abc import Awaitable
+    from litellm.types.utils import ModelResponse as _ModelResponseType
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper as _CustomStreamWrapperType
+    from litellm.proxy_auth import ProxyAuthHandler as _ProxyAuthHandlerType
 
     # Cost calculator functions
     cost_per_token: Callable[..., Tuple[float, float]]
@@ -2287,16 +2310,18 @@ if TYPE_CHECKING:
     get_response_string: Callable[..., str]
     supports_function_calling: Callable[..., bool]
     supports_web_search: Callable[..., bool]
+    supports_tool_search: Callable[..., bool]
     supports_url_context: Callable[..., bool]
     supports_response_schema: Callable[..., bool]
     supports_parallel_function_calling: Callable[..., bool]
     supports_vision: Callable[..., bool]
     supports_audio_input: Callable[..., bool]
     supports_video_input: Callable[..., bool]
+    supports_box_questions: Callable[..., bool]
     supports_audio_output: Callable[..., bool]
     supports_system_messages: Callable[..., bool]
     supports_reasoning: Callable[..., bool]
-    acreate: Callable[..., Any]
+    acreate: Callable[..., Awaitable[_ModelResponseType | _CustomStreamWrapperType]]
     get_max_tokens: Callable[..., int]
     get_model_info: Callable[..., _ModelInfoType]
     register_prompt_template: Callable[..., None]
@@ -2374,6 +2399,7 @@ _AGENT_EXPORTS: Final = frozenset(
         "ClaudeCodeOptions",
         "CodexOptions",
         "OpenCodeOptions",
+        "PiOptions",
         "DeepAgentsOptions",
         "ToolLoopOptions",
     }
@@ -2593,8 +2619,10 @@ def __getattr__(name: str) -> Any:
             cancel_run,
             delete_run,
         )
+        from types import MappingProxyType
 
-        return locals()[name]
+        evals_exports: Final[Mapping[str, object]] = MappingProxyType(locals())
+        return evals_exports[name]
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
