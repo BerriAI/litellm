@@ -249,5 +249,10 @@
       "/v1/responses",
       "/v1/messages"
     ]
+  },
+  "mallard": {
+    "base_url": "https://api.mallardai.co.uk/v1",
+    "api_key_env": "MALLARD_API_KEY",
+    "api_base_env": "MALLARD_API_BASE"
   }
 }

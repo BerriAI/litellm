@@ -76839,6 +76839,23 @@
         "supports_reasoning": true,
         "source": "https://api.openinfer.ai/v1/models"
     },
+    "mallard/qwen/qwen3.6-35b-a3b": {
+        "max_tokens": 235929,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 235929,
+        "input_cost_per_token": 1.06944e-07,
+        "cache_read_input_token_cost": 2.6736e-08,
+        "output_cost_per_token": 1.0026e-06,
+        "litellm_provider": "mallard",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_prompt_caching": true,
+        "source": "https://mallardai.co.uk/pricing/"
+    },
     "openinfer/@oi/Qwen3.5-27B": {
         "max_tokens": 32768,
         "max_input_tokens": 32768,
