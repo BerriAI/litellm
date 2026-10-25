@@ -299,14 +299,31 @@ def test_audio_transcription_happy_path(client, auth_as, patched_transcription, 
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"])
-def test_audio_transcription_error(client, auth_as, patched_transcription_error, path):
+@pytest.mark.parametrize("response_format", [None, "text"], ids=["default", "text"])
+def test_audio_transcription_error(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[None]],
+    patched_transcription_error: None,
+    path: str,
+    response_format: str | None,
+) -> None:
     """Pins ``POST /v1/audio/transcriptions`` / ``POST /audio/transcriptions`` (error)."""
-    files = {"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")}
-    data = {"model": "whisper-1"}
+    files: Final = {"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")}
+    data: Final[dict[str, str]] = {"model": "whisper-1"} | (
+        {"response_format": response_format} if response_format is not None else {}
+    )
     with auth_as():
-        response = client.post(path, files=files, data=data)
+        response: Final = client.post(path, files=files, data=data)
     assert response.status_code == 500
-    assert len(response.content) > 0
+    assert response.headers["content-type"] == "application/json"
+    assert response.json() == {
+        "error": {
+            "message": "transcription boom",
+            "type": "None",
+            "param": "None",
+            "code": "500",
+        }
+    }
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"], ids=["v1", "alias"])
