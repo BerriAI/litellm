@@ -9,7 +9,8 @@ import json
 import mimetypes
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from itertools import groupby, islice
+from graphlib import CycleError, TopologicalSorter
+from itertools import chain, groupby, islice
 from os import PathLike
 from pathlib import Path
 from types import MappingProxyType
@@ -19,6 +20,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -623,7 +625,7 @@ def update_messages_with_model_file_ids(
 def update_responses_input_with_model_file_ids(
     input: object,
     model_id: str | None = None,
-    model_file_id_mapping: dict[str, dict[str, str]] | None = None,
+    model_file_id_mapping: Mapping[str, Mapping[str, str]] | None = None,
 ) -> object:
     """
     Updates responses API input with provider-specific file IDs.
@@ -664,7 +666,7 @@ def update_responses_input_with_model_file_ids(
             for content_item in content:
                 if isinstance(content_item, dict) and content_item.get("type") == "input_file":
                     file_id = content_item.get("file_id")
-                    if file_id:
+                    if isinstance(file_id, str) and file_id:
                         provider_file_id = file_id  # Default to original
 
                         # Check if we have a mapping for this file ID
@@ -760,7 +762,7 @@ def _decode_vector_store_ids_in_tools(
 def update_responses_tools_with_model_file_ids(
     tools: list[dict[str, object]] | None,
     model_id: str | None = None,
-    model_file_id_mapping: dict[str, dict[str, str]] | None = None,
+    model_file_id_mapping: Mapping[str, Mapping[str, str]] | None = None,
 ) -> list[dict[str, object]] | None:
     """
     Updates responses API tools with provider-specific file IDs.
@@ -1424,6 +1426,123 @@ def _schema_levels(schema: Mapping[str, object]) -> Iterator[tuple[Mapping[str, 
     while frontier:
         yield frontier
         frontier = tuple(child for node in frontier for child in _subschemas(node))
+
+
+def schema_fragment_ref(ref: str) -> str:
+    return f"#{ref}" if ref.startswith(("/$defs/", "/definitions/")) else ref
+
+
+def schema_has_unresolvable_ref(schema: Mapping[str, object]) -> bool:
+    definitions: Final = MappingProxyType(dict(_root_definitions(schema)))
+    if not _refs_in(schema) <= definitions.keys():
+        return True
+    try:
+        tuple(TopologicalSorter({pointer: _refs_in(body) for pointer, body in definitions.items()}).static_order())
+    except CycleError:
+        return True
+    return False
+
+
+def schema_union_property_count(schema: Mapping[str, object]) -> int:
+    return sum(1 for _, node in _property_schemas(schema) if _is_union(node))
+
+
+def schema_optional_property_count(schema: Mapping[str, object]) -> int:
+    return sum(len(_optional_property_names(node)) for node in _schema_nodes(schema))
+
+
+def schema_property_count(schema: Mapping[str, object]) -> int:
+    return sum(len(properties) for node in _schema_nodes(schema) if (properties := _schema_at(node, "properties")))
+
+
+def schema_grammar_branch_count(schema: Mapping[str, object]) -> int:
+    return sum(_grammar_branches(node) for node in _schema_nodes(schema))
+
+
+def schema_has_open_object(schema: Mapping[str, object]) -> bool:
+    return any(_is_open_object(node) for node in _schema_nodes(schema))
+
+
+def schema_has_lookaround_pattern(schema: Mapping[str, object]) -> bool:
+    return any(
+        isinstance(pattern := node.get("pattern"), str) and _uses_regex_lookaround(pattern)
+        for node in _schema_nodes(schema)
+    )
+
+
+def schema_string_formats(schema: Mapping[str, object]) -> frozenset[str]:
+    return frozenset(
+        value for node in _schema_nodes(schema) if _may_be_string(node) and isinstance(value := node.get("format"), str)
+    )
+
+
+def _may_be_string(node: Mapping[str, object]) -> bool:
+    node_type: Final = node.get("type")
+    return node_type is None or node_type == "string" or "string" in _list_at(node, "type")
+
+
+def is_object_schema(node: Mapping[str, object]) -> bool:
+    node_type: Final = node.get("type")
+    return node_type == "object" or (isinstance(node_type, list) and "object" in node_type)
+
+
+def _schema_nodes(schema: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
+    return chain.from_iterable(islice(_schema_levels(schema), _MAX_SCHEMA_NESTING))
+
+
+_SCHEMA_LIST: Final = TypeAdapter(tuple[object, ...])
+
+
+def _list_at(container: Mapping[str, object], key: str) -> tuple[object, ...]:
+    value: Final = container.get(key)
+    return _SCHEMA_LIST.validate_python(value) if isinstance(value, list) else ()
+
+
+def _named_schemas(container: Mapping[str, object] | None) -> Iterator[tuple[str, Mapping[str, object]]]:
+    if container is None:
+        return iter(())
+    return ((key, value) for key in container if (value := _schema_at(container, key)) is not None)
+
+
+def _root_definitions(schema: Mapping[str, object]) -> Iterator[tuple[str, Mapping[str, object]]]:
+    for defs_key in ("$defs", "definitions"):
+        yield from ((f"#/{defs_key}/{name}", body) for name, body in _named_schemas(_schema_at(schema, defs_key)))
+
+
+def _refs_in(schema: Mapping[str, object]) -> frozenset[str]:
+    return frozenset(
+        schema_fragment_ref(ref) for node in _schema_nodes(schema) if isinstance(ref := node.get("$ref"), str)
+    )
+
+
+def _property_schemas(schema: Mapping[str, object]) -> Iterator[tuple[str, Mapping[str, object]]]:
+    return chain.from_iterable(_named_schemas(_schema_at(node, "properties")) for node in _schema_nodes(schema))
+
+
+def _is_union(node: Mapping[str, object]) -> bool:
+    return isinstance(node.get("anyOf"), list) or isinstance(node.get("oneOf"), list) or len(_list_at(node, "type")) > 1
+
+
+def _grammar_branches(node: Mapping[str, object]) -> int:
+    properties: Final = _schema_at(node, "properties")
+    if properties is None:
+        return 0
+    optional: Final = len(_optional_property_names(node))
+    return (1 << optional) * (len(properties) - optional + 1)
+
+
+def _optional_property_names(node: Mapping[str, object]) -> frozenset[str]:
+    properties: Final = _schema_at(node, "properties")
+    if properties is None:
+        return frozenset()
+    return frozenset(properties) - frozenset(name for name in _list_at(node, "required") if isinstance(name, str))
+
+
+def _is_open_object(node: Mapping[str, object]) -> bool:
+    additional_properties: Final = node.get("additionalProperties")
+    if additional_properties is True or isinstance(additional_properties, dict) or "patternProperties" in node:
+        return True
+    return is_object_schema(node) and "properties" not in node and additional_properties is not False
 
 
 def _subschemas(node: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
@@ -2207,6 +2326,16 @@ def is_unsignable_thinking_block(block: object) -> bool:
     return not (isinstance(signature, str) and len(signature) > 0)
 
 
+def has_blank_redacted_data(block: object) -> bool:
+    match block:
+        case {"type": "redacted_thinking", "data": str() as data}:
+            return not data.strip()
+        case {"type": "redacted_thinking"}:
+            return True
+        case _:
+            return False
+
+
 def native_redacted_thinking_data(data: str) -> str:
     """Claude's own `data` string for a redacted_thinking block.
 
@@ -2711,7 +2840,7 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
             break
 
         try:
-            obj, end_idx = decoder.raw_decode(raw, idx)
+            decoded = decoder.raw_decode(raw, idx)
         except json.JSONDecodeError as e:
             verbose_logger.warning(
                 "split_concatenated_json_objects: discarding unparseable tool-call "
@@ -2721,13 +2850,14 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
                 e,
             )
             break
-        if isinstance(obj, dict):
-            results.append(obj)
+        obj = as_str_mapping(_DECODED_JSON.validate_python(decoded[0]))
+        if obj is not None:
+            results.append(dict(obj))
         else:
             # Non-dict JSON value – wrap in empty dict (Bedrock requires
             # toolUse.input to be an object).
             results.append({})
-        idx = end_idx
+        idx = decoded[1]
 
     return results
 
@@ -2759,14 +2889,16 @@ def salvage_concatenated_tool_arguments(raw: str) -> tuple[dict[str, object], ..
         if idx >= length:
             break
         try:
-            obj, end_idx = decoder.raw_decode(stripped, idx)
+            decoded = decoder.raw_decode(stripped, idx)
         except json.JSONDecodeError:
             return ()
-        if not isinstance(obj, dict):
+        decoded_object = as_str_mapping(_DECODED_JSON.validate_python(decoded[0]))
+        if decoded_object is None:
             return ()
-        idx = end_idx
+        idx = decoded[1]
         if exceeded:
             continue
+        obj = dict(decoded_object)
         count += 1
         if not kept:
             kept = (obj,)

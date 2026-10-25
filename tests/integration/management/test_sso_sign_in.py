@@ -3,7 +3,9 @@ import contextlib
 import json
 import uuid
 from collections.abc import Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 from typing import Final
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -15,10 +17,10 @@ from pydantic import JsonValue
 
 from tests.integration._support.client import Gateway, gateway_from_environment
 from tests.integration._support.database import read_rows
-from tests.integration._support.process import owned_proxy
+from tests.integration._support.process import OWNED_STATE_VARIABLE, OwnedState, owned_proxy
 from tests.integration._support.wire import Reply, Request, wire_server
 
-pytestmark: Final = pytest.mark.timeout(300)
+pytestmark: Final = [pytest.mark.timeout(300), pytest.mark.shares_worker_state]
 
 CLIENT_ID: Final = "integration-sso-client"
 CLIENT_SECRET: Final = "integration-sso-secret"
@@ -128,3 +130,38 @@ def test_a_first_sso_sign_in_creates_the_user_with_the_default_role(
                 "metadata": {"auth_provider": IDP_PROVIDER},
             }
         ]
+
+
+def test_free_sso_admission_preserves_existing_users_and_serializes_the_last_seat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(OWNED_STATE_VARIABLE, OwnedState.PRIVATE.value)
+    monkeypatch.delenv("LITELLM_LICENSE", raising=False)
+    with _sso_gateway(tmp_path, {}) as gateway:
+        for index in range(4):
+            signed_in: Final = _sign_in(gateway, f"free-sso-{index}")
+            assert signed_in.status_code == 303, signed_in.text
+
+        contenders: Final = tuple(f"free-sso-contender-{index}" for index in range(8))
+        with ThreadPoolExecutor(max_workers=len(contenders)) as pool:
+            responses: Final = tuple(pool.map(partial(_sign_in, gateway), contenders))
+
+        assert sorted(response.status_code for response in responses) == [303, 403, 403, 403, 403, 403, 403, 403]
+        assert gateway.rows('SELECT COUNT(*) AS count FROM "LiteLLM_UserTable"', ()) == [{"count": 5}]
+        for subject, response in zip(contenders, responses):
+            if response.status_code == 403:
+                assert "requires a LiteLLM Enterprise license" in response.text
+                assert not response.cookies
+                assert gateway.rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (subject,)) == []
+
+        existing: Final = _sign_in(gateway, "free-sso-0")
+        assert existing.status_code == 303, existing.text
+
+        admin_created: Final = gateway.request(
+            "POST", "/user/new", {"user_id": "api-created-user", "auto_create_key": False}
+        )
+        assert admin_created.status_code == 200, admin_created.text
+        above_capacity: Final = _sign_in(gateway, "free-sso-0")
+        refused: Final = _sign_in(gateway, "free-sso-extra")
+        assert (above_capacity.status_code, refused.status_code) == (303, 403)
+        assert gateway.rows('SELECT COUNT(*) AS count FROM "LiteLLM_UserTable"', ()) == [{"count": 6}]

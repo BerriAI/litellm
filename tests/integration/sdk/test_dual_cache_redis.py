@@ -12,6 +12,7 @@ from integration._support.async_server import LoopbackServer, close_writer
 from integration._support.ports import allocate_port
 from pydantic import ValidationError
 
+from litellm.caching.affinity_cache import claim_affinity_pin
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
@@ -305,3 +306,66 @@ async def test_shared_scheduler_handles_three_hundred_concurrent_enqueues_and_re
         *(scheduler.remove_request(request.request_id, "shared") for scheduler, request in zip(schedulers, requests))
     )
     assert await schedulers[0].get_queue("shared") == []
+
+
+@pytest.mark.asyncio
+async def test_concurrent_session_repin_claims_keep_the_shared_winner_after_recovery() -> None:
+    redis: Final = _redis_cache()
+    workers: Final = (DualCache(redis_cache=redis), DualCache(redis_cache=redis))
+    key: Final = f"session-repin-{uuid.uuid4().hex}"
+    choices: Final = ({"model_id": "replacement"}, {"model_id": "other"})
+    try:
+        await redis.async_set_cache(key, {"model_id": "original"}, ttl=60)
+        for worker in workers:
+            worker.in_memory_cache.set_cache(key, {"model_id": "original"}, ttl=60)
+        winners: Final = await asyncio.gather(
+            *(
+                claim_affinity_pin(worker, key, choice, 60, eligible_values=choices, preserve_legacy_model_ids=True)
+                for worker, choice in zip(workers, choices, strict=True)
+            )
+        )
+        assert winners[0] == winners[1] and winners[0] in choices
+        late_original: Final = await claim_affinity_pin(
+            workers[0],
+            key,
+            {"model_id": "original"},
+            60,
+            eligible_values=({"model_id": "original"}, *choices),
+            preserve_legacy_model_ids=True,
+        )
+        assert late_original == winners[0]
+        assert await redis.async_get_cache(key) == winners[0]
+    finally:
+        await redis.async_delete_cache(key)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored", ["original", '"original"', '{"model_id":"original"}'])
+async def test_session_repin_lua_preserves_healthy_legacy_pins_and_replaces_unavailable_ones(stored: str) -> None:
+    redis: Final = _redis_cache()
+    cache: Final = DualCache(redis_cache=redis)
+    key: Final = f"session-repin-legacy-{uuid.uuid4().hex}"
+    replacement: Final = {"model_id": "replacement"}
+    try:
+        redis.redis_client.set(redis.check_and_fix_namespace(key), stored, ex=60)
+        preserved: Final = await claim_affinity_pin(
+            cache,
+            key,
+            replacement,
+            60,
+            eligible_values=({"model_id": "original"}, replacement),
+            preserve_legacy_model_ids=True,
+        )
+        assert preserved in ("original", {"model_id": "original"})
+        moved: Final = await claim_affinity_pin(
+            cache,
+            key,
+            replacement,
+            60,
+            eligible_values=(replacement,),
+            preserve_legacy_model_ids=True,
+        )
+        assert moved == replacement
+        assert await redis.async_get_cache(key) == replacement
+    finally:
+        await redis.async_delete_cache(key)

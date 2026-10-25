@@ -8,6 +8,7 @@ from typing import Final, TypeAlias
 import click
 
 from litellm._logging import verbose_logger
+from litellm.proxy.common_utils.banner import show_banner
 
 from .commands.auth import cli_context_obj, context_secret_vault
 
@@ -115,8 +116,6 @@ def show_commands():
 
 def setup_shell(ctx: click.Context):
     """Set up the interactive shell with banner and initial info."""
-    from litellm.proxy.common_utils.banner import show_banner
-
     show_banner()
 
     # Show server connection info
@@ -137,8 +136,6 @@ def handle_special_commands(user_input: str) -> bool:
         return True
     elif user_input.lower() == "clear":
         click.clear()
-        from litellm.proxy.common_utils.banner import show_banner
-
         show_banner()
         show_commands()
         return True
@@ -192,7 +189,7 @@ def execute_command(path: ShellScope, ctx: click.Context, cli: click.Group) -> N
     try:
         if path[0].startswith("-"):
             cli.main(
-                ["--base-url", ctx.obj["base_url"], *path],
+                ["--base-url", cli_context_obj(ctx)["base_url"], *path],
                 prog_name="lite",
                 obj={"secret_vault": context_secret_vault(ctx)},
                 standalone_mode=False,

@@ -90,6 +90,7 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 GUARDRAIL_REGISTRY: Final = GuardrailRegistry()
 _DECODED_JSON: Final = TypeAdapter(object)
+_DECODED_YAML: Final = TypeAdapter(object)
 
 
 def _as_str_object_mapping(mapping: Mapping[str, object]) -> Mapping[str, object]:
@@ -1682,7 +1683,7 @@ async def validate_blocked_words_file(request: dict[str, str]):
         if not file_content:
             return {"valid": False, "error": "No file content provided"}
 
-        data: Final = yaml.safe_load(file_content)
+        data: Final = _DECODED_YAML.validate_python(yaml.safe_load(file_content))
 
         if not isinstance(data, dict) or "blocked_words" not in data:
             return {
@@ -2367,9 +2368,6 @@ class _GuardrailLoggingObj(Protocol):
     @property
     def async_success_handler(self) -> "Callable[..., Awaitable[object]]": ...
 
-    @property
-    def success_handler(self) -> "Callable[..., object]": ...
-
 
 class _GuardrailProxyLogging(Protocol):
     @property
@@ -2399,10 +2397,6 @@ async def _emit_guardrail_success_logs(
     caller from receiving the guardrail response.  Returns the (possibly
     hook-modified) response.
     """
-    from litellm.litellm_core_utils.thread_pool_executor import (
-        executor as thread_pool_executor,
-    )
-
     try:
         modified: Final = await proxy_logging_obj.post_call_success_hook(
             data=data,
@@ -2430,16 +2424,6 @@ async def _emit_guardrail_success_logs(
             )
         except Exception:
             verbose_proxy_logger.exception("apply_guardrail: async_success_handler failed")
-        try:
-            thread_pool_executor.submit(
-                litellm_logging_obj.success_handler,
-                response_for_logging,
-                start_time,
-                end_time,
-                False,
-            )
-        except Exception:
-            verbose_proxy_logger.exception("apply_guardrail: success_handler submit failed")
 
     return response
 

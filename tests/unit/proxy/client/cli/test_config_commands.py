@@ -6,16 +6,16 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
-
-
+from litellm.litellm_core_utils.private_json import write_private_json
 from litellm.proxy.client.cli import cli
 from litellm.proxy.client.cli.commands.config import (
+    claude_subscription_default,
     get_config_file_path,
     get_config_value,
     load_config,
+    pkce_default,
     save_config,
 )
-from litellm.litellm_core_utils.private_json import write_private_json
 from litellm.proxy.client.cli.interface import show_commands
 
 
@@ -360,3 +360,51 @@ class TestWritePrivateJson:
 
         assert not target.exists()
         assert list(tmp_path.glob(".tmp-*")) == []
+
+
+class TestClaudeSubscriptionSetting:
+    @pytest.mark.parametrize("word", ["true", "TRUE", "on", "1", "yes"])
+    def test_truthy_words_are_stored_as_true(self, cli_runner, isolated_home, word):
+        result = cli_runner.invoke(cli, ["config", "set", "claude_subscription", word])
+
+        assert result.exit_code == 0, result.output
+        assert load_config()["claude_subscription"] == "true"
+        assert claude_subscription_default() is True
+
+    @pytest.mark.parametrize("word", ["false", "Off", "0", "no"])
+    def test_falsy_words_are_stored_as_false(self, cli_runner, isolated_home, word):
+        cli_runner.invoke(cli, ["config", "set", "claude_subscription", "true"])
+        result = cli_runner.invoke(cli, ["config", "set", "claude_subscription", word])
+
+        assert result.exit_code == 0, result.output
+        assert load_config()["claude_subscription"] == "false"
+        assert claude_subscription_default() is False
+
+    def test_anything_else_is_rejected_and_nothing_is_saved(self, cli_runner, isolated_home):
+        result = cli_runner.invoke(cli, ["config", "set", "claude_subscription", "maybe"])
+
+        assert result.exit_code != 0
+        assert "true or false" in result.output
+        assert "claude_subscription" not in load_config()
+
+    def test_unset_means_off(self, isolated_home):
+        assert claude_subscription_default() is False
+
+
+class TestPkceSetting:
+    @pytest.mark.parametrize(("word", "expected"), [("true", True), ("on", True), ("false", False), ("off", False)])
+    def test_the_saved_value_drives_the_default(self, cli_runner, isolated_home, word, expected):
+        result = cli_runner.invoke(cli, ["config", "set", "pkce", word])
+
+        assert result.exit_code == 0, result.output
+        assert pkce_default() is expected
+
+    def test_a_non_boolean_is_rejected_and_nothing_is_saved(self, cli_runner, isolated_home):
+        result = cli_runner.invoke(cli, ["config", "set", "pkce", "sometimes"])
+
+        assert result.exit_code != 0
+        assert "true or false" in result.output
+        assert "pkce" not in load_config()
+
+    def test_unset_means_off(self, isolated_home):
+        assert pkce_default() is False

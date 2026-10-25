@@ -18,8 +18,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import (
-    reasoning_effort_from_thinking_budget,
+    reasoning_effort_from_thinking,
 )
+from litellm.llms.anthropic.pass_through.convertible_blocks import tool_result_text_parts
 from litellm.llms.anthropic.pass_through.messages.utils import (
     refusal_stop_details,
     responses_output_refusal_text,
@@ -241,7 +242,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     @staticmethod
     def _summary_part_text(part: object) -> str:
         if isinstance(part, Mapping):
-            mapping: Final = cast(Mapping[str, Any], part)  # cast-ok: summary parts are untyped provider json
+            mapping: Final = cast(Mapping[str, object], part)  # cast-ok: summary parts are untyped provider json
             return str(mapping.get("text") or "")
         return str(getattr(part, "text", None) or "")
 
@@ -371,10 +372,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         elif btype == "tool_result":
                             tool_use_id = block.get("tool_use_id", "")
                             inner = block.get("content")
+                            tool_result_block = cast(Mapping[str, object], block)  # cast-ok: TypedDict upcast
                             tool_breakpoint, covered_image_parts, later_image_parts = (
-                                self._tool_result_images_by_breakpoint(
-                                    cast(Mapping[str, object], block)  # cast-ok: TypedDict upcast
-                                )
+                                self._tool_result_images_by_breakpoint(tool_result_block)
                             )
                             document_candidates = (
                                 tuple(
@@ -391,10 +391,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             elif isinstance(inner, str):
                                 output_text = inner
                             elif isinstance(inner, list):
-                                parts = [
-                                    c.get("text", "") for c in inner if isinstance(c, dict) and c.get("type") == "text"
-                                ]
-                                output_text = "\n".join(parts)
+                                output_text = "\n".join(tool_result_text_parts(tool_result_block))
                                 if covered_image_parts or later_image_parts:
                                     output_text = (
                                         f"{output_text}\n{TOOL_RESULT_IMAGE_PLACEHOLDER}"
@@ -467,33 +464,32 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
         return input_items
 
+    @staticmethod
+    def _translate_tool_to_responses_api(tool_dict: Mapping[str, object]) -> dict[str, object]:
+        tool_type: Final = tool_dict.get("type", "")
+        tool_name: Final = tool_dict.get("name", "")
+        # web_search tool
+        if (isinstance(tool_type, str) and tool_type.startswith("web_search")) or tool_name == "web_search":
+            return {"type": "web_search_preview"}
+        # Responses turns strict mode on when `strict` is omitted, silently rewriting
+        # `required` to every property. Anthropic tools are non-strict unless asked.
+        func_tool: Final[dict[str, object]] = {
+            "type": "function",
+            "name": tool_name,
+            "strict": bool(tool_dict.get("strict")),
+        }
+        if "description" in tool_dict:
+            func_tool["description"] = tool_dict["description"]
+        if "input_schema" in tool_dict:
+            func_tool["parameters"] = json_copy_or_original(tool_dict["input_schema"])
+        return func_tool
+
     def translate_tools_to_responses_api(
         self,
         tools: list[AllAnthropicToolsValues],
     ) -> list[dict[str, object]]:
         """Convert Anthropic tool definitions to Responses API function tools."""
-        result: Final[list[dict[str, object]]] = []
-        for tool in tools:
-            tool_dict = cast(dict[str, Any], tool)
-            tool_type = tool_dict.get("type", "")
-            tool_name = tool_dict.get("name", "")
-            # web_search tool
-            if (isinstance(tool_type, str) and tool_type.startswith("web_search")) or tool_name == "web_search":
-                result.append({"type": "web_search_preview"})
-                continue
-            # Responses turns strict mode on when `strict` is omitted, silently rewriting
-            # `required` to every property. Anthropic tools are non-strict unless asked.
-            func_tool: dict[str, object] = {
-                "type": "function",
-                "name": tool_name,
-                "strict": bool(tool_dict.get("strict")),
-            }
-            if "description" in tool_dict:
-                func_tool["description"] = tool_dict["description"]
-            if "input_schema" in tool_dict:
-                func_tool["parameters"] = json_copy_or_original(tool_dict["input_schema"])
-            result.append(func_tool)
-        return result
+        return [self._translate_tool_to_responses_api(tool) for tool in tools]
 
     @staticmethod
     def translate_tool_choice_to_responses_api(
@@ -544,6 +540,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     def translate_thinking_to_reasoning(
         thinking: dict[str, object],
         output_config: dict[str, object] | None = None,
+        auto_summary_level: str = "detailed",
+        *,
+        drop_params: bool = True,
     ) -> dict[str, object] | None:
         """
         Convert Anthropic thinking param to Responses API reasoning param.
@@ -564,9 +563,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if isinstance(output_config, dict) and output_config.get("effort"):
                 effort = output_config["effort"]
         elif thinking_type == "enabled":
-            raw_budget: Final = thinking.get("budget_tokens", 0)
-            budget_tokens: Final = int(raw_budget) if isinstance(raw_budget, (int, float)) else 0
-            effort = reasoning_effort_from_thinking_budget(budget_tokens)
+            budget_effort: Final = reasoning_effort_from_thinking(thinking, drop_params=drop_params)
+            if budget_effort is None:
+                return None
+            effort = budget_effort
         else:
             return None
 
@@ -576,7 +576,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if summary:
             result["summary"] = summary
         elif auto_summary:
-            result["summary"] = "detailed"
+            result["summary"] = auto_summary_level
         return result
 
     @classmethod
@@ -591,6 +591,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         self,
         anthropic_request: AnthropicMessagesRequest,
         include_encrypted_reasoning: bool = True,
+        auto_summary_level: str = "detailed",
+        *,
+        drop_params: bool = True,
     ) -> dict[str, Any]:
         """
         Translate a full Anthropic /v1/messages request dict to
@@ -599,7 +602,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         ``include_encrypted_reasoning`` asks the provider for ``reasoning.encrypted_content``
         on every call, so a reasoning model's items can be replayed intact next turn even
         when the client sent no ``thinking`` block; pass False for a provider whose
-        Responses API rejects ``include``.
+        Responses API rejects ``include``. ``auto_summary_level`` is the ``reasoning.summary`` the
+        opt-in auto summary injects when the client sent none.
         """
         model: Final[str] = anthropic_request["model"]
         messages_list: Final = cast(
@@ -669,7 +673,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             output_config = anthropic_request.get("output_config")
             reasoning: Final = self.translate_thinking_to_reasoning(
                 thinking,
-                output_config=cast(dict[str, Any] | None, output_config),
+                output_config=cast(dict[str, object] | None, output_config),
+                auto_summary_level=auto_summary_level,
+                drop_params=drop_params,
             )
             if reasoning:
                 responses_kwargs["reasoning"] = reasoning

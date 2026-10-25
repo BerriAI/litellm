@@ -55,6 +55,8 @@ from integration.providers._gemini_long_decode_support import (
 )
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 Continuation = Callable[[Request, str], Reply]
 
 _MARKER: Final = re.compile(r"marker-([0-9a-f]{32})")
