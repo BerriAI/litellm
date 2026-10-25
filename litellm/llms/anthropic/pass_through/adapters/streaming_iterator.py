@@ -67,6 +67,11 @@ class _ChunkStream(Protocol):
 
 
 @runtime_checkable
+class _AsyncCloseable(Protocol):
+    async def aclose(self) -> None: ...
+
+
+@runtime_checkable
 class _FailureLoggingWaiter(Protocol):
     @property
     def has_dispatched_failure_logging(self) -> bool: ...
@@ -197,6 +202,14 @@ class _CombinedChunkSplitter:
         self._buffer: deque[ModelResponseStream] = deque()
         self._held_calls: Mapping[int, tuple[ModelResponseStream, _ToolCallPart]] = MappingProxyType({})
         self._live_call_index: int | None = None
+        self._closed = False
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if isinstance(self._stream, _AsyncCloseable):
+            await self._stream.aclose()
 
     @property
     def has_dispatched_failure_logging(self) -> bool:
@@ -1239,6 +1252,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 # For non-dict chunks, forward the original value unchanged
                 yield chunk
 
+    async def aclose(self) -> None:
+        await self._combined_chunk_splitter.aclose()
+
     async def async_anthropic_sse_wrapper(self) -> AsyncIterator[bytes]:
         """
         Async version of anthropic_sse_wrapper.
@@ -1481,4 +1497,7 @@ class AnthropicSSEStream(AsyncIterator[bytes]):
         return await self._byte_stream.__anext__()
 
     async def aclose(self) -> None:
-        await self._byte_stream.aclose()
+        try:
+            await self._byte_stream.aclose()
+        finally:
+            await self._anthropic_wrapper.aclose()
