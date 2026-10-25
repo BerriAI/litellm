@@ -2,7 +2,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 import { Tags } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 
-import { DataTable, DataTablePagination } from "@/components/shared/DataTable";
+import { DataTable, DataTablePagination, DEFAULT_PAGE_SIZE_OPTIONS } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
 import type { DailyActivityTagPageResponse, DailyActivityTagSpendRow } from "@/components/UsagePage/dailyActivityApi";
 
@@ -19,22 +19,24 @@ interface TeamTagSpendCardProps {
 
 interface TagPageState {
   scope: object;
-  page: number;
+  pageKey: string;
   response: DailyActivityTagPageResponse | null;
   failed: boolean;
 }
 
 interface TeamTagSpendPage {
   page: number;
+  pageSize: number;
   loading: boolean;
   failed: boolean;
   rows: DailyActivityTagSpendRow[];
   totalTags: number;
   onPageChange: (nextPage: number) => void;
+  onPageSizeChange: (nextPageSize: number) => void;
 }
 
 const QUIET_HEADER = { headerClassName: "font-normal" };
-const PAGE_SIZE = 50;
+const DEFAULT_PAGE_SIZE = 50;
 
 const columns: ColumnDef<DailyActivityTagSpendRow>[] = [
   {
@@ -82,11 +84,17 @@ const useTeamTagSpendPage = ({ accessToken, startTime, endTime, teamId }: TeamTa
     () => ({ hasAccessToken: accessToken !== null, endTimestamp, startTimestamp, teamId }),
     [accessToken, endTimestamp, startTimestamp, teamId],
   );
-  const [pageState, setPageState] = useState<{ scope: object; page: number }>({ scope: {}, page: 0 });
+  const [pageState, setPageState] = useState<{ scope: object; pageSize: number; page: number }>({
+    scope: {},
+    pageSize: DEFAULT_PAGE_SIZE,
+    page: 0,
+  });
   const [tagPageState, setTagPageState] = useState<TagPageState | null>(null);
+  const pageSize = pageState.pageSize;
   const page = pageState.scope === requestScope ? pageState.page : 0;
+  const pageKey = `${page}:${pageSize}`;
   const currentScopeState = tagPageState?.scope === requestScope ? tagPageState : null;
-  const currentPageState = currentScopeState?.page === page ? currentScopeState : null;
+  const currentPageState = currentScopeState?.pageKey === pageKey ? currentScopeState : null;
   const enabled = Boolean(accessToken && startTimestamp !== undefined && endTimestamp !== undefined);
 
   useEffect(() => {
@@ -98,15 +106,15 @@ const useTeamTagSpendPage = ({ accessToken, startTime, endTime, teamId }: TeamTa
       startTime: new Date(startTimestamp),
       endTime: new Date(endTimestamp),
       teamId,
-      offset: page * PAGE_SIZE,
-      limit: PAGE_SIZE,
+      offset: page * pageSize,
+      limit: pageSize,
       signal: controller.signal,
     };
     void ENTITY_API.team
       .tagPage(tagPageRequest)
       .then((response) => {
         if (controller.signal.aborted) return;
-        const nextPageState: TagPageState = { scope: requestScope, page, response, failed: false };
+        const nextPageState: TagPageState = { scope: requestScope, pageKey, response, failed: false };
         setTagPageState(nextPageState);
       })
       .catch((error: unknown) => {
@@ -114,25 +122,28 @@ const useTeamTagSpendPage = ({ accessToken, startTime, endTime, teamId }: TeamTa
         console.error("Team tag spend page request failed:", error);
         setTagPageState((current) => ({
           scope: requestScope,
-          page,
+          pageKey,
           response: current?.scope === requestScope ? current.response : null,
           failed: true,
         }));
       });
     return () => controller.abort();
-  }, [accessToken, endTimestamp, page, requestScope, startTimestamp, teamId]);
+  }, [accessToken, endTimestamp, page, pageKey, pageSize, requestScope, startTimestamp, teamId]);
 
   const loading = enabled && currentPageState === null;
   const failed = currentPageState?.failed ?? false;
   const rows = failed ? [] : currentPageState?.response?.tags ?? [];
   const totalTags = currentScopeState?.response?.total_tags ?? 0;
-  const onPageChange = (nextPage: number) => setPageState({ scope: requestScope, page: nextPage });
+  const onPageChange = (nextPage: number) => setPageState({ scope: requestScope, pageSize, page: nextPage });
+  const onPageSizeChange = (nextPageSize: number) =>
+    setPageState({ scope: requestScope, pageSize: nextPageSize, page: 0 });
 
-  return { page, loading, failed, rows, totalTags, onPageChange };
+  return { page, pageSize, loading, failed, rows, totalTags, onPageChange, onPageSizeChange };
 };
 
 const TeamTagSpendCard: React.FC<TeamTagSpendCardProps> = (props) => {
-  const { page, loading, failed, rows, totalTags, onPageChange } = useTeamTagSpendPage(props);
+  const { page, pageSize, loading, failed, rows, totalTags, onPageChange, onPageSizeChange } =
+    useTeamTagSpendPage(props);
   return (
     <Panel icon={Tags} title="Spend Per Tag" testId="team-tag-spend-card">
       <p className="mb-3 text-xs text-muted-foreground">
@@ -152,11 +163,11 @@ const TeamTagSpendCard: React.FC<TeamTagSpendCardProps> = (props) => {
       {totalTags > 0 && (
         <DataTablePagination
           page={page}
-          pageSize={PAGE_SIZE}
+          pageSize={pageSize}
           rowCount={totalTags}
           onPageChange={onPageChange}
-          onPageSizeChange={() => undefined}
-          pageSizeOptions={[PAGE_SIZE]}
+          onPageSizeChange={onPageSizeChange}
+          pageSizeOptions={DEFAULT_PAGE_SIZE_OPTIONS}
           isLoading={loading}
         />
       )}
