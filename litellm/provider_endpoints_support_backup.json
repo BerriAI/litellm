@@ -492,6 +492,23 @@
         "interactions": true
       }
     },
+    "cloudgpu": {
+      "display_name": "CloudGPU (`cloudgpu`)",
+      "url": "https://cloudgpu.app/api/docs",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "cloudflare": {
       "display_name": "Cloudflare AI Workers (`cloudflare`)",
       "url": "https://docs.litellm.ai/docs/providers/cloudflare_workers",

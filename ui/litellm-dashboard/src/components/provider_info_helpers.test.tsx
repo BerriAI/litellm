@@ -200,6 +200,7 @@ describe("provider_info_helpers", () => {
         Providers.Bespoke,
         Providers.BYTEZ,
         Providers.CLARIFAI,
+        Providers.CLOUDGPU,
         Providers.Cognition,
         Providers.COMPACTIFAI,
         Providers.CORALBRICKS,
