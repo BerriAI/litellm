@@ -48096,7 +48096,6 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true,
         "supports_vision": true
     },
     "snowflake/claude-3-5-sonnet": {
