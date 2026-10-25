@@ -3765,6 +3765,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "axum-login",
+ "fancy-regex 0.19.2",
  "futures-util",
  "litellm-auth-types",
  "litellm-config",
