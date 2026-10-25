@@ -132,11 +132,12 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
         mapped_voice: Final = self._resolve_voice_id(voice, params)
 
         # Response/output format → query parameter
-        response_format: Final = params.pop("response_format", None)
-        output_format_param: Final = params.pop("output_format", None) or passthrough_kwargs.pop("output_format", None)
-        format_param: Final = response_format or output_format_param
-        if isinstance(format_param, str):
-            mapped_format: Final = self.FORMAT_MAPPINGS.get(format_param.lower(), format_param)
+        format_key: Final = "response_format" if "response_format" in params else "output_format"
+        output_format_param: Final[object] = params.pop(format_key, None) or passthrough_kwargs.pop(
+            "output_format", None
+        )
+        if isinstance(output_format_param, str):
+            mapped_format: Final = self.FORMAT_MAPPINGS.get(output_format_param.lower(), output_format_param)
             query_params["output_format"] = mapped_format
 
         # ElevenLabs does not support OpenAI speed directly.
