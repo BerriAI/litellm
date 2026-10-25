@@ -7194,7 +7194,7 @@ def test_invalid_reasoning_effort_is_a_400_not_a_500(custom_llm_provider, model,
             model=model,
             custom_llm_provider=custom_llm_provider,
             reasoning_effort=reasoning_effort,
-            drop_params=True,
+            drop_params=False,
         )
 
     assert exc_info.value.status_code == 400

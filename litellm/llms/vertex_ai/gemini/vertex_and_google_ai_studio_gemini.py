@@ -1292,18 +1292,28 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 return None
 
     @staticmethod
-    def _map_reasoning_effort(effort: str, model: str, reasoning_effort: object) -> GeminiThinkingConfig:
+    def _map_reasoning_effort(
+        effort: str,
+        model: str,
+        reasoning_effort: object,
+        drop_params: bool = False,
+    ) -> GeminiThinkingConfig | None:
         include_thoughts: Final = VertexGeminiConfig._include_thoughts_requested_by_reasoning_effort(reasoning_effort)
         if VertexGeminiConfig._is_gemini_3_or_newer(model):
-            return VertexGeminiConfig._map_reasoning_effort_to_thinking_level(effort, model, include_thoughts)
-        return VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(effort, model, include_thoughts)
+            return VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+                effort, model, include_thoughts, drop_params=drop_params
+            )
+        return VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+            effort, model, include_thoughts, drop_params=drop_params
+        )
 
     @staticmethod
     def _map_reasoning_effort_to_thinking_budget(
         reasoning_effort: str,
         model: str | None = None,
         include_thoughts: bool | None = None,
-    ) -> GeminiThinkingConfig:
+        drop_params: bool = False,
+    ) -> GeminiThinkingConfig | None:
         sends_thoughts: Final = VertexGeminiConfig._include_thoughts(include_thoughts)
         if reasoning_effort == "minimal":
             # Use model-specific minimum thinking budget or fallback
@@ -1347,6 +1357,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 "includeThoughts": False,
             }
         else:
+            should_drop: Final[bool] = (
+                drop_params is True
+                or getattr(litellm, "drop_params", False) is True
+                or drops_unsupported_params(drop_params)
+            )
+            if should_drop:
+                verbose_logger.debug("Dropping unsupported reasoning_effort: %s", reasoning_effort)
+                return None
             raise _unsupported_reasoning_effort(reasoning_effort)
 
     @staticmethod
@@ -1362,7 +1380,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         reasoning_effort: str,
         model: str | None = None,
         include_thoughts: bool | None = None,
-    ) -> GeminiThinkingConfig:
+        drop_params: bool = False,
+    ) -> GeminiThinkingConfig | None:
         """
         Map reasoning_effort to thinking_level for Gemini 3+ models.
         Args:
@@ -1391,6 +1410,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 "includeThoughts": False,
             }
         else:
+            should_drop: Final[bool] = (
+                drop_params is True
+                or getattr(litellm, "drop_params", False) is True
+                or drops_unsupported_params(drop_params)
+            )
+            if should_drop:
+                verbose_logger.debug("Dropping unsupported reasoning_effort: %s", reasoning_effort)
+                return None
             raise _unsupported_reasoning_effort(reasoning_effort)
 
     @staticmethod
@@ -1696,15 +1723,27 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     effort_value = value.get("effort")
 
                 if effort_value is not None:
-                    # Validate no conflict with thinking_level
-                    VertexGeminiConfig._validate_thinking_config_conflicts(
-                        optional_params=optional_params,
-                        param_name="reasoning_effort",
-                        param_description="thinking_budget",
+                    should_drop: bool = (
+                        drop_params is True
+                        or optional_params.get("drop_params") is True
+                        or getattr(litellm, "drop_params", False) is True
+                        or drops_unsupported_params(drop_params)
+                        or drops_unsupported_params(optional_params.get("drop_params"))
                     )
-                    optional_params["thinkingConfig"] = VertexGeminiConfig._map_reasoning_effort(
-                        effort=effort_value, model=model, reasoning_effort=value
+                    thinking_config = VertexGeminiConfig._map_reasoning_effort(
+                        effort=effort_value,
+                        model=model,
+                        reasoning_effort=value,
+                        drop_params=should_drop,
                     )
+                    if thinking_config is not None:
+                        # Validate no conflict with thinking_level
+                        VertexGeminiConfig._validate_thinking_config_conflicts(
+                            optional_params=optional_params,
+                            param_name="reasoning_effort",
+                            param_description="thinking_budget",
+                        )
+                        optional_params["thinkingConfig"] = thinking_config
             elif param == "thinking":
                 # Validate no conflict with thinking_level
                 VertexGeminiConfig._validate_thinking_config_conflicts(
