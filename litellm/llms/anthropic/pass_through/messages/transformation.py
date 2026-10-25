@@ -414,12 +414,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     @staticmethod
     def _translate_reasoning_effort_to_anthropic(
-        model: str, optional_params: dict, max_tokens: int | None, custom_llm_provider: str
+        model: str, optional_params: dict, max_tokens: int | None, custom_llm_provider: str, drop_params: bool = False
     ) -> None:
         """Map OpenAI-style ``reasoning_effort`` to native Anthropic params.
 
-        Caller-supplied ``thinking`` / ``output_config`` win over the alias.
-        ``effort='none'`` clears both. Invalid efforts raise a 400. A mapped
+        Caller-supplied ``thinking`` / ``output_config`` win over positive efforts.
+        ``effort='none'`` overrides both to disable thinking. Invalid efforts raise a 400. A mapped
         thinking budget is capped below ``max_tokens`` and dropped when even
         the minimum budget cannot fit.
         """
@@ -438,13 +438,16 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 reasoning_effort=reasoning_effort,
                 model=model,
                 custom_llm_provider=custom_llm_provider,
+                drop_params=drop_params,
             )
         except _BadRequestError as e:
             raise AnthropicError(message=str(e.message), status_code=400)
 
-        if mapped_thinking is None:
+        if mapped_thinking is None or reasoning_effort == "none":
             optional_params.pop("thinking", None)
             optional_params.pop("output_config", None)
+            if mapped_thinking is not None:
+                optional_params["thinking"] = mapped_thinking  # rebind-ok: request out-param
             return
 
         fitted_thinking: Final = AnthropicConfig.cap_thinking_budget_to_max_tokens(mapped_thinking, max_tokens)
@@ -645,6 +648,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params=anthropic_messages_optional_request_params,
             max_tokens=max_tokens,
             custom_llm_provider=self._resolved_provider,
+            drop_params=getattr(litellm_params, "drop_params", None) is True,
         )
 
         AnthropicModelInfo.maybe_drop_disabled_thinking(

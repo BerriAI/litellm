@@ -46,7 +46,7 @@ def test_reasoning_effort_maps_to_output_config_for_adaptive_model(
     assert result.get("output_config") == {"effort": expected_effort}
 
 
-def test_reasoning_effort_none_clears_thinking_and_output_config():
+def test_reasoning_effort_none_disables_thinking_and_clears_output_config():
     config = AnthropicMessagesConfig()
     optional_params = {
         "max_tokens": 1024,
@@ -64,7 +64,7 @@ def test_reasoning_effort_none_clears_thinking_and_output_config():
     )
 
     assert "reasoning_effort" not in result
-    assert "thinking" not in result
+    assert result["thinking"] == {"type": "disabled"}
     assert "output_config" not in result
 
 

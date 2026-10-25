@@ -1034,8 +1034,8 @@ def test_openai_gpt5_converse_never_forwards_thinking(model, local_model_cost_ma
         "bedrock/converse/us.anthropic.claude-opus-4-7",
     ],
 )
-def test_reasoning_effort_none_omits_thinking_for_anthropic_converse(model):
-    """reasoning_effort="none" must omit thinking from the Bedrock Converse request."""
+def test_reasoning_effort_none_disables_thinking_for_anthropic_converse(model):
+    """reasoning_effort="none" must explicitly disable adaptive thinking."""
     config = AmazonConverseConfig()
 
     optional_params = config.map_openai_params(
@@ -1045,7 +1045,10 @@ def test_reasoning_effort_none_omits_thinking_for_anthropic_converse(model):
         drop_params=False,
     )
 
-    assert "thinking" not in optional_params
+    if model == "bedrock/converse/us.anthropic.claude-opus-4-5-20251101-v1:0":
+        assert "thinking" not in optional_params
+    else:
+        assert optional_params["thinking"] == {"type": "disabled"}
 
 
 @pytest.mark.parametrize(

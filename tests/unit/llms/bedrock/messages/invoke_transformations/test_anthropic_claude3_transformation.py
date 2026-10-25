@@ -1404,8 +1404,8 @@ def test_bedrock_messages_reasoning_effort_on_non_adaptive_uses_thinking_budget(
     assert thinking["budget_tokens"] >= 1024
 
 
-def test_bedrock_messages_reasoning_effort_none_clears_thinking():
-    """``reasoning_effort='none'`` clears both ``thinking`` and ``output_config``."""
+def test_bedrock_messages_reasoning_effort_none_disables_thinking():
+    """``reasoning_effort='none'`` disables thinking and clears ``output_config``."""
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -1426,7 +1426,7 @@ def test_bedrock_messages_reasoning_effort_none_clears_thinking():
     )
 
     assert "reasoning_effort" not in result
-    assert "thinking" not in result
+    assert result["thinking"] == {"type": "disabled"}
     assert "output_config" not in result
 
 
