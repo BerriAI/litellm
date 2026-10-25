@@ -134,7 +134,7 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
         # Response/output format → query parameter
         response_format: Final = params.pop("response_format", None)
         output_format_param: Final = params.pop("output_format", None) or passthrough_kwargs.pop("output_format", None)
-        format_param = response_format or output_format_param
+        format_param: Final = response_format or output_format_param
         if isinstance(format_param, str):
             mapped_format: Final = self.FORMAT_MAPPINGS.get(format_param.lower(), format_param)
             query_params["output_format"] = mapped_format
