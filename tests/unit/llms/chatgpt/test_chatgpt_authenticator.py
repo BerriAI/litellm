@@ -194,7 +194,9 @@ class TestChatGPTMultiAccountAuthenticator:
 
         assert authenticator.auth_file == str(custom_file)
         assert authenticator.token_dir == str(custom_file.parent)
-        assert custom_file.parent.exists()
+        assert not custom_file.parent.exists()
+        authenticator._write_auth_file({"access_token": "token-a"})
+        assert json.loads(custom_file.read_text())["access_token"] == "token-a"
 
     def test_default_auth_file_from_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "env-dir"))

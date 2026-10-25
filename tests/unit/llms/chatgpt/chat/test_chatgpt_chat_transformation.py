@@ -8,6 +8,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.chatgpt.chat.transformation import ChatGPTConfig
 from litellm.types.router import GenericLiteLLMParams
@@ -146,14 +147,35 @@ def _subscription_response(request: httpx.Request) -> httpx.Response:
     )
 
 
+@pytest.mark.parametrize("blocked_default", [False, True])
+@pytest.mark.parametrize("with_prompt", [False, True])
 @pytest.mark.parametrize("endpoint", ["chat", "responses"])
 @pytest.mark.parametrize("through_router", [False, True])
 @pytest.mark.asyncio
 async def test_requests_use_selected_subscription(
-    auth_files: tuple[Path, Path], endpoint: str, through_router: bool, monkeypatch: pytest.MonkeyPatch
+    auth_files: tuple[Path, Path],
+    endpoint: str,
+    through_router: bool,
+    with_prompt: bool,
+    blocked_default: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(auth_files[0].parent / "missing-default"))
+    default_dir: Final = auth_files[0].parent / "missing-default"
+    if blocked_default:
+        default_dir.write_text("ordinary file")
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(default_dir / "unused"))
+    if with_prompt:
+        monkeypatch.setattr(
+            litellm,
+            "callbacks",
+            [
+                DotpromptManager(
+                    prompt_id="account-check",
+                    prompt_data={"content": "Saved account prompt", "metadata": {"model": "chatgpt/gpt-6.1-sol"}},
+                )
+            ],
+        )
     router: Final = (
         litellm.Router(
             model_list=[
@@ -174,6 +196,8 @@ async def test_requests_use_selected_subscription(
             if router
             else {"model": "chatgpt/gpt-6.1-sol", "chatgpt_auth_file": str(path)}
         )
+        if with_prompt:
+            params["prompt_id"] = "account-check"
         if endpoint == "chat":
             result: Final = await (router.acompletion if router else litellm.acompletion)(
                 **params, messages=[{"role": "user", "content": "Hello"}]
@@ -188,3 +212,5 @@ async def test_requests_use_selected_subscription(
         transport.post("https://chatgpt.com/backend-api/codex/responses").mock(side_effect=_subscription_response)
         results: Final = await asyncio.gather(*(request(index, path) for index, path in enumerate(auth_files)))
         assert results == ["acct-a", "acct-b"]
+        if with_prompt:
+            assert all("Saved account prompt" in call.request.content.decode() for call in transport.calls)

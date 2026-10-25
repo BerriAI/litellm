@@ -705,9 +705,11 @@ def _api_base_kwarg(kwargs: Mapping[str, object]) -> str | None:
     return api_base if isinstance(api_base, str) else None
 
 
-def _dispatched_model_name(model: str, custom_llm_provider: str, api_base: str | None) -> str:
+def _dispatched_model_name(
+    model: str, custom_llm_provider: str, api_base: str | None, litellm_params: GenericLiteLLMParams | None = None
+) -> str:
     provider_model, _, _, _ = litellm.get_llm_provider(
-        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, litellm_params=litellm_params
     )
     return _strip_responses_routing_prefix(provider_model)
 
@@ -718,6 +720,7 @@ def _will_bridge_to_chat_completions(
     use_chat_completions_api: bool,
     model_info: object,
     api_base: str | None,
+    litellm_params: GenericLiteLLMParams | None = None,
 ) -> bool:
     """``_bridges_to_chat_completions`` for callers running before the provider config is resolved.
 
@@ -734,7 +737,7 @@ def _will_bridge_to_chat_completions(
         return True
     return _bridges_to_chat_completions(
         _resolve_responses_api_provider_config(
-            _dispatched_model_name(normalized_model[0], custom_llm_provider, api_base),
+            _dispatched_model_name(normalized_model[0], custom_llm_provider, api_base, litellm_params),
             custom_llm_provider,
             model_info,
             api_base,
@@ -750,12 +753,15 @@ def provider_stores_the_conversation(model: str, custom_llm_provider: str | None
     first MCP round runs as an internal call that writes no spend log at all.
     """
     api_base: Final = _api_base_kwarg(kwargs)
+    litellm_params: Final = GenericLiteLLMParams(**kwargs)
     return not _will_bridge_to_chat_completions(
         model,
-        custom_llm_provider or litellm.get_llm_provider(model=model, api_base=api_base)[1],
+        custom_llm_provider
+        or litellm.get_llm_provider(model=model, api_base=api_base, litellm_params=litellm_params)[1],
         bool(kwargs.get("use_chat_completions_api")),
         kwargs.get("model_info"),
         api_base,
+        litellm_params,
     )
 
 
@@ -936,6 +942,7 @@ async def aresponses(
                     bool(kwargs.get("use_chat_completions_api")),
                     kwargs.get("model_info"),
                     _api_base_kwarg(kwargs),
+                    GenericLiteLLMParams(**kwargs),
                 ),
             ):
                 _stamp_injection_points_for_the_hook(kwargs, model, custom_llm_provider, input, tools)
@@ -1051,11 +1058,14 @@ def _resolve_prompt_swapped_provider(
     kwargs: Mapping[str, object],
     prompt_id: str | None,
 ) -> str:
-    swapped_provider: Final = litellm.get_llm_provider(model=swapped_model)[1]
+    litellm_params: Final = GenericLiteLLMParams(**kwargs)
+    swapped_provider: Final = litellm.get_llm_provider(model=swapped_model, litellm_params=litellm_params)[1]
     if kwargs.get("api_key") is None and kwargs.get("api_base") is None:
         return swapped_provider
     try:
-        original_provider: Final = custom_llm_provider or litellm.get_llm_provider(model=original_model)[1]
+        original_provider: Final = (
+            custom_llm_provider or litellm.get_llm_provider(model=original_model, litellm_params=litellm_params)[1]
+        )
     except litellm.BadRequestError:
         return swapped_provider
     if swapped_provider == original_provider:
@@ -1108,6 +1118,7 @@ def _apply_prompt_management_to_responses_call(
                 use_chat_completions_api,
                 kwargs.get("model_info"),
                 _api_base_kwarg(kwargs),
+                GenericLiteLLMParams(**kwargs),
             ),
         ):
             _stamp_injection_points_for_the_hook(kwargs, model, custom_llm_provider, input, tools)

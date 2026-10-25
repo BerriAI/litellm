@@ -84,7 +84,6 @@ class Authenticator:
         )
         self.auth_file = os.path.abspath(os.path.expanduser(auth_file or default_auth_file))
         self.token_dir = os.path.dirname(self.auth_file)
-        self._ensure_token_dir()
 
     def get_api_base(self) -> str:
         return os.getenv("CHATGPT_API_BASE") or os.getenv("OPENAI_CHATGPT_API_BASE") or CHATGPT_API_BASE
@@ -154,6 +153,7 @@ class Authenticator:
 
     def _write_auth_file(self, data: JsonObject) -> None:
         try:
+            self._ensure_token_dir()
             with open(self.auth_file, "w") as f:
                 json.dump(data, f)
         except OSError as exc:
