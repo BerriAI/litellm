@@ -96,21 +96,31 @@ def create_config_class(provider: SimpleProviderConfig):
                 return ensure_api_route(api_base, "chat/completions")
             raise ValueError(f"api_base is required for provider {provider.slug}")
 
+        @staticmethod
+        def _supports_tool_params(model: str) -> bool:
+            from litellm.utils import is_explicitly_disabled_factory, supports_function_calling
+
+            if supports_function_calling(model=model, custom_llm_provider=provider.slug):
+                return True
+
+            if provider.provider_info.get("supports_function_calling") is False:
+                return False
+
+            if is_explicitly_disabled_factory(
+                model=model, custom_llm_provider=provider.slug, key="supports_function_calling"
+            ):
+                return False
+
+            return True
+
         def get_supported_openai_params(self, model: str) -> list:
             """Get supported OpenAI params, excluding tool-related params for models
             that don't support function calling."""
-            from litellm.utils import is_explicitly_disabled_factory, supports_function_calling, supports_reasoning
+            from litellm.utils import supports_reasoning
 
             supported_params: Final = super().get_supported_openai_params(model=model)
 
-            _supports_fc: Final = supports_function_calling(model=model, custom_llm_provider=provider.slug) or (
-                provider.provider_info.get("supports_function_calling") is not False
-                and not is_explicitly_disabled_factory(
-                    model=model, custom_llm_provider=provider.slug, key="supports_function_calling"
-                )
-            )
-
-            if not _supports_fc:
+            if not self._supports_tool_params(model):
                 tool_params: Final = [
                     "tools",
                     "tool_choice",
