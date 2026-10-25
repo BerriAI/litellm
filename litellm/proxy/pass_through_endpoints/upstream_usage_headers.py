@@ -7,6 +7,7 @@ records the reported values without recomputing them.
 """
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
@@ -89,15 +90,15 @@ def _parse_total_tokens(raw_value: str | None) -> int | None:
     return total_tokens
 
 
-def parse_upstream_reported_usage(headers: httpx.Headers) -> UpstreamReportedUsage | None:
+def parse_upstream_reported_usage(headers: Mapping[str, str]) -> UpstreamReportedUsage | None:
     """Read the reported totals off an upstream pass-through response.
 
     Returns ``None`` when neither header is present, which is the normal case
     for a target that does not speak this contract (e.g. Anthropic or Vertex,
     whose cost LiteLLM derives from the response body instead).
     """
-    raw_response_cost: Final = headers.get(UPSTREAM_RESPONSE_COST_HEADER)
-    raw_total_tokens: Final = headers.get(UPSTREAM_TOTAL_TOKENS_HEADER)
+    raw_response_cost: Final[str | None] = headers.get(UPSTREAM_RESPONSE_COST_HEADER)
+    raw_total_tokens: Final[str | None] = headers.get(UPSTREAM_TOTAL_TOKENS_HEADER)
     if raw_response_cost is None and raw_total_tokens is None:
         return None
     return UpstreamReportedUsage(

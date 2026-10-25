@@ -1,5 +1,6 @@
 from importlib import import_module
 import base64
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -7,9 +8,12 @@ import pytest
 
 import litellm
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
-from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIOptionalRequestParams
-from litellm.types.utils import Usage
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
+from litellm.types.utils import ModelInfo, Usage
+from litellm.utils import _invalidate_model_cost_lowercase_map
 
 
 class TestResponsesAPIRequestUtils:
@@ -205,13 +209,13 @@ class TestResponsesAPIRequestUtils:
         """Ensure _update_responses_api_response_id_with_model_id works with dict input"""
         responses_api_response = {"id": "resp_abc123"}
         litellm_metadata = {"model_info": {"id": "gpt-4o"}}
-        updated = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+        updated = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
             responses_api_response=responses_api_response,
             custom_llm_provider="openai",
             litellm_metadata=litellm_metadata,
         )
         assert updated["id"] != "resp_abc123"
-        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(updated["id"])
+        decoded = ResponsesAPIRequestUtils.decode_responses_api_response_id(updated["id"])
         assert decoded.get("response_id") == "resp_abc123"
         assert decoded.get("model_id") == "gpt-4o"
         assert decoded.get("custom_llm_provider") == "openai"
@@ -220,12 +224,12 @@ class TestResponsesAPIRequestUtils:
         raw = "resp_" + "a" * 48
         litellm_metadata = {"model_info": {"id": "model-123"}}
 
-        once = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+        once = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
             {"id": raw},
             custom_llm_provider="openai",
             litellm_metadata=litellm_metadata,
         )
-        twice = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+        twice = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
             {"id": once["id"]},
             custom_llm_provider="openai",
             litellm_metadata=litellm_metadata,
@@ -233,17 +237,17 @@ class TestResponsesAPIRequestUtils:
 
         assert twice == once
         assert ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(twice["id"]) == raw
-        assert ResponsesAPIRequestUtils._decode_responses_api_response_id(once["id"]).get("response_id") == raw
+        assert ResponsesAPIRequestUtils.decode_responses_api_response_id(once["id"]).get("response_id") == raw
 
     def test_build_decode_container_id_omits_none_model_id(self):
         """model_id=None must not round-trip as the truthy string 'None'."""
-        encoded = ResponsesAPIRequestUtils._build_container_id(
+        encoded = ResponsesAPIRequestUtils.build_container_id(
             custom_llm_provider="azure",
             model_id=None,
             container_id="cntr_upstream_abc",
         )
         assert "None" not in base64.b64decode(encoded.replace("cntr_", "").encode("utf-8")).decode("utf-8")
-        decoded = ResponsesAPIRequestUtils._decode_container_id(encoded)
+        decoded = ResponsesAPIRequestUtils.decode_container_id(encoded)
         assert decoded.get("custom_llm_provider") == "azure"
         assert decoded.get("model_id") is None
         assert decoded.get("response_id") == "cntr_upstream_abc"
@@ -252,7 +256,7 @@ class TestResponsesAPIRequestUtils:
         """IDs encoded before the None fix should decode without a bogus model_id."""
         legacy_inner = "litellm:custom_llm_provider:azure;model_id:None;container_id:cntr_x"
         legacy_id = "cntr_" + base64.b64encode(legacy_inner.encode("utf-8")).decode("utf-8")
-        decoded = ResponsesAPIRequestUtils._decode_container_id(legacy_id)
+        decoded = ResponsesAPIRequestUtils.decode_container_id(legacy_id)
         assert decoded.get("model_id") is None
         assert decoded.get("custom_llm_provider") == "azure"
         assert decoded.get("response_id") == "cntr_x"
@@ -265,7 +269,7 @@ class TestResponseAPILoggingUtils:
         usage = {"input_tokens": 10, "output_tokens": 20}
 
         # Execute
-        result = ResponseAPILoggingUtils._is_response_api_usage(usage)
+        result = ResponseAPILoggingUtils.is_response_api_usage(usage)
 
         # Assert
         assert result is True
@@ -276,7 +280,7 @@ class TestResponseAPILoggingUtils:
         usage = {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}
 
         # Execute
-        result = ResponseAPILoggingUtils._is_response_api_usage(usage)
+        result = ResponseAPILoggingUtils.is_response_api_usage(usage)
 
         # Assert
         assert result is False
@@ -293,7 +297,7 @@ class TestResponseAPILoggingUtils:
         }
 
         # Execute
-        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+        result = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)
 
         # Assert
         assert isinstance(result, Usage)
@@ -313,7 +317,7 @@ class TestResponseAPILoggingUtils:
         }
 
         # Execute
-        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+        result = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)
 
         # Assert
         assert result.prompt_tokens == 0
@@ -332,7 +336,7 @@ class TestResponseAPILoggingUtils:
         }
 
         # Execute
-        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+        result = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)
 
         # Assert
         assert result.prompt_tokens == 15
@@ -369,7 +373,7 @@ class TestResponseAPILoggingUtils:
         }
 
         # Execute
-        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+        result = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)
 
         # Assert - verify basic token counts
         assert isinstance(result, Usage)
@@ -404,12 +408,49 @@ class TestResponseAPILoggingUtils:
             },
         }
 
-        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+        result = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)
 
         assert result.prompt_tokens_details is not None
         assert result.prompt_tokens_details.cache_write_tokens == 10059
         assert result.prompt_tokens_details.cache_creation_tokens == 10059
         assert result.prompt_tokens_details.cached_tokens == 0
+
+    @pytest.mark.parametrize("as_model", [False, True])
+    def test_transform_response_api_usage_prices_12h_cache_writes(self, as_model: bool) -> None:
+        usage_data: Final = {
+            "input_tokens": 5_000,
+            "output_tokens": 0,
+            "total_tokens": 5_000,
+            "input_tokens_details": {
+                "cache_write_tokens": 5_000,
+                "cache_write_tokens_details": {"ttl_30m_tokens": 3_000, "ttl_12h_tokens": 2_000},
+            },
+        }
+        usage_input: Final = ResponseAPIUsage(**usage_data) if as_model else usage_data
+        usage: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_input)
+        model_info: Final[ModelInfo] = {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "cache_creation_input_token_cost": 3e-6,
+            "cache_creation_input_token_cost_above_12hr": 5e-6,
+        }
+
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.cache_write_tokens == 5_000
+        assert usage.prompt_tokens_details.cache_creation_token_details is not None
+        assert usage.prompt_tokens_details.cache_creation_token_details.ephemeral_12h_input_tokens == 2_000
+        assert usage.prompt_tokens_details.cache_creation_token_details.ephemeral_30m_input_tokens == 3_000
+        cost: Final = generic_cost_per_token(
+            model="test-12h-cache-write",
+            usage=usage,
+            custom_llm_provider="openai",
+            model_info=model_info,
+        )[0]
+
+        assert cost == pytest.approx(
+            3_000 * model_info["cache_creation_input_token_cost"]
+            + 2_000 * model_info["cache_creation_input_token_cost_above_12hr"]
+        )
 
     def test_transform_response_api_usage_mixed_details(self):
         """Test transformation handles mixed token details (cached + image + audio)."""
@@ -433,7 +474,7 @@ class TestResponseAPILoggingUtils:
         }
 
         # Execute
-        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+        result = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)
 
         # Assert - all token detail types should be preserved
         assert result.prompt_tokens_details is not None
@@ -465,7 +506,7 @@ class TestResponseAPILoggingUtils:
             },
         }
 
-        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+        result = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)
 
         assert result.prompt_tokens_details is not None
         assert result.prompt_tokens_details.text_tokens == 8
@@ -487,7 +528,7 @@ class TestResponseAPILoggingUtils:
             "output_token_details": {"text_tokens": 2, "audio_tokens": 98},
         }
 
-        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+        result = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)
 
         assert result.prompt_tokens_details is not None
         assert result.prompt_tokens_details.text_tokens == 10
@@ -507,7 +548,7 @@ class TestResponseAPILoggingUtils:
             "output_token_details": {"text_tokens": 70, "audio_tokens": 0, "reasoning_tokens": 52},
         }
 
-        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+        result = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)
 
         assert result.completion_tokens == 70
         assert result.completion_tokens_details is not None
@@ -525,7 +566,7 @@ class TestResponseAPILoggingUtils:
             "output_token_details": {"text_tokens": 39, "audio_tokens": 31, "reasoning_tokens": 23},
         }
 
-        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+        result = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)
 
         assert result.completion_tokens_details is not None
         assert result.completion_tokens_details.text_tokens == 16
@@ -541,7 +582,7 @@ class TestResponseAPILoggingUtils:
             "output_tokens_details": {"text_tokens": 12, "reasoning_tokens": 5},
         }
 
-        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+        result = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)
 
         assert result.completion_tokens_details is not None
         assert result.completion_tokens_details.text_tokens == 12
@@ -557,7 +598,7 @@ class TestResponseAPILoggingUtils:
             server_side_tool_usage_details=details,
         )
 
-        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+        result = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)
 
         assert isinstance(result, Usage)
         assert result.prompt_tokens == 100
@@ -577,7 +618,7 @@ class TestResponseAPILoggingUtils:
             server_side_tool_usage_details={"web_search_calls": 1},
         )
 
-        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+        result = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)
 
         assert result.prompt_tokens == 35
         assert result.completion_tokens == 1716
@@ -594,7 +635,7 @@ class TestResponseAPILoggingUtils:
         )
         setattr(usage, "server_side_tool_usage_details", details)
 
-        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+        result = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)
 
         assert result is usage
         assert getattr(result, "server_side_tool_usage_details") == details
@@ -621,7 +662,7 @@ class TestResponseAPILoggingUtils:
             "server_side_tool_usage_details": details,
         }
 
-        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+        result = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)
 
         assert isinstance(result, Usage)
         assert result.prompt_tokens == 50
@@ -647,7 +688,7 @@ class TestResponseAPILoggingUtils:
             },
         }
 
-        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+        result = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)
 
         assert result.prompt_tokens_details is not None
         assert result.prompt_tokens_details.cached_tokens == 192
@@ -668,7 +709,7 @@ class TestResponseAPILoggingUtils:
             },
         )
 
-        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+        result = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)
 
         assert result.prompt_tokens_details is not None
         assert result.prompt_tokens_details.cached_tokens_details is not None
@@ -890,3 +931,45 @@ class TestResponsesInputToChatMessages:
         assert ResponsesAPIRequestUtils.responses_input_to_chat_messages(
             [reasoning_item, user_message, "stray"]
         ) == [user_message]
+
+
+def test_responses_object_bills_an_explicit_cache_hit_at_the_explicit_rate():
+    model = "dashscope/qwen-responses-explicit-cache-test"
+    previous_row = litellm.model_cost.get(model)
+    litellm.model_cost[model] = {
+        "litellm_provider": "dashscope",
+        "mode": "chat",
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 7.5e-06,
+        "cache_read_input_token_cost": 5e-07,
+        "explicit_cache_read_input_token_cost": 2.5e-07,
+    }
+    _invalidate_model_cost_lowercase_map()
+    try:
+        chat_usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=0,
+            prompt_tokens_details={"cached_tokens": 1000, "cache_type": "ephemeral"},
+        )
+        responses_object = ResponsesAPIResponse(
+            id="resp_explicit_cache",
+            created_at=0,
+            model="qwen-responses-explicit-cache-test",
+            object="response",
+            status="completed",
+            output=[],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+            usage=LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(chat_usage),
+        )
+
+        assert litellm.completion_cost(completion_response=responses_object, model=model) == pytest.approx(
+            1000 * 2.5e-07
+        )
+    finally:
+        if previous_row is None:
+            litellm.model_cost.pop(model, None)
+        else:
+            litellm.model_cost[model] = previous_row
+        _invalidate_model_cost_lowercase_map()

@@ -1,8 +1,6 @@
 import asyncio
 import json
-import os
 import re
-import signal
 import uuid
 from collections.abc import Callable, Generator, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -15,7 +13,6 @@ from typing import Final, Literal, Protocol, cast
 import anthropic
 import httpx
 import openai
-import psutil
 import pytest
 import yaml
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
@@ -361,6 +358,10 @@ def _has_root(spans: tuple[Span, ...]) -> bool:
     return any(span["kind"] == SERVER for span in spans)
 
 
+def _has_model_span(spans: tuple[Span, ...]) -> bool:
+    return any("gen_ai.operation.name" in span["attributes"] for span in spans)
+
+
 def _trace_of_call(sink: str, call_id: str, since: int) -> tuple[Span, ...]:
     _, spans = recorded_spans(sink, since)
     traces: Final = {span["trace_id"] for span in spans if span["attributes"].get("litellm.call_id") == call_id}
@@ -370,7 +371,7 @@ def _trace_of_call(sink: str, call_id: str, since: int) -> tuple[Span, ...]:
 def _operator_trace(rig: Rig, sent: Sent, cursors: Cursors) -> tuple[Span, ...]:
     trace: Final = eventually(
         lambda: _trace_of_call(rig.sinks.operator, sent.call_id, cursors.operator),
-        lambda spans: _has_root(spans) and "redis" in _db_systems(spans),
+        lambda spans: _has_root(spans) and "redis" in _db_systems(spans) and _has_model_span(spans),
         seconds=40,
     )
     assert len({span["trace_id"] for span in trace}) == 1, _names(trace)
@@ -408,7 +409,7 @@ def _assert_tenant_mirrors(rig: Rig, operator: tuple[Span, ...], cursors: Cursor
 
 def _assert_withheld(rig: Rig, sent: Sent, cursors: Cursors) -> tuple[Span, ...]:
     tenant: Final = _assert_tenant_mirrors(rig, _operator_trace(rig, sent, cursors), cursors)
-    assert any("gen_ai.operation.name" in span["attributes"] for span in tenant), _names(tenant)
+    assert _has_model_span(tenant), _names(tenant)
     return tenant
 
 
@@ -687,25 +688,22 @@ def test_stalled_tenant_destination_during_a_burst_does_not_block_responses(rig:
 
 @pytest.mark.timeout(300)
 def test_killing_one_of_two_workers_mid_burst_keeps_the_filter_on_the_survivor(rig: Rig) -> None:
-    root: Final = psutil.Process(rig.owned.process.pid)
-    workers: Final = eventually(
-        lambda: tuple(child for child in root.children() if "resource_tracker" not in " ".join(child.cmdline())),
-        lambda found: len(found) == 2,
-        seconds=30,
-    )
+    workers: Final = eventually(rig.owned.worker_pids, lambda found: len(found) == 2, seconds=30)
     cursors: Final = rig.cursors()
 
-    def one(index: int) -> Sent | str:
-        if index == 6:
-            os.kill(workers[0].pid, signal.SIGKILL)
-        try:
-            return rig.raw("chat", _marker(), stream=index % 2 == 0)
-        except (httpx.HTTPError, AssertionError) as error:
-            return repr(error)
+    with rig.owned.replacing_worker(min(workers)) as kill:
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        results: Final = tuple(pool.map(one, range(18)))
-    assert rig.owned.process.poll() is None, "Proxy root exited after a worker was killed"
+        def one(index: int) -> Sent | str:
+            if index == 6:
+                kill()
+            try:
+                return rig.raw("chat", _marker(), stream=index % 2 == 0)
+            except (httpx.HTTPError, AssertionError) as error:
+                return repr(error)
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            results: Final = tuple(pool.map(one, range(18)))
+        assert rig.owned.process.poll() is None, "Proxy root exited after a worker was killed"
     failures: Final = tuple(result for result in results if isinstance(result, str))
     assert all(failure.startswith(("ReadError(", "RemoteProtocolError(", "ConnectError(")) for failure in failures), (
         failures
@@ -725,7 +723,7 @@ def _assert_tenant_kept(
         return (
             sum(1 for span in spans if span["kind"] == SERVER) == 1
             and "redis" in _db_systems(spans)
-            and (not needs_model_span or any("gen_ai.operation.name" in span["attributes"] for span in spans))
+            and (not needs_model_span or _has_model_span(spans))
         )
 
     tenant: Final = eventually(
@@ -736,7 +734,7 @@ def _assert_tenant_kept(
     )
     assert sum(1 for span in tenant if span["kind"] == SERVER) == 1, _names(tenant)
     assert "redis" in _db_systems(tenant), f"redis spans missing at the tenant: {_names(tenant)}"
-    assert not needs_model_span or any("gen_ai.operation.name" in span["attributes"] for span in tenant), _names(tenant)
+    assert not needs_model_span or _has_model_span(tenant), _names(tenant)
     return tenant
 
 
@@ -918,25 +916,22 @@ def test_unconfigured_tenant_outage_during_a_mixed_burst(unconfigured_rig: Rig) 
 
 @pytest.mark.timeout(300)
 def test_unconfigured_killing_one_of_two_workers_keeps_the_fan_out(unconfigured_rig: Rig) -> None:
-    root: Final = psutil.Process(unconfigured_rig.owned.process.pid)
-    workers: Final = eventually(
-        lambda: tuple(child for child in root.children() if "resource_tracker" not in " ".join(child.cmdline())),
-        lambda found: len(found) == 2,
-        seconds=30,
-    )
+    workers: Final = eventually(unconfigured_rig.owned.worker_pids, lambda found: len(found) == 2, seconds=30)
     cursors: Final = unconfigured_rig.cursors()
 
-    def one(index: int) -> Sent | str:
-        if index == 6:
-            os.kill(workers[0].pid, signal.SIGKILL)
-        try:
-            return unconfigured_rig.raw("chat", _marker(), stream=index % 2 == 0)
-        except (httpx.HTTPError, AssertionError) as error:
-            return repr(error)
+    with unconfigured_rig.owned.replacing_worker(min(workers)) as kill:
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        results: Final = tuple(pool.map(one, range(18)))
-    assert unconfigured_rig.owned.process.poll() is None, "Proxy root exited after a worker was killed"
+        def one(index: int) -> Sent | str:
+            if index == 6:
+                kill()
+            try:
+                return unconfigured_rig.raw("chat", _marker(), stream=index % 2 == 0)
+            except (httpx.HTTPError, AssertionError) as error:
+                return repr(error)
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            results: Final = tuple(pool.map(one, range(18)))
+        assert unconfigured_rig.owned.process.poll() is None, "Proxy root exited after a worker was killed"
     failures: Final = tuple(result for result in results if isinstance(result, str))
     assert all(failure.startswith(("ReadError(", "RemoteProtocolError(", "ConnectError(")) for failure in failures), (
         failures

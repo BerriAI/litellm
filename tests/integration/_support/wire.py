@@ -3,13 +3,14 @@ from __future__ import annotations
 import ssl
 import threading
 import time
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from queue import SimpleQueue
 from types import MappingProxyType
-from typing import Final
+from typing import BinaryIO, Final
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +21,37 @@ class Request:
     body: bytes
 
 
+class AbortedBody(Exception):
+    """The client closed the connection before the body it announced was complete."""
+
+
+def exactly(stream: BinaryIO, size: int) -> bytes:
+    data: Final = stream.read(size)
+    if len(data) < size:
+        raise AbortedBody
+    return data
+
+
+def chunked_body(stream: BinaryIO) -> Iterator[bytes]:
+    while True:
+        size_line: Final = stream.readline()
+        if not size_line:
+            raise AbortedBody
+        size: Final = int(size_line.split(b";")[0].strip(), 16)
+        if size == 0:
+            while stream.readline().strip():
+                pass
+            return
+        yield exactly(stream, size)
+        stream.readline()
+
+
+def read_body(headers: Mapping[str, str], stream: BinaryIO) -> bytes:
+    if headers.get("transfer-encoding", "").lower() == "chunked":
+        return b"".join(chunked_body(stream))
+    return exactly(stream, int(headers.get("content-length", "0")))
+
+
 @dataclass(frozen=True, slots=True)
 class Reply:
     status: int = 200
@@ -27,8 +59,10 @@ class Reply:
     content_type: str = "application/json"
     chunks: tuple[bytes, ...] | None = None
     abort_after: int | None = None
+    gate_before_first: threading.Event | None = None
     gate_after_first: threading.Event | None = None
     pause_between_chunks: float = 0
+    heartbeat: bytes | None = None
     headers: Mapping[str, str] = MappingProxyType({})
     drop_connection: bool = False
 
@@ -39,12 +73,27 @@ class Wire:
     received: SimpleQueue[Request]
     disconnected: SimpleQueue[str]
     connected: SimpleQueue[str]
+    closed: SimpleQueue[str]
 
     def drain(self) -> tuple[Request, ...]:
         return tuple(self.received.get_nowait() for _ in range(self.received.qsize()))
 
     def connections(self) -> int:
         return self.connected.qsize()
+
+    def open_connections(self) -> int:
+        return self.connected.qsize() - self.closed.qsize()
+
+
+def _await_release(
+    gate: threading.Event, closing: threading.Event, beat: Callable[[], None] | None = None, every: float = 0.05
+) -> bool:
+    while not closing.is_set():
+        if gate.wait(timeout=every):
+            return True
+        if beat is not None:
+            beat()
+    return gate.is_set()
 
 
 @contextmanager
@@ -60,6 +109,8 @@ def wire_server(
     errors: Final[SimpleQueue[Exception]] = SimpleQueue()
     disconnected: Final[SimpleQueue[str]] = SimpleQueue()
     connected: Final[SimpleQueue[str]] = SimpleQueue()
+    closed: Final[SimpleQueue[str]] = SimpleQueue()
+    closing: Final = threading.Event()
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -69,13 +120,23 @@ def wire_server(
             super().setup()
             connected.put(f"{self.client_address[0]}:{self.client_address[1]}")
 
+        def finish(self) -> None:
+            super().finish()
+            closed.put(f"{self.client_address[0]}:{self.client_address[1]}")
+
+        def write_chunk(self, chunk: bytes) -> None:
+            self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
+            self.wfile.flush()
+
         def respond(self) -> None:
-            request: Final = Request(
-                self.command,
-                self.path,
-                {name.lower(): value for name, value in self.headers.items()},
-                self.rfile.read(int(self.headers.get("content-length", "0"))),
-            )
+            headers: Final = {name.lower(): value for name, value in self.headers.items()}
+            try:
+                body: Final = read_body(headers, self.rfile)
+            except AbortedBody:
+                self.close_connection = True
+                disconnected.put(self.path)
+                return
+            request: Final = Request(self.command, self.path, headers, body)
             received.put(request)
             try:
                 reply = respond(request)
@@ -106,10 +167,28 @@ def wire_server(
                     for index, chunk in enumerate(reply.chunks):
                         if reply.abort_after == index:
                             break
-                        self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
-                        self.wfile.flush()
-                        if index == 0 and reply.gate_after_first is not None:
-                            assert reply.gate_after_first.wait(timeout=5), "Stream barrier was never released"
+                        if (
+                            index == 0
+                            and reply.gate_before_first is not None
+                            and not _await_release(reply.gate_before_first, closing)
+                        ):
+                            break
+                        self.write_chunk(chunk)
+                        if (
+                            index == 0
+                            and reply.gate_after_first is not None
+                            and not (
+                                _await_release(reply.gate_after_first, closing)
+                                if reply.heartbeat is None
+                                else _await_release(
+                                    reply.gate_after_first,
+                                    closing,
+                                    partial(self.write_chunk, reply.heartbeat),
+                                    reply.pause_between_chunks,
+                                )
+                            )
+                        ):
+                            break
                         if reply.pause_between_chunks and index + 1 < len(reply.chunks):
                             time.sleep(reply.pause_between_chunks)
                     else:
@@ -149,8 +228,10 @@ def wire_server(
                 received,
                 disconnected,
                 connected,
+                closed,
             )
         finally:
+            closing.set()
             server.shutdown()
             thread.join(timeout=6)
             assert not thread.is_alive(), "Owned HTTP server survived cleanup"

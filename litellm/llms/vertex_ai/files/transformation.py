@@ -5,9 +5,10 @@ import json
 import os
 import re
 import time
-from collections.abc import AsyncGenerator, Callable, Iterable, Iterator, Mapping
+from collections.abc import AsyncGenerator, Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass
+from functools import partial
 from types import MappingProxyType
 from typing import IO, Any, Final, TypedDict
 from urllib.parse import quote, unquote
@@ -15,6 +16,7 @@ from urllib.parse import quote, unquote
 import httpx
 from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, Required
 
 import litellm
@@ -30,11 +32,13 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     split_configured_cloud_bucket_name,
     validate_managed_cloud_file_id,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_data,
     extract_file_metadata,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
@@ -45,10 +49,10 @@ from litellm.llms.base_llm.files.transformation import (
 )
 from litellm.llms.vertex_ai.batches.transformation import vertex_embedding_prompt_token_count
 from litellm.llms.vertex_ai.common_utils import (
-    _convert_vertex_datetime_to_openai_datetime,
+    convert_vertex_datetime_to_openai_datetime,
     get_vertex_ai_fine_tuned_endpoint_id,
 )
-from litellm.llms.vertex_ai.gemini.transformation import _transform_request_body
+from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
@@ -67,7 +71,7 @@ from litellm.types.llms.openai import (
     OpenAIFilesPurpose,
     PathLike,
 )
-from litellm.types.llms.vertex_ai import GcsBucketResponse, GeminiEmbeddingInput
+from litellm.types.llms.vertex_ai import GcsBucketResponse, GeminiEmbeddingElement, GeminiEmbeddingInput
 from litellm.types.utils import (
     Embedding,
     EmbeddingResponse,
@@ -93,6 +97,7 @@ _JSONL_NEWLINE: Final = b"\n"
 _BATCH_OUTPUT_FIRST_ROW_PEEK_LIMIT_BYTES: Final = 32 * 1024 * 1024
 _PASSTHROUGH_MANAGED_GCS_PREFIX: Final = f"{VERTEX_AI_MANAGED_GCS_PREFIX}passthrough/"
 _RAW_UPLOAD_CHUNK_BYTES: Final = 1024 * 1024
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _GcsObjectMetadataJson(TypedDict, total=False):
@@ -424,6 +429,15 @@ def _split_vertex_batch_key(vertex_output_row: Mapping[str, object]) -> tuple[st
     return unquote(match["custom_id"]), int(match["index"]), int(match["total"])
 
 
+def vertex_batch_row_custom_id(vertex_row: Mapping[str, object]) -> str | None:
+    """The OpenAI `custom_id` a Vertex batch input or output row was written for, or None when it carries none."""
+    request_data: Final = vertex_row.get("request")
+    has_labels: Final = isinstance(request_data, Mapping) and "labels" in request_data
+    if vertex_row.get(_VERTEX_BATCH_KEY_FIELD) is None and not has_labels:
+        return None
+    return _split_vertex_batch_key(vertex_row)[0]
+
+
 def _vertex_embeddings_rows_to_openai_batch_output_row(
     custom_id: str,
     vertex_output_rows: tuple[_VertexEmbeddingBatchRow, ...],
@@ -555,18 +569,27 @@ def _is_responses_batch_entry(openai_entry: Mapping[str, object]) -> bool:
     return path == "responses" or path.endswith("/responses")
 
 
+def _own_embedding_input(
+    element: GeminiEmbeddingElement | list[str] | list[GeminiEmbeddingElement],
+) -> GeminiEmbeddingInput:
+    if isinstance(element, (str, list)):
+        return element
+    file_block_alone: Final[list[GeminiEmbeddingElement]] = [element]
+    return file_block_alone
+
+
 def _openai_embedding_input_elements(
     embedding_input: GeminiEmbeddingInput,
-) -> tuple[str | list[str], ...]:
+) -> tuple[GeminiEmbeddingInput, ...]:
     """
     Split an OpenAI `input` into the elements that each get their own embedding.
 
-    A string is one embedding, a flat array is one embedding per element, and a nested
-    array is one combined embedding per inner array, matching the online
-    `batchEmbedContents` path.
+    A string or a file content block is one embedding, a flat array is one embedding
+    per element, and a nested array is one combined embedding per inner array,
+    matching the online `batchEmbedContents` path.
     """
     if isinstance(embedding_input, list):
-        return tuple(embedding_input)
+        return tuple(_own_embedding_input(element) for element in embedding_input)
     return (embedding_input,)
 
 
@@ -663,7 +686,7 @@ def _openai_batch_jsonl_entry_to_vertex_embeddings_rows(
 
 def _openai_batch_jsonl_entry_to_vertex_rows(
     openai_entry: dict[str, Any],
-    map_openai_to_vertex_params: Callable[[dict[str, Any]], dict[str, object]],
+    map_openai_to_vertex_params: Callable[[dict[str, object]], dict[str, object]],
 ) -> tuple[Mapping[str, object], ...]:
     """
     Transforms a single OpenAI JSONL batch entry into the Vertex rows it maps to.
@@ -675,13 +698,15 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
     if _is_embeddings_batch_entry(openai_entry):
         return _openai_batch_jsonl_entry_to_vertex_embeddings_rows(openai_entry)
 
-    openai_request_body: Final = openai_entry.get("body") or {}
+    if not isinstance(openai_entry.get("body"), dict):
+        raise TypeError("`body` on batch requests must be a JSON object, but was missing or not an object")
+    openai_request_body: Final = openai_entry["body"]
     chat_request_body: Final = (
         responses_batch_body_to_chat_body(openai_request_body, custom_llm_provider="vertex_ai")
         if _is_responses_batch_entry(openai_entry)
         else openai_request_body
     )
-    vertex_request_body: Final = _transform_request_body(
+    vertex_request_body: Final = transform_request_body(
         messages=map_developer_role_to_system_role(chat_request_body.get("messages", [])),
         model=chat_request_body.get("model", ""),
         optional_params=map_openai_to_vertex_params(chat_request_body),
@@ -699,21 +724,40 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
     return ({"request": vertex_request_body},)
 
 
-def _iter_stripped_lines(raw_lines: Iterable[str | bytes]) -> Iterator[str]:
-    """Decode (when needed), strip, and drop blank lines from an iterable of lines."""
-    for raw in raw_lines:
-        line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
-        line = line.strip()
+def _decode_batch_input_line(lineno: int, raw: str | bytes | bytearray) -> str:
+    if isinstance(raw, str):
+        return raw.removeprefix("\ufeff")
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError as e:
+        raise VertexAIError(
+            status_code=400,
+            message=f"Batch input file line {lineno} is not valid UTF-8: {e.reason}",
+        ) from e
+
+
+def _describe_batch_row_error(error: Exception) -> str:
+    match error:
+        case KeyError():
+            return f"missing field {error}"
+        case _:
+            return str(error)
+
+
+def _iter_numbered_stripped_lines(raw_lines: Iterable[str | bytes]) -> Iterator[tuple[int, str]]:
+    """Decode (when needed), strip trailing whitespace, and drop blank lines from an iterable of lines."""
+    for lineno, raw in enumerate(raw_lines, start=1):
+        line = _decode_batch_input_line(lineno, raw).rstrip()
         if line:
-            yield line
+            yield lineno, line
 
 
-def _iter_openai_jsonl_lines(openai_file_content: FileTypes) -> Iterator[str]:
+def _iter_numbered_openai_jsonl_lines(openai_file_content: FileTypes) -> Iterator[tuple[int, str]]:
     """
     Yield non-empty JSONL lines one at a time without materializing the whole
     payload, so peak memory stays bounded regardless of payload size. Mirrors
-    ``str.splitlines()`` + ``line.strip()`` for ``\\n`` / ``\\r\\n`` delimited
-    JSONL.
+    ``str.splitlines()`` + ``line.rstrip()`` for ``\\n`` / ``\\r\\n`` delimited
+    JSONL, keeping leading whitespace so JSON error columns match the file.
     """
     content: FileTypes | str = openai_file_content
     if isinstance(content, tuple):
@@ -724,24 +768,26 @@ def _iter_openai_jsonl_lines(openai_file_content: FileTypes) -> Iterator[str]:
         # into a BytesIO just to iterate it line by line.
         newline: Final = ord("\n")
         start, length = 0, len(content)
+        lineno: int = 0  # rebind-ok: line counter advances for each streamed chunk
         while start < length:
             idx = content.find(newline, start)
             if idx == -1:
                 chunk, start = content[start:], length
             else:
                 chunk, start = content[start:idx], idx + 1
-            line = chunk.decode("utf-8").strip()
+            lineno += 1
+            line = _decode_batch_input_line(lineno, chunk).rstrip()
             if line:
-                yield line
+                yield lineno, line
         return
 
     if isinstance(content, str):
-        yield from _iter_stripped_lines(io.StringIO(content))
+        yield from _iter_numbered_stripped_lines(io.StringIO(content))
         return
 
     if isinstance(content, PathLike):
         with open(str(content), "rb") as handle:
-            yield from _iter_stripped_lines(handle)
+            yield from _iter_numbered_stripped_lines(handle)
         return
 
     if hasattr(content, "read"):
@@ -762,7 +808,7 @@ def _iter_openai_jsonl_lines(openai_file_content: FileTypes) -> Iterator[str]:
                 "Batch upload file handle must be seekable so it can be re-read "
                 "for the GCS object name and the upload body."
             ) from e
-        yield from _iter_stripped_lines(content)
+        yield from _iter_numbered_stripped_lines(content)
         return
 
     raise ValueError("Unsupported file content type")
@@ -770,9 +816,30 @@ def _iter_openai_jsonl_lines(openai_file_content: FileTypes) -> Iterator[str]:
 
 def _iter_openai_jsonl_entries(
     openai_file_content: FileTypes,
-) -> Iterator[dict[str, Any]]:
-    for line in _iter_openai_jsonl_lines(openai_file_content):
-        yield json.loads(line)
+) -> Iterator[tuple[int, dict[str, object]]]:
+    for lineno, line in _iter_numbered_openai_jsonl_lines(openai_file_content):
+        entry = _load_openai_jsonl_row(lineno, line)
+        if not isinstance(entry, dict):
+            raise VertexAIError(
+                status_code=400,
+                message=f"Batch input file line {lineno} is not a JSON object",
+            )
+        yield lineno, entry
+
+
+def _load_openai_jsonl_row(lineno: int, line: str) -> object:
+    try:
+        return _DECODED_JSON.validate_python(json.loads(line))
+    except json.JSONDecodeError as e:
+        raise VertexAIError(
+            status_code=400,
+            message=f"Batch input file line {lineno} is not valid JSON: {e.msg} at column {e.colno}",
+        ) from e
+    except (ValueError, RecursionError) as e:
+        raise VertexAIError(
+            status_code=400,
+            message=f"Batch input file line {lineno} could not be parsed: {e}",
+        ) from e
 
 
 def _parse_vertex_batch_output_row(line: str) -> _VertexBatchRow:
@@ -791,15 +858,23 @@ class _OpenAIToVertexBatchUploadStream(BaseFileUploadStream):
     def __init__(
         self,
         openai_file_content: FileTypes,
-        map_openai_to_vertex_params: Callable[[dict[str, Any]], dict[str, object]],
+        map_openai_to_vertex_params: Callable[[dict[str, object]], dict[str, object]],
     ) -> None:
         self._openai_file_content = openai_file_content
         self._map_openai_to_vertex_params = map_openai_to_vertex_params
 
     def _iter_vertex_jsonl_chunks(self) -> Iterator[bytes]:
         first = True
-        for entry in _iter_openai_jsonl_entries(self._openai_file_content):
-            for wrapped in _openai_batch_jsonl_entry_to_vertex_rows(entry, self._map_openai_to_vertex_params):
+        for lineno, entry in _iter_openai_jsonl_entries(self._openai_file_content):
+            try:
+                vertex_rows = _openai_batch_jsonl_entry_to_vertex_rows(entry, self._map_openai_to_vertex_params)
+            except Exception as e:
+                raise VertexAIError(
+                    status_code=400,
+                    message=f"Batch input file line {lineno} could not be converted to a Vertex AI request: "
+                    f"{_describe_batch_row_error(e)}",
+                ) from e
+            for wrapped in vertex_rows:
                 prefix = b"" if first else b"\n"
                 first = False
                 yield prefix + json.dumps(wrapped).encode("utf-8")
@@ -894,7 +969,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
     def _get_gcs_object_name_from_batch_jsonl(
         self,
-        openai_jsonl_content: list[dict[str, Any]],
+        openai_jsonl_content: Sequence[Mapping[str, object]],
         deployment_model: str | None = None,
     ) -> str:
         """
@@ -912,11 +987,11 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         `projects/../locations/../endpoints/<id>` batch job model instead of a
         nonexistent publisher model.
         """
-        raw_model: Final = (
-            deployment_model.removeprefix("vertex_ai/")
-            if deployment_model
-            else openai_jsonl_content[0].get("body", {}).get("model", "")
-        )
+        body: Final = openai_jsonl_content[0].get("body")
+        body_fields: Final = as_str_mapping(body)
+        body_model: Final = body_fields.get("model") if body_fields is not None and isinstance(body, dict) else None
+        jsonl_model: Final = body_model if isinstance(body_model, str) else ""
+        raw_model: Final = deployment_model.removeprefix("vertex_ai/") if deployment_model else jsonl_model
         return _managed_batch_object_name(raw_model, passthrough=False)
 
     def _get_passthrough_gcs_object_name(self, deployment_model: str | None) -> str:
@@ -947,9 +1022,11 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             return self._get_passthrough_gcs_object_name(deployment_model)
         if purpose == "batch":
             ## 1. If jsonl, derive the object name from the deployment model (or the first entry's)
-            first_entry: Final = next(_iter_openai_jsonl_entries(file_data), None)
-            if first_entry is not None:
-                return self._get_gcs_object_name_from_batch_jsonl([first_entry], deployment_model=deployment_model)
+            first_numbered_entry: Final = next(_iter_openai_jsonl_entries(file_data), None)
+            if first_numbered_entry is not None:
+                return self._get_gcs_object_name_from_batch_jsonl(
+                    [first_numbered_entry[1]], deployment_model=deployment_model
+                )
 
         ## 2. If not jsonl, store under a server-generated managed object name
         filename, _ = extract_file_metadata(file_data)
@@ -1010,12 +1087,12 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         if object_prefix:
             object_name = f"{object_prefix}/{object_name}"
         encoded_object_name: Final = encode_gcs_object_name_for_url(object_name)
-        endpoint: Final = f"upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={encoded_object_name}"
+        upload_path: Final = f"upload/storage/v1/b/{bucket_name}/o"
         api_base = api_base or "https://storage.googleapis.com"
         if not api_base:
             raise ValueError("api_base is required")
 
-        return f"{api_base}/{endpoint}"
+        return f"{join_api_base(api_base, upload_path)}?uploadType=media&name={encoded_object_name}"
 
     def get_supported_openai_params(self, model: str) -> list[OpenAICreateFileRequestOptionalParams]:
         return []
@@ -1032,21 +1109,27 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
     def _map_openai_to_vertex_params(
         self,
         openai_request_body: dict[str, Any],
+        deployment_drop_params: object = None,
     ) -> dict[str, object]:
         """
         wrapper to call VertexGeminiConfig.map_openai_params
         """
-        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-            VertexGeminiConfig,
-        )
-
         config: Final = VertexGeminiConfig()
-        _model: Final = openai_request_body.get("model", "")
+        raw_model: Final = openai_request_body.get("model", "")
+        model: Final = raw_model if isinstance(raw_model, str) else ""
+        sampling_params: Final = tuple(
+            p for p in ("temperature", "top_p", "top_k") if openai_request_body.get(p) is not None
+        )
+        if sampling_params and not VertexGeminiConfig.supports_sampling_params(model):
+            VertexGeminiConfig.reject_unsupported_sampling_param(
+                model=model, param=", ".join(sampling_params), drop_params=False
+            )
         vertex_params: Final = config.map_openai_params(
-            model=_model,
+            model=model,
             non_default_params=openai_request_body,
             optional_params={},
-            drop_params=False,
+            drop_params=drops_unsupported_params(openai_request_body.get("drop_params", deployment_drop_params)),
+            allow_integer_enums=False,
         )
         return vertex_params
 
@@ -1081,11 +1164,12 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             create_file_data=create_file_data,
             content_type=content_type,
         ):
+            deployment_drop_params: Final[object] = litellm_params.get("drop_params")
             return {
                 "streaming_media_upload": StreamingMediaUploadConfig(
                     body_stream=_OpenAIToVertexBatchUploadStream(
                         file_data,
-                        self._map_openai_to_vertex_params,
+                        partial(self._map_openai_to_vertex_params, deployment_drop_params=deployment_drop_params),
                     ),
                     content_type="application/json",
                 )
@@ -1125,7 +1209,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             purpose=response_object.get("purpose", "batch"),
             id=f"gs://{gcs_id}",
             filename=response_object.get("name", ""),
-            created_at=_convert_vertex_datetime_to_openai_datetime(
+            created_at=convert_vertex_datetime_to_openai_datetime(
                 vertex_datetime=response_object.get("timeCreated", "")
             ),
             status="uploaded",
@@ -1172,9 +1256,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         return OpenAIFileObject(
             id=f"gs://{gcs_id}",
             bytes=int(response_json.get("size", 0)),
-            created_at=_convert_vertex_datetime_to_openai_datetime(
-                vertex_datetime=response_json.get("timeCreated", "")
-            ),
+            created_at=convert_vertex_datetime_to_openai_datetime(vertex_datetime=response_json.get("timeCreated", "")),
             filename=response_json.get("name", ""),
             object="file",
             purpose=response_json.get("metadata", {}).get("purpose", "batch"),
@@ -1399,7 +1481,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             # as large as the (multi-GB) input, so splitting into a list of rows
             # and building a second list of transformed rows peaks at several full
             # copies and OOMs on retrieval.
-            lines: Final = _iter_openai_jsonl_lines(content)
+            lines: Final = (line for _, line in _iter_numbered_openai_jsonl_lines(content))
             try:
                 first_line: Final = next(lines)
             except StopIteration:
@@ -1490,7 +1572,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             # Use existing VertexGeminiConfig transformation
             model_response: Final = ModelResponse()
 
-            transformed_response = vertex_gemini_config._transform_google_generate_content_to_openai_model_response(
+            transformed_response = vertex_gemini_config.transform_google_generate_content_to_openai_model_response(
                 completion_response=vertex_response,
                 model_response=model_response,
                 model=model,
