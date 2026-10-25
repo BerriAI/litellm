@@ -75,6 +75,12 @@ def messages_carry_output_config(messages: Sequence[object]) -> bool:
 _messages_carry_output_config = messages_carry_output_config
 
 
+def _ensure_stop_sequence(response: AnthropicMessagesResponse) -> AnthropicMessagesResponse:
+    if "stop_sequence" not in response:
+        response["stop_sequence"] = None  # rebind-ok: normalize the request-owned response in place
+    return response
+
+
 class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     _workload_identity_eligible: ClassVar[bool] = True
 
@@ -715,14 +721,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> AnthropicMessagesResponse:
-        """
-        No transformation is needed for Anthropic messages, since we want the response in the Anthropic /v1/messages API spec
-        """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final[AnthropicMessagesResponse] = raw_response.json()
         except Exception:
             raise AnthropicError(message=raw_response.text, status_code=raw_response.status_code)
-        return AnthropicMessagesResponse(**raw_response_json)
+        response: Final = AnthropicMessagesResponse(**raw_response_json)
+        return _ensure_stop_sequence(response)
 
     def get_async_streaming_response_iterator(
         self,

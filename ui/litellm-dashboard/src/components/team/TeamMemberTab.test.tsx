@@ -313,7 +313,47 @@ describe("TeamMembersComponent", () => {
       />,
     );
 
-    expect(screen.getByText("Jul 15, 2026")).toBeInTheDocument();
+    expect(screen.getByText("Jul 15, 2026 12:00")).toBeInTheDocument();
+  });
+
+  it("shows Never resets for a member whose budget has no reset window", () => {
+    const teamData = createMockTeamData();
+    teamData.team_memberships[0].litellm_budget_table!.budget_reset_at = null;
+    renderWithProviders(
+      <TeamMembersComponent
+        teamData={teamData}
+        canEditTeam={false}
+        handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
+        onMemberBudgetReset={mockOnMemberBudgetReset}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />,
+    );
+
+    expect(screen.queryByText("Jul 15, 2026 12:00")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Never resets").length).toBeGreaterThan(0);
+  });
+
+  it("shows Unknown for a member whose budget has a duration but no scheduled reset yet", () => {
+    const teamData = createMockTeamData();
+    teamData.team_memberships[0].litellm_budget_table!.budget_duration = "30d";
+    teamData.team_memberships[0].litellm_budget_table!.budget_reset_at = null;
+    renderWithProviders(
+      <TeamMembersComponent
+        teamData={teamData}
+        canEditTeam={false}
+        handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
+        onMemberBudgetReset={mockOnMemberBudgetReset}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />,
+    );
+
+    expect(screen.getByText("Unknown")).toBeInTheDocument();
   });
 
   it("shows each member the values from its own membership row", () => {
