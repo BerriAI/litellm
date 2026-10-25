@@ -7,12 +7,18 @@ import Navbar from "@/components/navbar";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
+import { useCurrentUser } from "@/app/(dashboard)/hooks/currentUser/useCurrentUser";
+import { redirectToLogin } from "@/app/(dashboard)/hooks/redirectToLogin";
+import { clearTokenCookies } from "@/utils/cookieUtils";
+import { decodeToken } from "@/utils/jwtUtils";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { DebugWarningBanner } from "@/components/DebugWarningBanner";
-import { NoRedisWarningBanner } from "@/components/NoRedisWarningBanner";
-import { EnvCredentialLoginWarningBanner } from "@/components/EnvCredentialLoginWarningBanner";
-import { LicenseExpiryBanner } from "@/components/LicenseExpiryBanner";
+import {
+  createDeploymentHealthHandle,
+  DeploymentHealthBanner,
+  DeploymentHealthIcon,
+} from "@/components/DeploymentHealth/DeploymentHealth";
+import { DeploymentHealthPanel } from "@/components/DeploymentHealth/DeploymentHealthPanel";
 import { UserBanner } from "@/components/UserBanner";
 import { LiteAdminFrame } from "@/components/liteadmin/LiteAdmin";
 import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
@@ -121,6 +127,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const isDesktop = useMediaQuery("(min-width: 768px)", { initializeWithValue: false });
   const [mobileNavigationKey, setMobileNavigationKey] = useState<string | null>(null);
   const [mobileNavigationHandle] = useState(() => DialogPrimitive.createHandle());
+  const [deploymentHealthHandle] = useState(createDeploymentHealthHandle);
   if (mobileNavigationKey !== null && (isDesktop || mobileNavigationKey !== navigationKey)) {
     setMobileNavigationKey(null);
   }
@@ -140,11 +147,13 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   if (!isGateway) {
     return (
       <div className="flex h-screen flex-col overflow-hidden bg-background">
-        <Navbar accessToken={accessToken} isPublicPage={false} />
-        <DebugWarningBanner accessToken={accessToken} />
-        <NoRedisWarningBanner accessToken={accessToken} />
-        <EnvCredentialLoginWarningBanner accessToken={accessToken} />
-        <LicenseExpiryBanner accessToken={accessToken} />
+        <Navbar
+          accessToken={accessToken}
+          isPublicPage={false}
+          deploymentHealth={<DeploymentHealthIcon handle={deploymentHealthHandle} />}
+        />
+        <DeploymentHealthBanner handle={deploymentHealthHandle} />
+        <DeploymentHealthPanel handle={deploymentHealthHandle} />
         <UserBanner accessToken={accessToken} />
         <main className="flex min-h-0 flex-1 overflow-hidden">
           <AgentControlPlaneView />
@@ -193,11 +202,10 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
                   <Menu />
                 </SheetTrigger>
               }
+              deploymentHealth={<DeploymentHealthIcon handle={deploymentHealthHandle} />}
             />
-            <DebugWarningBanner accessToken={accessToken} />
-            <NoRedisWarningBanner accessToken={accessToken} />
-            <EnvCredentialLoginWarningBanner accessToken={accessToken} />
-            <LicenseExpiryBanner accessToken={accessToken} />
+            <DeploymentHealthBanner handle={deploymentHealthHandle} />
+            <DeploymentHealthPanel handle={deploymentHealthHandle} />
             <UserBanner accessToken={accessToken} />
             <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">
               <TelemetryEnvBanner />
@@ -214,8 +222,14 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
-  const { accessToken, authLoading, passwordResetRequired } = useAuth();
+  const { accessToken, token, authLoading, passwordResetRequired } = useAuth();
+  const session = decodeToken(token);
+  const { isLoading: currentUserLoading, isError: currentUserFailed } = useCurrentUser(
+    session?.key ?? null,
+    session?.auth_header_name,
+  );
   const isInvitationFlow = Boolean(searchParams.get("invitation_id"));
+  const identityPending = currentUserLoading || currentUserFailed;
 
   // Legacy invitation links point at /ui/?invitation_id=; the onboarding form now lives at its own
   // /onboarding route. Redirect once ui-config has loaded so uiHref resolves the SERVER_ROOT_PATH base.
@@ -233,7 +247,13 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
     }
   }, [authLoading, passwordResetRequired, pathname, router]);
 
-  if (authLoading || isInvitationFlow) {
+  useEffect(() => {
+    if (!currentUserFailed || isInvitationFlow) return;
+    clearTokenCookies();
+    redirectToLogin();
+  }, [currentUserFailed, isInvitationFlow]);
+
+  if (authLoading || identityPending || isInvitationFlow) {
     return <LoadingScreen />;
   }
 

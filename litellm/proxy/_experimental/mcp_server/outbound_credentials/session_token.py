@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import secrets
 from collections import Counter
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from functools import lru_cache
 from typing import Final, Literal, TypeAlias
@@ -110,19 +111,26 @@ class SessionPrincipal(LiteLLMBaseModel):
     gateway-sealed) DCR client identifier the token was issued to; the token endpoint
     requires it to match on the refresh grant.
 
-    ``resource_server_id`` is the single MCP server this session was authorized for when
-    the client requested a per-server RFC 8707 resource at authorize time, or ``None`` for
-    the aggregate scope. It is a RESTRICTION carried for admission to intersect against
-    the live grant resolution, never a grant by itself; the refresh grant re-mints from
-    this principal so the restriction survives rotation.
+    ``resource_server_ids`` are the MCP servers this session was authorized for when the
+    client requested an RFC 8707 resource or gateway scope at authorize time, or ``None``
+    for the aggregate scope. They are a RESTRICTION carried for admission to intersect
+    against the live grant resolution, never a grant by itself; the refresh grant re-mints
+    from this principal so the restriction survives rotation.
     """
 
     model_config = ConfigDict(frozen=True)
     user_id: str = Field(min_length=1)
     client_id: str = Field(min_length=1)
-    resource_server_id: str | None = None
+    resource_server_ids: tuple[str, ...] | None = Field(default=None, min_length=1)
     audience: SessionAudience | None = None
     team_id: str | None = None
+
+    @field_validator("resource_server_ids")
+    @classmethod
+    def _resource_server_ids_are_nonempty(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        if value is not None and not value:
+            raise ValueError("resource_server_ids must not be empty")
+        return value
 
 
 class SessionKeys(LiteLLMBaseModel):
@@ -307,6 +315,7 @@ class _SessionClaims(LiteLLMBaseModel):
     user_id: str = Field(min_length=1)
     client_id: str = Field(min_length=1)
     resource_server_id: str | None = None
+    resource_server_ids: Sequence[str] | None = Field(default=None, min_length=2)
     audience: SessionAudience | None = None
     team_id: str | None = None
     family: str | None = Field(default=None, min_length=1)
@@ -414,7 +423,16 @@ def _mint(
         kind=kind,
         user_id=principal.user_id,
         client_id=principal.client_id,
-        resource_server_id=principal.resource_server_id,
+        resource_server_id=(
+            principal.resource_server_ids[0]
+            if principal.resource_server_ids is not None and len(principal.resource_server_ids) == 1
+            else None
+        ),
+        resource_server_ids=(
+            list(principal.resource_server_ids)
+            if principal.resource_server_ids is not None and len(principal.resource_server_ids) >= 2
+            else None
+        ),
         audience=principal.audience,
         team_id=principal.team_id,
         family=family,
@@ -465,13 +483,21 @@ def _open(
         return claims
     if claims.kind != expected_kind:
         return SessionMalformed()
+    if claims.resource_server_id is not None and claims.resource_server_ids is not None:
+        return SessionMalformed()
     if now.timestamp() >= claims.exp:
         return SessionExpired()
     return OpenedSessionToken(
         principal=SessionPrincipal(
             user_id=claims.user_id,
             client_id=claims.client_id,
-            resource_server_id=claims.resource_server_id,
+            resource_server_ids=(
+                (claims.resource_server_id,)
+                if claims.resource_server_id is not None
+                else tuple(claims.resource_server_ids)
+                if claims.resource_server_ids is not None
+                else None
+            ),
             audience=claims.audience,
             team_id=claims.team_id,
         ),

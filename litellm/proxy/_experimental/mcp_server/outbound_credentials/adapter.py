@@ -21,7 +21,7 @@ from pydantic import SecretStr
 from typing_extensions import assert_never
 
 from litellm.experimental_mcp_client.client import MCPClient, strip_auth_scheme, to_basic_credentials
-from litellm.proxy._experimental.mcp_server.exceptions import MCPServerURLCredentialsError
+from litellm.proxy._experimental.mcp_server.exceptions import TOKEN_EXCHANGE_SUBJECT_ERROR, MCPServerURLCredentialsError
 from litellm.proxy._experimental.mcp_server.oauth_utils import resolve_upstream_resource
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
@@ -34,6 +34,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     CredError,
     IdJagConfig,
     IdJagResourceClient,
+    IdJagSubjectSource,
     NoneConfig,
     PassthroughConfig,
     PrivateKeyJwtAuth,
@@ -236,7 +237,8 @@ def _id_jag_spec(server: MCPServer, resource: str) -> ServerSpec | None:
     if not org_token_endpoint or not resource_token_endpoint or not client_id or client_auth is None:
         return None
     resource_client: Final = _id_jag_resource_client(server, client_id, client_auth)
-    if resource_client is None:
+    subject_source: Final = _id_jag_subject_source(server)
+    if resource_client is None or subject_source is None:
         return None
     return ServerSpec(
         server_id=server.server_id,
@@ -249,6 +251,7 @@ def _id_jag_spec(server: MCPServer, resource: str) -> ServerSpec | None:
             client_auth=client_auth,
             resource_client=resource_client,
             subject_token_type=_id_jag_subject_token_type(server),
+            subject_source=subject_source,
             audience=server.audience,
             resource=server.id_jag_resource,
             scopes=tuple(server.scopes or ()),
@@ -280,6 +283,18 @@ def _id_jag_client_auth(server: MCPServer) -> ClientAuth | None:
     if server.client_secret:
         return ClientSecretAuth(client_secret=SecretStr(server.client_secret))
     return None
+
+
+def _id_jag_subject_source(server: MCPServer) -> IdJagSubjectSource | None:
+    """``None`` for a value that names no source, so the half-configured server defers like a missing
+    endpoint does instead of silently presenting the wrong token."""
+    configured: Final = server.id_jag_subject_source
+    if not configured:
+        return IdJagSubjectSource.login_assertion
+    try:
+        return IdJagSubjectSource(configured)
+    except ValueError:
+        return None
 
 
 def _id_jag_subject_token_type(server: MCPServer) -> str:
@@ -402,7 +417,7 @@ def raise_token_exchange_challenge(
     )
     raise HTTPException(
         status_code=401,
-        detail="Unauthorized",
+        detail="Unauthorized" if encoded_claims else TOKEN_EXCHANGE_SUBJECT_ERROR,
         headers={"WWW-Authenticate": www_authenticate},
     )
 
@@ -445,6 +460,8 @@ def validate_static_credential(
     headers: Mapping[str, str],
     upstream_token_header: str | None = None,
     static_header_names: Iterable[str] = (),
+    *,
+    allow_absent: bool = False,
 ) -> Result[None, CredError]:
     if auth_type not in _STATIC_MODES:
         return Ok(None)
@@ -460,17 +477,23 @@ def validate_static_credential(
         )
     )
     values: Final = tuple((name.lower(), value.strip()) for name, value in headers.items() if name.lower() in slots)
+    if allow_absent and not values:
+        return Ok(None)
     if any(_usable_credential_value(auth_type, name, value) for name, value in values):
         return Ok(None)
     return Error(CredError.of_misconfigured(f"{auth_type} requires a usable upstream credential"))
 
 
-async def prepare_mcp_client(server: MCPServer, client: MCPClient) -> MCPClient:
+async def prepare_mcp_client(server: MCPServer, client: MCPClient, *, for_tool_listing: bool = False) -> MCPClient:
     if server.auth_type not in _STATIC_MODES or client.transport_type == MCPTransport.stdio:
         return client
     request: Final = await client.prepare_request_auth()
     match validate_static_credential(
-        server.auth_type, request.headers, server.upstream_token_header, server.static_headers or ()
+        server.auth_type,
+        request.headers,
+        server.upstream_token_header,
+        server.static_headers or (),
+        allow_absent=for_tool_listing and server.auth_type == MCPAuth.authorization,
     ):
         case Error(error):
             raise_public(error)

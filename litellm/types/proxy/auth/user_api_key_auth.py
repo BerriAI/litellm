@@ -168,7 +168,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # path via post-construction assignment and stripped from validated input like the markers
     # above; a forged value could at most narrow, but the stripping keeps the field's provenance
     # single-owner so its meaning stays trustworthy.
-    mcp_session_resource_server_id: str | None = Field(default=None, exclude=True)
+    mcp_session_resource_server_ids: tuple[str, ...] | None = Field(default=None, exclude=True)
     mcp_toolset_id: str | None = Field(default=None, exclude=True)
     authenticated_by_custom_auth: bool = Field(default=False, exclude=True)
     via_virtual_key: bool = Field(
@@ -198,14 +198,14 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
             "narrow the agent's access."
         ),
     )
-    budget_reservation: dict[str, Any] | None = Field(default=None, exclude=True)
+    budget_reservation: dict[str, object] | None = Field(default=None, exclude=True)
     team_budget_snapshot: TeamBudgetSnapshot | None = Field(default=None, exclude=True)
     user_budget_snapshot: UserBudgetSnapshot | None = Field(default=None, exclude=True)
     org_budget_snapshot: OrgBudgetSnapshot | None = Field(default=None, exclude=True)
     matched_model_access_groups: list[str] | None = Field(default=None, exclude=True)
     budget_throttle_pct: float | None = Field(default=None, exclude=True)
-    user: Any | None = None  # Expanded user object when expand=user is used
-    created_by_user: Any | None = None  # Expanded created_by user when expand=user is used
+    user: object | None = None  # Expanded user object when expand=user is used
+    created_by_user: object | None = None  # Expanded created_by user when expand=user is used
     end_user_object_permission: LiteLLM_ObjectPermissionTable | None = None
     # Team object_permission preloaded in auth (e.g. get_team_object) to avoid
     # per-request object_permission fetches in downstream checks (vector stores, etc.)
@@ -229,7 +229,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("requires_fresh_policy", None)
         values.pop("mcp_explicit_grants_only", None)
         values.pop("mcp_source_team_rpm_limits", None)
-        values.pop("mcp_session_resource_server_id", None)
+        values.pop("mcp_session_resource_server_ids", None)
         values.pop("mcp_toolset_id", None)
         values.pop("via_virtual_key", None)
         values.pop("authenticated_by_custom_auth", None)

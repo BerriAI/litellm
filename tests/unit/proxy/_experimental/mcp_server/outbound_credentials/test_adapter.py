@@ -31,6 +31,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ClientSecretAuth,
     CredError,
     IdJagConfig,
+    IdJagSubjectSource,
     NoneConfig,
     PassthroughConfig,
     PrivateKeyJwtAuth,
@@ -613,6 +614,10 @@ def test_raise_token_exchange_challenge_is_rfc9728_invalid_token():
     assert 'resource_metadata="/.well-known/oauth-protected-resource/mcp/obo-srv"' in www
     assert 'error="invalid_token"' in www
     assert "error_description=" in www
+    assert exc.detail == (
+        "Missing or invalid subject token. Authenticate with your identity provider and send its token "
+        "in the Authorization Bearer header. LiteLLM API keys and Admin UI sessions cannot be used for token exchange."
+    )
 
 
 def test_raise_token_exchange_challenge_includes_server_root_path(monkeypatch):
@@ -904,3 +909,25 @@ def test_incomplete_obo_keeps_exchange_ownership(client_secret: str | None, is_b
     assert isinstance(spec.config, TokenExchangeConfig)
     assert spec.config.client_id == "client"
     assert spec.config.client_secret is None
+    assert spec.config.client_id == "client"
+    assert spec.config.client_secret is None
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        (None, IdJagSubjectSource.login_assertion),
+        ("login_assertion", IdJagSubjectSource.login_assertion),
+        ("refresh_token", IdJagSubjectSource.refresh_token),
+    ],
+)
+def test_id_jag_subject_source_maps_to_config(configured: str | None, expected: IdJagSubjectSource) -> None:
+    spec = to_server_spec(_id_jag_server(id_jag_subject_source=configured))
+
+    assert spec is not None
+    assert isinstance(spec.config, IdJagConfig)
+    assert spec.config.subject_source is expected
+
+
+def test_id_jag_unknown_subject_source_defers_like_a_half_configured_server() -> None:
+    assert to_server_spec(_id_jag_server(id_jag_subject_source="assertion")) is None

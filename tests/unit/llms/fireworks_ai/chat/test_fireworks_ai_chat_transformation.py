@@ -494,6 +494,46 @@ def test_transform_messages_helper_strips_thinking_blocks_but_keeps_reasoning_co
     assert out[1]["content"] == "I can help."
 
 
+def test_tool_search_reply_sent_to_fireworks_drops_litellm_response_fields():
+    tool_search_reply = {
+        "role": "assistant",
+        "content": "",
+        "reasoning_items": [{"type": "reasoning", "id": "rs_1", "summary": []}],
+        "provider_specific_fields": {"tool_search_items": [{"type": "tool_search_call", "id": "ts_1"}]},
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                "provider_specific_fields": {"namespace": "weather"},
+            }
+        ],
+    }
+    request = FireworksAIConfig().transform_request(
+        model="accounts/fireworks/models/gpt-oss-120b",
+        messages=[
+            {"role": "user", "content": "Weather in Paris?"},
+            tool_search_reply,
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][1] == {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+            }
+        ],
+    }
+
+
 # -----------------------------------------------------------------------------
 # Regression tests for legacy / OpenAPI $ref defs in tool parameters.
 #

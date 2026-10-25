@@ -18,7 +18,15 @@ vi.mock("@/components/networking", () => ({
   modelHubCall: vi.fn(),
   getConfigFieldSetting: vi.fn(),
   getGlobalLitellmHeaderName: vi.fn(() => "X-Litellm-Key"),
+  getPublicModelHubInfo: vi.fn().mockResolvedValue({
+    docs_title: "Docs",
+    custom_docs_description: null,
+    litellm_version: "1.0.0",
+    useful_links: {},
+  }),
   getProxyBaseUrl: vi.fn(() => "http://localhost:4000"),
+  getGatewayBaseUrl: vi.fn(() => "http://gateway.local:5000"),
+  getUiPageUrl: (url: string) => url,
   getAgentsList: vi.fn(),
   fetchMCPServers: vi.fn(),
   makeMCPPublicCall: vi.fn(),
@@ -221,6 +229,107 @@ describe("ModelHubTable", () => {
     expect(networking.modelHubCall).not.toHaveBeenCalled();
   });
 
+  it("should limit the chat catalog to browsing models even for an admin", async () => {
+    vi.mocked(networking.modelHubCall).mockResolvedValue({
+      data: [{ model_group: "chat-model", providers: ["openai"], mode: "chat" }],
+    });
+    mockUseUISettings.mockReturnValue({ data: { values: {} }, isLoading: false });
+
+    renderWithProviders(
+      <ModelHubTable
+        accessToken="test-token"
+        publicPage={false}
+        premiumUser
+        userRole="Admin"
+        canOpenPlayground
+        canAddModels
+        variant="chat"
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: /^chat-model/ })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Search models" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "AI Hub" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Model Hub URL:")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Select Models to Make Public" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Add model" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "decisions" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("decision-model-garden")).not.toBeInTheDocument();
+    expect(networking.modelHubCall).toHaveBeenCalledWith("test-token");
+    expect(networking.getConfigFieldSetting).not.toHaveBeenCalled();
+    expect(networking.getAgentsList).not.toHaveBeenCalled();
+    expect(networking.fetchMCPServers).not.toHaveBeenCalled();
+    expect(networking.getClaudeCodePluginsList).not.toHaveBeenCalled();
+    expect(networking.getPublicModelHubInfo).not.toHaveBeenCalled();
+    expect(networking.modelCostMap).not.toHaveBeenCalled();
+  });
+
+  it("should combine provider selection with other filters and clear only the requested filters", async () => {
+    vi.mocked(networking.modelHubCall).mockResolvedValue({
+      data: [
+        { model_group: "openai-shared", providers: ["openai"], mode: "chat", supports_vision: true },
+        { model_group: "anthropic-shared", providers: ["anthropic"], mode: "chat", supports_vision: true },
+        { model_group: "openai-image", providers: ["openai"], mode: "image_generation" },
+      ],
+    });
+    mockUseUISettings.mockReturnValue({ data: { values: {} }, isLoading: false });
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ModelHubTable
+        accessToken="test-token"
+        publicPage={false}
+        premiumUser={false}
+        userRole="Admin"
+        canOpenPlayground={false}
+        canAddModels={false}
+        variant="chat"
+      />,
+    );
+
+    await screen.findByRole("button", { name: /^openai-shared/ });
+    expect(screen.queryByDisplayValue("All Providers")).not.toBeInTheDocument();
+    const provider = screen.getByRole("combobox", { name: "Provider" });
+    const search = screen.getByRole("textbox", { name: "Search models" });
+    const mode = screen.getByRole("combobox", { name: "Model type" });
+    const feature = screen.getByRole("combobox", { name: "Model capability" });
+    await user.type(search, "shared");
+    await user.click(mode);
+    await user.click(await screen.findByRole("option", { name: "chat", exact: true }));
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+    await user.click(feature);
+    await user.click(await screen.findByRole("option", { name: "Vision", exact: true }));
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+    await user.click(provider);
+    await user.click(await screen.findByRole("option", { name: "OpenAI", exact: true }));
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+
+    expect(screen.getByRole("button", { name: /^openai-shared/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^anthropic-shared/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^openai-image/ })).not.toBeInTheDocument();
+    expect(provider).toHaveTextContent("OpenAI");
+
+    await user.click(provider);
+    await user.click(await screen.findByRole("option", { name: "All providers", exact: true }));
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /^anthropic-shared/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^openai-image/ })).not.toBeInTheDocument();
+    expect(search).toHaveValue("shared");
+    expect(mode).toHaveTextContent("chat");
+    expect(feature).toHaveTextContent("Vision");
+
+    await user.click(provider);
+    await user.click(await screen.findByRole("option", { name: "Anthropic", exact: true }));
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Clear Filters" }));
+    expect(provider).toHaveTextContent("All providers");
+    expect(search).toHaveValue("");
+    expect(mode).toHaveTextContent("All types");
+    expect(feature).toHaveTextContent("All capabilities");
+    expect(screen.getByRole("button", { name: /^openai-image/ })).toBeInTheDocument();
+    expect(screen.getByLabelText("3 models")).toBeInTheDocument();
+  });
+
   it("should call getUiConfig before modelHubPublicModelsCall when publicPage is true", async () => {
     const getUiConfigMock = vi.mocked(networking.getUiConfig);
     const modelHubPublicModelsCallMock = vi.mocked(networking.modelHubPublicModelsCall);
@@ -292,7 +401,7 @@ describe("ModelHubTable", () => {
     it("shows a decision model how to call it on /v1/systemone, with the docs and the playground", async () => {
       const dialog = await openDetails({ model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" });
 
-      expect(dialog).toHaveTextContent('"http://localhost:4000/v1/systemone"');
+      expect(dialog).toHaveTextContent('"http://gateway.local:5000/v1/systemone"');
       expect(dialog).toHaveTextContent('headers={"X-Litellm-Key": "Bearer your_api_key"}');
       expect(dialog).not.toHaveTextContent("chat.completions");
       expect(screen.getByRole("link", { name: "How to call decision models" })).toHaveAttribute(
@@ -311,7 +420,7 @@ describe("ModelHubTable", () => {
         false,
       );
 
-      expect(dialog).toHaveTextContent('"http://localhost:4000/v1/systemone"');
+      expect(dialog).toHaveTextContent('"http://gateway.local:5000/v1/systemone"');
       expect(screen.getByRole("link", { name: "How to call decision models" })).toBeInTheDocument();
       expect(screen.queryByRole("link", { name: "Try it in the Playground" })).not.toBeInTheDocument();
     });
@@ -320,6 +429,7 @@ describe("ModelHubTable", () => {
       const dialog = await openDetails({ model_group: "claude-opus-4-8", providers: ["anthropic"], mode: "chat" });
 
       expect(dialog).toHaveTextContent("client.chat.completions.create(");
+      expect(dialog).toHaveTextContent('"http://gateway.local:5000"');
       expect(screen.queryByRole("link", { name: "How to call decision models" })).not.toBeInTheDocument();
     });
   });
@@ -583,6 +693,36 @@ describe("ModelHubTable", () => {
       );
       return { user, search: await screen.findByPlaceholderText("Search model names...") };
     };
+
+    it("uses the backend URL for MCP server connection examples", async () => {
+      const server: MCPServerData = {
+        server_id: "server-1",
+        server_name: "exa_test",
+        url: "https://upstream.example.com/mcp",
+        transport: "http",
+        auth_type: "none",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "test-user",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "test-user",
+        teams: [],
+        mcp_access_groups: [],
+        allowed_tools: [],
+        extra_headers: [],
+        mcp_info: {},
+        static_headers: {},
+        status: "active",
+        args: [],
+        env: {},
+      };
+      const { user } = await renderHub([], Promise.resolve([server]));
+
+      await user.click(screen.getByRole("tab", { name: "MCP Hub" }));
+      await user.click(await screen.findByText("exa_test"));
+
+      expect(await screen.findByText(/http:\/\/localhost:4000\/exa_test\/mcp/)).toBeInTheDocument();
+      expect(screen.queryByText(/http:\/\/gateway\.local:5000\/exa_test\/mcp/)).not.toBeInTheDocument();
+    });
 
     it("requires a fresh MCP publication list before and after saving", async () => {
       const servers = Promise.withResolvers<MCPServerData[]>();
