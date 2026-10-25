@@ -5316,3 +5316,27 @@ async def test_a_non_numeric_max_request_size_mb_is_ignored_without_premium():
         patch("litellm.proxy.proxy_server.premium_user", False),
     ):
         assert await check_if_request_size_is_safe(request=_request_with_content_length(1024)) is True
+
+
+@pytest.mark.parametrize("allow_client_side_credentials", [False, True])
+@pytest.mark.parametrize("route", ["/model/new", "/model/update", "/model/account-a/update", "/health/test_connection"])
+def test_chatgpt_model_configuration_reaches_role_authorization(
+    allow_client_side_credentials: bool, route: str
+) -> None:
+    body: Final = {"litellm_params": {"model": "chatgpt/gpt-6-luna", "chatgpt_auth_file": "/tokens/account-a/auth.json"}}
+    assert is_request_body_safe(
+        request_body=body,
+        general_settings={"allow_client_side_credentials": allow_client_side_credentials},
+        llm_router=None,
+        model="",
+        route=route,
+    )
+    for inference_route in ("/v1/chat/completions", "/v1/responses"):
+        with pytest.raises(ValueError, match="chatgpt_auth_file"):
+            is_request_body_safe(
+                request_body=body,
+                general_settings={"allow_client_side_credentials": allow_client_side_credentials},
+                llm_router=None,
+                model="",
+                route=inference_route,
+            )
