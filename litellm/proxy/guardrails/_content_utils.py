@@ -151,6 +151,9 @@ def iter_message_text(data: Mapping[str, object]) -> Iterator[str]:
         if not isinstance(message, dict):
             continue
         yield from _iter_text_parts_in_content(message.get("content"))
+        reasoning = message.get("reasoning_content")
+        if isinstance(reasoning, str) and reasoning:
+            yield reasoning
 
 
 def walk_user_text(data: dict[str, object], visit: Callable[[str], str]) -> int:
@@ -186,8 +189,16 @@ def walk_user_text(data: dict[str, object], visit: Callable[[str], str]) -> int:
     messages: Final = data.get("messages")
     if isinstance(messages, list):
         for message in messages:
-            if isinstance(message, dict) and "content" in message:
-                message["content"] = _rewrite_content(message["content"])
+            if isinstance(message, dict):
+                if "content" in message:
+                    message["content"] = _rewrite_content(message["content"])
+                if (
+                    "reasoning_content" in message
+                    and isinstance(message["reasoning_content"], str)
+                    and message["reasoning_content"]
+                ):
+                    visited += 1
+                    message["reasoning_content"] = visit(message["reasoning_content"])
 
     input_value: Final = data.get("input")
     if isinstance(input_value, str):

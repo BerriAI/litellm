@@ -782,3 +782,59 @@ def test_is_non_conversational_call_type_defaults_to_inspecting_unknown_call_typ
     """A call type this module has never heard of must still be inspected —
     failing closed is the point of the deny-list."""
     assert is_non_conversational_call_type("some_future_call_type") is False
+
+
+def test_iter_message_text_assistant_reasoning_content():
+    data = {
+        "messages": [
+            {"role": "user", "content": "hello"},
+            {
+                "role": "assistant",
+                "content": "Let me help.",
+                "reasoning_content": "Thinking about the question...",
+            },
+            {
+                "role": "assistant",
+                "reasoning_content": "Standalone reasoning without content.",
+            },
+            {
+                "role": "assistant",
+                "content": "Normal response.",
+            },
+        ]
+    }
+    assert list(iter_message_text(data)) == [
+        "hello",
+        "Let me help.",
+        "Thinking about the question...",
+        "Standalone reasoning without content.",
+        "Normal response.",
+    ]
+
+
+def test_walk_user_text_redacts_assistant_reasoning_content():
+    data = {
+        "messages": [
+            {"role": "user", "content": "hello SECRET_1"},
+            {
+                "role": "assistant",
+                "content": "Help with SECRET_2",
+                "reasoning_content": "Internal thought with SECRET_3",
+            },
+            {
+                "role": "assistant",
+                "reasoning_content": "Standalone thought with SECRET_4",
+            },
+            {
+                "role": "assistant",
+                "content": "Normal response SECRET_5",
+            },
+        ]
+    }
+    visited = walk_user_text(data, lambda s: s.replace("SECRET_", "[REDACTED_]"))
+    assert visited == 5
+    assert data["messages"][0]["content"] == "hello [REDACTED_]1"
+    assert data["messages"][1]["content"] == "Help with [REDACTED_]2"
+    assert data["messages"][1]["reasoning_content"] == "Internal thought with [REDACTED_]3"
+    assert data["messages"][2]["reasoning_content"] == "Standalone thought with [REDACTED_]4"
+    assert data["messages"][3]["content"] == "Normal response [REDACTED_]5"
