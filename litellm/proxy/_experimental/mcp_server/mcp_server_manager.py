@@ -6844,7 +6844,6 @@ class MCPServerManager:
         mcp_server = self.get_mcp_server_from_tool_name(  # rebind-ok: pre-existing rebinding on a rename-only line
             prefixed_tool_name
         )
-        resolved_by_server_name_only = False
         normalized_server_name: Final = normalize_server_name(server_name)
 
         def _candidate_matches_server_name(candidate: MCPServer) -> bool:
@@ -6861,7 +6860,6 @@ class MCPServerManager:
             for candidate in self.get_registry().values():
                 if _candidate_matches_server_name(candidate):
                     mcp_server = candidate
-                    resolved_by_server_name_only = True
                     break
         if mcp_server is None:
             fallback: Final = self.get_mcp_server_from_tool_name(name)
@@ -6871,9 +6869,6 @@ class MCPServerManager:
             raise ValueError(f"Tool {name} not found")
         if is_mcp_stdio_blocked(mcp_server.transport):
             raise HTTPException(status_code=403, detail=MCP_STDIO_DISABLED_MESSAGE)
-
-        if resolved_by_server_name_only and not self.server_exposes_tool(mcp_server, name):
-            raise ValueError(f"Tool {name} not found")
 
         return mcp_server
 
@@ -7094,6 +7089,11 @@ class MCPServerManager:
         listed_caller: Final = listed_tools_caller_for(
             mcp_server, user_api_key_auth, client_auth_header, mcp_server_auth_headers, raw_headers, oauth2_headers
         )
+        guardrail_tool: Final[MCPTool | None] = (
+            listed_tool if listed_tool is not ... else self.get_guardrail_tool(mcp_server, name, listed_caller)
+        )
+        if guardrail_tool is None and not self.server_exposes_tool(mcp_server, name):
+            raise ValueError(f"Tool {name} not found")
 
         #########################################################
         # Pre MCP Tool Call Hook
@@ -7110,7 +7110,7 @@ class MCPServerManager:
             raw_headers=raw_headers,
             litellm_logging_obj=litellm_logging_obj,
             guardrail_context=guardrail_context,
-            tool=self.get_guardrail_tool(mcp_server, name, listed_caller) if listed_tool is ... else listed_tool,
+            tool=guardrail_tool,
             incoming_bearer_token=incoming_bearer_token,
             guardrail_auth=effective_guardrail_auth,
         )

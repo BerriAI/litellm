@@ -607,6 +607,7 @@ async def _dispatch_virtual_mcp_tool(
         tool_name=tool_request.name,
         arguments=tool_request.arguments or {},
         user_api_key_dict=user_api_key_auth,
+        requested_server_id=mcp_servers[0] if mcp_servers is not None and len(mcp_servers) == 1 else None,
         client_ip=client_ip,
         mcp_servers=mcp_servers,
         mcp_auth_header=mcp_auth_header,
