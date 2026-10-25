@@ -89,12 +89,13 @@ def _get_user_agent(request: Request) -> str | None:
 
 
 def _with_client_context(
-    request_data: dict[str, object], requester_ip: str | None, user_agent: str | None
+    request_data: object, requester_ip: str | None, user_agent: str | None
 ) -> dict[str, object]:
     """Auth gate rejections are raised before `add_litellm_data_to_request` records the
     caller IP and User-Agent, so their failure logs would otherwise carry neither."""
-    key: Final = "litellm_metadata" if "litellm_metadata" in request_data else "metadata"
-    metadata: Final = request_data.get(key)
+    base_dict: Final[dict[str, object]] = request_data.copy() if isinstance(request_data, dict) else {}
+    key: Final = "litellm_metadata" if "litellm_metadata" in base_dict else "metadata"
+    metadata: Final = base_dict.get(key)
     base: Final[Mapping[str, object]] = metadata if isinstance(metadata, Mapping) else EMPTY_MAPPING
     stamped: Final = {
         name: value
@@ -102,8 +103,8 @@ def _with_client_context(
         if value and not base.get(name)
     }
     if not stamped:
-        return request_data
-    return {**request_data, key: {**base, **stamped}}
+        return base_dict
+    return {**base_dict, key: {**base, **stamped}}
 
 
 def _escape_control_chars(value: str) -> str:
@@ -139,7 +140,7 @@ class UserAPIKeyAuthExceptionHandler:
     async def handle_authentication_error(
         e: Exception,
         request: Request,
-        request_data: dict[str, object],
+        request_data: object,
         route: str,
         parent_otel_span: Span | None,
         api_key: str,
@@ -227,9 +228,10 @@ class UserAPIKeyAuthExceptionHandler:
             # Stamp identity onto the request's server span now, before the request
             # is rejected; the OTEL failure hooks don't touch the server span, so
             # without this the failed trace would carry no team/key attributes.
+            request_data_dict: Final = request_data if isinstance(request_data, dict) else None
             seed_request_identity(
                 user_api_key_dict,
-                model=request_data.get("model"),
+                model=request_data_dict.get("model") if request_data_dict is not None else None,
             )
 
             # Budget checks live in tenant-scoped helpers (key / team / org / tag)
@@ -242,7 +244,7 @@ class UserAPIKeyAuthExceptionHandler:
                     resolve_llm_provider_for_rate_limit,
                 )
 
-                budget_model: Final = request_data.get("model")
+                budget_model: Final = request_data_dict.get("model") if request_data_dict is not None else None
                 _, e.llm_provider = resolve_llm_provider_for_rate_limit(
                     budget_model if isinstance(budget_model, str) else None
                 )

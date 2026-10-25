@@ -3734,6 +3734,8 @@ class ProxyLogging:
             - Optional[HTTPException]: If any callback returns or raises an HTTPException, the first one found is returned.
                                       Otherwise, returns None and the original exception is used.
         """
+        if not isinstance(request_data, dict):
+            request_data = {}
 
         logging_obj: Final[object] = request_data.get("litellm_logging_obj")  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # legacy request data is narrowed to Logging below
         if isinstance(logging_obj, Logging) and logging_obj.baseline_cache_context is not None:

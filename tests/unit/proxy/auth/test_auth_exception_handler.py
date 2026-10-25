@@ -1223,3 +1223,89 @@ def test_as_proxy_exception_keeps_jwt_scope_denial_message_shape():
 
     assert converted.to_dict() == plain.to_dict()
     assert converted.internal_message == denial.internal_message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "non_dict_body",
+    [
+        pytest.param([], id="empty-list"),
+        pytest.param([1, 2], id="list-with-items"),
+        pytest.param([{"model": "gpt-4"}], id="list-of-dict"),
+        pytest.param("string-body", id="string"),
+        pytest.param(42, id="integer"),
+        pytest.param(True, id="boolean"),
+        pytest.param(None, id="null-none"),
+    ],
+)
+async def test_handle_authentication_error_non_object_json_body(non_dict_body):
+    """A request whose JSON body is valid JSON but not an object (e.g. [], null, 's', 1)
+    must not cause an AttributeError: 'list' object has no attribute 'get' or 500 (#48304)."""
+    handler = UserAPIKeyAuthExceptionHandler()
+    mock_request = MagicMock()
+    mock_request.scope = {"headers": {}}
+    mock_request.client.host = "192.0.2.1"
+    mock_request.headers = {"user-agent": "test-agent"}
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_post_call_hook,
+        patch(
+            "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
+        ) as mock_seed_identity,
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+        pytest.raises(ProxyException) as exc_info,
+    ):
+        await handler.handle_authentication_error(
+            e=Exception("Authentication failed: invalid key"),
+            request=mock_request,
+            request_data=non_dict_body,
+            route="/v1/chat/completions",
+            parent_otel_span=None,
+            api_key="sk-test-key",
+        )
+
+    assert exc_info.value is not None
+    # Verify seed_request_identity was called with model=None
+    mock_seed_identity.assert_called_once()
+    assert mock_seed_identity.call_args[1]["model"] is None
+
+    # Verify post_call_failure_hook was passed a dict with client context
+    mock_post_call_hook.assert_called_once()
+    hook_request_data = mock_post_call_hook.call_args[1]["request_data"]
+    assert isinstance(hook_request_data, dict)
+    metadata = hook_request_data.get("metadata", {})
+    assert metadata.get("requester_ip_address") == "192.0.2.1"
+    assert metadata.get("user_agent") == "test-agent"
+
+
+def test_with_client_context_non_dict_payload():
+    """_with_client_context safely coerces non-dict request_data into a dict with client context."""
+    from litellm.proxy.auth.auth_exception_handler import _with_client_context
+
+    for non_dict in [[], [1, 2], "raw-string", 123, True, None]:
+        result = _with_client_context(non_dict, requester_ip="10.0.0.1", user_agent="curl/8.0")
+        assert isinstance(result, dict)
+        metadata = result.get("metadata", {})
+        assert metadata.get("requester_ip_address") == "10.0.0.1"
+        assert metadata.get("user_agent") == "curl/8.0"
+
+
+def test_populate_request_with_path_params_non_dict_payload():
+    """populate_request_with_path_params returns non-dict request_data unchanged without raising."""
+    from litellm.proxy.common_utils.http_parsing_utils import populate_request_with_path_params
+
+    mock_request = MagicMock()
+    mock_request.query_params = {"param": "val"}
+    mock_request.path_params = {"team_id": "team-1"}
+
+    for non_dict in [[], [1, 2], "raw-string", 123, None]:
+        result = populate_request_with_path_params(non_dict, mock_request)
+        assert result == non_dict
+

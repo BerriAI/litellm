@@ -735,6 +735,9 @@ def populate_request_with_path_params(request_data: dict, request: Request) -> d
     Returns:
         dict: Updated request_data with path parameters and query parameters added
     """
+    if not isinstance(request_data, dict):
+        return request_data
+
     # Add query parameters to request_data (for GET requests, etc.)
     query_params: Final = safe_get_request_query_params(request)
     if query_params:
