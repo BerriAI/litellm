@@ -2392,7 +2392,7 @@ async def test_proxy_model_group_alias_checks(prisma_client, hidden):  # noqa: F
         user_api_key_dict=UserAPIKeyAuth(models=[]),
     )
     print(f"resp: {resp}")
-    models = resp["data"]
+    models = resp.data
     is_model_alias_in_list = False
     print(f"model_alias: {model_alias}, models: {models}")
     for item in models:
@@ -2461,7 +2461,7 @@ async def test_proxy_model_group_info_rerank(prisma_client):  # noqa: F811  # py
     )
 
     print(resp)
-    models = resp["data"]
+    models = resp.data
     assert models[0].mode == "rerank"
 
 
