@@ -18,8 +18,7 @@ import pytest
 import yaml
 from botocore.config import Config
 from integration._support.budget import case_timeout_seconds
-from integration._support.client import Gateway, eventually
-from integration._support.database import read_rows
+from integration._support.client import Gateway, Scenario, eventually
 from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.upstream import _aws_event_frame
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -194,12 +193,13 @@ def _deployment(wire: Wire, model: str, trace: str) -> Mapping[str, JsonValue]:
 @dataclass(frozen=True, slots=True)
 class Rig:
     proxy: Gateway
+    scenario: Scenario
     converse_model: str
     invoke_model: str
     untraced_model: str
 
     def key(self) -> str:
-        return self.proxy.key(key_alias=f"native-trace-{uuid.uuid4().hex[:8]}")
+        return self.scenario.key(key_alias=f"native-trace-{uuid.uuid4().hex[:8]}")
 
     def runtime(self, monkeypatch: pytest.MonkeyPatch, key: str):  # noqa: ANN201  # boto3 clients are untyped
         monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", key)
@@ -234,9 +234,13 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
         }
         config_path: Final = directory / "bedrock-native-guardrail-trace.yaml"
         config_path.write_text(yaml.safe_dump(config))
-        with owned_proxy(session_gateway, directory, {}, config=config_path) as proxy:
+        with owned_proxy(session_gateway, directory, {}, config=config_path) as proxy, proxy.scenario() as scenario:
             yield Rig(
-                proxy=proxy, converse_model=converse_model, invoke_model=invoke_model, untraced_model=untraced_model
+                proxy=proxy,
+                scenario=scenario,
+                converse_model=converse_model,
+                invoke_model=invoke_model,
+                untraced_model=untraced_model,
             )
 
 
@@ -246,9 +250,9 @@ class SpendRow:
     guardrail_information: tuple[dict[str, JsonValue], ...]
 
 
-def _spend_row(key: str) -> SpendRow:
+def _spend_row(proxy: Gateway, key: str) -> SpendRow:
     digest: Final = sha256(key.encode()).hexdigest()
-    (row,) = eventually(lambda: read_rows(_SPEND_SQL, (digest,)), lambda rows: len(rows) == 1, seconds=70)
+    (row,) = eventually(lambda: proxy.rows(_SPEND_SQL, (digest,)), lambda rows: len(rows) == 1, seconds=70)
     metadata: Final = _JSON_OBJECT.validate_python(
         json.loads(row["metadata"]) if isinstance(row["metadata"], str) else row["metadata"]
     )
@@ -288,7 +292,7 @@ def test_non_streaming_response_prices_the_trace_into_the_cost_header_and_the_sp
     response: Final = rig.proxy.request("POST", endpoint, body, key=key)
     assert response.is_success, response.text[:400]
     assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(_llm_cost() + _guardrail_cost())
-    _assert_billed_as_guardrail_cost(_spend_row(key))
+    _assert_billed_as_guardrail_cost(_spend_row(rig.proxy, key))
 
 
 @pytest.mark.parametrize("api", ["converse", "invoke"])
@@ -304,7 +308,7 @@ def test_streamed_response_prices_the_trace_of_the_final_event_into_the_spend_ro
     ) as response:
         frames: Final = tuple(line for line in response.iter_lines() if line.startswith("data:"))
     assert response.is_success and frames
-    _assert_billed_as_guardrail_cost(_spend_row(key))
+    _assert_billed_as_guardrail_cost(_spend_row(rig.proxy, key))
 
 
 @pytest.mark.parametrize("action", _ACTIONS)
@@ -331,7 +335,7 @@ def test_passthrough_action_prices_the_trace_into_the_spend_row(
         list(
             getattr(runtime, "invoke_model_with_response_stream")(modelId=rig.converse_model, body=invoke_body)["body"]
         )
-    _assert_billed_as_guardrail_cost(_spend_row(key))
+    _assert_billed_as_guardrail_cost(_spend_row(rig.proxy, key))
 
 
 def test_disabled_trace_bills_only_the_tokens(rig: Rig) -> None:
@@ -340,6 +344,6 @@ def test_disabled_trace_bills_only_the_tokens(rig: Rig) -> None:
     assert response.is_success, response.text[:400]
     assert "trace" not in response.json()
     assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(_llm_cost())
-    row: Final = _spend_row(key)
+    row: Final = _spend_row(rig.proxy, key)
     assert row.spend == pytest.approx(_llm_cost())
     assert row.guardrail_information == ()
