@@ -3059,7 +3059,9 @@ async def test_pre_call_hook_skips_attachment_scan_when_guardrail_has_none():
 
 @pytest.mark.parametrize("hook", ["async_pre_call_hook", "async_moderation_hook"])
 @pytest.mark.asyncio
-async def test_pass_through_guardrail_text_is_the_client_body_without_the_injected_key_metadata(monkeypatch, hook):
+async def test_pass_through_guardrail_text_is_the_client_body_without_the_injected_key_metadata(
+    monkeypatch: pytest.MonkeyPatch, hook: str
+) -> None:
     _patch_translation_mappings(monkeypatch, {CallTypes.pass_through: PassThroughEndpointHandler})
     guardrail: Final = RecordingGuardrail()
     body: Final = {

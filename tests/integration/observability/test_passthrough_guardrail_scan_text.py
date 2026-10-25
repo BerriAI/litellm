@@ -50,15 +50,17 @@ def _anthropic_reply(_request: Request) -> Reply:
     return Reply(body=message_json("msg_passthrough_scan", "claude-sonnet-5-5", "Hi"))
 
 
-def _scanned_payloads(guardrail: str, vendor_body: dict[str, JsonValue]) -> list[JsonValue]:
-    if guardrail == GENERIC:
-        texts = vendor_body["texts"]
-    else:
-        contents: Final = vendor_body["contents"]
-        assert isinstance(contents, list), vendor_body
-        texts = [content.get("prompt") for content in contents if isinstance(content, dict)]
+def _parsed_texts(texts: JsonValue, vendor_body: dict[str, JsonValue]) -> list[JsonValue]:
     assert isinstance(texts, list), vendor_body
     return [json.loads(text) if isinstance(text, str) else text for text in texts]
+
+
+def _scanned_payloads(guardrail: str, vendor_body: dict[str, JsonValue]) -> list[JsonValue]:
+    if guardrail == GENERIC:
+        return _parsed_texts(vendor_body["texts"], vendor_body)
+    contents: Final = vendor_body["contents"]
+    assert isinstance(contents, list), vendor_body
+    return _parsed_texts([content.get("prompt") for content in contents if isinstance(content, dict)], vendor_body)
 
 
 @dataclass(frozen=True, slots=True)
