@@ -15,7 +15,6 @@ const inter = Inter({ subsets: ["latin"] });
 export const metadata: Metadata = {
   title: "LiteLLM Dashboard",
   description: "LiteLLM Proxy Admin UI",
-  icons: { icon: "/get_favicon" },
 };
 
 export default function RootLayout({
@@ -28,6 +27,7 @@ export default function RootLayout({
     // cannot predict; suppressHydrationWarning confines that mismatch to this element.
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
+        <link rel="icon" href="/get_favicon" />
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
           <NuqsAdapter>
             <ReactQueryProvider>
