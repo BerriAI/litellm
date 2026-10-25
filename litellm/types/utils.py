@@ -1650,8 +1650,6 @@ class Delta(SafeAttributeModel, OpenAIObject):
                         coerced_tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
                 elif isinstance(tool_call, (ChatCompletionDeltaToolCall, ChatCompletionDeltaCustomToolCall)):
                     coerced_tool_calls.append(tool_call)
-                else:
-                    coerced_tool_calls.append(tool_call)
             tool_calls = coerced_tool_calls
 
         # Build the per-chunk state directly instead of round-tripping every

@@ -152,7 +152,12 @@ class _ToolCallFragment(TypedDict, total=False):
 
 
 class _ToolCallDelta(TypedDict, total=False):
-    tool_calls: ReadOnly[Sequence[_ToolCallFragment | ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall]]
+    tool_calls: ReadOnly[
+        Sequence[_ToolCallFragment | ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall]
+        | _ToolCallFragment
+        | ChatCompletionDeltaToolCall
+        | ChatCompletionDeltaCustomToolCall
+    ]
 
 
 class _ToolCallChoice(TypedDict, total=False):
@@ -485,14 +490,23 @@ class ChunkProcessor:
                 if not delta:
                     continue
                 choice_index = choice.get("index", 0)
-                tool_calls = delta.get("tool_calls") or ()
-                if tool_calls and not isinstance(tool_calls, (list, tuple)):
-                    tool_calls = [tool_calls]
+                raw_tool_calls = delta.get("tool_calls")
+                if not raw_tool_calls:
+                    continue
+                if isinstance(
+                    raw_tool_calls,
+                    (dict, ChatCompletionDeltaToolCall, ChatCompletionDeltaCustomToolCall),
+                ):
+                    tool_calls = (raw_tool_calls,)
+                else:
+                    tool_calls = raw_tool_calls
                 for tool_call in tool_calls:
                     if not tool_call:
                         continue
+                    key: _ToolCallKey
                     if isinstance(tool_call, dict):
-                        key = (choice_index, tool_call.get("index", 0))
+                        call_index: int = int(tool_call.get("index") or 0)
+                        key = (choice_index, call_index)
                         function = tool_call.get("function")
                         if isinstance(function, dict):
                             if fragment_arguments := function.get("arguments"):
@@ -503,7 +517,8 @@ class ChunkProcessor:
                         if isinstance(custom, dict) and (custom_input := custom.get("input")):
                             yield key, "custom_input", custom_input
                     else:
-                        key = (choice_index, getattr(tool_call, "index", 0))
+                        call_index = int(getattr(tool_call, "index", 0) or 0)
+                        key = (choice_index, call_index)
                         function = getattr(tool_call, "function", None)
                         if object_arguments := getattr(function, "arguments", None):
                             yield key, "arguments", object_arguments
@@ -534,10 +549,19 @@ class ChunkProcessor:
         for chunk in tool_call_chunks:
             choices = chunk["choices"]
             for choice in choices:
-                delta = choice.get("delta", {})
-                tool_calls = delta.get("tool_calls") or ()
-                if tool_calls and not isinstance(tool_calls, (list, tuple)):
-                    tool_calls = [tool_calls]
+                delta = choice.get("delta")
+                if not delta:
+                    continue
+                raw_tool_calls = delta.get("tool_calls")
+                if not raw_tool_calls:
+                    continue
+                if isinstance(
+                    raw_tool_calls,
+                    (dict, ChatCompletionDeltaToolCall, ChatCompletionDeltaCustomToolCall),
+                ):
+                    tool_calls = (raw_tool_calls,)
+                else:
+                    tool_calls = raw_tool_calls
                 choice_index = choice.get("index", 0)
 
                 for tool_call in tool_calls:
