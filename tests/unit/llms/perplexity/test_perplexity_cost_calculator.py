@@ -228,7 +228,9 @@ class TestPerplexityCostCalculator:
         usage = Usage(prompt_tokens=1000, completion_tokens=200, total_tokens=1200)
         usage.cost = {"total_cost": 0.00501}
 
-        prompt_cost, completion_cost = perplexity_cost_per_token(model=self.OFF_PEAK_MODEL, usage=usage)
+        prompt_cost, completion_cost = billed_cost_per_token(
+            model=self.OFF_PEAK_MODEL, custom_llm_provider="perplexity", usage_object=usage
+        )
 
-        assert prompt_cost == 0.0
-        assert completion_cost == 0.00501
+        assert math.isclose(prompt_cost + completion_cost, 0.00501, rel_tol=1e-10)
+        assert prompt_cost > 0.0 and completion_cost > 0.0

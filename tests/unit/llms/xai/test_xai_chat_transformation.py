@@ -13,7 +13,7 @@ from litellm.llms.xai.chat.transformation import (
     XAIChatCompletionStreamingHandler,
     XAIChatConfig,
 )
-from litellm.llms.xai.cost_calculator import cost_per_token
+from litellm.cost_calculator import cost_per_token
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     ModelResponse,
@@ -433,7 +433,7 @@ class TestXAIReportedCost:
         )
 
         assert usage.cost == 0.0037756
-        assert cost_per_token(model="grok-4-latest", usage=usage) == (0.0, 0.0037756)
+        assert cost_per_token(model="grok-4-latest", custom_llm_provider="xai", usage_object=usage) == (0.0, 0.0037756)
 
     def test_usage_without_a_reported_cost_is_left_alone(self):
         usage = self._transformed_usage({"prompt_tokens": 100, "completion_tokens": 200, "total_tokens": 300})
@@ -481,7 +481,7 @@ class TestXAIReportedCost:
 
         assembled = litellm.stream_chunk_builder(chunks=[parsed])
         assert assembled.usage.cost == 0.0037756
-        assert cost_per_token(model="grok-4-latest", usage=assembled.usage) == (
+        assert cost_per_token(model="grok-4-latest", custom_llm_provider="xai", usage_object=assembled.usage) == (
             0.0,
             0.0037756,
         )

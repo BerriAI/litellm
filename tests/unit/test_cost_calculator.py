@@ -10641,6 +10641,31 @@ def test_provider_reported_usage_cost_takes_discount_then_margin(monkeypatch: py
     assert _bill_reported_cost(stream, {}, {}) == pytest.approx(0.037 * 0.8 * 1.5 + 0.001)
 
 
+def test_a_usage_cost_litellm_stamped_on_a_stream_is_not_billed_again_as_a_provider_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, _REPORTED_COST_FIXTURE_MODEL, _REPORTED_COST_FIXTURE_RATES)
+    monkeypatch.setattr(litellm, "cost_margin_config", {"global": {"fixed_amount": 0.002}})
+    logging_obj: Final = _reported_cost_logging(True, {})
+    token_math_plus_margin: Final = 100 * 1e-6 + 20 * 3e-6 + 0.002
+
+    response: Final[object] = litellm.stream_chunk_builder(
+        [
+            _reported_cost_stream_chunk("hi", None, None),
+            _reported_cost_stream_chunk(None, "stop", None),
+            _reported_cost_stream_chunk(None, None, Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120)),
+        ],
+        messages=[{"role": "user", "content": "hi"}],
+        logging_obj=logging_obj,
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.usage is not None and response.usage.cost == pytest.approx(token_math_plus_margin)
+    assert logging_obj.response_cost_calculator(result=response, ignore_stamped_cost=True) == pytest.approx(
+        token_math_plus_margin
+    )
+
+
 def test_provider_reported_usage_cost_splits_input_and_output_by_the_token_math_ratio(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

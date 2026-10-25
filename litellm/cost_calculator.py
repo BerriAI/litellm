@@ -25,7 +25,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, provider_reported_usage_cost
 from litellm.litellm_core_utils.cost_discount import resolve_cost_discount
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, is_decisions_call_type
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, usage_cost_stamped_by_litellm
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
@@ -1705,7 +1705,7 @@ def completion_cost(
         provider_usage_object: Final = get_usage_object(completion_response=completion_response)
         cost_per_token_usage_object: Final[Usage | None] = (
             _without_provider_stated_cost(provider_usage_object)
-            if custom_pricing or base_model is not None
+            if custom_pricing or base_model is not None or usage_cost_stamped_by_litellm(completion_response)
             else provider_usage_object
         )
         rerank_billed_units: RerankBilledUnits | None = None
