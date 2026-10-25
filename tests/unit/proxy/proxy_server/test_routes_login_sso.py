@@ -499,6 +499,69 @@ def test_login_form_ignores_open_redirect_return_to(client, monkeypatch):
     assert "/ui" in location  # dashboard fallback
 
 
+def test_login_v2_honors_same_origin_return_to_cookie(client, monkeypatch):
+    """/sso/key/generate's deprecation banner sends password users to /ui/login/, which signs in via
+    /v2/login. A return_to the banner page preserved (the MCP gateway /authorize round-trip) must come
+    back as redirect_url, or the native client's loopback callback never gets its code (#48090)."""
+    _install_login_mocks(monkeypatch)
+    return_to = "/authorize?response_type=code&client_id=llm_dcrc_abc&redirect_uri=http%3A%2F%2F127.0.0.1%3A5555%2F"
+    response = client.post(
+        "/v2/login",
+        json={"username": "admin", "password": "password"},
+        cookies={"litellm_cp_return_to": _sealed_return_to(return_to)},
+    )
+    set_cookie = response.headers.get("set-cookie", "")
+    assert response.status_code == 200
+    assert response.json()["redirect_url"] == return_to
+    assert "token=" in set_cookie
+    assert 'litellm_cp_return_to=""' in set_cookie  # one-shot: cleared after use
+
+
+def test_login_v2_honors_control_plane_return_to_cookie(client, monkeypatch):
+    """/v2/login resumes through the same resumer as /login, so a control-plane return_to gets the
+    one-time login code instead of the dashboard."""
+    import litellm.proxy.proxy_server as ps
+
+    _install_login_mocks(monkeypatch)
+    monkeypatch.setitem(ps.general_settings, "control_plane_url", "https://cp.example.com")
+    response = client.post(
+        "/v2/login",
+        json={"username": "admin", "password": "password"},
+        cookies={"litellm_cp_return_to": _sealed_return_to("https://cp.example.com/console")},
+    )
+    redirect_url = response.json()["redirect_url"]
+    assert response.status_code == 200
+    assert redirect_url.startswith("https://cp.example.com/console")
+    assert "code=" in redirect_url and "login=success" in redirect_url
+
+
+@pytest.mark.parametrize(
+    "cookie",
+    [
+        pytest.param("/authorize?client_id=llm_dcrc_abc", id="plaintext-not-sealed-here"),
+        pytest.param("sealed:https://evil.example.com/steal", id="open-redirect"),
+        pytest.param("sealed:https://old-cp.example.com/console", id="stale-control-plane"),
+    ],
+)
+def test_login_v2_falls_back_to_dashboard_for_unusable_return_to(client, monkeypatch, cookie):
+    """A return_to the resumer won't honor never fails the sign-in: /v2/login lands on the dashboard
+    and clears the cookie."""
+    import litellm.proxy.proxy_server as ps
+
+    _install_login_mocks(monkeypatch)
+    monkeypatch.setitem(ps.general_settings, "control_plane_url", "https://new-cp.example.com")
+    if cookie.startswith("sealed:"):
+        cookie = _sealed_return_to(cookie.removeprefix("sealed:"))
+    response = client.post(
+        "/v2/login",
+        json={"username": "admin", "password": "password"},
+        cookies={"litellm_cp_return_to": cookie},
+    )
+    assert response.status_code == 200
+    assert response.json()["redirect_url"].endswith("/ui?login=success")
+    assert 'litellm_cp_return_to=""' in response.headers.get("set-cookie", "")
+
+
 # ---------------------------------------------------------------------------
 # Failed-login accounting across the login routes (LIT-5285)
 # ---------------------------------------------------------------------------
