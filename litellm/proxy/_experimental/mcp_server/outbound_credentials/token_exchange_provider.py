@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
@@ -34,6 +35,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger
 _GATEWAY_FAULT_OAUTH_ERRORS: Final = frozenset(
     {"invalid_client", "unauthorized_client", "unsupported_grant_type", "invalid_target", "invalid_scope"}
 )
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _oauth_error_fields(response: httpx.Response) -> tuple[str | None, str | None]:
@@ -46,7 +48,7 @@ def _oauth_error_fields(response: httpx.Response) -> tuple[str | None, str | Non
     it can carry IdP internals and must never reach the caller.
     """
     try:
-        body: Final[object] = response.json()
+        body: Final = _DECODED_JSON.validate_python(response.json())
     except Exception:  # noqa: BLE001
         return None, None
     if not isinstance(body, dict):

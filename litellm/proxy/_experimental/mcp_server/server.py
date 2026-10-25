@@ -14,7 +14,7 @@ import time
 import types
 from collections import Counter
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, Sequence, Set
-from typing import TYPE_CHECKING, Final, NoReturn, Protocol
+from typing import TYPE_CHECKING, Final, Literal, NoReturn, Protocol
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -148,6 +148,16 @@ def _scope_path(scope: Scope) -> str:
 
 def _scope_headers(scope: Scope) -> Sequence[tuple[bytes, bytes]]:
     return asgi_scope_fields(scope).get("headers", [])
+
+
+class _RawHeaderPairsSource(Protocol):
+    def get(
+        self, key: Literal["headers"], default: Sequence[tuple[bytes | str, bytes | str]], /
+    ) -> Sequence[tuple[bytes | str, bytes | str]]: ...
+
+
+def _raw_header_pairs(source: _RawHeaderPairsSource) -> Sequence[tuple[bytes | str, bytes | str]]:
+    return source.get("headers", [])
 
 
 def unsupported_protocol_version(scope: Scope) -> str | None:
@@ -1319,7 +1329,7 @@ if MCP_AVAILABLE:
         Extract mcp-session-id from ASGI scope headers.
         Returns None if not present.
         """
-        scope_headers: Final[Sequence[tuple[bytes | str, bytes | str]]] = scope.get("headers", [])
+        scope_headers: Final = _raw_header_pairs(scope)
         for header_name, header_value in scope_headers:
             name = header_name if isinstance(header_name, bytes) else header_name.encode()
             if name.lower() == b"mcp-session-id":
@@ -1669,7 +1679,7 @@ if MCP_AVAILABLE:
         Fixes https://github.com/BerriAI/litellm/issues/20992
         """
         _mcp_session_header: Final = b"mcp-session-id"
-        _headers: Final[Sequence[tuple[bytes | str, bytes | str]]] = scope.get("headers", [])
+        _headers: Final = _raw_header_pairs(scope)
 
         def _normalize_header_name(header_name: object) -> bytes | None:
             if isinstance(header_name, bytes):
@@ -1797,7 +1807,7 @@ if MCP_AVAILABLE:
             return acting.model_copy(update={"mcp_toolset_id": toolset_id})
 
         tool_permissions = await operations.global_mcp_server_manager.resolve_toolset_tool_permissions(
-            toolset_ids=[toolset_id]
+            toolset_ids=[toolset_id], requires_fresh_policy=acting.requires_fresh_policy
         )
         server_ids: Final = list(tool_permissions.keys())
         existing_op: Final = acting.object_permission
@@ -2869,7 +2879,7 @@ if MCP_AVAILABLE:
                 mcp_servers,
                 _sse_client_ip,
                 scoped_server_endpoint=scoped_server_endpoint,
-                is_initialize=scope.get("method") == "GET",
+                is_initialize=asgi_scope_fields(scope).get("method", "") == "GET",
             ):
                 async with (
                     sse.connect_sse(transport_scope, receive, send) as (read_stream, write_stream),
@@ -3090,7 +3100,7 @@ if MCP_AVAILABLE:
     ) -> Send:
         async def wrapped_send(message: Message) -> None:
             if message.get("type") == "http.response.start":
-                response_headers: Final[Sequence[tuple[bytes | str, bytes | str]]] = message.get("headers", [])
+                response_headers: Final = _raw_header_pairs(message)
                 for key, value in response_headers:
                     header_name = key if isinstance(key, bytes) else str(key).encode()
                     if header_name.lower() == b"mcp-session-id":
