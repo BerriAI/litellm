@@ -154,11 +154,11 @@ def test_queue_chat_completions_reports_the_priority_the_router_queued_at(
 ) -> None:
     router: Final = _queue_router(monkeypatch, default_priority)
     payload: Final = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], **priority_fields}
-    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+    with patch.object(router.scheduler, "wait_for_turn", wraps=router.scheduler.wait_for_turn) as wait_for_turn:
         with auth_as():
             response: Final = client.post("/queue/chat/completions", json=payload)
     assert response.status_code == 200, response.text
-    assert [call.kwargs["request"].priority for call in add_request.await_args_list] == [expected_priority]
+    assert [call.kwargs["request"].priority for call in wait_for_turn.await_args_list] == [expected_priority]
     assert response.headers.get("x-litellm-priority") == str(expected_priority)
 
 
@@ -181,14 +181,14 @@ def test_queue_chat_completions_rejects_a_request_it_cannot_queue_as_an_invalid_
 ) -> None:
     router: Final = _queue_router(monkeypatch, default_priority)
     payload: Final = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], **priority_fields}
-    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+    with patch.object(router.scheduler, "wait_for_turn", wraps=router.scheduler.wait_for_turn) as wait_for_turn:
         with auth_as():
             response: Final = client.post("/queue/chat/completions", json=payload)
     assert response.status_code == 400, response.text
     error: Final = response.json()["error"]
     assert (error["type"], error["param"]) == ("invalid_request_error", "priority")
     assert message in error["message"]
-    assert add_request.await_count == 0
+    assert wait_for_turn.await_count == 0
 
 
 def test_streamed_queue_responses_report_the_priority_the_router_queued_at(
