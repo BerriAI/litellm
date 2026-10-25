@@ -9,7 +9,7 @@ import sys
 import urllib.parse as urlparse
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast  # noqa: TID251  # cast is called at runtime below
 
 import click
 import httpx
@@ -1312,7 +1312,7 @@ def run_server(
             elif not isinstance(general_settings, dict):
                 raise ValueError(
                     "`general_settings` in the proxy config must be a mapping "
-                    f"(got {_value_type_name(cast(object, general_settings))}). Check the "
+                    f"(got {_value_type_name(cast(object, general_settings))}). Check the "  # cast-ok: untyped YAML config; only runtime class name read for the error
                     "`general_settings:` block in your config file."
                 )
             ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
