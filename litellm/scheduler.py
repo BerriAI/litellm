@@ -2,6 +2,7 @@ import asyncio
 import enum
 import heapq
 import logging as _logging
+import random as _random
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from functools import partial as _partial
@@ -106,7 +107,7 @@ async def _mutate_redis_queue(
     cache: RedisCache, key: str, model_name: str, ttl: int | None, change: Callable[[_Queue], _QueueResult]
 ) -> _QueueResult:
     script: Final = cache.async_register_script(_QUEUE_COMPARE_SET)
-    for _ in range(100):
+    for attempt in range(100):
         raw, queue = await _read_redis_queue(cache, key)
         admitted, updated = change(queue)
         if updated == queue:
@@ -123,6 +124,8 @@ async def _mutate_redis_queue(
             )
         ):
             return admitted, updated
+        if attempt < 99:
+            await asyncio.sleep(_random.uniform(0, min(0.05, 0.001 * 2 ** min(attempt, 6))))
     raise Timeout(
         message="Scheduler queue remained busy after concurrent updates", model=model_name, llm_provider="openai"
     )
@@ -251,8 +254,14 @@ class Scheduler:
                     return
                 await asyncio.sleep(self.polling_interval)
         finally:
-            await asyncio.shield(self.remove_request(request_id=request.request_id, model_name=request.model_name))
+            await asyncio.shield(self._cleanup_request(request))
         raise Timeout(message="Request timed out while polling queue", model=request.model_name, llm_provider="openai")
+
+    async def _cleanup_request(self, request: FlowItem) -> None:
+        try:
+            await self.remove_request(request_id=request.request_id, model_name=request.model_name)
+        except Exception as error:  # noqa: BLE001  # Cleanup must preserve every request outcome, including cancellation
+            _log_redis_failure(_verbose_router_logger, _logging.WARNING, "Scheduler queue cleanup failed", error)
 
     async def remove_request(self, request_id: str, model_name: str) -> None:
         """

@@ -3,7 +3,7 @@ import os
 import threading
 import uuid
 from collections.abc import AsyncIterator, Iterator
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import patch
 
 import pytest
@@ -244,3 +244,64 @@ async def test_shared_scheduler_retains_priority_and_request_id(
         )
         <= 17
     )
+
+
+@pytest.mark.parametrize("outcome", ["admitted", "failed", "cancelled"])
+async def test_shared_scheduler_cleanup_failure_preserves_request_outcome(
+    shared_scheduler_cache: RedisCache,
+    outcome: Literal["admitted", "failed", "cancelled"],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    scheduler: Final = Scheduler(redis_cache=shared_scheduler_cache)
+    original: Final = RuntimeError("health lookup failed")
+
+    async def health_after_corrupting_queue() -> tuple[object, ...]:
+        await shared_scheduler_cache.async_set_cache("scheduler:queue:shared", {"invalid": "queue"})
+        match outcome:
+            case "failed":
+                raise original
+            case "cancelled":
+                raise asyncio.CancelledError
+            case "admitted":
+                return ("healthy",)
+
+    async def wait() -> None:
+        await scheduler.wait_for_turn(
+            FlowItem(priority=1, request_id="cleanup", model_name="shared"),
+            timeout=5,
+            get_healthy_deployments=health_after_corrupting_queue,
+        )
+
+    match outcome:
+        case "admitted":
+            await wait()
+        case "failed":
+            with pytest.raises(RuntimeError) as caught:
+                await wait()
+            assert caught.value is original
+        case "cancelled":
+            with pytest.raises(asyncio.CancelledError):
+                await wait()
+    assert "Scheduler queue cleanup failed" in caplog.text
+    assert await shared_scheduler_cache.async_get_cache("scheduler:queue:shared") == {"invalid": "queue"}
+
+
+async def test_shared_scheduler_handles_three_hundred_concurrent_enqueues_and_removals(
+    shared_scheduler_cache: RedisCache,
+) -> None:
+    schedulers: Final = tuple(Scheduler(redis_cache=shared_scheduler_cache) for _ in range(300))
+    for scheduler in schedulers:
+        scheduler.cache.update_cache_ttl(default_in_memory_ttl=60, default_redis_ttl=None)
+    requests: Final = tuple(
+        FlowItem(priority=i % 8, request_id=f"burst-{i:03}", model_name="shared") for i in range(300)
+    )
+
+    await asyncio.gather(*(scheduler.add_request(request) for scheduler, request in zip(schedulers, requests)))
+
+    assert await schedulers[0].get_queue("shared") == sorted(
+        (request.priority, request.request_id) for request in requests
+    )
+    await asyncio.gather(
+        *(scheduler.remove_request(request.request_id, "shared") for scheduler, request in zip(schedulers, requests))
+    )
+    assert await schedulers[0].get_queue("shared") == []
