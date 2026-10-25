@@ -240,6 +240,7 @@ async fn chat_cache_identity_follows_resolved_configuration_and_request_callback
         let cache = ScopedCache::new(cache.clone(), CacheScope::Shared);
         ChatCompletionsRoute::new(
             litellm_http::Client::plain_for_test(),
+            litellm_http::CredentialClient::no_redirect_for_test(),
             Arc::new(Default::default()),
             secrets.clone(),
         )

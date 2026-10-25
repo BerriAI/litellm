@@ -1,4 +1,3 @@
-use litellm_http::transport::Error as TransportError;
 use litellm_inference::Error;
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
@@ -20,12 +19,10 @@ pyo3::create_exception!(
 );
 
 pub(crate) fn route_error_to_pyerr(error: Error) -> PyErr {
-    match error {
-        Error::Transport(TransportError::Http { status, body }) => {
-            RustUpstreamError::new_err((status, body))
-        }
-        other => by_fault(other.is_request(), other.to_string()),
+    if let Some((status, message)) = error.http_failure() {
+        return RustUpstreamError::new_err((status, message.into_owned()));
     }
+    by_fault(error.is_request(), error.to_string())
 }
 
 /// A request the caller got wrong is a `ValueError`; anything else is a `RuntimeError`.
@@ -40,6 +37,7 @@ pub(crate) fn by_fault(is_request: bool, message: String) -> PyErr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use litellm_http::transport::Error as TransportError;
 
     #[rstest::rstest]
     #[case::unsupported(Error::Unsupported("test capability"), true)]
@@ -82,7 +80,48 @@ mod tests {
         });
     }
 
-    #[test]
+    #[rstest::rstest]
+    #[case::unavailable(503)]
+    #[case::unauthorized(401)]
+    #[case::rate_limited(429)]
+    fn credential_status_survives_python_mapping(#[case] status: u16) {
+        Python::initialize();
+        Python::attach(|py| {
+            let error = Error::Auth(litellm_auth::Error::CredentialRequest {
+                status: Some(status),
+                source: "sensitive credential response".into(),
+            });
+            let upstream = route_error_to_pyerr(error);
+            assert!(upstream.is_instance_of::<RustUpstreamError>(py));
+            assert_eq!(
+                upstream
+                    .value(py)
+                    .getattr("args")
+                    .unwrap()
+                    .extract::<(u16, String)>()
+                    .unwrap(),
+                (status, "credential request failed".into())
+            );
+        });
+    }
+
+    #[rstest::rstest]
+    #[case::network(Error::Auth(litellm_auth::Error::CredentialRequest {
+        status: None,
+        source: "network failure".into(),
+    }))]
+    #[case::invalid_response(Error::Auth(litellm_auth::Error::InvalidCredentialResponse(
+        "invalid response".into(),
+    )))]
+    fn credential_failures_without_http_status_are_runtime_errors(#[case] error: Error) {
+        Python::initialize();
+        Python::attach(|py| {
+            let failure = route_error_to_pyerr(error);
+            assert!(failure.is_instance_of::<PyRuntimeError>(py));
+        });
+    }
+
+    #[rstest::rstest]
     fn missing_api_key_stays_a_runtime_error_while_other_auth_failures_are_value_errors() {
         Python::initialize();
         Python::attach(|py| {

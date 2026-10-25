@@ -151,6 +151,7 @@ pub(super) trait InferenceRoute: Sized + 'static {
 
     fn new(
         http: litellm_http::Client,
+        credential: litellm_http::CredentialClient,
         auth: Arc<AuthServices>,
         secrets: Arc<dyn SecretSource>,
     ) -> Self;
@@ -182,9 +183,12 @@ where
         py,
         arguments,
         move |py, arguments, request| {
+            let (provider, credential) =
+                crate::http::provider_clients(py, arguments, asynchronous)?
+                    .map_err(crate::http::client_error)?;
             let route = R::new(
-                crate::http::provider_client(py, arguments, asynchronous)?
-                    .map_err(crate::http::client_error)?,
+                provider,
+                credential,
                 crate::http::resources().auth.clone(),
                 crate::secrets::source(py)?,
             );

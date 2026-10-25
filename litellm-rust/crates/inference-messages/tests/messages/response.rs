@@ -273,8 +273,10 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
     };
 
     let resources = resources();
+    let http = Resolution::from(&settings).config;
     let response = litellm_inference_messages::MessagesRoute::new(
-        provider_http(&resources, &Resolution::from(&settings).config),
+        provider_http(&resources, &http),
+        resources.pool.credential_client(&http).unwrap(),
         resources.auth,
         no_secrets(),
     )
@@ -356,8 +358,10 @@ async fn route_uses_injected_dependencies_and_optional_cache(
 
     let upstream = upstream([message_response(), message_response()]).await;
     let resources = resources();
+    let http = http_config();
     let route = MessagesRoute::new(
-        provider_http(&resources, &http_config()),
+        provider_http(&resources, &http),
+        resources.pool.credential_client(&http).unwrap(),
         resources.auth.clone(),
         Arc::new(RecordingSecrets::new([("ANTHROPIC_API_KEY", "route-key")])),
     );

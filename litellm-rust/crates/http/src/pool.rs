@@ -6,7 +6,12 @@ use std::{
 
 use reqwest::dns::Resolve;
 
-use crate::{client::Client, config::HttpClientConfig, error::Error, proxy::EnvironmentProxies};
+use crate::{
+    client::{Client, CredentialClient},
+    config::HttpClientConfig,
+    error::Error,
+    proxy::EnvironmentProxies,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ClientVariant {
@@ -90,6 +95,30 @@ impl HttpClientPool {
             },
         );
         Ok(Client::new(client))
+    }
+
+    pub fn credential_client(&self, config: &HttpClientConfig) -> Result<CredentialClient, Error> {
+        let effective = config.clone();
+        let key = (effective, ClientVariant::NoRedirect);
+        if let Some(pooled) = self.lock().get(&key)
+            && pooled.built_at.elapsed() < self.ttl
+        {
+            return Ok(CredentialClient::new(pooled.client.clone()));
+        }
+        let client = self
+            .apply(
+                ClientVariant::NoRedirect,
+                reqwest::ClientBuilder::try_from(&key.0)?,
+            )
+            .build()?;
+        self.lock().insert(
+            key,
+            PooledClient {
+                client: client.clone(),
+                built_at: Instant::now(),
+            },
+        );
+        Ok(CredentialClient::new(client))
     }
 
     fn lock(&self) -> MutexGuard<'_, Clients> {
@@ -243,6 +272,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn credential_client_preserves_the_resolved_proxy_and_user_agent() {
+        let (proxy, connections, requests) = serve("HTTP/1.1 204 No Content").await;
+        let config = HttpClientConfig {
+            proxies: proxied_through(&format!("http://user:secret@{proxy}")),
+            ..config("credential-client/1")
+        };
+        let client = pool().credential_client(&config).unwrap();
+        let response = client
+            .get("http://upstream.invalid/token")
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 204);
+        assert_eq!(connections.load(Ordering::SeqCst), 1);
+        let request = requests.lock().unwrap().concat();
+        assert!(request.starts_with("GET http://upstream.invalid/token HTTP/1.1"));
+        assert!(request.contains("proxy-authorization: Basic dXNlcjpzZWNyZXQ="));
+        assert!(request.contains("user-agent: credential-client/1"));
+    }
+
+    #[tokio::test]
     async fn no_proxy_hosts_bypass_the_resolved_proxy() {
         let (upstream, _, _) = serve("HTTP/1.1 204 No Content").await;
         let (proxy, proxy_connections, _) = serve("HTTP/1.1 502 Bad Gateway").await;
@@ -356,6 +407,20 @@ mod tests {
         .await;
         assert_eq!(response.status(), 302);
         assert_eq!(response.headers()["location"], "/elsewhere");
+    }
+
+    #[tokio::test]
+    async fn credential_client_does_not_follow_redirects() {
+        let (address, connections, _) = serve("HTTP/1.1 302 Found").await;
+        let client = pool().credential_client(&config("a")).unwrap();
+        let response = client
+            .get(format!("http://{address}"))
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 302);
+        assert_eq!(connections.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

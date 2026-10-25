@@ -3,7 +3,6 @@ use axum::{
     Json,
     response::{IntoResponse, Response},
 };
-use litellm_http::transport::Error as TransportError;
 use litellm_inference::Error as InferenceError;
 use litellm_llms::base_llm::ocr::error::Error as OcrError;
 use serde_json::{Map, Value, json};
@@ -64,8 +63,9 @@ impl Error {
                 .and_then(|status| StatusCode::from_u16(status).ok())
                 .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             Self::InvalidBody(_) | Self::UnknownModel(_) => StatusCode::BAD_REQUEST,
-            Self::Route(InferenceError::Transport(TransportError::Http { status, .. })) => {
-                StatusCode::from_u16(*status).unwrap_or(StatusCode::BAD_GATEWAY)
+            Self::Route(error) if error.http_status().is_some() => {
+                StatusCode::from_u16(error.http_status().expect("status was checked"))
+                    .unwrap_or(StatusCode::BAD_GATEWAY)
             }
             Self::Route(InferenceError::Auth(litellm_auth::Error::MissingApiKey { .. })) => {
                 StatusCode::UNAUTHORIZED
@@ -97,9 +97,10 @@ impl Error {
     /// body already in that shape passes through, any other has its message extracted.
     pub fn body(&self, request_id: Option<&str>) -> Value {
         let raw = match self {
-            Self::Route(InferenceError::Transport(TransportError::Http { body, .. })) => {
-                body.clone()
-            }
+            Self::Route(error) => error
+                .http_failure()
+                .map(|(_, message)| message.into_owned())
+                .unwrap_or_else(|| error.to_string()),
             other => other.to_string(),
         };
         let parsed = serde_json::from_str::<Value>(&raw).ok();
@@ -175,6 +176,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use litellm_http::transport::Error as TransportError;
 
     fn upstream(status: u16, body: &str) -> Error {
         Error::Route(InferenceError::Transport(TransportError::Http {
@@ -226,6 +228,24 @@ mod tests {
     }
 
     #[rstest]
+    #[case::unavailable(503, StatusCode::SERVICE_UNAVAILABLE)]
+    #[case::unauthorized(401, StatusCode::UNAUTHORIZED)]
+    #[case::rate_limited(429, StatusCode::TOO_MANY_REQUESTS)]
+    fn credential_http_status_is_preserved(#[case] status: u16, #[case] expected: StatusCode) {
+        let error = Error::Route(InferenceError::Auth(
+            litellm_auth::Error::CredentialRequest {
+                status: Some(status),
+                source: "credential endpoint failed".into(),
+            },
+        ));
+        assert_eq!(error.status(), expected);
+        assert_eq!(
+            error.body(None)["error"]["message"],
+            "credential request failed"
+        );
+    }
+
+    #[rstest]
     #[case::upstream_status(upstream(429, ""), StatusCode::TOO_MANY_REQUESTS)]
     #[case::rejected_request(Error::Route(InferenceError::InvalidRequest("top_k".into())), StatusCode::BAD_REQUEST)]
     #[case::missing_key(
@@ -239,6 +259,15 @@ mod tests {
         Error::Route(InferenceError::Transport(TransportError::Network("reset".into()))),
         StatusCode::INTERNAL_SERVER_ERROR,
     )]
+    #[case::credential_network(Error::Route(InferenceError::Auth(
+        litellm_auth::Error::CredentialRequest {
+            status: None,
+            source: "network failure".into(),
+        },
+    )), StatusCode::INTERNAL_SERVER_ERROR)]
+    #[case::credential_invalid_response(Error::Route(InferenceError::Auth(
+        litellm_auth::Error::InvalidCredentialResponse("invalid response".into()),
+    )), StatusCode::INTERNAL_SERVER_ERROR)]
     fn status_follows_who_is_at_fault(#[case] error: Error, #[case] status: StatusCode) {
         assert_eq!(error.status(), status);
     }

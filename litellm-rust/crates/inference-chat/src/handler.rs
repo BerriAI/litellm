@@ -26,6 +26,7 @@ use crate::{
 #[expect(clippy::too_many_arguments)] // mirrors BaseLLMHTTPHandler.completion, which takes each stage input separately
 pub(super) async fn execute(
     http: &Client,
+    credential: &litellm_http::CredentialClient,
     auth: &AuthServices,
     config: &'static dyn BaseConfig,
     provider: litellm_inference::provider::ResolvedProvider<'_>,
@@ -64,7 +65,8 @@ pub(super) async fn execute(
         secret_fields: Vec::new(),
         api_key: call.api_key.map(litellm_auth::SecretValue::new),
     };
-    let authenticated = resolve_auth(auth, environment, &|key| secrets.get(key)).await?;
+    let authenticated =
+        resolve_auth(auth, credential, environment, &|key| secrets.get(key)).await?;
     let identity = litellm_host::interceptors::ProviderIdentity {
         model: context.model.clone(),
         provider: context.custom_llm_provider.clone(),
@@ -95,6 +97,7 @@ pub(super) async fn execute(
                 Authenticated {
                     headers: wire.headers,
                     signer: authenticated.signer,
+                    watsonx_iam: authenticated.watsonx_iam,
                 },
                 wire.url,
                 &wire.body,
@@ -282,8 +285,10 @@ mod tests {
         let interceptors = RecordingHooks::default();
 
         let (provider, config, request) = prepared(&upstream.uri());
+        let credential = litellm_http::CredentialClient::no_redirect_for_test();
         execute(
             &Client::plain_for_test(),
+            &credential,
             &AuthServices::default(),
             config,
             provider,
@@ -327,8 +332,10 @@ mod tests {
         let interceptors = RecordingHooks::default();
 
         let (provider, config, request) = prepared(&upstream.uri());
+        let credential = litellm_http::CredentialClient::no_redirect_for_test();
         let error = execute(
             &Client::plain_for_test(),
+            &credential,
             &AuthServices::default(),
             config,
             provider,

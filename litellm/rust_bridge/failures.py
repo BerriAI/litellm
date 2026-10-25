@@ -27,7 +27,7 @@ class UpstreamFailure(Exception):
 def _upstream_failure(error: Exception, api_base: str | None) -> Exception:
     try:
         status, body = _UPSTREAM_ARGS.validate_python(error.args)
-        headers: Final = _UPSTREAM_HEADERS.validate_python(getattr(error, "headers", None))
+        headers: Final = _UPSTREAM_HEADERS.validate_python(getattr(error, "headers", []))
     except ValidationError:
         return error
     http_request: Final = httpx.Request("POST", api_base or "https://docs.litellm.ai/docs")

@@ -58,6 +58,7 @@ pub(super) async fn execute(
 ) -> Result<MessagesCallResponse, Error> {
     let request = provider_call(
         &route.auth,
+        &route.credential,
         provider,
         model,
         call,
@@ -96,6 +97,7 @@ pub(super) async fn execute(
 
 async fn provider_call(
     auth: &AuthServices,
+    credential: &litellm_http::CredentialClient,
     provider: MessagesProvider,
     model: String,
     call: MessagesCall,
@@ -168,7 +170,10 @@ async fn provider_call(
         secret_fields: Vec::new(),
         api_key: api_key.map(SecretValue::new),
     };
-    let authenticated = resolve_auth(auth, environment, &|key| std::env::var(key).ok()).await?;
+    let authenticated = resolve_auth(auth, credential, environment, &|key| {
+        std::env::var(key).ok()
+    })
+    .await?;
     let identity = ProviderIdentity {
         model: request_context.model.clone(),
         provider: request_context.custom_llm_provider.clone(),
@@ -244,6 +249,7 @@ async fn call_provider(
         Authenticated {
             headers: wire.headers,
             signer,
+            watsonx_iam: None,
         },
         &wire.url,
         &wire.body,
@@ -430,8 +436,10 @@ mod tests {
         let model = provider.model.to_owned();
         let interceptors = ();
         let context = CallContext::new(&interceptors, litellm_inference::CallOptions::default());
+        let credential = litellm_http::CredentialClient::no_redirect_for_test();
         provider_call(
             &AuthServices::default(),
+            &credential,
             config,
             model,
             call,
@@ -858,6 +866,7 @@ mod tests {
             Authenticated {
                 headers: call.wire.headers,
                 signer: call.signer,
+                watsonx_iam: None,
             },
             call.wire.url,
             &call.wire.body,

@@ -28,6 +28,7 @@ fn audio_transcription_provider(
 #[derive(Clone)]
 pub struct AudioTranscriptionRoute {
     http: litellm_http::Client,
+    credential: litellm_http::CredentialClient,
     auth: Arc<AuthServices>,
     secrets: Arc<dyn SecretSource>,
 }
@@ -35,11 +36,13 @@ pub struct AudioTranscriptionRoute {
 impl AudioTranscriptionRoute {
     pub fn new(
         http: litellm_http::Client,
+        credential: litellm_http::CredentialClient,
         auth: Arc<AuthServices>,
         secrets: Arc<dyn SecretSource>,
     ) -> Self {
         Self {
             http,
+            credential,
             auth,
             secrets,
         }
@@ -72,9 +75,16 @@ impl AudioTranscriptionRoute {
                 <&'static str>::from(provider.provider),
             );
             let secrets = self.secrets.resolve(&config.secret_names()).await?;
-            let execute: futures_util::future::BoxFuture<'_, Result<Value, Error>> = Box::pin(
-                handler::execute(&self.http, &self.auth, config, provider, request, secrets),
-            );
+            let execute: futures_util::future::BoxFuture<'_, Result<Value, Error>> =
+                Box::pin(handler::execute(
+                    &self.http,
+                    &self.credential,
+                    &self.auth,
+                    config,
+                    provider,
+                    request,
+                    secrets,
+                ));
             execute.await
         })
         .await

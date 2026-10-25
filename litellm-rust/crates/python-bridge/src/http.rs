@@ -117,13 +117,19 @@ pub(crate) fn call_config(
     Ok(resolution.config)
 }
 
-pub(crate) fn provider_client(
+pub(crate) fn provider_clients(
     py: Python<'_>,
     kwargs: &Bound<'_, PyDict>,
     asynchronous: bool,
-) -> PyResult<Result<Client, litellm_http::Error>> {
+) -> PyResult<Result<(Client, litellm_http::CredentialClient), litellm_http::Error>> {
     let config = call_config(py, kwargs, asynchronous)?;
-    Ok(pool().client(&config, ClientVariant::Provider))
+    let pool = pool();
+    Ok(pool
+        .client(&config, ClientVariant::Provider)
+        .and_then(|provider| {
+            pool.credential_client(&config)
+                .map(|credential| (provider, credential))
+        }))
 }
 
 pub(crate) fn host_client(py: Python<'_>, variant: ClientVariant) -> PyResult<Client> {

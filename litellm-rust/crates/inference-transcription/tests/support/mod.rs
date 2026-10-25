@@ -5,7 +5,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use litellm_inference_testing::{http_config, no_secrets, provider_http, resources};
+use litellm_inference_testing::{
+    credential_http, http_config, no_secrets, provider_http, resources,
+};
 use serde_json::Value;
 use wiremock::{Mock, MockServer, Request, ResponseTemplate, matchers::any};
 
@@ -14,8 +16,10 @@ pub const UNREACHABLE_BASE: &str = "http://127.0.0.1:1";
 
 pub fn audio_transcription_route() -> litellm_inference_transcription::AudioTranscriptionRoute {
     let resources = resources();
+    let config = http_config();
     litellm_inference_transcription::AudioTranscriptionRoute::new(
-        provider_http(&resources, &http_config()),
+        provider_http(&resources, &config),
+        credential_http(&resources, &config),
         resources.auth,
         no_secrets(),
     )

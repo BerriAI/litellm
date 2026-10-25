@@ -17,6 +17,7 @@ use litellm_inference::provider::ResolvedProvider;
 
 pub(super) async fn execute(
     http: &Client,
+    credential: &litellm_http::CredentialClient,
     auth: &litellm_auth::AuthServices,
     config: &'static dyn BaseAudioTranscriptionConfig,
     provider: ResolvedProvider<'_>,
@@ -45,7 +46,7 @@ pub(super) async fn execute(
     let body = config
         .transform_audio_transcription_request(provider.model, call.audio, filtered_params)?
         .body;
-    let authenticated = resolve_auth(auth, environment, &env_lookup).await?;
+    let authenticated = resolve_auth(auth, credential, environment, &env_lookup).await?;
     let outbound = litellm_inference::outbound::outbound_request(
         authenticated,
         url,

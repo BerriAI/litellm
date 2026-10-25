@@ -57,21 +57,29 @@ impl Gateway {
         models: ModelRouter,
     ) -> Result<Self, litellm_http::Error> {
         let provider = resources.pool.client(&http, ClientVariant::Provider)?;
+        let credential = resources.pool.credential_client(&http)?;
         let auth = resources.auth.clone();
         Ok(Self {
             cache: None,
             audio_transcription: AudioTranscriptionRoute::new(
                 provider.clone(),
+                credential.clone(),
                 auth.clone(),
                 secrets.clone(),
             ),
             chat_completions: ChatCompletionsRoute::new(
                 provider.clone(),
+                credential.clone(),
                 auth.clone(),
                 secrets.clone(),
             ),
-            messages: MessagesRoute::new(provider.clone(), auth.clone(), secrets.clone()),
-            responses: ResponsesRoute::new(provider, auth.clone(), secrets.clone()),
+            messages: MessagesRoute::new(
+                provider.clone(),
+                credential.clone(),
+                auth.clone(),
+                secrets.clone(),
+            ),
+            responses: ResponsesRoute::new(provider, credential, auth.clone(), secrets.clone()),
             ocr: OcrRoute::new(OcrClient::new(
                 &resources.pool,
                 &http,

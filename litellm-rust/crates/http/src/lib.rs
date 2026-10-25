@@ -19,7 +19,7 @@ mod tls;
 pub mod transport;
 pub mod websocket;
 
-pub use client::Client;
+pub use client::{Client, CredentialClient};
 pub use config::{ClientIdentity, HttpClientConfig, Resolution, Verify};
 pub use error::{Error, TlsSource};
 pub use pool::{ClientVariant, HttpClientPool};
