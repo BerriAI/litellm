@@ -205,9 +205,17 @@ async def test_escape_heavy_json_uses_memory_proportional_to_body_size():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cached", (False, True))
-async def test_model_alias_rewrite_preserves_large_integers_in_every_body_reader(cached: bool):
-    payload: Final = {"model": "alias", "schema": {"maximum": 12345678901234567890123}}
-    request: Final = _starlette_request(json.dumps(payload).encode(), "application/json")
+@pytest.mark.parametrize("depth", (0, 250, 800))
+async def test_model_alias_rewrite_preserves_large_integers_in_every_body_reader(cached: bool, depth: int):
+    raw: Final = (
+        b'{"model":"alias","schema":'
+        + b"[" * depth
+        + b'{"maximum":12345678901234567890123}'
+        + b"]" * depth
+        + b"}"
+    )
+    payload: Final = json.loads(raw)
+    request: Final = _starlette_request(raw, "application/json")
     request_data: Final = await read_request_body(request) if cached else dict(payload)
     rewrite_request_model(request_data, request, "integer-test")
     expected: Final = {**payload, "model": "integer-test"}

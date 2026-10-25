@@ -7,7 +7,7 @@ from typing import Annotated, Any, Final, Literal, Union, get_args, get_origin
 import orjson
 from fastapi import Request, UploadFile, status
 from pydantic import TypeAdapter
-from pydantic_core import from_json
+from pydantic_core import PydanticSerializationError, from_json
 from starlette._utils import get_route_path
 from starlette.requests import HTTPConnection
 from typing_extensions import NotRequired, ReadOnly, Required, assert_never
@@ -171,6 +171,13 @@ def _decode_json_body(body: bytes) -> object:
     except ValueError:
         # The native decoder has a lower nesting limit than orjson.
         return _DECODED_JSON.validate_python(json.loads(body))
+
+
+def _encode_json_body(body: Mapping[str, object]) -> bytes:
+    try:
+        return _JSON_REQUEST_BODY.dump_json(body)
+    except PydanticSerializationError:
+        return json.dumps(body, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
 
 
 def _parse_binary_body(body: bytes) -> dict:
@@ -432,7 +439,7 @@ def rewrite_request_model(
     )
     safe_set_request_parsed_body(request=request, parsed_body=body)
     request._json = body  # pyright: ignore[reportPrivateUsage]  # Starlette JSON cache
-    request._body = _JSON_REQUEST_BODY.dump_json(body)  # pyright: ignore[reportPrivateUsage]  # Starlette body cache
+    request._body = _encode_json_body(body)  # pyright: ignore[reportPrivateUsage]  # Starlette body cache
 
 
 def safe_get_request_headers(request: Request | None) -> dict:
