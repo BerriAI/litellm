@@ -4,8 +4,11 @@ from typing import Final
 
 from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import provider_reported_usage_cost, set_response_cost_in_hidden_params
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.utils import ModelResponse
 
 
 def is_opencode_api_base(api_base: str | None) -> bool:
@@ -67,3 +70,11 @@ def go_headers(
         params,
         "x-opencode-session",
     )
+
+
+def go_reported_cost(usage: object) -> float | None:
+    return provider_reported_usage_cost(usage, "opencode_go")
+
+
+def attach_go_reported_cost(response: ModelResponse | ResponsesAPIResponse, usage: object) -> None:
+    set_response_cost_in_hidden_params(response, go_reported_cost(usage))
