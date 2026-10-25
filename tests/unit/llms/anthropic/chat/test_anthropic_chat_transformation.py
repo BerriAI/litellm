@@ -3339,8 +3339,8 @@ def test_effort_beta_header_not_injected_for_46_models():
         "claude-opus-4-7",
     ],
 )
-def test_reasoning_effort_none_omits_thinking_and_output_config(model):
-    """reasoning_effort="none" must omit thinking and output_config from the request."""
+def test_reasoning_effort_none_disables_thinking(model):
+    """reasoning_effort="none" must explicitly disable adaptive thinking."""
     config = AnthropicConfig()
 
     result = config.map_openai_params(
@@ -3350,7 +3350,10 @@ def test_reasoning_effort_none_omits_thinking_and_output_config(model):
         drop_params=False,
     )
 
-    assert "thinking" not in result
+    if model == "claude-opus-4-5-20251101":
+        assert "thinking" not in result
+    else:
+        assert result["thinking"] == {"type": "disabled"}
     assert "output_config" not in result
 
 

@@ -1563,10 +1563,27 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model: str,
         custom_llm_provider: str,
         llm_provider: str = "anthropic",
+        drop_params: bool = False,
     ) -> AnthropicThinkingParam | None:
         """Capability probes read the cost map under ``custom_llm_provider``; ``llm_provider`` only tags raised exceptions."""
-        if reasoning_effort is None or reasoning_effort == "none":
+        if reasoning_effort is None:
             return None
+        if reasoning_effort == "none":
+            # Legacy models default thinking off; omission already disables it.
+            if not AnthropicConfig._is_adaptive_thinking_model(model, custom_llm_provider):
+                return None
+            if AnthropicModelInfo.supports_model_capability(model, "thinking_always_on", custom_llm_provider):
+                if drops_unsupported_params(drop_params):
+                    return None
+                raise litellm.UnsupportedParamsError(
+                    message=(
+                        f"{model} does not support reasoning_effort='none': thinking cannot be disabled. "
+                        "To drop unsupported params, set drop_params=True."
+                    ),
+                    model=model,
+                    llm_provider=llm_provider,
+                )
+            return AnthropicThinkingParam(type="disabled")
         if AnthropicConfig._is_adaptive_thinking_model(model, custom_llm_provider):
             # without display, Anthropic defaults adaptive thinking to
             # display="omitted" and returns a blank thinking block
@@ -1625,8 +1642,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model: str,
         custom_llm_provider: str,
         llm_provider: str = "anthropic",
+        drop_params: bool = False,
     ) -> AnthropicThinkingParam | None:
-        return cls._map_reasoning_effort(reasoning_effort, model, custom_llm_provider, llm_provider)
+        return cls._map_reasoning_effort(reasoning_effort, model, custom_llm_provider, llm_provider, drop_params)
 
     @staticmethod
     def cap_thinking_budget_to_max_tokens(
@@ -1953,6 +1971,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     continue
                 mapped_thinking = AnthropicConfig._map_reasoning_effort(
                     reasoning_effort=effort_value,
+                    drop_params=drop_params,
                     model=model,
                     custom_llm_provider=self._resolved_provider,
                     llm_provider=self._resolved_provider,
@@ -1962,7 +1981,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     optional_params.pop("output_config", None)
                 else:
                     optional_params["thinking"] = mapped_thinking
-                    if AnthropicConfig._is_adaptive_thinking_model(model, self._resolved_provider):
+                    if mapped_thinking["type"] == "disabled":
+                        optional_params.pop("output_config", None)
+                    elif mapped_thinking["type"] == "adaptive":
                         mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(effort_value)
                         if mapped_effort is None:
                             AnthropicConfig._raise_invalid_reasoning_effort(
