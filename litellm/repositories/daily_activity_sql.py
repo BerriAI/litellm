@@ -117,7 +117,6 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
     return " AND ".join(conditions), params
 
 
-# Same rule as common_daily_activity._is_user_agent_tag
 _NOT_USER_AGENT_TAG: Final = "NOT (LOWER(BTRIM(tag)) LIKE 'user-agent:%' OR LOWER(BTRIM(tag)) LIKE 'user agent:%')"
 
 

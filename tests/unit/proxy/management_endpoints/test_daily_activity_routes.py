@@ -1378,6 +1378,20 @@ def test_team_tag_page_returns_404_for_a_non_member(
     repository.tag_page.assert_not_awaited()
 
 
+def test_team_tag_page_is_empty_for_a_team_that_is_also_excluded(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+) -> None:
+    client, repository = daily_activity_client
+    response: Final = client.get(
+        "/team/daily/activity/aggregated/tags",
+        params={**_entity_params("team_ids", "team-a"), "exclude_team_ids": "team-a", "offset": 0, "limit": 5},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"tags": [], "total_tags": 0, "offset": 0, "limit": 5}
+    repository.tag_page.assert_not_awaited()
+
+
 def test_team_aggregated_ignores_group_by_and_reads_the_team_table(
     daily_activity_client: tuple[TestClient, _FakeRepository],
 ) -> None:

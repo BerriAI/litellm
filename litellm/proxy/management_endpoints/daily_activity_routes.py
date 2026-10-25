@@ -64,6 +64,7 @@ from litellm.types.repositories.daily_activity import (
     ExportType,
     KeyMetadataRow,
     KeySpendRow,
+    TagPage,
     UserMetadataRow,
     UserSpendRow,
 )
@@ -406,11 +407,10 @@ def _register_tag_page_route(router: APIRouter, resolver: EntityScopeResolver, p
                 prisma_client,
                 user_aggregated=False,
             )
-            page: Final = await repository.tag_page(
-                resolved.scope,
-                team_id=team_ids[0],
-                offset=offset,
-                limit=limit,
+            page: Final = (
+                TagPage(rows=(), total_tags=0)
+                if team_ids[0] in resolved.scope.exclude_entity_ids
+                else await repository.tag_page(resolved.scope, team_id=team_ids[0], offset=offset, limit=limit)
             )
             return DailyActivityTagPageResponse(
                 tags=list(page.rows),
