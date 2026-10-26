@@ -644,9 +644,13 @@
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_token": 3.3e-07,
         "litellm_provider": "bedrock",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
         "mode": "realtime",
         "output_cost_per_audio_token": 1.2e-05,
         "output_cost_per_token": 2.75e-06,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-2-sonic.md",
         "supports_audio_input": true,
         "supports_audio_output": true
     },
@@ -4339,7 +4343,7 @@
         "deprecation_date": "2027-05-18",
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure_ai",
-        "max_input_tokens": 272000,
+        "max_input_tokens": 128000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
@@ -9232,7 +9236,7 @@
         "deprecation_date": "2027-05-18",
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure",
-        "max_input_tokens": 272000,
+        "max_input_tokens": 128000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
@@ -9679,7 +9683,7 @@
         "deprecation_date": "2027-05-18",
         "input_cost_per_token": 5.5e-06,
         "litellm_provider": "azure",
-        "max_input_tokens": 272000,
+        "max_input_tokens": 128000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
@@ -15658,6 +15662,28 @@
         "supported_endpoints": [
             "/v1/images/generations"
         ]
+    },
+    "cerebras/llama-3.1-70b": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "cerebras",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "cerebras/llama-3.1-8b": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "cerebras",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "cerebras/llama-3.3-70b": {
         "input_cost_per_token": 8.5e-07,
@@ -33212,6 +33238,7 @@
     "github_copilot/claude-opus-4.8-fast": {
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_read_input_token_cost": 1e-06,
+        "deprecation_date": "2026-11-16",
         "input_cost_per_token": 1e-05,
         "litellm_provider": "github_copilot",
         "max_input_tokens": 200000,
@@ -37401,6 +37428,7 @@
     },
     "gpt-5.6-cyber": {
         "cache_creation_input_token_cost": 1.5625e-05,
+        "cache_creation_input_token_cost_above_12hr": 3.125e-05,
         "cache_creation_input_token_cost_above_272k_tokens": 3.125e-05,
         "cache_read_input_token_cost": 1.25e-06,
         "cache_read_input_token_cost_above_272k_tokens": 2.5e-06,
@@ -42697,6 +42725,29 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
+    },
+    "mistral/zai-glm-5-3-flash": {
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
+        "source": "https://docs.mistral.ai/models/zai-glm-5-3-flash",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "mistral/zai-glm-5": {
         "cache_read_input_token_cost": 1.4e-07,
@@ -59514,6 +59565,7 @@
         "supports_audio_input": true,
         "supports_audio_output": true,
         "gemini_native_audio": true,
+        "input_cost_per_video_token": 3e-06,
         "supports_function_calling": true,
         "supports_response_schema": false,
         "supports_vision": true,
@@ -59709,6 +59761,7 @@
         "tpm": 250000,
         "rpm": 10,
         "gemini_native_audio": true,
+        "input_cost_per_video_token": 3e-06,
         "supports_function_calling": true,
         "supports_response_schema": false,
         "supports_vision": true,
@@ -75362,10 +75415,13 @@
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_token": 3.3e-07,
         "litellm_provider": "bedrock",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
         "mode": "realtime",
         "output_cost_per_audio_token": 1.2e-05,
         "output_cost_per_token": 2.75e-06,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-2-5-sonic.md",
         "supports_audio_input": true,
         "supports_audio_output": true
     },
