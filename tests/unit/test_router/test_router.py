@@ -14371,6 +14371,43 @@ class TestUpsertDeploymentRollback:
         assert restored.litellm_params.model == "gpt-4o"
         assert [model["model_name"] for model in router.model_list] == ["prod-model"]
 
+    def test_workers_ai_model_id_replaces_the_served_deployment(self):
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "cloudflare/clef-flash",
+                    "litellm_params": {
+                        "model": "cloudflare/clef-flash",
+                        "api_base": "https://api.cloudflare.com/client/v4/accounts/acct/ai/run",
+                        "api_key": "old-key",
+                    },
+                    "model_info": {"id": "clef-1", "db_model": True},
+                }
+            ],
+            ignore_invalid_deployments=True,
+        )
+
+        result = router.upsert_deployment(
+            deployment=Deployment(
+                model_name="cloudflare/clef-flash",
+                litellm_params=LiteLLM_Params(
+                    model="@cf/cloudflare/clef-flash",
+                    api_base="https://api.cloudflare.com/client/v4/accounts/acct/ai/v1",
+                    api_key="new-key",
+                ),
+                model_info=ModelInfo(id="clef-1", db_model=True),
+            )
+        )
+
+        assert result is not None
+        served = router.get_deployment(model_id="clef-1")
+        assert served is not None
+        assert served.litellm_params.model == "@cf/cloudflare/clef-flash"
+        assert served.litellm_params.api_base == "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1"
+        assert served.litellm_params.api_key == "new-key"
+
     def test_failed_fresh_add_returns_none_without_restore(self):
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 

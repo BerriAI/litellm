@@ -57,6 +57,14 @@ def test_get_llm_provider_still_rejects_unregistered_prefix(registered_custom_pr
         get_llm_provider(model="not-registered-llm/my-model")
 
 
+@pytest.mark.parametrize("model", ["@cf/cloudflare/clef-flash", "@hf/thebloke/model"])
+def test_get_llm_provider_keeps_workers_ai_model_id(model: str) -> None:
+    resolved_model, provider, _, _ = get_llm_provider(model=model)
+
+    assert provider == "cloudflare"
+    assert resolved_model == model
+
+
 @pytest.mark.parametrize(
     ("candidate", "expected"),
     [(CUSTOM_PROVIDER, True), ("not-registered-llm", False), (None, False), ("", False)],
