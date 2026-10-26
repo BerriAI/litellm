@@ -78852,6 +78852,24 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true
     },
+    "baseten/decision-models/baseten-elephant-9b-latest": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "baseten",
+        "max_input_tokens": 16384,
+        "mode": "decisions",
+        "output_cost_per_token": 0.0,
+        "source": "https://inference.baseten.co/v1/models",
+        "supports_vision": true
+    },
+    "baseten/decision-models/baseten-mammoth-27b-latest": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "baseten",
+        "max_input_tokens": 16384,
+        "mode": "decisions",
+        "output_cost_per_token": 0.0,
+        "source": "https://inference.baseten.co/v1/models",
+        "supports_vision": true
+    },
     "github_copilot/gpt-6.1-terra": {
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_272k_tokens": 2.5e-06,
