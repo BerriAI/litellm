@@ -441,17 +441,20 @@ async def test_client_login_cannot_be_redirected_to_another_host(
             **credential,
         }
     )
+    async def request() -> None:
+        if endpoint == "chat":
+            if async_call:
+                await litellm.acompletion(**params, messages=[{"role": "user", "content": "Hello"}])
+            else:
+                litellm.completion(**params, messages=[{"role": "user", "content": "Hello"}])
+        elif async_call:
+            await litellm.aresponses(**params, input="Hello")
+        else:
+            litellm.responses(**params, input="Hello")
+
     with respx.mock as transport:
         with pytest.raises(litellm.BadRequestError, match="official HTTPS ChatGPT endpoint"):
-            if endpoint == "chat":
-                if async_call:
-                    await litellm.acompletion(**params, messages=[{"role": "user", "content": "Hello"}])
-                else:
-                    litellm.completion(**params, messages=[{"role": "user", "content": "Hello"}])
-            elif async_call:
-                await litellm.aresponses(**params, input="Hello")
-            else:
-                litellm.responses(**params, input="Hello")
+            await request()
         assert len(transport.calls) == 0
 
 
