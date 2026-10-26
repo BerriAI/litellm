@@ -3,7 +3,7 @@ name = "litellm"
 version = "1.108.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
-requires-python = ">=3.10, <3.15"
+requires-python = ">=3.10, <3.16"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
@@ -14,7 +14,7 @@ dependencies = [
     # deps. Reproducibility for our Docker/CI comes from `uv.lock`.
     # When changing a floor, verify it installs + imports on every supported
     # Python with: `uv pip install --resolution=lowest-direct .`
-    "fastuuid>=0.14.0,<1.0",
+    "fastuuid>=0.14.0,<1.0; python_version < '3.15'",
     # TODO: Drop the 3.10 cap when a compatible release fixes the APIs introduced in 3.20.4 (GHSA-v4x8-3wr5-3wq8)
     "filelock>=3.20.3,<3.20.4; python_version < '3.11'",
     "filelock>=4.2.1,<5.0; python_version >= '3.11'",
@@ -25,7 +25,8 @@ dependencies = [
     "packaging>=24.0",
     "importlib-metadata>=8.0.0,<9.0",
     "tiktoken>=0.8.0,<1.0; python_version < '3.14'",
-    "tiktoken>=0.12.0,<1.0; python_version >= '3.14'",
+    "tiktoken>=0.12.0,<1.0; python_version == '3.14'",
+    "tiktoken>=0.14.0,<1.0; python_version >= '3.15'",
     "tokenizers>=0.21.0,<1.0",
     "huggingface-hub>=0.34.0,<2.0",
     "click>=8.0.0,<9.0",
@@ -34,7 +35,8 @@ dependencies = [
     "anyio>=4.14.0,<5.0",
     "async-timeout>=4.0.3,<6.0; python_version < '3.11'",
     "pydantic>=2.11.0,<3.0.0; python_version < '3.14'",
-    "pydantic>=2.12.0,<3.0.0; python_version >= '3.14'",
+    "pydantic>=2.12.0,<3.0.0; python_version == '3.14'",
+    "pydantic>=2.14.0,<3.0.0; python_version >= '3.15'",
     "pydantic-settings>=2.14.1,<3.0",
     "jsonschema>=4.22.0,<5.0",
     "boto3>=1.43.117,<2.0",
@@ -57,17 +59,20 @@ Documentation = "https://docs.litellm.ai"
 proxy = [
     "gunicorn>=23.0.0,<24.0",
     "uvicorn>=0.33.0,<1.0",
-    "granian>=2.7.4,<3.0",
+    "granian>=2.7.4,<3.0; python_version < '3.15'",
+    "granian>=2.8.0,<3.0; python_version >= '3.15'",
     "uvloop>=0.22.1,<1.0; sys_platform != 'win32'",
     "fastapi>=0.136.3,<1.0",
     "starlette>=1.0.1,<2.0",
     "backoff>=2.2.1,<3.0",
     "pyyaml>=6.0.3,<7.0",
     "rq>=2.7.0,<3.0",
-    "orjson>=3.11.6,<4.0",
+    "orjson>=3.11.6,<4.0; python_version < '3.15'",
+    "orjson>=3.12.0,<4.0; python_version >= '3.15'",
     # redis-py's C response parser. It arrives with redis (via rq) either way; naming
     # it here is what makes redis-py select _HiredisParser instead of the Python one.
-    "hiredis>=3.0.0,<4.0",
+    "hiredis>=3.0.0,<4.0; python_version < '3.15'",
+    "hiredis>=3.5.0,<4.0; python_version >= '3.15'",
     "apscheduler>=3.11.2,<4.0",
     "fastapi-sso>=0.19.0,<1.0",
     "PyJWT>=2.13.0,<3.0",
@@ -212,8 +217,8 @@ dev = [
     "tomli==2.4.1; python_version < '3.11'",
     "pytest-mock==3.15.1",
     "pytest-asyncio==1.3.0",
-    "psycopg==3.3.3",
-    "psycopg-binary==3.3.3",
+    "psycopg==3.3.6",
+    "psycopg-binary==3.3.6",
     "pytest-xdist==3.8.0",
     "requests-mock==1.12.1",
     "responses==0.26.0",

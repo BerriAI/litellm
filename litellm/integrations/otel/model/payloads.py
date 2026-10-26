@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, ClassVar, Final, Literal, cast
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, Protocol, cast
 from urllib.parse import urlsplit
 
 from typing_extensions import ReadOnly, TypedDict
@@ -716,6 +716,15 @@ def _json_or_none(value: object) -> str | None:
         return None
 
 
+class _EnumValue(Protocol):
+    @property
+    def value(self) -> object: ...
+
+
+def _enum_value(item: _EnumValue) -> object:
+    return item.value
+
+
 def _guardrail_mode_str(value: object) -> str | None:
     """Normalize ``guardrail_mode`` to a stable string.
 
@@ -732,12 +741,12 @@ def _guardrail_mode_str(value: object) -> str | None:
         for item in value:
             if item is None:
                 continue
-            part = as_str(item.value) if isinstance(item, Enum) else as_str(item)
+            part = as_str(_enum_value(item)) if isinstance(item, Enum) else as_str(item)
             if part:
                 parts.append(part)
         return ",".join(parts) or None
     if isinstance(value, Enum):
-        return as_str(value.value)
+        return as_str(_enum_value(value))
     return as_str(value)
 
 

@@ -16,6 +16,7 @@ import hashlib
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final, cast
 
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._internal_context import with_service_target
@@ -36,6 +37,27 @@ from litellm.types.utils import CallTypes
 
 class DeploymentAffinityCacheValue(TypedDict, closed=True):
     model_id: ReadOnly[str]
+
+
+def _affinity_response_fields(response: object) -> Mapping[str, object]:
+    return (
+        TypeAdapter(Mapping[str, object]).validate_python(response)
+        if isinstance(response, Mapping)
+        else {name: getattr(response, name, None) for name in ("response", "status", "error")}
+    )
+
+
+def completed_affinity_response(response: object) -> bool:
+    if response is None:
+        return False
+    envelope: Final = _affinity_response_fields(response)
+    if envelope.get("error") is not None or envelope.get("status") not in (None, "completed"):
+        return False
+    nested: Final = envelope.get("response")
+    fields: Final = _affinity_response_fields(nested) if nested is not None else envelope
+    return (
+        fields.get("response") is None and fields.get("error") is None and fields.get("status") in (None, "completed")
+    )
 
 
 VALID_MODEL_GROUP_AFFINITY_FLAGS: Final = frozenset(
@@ -86,6 +108,7 @@ class DeploymentAffinityCheck(CustomLogger):
         enable_session_id_affinity: bool = False,
         model_group_affinity_config: dict[str, list[str]] | None = None,
         is_priority_group: Callable[[str], bool] | None = None,
+        session_affinity_repin_on_failover: bool = False,
     ):
         super().__init__()
         self.cache = cache
@@ -95,6 +118,7 @@ class DeploymentAffinityCheck(CustomLogger):
         self.enable_session_id_affinity = enable_session_id_affinity
         self.model_group_affinity_config: dict[str, list[str]] = model_group_affinity_config or {}
         self.is_priority_group = is_priority_group
+        self.session_affinity_repin_on_failover = session_affinity_repin_on_failover
 
     def _get_effective_flags(self, model_group: str) -> tuple[bool, bool, bool]:
         """
@@ -297,7 +321,7 @@ class DeploymentAffinityCheck(CustomLogger):
         return f"{cls.USER_ID_AFFINITY_PREFIX}{user_id}"
 
     @staticmethod
-    def _get_session_id_from_request_kwargs(request_kwargs: dict) -> str | None:
+    def _get_session_id_from_request_kwargs(request_kwargs: Mapping[str, object]) -> str | None:
         for metadata in DeploymentAffinityCheck._iter_metadata_dicts(request_kwargs):
             session_id = DeploymentAffinityCheck._get_session_id_from_metadata_dict(metadata=metadata)
             if session_id is not None:
@@ -305,7 +329,7 @@ class DeploymentAffinityCheck(CustomLogger):
         return None
 
     @staticmethod
-    def _get_marker_session_affinity_ttl(request_kwargs: dict) -> int | None:
+    def _get_marker_session_affinity_ttl(request_kwargs: Mapping[str, object]) -> int | None:
         """TTL from the session-affinity marker the Router stamps at pre-routing time
         when an auto-router routed this request with session_affinity enabled.
         Marker presence enables session pinning for this request only; anything that
@@ -357,7 +381,7 @@ class DeploymentAffinityCheck(CustomLogger):
         model: str,
         healthy_deployments: list,
         messages: list[AllMessageValues] | None,
-        request_kwargs: dict | None = None,
+        request_kwargs: dict[str, object] | None = None,
         parent_otel_span: Span | None = None,
     ) -> list[dict]:
         """
@@ -418,7 +442,15 @@ class DeploymentAffinityCheck(CustomLogger):
                 session_cache_key: Final = self.get_session_affinity_cache_key(
                     model_group=stable_model_map_key, session_id=session_id, user_key=user_key
                 )
-                session_cache_result: Final = await self.cache.async_get_cache(key=session_cache_key)
+                session_cache_result: Final = (
+                    await self._read_shared_session_pin(
+                        session_cache_key,
+                        self._get_marker_session_affinity_ttl(request_kwargs) or self.ttl_seconds,
+                        parent_otel_span,
+                    )
+                    if self.session_affinity_repin_on_failover
+                    else await self.cache.async_get_cache(key=session_cache_key)
+                )
 
                 session_model_id: str | None = None
                 if isinstance(session_cache_result, dict):
@@ -481,6 +513,71 @@ class DeploymentAffinityCheck(CustomLogger):
             self._shorten_for_logs(self._hash_user_key(user_key)),
         )
         return [deployment]
+
+    async def _read_shared_session_pin(self, cache_key: str, ttl_seconds: int, parent_otel_span: Span | None) -> object:
+        redis_cache: Final = self.cache.redis_cache
+        if redis_cache is None:
+            return TypeAdapter(object).validate_python(await self.cache.async_get_cache(key=cache_key))
+        local_before: Final = TypeAdapter(object).validate_python(self.cache.in_memory_cache.get_cache(cache_key))
+        try:
+            shared: Final[object] = await redis_cache.async_get_cache(
+                key=cache_key, parent_otel_span=parent_otel_span, raise_on_error=True
+            )
+        except Exception:  # noqa: BLE001  # Optional affinity falls back locally on Redis admission or read failure
+            verbose_router_logger.debug("Session pin read failed, using pod-local affinity")
+            return TypeAdapter(object).validate_python(await self.cache.async_get_cache(key=cache_key, local_only=True))
+        if self.cache.in_memory_cache.get_cache(cache_key) is local_before:
+            if shared is None:
+                self.cache.in_memory_cache.delete_cache(cache_key)
+            else:
+                self._set_local_pin(cache_key, shared, ttl_seconds)
+        return shared
+
+    def get_repin_model_group(self, request_kwargs: Mapping[str, object]) -> str | None:
+        model_group: Final = next(
+            (
+                value
+                for metadata in self._iter_metadata_dicts(request_kwargs)
+                if isinstance(value := metadata.get("deployment_model_name"), str) and value
+            ),
+            None,
+        )
+        if model_group is None or self._get_session_id_from_request_kwargs(request_kwargs) is None:
+            return None
+        if (
+            not self._get_effective_flags(model_group)[2]
+            and self._get_marker_session_affinity_ttl(request_kwargs) is None
+        ):
+            return None
+        return model_group
+
+    async def async_repin_session_after_success(
+        self,
+        request_kwargs: Mapping[str, object],
+        model_group: str,
+        eligible_deployment_ids: frozenset[str],
+    ) -> None:
+        marker_ttl: Final = self._get_marker_session_affinity_ttl(request_kwargs)
+        if not self._get_effective_flags(model_group)[2] and marker_ttl is None:
+            return
+        session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs)
+        if session_id is None:
+            return
+        model_info: Final = TypeAdapter(Mapping[str, object]).validate_python(request_kwargs.get("model_info") or {})
+        model_id: Final = model_info.get("id")
+        if model_id is None or str(model_id) not in eligible_deployment_ids:
+            return
+        cache_key: Final = self.get_session_affinity_cache_key(
+            model_group, session_id, self.get_user_key_from_request_kwargs(request_kwargs)
+        )
+        await claim_affinity_pin(
+            self.cache,
+            cache_key,
+            DeploymentAffinityCacheValue(model_id=str(model_id)),
+            marker_ttl if marker_ttl is not None else self.ttl_seconds,
+            eligible_values=tuple(DeploymentAffinityCacheValue(model_id=value) for value in eligible_deployment_ids),
+            preserve_legacy_model_ids=True,
+        )
 
     async def async_pre_call_deployment_hook(
         self, kwargs: dict[str, object], call_type: CallTypes | None

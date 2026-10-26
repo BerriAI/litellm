@@ -3,10 +3,11 @@ import re
 from collections.abc import Mapping, Sequence
 from itertools import accumulate, repeat
 from types import MappingProxyType
-from typing import Any, Final, cast
+from typing import Final
 from urllib.parse import quote, unquote
 
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
 VERTEX_AI_MANAGED_GCS_PREFIX: Final = "litellm-vertex-files/"
 BEDROCK_MANAGED_S3_BATCH_PREFIX: Final = "litellm-bedrock-files-"
@@ -141,7 +142,8 @@ def should_allow_legacy_cloud_file_ids(
     if isinstance(litellm_params, Mapping):
         trusted_model_credentials: Final = litellm_params.get("_litellm_internal_model_credentials")
         if isinstance(trusted_model_credentials, _MAPPING_PROXY_TYPE):
-            value = cast(Mapping[str, Any], trusted_model_credentials).get("allow_legacy_cloud_file_ids")
+            trusted_mapping: Final = as_str_mapping(trusted_model_credentials)
+            value = trusted_mapping.get("allow_legacy_cloud_file_ids") if trusted_mapping is not None else None
 
     if isinstance(value, bool):
         return value

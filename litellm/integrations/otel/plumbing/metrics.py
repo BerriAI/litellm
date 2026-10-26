@@ -173,6 +173,7 @@ class _MetricKwargs(TypedDict, total=False):
     response_cost: ReadOnly[float | None]
     completion_start_time: ReadOnly[datetime | float | str | None]
     api_call_start_time: ReadOnly[datetime | float | str | None]
+    end_time: ReadOnly[datetime | float | str | None]
 
 
 def resolve_error_type(kwargs: Mapping[str, Any]) -> str:
@@ -414,15 +415,12 @@ class GenAIMetricRecorder:
         if generation_time > 0:
             self._metrics.time_per_output_token.record(generation_time / completion_tokens, attributes=common_attrs)
 
-    def _record_response_duration(self, kwargs: Mapping[str, Any], end_time: datetime, common_attrs: dict) -> None:
+    def _record_response_duration(self, kwargs: _MetricKwargs, end_time: datetime, common_attrs: dict) -> None:
         api_call_start_time: Final = kwargs.get("api_call_start_time")
         if api_call_start_time is None:
             return
-        _end_time = kwargs.get("end_time") or end_time
-        if _end_time is None:
-            _end_time = datetime.now()
         api_call_start: Final = to_seconds(api_call_start_time)
-        end_ts: Final = to_seconds(_end_time)
+        end_ts: Final = to_seconds(kwargs.get("end_time") or end_time)
         if api_call_start is None or end_ts is None:
             return
         duration: Final = end_ts - api_call_start
