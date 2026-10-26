@@ -254,13 +254,6 @@ class _LabeledMetric:
             str(value) for name, value in zip(self._original_labelnames, values) if name not in self._excluded_labels
         )
 
-    def remove(self, *labelvalues: str) -> None:
-        kept_values: Final = tuple(
-            value for name, value in zip(self._original_labelnames, labelvalues) if name not in self._excluded_labels
-        )
-        if kept_values:
-            self._metric.remove(*kept_values)
-
 
 _MetricLike: TypeAlias = "NoOpMetric | _LabeledMetric | MetricWrapperBase"
 

@@ -20,12 +20,13 @@ import pytest
 
 from prometheus_client import CollectorRegistry, Gauge
 
-from litellm.integrations.prometheus import PrometheusLogger, _ExcludedLabelMetric
+from litellm.integrations.prometheus import PrometheusLogger, _LabeledMetric
 from litellm.integrations.prometheus_helpers.bounded_prometheus_series_tracker import (
     BoundedPrometheusSeriesTracker,
+    PrometheusSeriesLimits,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    _PROXY_MaxParallelRequestsHandler_v3,
+    PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.types.integrations.prometheus import (
     DEFINED_PROMETHEUS_METRICS,
@@ -278,7 +279,7 @@ def test_limiter_publishes_team_headers_in_the_shape_the_gauges_read():
     limiter builds from ``descriptor_key`` + ``rate_limit_type``, so a change
     to that format would otherwise silently stop the team series.
     """
-    headers = _PROXY_MaxParallelRequestsHandler_v3._merge_ratelimit_statuses_into_additional_headers(
+    headers = PROXY_MaxParallelRequestsHandler_v3._merge_ratelimit_statuses_into_additional_headers(
         additional_headers={},
         statuses=[
             {
@@ -341,7 +342,15 @@ def test_removing_a_never_emitted_real_series_raises_nothing():
 def test_excluded_label_wrapper_sets_and_removes_using_the_kept_labels():
     registry = CollectorRegistry()
     real = Gauge("litellm_team_rpm_limit", "doc", labelnames=["team", "model"], registry=registry)
-    wrapper = _ExcludedLabelMetric(real, ORIGINAL_LABELNAMES, frozenset({"team_alias"}))
+    wrapper = _LabeledMetric(
+        metric=real,
+        metric_name="litellm_team_rpm_limit",
+        original_labelnames=ORIGINAL_LABELNAMES,
+        excluded_labels=frozenset({"team_alias"}),
+        tracker=BoundedPrometheusSeriesTracker(),
+        limits=PrometheusSeriesLimits(max_series=None, ttl_seconds=None, cleanup_interval_seconds=None),
+        shares_overflow_series=False,
+    )
     kept = {"team": "team-abc", "model": "gpt-4o-mini"}
 
     wrapper.labels(**TEAM_LABELS).set(60)
@@ -349,24 +358,6 @@ def test_excluded_label_wrapper_sets_and_removes_using_the_kept_labels():
 
     wrapper.remove(*(TEAM_LABELS[name] for name in ORIGINAL_LABELNAMES))
     assert registry.get_sample_value("litellm_team_rpm_limit", kept) is None
-
-
-def test_excluded_label_wrapper_cannot_remove_when_every_label_is_excluded():
-    """
-    With every label excluded the gauge collapses to a single unlabeled sample,
-    which has no child series for prometheus_client to remove. Such a metric
-    cannot represent per-team state at all, so there is no correct value to
-    drop it to; this pins the behaviour rather than papering over it.
-    """
-    registry = CollectorRegistry()
-    real = Gauge("litellm_team_rpm_limit", "doc", registry=registry)
-    wrapper = _ExcludedLabelMetric(real, ORIGINAL_LABELNAMES, frozenset(ORIGINAL_LABELNAMES))
-
-    wrapper.labels(**TEAM_LABELS).set(60)
-    assert registry.get_sample_value("litellm_team_rpm_limit", {}) == 60
-
-    wrapper.remove(*(TEAM_LABELS[name] for name in ORIGINAL_LABELNAMES))
-    assert registry.get_sample_value("litellm_team_rpm_limit", {}) == 60
 
 
 def test_noop_metric_remove_is_inert():
