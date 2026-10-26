@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Sequence
-from typing import Final, TypeAlias, TypeVar
+from typing import Final, Protocol, TypeAlias, TypeVar
 
 from mcp.types import CacheableResult, CallToolResult, ContentBlock, InputRequiredResult, TextContent, Tool
 from typing_extensions import ReadOnly, TypedDict, assert_never
@@ -105,8 +105,17 @@ def complete_call_tool_result(outcome: ToolOutcome, compat: WireCompat) -> CallT
     return converted
 
 
+class _StructuredContentCarrier(Protocol):
+    @property
+    def structured_content(self) -> object: ...
+
+
+def _structured_content(result: _StructuredContentCarrier) -> object:
+    return result.structured_content
+
+
 def _downgrade_structured_content(result: CallToolResult) -> CallToolResult:
-    structured: Final = result.structured_content
+    structured: Final = _structured_content(result)
     if structured is None or isinstance(structured, dict):
         return result
     fallback: Final = TextContent(type="text", text=json.dumps(structured))

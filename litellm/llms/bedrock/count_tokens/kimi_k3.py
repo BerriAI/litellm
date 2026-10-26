@@ -27,6 +27,7 @@ from typing_extensions import Self
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.litellm_core_utils.prompt_templates.factory import (
     chat_completion_tools_for,
     is_flat_responses_tool,
@@ -67,12 +68,14 @@ class KimiK3TokenizerSource:
 def _hugging_face_ranks_path() -> str:
     import huggingface_hub
 
-    return huggingface_hub.hf_hub_download(
-        repo_id=KIMI_K3_REPO,
-        filename=KIMI_K3_RANKS_FILE,
-        revision=KIMI_K3_REVISION,
-        local_files_only=litellm.disable_hf_tokenizer_download is True,
-    )
+    if litellm.disable_hf_tokenizer_download is True or is_offline_mode():
+        cached: Final = huggingface_hub.try_to_load_from_cache(
+            repo_id=KIMI_K3_REPO, filename=KIMI_K3_RANKS_FILE, revision=KIMI_K3_REVISION
+        )
+        if not isinstance(cached, str):
+            raise FileNotFoundError(f"{KIMI_K3_RANKS_FILE} is not in the Hugging Face cache")
+        return cached
+    return huggingface_hub.hf_hub_download(repo_id=KIMI_K3_REPO, filename=KIMI_K3_RANKS_FILE, revision=KIMI_K3_REVISION)
 
 
 HUGGING_FACE_SOURCE: Final = KimiK3TokenizerSource(ranks_path=_hugging_face_ranks_path, sha256=KIMI_K3_RANKS_SHA256)

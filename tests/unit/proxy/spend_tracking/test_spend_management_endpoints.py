@@ -5,19 +5,21 @@ import hashlib
 import json
 import re
 import sqlite3
+from collections.abc import Mapping
 from datetime import timezone
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import prisma
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 
 import litellm
 import litellm.proxy.proxy_server as ps
 from litellm.proxy.auth.authorization import OwnedRows
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup, load_permitted_log_team_ids
+from litellm.proxy.auth.route_checks import RouteChecks
 
 
 def _default_date_range():
@@ -268,6 +270,8 @@ def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=No
 
 from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 from litellm.proxy._types import (
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
     LitellmUserRoles,
     Member,
     ProxyException,
@@ -1892,6 +1896,91 @@ async def test_ui_view_spend_logs_user_filter_intersects_permitted_team_scope(cl
         )
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.parametrize(
+    ("team_role", "selected_user", "expected_ids"),
+    (
+        ("admin", None, ("member-in-team", "second-member-in-team")),
+        ("admin", "member", ("member-in-team",)),
+        ("admin", "caller", ()),
+        ("admin", "outsider", ()),
+        ("user", None, None),
+        (None, "member", None),
+    ),
+)
+def test_ui_client_usage_enforces_selected_team_and_member_scope(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    team_role: Literal["admin", "user"] | None,
+    selected_user: str | None,
+    expected_ids: tuple[str, ...] | None,
+) -> None:
+    logs: Final = tuple(
+        {
+            "request_id": request_id,
+            "user": user_id,
+            "team_id": team_id,
+            "api_key": "shared-key",
+            "spend": 0.1,
+            "startTime": "2026-01-02T12:00:00+00:00",
+            "model": "test-model",
+        }
+        for request_id, user_id, team_id in (
+            ("member-in-team", "member", "selected-team"),
+            ("same-member-other-team", "member", "other-team"),
+            ("second-member-in-team", "second-member", "selected-team"),
+            ("caller-personal", "caller", None),
+            ("outsider-request", "outsider", "other-team"),
+        )
+    )
+    team: Final = LiteLLM_TeamTable(
+        team_id="selected-team",
+        members_with_roles=([Member(user_id="caller", role=team_role)] if team_role else [])
+        + [Member(user_id="member", role="user"), Member(user_id="second-member", role="user")],
+        team_member_permissions=[],
+    )
+
+    async def team_lookup(where: Mapping[str, object]) -> LiteLLM_TeamTable | None:
+        return team if where.get("team_id") == team.team_id else None
+
+    def filter_logs(where: Mapping[str, object]) -> tuple[dict[str, str | float | None], ...]:
+        return tuple(
+            row
+            for row in logs
+            if (where.get("team_id") is None or row["team_id"] == where["team_id"])
+            and (where.get("user") is None or row["user"] == where["user"])
+        )
+
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="caller")
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=LiteLLM_UserTable(user_id="caller", user_role=LitellmUserRoles.INTERNAL_USER.value),
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route="/spend/logs/ui",
+        request=Request({"type": "http", "method": "GET", "path": "/spend/logs/ui", "query_string": b""}),
+        valid_token=auth,
+        request_data={},
+    )
+    monkeypatch.setattr(ps, "prisma_client", make_ui_spend_logs_mock_prisma(logs, filter_logs, team_lookup))
+    monkeypatch.setitem(app.dependency_overrides, ps.user_api_key_auth, lambda: auth)
+    response: Final = client.get(
+        "/spend/logs/ui",
+        params={
+            "start_date": "2026-01-01 00:00:00",
+            "end_date": "2026-01-03 00:00:00",
+            "team_id": "selected-team",
+            "page_size": 1000,
+            "group_by_session": "false",
+            **({"user_id": selected_user} if selected_user else {}),
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+    if expected_ids is None:
+        assert response.status_code == 403
+        return
+    assert response.status_code == 200
+    assert tuple(row["request_id"] for row in response.json()["data"]) == expected_ids
+    assert response.json()["total"] == len(expected_ids)
 
 
 @pytest.mark.asyncio
@@ -6524,7 +6613,6 @@ def test_ui_view_request_response_reads_from_cold_storage(client, monkeypatch):
 
 from litellm.proxy._types import (
     LiteLLM_OrganizationMembershipTable,
-    LiteLLM_UserTable,
     LiteLLMRoutes,
     hash_token,
 )

@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import (
     Annotated,
     Final,
+    Literal,
     NamedTuple,
     Protocol,
     cast,  # noqa: TID251  # prisma types Json columns as fields.Json but de-serializes them to plain python on read
@@ -256,6 +257,11 @@ class UISettings(LiteLLMBaseModel):
 
     model_config = ConfigDict(extra="allow")
 
+    usage_default_time_range: Literal["today", "last_7_days", "last_30_days", "month_to_date", "year_to_date"] = Field(
+        default="last_7_days",
+        description="Default date range when opening Usage without an explicit URL range. Calendar ranges use the browser timezone.",
+    )
+
     disable_model_add_for_internal_users: bool = Field(
         default=False,
         description=(
@@ -386,6 +392,7 @@ class UISettingsResponse(SettingsResponse):
 
 # Allowlist of UI settings that can be stored
 ALLOWED_UI_SETTINGS_FIELDS: Final = {
+    "usage_default_time_range",
     "disable_model_add_for_internal_users",
     "disable_team_admin_delete_team_user",
     "enabled_ui_pages_internal_users",
