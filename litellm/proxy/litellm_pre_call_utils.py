@@ -2606,7 +2606,7 @@ async def add_litellm_data_to_request(
     )
 
     ## Cache Controls
-    cache_control_header: Final = _headers.get("Cache-Control", None)
+    cache_control_header: Final = request.headers.get("cache-control")
     if cache_control_header:
         cache_dict: Final = parse_cache_control(cache_control_header)
         data["ttl"] = cache_dict.get("s-maxage")

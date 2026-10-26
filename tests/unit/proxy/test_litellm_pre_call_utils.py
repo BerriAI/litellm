@@ -10645,3 +10645,28 @@ def test_mapped_baggage_tags_keep_non_string_client_tags_as_sent():
     data: Final[dict[str, object]] = {"metadata": {"tags": [1, {"team": "x"}, "client-tag", "client-tag"]}}
     LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, data)
     assert data["metadata"]["tags"] == [1, {"team": "x"}, "client-tag", "client-tag", "tenant:a"]
+
+
+@pytest.mark.asyncio
+async def test_cache_control_s_maxage_header_sets_the_cache_ttl():
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json"), (b"cache-control", b"s-maxage=10")],
+        }
+    )
+    enriched: Final = await add_litellm_data_to_request(
+        data={"model": "qa-model", "messages": [{"role": "user", "content": "hi"}]},
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="qa-key"),
+        proxy_config=ProxyConfig(),
+        general_settings={},
+    )
+    assert float(enriched["ttl"]) == 10
