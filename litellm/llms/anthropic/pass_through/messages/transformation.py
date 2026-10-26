@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, MutableMapping, Sequence
 from typing import ClassVar, Final
 
 import httpx
@@ -31,6 +31,7 @@ from litellm.types.router import GenericLiteLLMParams
 from ...common_utils import (
     AnthropicError,
     AnthropicModelInfo,
+    drop_clear_thinking_edits_for_model,
     merge_anthropic_beta_headers,
     optionally_handle_anthropic_oauth,
     requires_native_compaction_beta,
@@ -91,6 +92,15 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     @property
     def _resolved_provider(self) -> str:
         return self.custom_llm_provider or "anthropic"
+
+    def _drop_thinking(
+        self,
+        optional_params: MutableMapping[str, object],  # mutable-ok: edits optional params in place
+        model: str,
+        custom_llm_provider: str,
+    ) -> None:
+        optional_params.pop("thinking", None)
+        drop_clear_thinking_edits_for_model(optional_params, model, custom_llm_provider)
 
     def get_supported_anthropic_messages_params(self, model: str) -> list:
         return [
@@ -412,9 +422,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             messages=messages,
         )
 
-    @staticmethod
     def _translate_reasoning_effort_to_anthropic(
-        model: str, optional_params: dict, max_tokens: int | None, custom_llm_provider: str
+        self, model: str, optional_params: dict[str, object], max_tokens: int | None, custom_llm_provider: str
     ) -> None:
         """Map OpenAI-style ``reasoning_effort`` to native Anthropic params.
 
@@ -443,7 +452,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             raise AnthropicError(message=str(e.message), status_code=400)
 
         if mapped_thinking is None:
-            optional_params.pop("thinking", None)
+            self._drop_thinking(optional_params, model, custom_llm_provider)
             optional_params.pop("output_config", None)
             return
 
@@ -473,9 +482,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             existing_output_config.setdefault("effort", mapped_effort)
             optional_params["output_config"] = existing_output_config
 
-    @staticmethod
     def _translate_adaptive_effort_for_non_adaptive_model(
-        model: str, optional_params: dict, max_tokens: int | None, custom_llm_provider: str
+        self, model: str, optional_params: dict[str, object], max_tokens: int | None, custom_llm_provider: str
     ) -> None:
         """Translate the 4.6+ adaptive-thinking interface (``thinking.type=adaptive``
         and/or ``output_config.effort``) down to what an older Anthropic model
@@ -538,7 +546,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             or AnthropicConfig.validate_effort_for_model(model, effort, custom_llm_provider) is None
         ):
             if adaptive_thinking:
-                optional_params.pop("thinking", None)
+                self._drop_thinking(optional_params, model, custom_llm_provider)
             return
 
         supports_thinking: Final = AnthropicModelInfo.supports_model_capability(
@@ -566,7 +574,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params["thinking"] = capped_thinking
         else:
             verbose_logger.warning(DROP_UNSUPPORTED_ADAPTIVE_EFFORT_WARNING, model)
-            optional_params.pop("thinking", None)
+            self._drop_thinking(optional_params, model, custom_llm_provider)
 
         if isinstance(output_config, dict) and "effort" in output_config:
             residual: Final = {k: v for k, v in output_config.items() if k != "effort"}
@@ -642,7 +650,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         self._translate_reasoning_effort_to_anthropic(
             model=model,
-            optional_params=anthropic_messages_optional_request_params,
+            optional_params=anthropic_messages_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # the request params arrive as a bare dict
             max_tokens=max_tokens,
             custom_llm_provider=self._resolved_provider,
         )
@@ -662,7 +670,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         self._translate_adaptive_effort_for_non_adaptive_model(
             model=model,
-            optional_params=anthropic_messages_optional_request_params,
+            optional_params=anthropic_messages_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # the request params arrive as a bare dict
             max_tokens=max_tokens,
             custom_llm_provider=self._resolved_provider,
         )

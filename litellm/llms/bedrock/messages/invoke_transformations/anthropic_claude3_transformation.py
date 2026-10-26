@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, MutableMapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -97,6 +97,17 @@ class AmazonAnthropicClaudeMessagesConfig(
     @property
     def beta_headers_provider(self) -> str:
         return self.custom_llm_provider or "bedrock"
+
+    def _drop_thinking(
+        self,
+        optional_params: MutableMapping[str, object],  # mutable-ok: edits optional params in place
+        model: str,
+        custom_llm_provider: str,
+    ) -> None:
+        """Keep the clear_thinking edit: it makes
+        ``_ensure_thinking_for_clear_thinking_context_management`` add thinking back,
+        and ``_filter_context_management_for_bedrock_invoke`` strips it before sending."""
+        optional_params.pop("thinking", None)
 
     def should_strip_billing_metadata(self) -> bool:
         return True

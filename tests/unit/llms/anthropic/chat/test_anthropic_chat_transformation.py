@@ -9816,3 +9816,106 @@ def test_transform_request_tool_config_point_without_tools_drops_the_key():
     assert "cache_control_injection_points" not in data
     assert "tools" not in data
     assert litellm_params["metadata"] == {}
+
+
+CLEAR_THINKING_EDIT: Final = {"type": "clear_thinking_20251015", "keep": "all"}
+CLEAR_TOOL_USES_EDIT: Final = {"type": "clear_tool_uses_20250919"}
+
+
+def _edits_for(keeps_thinking: bool) -> list[dict[str, str]]:
+    return [CLEAR_THINKING_EDIT, CLEAR_TOOL_USES_EDIT] if keeps_thinking else [CLEAR_TOOL_USES_EDIT]
+
+
+@pytest.mark.parametrize(
+    ("model", "params", "keeps_thinking"),
+    [
+        pytest.param(
+            "claude-haiku-4-5",
+            {"thinking": {"type": "adaptive"}, "max_tokens": 1000},
+            False,
+            id="adaptive-unfit-dropped",
+        ),
+        pytest.param(
+            "claude-haiku-4-5", {"thinking": {"type": "adaptive"}, "max_tokens": 8192}, True, id="adaptive-translated"
+        ),
+        pytest.param("claude-sonnet-4-5", {"reasoning_effort": "none"}, False, id="reasoning-effort-none"),
+        pytest.param(
+            "claude-sonnet-4-5", {"reasoning_effort": {"effort": "none"}}, False, id="reasoning-effort-dict-none"
+        ),
+        pytest.param("claude-sonnet-4-5", {"reasoning_effort": "high"}, True, id="reasoning-effort-high"),
+    ],
+)
+@pytest.mark.parametrize("context_management_first", [True, False])
+def test_map_openai_params_drops_clear_thinking_edit_exactly_when_thinking_is(
+    model, params, keeps_thinking, context_management_first
+):
+    context_management: Final = {"context_management": {"edits": [CLEAR_THINKING_EDIT, CLEAR_TOOL_USES_EDIT]}}
+    rest: Final = {"max_tokens": 8192, **params}
+    result = AnthropicConfig().map_openai_params(
+        non_default_params={**context_management, **rest}
+        if context_management_first
+        else {**rest, **context_management},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert ("thinking" in result) is keeps_thinking
+    assert result["context_management"] == {"edits": _edits_for(keeps_thinking)}
+
+
+@pytest.mark.parametrize(
+    ("model", "reasoning_effort"),
+    [
+        pytest.param("claude-fable-5", "none", id="always-on-model"),
+        pytest.param("claude-sonnet-4-5", {"summary": "concise"}, id="effort-less-dict"),
+    ],
+)
+def test_map_openai_params_keeps_clear_thinking_edit_when_thinking_was_not_dropped(model, reasoning_effort):
+    result = AnthropicConfig().map_openai_params(
+        non_default_params={
+            "context_management": {"edits": [CLEAR_THINKING_EDIT]},
+            "max_tokens": 8192,
+            "reasoning_effort": reasoning_effort,
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert result["context_management"] == {"edits": [CLEAR_THINKING_EDIT]}
+
+
+@pytest.mark.parametrize(
+    ("model", "modify_params", "keeps_thinking", "keeps_edit"),
+    [
+        pytest.param("claude-sonnet-4-5", True, False, False, id="dropped"),
+        pytest.param("claude-sonnet-4-5", False, True, True, id="modify-params-off"),
+        pytest.param("claude-fable-5", True, False, True, id="always-on-keeps-edit"),
+    ],
+)
+def test_transform_request_drops_clear_thinking_edit_with_thinking_for_tool_turn_without_thinking_blocks(
+    monkeypatch, model, modify_params, keeps_thinking, keeps_edit
+):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    result = AnthropicConfig().transform_request(
+        model=model,
+        messages=[
+            {"role": "user", "content": "Look it up"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "found"},
+        ],
+        optional_params={
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+            "context_management": {"edits": [CLEAR_THINKING_EDIT, CLEAR_TOOL_USES_EDIT]},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert ("thinking" in result) is keeps_thinking
+    assert result["context_management"] == {"edits": _edits_for(keeps_edit)}

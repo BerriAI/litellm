@@ -1780,17 +1780,63 @@ def strip_encrypted_reasoning_blocks_from_anthropic_messages(
     return [m for m in stripped if m is not None]
 
 
+def _is_clear_thinking_edit(edit: object) -> bool:
+    match edit:
+        case {"type": str(edit_type)}:
+            return edit_type.startswith("clear_thinking_")
+        case _:
+            return False
+
+
+def drop_clear_thinking_edits(params: MutableMapping[str, object]) -> None:  # mutable-ok: edits in place
+    """
+    Remove the ``clear_thinking_*`` context-management edits, which Anthropic
+    rejects without ``thinking``.  ``context_management`` itself goes only when
+    such an edit was removed and nothing else is left in it.
+    """
+    raw_context_management: Final = params.get("context_management")
+    if not isinstance(raw_context_management, dict):
+        return
+    context_management: Final = OBJECT_MAPPING_ADAPTER.validate_python(raw_context_management)
+    raw_edits: Final = context_management.get("edits")
+    if not isinstance(raw_edits, list):
+        return
+    edits: Final = OBJECT_LIST_ADAPTER.validate_python(raw_edits)
+    kept_edits: Final = [edit for edit in edits if not _is_clear_thinking_edit(edit)]
+    if len(kept_edits) == len(edits):
+        return
+    if not kept_edits and len(context_management) == 1:
+        params.pop("context_management")
+        return
+    params["context_management"] = {  # rebind-ok: callers mutate their request params in place
+        **context_management,
+        "edits": kept_edits,
+    }
+
+
+def drop_clear_thinking_edits_for_model(
+    params: MutableMapping[str, object],  # mutable-ok: edits in place
+    model: str,
+    custom_llm_provider: str,
+) -> None:
+    """Remove the clear_thinking edits unless the model always thinks anyway."""
+    if not AnthropicModelInfo.supports_model_capability(model, "thinking_always_on", custom_llm_provider):
+        drop_clear_thinking_edits(params)
+
+
 def strip_thinking_blocks_from_anthropic_messages_request_dict(
     data: dict[str, object],
 ) -> None:
     """
     Mutate an Anthropic Messages-style request dict: strip thinking blocks from
-    ``messages`` and remove the top-level ``thinking`` extended-thinking param.
+    ``messages`` and remove ``thinking`` with its dependent context-management
+    edits (see :func:`drop_clear_thinking_edits`).
     """
     msgs: Final = data.get("messages")
     if isinstance(msgs, list):
         data["messages"] = strip_thinking_blocks_from_anthropic_messages(msgs)
     data.pop("thinking", None)
+    drop_clear_thinking_edits(data)
 
 
 _DROP_ANTHROPIC_MESSAGE: Final = object()
