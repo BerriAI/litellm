@@ -7,7 +7,7 @@ import os
 import sys
 import uuid
 import zlib
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 from pydantic import TypeAdapter, ValidationError
 from starlette.datastructures import FormData, Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
+from starlette.websockets import WebSocketDisconnect
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -69,6 +70,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
     PassthroughStandardLoggingPayload,
 )
+from litellm.types.utils import StandardLoggingPayload
 from tests._master_key import MASTER_KEY
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
@@ -7615,6 +7617,116 @@ async def test_websocket_passthrough_sends_deepgram_audio_bytes_and_control_text
     assert [call.args[0] for call in upstream_ws.send.await_args_list] == [audio_chunk, close_stream]
     assert isinstance(upstream_ws.send.await_args_list[0].args[0], bytes)
     upstream_ws.close.assert_awaited_once()
+
+
+RELAY_HANG_GUARD_SECONDS: Final = 5.0
+
+
+def _final_results_frame(start: float, duration: float, transcript: str) -> str:
+    return json.dumps(
+        {
+            "type": "Results",
+            "start": start,
+            "duration": duration,
+            "is_final": True,
+            "channel": {"alternatives": [{"transcript": transcript}]},
+        }
+    )
+
+
+class _CapturingSpendLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.payloads: list[StandardLoggingPayload] = []  # mutable-ok: the logger appends each payload it receives
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.payloads.append(kwargs["standard_logging_object"])
+
+
+@dataclass(frozen=True, slots=True)
+class _RelayedSession:
+    spend_logs: tuple[StandardLoggingPayload, ...]
+    failure_hook: AsyncMock
+
+
+async def _relay_and_capture_spend(
+    monkeypatch: pytest.MonkeyPatch,
+    upstream_ws: FakeUpstreamWebSocket,
+    websocket: MagicMock,
+    target: str,
+    endpoint: str,
+) -> _RelayedSession:
+    """Runs the relay with the real success handler and returns what a spend logger receives"""
+    capturing_logger: Final = _CapturingSpendLogger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [capturing_logger])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    queued: Final[list[Coroutine[object, object, None]]] = []  # mutable-ok: the fake worker keeps each coroutine
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as proxy_logging,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
+            return_value=FakeUpstreamConnect(upstream_ws),
+        ),
+        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER") as worker,
+    ):
+        proxy_logging.pre_call_hook = AsyncMock(return_value={})
+        proxy_logging.post_call_success_hook = AsyncMock()
+        proxy_logging.post_call_failure_hook = AsyncMock()
+        worker.ensure_initialized_and_enqueue = MagicMock(
+            side_effect=lambda async_coroutine: queued.append(async_coroutine)
+        )
+        await asyncio.wait_for(
+            websocket_passthrough_request(
+                websocket=websocket,
+                target=target,
+                custom_headers={"Authorization": "Token dg-provider-key"},
+                user_api_key_dict=UserAPIKeyAuth(),
+                forward_headers=False,
+                endpoint=endpoint,
+                accept_websocket=False,
+            ),
+            timeout=RELAY_HANG_GUARD_SECONDS,
+        )
+    for coroutine in queued:
+        await coroutine
+    return _RelayedSession(
+        spend_logs=tuple(capturing_logger.payloads), failure_hook=proxy_logging.post_call_failure_hook
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "client_send_error",
+    [
+        pytest.param(RuntimeError("unable to perform operation on <TCPTransport closed=True>"), id="transport closed"),
+        pytest.param(WebSocketDisconnect(code=1006), id="socket failed"),
+    ],
+)
+async def test_websocket_passthrough_bills_a_session_whose_client_hangs_up_while_upstream_is_sending(
+    monkeypatch: pytest.MonkeyPatch, client_send_error: Exception
+) -> None:
+    """A client that hangs up mid-stream has still used what the upstream produced, so the session is billed like a
+    normal disconnect, up to the end of the frame whose send failed and not past it"""
+    upstream_ws: Final = FakeUpstreamWebSocket(
+        _final_results_frame(start=0.0, duration=1.0, transcript="relayed"),
+        b"\x00\x01audio",
+        _final_results_frame(start=1.0, duration=1.5, transcript="sent as the client hung up"),
+        _final_results_frame(start=2.5, duration=5.0, transcript="never relayed"),
+    )
+    websocket: Final = _client_websocket(_pending_receive)
+    websocket.send_text = AsyncMock(side_effect=[None, client_send_error])
+
+    session: Final = await _relay_and_capture_spend(
+        monkeypatch, upstream_ws, websocket, DEEPGRAM_LISTEN_TARGET, "/deepgram/v1/listen"
+    )
+
+    nova_3_usd_per_second: Final = litellm.model_cost["deepgram/streaming/nova-3"]["input_cost_per_second"]
+    assert [(log["status"], log["model"]) for log in session.spend_logs] == [("success", "nova-3")]
+    assert session.spend_logs[0]["response_cost"] == pytest.approx(2.5 * nova_3_usd_per_second)
+    session.failure_hook.assert_not_awaited()
+    assert all(call.kwargs.get("code") != 1011 for call in websocket.close.await_args_list)
 
 
 @pytest.mark.asyncio

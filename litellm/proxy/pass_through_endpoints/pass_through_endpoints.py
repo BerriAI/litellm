@@ -29,7 +29,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import TypeAdapter
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.routing import BaseRoute, Route
-from starlette.websockets import WebSocketState
+from starlette.websockets import WebSocketDisconnect, WebSocketState
 from websockets.asyncio.client import connect
 from websockets.exceptions import (
     ConnectionClosedError,
@@ -2429,6 +2429,22 @@ def _client_socket_is_open(websocket: WebSocket) -> bool:
     )
 
 
+async def _send_to_client(websocket: WebSocket, frame: str | bytes) -> bool:
+    """
+    False once the client has gone, so the relay ends the session like a client disconnect and still bills what the
+    upstream produced. Starlette raises WebSocketDisconnect when the transport errors. RuntimeError comes from uvicorn
+    after the client's close has arrived, or from the event loop once the transport is closed
+    """
+    try:
+        if isinstance(frame, bytes):
+            await websocket.send_bytes(frame)
+        else:
+            await websocket.send_text(frame)
+    except (WebSocketDisconnect, RuntimeError):
+        return False
+    return True
+
+
 def _upstream_close_to_relay(task_results: Iterable[object]) -> Close | None:
     """
     The upstream close worth telling the client about: anything other than a plain, reasonless normal close.
@@ -2705,11 +2721,7 @@ async def websocket_passthrough_request(
             is_vertex_live: Final = bool(endpoint and "/vertex_ai/live" in endpoint)
             json_frame_ordinal: Final = count()
 
-            async def relay_upstream_frame(upstream_message: str | bytes) -> None:
-                if isinstance(upstream_message, bytes):
-                    await websocket.send_bytes(upstream_message)
-                else:
-                    await websocket.send_text(upstream_message)
+            def record_upstream_frame(upstream_message: str | bytes) -> None:
                 message_data: Final = _json_object_frame(upstream_message)
                 if message_data is None:
                     return
@@ -2718,10 +2730,18 @@ async def websocket_passthrough_request(
                     return
                 websocket_messages.append(message_data)
 
+            async def relay_upstream_frame(upstream_message: str | bytes) -> bool:
+                record_upstream_frame(upstream_message)
+                return await _send_to_client(websocket, upstream_message)
+
             async def forward_upstream_to_client() -> Close | None:
                 try:
                     while True:
-                        await relay_upstream_frame(await upstream_ws.recv())
+                        if not await relay_upstream_frame(await upstream_ws.recv()):
+                            verbose_proxy_logger.debug(
+                                "WebSocket passthrough (%s): client left while the upstream was sending", endpoint
+                            )
+                            return None
                 except (ConnectionClosedOK, ConnectionClosedError) as e:
                     verbose_proxy_logger.debug("Upstream WebSocket connection closed: %s", e)
                     return e.rcvd
