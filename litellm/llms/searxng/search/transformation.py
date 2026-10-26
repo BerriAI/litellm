@@ -4,17 +4,23 @@ Calls SearXNG's /search endpoint to search the web.
 SearXNG API Reference: https://docs.searxng.org/dev/search_api.html
 """
 
+from collections.abc import Iterable, Mapping
 from typing import Final, TypedDict
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
     SearchResponse,
     SearchResult,
 )
 from litellm.secret_managers.main import get_secret_str
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class _SearXNGSearchRequestRequired(TypedDict):
@@ -96,12 +102,7 @@ class SearXNGSearchConfig(BaseSearchConfig):
                 "or pass `api_base` parameter. Example: os.environ['SEARXNG_API_BASE'] = 'https://your-searxng-instance.com'"
             )
 
-        # Append "/search" to the api base if it's not already there
-        if not api_base.endswith("/search"):
-            if api_base.endswith("/"):
-                api_base = f"{api_base}search"
-            else:
-                api_base = f"{api_base}/search"
+        api_base = ensure_api_route(api_base, "search")
 
         # Build query parameters from the transformed request body
         if data and isinstance(data, dict) and "_searxng_params" in data:
@@ -204,22 +205,25 @@ class SearXNGSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json: Final = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
         # Transform results to SearchResult objects
         # Note: SearXNG doesn't natively support limiting results via API params
         # It returns ~20 results per page by default
         results: Final = []
-        for result in response_json.get("results", []):
+        for raw_result in _JSON_VALUES.validate_python(response_json.get("results", [])):
+            result = _JSON_OBJECT.validate_python(raw_result)
             # Get date from either publishedDate or pubdate field
             date = result.get("publishedDate") or result.get("pubdate")
 
-            search_result = SearchResult(
-                title=result.get("title", ""),
-                url=result.get("url", ""),
-                snippet=result.get("content", ""),  # SearXNG uses "content" for snippet
-                date=date,
-                last_updated=None,  # SearXNG doesn't provide last_updated in response
+            search_result = SearchResult.model_validate(
+                {
+                    "title": result.get("title", ""),
+                    "url": result.get("url", ""),
+                    "snippet": result.get("content", ""),  # SearXNG uses "content" for snippet
+                    "date": date,
+                    "last_updated": None,  # SearXNG doesn't provide last_updated in response
+                }
             )
             results.append(search_result)
 

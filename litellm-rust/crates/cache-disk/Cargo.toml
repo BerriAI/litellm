@@ -9,7 +9,7 @@ repository.workspace = true
 litellm-cache.workspace = true
 py_literal = "0.4.0"
 rand.workspace = true
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
 serde-pickle = "1.2"
 serde_json.workspace = true
 tokio.workspace = true

@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
 use crate::compatibility::python_manager_string;
-use litellm_core_utils::{
-    serde_compat::parse_str_bool,
-    settings::{Lookup, ProcessEnvironment},
-};
+use litellm_core_utils::{serde_compat::parse_str_bool, settings::Lookup};
 
 use crate::state::{LookupTarget, normalize_secret_name};
 use crate::{Error, OidcResolver, Secret, SecretManagerState, SecretValue};
@@ -22,16 +19,6 @@ pub struct SecretResolver {
     oidc: OidcResolver,
     failure_policy: FailurePolicy,
     python_compatible: bool,
-}
-
-impl Default for SecretResolver {
-    fn default() -> Self {
-        Self::new(
-            Arc::new(SecretManagerState::default()),
-            Arc::new(ProcessEnvironment),
-            OidcResolver::default(),
-        )
-    }
 }
 
 impl SecretResolver {

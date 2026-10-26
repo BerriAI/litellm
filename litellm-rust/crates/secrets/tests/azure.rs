@@ -22,7 +22,7 @@ async fn azure_handler_reads_missing_and_failed_secrets() {
         .await;
     let manager = SecretManager::AzureKeyVault(
         AzureKeyVault::with_client(
-            reqwest::Client::new(),
+            litellm_http::Client::plain_for_test(),
             server.uri().parse().unwrap(),
             std::sync::Arc::new(|name: &str| (name == "AZURE_AD_TOKEN").then(|| "fake".to_owned())),
         )
@@ -81,7 +81,7 @@ async fn successful_azure_responses_do_not_fall_back_when_the_value_is_empty_or_
         .mount(&server)
         .await;
     let manager = AzureKeyVault::with_client(
-        reqwest::Client::new(),
+        litellm_http::Client::plain_for_test(),
         server.uri().parse().unwrap(),
         Arc::new(|name: &str| (name == "AZURE_AD_TOKEN").then(|| "token".into())),
     )
@@ -92,7 +92,7 @@ async fn successful_azure_responses_do_not_fall_back_when_the_value_is_empty_or_
             Default::default(),
         )),
         Arc::new(|_: &str| Some("environment".into())),
-        OidcResolver::default(),
+        OidcResolver::new(litellm_http::Client::plain_for_test()),
     );
     assert_eq!(
         resolver

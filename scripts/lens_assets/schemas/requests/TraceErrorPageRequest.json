@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "cursor": {
+      "default": null,
+      "maxLength": 512,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "trace_ref": {
+      "default": "",
+      "type": "string"
+    }
+  },
+  "title": "TraceErrorPageRequest",
+  "type": "object"
+}

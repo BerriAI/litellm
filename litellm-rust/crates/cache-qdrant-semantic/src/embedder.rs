@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use litellm_cache::{Error, semantic::Embedder};
-use reqwest::Client;
+use litellm_http::Client;
 use serde_json::Value;
 
 pub struct OpenAiEmbedder {

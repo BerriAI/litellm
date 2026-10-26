@@ -116,7 +116,7 @@ def test_vertex_batch_create_survives_explicit_null_output_info(gateway: Gateway
             "batch",
             "validating",
             _encoded(INPUT_FILE_ID, model, "file-"),
-            _encoded(f"{OUTPUT_PREFIX}/predictions.jsonl", model, "file-"),
+            None,
             None,
             "24h",
         ), response.text

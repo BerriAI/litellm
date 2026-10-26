@@ -7,12 +7,14 @@ from collections.abc import Container, Mapping
 from types import MappingProxyType
 from typing import Final
 
-from pydantic import AliasChoices, BaseModel, Field, ValidationError
+from pydantic import AliasChoices, Field, ValidationError
 
 import litellm
 from litellm.exceptions import AuthenticationError
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import LlmProviders
 
 EDENAI_API_BASE: Final = "https://api.edenai.run/v3"
@@ -23,7 +25,7 @@ class EdenAIException(BaseLLMException):
     pass
 
 
-class _EdenAIExtras(BaseModel):
+class _EdenAIExtras(LiteLLMBaseModel):
     cost: float | None = Field(default=None, validation_alias=AliasChoices("cost", EDENAI_COST_HEADER))
 
 
@@ -61,7 +63,7 @@ def reported_cost(payload: object) -> float | None:
 def authorized_headers(
     headers: Mapping[str, object], api_key: str | None, model: str
 ) -> dict[str, object]:  # mutable-ok: header contract
-    return {**headers, "Authorization": f"Bearer {require_api_key(api_key, model)}"}  # mutable-ok: header contract
+    return {**headers, "Authorization": f"Bearer {require_api_key(api_key, model)}"}
 
 
 def json_headers(
@@ -69,11 +71,11 @@ def json_headers(
 ) -> dict[str, object]:  # mutable-ok: header contract
     """The shared HTTP handler sends some JSON bodies as raw content, so the type must be set here."""
     authorized: Final = authorized_headers(headers, api_key, model)
-    return {**authorized, "Content-Type": "application/json"}  # mutable-ok: header contract
+    return {**authorized, "Content-Type": "application/json"}
 
 
 def endpoint_url(api_base: str | None, path: str) -> str:
-    return f"{resolve_api_base(api_base).rstrip('/')}/{path}"
+    return join_api_base(resolve_api_base(api_base), path)
 
 
 def pick(params: Mapping[str, object], keys: Container[str]) -> Mapping[str, object]:

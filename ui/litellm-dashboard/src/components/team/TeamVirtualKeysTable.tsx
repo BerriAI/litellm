@@ -1,5 +1,7 @@
 "use client";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { useTeamMemberBudgets } from "@/app/(dashboard)/hooks/teams/useTeamMemberBudgets";
+import { teamMemberBudgetGate } from "@/components/shared/InheritedBudgetHint";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import {
   DateCell,
@@ -14,6 +16,7 @@ import {
   DataTableFilterDrawer,
   DataTableFilterField,
   DataTableSortHeader,
+  DataTableMultiSortHeader,
   DataTableToolbar,
 } from "@/components/shared/DataTable";
 import { Badge } from "@/components/ui/badge";
@@ -21,6 +24,7 @@ import { Input } from "@/components/ui/input";
 import { orgDetailHref, userDetailHref } from "@/utils/entityLinks";
 import { DEFAULT_PROXY_ADMIN_USER_ID } from "@/utils/sentinels";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { ColumnDef, ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import { ChevronDown, ChevronRight } from "lucide-react";
@@ -28,6 +32,7 @@ import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { deriveKeyModelScope } from "../key_scope";
+import { KEY_RATE_LIMIT_SORT_FIELDS } from "../key_team_helpers/key_sorting";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
@@ -96,6 +101,12 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       organization_id: (k.organization_id ?? k.org_id) || orgId,
     }));
   }, [keys?.keys, organization?.organization_id]);
+
+  const teamMemberBudgetTeamIds = useMemo(
+    () => (displayKeys.some((key) => key.max_budget == null && Boolean(key.user_id)) ? [teamId] : []),
+    [displayKeys, teamId],
+  );
+  const teamMemberBudgets = useTeamMemberBudgets(teamMemberBudgetTeamIds);
 
   const rowCount = keys?.total_count ?? 0;
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
@@ -269,45 +280,74 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "last_active",
         accessorKey: "last_active",
-        header: "Last Active",
+        meta: { title: "Last Active" },
+        header: ({ column }) => <DataTableSortHeader column={column} title="Last Active" />,
         size: 130,
-        enableSorting: false,
+        enableSorting: true,
+        sortDescFirst: false,
         cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback="Unknown" />,
       },
       {
         id: "expires",
         accessorKey: "expires",
-        header: "Expires",
+        meta: { title: "Expires" },
+        header: ({ column }) => <DataTableSortHeader column={column} title="Expires" />,
         size: 120,
-        enableSorting: false,
+        enableSorting: true,
+        sortDescFirst: false,
         cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback="Never" />,
       },
       {
         id: "spend",
         accessorKey: "spend",
-        meta: { title: "Spend (USD)" },
+        meta: { title: "Spend (USD)", numeric: true },
         header: ({ column }) => <DataTableSortHeader column={column} title="Spend (USD)" variant="header-cycle" />,
         size: 100,
         enableSorting: true,
         cell: (info) => <MoneyCell value={info.getValue() as number | null} decimals={4} />,
       },
       {
+        id: "total_spend",
+        accessorKey: "total_spend",
+        meta: { title: "Lifetime Spend", numeric: true },
+        header: ({ column }) => <DataTableSortHeader column={column} title="Lifetime Spend" />,
+        size: 130,
+        enableSorting: true,
+        sortDescFirst: true,
+        cell: (info) => <MoneyCell value={info.getValue() as number | null | undefined} showZero />,
+      },
+      {
         id: "max_budget",
         accessorKey: "max_budget",
-        meta: { title: "Budget (USD)" },
+        meta: { title: "Budget (USD)", numeric: true },
         header: ({ column }) => <DataTableSortHeader column={column} title="Budget (USD)" variant="header-cycle" />,
-        size: 110,
+        size: 160,
         enableSorting: true,
-        cell: (info) => (
-          <MoneyCell value={info.getValue() as number | null} decimals={0} emptyText="Unlimited" showZero />
-        ),
+        cell: (info) => {
+          const key = info.row.original;
+          const memberGate =
+            key.max_budget == null
+              ? teamMemberBudgetGate(teamMemberBudgets[teamId], key.user_id, key.user?.user_email)
+              : null;
+
+          return memberGate ? (
+            <span className="block w-full whitespace-nowrap text-right tabular-nums">
+              ${formatNumberWithCommas(memberGate.maxBudget, 0)}{" "}
+              <span className="text-muted-foreground">(team member)</span>
+            </span>
+          ) : (
+            <MoneyCell value={info.getValue() as number | null} decimals={0} emptyText="Unlimited" showZero />
+          );
+        },
       },
       {
         id: "budget_reset_at",
         accessorKey: "budget_reset_at",
-        header: "Budget Reset",
+        meta: { title: "Budget Reset" },
+        header: ({ column }) => <DataTableSortHeader column={column} title="Budget Reset" />,
         size: 130,
-        enableSorting: false,
+        enableSorting: true,
+        sortDescFirst: false,
         cell: (info) => <DateCell value={info.getValue() as string | null} fallback="Never" />,
       },
       {
@@ -406,7 +446,8 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       },
       {
         id: "rate_limits",
-        header: "Rate Limits",
+        meta: { title: "Rate Limits" },
+        header: ({ table }) => <DataTableMultiSortHeader table={table} fields={KEY_RATE_LIMIT_SORT_FIELDS} />,
         size: 140,
         enableSorting: false,
         cell: ({ row }) => {
@@ -420,7 +461,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         },
       },
     ],
-    [expandedAccordions],
+    [expandedAccordions, teamMemberBudgets, teamId],
   );
 
   const handleSortingChange = useCallback((updaterOrValue: React.SetStateAction<SortingState>) => {

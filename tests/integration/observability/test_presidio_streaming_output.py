@@ -1,25 +1,26 @@
 import json
 import re
-import signal
 import threading
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-import psutil
+import httpx
+import pytest
 import yaml
 from integration._support.client import Gateway, eventually
-from integration._support.process import OwnedProxy, group_members, owned_proxy_process
+from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import OpenAI
 from pydantic import BaseModel
 
 PERSON: Final = "John Smith"
 MASK: Final = "<PERSON>"
+CUT_BY_WORKER_DEATH: Final = 0
 GEMINI_MODEL: Final = "gemini-2.5-flash"
 
 
@@ -170,6 +171,12 @@ class Rig:
         ) as response:
             return Received(response.status_code, tuple(response.iter_raw()))
 
+    def stream_on_a_worker_that_may_die(self, path: str, body: dict[str, object]) -> Received:
+        try:
+            return self.stream(path, body)
+        except httpx.TransportError:
+            return Received(CUT_BY_WORKER_DEATH, ())
+
     def gemini_path(self) -> str:
         return f"/v1beta/models/{self.gemini}:streamGenerateContent?alt=sse"
 
@@ -181,7 +188,7 @@ class Rig:
             "model": self.anthropic,
             "max_tokens": 64,
             "stream": True,
-            "messages": [{"role": "user", "content": "who designed it"}],
+            "messages": [{"role": "user", "content": f"who designed it {uuid.uuid4().hex}"}],
             **({"guardrails": list(guardrails)} if guardrails is not None else {}),
         }
 
@@ -191,6 +198,13 @@ def anthropic_text(received: Received) -> str:
         json.loads(line.removeprefix("data: ")) for line in received.text.split("\n") if line.startswith("data: ")
     )
     return "".join(event["delta"]["text"] for event in events if event.get("type") == "content_block_delta")
+
+
+def anthropic_message_id(received: Received) -> str:
+    events: Final = tuple(
+        json.loads(line.removeprefix("data: ")) for line in received.text.split("\n") if line.startswith("data: ")
+    )
+    return "".join(event["message"]["id"] for event in events if event.get("type") == "message_start")
 
 
 @contextmanager
@@ -339,10 +353,10 @@ def test_native_gemini_unauthenticated_request_is_rejected_before_upstream(gatew
         assert rig.upstream.drain() == ()
 
 
-def anthropic_provider(chunks: tuple[bytes, ...]) -> Callable[[Request], Reply]:
+def anthropic_provider(chunks: tuple[bytes, ...], *, pause_between_chunks: float = 0) -> Callable[[Request], Reply]:
     def provider(request: Request) -> Reply:
         assert request.target == "/v1/messages", request.target
-        return Reply(content_type="text/event-stream", chunks=chunks)
+        return Reply(content_type="text/event-stream", chunks=chunks, pause_between_chunks=pause_between_chunks)
 
     return provider
 
@@ -376,6 +390,50 @@ def test_anthropic_messages_first_frame_split_across_transport_chunks_is_still_m
         assert received.text.count("event: message_start") == 1
 
 
+def test_anthropic_messages_first_frame_split_inside_a_utf8_character_is_still_masked(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "msg_" + uuid.uuid4().hex
+    whole: Final = anthropic_stream(identity, f"{PERSON} designed the caf\u00e9.")
+    delta: Final = whole[2].replace("\\u00e9".encode(), "\u00e9".encode())
+    split_at: Final = delta.index("\u00e9".encode()) + 1
+    assert delta[split_at - 1 : split_at] == b"\xc3", delta
+    chunks: Final = (whole[0] + whole[1] + delta[:split_at], delta[split_at:], *whole[3:])
+    with presidio_rig(gateway, tmp_path, anthropic_provider(chunks, pause_between_chunks=0.5)) as rig:
+        received: Final = rig.stream("/v1/messages", rig.messages_body())
+        assert received.status == 200, received.text
+        assert anthropic_text(received) == f"{MASK} designed the caf\u00e9."
+        assert PERSON not in received.text, received.text
+        assert anthropic_message_id(received) == identity, received.text
+
+
+def test_anthropic_messages_stream_led_by_sse_comment_keepalive_is_still_masked(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "msg_" + uuid.uuid4().hex
+    chunks: Final = (b": keepalive\n\n", *anthropic_stream(identity, f"{PERSON} designed it."))
+    with presidio_rig(gateway, tmp_path, anthropic_provider(chunks, pause_between_chunks=0.5)) as rig:
+        received: Final = rig.stream("/v1/messages", rig.messages_body())
+        assert received.status == 200, received.text
+        assert received.text.startswith(": keepalive"), received.text[:200]
+        assert anthropic_text(received) == f"{MASK} designed it."
+        assert PERSON not in received.text, received.text
+        assert identity in received.text
+
+
+def test_anthropic_messages_stream_led_by_data_less_ping_event_is_still_masked(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "msg_" + uuid.uuid4().hex
+    chunks: Final = (b"event: ping\n\n", *anthropic_stream(identity, f"{PERSON} designed it."))
+    with presidio_rig(gateway, tmp_path, anthropic_provider(chunks, pause_between_chunks=0.5)) as rig:
+        received: Final = rig.stream("/v1/messages", rig.messages_body())
+        assert received.status == 200, received.text
+        assert anthropic_text(received) == f"{MASK} designed it."
+        assert PERSON not in received.text, received.text
+        assert identity in received.text
+
+
 def test_anthropic_messages_stream_fails_closed_when_analyzer_is_down(gateway: Gateway, tmp_path: Path) -> None:
     identity: Final = "msg_" + uuid.uuid4().hex
     provider: Final = anthropic_provider(anthropic_stream(identity, f"{PERSON} designed it."))
@@ -398,6 +456,96 @@ def test_anthropic_messages_per_request_guardrails_selects_masking(gateway: Gate
         assert guarded.status == 200, guarded.text
         assert anthropic_text(guarded) == f"{MASK} designed it."
         assert len(rig.analyzer.drain()) == 1
+
+
+READ_TOOL_USE_ID: Final = "toolu_presidio_read"
+READ_INPUT: Final = {"path": "/work/report.txt"}
+
+
+def anthropic_tool_turn_stream(identity: str, text: str, delta: Mapping[str, object]) -> tuple[bytes, ...]:
+    opening, text_start, text_delta, text_stop, _, closing = anthropic_stream(identity, text)
+    tool_use: Final = {"type": "tool_use", "id": READ_TOOL_USE_ID, "name": "Read", "input": {}}
+    return (
+        opening,
+        text_start,
+        text_delta,
+        text_stop,
+        anthropic_frame("content_block_start", {"type": "content_block_start", "index": 1, "content_block": tool_use}),
+        anthropic_frame(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "input_json_delta", "partial_json": json.dumps(READ_INPUT)},
+            },
+        ),
+        anthropic_frame("content_block_stop", {"type": "content_block_stop", "index": 1}),
+        anthropic_frame("message_delta", {"type": "message_delta", "delta": delta, "usage": {"output_tokens": 4}}),
+        closing,
+    )
+
+
+def read_verdicts(verdict: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
+    return [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": {READ_TOOL_USE_ID: verdict}}}]
+
+
+def anthropic_deltas(received: Received, event_type: str) -> tuple[Mapping[str, object], ...]:
+    events: Final = tuple(
+        json.loads(line.removeprefix("data: ")) for line in received.text.split("\n") if line.startswith("data: ")
+    )
+    return tuple(event["delta"] for event in events if event.get("type") == event_type)
+
+
+def anthropic_message_delta(received: Received) -> Mapping[str, object]:
+    deltas: Final = anthropic_deltas(received, "message_delta")
+    assert len(deltas) == 1, received.text
+    return deltas[0]
+
+
+def anthropic_text_deltas(received: Received) -> str:
+    deltas: Final = anthropic_deltas(received, "content_block_delta")
+    return "".join(str(delta["text"]) for delta in deltas if delta.get("type") == "text_delta")
+
+
+@pytest.mark.parametrize(
+    ("delta", "field", "kept"),
+    [
+        (
+            {
+                "stop_reason": "tool_use",
+                "stop_sequence": None,
+                "safeguard_results": read_verdicts(
+                    {"type": "evaluated", "outcome": "flagged", "explanation": f"{PERSON} asked for the report"}
+                ),
+            },
+            "safeguard_results",
+            read_verdicts({"type": "evaluated", "outcome": "flagged"}),
+        ),
+        (
+            {
+                "stop_reason": "refusal",
+                "stop_sequence": None,
+                "stop_details": {"type": "refusal", "category": "cyber", "explanation": f"declined for {PERSON}"},
+            },
+            "stop_details",
+            {"type": "refusal", "category": "cyber", "explanation": None},
+        ),
+    ],
+    ids=["verdict_explanation", "stop_details_explanation"],
+)
+def test_anthropic_messages_masked_stream_keeps_upstream_safeguard_fields_without_explanations(
+    gateway: Gateway, tmp_path: Path, delta: Mapping[str, object], field: str, kept: object
+) -> None:
+    identity: Final = "msg_" + uuid.uuid4().hex
+    provider: Final = anthropic_provider(anthropic_tool_turn_stream(identity, f"{PERSON} designed it.", delta))
+    with presidio_rig(gateway, tmp_path, provider) as rig:
+        received: Final = rig.stream("/v1/messages", rig.messages_body())
+        assert received.status == 200, received.text
+        assert anthropic_text_deltas(received) == f"{MASK} designed it.", received.text
+        assert anthropic_message_id(received) == identity, received.text
+        assert anthropic_message_delta(received).get(field) == kept, received.text
+        assert PERSON not in received.text, received.text
+        assert len(rig.upstream.drain()) == 1
 
 
 def openai_provider(identity: str) -> Callable[[Request], Reply]:
@@ -468,7 +616,7 @@ def test_mixed_burst_survives_anonymizer_outage_and_recovers(gateway: Gateway, t
         return Reply(
             content_type="text/event-stream",
             chunks=(gemini_frame(f"{PERSON} "), gemini_frame("designed it.")),
-            pause_between_chunks=0.05,
+            pause_between_chunks=0.5,
         )
 
     with presidio_rig(gateway, tmp_path, provider, anonymize=flaky_anonymizer) as rig:
@@ -514,20 +662,15 @@ def test_mixed_burst_survives_anonymizer_outage_and_recovers(gateway: Gateway, t
 
 def test_native_gemini_keeps_streaming_after_one_worker_is_killed(gateway: Gateway, tmp_path: Path) -> None:
     frames: Final = (gemini_frame("alive "), gemini_frame("still."))
-    provider: Final = gemini_provider(Reply(content_type="text/event-stream", chunks=frames, pause_between_chunks=0.05))
+    provider: Final = gemini_provider(Reply(content_type="text/event-stream", chunks=frames, pause_between_chunks=0.5))
     with presidio_rig(gateway, tmp_path, provider) as rig:
-        workers: Final = eventually(
-            lambda: tuple(
-                member for member in group_members(rig.proxy.process.pid) if member.pid != rig.proxy.process.pid
-            ),
-            lambda members: len(members) >= 2,
-            seconds=30,
-        )
-        victim: Final = workers[0]
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            futures: Final = tuple(pool.submit(rig.stream, rig.gemini_path(), rig.gemini_body()) for _ in range(8))
-            victim.send_signal(signal.SIGKILL)
-            psutil.wait_procs((victim,), timeout=10)
+        workers: Final = eventually(rig.proxy.worker_pids, lambda members: len(members) >= 2, seconds=30)
+        with rig.proxy.replacing_worker(min(workers)) as kill, ThreadPoolExecutor(max_workers=8) as pool:
+            futures: Final = tuple(
+                pool.submit(rig.stream_on_a_worker_that_may_die, rig.gemini_path(), rig.gemini_body())
+                for _ in range(8)
+            )
+            kill()
             first_wave: Final = tuple(future.result() for future in futures)
         survivors: Final = tuple(received for received in first_wave if received.status == 200)
         assert survivors, [received.text[:200] for received in first_wave]

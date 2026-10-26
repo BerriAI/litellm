@@ -26,6 +26,7 @@ from pydantic import BaseModel
 
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse, unwrap
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import (
     ChatBody,
@@ -52,6 +53,49 @@ AZURE_FOUNDRY_BACKEND: Final = "azure_ai/claude-haiku-4-5"
 OPENAI_BACKEND = "openai/gpt-5.6"
 ANTHROPIC_BACKEND = "anthropic/claude-haiku-4-5-20251001"
 BEDROCK_CONVERSE_BACKEND = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+BEDROCK_NOVA_BACKEND: Final = "bedrock/us.amazon.nova-2-lite-v1:0"
+VERTEX_MISTRAL_BACKEND: Final = "vertex_ai/mistral-small-2503"
+VERTEX_GPT_OSS_BACKEND: Final = "vertex_ai/openai/gpt-oss-120b-maas"
+VERTEX_PARTNER_BACKENDS: Final = (
+    pytest.param(
+        VERTEX_MISTRAL_BACKEND,
+        marks=(
+            pytest.mark.skip(
+                reason="the e2e Vertex project has no access to mistral-small-2503 (404 publisher model not found)"
+            ),
+            meta(
+                Subject(
+                    domain=Domain.LLM_TRANSLATION,
+                    route=Route.CHAT_COMPLETIONS,
+                    providers=(Provider.VERTEX_AI,),
+                    models=(VERTEX_MISTRAL_BACKEND,),
+                    mode=Mode.STREAM,
+                )
+            ),
+        ),
+    ),
+    pytest.param(
+        VERTEX_GPT_OSS_BACKEND,
+        marks=(
+            pytest.mark.skip(reason="never served by the e2e Vertex project (60s read timeout, no headers)"),
+            meta(
+                Subject(
+                    domain=Domain.LLM_TRANSLATION,
+                    route=Route.CHAT_COMPLETIONS,
+                    providers=(Provider.VERTEX_AI,),
+                    models=(VERTEX_GPT_OSS_BACKEND,),
+                    mode=Mode.STREAM,
+                )
+            ),
+        ),
+    ),
+)
+PDF_DOCUMENT_URL: Final = (
+    "https://cdn.jsdelivr.net/gh/BerriAI/litellm"
+    "@d769e81c90d453240c61fc572cdb27fae06a89d0"
+    "/tests/llm_translation/fixtures/dummy.pdf"
+)
+PDF_DOCUMENT_TEXT: Final = "test pdf file"
 
 
 class _StreamToolCallFunction(BaseModel):
@@ -197,19 +241,58 @@ _PERSON_SCHEMA: dict[str, object] = {
     },
 }
 
-CHAT_MODELS: tuple[tuple[str, str], ...] = (
-    ("gpt-5.5", "openai"),
-    ("claude-haiku-4-5", "anthropic"),
-    ("gemini-2.5-flash", "gemini"),
+OPENAI_CHAT_MODEL: Final = "gpt-5.5"
+ANTHROPIC_CHAT_MODEL: Final = "claude-haiku-4-5"
+GEMINI_FLASH_MODEL: Final = "gemini-2.5-flash"
+
+CHAT_MODELS: Final = (
+    pytest.param(
+        OPENAI_CHAT_MODEL,
+        "openai",
+        id=f"{OPENAI_CHAT_MODEL}-openai",
+        marks=meta(
+            Subject(
+                domain=Domain.LLM_TRANSLATION,
+                route=Route.CHAT_COMPLETIONS,
+                providers=(Provider.OPENAI,),
+                models=(OPENAI_CHAT_MODEL,),
+                mode=Mode.NONSTREAM,
+            )
+        ),
+    ),
+    pytest.param(
+        ANTHROPIC_CHAT_MODEL,
+        "anthropic",
+        id=f"{ANTHROPIC_CHAT_MODEL}-anthropic",
+        marks=meta(
+            Subject(
+                domain=Domain.LLM_TRANSLATION,
+                route=Route.CHAT_COMPLETIONS,
+                providers=(Provider.ANTHROPIC,),
+                models=(ANTHROPIC_CHAT_MODEL,),
+                mode=Mode.NONSTREAM,
+            )
+        ),
+    ),
+    pytest.param(
+        GEMINI_FLASH_MODEL,
+        "gemini",
+        id=f"{GEMINI_FLASH_MODEL}-gemini",
+        marks=meta(
+            Subject(
+                domain=Domain.LLM_TRANSLATION,
+                route=Route.CHAT_COMPLETIONS,
+                providers=(Provider.GEMINI,),
+                models=(GEMINI_FLASH_MODEL,),
+                mode=Mode.NONSTREAM,
+            )
+        ),
+    ),
 )
 
 
 class TestChatCompletionsRegression:
-    @pytest.mark.parametrize(
-        ("model", "route"),
-        CHAT_MODELS,
-        ids=[f"{model}-{route}" for model, route in CHAT_MODELS],
-    )
+    @pytest.mark.parametrize(("model", "route"), CHAT_MODELS)
     @pytest.mark.covers(
         "llm.chat_completions.openai.basic.nonstream.works",
         "llm.chat_completions.anthropic.basic.nonstream.works",
@@ -252,6 +335,15 @@ class TestCohereChat:
     @pytest.mark.covers(
         "llm.chat_completions.cohere.basic.nonstream.works",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.COHERE,),
+            models=(COHERE_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_cohere_chat_returns_content(
         self, client: PassthroughClient, resources: ResourceManager
@@ -296,6 +388,15 @@ class TestGeminiChatCompletions:
         "llm.chat_completions.gemini.basic.nonstream.works",
         "llm.chat_completions.gemini.basic.nonstream.cost_logged",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.GEMINI,),
+            models=(GEMINI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_gemini_chat_returns_content_and_logs_cost(
         self, client: PassthroughClient, resources: ResourceManager
@@ -358,6 +459,15 @@ class TestVertexChatCompletions:
         "llm.chat_completions.vertex.basic.nonstream.works",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.VERTEX_AI,),
+            models=(VERTEX_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_vertex_chat_returns_content(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -386,6 +496,16 @@ class TestVertexChatCompletions:
     @pytest.mark.covers(
         "llm.chat_completions.vertex.tool_use.nonstream.works",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.VERTEX_AI,),
+            models=(VERTEX_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_vertex_chat_returns_tool_call(
         self, client: PassthroughClient, resources: ResourceManager
@@ -416,6 +536,16 @@ class TestVertexChatCompletions:
         "llm.chat_completions.vertex.vision.nonstream.works",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.VERTEX_AI,),
+            models=(VERTEX_BACKEND,),
+            capabilities=(Capability.VISION,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_vertex_chat_vision_describes_image(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -432,6 +562,15 @@ class TestVertexChatCompletions:
     @pytest.mark.covers(
         "llm.chat_completions.vertex.basic.stream.works",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.VERTEX_AI,),
+            models=(VERTEX_BACKEND,),
+            mode=Mode.STREAM,
+        )
     )
     def test_vertex_chat_streams_real_content(
         self, client: PassthroughClient, resources: ResourceManager
@@ -475,6 +614,15 @@ class TestAzureOpenAIChatCompletions:
         "llm.chat_completions.azure_openai.basic.nonstream.works",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.AZURE,),
+            models=(AZURE_OPENAI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_azure_openai_chat_returns_content(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -503,6 +651,16 @@ class TestAzureOpenAIChatCompletions:
     @pytest.mark.covers(
         "llm.chat_completions.azure_openai.tool_use.nonstream.works",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.AZURE,),
+            models=(AZURE_OPENAI_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_azure_openai_chat_returns_tool_call(
         self, client: PassthroughClient, resources: ResourceManager
@@ -534,6 +692,15 @@ class TestAzureFoundryChatCompletions:
     @pytest.mark.covers(
         "llm.chat_completions.azure_foundry.basic.nonstream.works",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.AZURE_AI,),
+            models=(AZURE_FOUNDRY_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_azure_foundry_chat_returns_content(
         self, client: PassthroughClient, resources: ResourceManager
@@ -576,6 +743,14 @@ class TestHostedVllmChat:
     @pytest.mark.covers(
         "llm.chat_completions.hosted_vllm.basic.nonstream.works",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.HOSTED_VLLM,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_hosted_vllm_chat_returns_content(
         self, client: PassthroughClient, resources: ResourceManager
@@ -632,6 +807,15 @@ class TestOpenAIChatCompletions:
         "llm.chat_completions.openai.basic.stream.works",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_openai_chat_streams_real_content(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -658,6 +842,15 @@ class TestOpenAIChatCompletions:
     @pytest.mark.covers(
         "llm.chat_completions.openai.basic.nonstream.cost_logged",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_openai_chat_logs_cost(
         self, client: PassthroughClient, resources: ResourceManager
@@ -692,6 +885,16 @@ class TestOpenAIChatCompletions:
         "llm.chat_completions.openai.tool_use.nonstream.works",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_openai_chat_returns_tool_call(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -722,6 +925,16 @@ class TestOpenAIChatCompletions:
     @pytest.mark.covers(
         "llm.chat_completions.openai.structured_output.nonstream.works",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            capabilities=(Capability.RESPONSE_SCHEMA,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_openai_chat_structured_output_conforms_to_schema(
         self, client: PassthroughClient, resources: ResourceManager
@@ -755,6 +968,16 @@ class TestOpenAIChatCompletions:
     @pytest.mark.covers(
         "llm.chat_completions.openai.thinking.nonstream.works",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            capabilities=(Capability.REASONING,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_openai_chat_reasoning_reports_reasoning_tokens(
         self, client: PassthroughClient, resources: ResourceManager
@@ -806,6 +1029,16 @@ class TestOpenAIChatCompletions:
         "llm.chat_completions.openai.vision.nonstream.works",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_VISION_BACKEND,),
+            capabilities=(Capability.VISION,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_openai_chat_vision_describes_image(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -822,6 +1055,16 @@ class TestOpenAIChatCompletions:
     @pytest.mark.covers(
         "llm.chat_completions.openai.tool_use.stream.works",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.STREAM,
+        )
     )
     def test_openai_chat_streams_tool_call(
         self, client: PassthroughClient, resources: ResourceManager
@@ -870,6 +1113,15 @@ class TestBedrockConverseChatCompletions:
         "llm.chat_completions.bedrock_converse.basic.nonstream.works",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_CONVERSE_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_bedrock_converse_chat_returns_content(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -894,6 +1146,15 @@ class TestBedrockConverseChatCompletions:
         "llm.chat_completions.bedrock_converse.basic.stream.works",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_CONVERSE_BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_bedrock_converse_chat_streams_real_content(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -916,6 +1177,16 @@ class TestBedrockConverseChatCompletions:
     @pytest.mark.covers(
         "llm.chat_completions.bedrock_converse.tool_use.nonstream.works",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_CONVERSE_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_bedrock_converse_chat_returns_tool_call(
         self, client: PassthroughClient, resources: ResourceManager
@@ -942,6 +1213,16 @@ class TestBedrockConverseChatCompletions:
     @pytest.mark.covers(
         "llm.chat_completions.bedrock_converse.thinking.nonstream.works",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_CONVERSE_BACKEND,),
+            capabilities=(Capability.REASONING,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_bedrock_converse_chat_returns_reasoning(
         self, client: PassthroughClient, resources: ResourceManager
@@ -973,6 +1254,16 @@ class TestBedrockConverseChatCompletions:
         "llm.chat_completions.bedrock_converse.vision.nonstream.works",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_CONVERSE_BACKEND,),
+            capabilities=(Capability.VISION,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_bedrock_converse_chat_vision_describes_image(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -981,6 +1272,102 @@ class TestBedrockConverseChatCompletions:
 
         response = unwrap(client.proxy.chat(key, ChatBody(model=model, messages=_vision_messages(), max_tokens=32)))
         _assert_describes_cat(response)
+
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_NOVA_BACKEND,),
+            capabilities=(Capability.PDF_INPUT,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_bedrock_converse_reads_a_pdf_sent_by_url(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = f"e2e-bedrock-document-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model, _bedrock_params().model_copy(update={"model": BEDROCK_NOVA_BACKEND})
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        key = resources.key()
+
+        response = unwrap(
+            client.proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[
+                        ChatMessage(
+                            role="user",
+                            content=[
+                                TextContentPart(text="What title text is in this document? Reply with it only."),
+                                ImageContentPart(image_url=ImageUrl(url=PDF_DOCUMENT_URL)),
+                            ],
+                        )
+                    ],
+                    max_tokens=64,
+                ),
+            )
+        )
+        message = response.choices[0].message if response.choices else None
+        content = (message.content if message else "") or ""
+        assert PDF_DOCUMENT_TEXT in content.lower(), f"model did not read the PDF document block: {response}"
+
+
+class _PartnerDelta(BaseModel):
+    role: str | None = None
+    content: str | None = None
+
+
+class _PartnerChoice(BaseModel):
+    delta: _PartnerDelta = _PartnerDelta()
+    finish_reason: str | None = None
+
+
+class _PartnerChunk(BaseModel):
+    choices: list[_PartnerChoice] = []
+
+
+class TestVertexPartnerChatCompletions:
+    @pytest.mark.parametrize("backend", VERTEX_PARTNER_BACKENDS)
+    def test_vertex_partner_model_streams_openai_shaped_chunks(
+        self, client: PassthroughClient, resources: ResourceManager, backend: str
+    ) -> None:
+        model = f"e2e-vertex-partner-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model,
+            LiteLLMParamsBody(
+                model=backend, vertex_project="os.environ/VERTEXAI_PROJECT", vertex_location="us-central1"
+            ),
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        key = resources.key()
+
+        result = client.proxy.chat_stream(
+            key,
+            ChatBody(
+                model=model,
+                messages=[
+                    ChatMessage(role="user", content=f"Count from 1 to 5, one number per line. {unique_marker()}")
+                ],
+                max_tokens=256,
+                stream=True,
+            ),
+        )
+        assert result.ok and result.is_streaming, f"stream was not established: {result}"
+        assert result.stream_error is None, f"stream carried an error event: {result.stream_error}"
+        assert result.stream_done, "stream must terminate with [DONE]"
+        chunks = tuple(_PartnerChunk.model_validate_json(event) for event in result.stream_events)
+        choices = tuple(choice for chunk in chunks for choice in chunk.choices)
+        assert choices and choices[0].delta.role == "assistant", (
+            f"first chunk must carry the assistant role: {chunks[:2]}"
+        )
+        terminal = tuple(index for index, choice in enumerate(choices) if choice.finish_reason is not None)
+        assert len(terminal) == 1, f"expected exactly one terminal choice: {[c.finish_reason for c in choices]}"
+        text = "".join(choice.delta.content or "" for choice in choices[: terminal[0] + 1])
+        assert "5" in text, f"streamed text lost the requested content: {text!r}"
 
 
 class TestAnthropicChatCompletions:
@@ -1001,6 +1388,16 @@ class TestAnthropicChatCompletions:
     @pytest.mark.covers(
         "llm.chat_completions.anthropic.structured_output.nonstream.works",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_BACKEND,),
+            capabilities=(Capability.RESPONSE_SCHEMA,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_anthropic_chat_structured_output_conforms_to_schema(
         self, client: PassthroughClient, resources: ResourceManager
@@ -1034,6 +1431,16 @@ class TestAnthropicChatCompletions:
     @pytest.mark.covers(
         "llm.chat_completions.anthropic.thinking.nonstream.works",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_BACKEND,),
+            capabilities=(Capability.REASONING,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_anthropic_chat_returns_thinking_content(
         self, client: PassthroughClient, resources: ResourceManager
@@ -1073,6 +1480,16 @@ class TestAnthropicChatCompletions:
         "llm.chat_completions.anthropic.vision.nonstream.works",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_BACKEND,),
+            capabilities=(Capability.VISION,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_anthropic_chat_vision_describes_image(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -1085,6 +1502,15 @@ class TestAnthropicChatCompletions:
     @pytest.mark.covers(
         "llm.chat_completions.anthropic.basic.stream.works",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_BACKEND,),
+            mode=Mode.STREAM,
+        )
     )
     def test_anthropic_chat_streams_real_content(
         self, client: PassthroughClient, resources: ResourceManager
@@ -1108,6 +1534,16 @@ class TestAnthropicChatCompletions:
     @pytest.mark.covers(
         "llm.chat_completions.anthropic.tool_use.nonstream.works",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_anthropic_chat_returns_tool_call(
         self, client: PassthroughClient, resources: ResourceManager
@@ -1134,6 +1570,16 @@ class TestAnthropicChatCompletions:
     @pytest.mark.covers(
         "llm.chat_completions.anthropic.tool_use.stream.works",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.STREAM,
+        )
     )
     def test_anthropic_chat_streams_tool_call(
         self, client: PassthroughClient, resources: ResourceManager

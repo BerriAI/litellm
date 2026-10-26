@@ -1,0 +1,79 @@
+suite: Independent Lens release and credentials
+templates:
+  - lens/deployment.yaml
+values:
+  - ./values/required.yaml
+set:
+  fullnameOverride: lens-test
+  lensWorker.enabled: true
+  lensWorker.publicUrl: https://traces.example
+  lensWorker.serviceTokenSecret.name: lens-service
+  lensWorker.clickhouseSecret.name: lens-storage
+tests:
+  - it: selects a Lens release independently of the gateway
+    chart:
+      appVersion: 9.8.7
+    set:
+      backend.image.tag: gateway-9.8.7
+      lensWorker.image.tag: 2.3.4
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/lens:2.3.4
+  - it: retains the pinned Lens chart default when only the gateway changes
+    chart:
+      appVersion: 9.8.7
+    set:
+      backend.image.tag: gateway-9.8.7
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/lens:0.1.0-dev.0
+  - it: selects development publications explicitly
+    set:
+      lensWorker.image.repository: ghcr.io/berriai/lens-dev
+      lensWorker.image.tag: sha-0123456789abcdef
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/lens-dev:sha-0123456789abcdef
+  - it: preserves a verified registry mirror and digest
+    set:
+      lensWorker.image.repository: registry.example/lens
+      lensWorker.image.tag: replaced-label
+      lensWorker.image.digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.example/lens@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  - it: rejects a malformed digest
+    set:
+      lensWorker.image.digest: sha256:invalid
+    asserts:
+      - failedTemplate:
+          errorMessage: Lens image.digest must be sha256 followed by 64 lowercase hex characters
+  - it: keeps the legacy enablement switch working
+    set:
+      lensWorker.enabled: false
+    asserts:
+      - hasDocuments: {count: 0}
+  - it: keeps isolated local analysis with delegated gateway access
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: LENS_MODE, value: standalone}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LENS_GATEWAY_SECRET
+            valueFrom:
+              secretKeyRef: {name: lens-test-lens-gateway, key: gateway-secret}
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.volumes[0].emptyDir
+          value: {medium: Memory, sizeLimit: 1Gi}

@@ -44,6 +44,7 @@ export function DeletedTeamsTable({
 
   return (
     <DataTable
+      fillHeight
       data={teams}
       columns={columns}
       getRowId={(team, index) => team.team_id || String(index)}

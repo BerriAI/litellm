@@ -1,29 +1,28 @@
 use std::{process::Command, task::Poll};
 
 use litellm_host::{
-    host::HostResult,
     machine::{HostFailure, Interrupted, Machine, MachineStep, Step},
-    route::Route,
+    protocol::Protocol,
 };
 
 use pyo3::{prelude::*, types::PyDict};
 
 struct DiagnosticMachine;
 
-impl Route for DiagnosticMachine {
+impl Protocol for DiagnosticMachine {
     type Response = ();
     type Error = String;
-    type Op = ();
-    type OpResult = ();
+    type Request = ();
+    type HostCall = ();
     type Chunk = ();
     type StreamHead = ();
 }
 
 impl Machine for DiagnosticMachine {
-    type Route = Self;
+    type Protocol = Self;
     type Complete = ();
 
-    fn resume(&mut self, _: Option<HostResult<Self>>) -> Step<'_, Self> {
+    fn resume(&mut self) -> Step<'_, Self> {
         litellm_tracing::warn!("machine started");
         Box::pin(async {
             tokio::task::yield_now().await;
@@ -45,7 +44,7 @@ fn machine_warning(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
     let mut machine = super::LoggedMachine::new(DiagnosticMachine);
     let mut future = Box::pin(async move {
         machine
-            .resume(None)
+            .resume()
             .await
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
         machine
@@ -67,6 +66,19 @@ fn warning(py: Python<'_>) {
     });
 }
 
+#[tracing::instrument(name = "litellm.route", skip_all, fields(route = "fixture", outcome))]
+async fn traced_operation(_secret: &str) -> PyResult<()> {
+    tokio::task::yield_now().await;
+    tracing::info!("inside route");
+    tracing::Span::current().record("outcome", "success");
+    Ok(())
+}
+
+#[pyfunction]
+fn span_warning(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+    crate::execution::run_async_value(py, traced_operation("private-key-sentinel"))
+}
+
 #[pyfunction]
 fn levels(py: Python<'_>) {
     super::capture(py).scope(|| {
@@ -81,7 +93,7 @@ fn levels(py: Python<'_>) {
 
 #[pyfunction]
 fn asynchronous_warning(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
-    super::run_async_value(py, async {
+    crate::execution::run_async_value(py, async {
         tokio::task::yield_now().await;
         litellm_tracing::warn!("async warning");
         Ok(())
@@ -90,7 +102,7 @@ fn asynchronous_warning(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
 
 #[pyfunction]
 fn synchronous_warning(py: Python<'_>) -> PyResult<()> {
-    super::run_sync_value(py, async {
+    crate::execution::run_sync_value(py, async {
         tokio::task::yield_now().await;
         litellm_tracing::warn!("sync warning");
         Ok(())
@@ -99,7 +111,7 @@ fn synchronous_warning(py: Python<'_>) -> PyResult<()> {
 
 #[pyfunction]
 fn synchronous_failure(py: Python<'_>) -> PyResult<()> {
-    super::run_sync_value(py, async {
+    crate::execution::run_sync_value(py, async {
         litellm_tracing::warn!("failure diagnostic");
         Err(pyo3::exceptions::PyValueError::new_err("request failed"))
     })
@@ -110,7 +122,7 @@ fn http_warning(py: Python<'_>) -> PyResult<()> {
     crate::http::call_config(py, &PyDict::new(py), false).map(|_| ())
 }
 
-#[test]
+#[rstest::rstest]
 fn native_events_reach_python_with_levels_context_reentry_and_http_deduplication() {
     if std::env::var_os("LITELLM_LOGGER_TEST_PROCESS").is_none() {
         let output = Command::new(std::env::current_exe().unwrap())
@@ -156,6 +168,9 @@ fn native_events_reach_python_with_levels_context_reentry_and_http_deduplication
             .unwrap();
         locals
             .set_item("warning", wrap_pyfunction!(warning, py).unwrap())
+            .unwrap();
+        locals
+            .set_item("span_warning", wrap_pyfunction!(span_warning, py).unwrap())
             .unwrap();
         locals
             .set_item(
@@ -263,6 +278,25 @@ try:
         ('trace', logging.DEBUG), ('debug', logging.DEBUG), ('info', logging.INFO),
         ('warn', logging.WARNING), ('error', logging.ERROR),
     ]
+
+    before_spans = len(capture.records)
+    async def traced_request():
+        session = session_id_var.set('span-session')
+        trace = trace_id_var.set('span-trace')
+        try:
+            await span_warning()
+        finally:
+            trace_id_var.reset(trace)
+            session_id_var.reset(session)
+    asyncio.run(traced_request())
+    span_records = capture.records[before_spans:]
+    assert [r.getMessage() for r in span_records] == ['inside route', 'span closed']
+    assert all(r.session_id == 'span-session' and r.trace_id == 'span-trace' for r in span_records)
+    assert all(r.rust_fields['route'] == 'fixture' for r in span_records)
+    assert span_records[1].rust_fields['outcome'] == 'success'
+    assert span_records[1].rust_fields['span_name'] == 'litellm.route'
+    assert span_records[1].rust_fields['duration_ms'] >= 0
+    assert 'private-key-sentinel' not in repr([r.rust_fields for r in span_records])
 
     before = len(capture.records)
     litellm.ssl_ecdh_curve = 'logger-test-unsupported-curve'
