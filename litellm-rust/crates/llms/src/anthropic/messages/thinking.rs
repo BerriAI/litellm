@@ -2,8 +2,8 @@ use litellm_llms_types::{
     formats::{
         chat_completions::ReasoningEffort,
         messages::{
-            EffortLevel, MessagesOptionalParams, MessagesRequest, OutputConfig, ThinkingConfig,
-            ThinkingDisplay,
+            ContextEdit, ContextManagement, EffortLevel, MessagesOptionalParams, MessagesRequest,
+            OutputConfig, ThinkingConfig, ThinkingDisplay,
         },
     },
     recognized::Recognized,
@@ -144,6 +144,58 @@ fn legacy_reasoning_effort(
     }
 }
 
+fn is_clear_thinking_edit(edit: &Recognized<ContextEdit>) -> bool {
+    match edit {
+        Recognized::Known(ContextEdit::ClearThinking { .. }) => true,
+        Recognized::Known(_) => false,
+        Recognized::Unrecognized(value) => value
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|edit_type| edit_type.starts_with("clear_thinking_")),
+    }
+}
+
+/// Anthropic rejects `clear_thinking_*` edits without thinking. `context_management` goes
+/// only when such an edit was removed and nothing else is left in it.
+fn without_clear_thinking_edits(
+    context_management: Option<Recognized<ContextManagement>>,
+) -> Option<Recognized<ContextManagement>> {
+    match context_management {
+        Some(Recognized::Known(ContextManagement {
+            edits: Some(edits),
+            extra,
+        })) if edits.iter().any(is_clear_thinking_edit) => {
+            let kept: Vec<_> = edits
+                .into_iter()
+                .filter(|edit| !is_clear_thinking_edit(edit))
+                .collect();
+            (!kept.is_empty() || !extra.is_empty()).then(|| {
+                Recognized::Known(ContextManagement {
+                    edits: Some(kept),
+                    extra,
+                })
+            })
+        }
+        other => other,
+    }
+}
+
+fn without_thinking(
+    params: MessagesOptionalParams,
+    context: &ThinkingContext,
+) -> MessagesOptionalParams {
+    let context_management = if context.capabilities.thinking_always_on {
+        params.context_management
+    } else {
+        without_clear_thinking_edits(params.context_management)
+    };
+    MessagesOptionalParams {
+        thinking: None,
+        context_management,
+        ..params
+    }
+}
+
 fn translate_reasoning_effort(
     request: MessagesRequest,
     context: &ThinkingContext,
@@ -171,9 +223,8 @@ fn translate_reasoning_effort(
     ) else {
         return Ok(MessagesRequest {
             params: MessagesOptionalParams {
-                thinking: None,
                 output_config: None,
-                ..request.params
+                ..without_thinking(request.params, context)
             },
             ..request
         });
@@ -277,15 +328,11 @@ fn translate_adaptive_effort_for_non_adaptive_model(
         _ => true,
     };
     if supports_effort_param(capabilities) && (!adaptive_thinking || level_accepted) {
+        if !adaptive_thinking {
+            return Ok(request);
+        }
         return Ok(MessagesRequest {
-            params: MessagesOptionalParams {
-                thinking: if adaptive_thinking {
-                    None
-                } else {
-                    request.params.thinking
-                },
-                ..request.params
-            },
+            params: without_thinking(request.params, context),
             ..request
         });
     }
@@ -294,13 +341,17 @@ fn translate_adaptive_effort_for_non_adaptive_model(
     } else {
         None
     };
+    let thinking = budget
+        .and_then(|budget| fit_budget_to_max_tokens(budget, request.params.max_tokens))
+        .map(|budget| Recognized::Known(ThinkingConfig::enabled(budget)));
+    let params = MessagesOptionalParams {
+        output_config: without_effort(request.params.output_config),
+        ..request.params
+    };
     Ok(MessagesRequest {
-        params: MessagesOptionalParams {
-            thinking: budget
-                .and_then(|budget| fit_budget_to_max_tokens(budget, request.params.max_tokens))
-                .map(|budget| Recognized::Known(ThinkingConfig::enabled(budget))),
-            output_config: without_effort(request.params.output_config),
-            ..request.params
+        params: match thinking {
+            Some(_) => MessagesOptionalParams { thinking, ..params },
+            None => without_thinking(params, context),
         },
         ..request
     })
@@ -623,6 +674,95 @@ mod tests {
         #[case] expected: Value,
     ) {
         assert_eq!(translate(capabilities, input), Ok(request(expected)));
+    }
+
+    #[rstest]
+    #[case::reasoning_effort_none(
+        haiku_4_5(),
+        serde_json::json!({"max_tokens": 8192, "reasoning_effort": "none"}),
+        false
+    )]
+    #[case::reasoning_effort_high(
+        haiku_4_5(),
+        serde_json::json!({"max_tokens": 8192, "reasoning_effort": "high"}),
+        true
+    )]
+    #[case::effort_model_drops_adaptive(opus_4_5(), claude_code_payload("high", 8192), false)]
+    #[case::adaptive_model_keeps_adaptive(sonnet_4_6(), claude_code_payload("high", 8192), true)]
+    #[case::non_reasoning_model(haiku_3_5(), claude_code_payload("high", 8192), false)]
+    #[case::legacy_thinking_model(haiku_4_5(), claude_code_payload("high", 8192), true)]
+    #[case::always_on_model_keeps_edit(
+        fable_5_1(),
+        serde_json::json!({"max_tokens": 8192, "reasoning_effort": "none"}),
+        true
+    )]
+    fn clear_thinking_edit_is_dropped_with_thinking_except_on_always_on_models(
+        #[case] capabilities: MessagesModelCapabilities,
+        #[case] fields: Value,
+        #[case] keeps_edit: bool,
+    ) {
+        let mut fields = fields;
+        fields.as_object_mut().unwrap().insert(
+            "context_management".into(),
+            serde_json::json!({"edits": [{"type": "clear_thinking_20251015", "keep": "all"}, {"type": "clear_tool_uses_20250919"}]}),
+        );
+        let always_on = capabilities.thinking_always_on;
+        let translated = serde_json::to_value(translate(capabilities, fields).unwrap()).unwrap();
+        let edit_types: Vec<&str> = translated["context_management"]["edits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|edit| edit["type"].as_str())
+            .collect();
+        let expected: &[&str] = if keeps_edit {
+            &["clear_thinking_20251015", "clear_tool_uses_20250919"]
+        } else {
+            &["clear_tool_uses_20250919"]
+        };
+        assert_eq!(edit_types, expected);
+        assert_eq!(
+            translated.get("thinking").is_some(),
+            keeps_edit && !always_on
+        );
+    }
+
+    #[rstest]
+    #[case::only_clear_thinking_is_removed_whole(
+        serde_json::json!({"edits": [{"type": "clear_thinking_20251015"}]}),
+        None
+    )]
+    #[case::any_clear_thinking_version(
+        serde_json::json!({"edits": [{"type": "clear_thinking_20990101"}, {"type": "compact_20260112"}]}),
+        Some(serde_json::json!({"edits": [{"type": "compact_20260112"}]}))
+    )]
+    #[case::other_keys_kept(
+        serde_json::json!({"edits": [{"type": "clear_thinking_20251015"}], "extra": 1}),
+        Some(serde_json::json!({"edits": [], "extra": 1}))
+    )]
+    #[case::no_clear_thinking_untouched(
+        serde_json::json!({"edits": []}),
+        Some(serde_json::json!({"edits": []}))
+    )]
+    #[case::openai_list_untouched(
+        serde_json::json!([{"type": "compaction"}]),
+        Some(serde_json::json!([{"type": "compaction"}]))
+    )]
+    fn clear_thinking_edits_are_removed(
+        #[case] context_management: Value,
+        #[case] expected: Option<Value>,
+    ) {
+        let translated = translate(
+            haiku_4_5(),
+            serde_json::json!({"max_tokens": 8192, "reasoning_effort": "none", "context_management": context_management}),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(translated)
+                .unwrap()
+                .get("context_management")
+                .cloned(),
+            expected
+        );
     }
 
     #[rstest]
