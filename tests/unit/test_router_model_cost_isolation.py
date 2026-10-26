@@ -18,6 +18,7 @@ import queue
 import re
 import sys
 import threading
+from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, cast
@@ -31,8 +32,8 @@ import litellm
 from litellm import Router
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
-from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
+from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.types.router import (
@@ -105,7 +106,19 @@ async def test_discovered_limits_survive_deployment_growth_and_removal(
     await handler.client.aclose()
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(
-            lambda request: httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 4096}]})
+            lambda request: httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "local-model",
+                            "max_model_len": 4096,
+                            "max_input_tokens": 4096,
+                            "max_output_tokens": 4096,
+                        }
+                    ]
+                },
+            )
         )
     ) as client:
         handler.client = client
@@ -158,9 +171,28 @@ async def test_discovery_discards_metadata_for_a_replaced_deployment(monkeypatch
                     model_info=ModelInfo(id="replaced-deployment"),
                 )
             )
-            return httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 8192}]})
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "local-model",
+                            "max_model_len": 8192,
+                            "max_input_tokens": 8192,
+                            "max_output_tokens": 8192,
+                        }
+                    ]
+                },
+            )
         assert request.url.host == "replacement.test"
-        return httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 2048}]})
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "local-model", "max_model_len": 2048, "max_input_tokens": 2048, "max_output_tokens": 2048}
+                ]
+            },
+        )
 
     handler: Final = AsyncHTTPHandler()
     await handler.client.aclose()
@@ -225,7 +257,14 @@ async def test_discovery_is_isolated_across_routers_and_reused_ids(monkeypatch: 
         if request.url.host == "unavailable.test":
             return httpx.Response(503)
         limit: Final = 8192 if request.url.host == "first.test" else 2048
-        return httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": limit}]})
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "local-model", "max_model_len": limit, "max_input_tokens": limit, "max_output_tokens": limit}
+                ]
+            },
+        )
 
     handler: Final = AsyncHTTPHandler()
     await handler.client.aclose()
@@ -279,7 +318,14 @@ async def test_discovery_refreshes_other_endpoints_while_one_is_pending(monkeypa
         if request.url.host == "second.test":
             second_started.set()
             return httpx.Response(503)
-        return httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 2048}]})
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "local-model", "max_model_len": 2048, "max_input_tokens": 2048, "max_output_tokens": 2048}
+                ]
+            },
+        )
 
     handler: Final = AsyncHTTPHandler()
     await handler.client.aclose()
@@ -311,8 +357,32 @@ async def test_discovered_limits_expire_after_the_last_successful_refresh(monkey
     router._discovered_model_info_cache = InMemoryCache(clock=clock, default_ttl=2 * MODEL_INFO_REFRESH_SECONDS)
     responses: Final = iter(
         (
-            httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 4096}]}),
-            httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 8192}]}),
+            httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "local-model",
+                            "max_model_len": 4096,
+                            "max_input_tokens": 4096,
+                            "max_output_tokens": 4096,
+                        }
+                    ]
+                },
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "local-model",
+                            "max_model_len": 8192,
+                            "max_input_tokens": 8192,
+                            "max_output_tokens": 8192,
+                        }
+                    ]
+                },
+            ),
             httpx.Response(503),
         )
     )
@@ -350,7 +420,20 @@ async def test_discovered_limits_are_isolated_overridable_and_refreshable(
     def respond(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/models"
         assert request.headers["authorization"] == "Bearer local-key"
-        return httpx.Response(200, json={"data": [{"id": "org/local-model", "max_model_len": next(upstream_limit)}]})
+        limit: Final = next(upstream_limit)
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "org/local-model",
+                        "max_model_len": limit,
+                        "max_input_tokens": limit,
+                        "max_output_tokens": limit,
+                    }
+                ]
+            },
+        )
 
     router: Final = Router(
         model_list=[
@@ -406,7 +489,19 @@ async def test_discovery_preserves_input_overrides_and_survives_outages(monkeypa
     monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
     responses: Final = iter(
         (
-            httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 4096}]}),
+            httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "local-model",
+                            "max_model_len": 4096,
+                            "max_input_tokens": 4096,
+                            "max_output_tokens": 4096,
+                        }
+                    ]
+                },
+            ),
             httpx.Response(503),
         )
     )
@@ -3932,6 +4027,61 @@ def test_price_data_reload_refreshes_the_cached_model_group_and_deployment_info(
 
     assert router.cached_model_group_info("grp").input_cost_per_token == new_price
     assert router.cached_deployment_model_info("dep-a", "openai/gpt-4o")["input_cost_per_token"] == new_price
+
+
+@pytest.mark.parametrize(
+    "params",
+    (
+        LiteLLM_Params(model="openai/*", api_base="https://fixture.test/v1"),
+        LiteLLM_Params(model="openai/fixture", api_base="https://fixture.test/v1", use_clientside_credentials=True),
+        LiteLLM_Params(model="anthropic/claude-sonnet-4-5"),
+    ),
+)
+async def test_deployment_metadata_skips_unresolved_or_unsupported_supplier_connections(params: LiteLLM_Params) -> None:
+    router: Final = Router(model_list=[])
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+
+    def unexpected(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"No catalog request expected for {request.url.path}")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(unexpected)) as http_client:
+        handler.client = http_client
+        assert await router._aget_deployment_model_metadata(params, client=handler) == {}
+
+
+async def test_deployment_metadata_uses_resolved_catalog_credentials_and_independent_limits() -> None:
+    router: Final = Router(model_list=[])
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    paths: Final[list[str]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        assert request.headers["authorization"] == "Bearer operator-override"
+        assert request.headers["x-provider-route"] == "fixture"
+        return httpx.Response(
+            200,
+            json={
+                "data": [{"id": "fixture", "context_window": 1200, "max_input_tokens": 1100, "max_output_tokens": 200}]
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        handler.client = http_client
+        metadata: Final = await router._aget_deployment_model_metadata(
+            LiteLLM_Params(
+                model="openai/fixture",
+                api_base="https://fixture.test/v1",
+                api_key="default-key",
+                extra_headers={"Authorization": "Bearer operator-override", "x-provider-route": "fixture"},
+            ),
+            client=handler,
+        )
+    assert paths == ["/v1/models"]
+    assert metadata["context_window"] == 1200
+    assert metadata["max_input_tokens"] == 1100
+    assert metadata["max_output_tokens"] == 200
 
 
 def test_price_data_reload_keeps_geo_deployments_priced_while_requests_register_pricing(monkeypatch: pytest.MonkeyPatch) -> None:

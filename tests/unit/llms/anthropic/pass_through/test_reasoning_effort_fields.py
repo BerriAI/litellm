@@ -23,6 +23,14 @@ from litellm.router_utils.reasoning_effort_capability import (
 from litellm.utils import get_model_info
 
 
+@pytest.mark.parametrize("effort", ("max", "xhigh", "high", "minimal", "none", "future-effort"))
+@pytest.mark.parametrize(("model", "provider"), (("org/off-map", "openrouter"), ("openrouter/org/off-map", None)))
+def test_openrouter_gateway_efforts_are_never_degraded_from_backend_flags(
+    effort: str, model: str, provider: str | None
+) -> None:
+    assert normalize_reasoning_effort_value(effort, model, provider) == effort
+
+
 def _load_model_registry() -> Dict[str, Any]:
     """Load the root model_prices_and_context_window.json."""
     json_path = os.path.join(

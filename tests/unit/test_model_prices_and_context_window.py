@@ -736,6 +736,36 @@ def test_unregistered_provider_guard_flags_only_labels_nobody_registered():
     ]
 
 
+def test_native_model_info_and_lookup_preserve_reasoning_capabilities_and_request_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.types.router import ModelInfo
+
+    metadata: Final = {
+        "context_window": 1200,
+        "max_input_tokens": 1100,
+        "max_output_tokens": 200,
+        "max_tokens": 200,
+        "supports_function_calling": True,
+        "supports_parallel_function_calling": False,
+        "supports_reasoning": True,
+        "reasoning_effort_levels": ["low", "max"],
+        "default_reasoning_effort": "low",
+        "supported_endpoints": ["/v1/responses"],
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["text"],
+        "request_defaults": {
+            "output_token_budget": 100,
+            "output_token_budget_by_reasoning_effort": {"max": 180},
+        },
+    }
+    native: Final = ModelInfo(**metadata)
+    assert native.request_defaults.output_budget("max") == 180
+    monkeypatch.setattr(litellm, "model_cost", {"fixture-model": {"litellm_provider": "openai", **metadata}})
+    info: Final = litellm.get_model_info("fixture-model")
+    assert {field: info.get(field) for field in metadata} == metadata
+
+
 def _search_free_requests_rows(path: Path) -> Mapping[str, dict[str, JsonValue]]:
     prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
     return MappingProxyType(

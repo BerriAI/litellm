@@ -88,7 +88,7 @@ from litellm.types.proxy.carried_budget_state import (
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.request_tag_mappings import RequestTagMapping
 from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
-from litellm.types.router import AllowedModelRegion, RouterErrors, UpdateRouterConfig
+from litellm.types.router import AllowedModelRegion, ModelMetadata, RouterErrors, UpdateRouterConfig
 from litellm.types.router_weights import validate_router_settings_dict
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
@@ -1116,7 +1116,9 @@ class ModelInfoDelete(LiteLLMPydanticObjectBase):
     id: str
 
 
-class ModelInfo(LiteLLMPydanticObjectBase):
+class ModelInfo(  # frozen-ok: native model management assigns team_public_model_name after validation
+    ModelMetadata, LiteLLMPydanticObjectBase
+):
     id: str | None
     mode: Literal["embedding", "chat", "completion"] | None
     input_cost_per_token: float | None = 0.0
@@ -1133,7 +1135,7 @@ class ModelInfo(LiteLLMPydanticObjectBase):
     )
     discoverable: bool | None = None
 
-    model_config = ConfigDict(protected_namespaces=(), extra="allow")
+    model_config = ConfigDict(protected_namespaces=(), extra="allow", frozen=False)
 
     @model_validator(mode="before")
     @classmethod
@@ -2459,6 +2461,9 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     Documents all the fields supported by `general_settings` in config.yaml
     """
 
+    model_offerings_path: str | None = Field(
+        None, description="Path to the authoritative external offering file, reloaded without restarting the proxy"
+    )
     request_tag_mappings: Sequence[RequestTagMapping] | None = Field(
         None,
         description="Map W3C baggage values to request tags. Exact value/tag rules take precedence over tag_prefix fallbacks.",

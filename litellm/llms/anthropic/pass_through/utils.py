@@ -221,6 +221,8 @@ def normalize_reasoning_effort_value(
 
     if deployment_rounds_reasoning_effort(deployment_model_info):
         return effort
+    if custom_llm_provider == "openrouter" or custom_llm_provider is None and model.startswith("openrouter/"):
+        return effort
     from litellm.utils import get_model_info
 
     try:

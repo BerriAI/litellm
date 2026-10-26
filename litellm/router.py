@@ -140,10 +140,8 @@ from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import (
-    MODEL_INFO_DISCOVERY_PROVIDERS,
     MODEL_INFO_REFRESH_CONCURRENCY,
     MODEL_INFO_REFRESH_SECONDS,
-    get_openai_compatible_model_info,
 )
 from litellm.responses.bridge_check import keep_registered_mode
 from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
@@ -299,6 +297,7 @@ from litellm.router_utils.kubernetes_pod_discovery import (
     resolve_pods_after,
     resolve_pods_after_bound,
 )
+from litellm.router_utils.model_request_defaults import deployment_params_with_request_defaults, model_request_defaults
 from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
     MID_STREAM_CONTINUATION_MARKER,
     ContinuationOutput,
@@ -397,6 +396,7 @@ from litellm.types.router import (
     LiteLLMParamsTypedDict,
     MockRouterTestingParams,
     ModelGroupInfo,
+    ModelListingDeployment,
     OptionalPreCallChecks,
     PreRoutingStrategy,
     RetryPolicy,
@@ -451,7 +451,6 @@ from litellm.utils import (
     lookup_model_info_for_registration,
     model_info_with_pricing_overrides,
     provider_rejectable_params,
-    resolve_api_key_secret_reference,
     set_live_deployment_replay,
 )
 
@@ -1428,6 +1427,7 @@ class Router:
         self.routing_plugins: list[RoutingPlugin] = list(plugins) if plugins else []
 
         # Initialize model_group_alias early since it's used in set_model_list
+        self.model_metadata_authoritative = False
         self.model_group_alias: dict[str, str | RouterModelGroupAliasItem] = (
             model_group_alias or {}
         )  # dict to store aliases for router, ex. {"gpt-4": "gpt-3.5-turbo"}, all requests with gpt-4 -> get routed to gpt-3.5-turbo group
@@ -3124,10 +3124,22 @@ class Router:
             )
             # Check for silent model experiment
             # Make a local copy of litellm_params to avoid mutating the Router's state
-            litellm_params: Final = self._deployment_params_with_request_reasoning_override(
+            selected_params: Final = self._deployment_params_with_request_reasoning_override(
                 deployment["litellm_params"], kwargs
             )
-            silent_model: Final = litellm_params.pop("silent_model", None)
+            request_defaults: Final = model_request_defaults(
+                deployment.get("model_info", {}),
+                _MODEL_INFO_ADAPTER.validate_python(selected_params),
+                _MODEL_INFO_ADAPTER.validate_python(kwargs),
+                "completion",
+            )
+            litellm_params: Final = deployment_params_with_request_defaults(
+                {key: value for key, value in selected_params.items() if key != "silent_model"},
+                request_defaults,
+                deployment.get("model_info", {}),
+                _MODEL_INFO_ADAPTER.validate_python(kwargs),
+            )
+            silent_model: Final = selected_params.get("silent_model")
 
             for silent_target in _silent_experiment_targets(silent_model):
                 # Mirroring traffic to a secondary model
@@ -3169,6 +3181,7 @@ class Router:
                     "caching": self.cache_responses,
                     "client": model_client,
                     **kwargs,
+                    **request_defaults,
                 }
             )
             response: Final = litellm.completion(**input_kwargs)
@@ -4493,10 +4506,22 @@ class Router:
 
             # Check for silent model experiment
             # Make a local copy of litellm_params to avoid mutating the Router's state
-            litellm_params: Final = self._deployment_params_with_request_reasoning_override(
+            selected_params: Final = self._deployment_params_with_request_reasoning_override(
                 deployment["litellm_params"], kwargs
             )
-            silent_model: Final = litellm_params.pop("silent_model", None)
+            request_defaults: Final = model_request_defaults(
+                deployment.get("model_info", {}),
+                _MODEL_INFO_ADAPTER.validate_python(selected_params),
+                _MODEL_INFO_ADAPTER.validate_python(kwargs),
+                "completion",
+            )
+            litellm_params: Final = deployment_params_with_request_defaults(
+                {key: value for key, value in selected_params.items() if key != "silent_model"},
+                request_defaults,
+                deployment.get("model_info", {}),
+                _MODEL_INFO_ADAPTER.validate_python(kwargs),
+            )
+            silent_model: Final = selected_params.get("silent_model")
 
             for silent_target in _silent_experiment_targets(silent_model):
                 # Mirroring traffic to a secondary model
@@ -4528,6 +4553,7 @@ class Router:
                     "caching": self.cache_responses,
                     "client": model_client,
                     **kwargs,
+                    **request_defaults,
                 }
             )
 
@@ -6221,6 +6247,12 @@ class Router:
                     return await original_generic_function(model=model, **kwargs)
                 raise e
 
+            request_defaults: Final = model_request_defaults(
+                deployment.get("model_info", {}),
+                _MODEL_INFO_ADAPTER.validate_python(deployment["litellm_params"]),
+                _MODEL_INFO_ADAPTER.validate_python(kwargs),
+                handler_name or "",
+            )
             self._update_kwargs_with_deployment(
                 deployment=deployment,
                 kwargs=kwargs,
@@ -6228,7 +6260,12 @@ class Router:
                 splits_stream_timeout=handler_name in _STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
             )
 
-            data: Final = deployment["litellm_params"].copy()
+            data: Final = deployment_params_with_request_defaults(
+                _MODEL_INFO_ADAPTER.validate_python(deployment["litellm_params"]),
+                request_defaults,
+                deployment.get("model_info", {}),
+                _MODEL_INFO_ADAPTER.validate_python(kwargs),
+            )
             model_name: Final = data["model"]
             self.total_calls[model_name] += 1
 
@@ -6245,6 +6282,7 @@ class Router:
                 **kwargs,
                 "model": model_name,
                 **_with_router_resolved_session_model(kwargs.get("session"), model_name),
+                **request_defaults,
                 **(
                     {"turn_admission": partial(self.async_admit_deployment_turn, model, deployment, kwargs)}
                     if generic_function_name == "_aresponses_websocket"
@@ -6992,8 +7030,19 @@ class Router:
                 function_name="generic_api_call",
                 splits_stream_timeout=handler_name in _STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
             )
+            request_defaults: Final = model_request_defaults(
+                deployment.get("model_info", {}),
+                _MODEL_INFO_ADAPTER.validate_python(deployment["litellm_params"]),
+                _MODEL_INFO_ADAPTER.validate_python(kwargs),
+                handler_name,
+            )
 
-            data: Final = deployment["litellm_params"].copy()
+            data: Final = deployment_params_with_request_defaults(
+                _MODEL_INFO_ADAPTER.validate_python(deployment["litellm_params"]),
+                request_defaults,
+                deployment.get("model_info", {}),
+                _MODEL_INFO_ADAPTER.validate_python(kwargs),
+            )
             model_name: Final = data["model"]
 
             self.total_calls[model_name] += 1
@@ -7015,6 +7064,7 @@ class Router:
                     "custom_llm_provider": custom_llm_provider,
                     "caching": self.cache_responses,
                     **kwargs,
+                    **request_defaults,
                 }
             )
 
@@ -10446,7 +10496,7 @@ class Router:
 
             deployment = self._add_deployment(deployment=with_admin_api_key_secret_reference(deployment))
 
-            model: Final = deployment.to_json(exclude_none=True)
+            model: Final = deployment.to_router_dict()
 
             self._add_model_to_list_and_index_map(model=model, model_id=deployment.model_info.id)
             return deployment
@@ -10927,7 +10977,9 @@ class Router:
         - ValueError: If LITELLM_ENVIRONMENT is not set in .env or not one of the valid values
         - ValueError: If supported_environments is not set in model_info or not one of the valid values
         """
-        return model_info_is_active_for_environment(model_info=deployment.model_info)
+        return model_info_is_active_for_environment(
+            model_info=_MODEL_INFO_ADAPTER.validate_python(deployment.model_info.model_dump(exclude_none=True))
+        )
 
     def set_model_list(self, model_list: list):
         original_model_list: Final = copy.deepcopy(model_list)
@@ -11021,6 +11073,32 @@ class Router:
         # deployments have been registered.
         self._finalize_adaptive_router_if_configured()
 
+    def snapshot_with_model_list(
+        self, model_list: Sequence[Mapping[str, object]], *, metadata_authoritative: bool = False
+    ) -> "Router":
+        snapshot: Final = copy.copy(self)
+        snapshot.model_metadata_authoritative = metadata_authoritative
+        snapshot.pattern_router = PatternMatchRouter()
+        snapshot.deployment_names = []
+        snapshot.provider_default_deployment_ids = []
+        snapshot._zero_cost_cache = {}
+        snapshot._discovered_model_info_cache = InMemoryCache(
+            max_size_in_memory=max(len(model_list), 1), default_ttl=2 * MODEL_INFO_REFRESH_SECONDS
+        )
+        snapshot.cached_deployment_model_info = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(
+            snapshot.get_deployment_model_info
+        )
+        snapshot.set_model_list([dict(model) for model in model_list])
+        snapshot.healthy_deployments = snapshot.get_model_list() or []
+        # Factory closures and the OpenAI-compatible wrapper must dispatch through
+        # this snapshot, rather than the template whose attributes were copied.
+        # Rebinding endpoints does not register callbacks or recreate clients.
+        snapshot.initialize_assistants_endpoint()
+        snapshot.initialize_router_endpoints()
+        snapshot.chat = litellm.Chat(params=snapshot.default_litellm_params, router_obj=snapshot)
+        _live_routers.add(snapshot)
+        return snapshot
+
     def _add_deployment(self, deployment: Deployment) -> Deployment:
         import os
 
@@ -11093,7 +11171,7 @@ class Router:
         if "*" in deployment.model_name:
             # store this as a regex pattern - all deployments matching this pattern will be sent to this deployment
             # Store deployment.model_name as a regex pattern
-            self.pattern_router.add_pattern(deployment.model_name, deployment.to_json(exclude_none=True))
+            self.pattern_router.add_pattern(deployment.model_name, deployment.to_router_dict())
             if deployment.model_info.id:
                 self.provider_default_deployment_ids.append(deployment.model_info.id)
 
@@ -11102,9 +11180,7 @@ class Router:
         if _team_id is not None and _team_public_model_name is not None and "*" in _team_public_model_name:
             if _team_id not in self.team_pattern_routers:
                 self.team_pattern_routers[_team_id] = PatternMatchRouter()
-            self.team_pattern_routers[_team_id].add_pattern(
-                _team_public_model_name, deployment.to_json(exclude_none=True)
-            )
+            self.team_pattern_routers[_team_id].add_pattern(_team_public_model_name, deployment.to_router_dict())
 
         # Azure GPT-Vision Enhancements, users can pass os.environ/
         data_sources: Final = deployment.litellm_params.get("dataSources", []) or []
@@ -11218,7 +11294,7 @@ class Router:
         served: Final = with_admin_api_key_secret_reference(without_model_capability_flags(deployment))
 
         # add to model list
-        _deployment: Final = served.to_json(exclude_none=True)
+        _deployment: Final = served.to_router_dict()
         # initialize client
         self._add_deployment(deployment=served)
 
@@ -11464,7 +11540,7 @@ class Router:
         deployment alone, which is what lets a refresh rebuild the same entries.
         """
         model_info: Final = dict(
-            _MODEL_INFO_ADAPTER.validate_python(deployment.model_info.model_dump(exclude_none=True))
+            _MODEL_INFO_ADAPTER.validate_python(deployment.model_info.model_dump(mode="json", exclude_none=True))
         )
         for field in CustomPricingLiteLLMParams.model_fields:
             field_value = deployment.litellm_params.get(field)
@@ -11808,35 +11884,7 @@ class Router:
                 }
             )
         )
-        model, provider, dynamic_api_key, api_base = litellm.get_llm_provider(model=params.model, litellm_params=params)
-        if provider not in MODEL_INFO_DISCOVERY_PROVIDERS:
-            return
-        if api_base is None or "*" in model or params.get("use_clientside_credentials"):
-            return
-        api_key: Final = resolve_api_key_secret_reference(
-            params.api_key or dynamic_api_key,
-            model=model,
-            llm_provider=provider,
-            upstream=MappingProxyType({"api_base": params.api_base}),
-        )
-        headers: Final = TypeAdapter(Mapping[str, str]).validate_python(
-            params.get("extra_headers") or params.get("headers") or MappingProxyType({})
-        )
-        auth_headers: Final = (
-            MappingProxyType({"authorization": f"Bearer {api_key}"}) if api_key else MappingProxyType({})
-        )
-        limits: Final = await get_openai_compatible_model_info(
-            model=model,
-            api_base=api_base,
-            headers=MappingProxyType(
-                {
-                    **auth_headers,
-                    **MappingProxyType({key.lower(): value for key, value in headers.items()}),
-                }
-            ),
-            client=client or get_async_httpx_client(llm_provider=LlmProviders.OPENAI),
-            cache=self.cache.in_memory_cache,
-        )
+        limits: Final = await self._aget_deployment_model_metadata(params, client=client)
         model_id: Final = deployment.model_info.id
         if not limits or model_id is None or self.get_model_info(model_id) is not raw_deployment:
             return
@@ -11847,13 +11895,22 @@ class Router:
         )
         self._invalidate_model_group_info_cache()
 
-    def get_discovered_model_info(self, model_id: str | None) -> Mapping[str, int]:
+    async def _aget_deployment_model_metadata(
+        self, params: LiteLLM_Params, *, client: AsyncHTTPHandler | None
+    ) -> Mapping[str, object]:
+        from litellm.llms.model_inventory import get_deployment_model_metadata
+
+        return await get_deployment_model_metadata(
+            params=params,
+            client=client or get_async_httpx_client(llm_provider=LlmProviders.OPENAI),
+            cache=self.cache.in_memory_cache,
+        )
+
+    def get_discovered_model_info(self, model_id: object) -> Mapping[str, object]:
+        if not isinstance(model_id, str):
+            return MappingProxyType({})
         cached: Final[object] = self._discovered_model_info_cache.get_cache(model_id)
-        if (
-            model_id is not None
-            and isinstance(cached, DiscoveredDeploymentModelInfo)
-            and cached.deployment is self.get_model_info(model_id)
-        ):
+        if isinstance(cached, DiscoveredDeploymentModelInfo) and cached.deployment is self.get_model_info(model_id):
             configured: Final = TypeAdapter(Mapping[str, object]).validate_python(cached.deployment["model_info"])
             return MappingProxyType({key: value for key, value in cached.limits.items() if configured.get(key) is None})
         return MappingProxyType({})
@@ -11881,15 +11938,21 @@ class Router:
         if not indices:
             return None
 
-        deployments: Final = tuple(self.model_list[index] for index in indices)
+        deployments: Final = tuple(_MODEL_INFO_ADAPTER.validate_python(self.model_list[index]) for index in indices)
         model_infos: Final = tuple(
             MappingProxyType(
                 {
-                    **self.get_discovered_model_info((deployment.get("model_info") or MappingProxyType({})).get("id")),
+                    **self.get_discovered_model_info(
+                        _MODEL_INFO_ADAPTER.validate_python(deployment.get("model_info") or MappingProxyType({})).get(
+                            "id"
+                        )
+                    ),
                     **MappingProxyType(
                         {
                             k: v
-                            for k, v in (deployment.get("model_info") or MappingProxyType({})).items()
+                            for k, v in _MODEL_INFO_ADAPTER.validate_python(
+                                deployment.get("model_info") or MappingProxyType({})
+                            ).items()
                             if v is not None
                         }
                     ),
@@ -11898,12 +11961,19 @@ class Router:
             for deployment in deployments
         )
         raw_deployments: Final[tuple[object, ...]] = deployments
-        pricing_keys: Final = (deployment_pricing_models(deployment) for deployment in raw_deployments)
+        pricing_keys: Final = tuple(deployment_pricing_models(deployment) for deployment in raw_deployments)
         cost_map_keys: Final = tuple(dict.fromkeys(keys[0] for keys in pricing_keys if keys))
         return DeploymentModelListingInfo(
             cost_map_keys=cost_map_keys,
             max_input_tokens=self._widest_configured_limit(model_infos, "max_input_tokens"),
             max_output_tokens=self._widest_configured_limit(model_infos, "max_output_tokens"),
+            deployments=tuple(
+                ModelListingDeployment(
+                    cost_map_key=keys[0] if keys else None,
+                    model_info=model_info,
+                )
+                for model_info, keys in zip(model_infos, pricing_keys)
+            ),
         )
 
     @staticmethod

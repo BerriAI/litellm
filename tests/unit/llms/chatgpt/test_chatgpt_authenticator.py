@@ -161,3 +161,13 @@ class TestChatGPTAuthenticator:
             assert account_id == "acct-123"
             mock_write.assert_called_once()
             assert mock_write.call_args[0][0]["account_id"] == "acct-123"
+
+
+def test_request_scope_never_starts_device_login(tmp_path):
+    from litellm.llms.chatgpt.authenticator import prevent_device_login
+    from litellm.llms.chatgpt.common_utils import GetAccessTokenError
+
+    authenticator = Authenticator()
+    authenticator.auth_file = str(tmp_path / "missing-auth.json")
+    with prevent_device_login(), pytest.raises(GetAccessTokenError, match="cannot start device login"):
+        authenticator.get_access_token()

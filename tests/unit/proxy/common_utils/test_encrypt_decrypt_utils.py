@@ -266,3 +266,21 @@ def test_bearer_token_uses_only_header_safe_characters(length: int):
 
     assert re.fullmatch(r"kind_a_[A-Za-z0-9_-]+", token), token
     assert decrypt_bearer_token(token, prefix="kind_a_") == "x" * length
+
+
+def test_model_offering_identity_uses_server_key_and_not_a_public_credential_hash(monkeypatch):
+    import hashlib
+    import hmac
+
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import model_offering_identity_fingerprint
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "fixture-server-owned-key")
+    low_entropy_header = b'Basic dXNlcjpwYXNz'
+    identity = model_offering_identity_fingerprint(low_entropy_header)
+    assert identity == hmac.new(
+        b"fixture-server-owned-key", b"litellm:model-offering-identity:v1\0" + low_entropy_header, hashlib.sha256
+    ).hexdigest()
+    assert identity != hashlib.sha256(low_entropy_header).hexdigest()
+    assert identity != model_offering_identity_fingerprint(b'Basic dXNlcjpuZXctcGFzcw==')
+    monkeypatch.setenv("LITELLM_SALT_KEY", "other-server-owned-key")
+    assert identity != model_offering_identity_fingerprint(low_entropy_header)

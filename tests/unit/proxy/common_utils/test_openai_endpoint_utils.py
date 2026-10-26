@@ -77,9 +77,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
         ),
     ],
 )
-def test_remove_sensitive_info_from_deployment(
-    model_config: dict, expected_config: dict
-):
+def test_remove_sensitive_info_from_deployment(model_config: dict, expected_config: dict):
     sanitized_config = remove_sensitive_info_from_deployment(model_config)
     assert sanitized_config == expected_config
 
@@ -105,15 +103,10 @@ def test_remove_sensitive_info_from_deployment_with_excluded_keys():
     assert "*" in sanitized_config["litellm_params"]["access_token"]
 
     # With excluded_keys, litellm_credentials_name should NOT be masked.
-    # ``remove_sensitive_info_from_deployment`` mutates its input, so feed it
-    # a fresh copy rather than the already-sanitized one.
     sanitized_config = remove_sensitive_info_from_deployment(
         copy.deepcopy(base_config), excluded_keys={"litellm_credentials_name"}
     )
-    assert (
-        sanitized_config["litellm_params"]["litellm_credentials_name"]
-        == "my-credential-name"
-    )
+    assert sanitized_config["litellm_params"]["litellm_credentials_name"] == "my-credential-name"
 
     # access_token should still be masked (not in excluded_keys)
     assert sanitized_config["litellm_params"]["access_token"] != "token-12345"
@@ -121,3 +114,22 @@ def test_remove_sensitive_info_from_deployment_with_excluded_keys():
 
     # api_key should still be removed (popped) regardless of excluded_keys
     assert "api_key" not in sanitized_config["litellm_params"]
+
+
+def test_public_deployment_omits_all_headers_without_mutating_runtime_parameters():
+    configured = {
+        "model_name": "selected",
+        "litellm_params": {
+            "model": "openai/backend",
+            "api_key": "private-key",
+            "extra_headers": {"X-Session": "opaque-session", "Trace-Value": "private-trace"},
+            "headers": {"Unclassified": "another-secret"},
+            "temperature": 0.25,
+        },
+    }
+    original = copy.deepcopy(configured)
+    public = remove_sensitive_info_from_deployment(configured, excluded_keys={"extra_headers", "headers"})
+    assert public["litellm_params"] == {"model": "openai/backend", "temperature": 0.25}
+    assert configured == original
+    assert public is not configured
+    assert public["litellm_params"] is not configured["litellm_params"]
