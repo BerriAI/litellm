@@ -20,30 +20,35 @@ use litellm_gateway_auth::Auth;
 use litellm_gateway_inference::{Gateway, ModelRouter};
 use litellm_http::{ClientVariant, HttpClientPool, Resolution, media::PublicDnsResolver};
 use litellm_inference::resources::CoreResources;
+use litellm_layered::Env;
+use litellm_llms::base_llm::ocr::settings::{OcrKeysPartial, OcrSettings};
 use litellm_secrets::source::EnvironmentSecrets;
 use litellm_tracing::ByteChunk;
 use uuid::Uuid;
 
-pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
+pub fn build_inference(config: &Config, process: &Env) -> Result<Arc<Gateway>, Error> {
     let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
     let environment = secrets::environment_values(&config.environment_variables)?;
-    let lookup = |name: &str| {
+    let env = process.clone().overlaid(
         environment
-            .get(name)
-            .map(|value| value.expose().to_owned())
-            .or_else(|| std::env::var(name).ok())
-    };
-    let http_settings = http::http_settings(&lookup, &config.litellm_settings)?;
+            .iter()
+            .map(|(name, value)| (name.clone(), value.expose().to_owned())),
+    );
+    let http_settings = http::http_settings(&env, &config.litellm_settings)?;
+    let ocr = OcrSettings::from(OcrKeysPartial::from_env(&env)?);
     let http = Resolution::from(&http_settings).config;
     let client = pool.client(&http, ClientVariant::Provider)?;
+    let env = Arc::new(env);
     let secrets = Arc::new(secrets::ConfigSecrets::new(
         environment,
-        Arc::new(EnvironmentSecrets::python_compatible(client)),
+        Arc::new(EnvironmentSecrets::python_compatible(client, env.clone())),
     ));
     let resources = CoreResources::new(pool);
     Ok(Arc::new(Gateway::new(
         resources,
         http,
+        ocr,
+        env,
         secrets,
         ModelRouter::from_model_list(&config.model_list),
     )?))

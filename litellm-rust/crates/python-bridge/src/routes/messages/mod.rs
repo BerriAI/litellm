@@ -18,6 +18,7 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
                     .map_err(crate::http::client_error)?,
                 crate::http::resources().auth.clone(),
                 crate::secrets::source(py)?,
+                std::sync::Arc::new(crate::environment::ProcessEnvironment),
             );
             Ok(litellm_host::call::hosted_call(
                 request,

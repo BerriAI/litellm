@@ -9,6 +9,7 @@ use litellm_auth::AuthServices;
 use litellm_host::interceptors::Interceptors;
 use litellm_inference::context::CallContext;
 use litellm_inference::provider::resolve_llm_provider;
+use litellm_layered::SharedLookup;
 use litellm_secrets::source::SecretSource;
 use std::sync::Arc;
 
@@ -25,6 +26,7 @@ pub struct MessagesRoute {
     http: litellm_http::Client,
     auth: Arc<AuthServices>,
     secrets: Arc<dyn SecretSource>,
+    env: SharedLookup,
     cache: Option<litellm_cache_response::ScopedCache>,
 }
 
@@ -33,11 +35,13 @@ impl MessagesRoute {
         http: litellm_http::Client,
         auth: Arc<AuthServices>,
         secrets: Arc<dyn SecretSource>,
+        env: SharedLookup,
     ) -> Self {
         Self {
             http,
             auth,
             secrets,
+            env,
             cache: None,
         }
     }

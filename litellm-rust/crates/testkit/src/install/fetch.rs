@@ -19,6 +19,7 @@ impl HttpFetch {
         }
     }
 
+    #[allow(clippy::disallowed_methods)] // test tooling reads its own token
     pub fn from_env() -> Self {
         Self::new(std::env::var("GITHUB_TOKEN").ok())
     }

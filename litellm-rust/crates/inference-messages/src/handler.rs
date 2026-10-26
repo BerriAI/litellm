@@ -62,6 +62,7 @@ pub(super) async fn execute(
         model,
         call,
         secrets.as_ref(),
+        route.env.as_ref(),
         context,
     )
     .boxed()
@@ -100,6 +101,7 @@ async fn provider_call(
     model: String,
     call: MessagesCall,
     secrets: &(dyn Lookup + Send + Sync),
+    env: &(dyn Lookup + Send + Sync),
     context: &CallContext<'_, impl Interceptors<Error>>,
 ) -> Result<ProviderCall, Error> {
     let MessagesCall {
@@ -143,7 +145,7 @@ async fn provider_call(
 
     let body = config.transform_anthropic_messages_request(
         trimmed,
-        &MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params),
+        &MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params, env),
     )?;
     let environment = ValidatedEnvironment {
         headers: config.request_headers(
@@ -168,7 +170,10 @@ async fn provider_call(
         secret_fields: Vec::new(),
         api_key: api_key.map(SecretValue::new),
     };
-    let authenticated = resolve_auth(auth, environment, &|key| std::env::var(key).ok()).await?;
+    let authenticated = resolve_auth(auth, environment, &|key| {
+        secrets.get(key).or_else(|| env.get(key))
+    })
+    .await?;
     let identity = ProviderIdentity {
         model: request_context.model.clone(),
         provider: request_context.custom_llm_provider.clone(),
@@ -436,6 +441,7 @@ mod tests {
             model,
             call,
             secrets,
+            &|_: &str| None,
             &context,
         )
         .await

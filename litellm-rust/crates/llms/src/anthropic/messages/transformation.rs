@@ -371,10 +371,7 @@ pub fn map_openai_context_management_to_anthropic(
 
 #[cfg(test)]
 mod tests {
-    use crate::base_llm::messages::context::{
-        MessagesModelCapabilities, ThinkingBudgets, ThinkingContext,
-    };
-    use std::process::Command;
+    use crate::base_llm::messages::context::MessagesModelCapabilities;
 
     use rstest::{fixture, rstest};
 
@@ -388,7 +385,6 @@ mod tests {
     const OAUTH_BETA: &str = "oauth-2025-04-20";
     const BROWSER_ACCESS: (&str, &str) = ("anthropic-dangerous-direct-browser-access", "true");
     const LOW_BUDGET_ENV: &str = "DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET";
-    const PROCESS_ENV_PROBE: &str = "LITELLM_MESSAGES_TRANSFORM_CONTEXT_PROBE";
 
     fn merged(base: Value, fields: Value) -> Value {
         Value::Object(
@@ -443,7 +439,7 @@ mod tests {
         ANTHROPIC_MESSAGES_CONFIG
             .transform_anthropic_messages_request(
                 request(fields),
-                &MessagesTransformContext::with_lookup(capabilities, drop_params, &no_env),
+                &MessagesTransformContext::new(capabilities, drop_params, &no_env),
             )
             .map(|transformed| serde_json::to_value(transformed).unwrap())
     }
@@ -768,7 +764,7 @@ mod tests {
 
     #[test]
     fn thinking_is_translated_with_the_context_budgets() {
-        let context = MessagesTransformContext::with_lookup(
+        let context = MessagesTransformContext::new(
             MessagesModelCapabilities {
                 supports_reasoning: true,
                 ..Default::default()
@@ -788,54 +784,6 @@ mod tests {
                 "max_tokens": 4096,
                 "thinking": {"type": "enabled", "budget_tokens": 2000}
             })))
-        );
-    }
-
-    #[test]
-    fn new_reads_thinking_budgets_from_the_process_environment() {
-        if std::env::var_os(PROCESS_ENV_PROBE).is_some() {
-            assert_eq!(
-                MessagesTransformContext::new(sampling_removed(), true),
-                MessagesTransformContext {
-                    thinking: ThinkingContext {
-                        capabilities: sampling_removed(),
-                        budgets: ThinkingBudgets {
-                            low: 2000,
-                            ..ThinkingBudgets::default()
-                        },
-                    },
-                    drop_params: true,
-                }
-            );
-            return;
-        }
-        let (_, test_path) = concat!(
-            module_path!(),
-            "::new_reads_thinking_budgets_from_the_process_environment"
-        )
-        .split_once("::")
-        .unwrap();
-        let other_tiers = ["MINIMAL", "MEDIUM", "HIGH", "XHIGH", "MAX"]
-            .map(|tier| format!("DEFAULT_REASONING_EFFORT_{tier}_THINKING_BUDGET"));
-        let output = other_tiers
-            .iter()
-            .fold(
-                Command::new(std::env::current_exe().unwrap()),
-                |mut command, name| {
-                    command.env_remove(name);
-                    command
-                },
-            )
-            .args([test_path, "--exact"])
-            .env(PROCESS_ENV_PROBE, "1")
-            .env(LOW_BUDGET_ENV, "2000")
-            .output()
-            .unwrap();
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            output.status.success() && stdout.contains("1 passed"),
-            "{stdout}{}",
-            String::from_utf8_lossy(&output.stderr)
         );
     }
 

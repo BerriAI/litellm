@@ -7,7 +7,6 @@ repository.workspace = true
 
 [dependencies]
 axum.workspace = true
-envy = "0.4.2"
 http-body-util = "0.1"
 litellm-inference.workspace = true
 litellm-gateway-inference.workspace = true
@@ -19,6 +18,7 @@ litellm-gateway-auth.workspace = true
 litellm-gateway-ui.workspace = true
 litellm-auth-types.workspace = true
 litellm-config.workspace = true
+litellm-core-utils.workspace = true
 litellm-http = { workspace = true, features = ["mcp"] }
 litellm-layered.workspace = true
 litellm-llms.workspace = true
@@ -38,3 +38,4 @@ serde_yaml_ng = "0.10.0"
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tower = { version = "0.5", features = ["util"] }
+wiremock.workspace = true

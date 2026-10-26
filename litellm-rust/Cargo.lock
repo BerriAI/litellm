@@ -1912,15 +1912,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "envy"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f47e0157f2cb54f5ae1bd371b30a2ae4311e1c028f575cd4e81de7353215965"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3381,9 +3372,11 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "veil",
+ "wiremock",
 ]
 
 [[package]]
@@ -3460,6 +3453,7 @@ dependencies = [
  "litellm-cache-response",
  "litellm-cache-testing",
  "litellm-http",
+ "litellm-layered",
  "reqwest 0.12.28",
  "rstest",
  "serde_json",
@@ -3494,6 +3488,7 @@ dependencies = [
  "litellm-cache",
  "litellm-cache-testing",
  "litellm-http",
+ "litellm-layered",
  "percent-encoding",
  "reqwest 0.12.28",
  "rstest",
@@ -3540,6 +3535,7 @@ version = "0.1.0"
 dependencies = [
  "litellm-cache",
  "litellm-cache-testing",
+ "litellm-layered",
  "r2d2",
  "redis",
  "redis-test",
@@ -3598,6 +3594,7 @@ dependencies = [
  "litellm-cache",
  "litellm-cache-testing",
  "litellm-http",
+ "litellm-layered",
  "reqwest 0.12.28",
  "rstest",
  "serde_json",
@@ -3732,11 +3729,11 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
- "envy",
  "futures-util",
  "http-body-util",
  "litellm-auth-types",
  "litellm-config",
+ "litellm-core-utils",
  "litellm-gateway-auth",
  "litellm-gateway-inference",
  "litellm-gateway-mcp",
@@ -3759,6 +3756,7 @@ dependencies = [
  "tower-sessions-moka-store",
  "tracing",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -3803,6 +3801,7 @@ dependencies = [
  "litellm-inference-ocr",
  "litellm-inference-responses",
  "litellm-inference-transcription",
+ "litellm-layered",
  "litellm-llms",
  "litellm-llms-types",
  "litellm-router",
@@ -4037,6 +4036,7 @@ dependencies = [
  "litellm-http",
  "litellm-inference",
  "litellm-inference-testing",
+ "litellm-layered",
  "litellm-llms",
  "litellm-llms-types",
  "litellm-router-types",
@@ -4184,6 +4184,7 @@ dependencies = [
  "litellm-framer",
  "litellm-host",
  "litellm-http",
+ "litellm-layered",
  "litellm-llms-types",
  "litellm-python-compat",
  "litellm-router-types",

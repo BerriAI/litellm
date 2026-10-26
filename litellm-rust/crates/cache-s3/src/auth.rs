@@ -3,20 +3,17 @@ use aws_credential_types::{
     provider::{ProvideCredentials, error::CredentialsError, future},
 };
 use litellm_auth_aws::{AwsAuthConfig, AwsAuthService};
+use litellm_layered::SharedLookup;
 
 #[derive(Clone)]
 pub struct S3Credentials {
     auth: AwsAuthService,
     config: AwsAuthConfig,
-    env: fn(&str) -> Option<String>,
+    env: SharedLookup,
 }
 
 impl S3Credentials {
-    pub fn new(config: AwsAuthConfig) -> Self {
-        Self::with_env(config, |name| std::env::var(name).ok())
-    }
-
-    pub fn with_env(config: AwsAuthConfig, env: fn(&str) -> Option<String>) -> Self {
+    pub fn new(config: AwsAuthConfig, env: SharedLookup) -> Self {
         Self {
             auth: AwsAuthService::default(),
             config,
@@ -44,7 +41,7 @@ impl ProvideCredentials for S3Credentials {
                 ));
             }
             self.auth
-                .resolve_credentials(self.config.clone(), &self.env)
+                .resolve_credentials(self.config.clone(), &|name| self.env.get(name))
                 .await
                 .map_err(|_| CredentialsError::provider_error("S3 cache authentication failed"))
         })

@@ -11,16 +11,17 @@ mod tests {
     #[tokio::test]
     async fn python_environment_values_are_absent_like_get_secret_str(
         #[case] name: &'static str,
-        #[case] value: &str,
+        #[case] value: &'static str,
         #[case] expected: Option<&str>,
     ) {
-        unsafe { std::env::set_var(name, value) };
-        let secret = EnvironmentSecrets::python_compatible(litellm_http::Client::plain_for_test())
-            .resolve(&[name])
-            .await
-            .unwrap()
-            .get(name);
-        unsafe { std::env::remove_var(name) };
+        let secret = EnvironmentSecrets::python_compatible(
+            litellm_http::Client::plain_for_test(),
+            std::sync::Arc::new(move |key: &str| (key == name).then(|| value.to_owned())),
+        )
+        .resolve(&[name])
+        .await
+        .unwrap()
+        .get(name);
         assert_eq!(secret.as_deref(), expected);
     }
 }

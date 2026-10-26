@@ -17,6 +17,8 @@ Each runtime writes its own `merge([..])` list per group, and a test per runtime
 - `from_env` and `from_litellm_params` are generated, and every runtime that has that source calls them
 - A source holding typed values (the config file, a live Python global) gets a hand-written constructor in the crate that owns the source, never in `layered` or in the group's crate
 - `layered` never depends on `litellm-config` or pyo3, and no library crate reads the process environment itself. It takes a `Lookup`: `Env` in the Rust gateway, `ProcessEnvironment` in `python-bridge`
+- `ProcessEnvironment` is private to `python-bridge`, so a library constructor takes the `Lookup` as a required argument and never falls back to the process through `new()`, `Default` or an optional builder step
+- An SDK that reads the process environment itself, like `aws-config`, gets every value that has an environment form from the `Lookup` first. Only sources with no environment form (profiles, ECS, IMDS) are left to the SDK
 
 ## Hand-written constructors list every field
 

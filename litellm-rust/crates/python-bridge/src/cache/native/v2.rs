@@ -100,6 +100,7 @@ impl NativeCacheHandle {
                     &RedisTopology::Standalone,
                     Some(ttl),
                     ResponseCacheCodec,
+                    &crate::environment::ProcessEnvironment,
                 )
             })
             .map_err(cache_error)?

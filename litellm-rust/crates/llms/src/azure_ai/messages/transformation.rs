@@ -379,7 +379,7 @@ mod tests {
             "inference_geo": "us",
             "litellm_metadata": {"trace": "abc"}
         });
-        let context = MessagesTransformContext::with_lookup(
+        let context = MessagesTransformContext::new(
             MessagesModelCapabilities {
                 supports_reasoning: true,
                 supports_adaptive_thinking: true,
@@ -406,6 +406,7 @@ mod tests {
                 ..MessagesModelCapabilities::default()
             },
             false,
+            &|_: &str| None,
         )
     }
 
@@ -507,7 +508,7 @@ mod tests {
                 {"role": "assistant", "content": "hello"}
             ]
         });
-        let context = MessagesTransformContext::with_lookup(
+        let context = MessagesTransformContext::new(
             MessagesModelCapabilities {
                 supports_reasoning: true,
                 supports_adaptive_thinking: true,

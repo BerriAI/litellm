@@ -25,11 +25,11 @@ fn mock(commands: Vec<MockCmd>) -> MockRedisConnection {
 }
 
 fn tagged(commands: Vec<MockCmd>) -> Mocked<TaggedByteCodec> {
-    RedisCache::with_connection(mock(commands), None, TaggedByteCodec(42))
+    RedisCache::with_connection(mock(commands), None, TaggedByteCodec(42), &|_: &str| None)
 }
 
 fn json_cache(commands: Vec<MockCmd>) -> Mocked<JsonCodec<serde_json::Value>> {
-    RedisCache::with_connection(mock(commands), None, JsonCodec::new())
+    RedisCache::with_connection(mock(commands), None, JsonCodec::new(), &|_: &str| None)
 }
 
 fn team(commands: Vec<MockCmd>) -> Mocked<JsonCodec<serde_json::Value>> {
@@ -55,7 +55,15 @@ fn scan(pattern: &str, cursor: u64, count: usize, reply: redis::Value) -> MockCm
 
 #[rstest]
 fn constructor_rejects_invalid_urls() {
-    assert!(RedisCache::new("not a redis url", None, JsonCodec::<String>::new()).is_err());
+    assert!(
+        RedisCache::new(
+            "not a redis url",
+            None,
+            JsonCodec::<String>::new(),
+            &|_: &str| None
+        )
+        .is_err()
+    );
 }
 
 #[rstest]
@@ -144,6 +152,7 @@ async fn async_operations_preserve_codec_ttl_and_missing_values(context: ExactCa
         ]),
         Some(Duration::from_secs(9)),
         TaggedByteCodec(42),
+        &|_: &str| None,
     );
     cache
         .batch_cache_write("counter", 7, context.clone())
@@ -342,6 +351,7 @@ async fn ttl_pipeline_keeps_each_entry_ttl_and_defaults_missing_ones() {
         )]),
         Some(Duration::from_secs(300)),
         JsonCodec::<serde_json::Value>::new(),
+        &|_: &str| None,
     )
     .with_namespace(Some("ns".into()));
 
@@ -613,6 +623,35 @@ async fn counted_lpop_assumes_redis_7_when_info_fails() {
     assert_eq!(
         cache.async_lpop("queue", Some(1)).await.unwrap(),
         RedisLpopResult::Values(vec![b"c".to_vec()])
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn counted_lpop_pops_one_at_a_time_when_info_fails_and_the_env_names_an_older_version() {
+    let single_pop = || {
+        let mut pipeline = redis::pipe();
+        pipeline.cmd("LPOP").arg("team:queue");
+        pipeline
+    };
+    let cache = RedisCache::with_connection(
+        mock(vec![
+            MockCmd::new(
+                redis::cmd("INFO"),
+                Err::<String, _>(redis::RedisError::from((redis::ErrorKind::Io, "down"))),
+            ),
+            MockCmd::with_values(single_pop(), Ok(vec![redis_test::redis_value!("a")])),
+            MockCmd::with_values(single_pop(), Ok(vec![redis_test::redis_value!("b")])),
+        ]),
+        None,
+        JsonCodec::<serde_json::Value>::new(),
+        &litellm_layered::Env::of(&[("DEFAULT_REDIS_MAJOR_VERSION", "5")]),
+    )
+    .with_namespace(Some("team".into()));
+
+    assert_eq!(
+        cache.async_lpop("queue", Some(2)).await.unwrap(),
+        RedisLpopResult::Values(vec![b"a".to_vec(), b"b".to_vec()])
     );
 }
 
@@ -924,6 +963,7 @@ async fn increments_keep_an_existing_ttl_in_one_atomic_script(context: ExactCach
         mock(vec![increment_script(2.5), increment_script(2.5)]),
         None,
         JsonCodec::<f64>::new(),
+        &|_: &str| None,
     );
 
     assert_eq!(
@@ -1153,6 +1193,12 @@ async fn disconnect_keeps_a_caller_owned_connection_usable() {
 #[rstest]
 #[tokio::test]
 async fn disconnect_drains_an_idle_pool_without_connecting() {
-    let cache = RedisCache::new("redis://127.0.0.1:1", None, JsonCodec::<String>::new()).unwrap();
+    let cache = RedisCache::new(
+        "redis://127.0.0.1:1",
+        None,
+        JsonCodec::<String>::new(),
+        &|_: &str| None,
+    )
+    .unwrap();
     cache.disconnect().await.unwrap();
 }

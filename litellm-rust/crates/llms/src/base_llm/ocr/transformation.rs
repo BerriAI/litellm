@@ -2,7 +2,7 @@ use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrRespo
 use std::{collections::BTreeMap, future::Future, sync::Arc, time::Duration};
 
 use litellm_auth::{InputSource, SecretValue, Sourced, TokenProviderHandle};
-use litellm_core_utils::{call_arguments::CallArguments, settings::ProcessEnvironment};
+use litellm_core_utils::call_arguments::CallArguments;
 use litellm_http::outbound::{OutboundRequest, RequestSigner};
 use litellm_secrets::source::Secrets;
 use serde::{
@@ -147,7 +147,7 @@ impl Default for OcrConnection {
             ResolvedOcrCredentials::default(),
             OcrTransportConfig::default(),
             OcrSettings::default(),
-            Arc::new(ProcessEnvironment),
+            Arc::new(|_: &str| None),
         )
     }
 }
@@ -455,7 +455,7 @@ mod tests {
                     ..OcrTransportConfig::default()
                 },
                 settings.clone(),
-                Arc::new(ProcessEnvironment),
+                Arc::new(|_: &str| None),
             )
             .timeout
         };

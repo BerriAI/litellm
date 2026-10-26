@@ -34,7 +34,7 @@ pub fn keyed(key: &str) -> ResponseCacheRequest {
 pub fn redis(commands: Vec<MockCmd>, namespace: Option<&str>) -> ResponseCache<MockedRedis> {
     let connection = MockRedisConnection::new(commands).assert_all_commands_consumed();
     ResponseCache::new(Arc::new(
-        RedisCache::with_connection(connection, None, ResponseCacheCodec)
+        RedisCache::with_connection(connection, None, ResponseCacheCodec, &|_: &str| None)
             .with_namespace(namespace.map(str::to_owned)),
     ))
 }
