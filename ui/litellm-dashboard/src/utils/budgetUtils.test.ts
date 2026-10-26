@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { describeBudgetResetSchedule, formatBudgetReset, formatBudgetResetUtc } from "./budgetUtils";
+import { budgetPeriodRange, describeBudgetResetSchedule, formatBudgetReset, formatBudgetResetUtc } from "./budgetUtils";
 
 const originalTimezone: string | undefined = process.env.TZ;
 
@@ -42,5 +42,31 @@ describe("describeBudgetResetSchedule", () => {
     expect(schedule.resetAt).toBe(resetAt.toISOString());
     expect(schedule.tooltip).toContain(Intl.DateTimeFormat().resolvedOptions().timeZone);
     expect(schedule.tooltip).toContain("carries into the next cycle");
+  });
+});
+
+describe("budgetPeriodRange", () => {
+  const resetAt = "2026-03-31T00:00:00Z";
+
+  it.each([
+    ["30d", "2026-03-01T00:00:00.000Z"],
+    ["1mo", "2026-02-28T00:00:00.000Z"],
+    ["7d", "2026-03-24T00:00:00.000Z"],
+    ["24h", "2026-03-30T00:00:00.000Z"],
+    ["1h", "2026-03-30T23:00:00.000Z"],
+    ["1w", "2026-03-24T00:00:00.000Z"],
+  ])("computes the period start for %s as reset minus the duration", (duration, start) => {
+    expect(budgetPeriodRange(duration, resetAt)).toEqual({ start, end: "2026-03-31T00:00:00.000Z" });
+  });
+
+  it.each([
+    ["bogus", resetAt],
+    ["0d", resetAt],
+    ["30d", "not-a-date"],
+    ["30d", null],
+    [null, resetAt],
+    ["", resetAt],
+  ])("returns null for duration %s and reset %s instead of an invalid date", (duration, reset) => {
+    expect(budgetPeriodRange(duration, reset)).toBeNull();
   });
 });

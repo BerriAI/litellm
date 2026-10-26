@@ -54,3 +54,31 @@ export function describeBudgetResetSchedule(
     tooltip: `Resets every ${budgetDuration}, but the next reset time has not been scheduled yet. ${ROLLOVER_NOTE}`,
   };
 }
+
+const BUDGET_DURATION_UNITS: Record<string, dayjs.ManipulateType> = {
+  s: "second",
+  m: "minute",
+  h: "hour",
+  d: "day",
+  w: "week",
+  mo: "month",
+};
+
+export interface BudgetPeriod {
+  start: string;
+  end: string;
+}
+
+export function budgetPeriodRange(
+  budgetDuration: string | null | undefined,
+  budgetResetAt: string | null | undefined,
+): BudgetPeriod | null {
+  if (!budgetDuration || !budgetResetAt) return null;
+  const end = dayjs(budgetResetAt);
+  if (!end.isValid()) return null;
+  const match = /^(\d+)(mo|s|m|h|d|w)$/.exec(budgetDuration.trim());
+  if (!match) return null;
+  const amount = Number(match[1]);
+  if (amount <= 0) return null;
+  return { start: end.subtract(amount, BUDGET_DURATION_UNITS[match[2]]).toISOString(), end: end.toISOString() };
+}
