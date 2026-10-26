@@ -9,9 +9,10 @@ if sys.version_info < (3, 11):  # BaseExceptionGroup is a builtin only from 3.11
     from exceptiongroup import BaseExceptionGroup
 
 import httpx
+import httpx2
 import pytest
 from mcp import MCPError
-from mcp.types import ErrorData
+from mcp.types import CONNECTION_CLOSED, ErrorData
 
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPServerListError,
@@ -100,6 +101,68 @@ def test_exception_group_members_are_searched_in_raise_order():
 
 def test_unknown_exception_is_internal():
     assert classify_list_exception(ValueError("who knows")).tag == "internal"
+
+
+@pytest.mark.parametrize("sdk_wrapped", (False, True))
+@pytest.mark.parametrize("nested", (False, True))
+def test_sse_event_limit_is_a_safe_upstream_fault(sdk_wrapped: bool, nested: bool) -> None:
+    limit: Final = 1024
+    decoder_message: Final = f"Server-sent event exceeded the {limit} byte limit."
+    failure: Final = (
+        MCPError(code=CONNECTION_CLOSED, message=f"SSE stream failed: {decoder_message}")
+        if sdk_wrapped else httpx2.SSEError(decoder_message)
+    )
+    wrapped: Final = BaseExceptionGroup("private-upstream-secret", [failure]) if nested else failure
+    fault: Final = classify_list_exception(wrapped)
+    message: Final = (
+        f"Upstream MCP SSE event exceeded the {limit} byte per-event limit. "
+        "Paginate tools/list responses so each event stays below the limit."
+    )
+    assert fault == ServerListFault(tag="upstream_error", sse_event_limit_bytes=limit)
+    assert fault.public_message == message
+    assert list_fault_http_status(fault) == 502
+    assert outcome_wire_value(fault) == {
+        "status": "upstream_error", "reason": "sse_event_too_large", "limit_bytes": limit, "message": message,
+    }
+
+
+@pytest.mark.parametrize(
+    "failure",
+    (
+        MCPError(code=CONNECTION_CLOSED, message="Connection closed"),
+        MCPError(code=-32603, message="SSE stream failed: Server-sent event exceeded the 1024 byte limit."),
+        MCPError(code=CONNECTION_CLOSED, message="SSE stream failed: Server-sent event exceeded the 0 byte limit."),
+        MCPError(code=CONNECTION_CLOSED, message="SSE stream failed: Server-sent event exceeded the -1 byte limit."),
+        MCPError(code=CONNECTION_CLOSED, message=(
+            "SSE stream failed: Server-sent event exceeded the 10000000000000000000 byte limit."
+        )),
+        MCPError(code=CONNECTION_CLOSED, message=(
+            "SSE stream failed: Server-sent event exceeded the 1024 byte limit. private-secret"
+        )),
+        httpx2.SSEError("private-secret Server-sent event exceeded the 1024 byte limit."),
+        httpx2.SSEError("Expected response with content type 'text/event-stream', got 'private-secret'."),
+        RuntimeError("SSE stream failed: Server-sent event exceeded the 1024 byte limit."),
+    ),
+)
+def test_unrelated_errors_do_not_claim_an_sse_event_limit(failure: Exception) -> None:
+    fault: Final = classify_list_exception(failure)
+    assert fault.sse_event_limit_bytes is None
+    assert fault.public_message is None
+    assert "private-secret" not in str(outcome_wire_value(fault))
+
+
+@pytest.mark.parametrize("status_code", (401, 403))
+def test_upstream_auth_takes_precedence_over_sse_event_limit(status_code: int) -> None:
+    request: Final = httpx2.Request("POST", "https://upstream.example/mcp")
+    response: Final = httpx2.Response(status_code, request=request)
+    failure: Final = BaseExceptionGroup("upstream errors", [
+        httpx2.SSEError("Server-sent event exceeded the 1024 byte limit."),
+        httpx2.HTTPStatusError("private-secret", request=request, response=response),
+    ])
+    fault: Final = classify_list_exception(failure)
+    assert fault.tag == ("auth_required" if status_code == 401 else "forbidden")
+    assert list_fault_http_status(fault) == status_code
+    assert fault.sse_event_limit_bytes is None
 
 
 def test_wire_value_carries_no_prose():
