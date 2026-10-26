@@ -67,7 +67,7 @@ describe("BudgetPeriodTooltip", () => {
     const user = userEvent.setup();
     render(<BudgetPeriodTooltip spend={1} maxBudget={10} budgetDuration="1d" budgetResetAt="2026-10-27T00:00:00Z" />);
 
-    await user.hover(screen.getByLabelText("question-circle"));
+    await user.hover(screen.getByLabelText("budget-period-details"));
 
     const tooltip = await screen.findByTestId("budget-period-tooltip");
     expect(tooltip).toHaveTextContent("Max budget: $10.00");

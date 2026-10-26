@@ -1,6 +1,7 @@
 "use client";
 
 import dayjs from "dayjs";
+import { CircleHelp } from "lucide-react";
 
 import { getBudgetDurationLabel } from "@/components/common_components/budget_duration_dropdown";
 import { SimpleTooltip } from "@/components/ui/tooltip";
@@ -58,6 +59,8 @@ export function BudgetPeriodTooltip(props: BudgetPeriodTooltipProps) {
           ))}
         </div>
       }
-    />
+    >
+      <CircleHelp aria-label="budget-period-details" className="ml-1 size-4 text-muted-foreground" />
+    </SimpleTooltip>
   );
 }
