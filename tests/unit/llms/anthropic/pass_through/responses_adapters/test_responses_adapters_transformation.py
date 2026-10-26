@@ -33,6 +33,85 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.openai import ResponseAPIUsage
 
 
+def test_parallel_tool_round_keeps_assistant_block_order() -> None:
+    request: Final = AnthropicMessagesRequest(
+        model="test-model",
+        max_tokens=1024,
+        messages=[
+            {"role": "user", "content": "Run both tools"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Use both tools"},
+                    {"type": "text", "text": "Working"},
+                    {"type": "tool_use", "id": "call_a", "name": "noop", "input": {}},
+                    {"type": "tool_use", "id": "call_b", "name": "noop", "input": {}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "call_a", "content": "done a"},
+                    {"type": "tool_result", "tool_use_id": "call_b", "content": "done b"},
+                ],
+            },
+        ],
+    )
+
+    assert _ADAPTER.translate_messages_to_responses_input(request["messages"]) == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Run both tools"}]},
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "Use both tools"}]},
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Working"}]},
+        {"type": "function_call", "call_id": "call_a", "name": "noop", "arguments": "{}"},
+        {"type": "function_call", "call_id": "call_b", "name": "noop", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_a", "output": "done a"},
+        {"type": "function_call_output", "call_id": "call_b", "output": "done b"},
+    ]
+
+
+@pytest.mark.parametrize("encrypted_content", [None, "opaque-reasoning"])
+@pytest.mark.parametrize("with_summary", [False, True])
+@pytest.mark.parametrize("as_dict", [False, True])
+def test_reasoning_content_survives_response_and_replay(
+    encrypted_content: str | None, with_summary: bool, as_dict: bool
+) -> None:
+    from openai.types.responses import ResponseReasoningItem
+
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    reasoning: Final = ResponseReasoningItem(
+        id="rs_content",
+        type="reasoning",
+        summary=[{"type": "summary_text", "text": "Brief summary"}] if with_summary else [],
+        content=[
+            {"type": "reasoning_text", "text": "First thought"},
+            {"type": "reasoning_text", "text": "Second thought"},
+        ],
+        encrypted_content=encrypted_content,
+    )
+    response: Final = ResponsesAPIResponse(
+        id="resp_content",
+        created_at=1,
+        model="test-model",
+        object="response",
+        status="completed",
+        output=[reasoning.model_dump(exclude_none=True) if as_dict else reasoning],
+        parallel_tool_calls=True,
+        tool_choice="auto",
+        tools=[],
+    )
+    translated: Final = _ADAPTER.translate_response(response)
+    request: Final = AnthropicMessagesRequest(
+        model="test-model", max_tokens=1024, messages=[{"role": "assistant", "content": translated["content"]}]
+    )
+
+    assert translated["content"][0]["type"] == "thinking"
+    assert translated["content"][0]["thinking"] == "First thought\n\nSecond thought"
+    assert _ADAPTER.translate_messages_to_responses_input(request["messages"]) == [
+        {key: value for key, value in reasoning.model_dump(exclude_none=True).items() if key != "id"}
+    ]
+
+
 def _make_request(**overrides) -> AnthropicMessagesRequest:
     base: dict = {
         "model": "openai.gpt-5.1-codex",
