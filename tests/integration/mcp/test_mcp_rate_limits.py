@@ -269,3 +269,83 @@ def test_mcp_key_team_and_server_rpm_limits_share_redis(tmp_path: Path, monkeypa
                 server_rejected: Final = _call_tool(second_replica, key_three, server_id, "rpm-add")
                 _assert_rate_limit(server_rejected, "mcp_server")
                 assert tool_calls(peer.drain()) == ()
+
+
+def test_streamable_mcp_setup_requests_use_virtual_key_rpm_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    results_directory: Final = tmp_path / "results"
+    results_directory.mkdir()
+    monkeypatch.setenv("INTEGRATION_RESULTS_DIR", str(results_directory))
+    assert os.environ.get("DATABASE_URL"), "This integration case requires disposable-database access"
+
+    with (
+        owned_redis(tmp_path) as redis,
+        scratch_database() as database_url,
+        mcp_peer() as peer,
+        httpx.Client() as client,
+    ):
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        seed: Final = Gateway(client, "sk-mcp-streamable-setup-rate-limit", peer.url)
+        config: Final = _config_file(
+            tmp_path,
+            seed.key,
+            redis,
+            upstream=peer.url,
+            store_model_in_db=True,
+        )
+        environment: Final = {
+            "DATABASE_URL": database_url,
+            "LITELLM_SALT_KEY": "mcp-streamable-setup-rate-limit",
+            "LITELLM_RATE_LIMIT_WINDOW_SIZE": "30",
+        }
+        options: Final = {
+            "config": config,
+            "remove_environment": ("DATABASE_URL_READ_REPLICA", "LITELLM_LICENSE", "LITELLM_LICENSE_PATH"),
+        }
+        with owned_proxy(seed, tmp_path / "proxy", environment, **options) as gateway, gateway.scenario() as scenario:
+            server_id: Final = register_mcp(scenario, peer, "rpm", allowed_tools=["add"])
+            key: Final = scenario.key(rpm_limit=2, object_permission={"mcp_servers": [server_id]})
+
+            def post_mcp(payload: dict[str, object], session_id: str | None = None) -> httpx.Response:
+                headers: Final = {
+                    "Authorization": f"Bearer {key}",
+                    "Accept": "application/json, text/event-stream",
+                    **({"mcp-session-id": session_id} if session_id is not None else {}),
+                }
+                return gateway.client.post("/mcp/", headers=headers, json=payload)
+
+            initialize: Final = post_mcp(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-03-26",
+                        "capabilities": {},
+                        "clientInfo": {"name": "litellm-test", "version": "1"},
+                    },
+                }
+            )
+            assert initialize.status_code == 200, initialize.text
+            session_id: Final = initialize.headers["mcp-session-id"]
+
+            initialized: Final = post_mcp(
+                {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                session_id,
+            )
+            assert initialized.status_code == 202, initialized.text
+
+            first_list: Final = post_mcp(
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+                session_id,
+            )
+            assert first_list.status_code == 200, first_list.text
+
+            second_list: Final = post_mcp(
+                {"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {}},
+                session_id,
+            )
+            assert second_list.status_code == 429, second_list.text
+            assert second_list.headers.get("retry-after") is not None

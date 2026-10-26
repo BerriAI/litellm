@@ -3006,7 +3006,7 @@ def test_oversized_initialize_peek_neither_routes_stateful_nor_attributes_client
     peeked = full_body[: mcp_server._MCP_ROUTING_PEEK_MAX_BYTES]
 
     assert mcp_server._extract_initialize_client_info(full_body) is not None
-    assert mcp_server._is_initialize_request(peeked) is False
+    assert mcp_server._mcp_request_method(peeked) is None
     assert mcp_server._extract_initialize_client_info(peeked) is None
 
 

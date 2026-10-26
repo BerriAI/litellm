@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Final
 
 import pytest
@@ -10,13 +11,14 @@ from contextlib import asynccontextmanager, nullcontext
 
 from starlette.types import Receive, Scope, Send
 
-
+from litellm.types.agents import AgentResponse
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     MCPServer,
     MCPTransport,
 )
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+from litellm.proxy._types import UserAPIKeyAuth
 from mcp.types import Tool as MCPTool, CallToolResult, ListToolsResult
 from mcp.types import TextContent
 
@@ -3257,6 +3259,267 @@ async def test_mcp_routing_batch_body_is_not_stashed_for_auth():
 
     assert await scope[MCP_PEEKED_BODY_SCOPE_KEY]() == b"{}"
     assert await _read_request_body(_admission_request(scope)) == {}
+
+
+@asynccontextmanager
+async def _streamable_mcp_request_runner(
+    monkeypatch: pytest.MonkeyPatch,
+    auth: UserAPIKeyAuth,
+    on_receive_count_at_dispatch: Callable[[int], None] | None = None,
+) -> AsyncIterator[tuple[Callable[..., Awaitable[None]], AsyncMock]]:
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import server
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.utils import InternalUsageCache, ProxyLogging
+
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(dual_cache=DualCache())
+    )
+    proxy_logging.proxy_hook_mapping["parallel_request_limiter"] = limiter
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", proxy_logging)
+
+    dispatch: Final = AsyncMock()
+    session_manager: Final = MagicMock()
+    session_manager.max_request_body_size = server.session_manager_stateless.max_request_body_size
+    session_manager.handle_request = dispatch
+    monkeypatch.setattr(server, "_SESSION_MANAGERS_INITIALIZED", True)
+    monkeypatch.setattr(server, "session_manager_stateless", session_manager)
+    monkeypatch.setattr(server, "session_manager_stateful", session_manager)
+    monkeypatch.setattr(
+        server,
+        "extract_mcp_auth_context",
+        AsyncMock(return_value=(auth, None, ["echo_server"], {}, {}, {})),
+    )
+
+    @asynccontextmanager
+    async def no_initialize_scope(*_args: object, **_kwargs: object) -> AsyncIterator[None]:
+        yield
+
+    monkeypatch.setattr(server, "_gateway_initialize_instructions_request_scope", no_initialize_scope)
+
+    async def request(
+        method: str,
+        request_body: bytes | None = None,
+        request_chunks: tuple[bytes, ...] | None = None,
+    ) -> None:
+        body: Final = (
+            request_body
+            if request_body is not None
+            else json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "method": method,
+                    **({"id": 1} if method != "notifications/initialized" else {}),
+                }
+            ).encode()
+        )
+        scope: Final[Scope] = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/echo_server",
+            "headers": [(b"content-type", b"application/json")],
+            "query_string": b"",
+            "server": ("localhost", 4000),
+            "scheme": "http",
+        }
+        request_messages: Final = (
+            tuple(
+                {
+                    "type": "http.request",
+                    "body": chunk,
+                    "more_body": index < len(request_chunks) - 1,
+                }
+                for index, chunk in enumerate(request_chunks)
+            )
+            if request_chunks is not None
+            else ({"type": "http.request", "body": body, "more_body": False},)
+        )
+        receive: Final[Receive] = AsyncMock(side_effect=request_messages)
+        if on_receive_count_at_dispatch is not None:
+            def observe_receive_count(*_args: object, **_kwargs: object) -> None:
+                on_receive_count_at_dispatch(receive.await_count)
+
+            dispatch.side_effect = observe_receive_count
+        send: Final[Send] = AsyncMock()
+        await server.handle_streamable_http_mcp(scope, receive, send)
+
+    yield request, dispatch
+
+
+def _padded_tools_list_body() -> bytes:
+    return json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "params": {"_meta": {"pad": "x" * 5000}},
+            "method": "tools/list",
+        }
+    ).encode()
+
+
+@pytest.mark.asyncio
+async def test_streamable_mcp_setup_requests_obey_virtual_key_rpm_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+    auth: Final = UserAPIKeyAuth(api_key="mcp-setup-rpm-key", rpm_limit=2)
+    async with _streamable_mcp_request_runner(monkeypatch, auth) as (request, dispatch):
+        await request("initialize")
+        await request("tools/list")
+        with pytest.raises(ProxyRateLimitError) as rate_limit_error:
+            await request("tools/list")
+
+        assert rate_limit_error.value.status_code == 429
+        assert rate_limit_error.value.headers.get("retry-after") is not None
+        assert dispatch.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_streamable_mcp_oversized_setup_request_obeys_virtual_key_rpm_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+    auth: Final = UserAPIKeyAuth(api_key="mcp-oversized-setup-rpm-key", rpm_limit=1)
+    async with _streamable_mcp_request_runner(monkeypatch, auth) as (request, dispatch):
+        await request("tools/list")
+        oversized_body: Final = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "params": {"_meta": {"pad": "x" * 5000}},
+                "method": "tools/list",
+            }
+        ).encode()
+        with pytest.raises(ProxyRateLimitError) as rate_limit_error:
+            await request("tools/list", oversized_body)
+
+        assert rate_limit_error.value.status_code == 429
+        assert rate_limit_error.value.headers.get("retry-after") is not None
+        assert dispatch.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_streamable_mcp_oversized_setup_request_obeys_model_metadata_rpm_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+    auth: Final = UserAPIKeyAuth(
+        api_key="mcp-oversized-model-rpm-key",
+        metadata={"model_rpm_limit": {"mcp-tool-call": 1}},
+    )
+    async with _streamable_mcp_request_runner(monkeypatch, auth) as (request, dispatch):
+        oversized_body: Final = _padded_tools_list_body()
+        await request("tools/list", oversized_body)
+        with pytest.raises(ProxyRateLimitError) as rate_limit_error:
+            await request("tools/list", oversized_body)
+
+        assert rate_limit_error.value.status_code == 429
+        assert rate_limit_error.value.headers.get("retry-after") is not None
+        assert dispatch.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_streamable_mcp_oversized_setup_request_obeys_agent_rpm_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+    agent_id: Final = "mcp-setup-agent-rpm"
+    agent_policy: Final = AgentResponse(
+        agent_id=agent_id,
+        agent_name="mcp-setup-agent",
+        agent_card_params={"name": "mcp-setup-agent"},
+        rpm_limit=1,
+    )
+    auth: Final = UserAPIKeyAuth(api_key="mcp-oversized-agent-rpm-key", agent_id=agent_id).model_copy(
+        update={"managed_agent_policy": agent_policy}
+    )
+    async with _streamable_mcp_request_runner(monkeypatch, auth) as (request, dispatch):
+        oversized_body: Final = _padded_tools_list_body()
+        await request("tools/list", oversized_body)
+        with pytest.raises(ProxyRateLimitError) as rate_limit_error:
+            await request("tools/list", oversized_body)
+
+        assert rate_limit_error.value.status_code == 429
+        assert rate_limit_error.value.headers.get("retry-after") is not None
+        assert dispatch.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_streamable_mcp_oversized_setup_request_dispatches_without_virtual_key_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth: Final = UserAPIKeyAuth(api_key="mcp-oversized-unlimited-key")
+    async with _streamable_mcp_request_runner(monkeypatch, auth) as (request, dispatch):
+        oversized_body: Final = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "params": {"_meta": {"pad": "x" * 5000}},
+                "method": "tools/list",
+            }
+        ).encode()
+        await request("tools/list", oversized_body)
+
+        assert dispatch.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_streamable_mcp_oversized_unlimited_setup_request_keeps_routing_peek_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy._experimental.mcp_server import server as mcp_server
+
+    auth: Final = UserAPIKeyAuth(api_key="mcp-oversized-unlimited-peek-key")
+
+    def assert_receive_count(receive_count: int) -> None:
+        assert receive_count == 1
+
+    async with _streamable_mcp_request_runner(monkeypatch, auth, assert_receive_count) as (request, dispatch):
+        assert await mcp_server._mcp_setup_request_limit_applies(auth) is False
+        oversized_body: Final = _padded_tools_list_body()
+        peek_cap: Final = mcp_server._MCP_ROUTING_PEEK_MAX_BYTES
+        await request("tools/list", oversized_body, (oversized_body[:peek_cap], oversized_body[peek_cap:]))
+
+        assert dispatch.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_streamable_mcp_tools_call_is_not_charged_by_setup_limiter(monkeypatch: pytest.MonkeyPatch) -> None:
+    auth: Final = UserAPIKeyAuth(api_key="mcp-tools-call-rpm-key", rpm_limit=1)
+    async with _streamable_mcp_request_runner(monkeypatch, auth) as (request, dispatch):
+        await request("tools/call")
+        await request("initialize")
+
+        assert dispatch.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_streamable_mcp_initialized_notification_does_not_consume_rpm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth: Final = UserAPIKeyAuth(api_key="mcp-initialized-rpm-key", rpm_limit=1)
+    async with _streamable_mcp_request_runner(monkeypatch, auth) as (request, dispatch):
+        await request("notifications/initialized")
+        await request("initialize")
+
+        assert dispatch.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_streamable_mcp_setup_request_releases_parallel_request_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth: Final = UserAPIKeyAuth(api_key="mcp-setup-parallel-key", max_parallel_requests=1)
+    async with _streamable_mcp_request_runner(monkeypatch, auth) as (request, dispatch):
+        await request("initialize")
+        await request("tools/list")
+
+        assert dispatch.await_count == 2
 
 
 @pytest.mark.asyncio

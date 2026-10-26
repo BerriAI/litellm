@@ -115,6 +115,7 @@ if TYPE_CHECKING:
 
 _redact_mcp_resource_url: Final = redact_mcp_resource_url
 
+_MCP_SETUP_REQUEST_METHODS: Final = frozenset({"initialize", "tools/list"})
 _STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS: Final = 30 * 60
 # Upper bound on concurrent stateful sessions a single caller may hold. Each
 # `initialize` creates a session that survives until the idle timeout, so
@@ -133,6 +134,32 @@ _MCP_TRANSPORT_SPAN_SCOPE_KEY: Final = "litellm_otel_transport_span"
 _MCP_DESTINATIONS_SCOPE_KEY: Final = "litellm_otel_request_destinations"
 _MCP_PROTOCOL_VERSION_HEADER: Final = b"mcp-protocol-version"
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _mcp_setup_request_capacity(
+    method: str | None,
+    user_api_key_auth: UserAPIKeyAuth | None,
+) -> contextlib.AbstractAsyncContextManager[None]:
+    if method not in _MCP_SETUP_REQUEST_METHODS or user_api_key_auth is None:
+        return contextlib.nullcontext()
+
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
+    if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
+        return contextlib.nullcontext()
+    return limiter.request_capacity(user_api_key_auth, "mcp-tool-call", request_data={})
+
+
+async def _mcp_setup_request_limit_applies(user_api_key_auth: UserAPIKeyAuth) -> bool:
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
+    if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
+        return False
+    return await limiter.has_request_capacity_limit(user_api_key_auth, "mcp-tool-call")
 
 
 def reject_disallowed_mcp_origin(request: StarletteRequest) -> None:
@@ -1403,18 +1430,15 @@ if MCP_AVAILABLE:
             return b"{}"
         return json.dumps({"method": method}).encode()
 
-    def _is_initialize_request(body: bytes) -> bool:
-        """
-        Check if the request body is a JSON-RPC initialize method.
-        Returns True if method is "initialize", False otherwise or on parse error.
-        """
+    def _mcp_request_method(body: bytes) -> str | None:
         if not body:
-            return False
+            return None
         try:
             data: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(body)))
-            return data is not None and data.get("method") == "initialize"
+            method: Final = data.get("method") if data is not None else None
+            return method if isinstance(method, str) else None
         except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
-            return False
+            return None
 
     def _jsonrpc_request_method(body: bytes) -> str | None:
         try:
@@ -2433,7 +2457,8 @@ if MCP_AVAILABLE:
             ) = await extract_mcp_auth_context(scope, path)
             admit_mcp_request(scope, user_api_key_auth, mcp_servers)
             body: Final = await peek.body() if peek is not None else b""
-            is_initialize: Final = _is_initialize_request(body)
+            mcp_method: Final = _mcp_request_method(body)
+            is_initialize: Final = mcp_method == "initialize"
             scoped_server_endpoint: Final = len(_get_mcp_servers_in_path(path) or []) == 1
             request_headers: Final = StarletteRequest(scope).headers
             defer_upstream_probes: Final = request_headers.get(
@@ -2715,11 +2740,20 @@ if MCP_AVAILABLE:
                     if use_stateful and session_id and scope.get("method") == "DELETE":
                         _remove_stateful_session_tracking(session_id)
 
+            charged_method: Final = (
+                _jsonrpc_request_method(await peek.full_body())
+                if mcp_method is None
+                and peek is not None
+                and len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES
+                and await _mcp_setup_request_limit_applies(user_api_key_auth)
+                else mcp_method
+            )
+            request_capacity: Final = _mcp_setup_request_capacity(charged_method, user_api_key_auth)
             try:
-                if session_lock is not None:
-                    async with session_lock:
-                        await _dispatch()
-                else:
+                async with (
+                    session_lock if session_lock is not None else contextlib.nullcontext(),
+                    request_capacity,
+                ):
                     await _dispatch()
             finally:
                 for active_request_session_id in active_request_session_ids:
