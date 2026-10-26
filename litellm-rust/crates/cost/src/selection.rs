@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::num::NonZeroU64;
 
 use crate::calculate::{Usage, When, batch_direct_rate, resolve};
 use crate::money::UnitPrice;
@@ -12,6 +13,9 @@ pub enum SelectionPolicy<'a> {
     #[default]
     Generic,
     SdkTokens(&'a TokenPriceSources),
+    DirectionalTokens {
+        threshold: NonZeroU64,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -36,6 +40,9 @@ impl SelectionPolicy<'_> {
         usage: &Usage,
         when: &When,
     ) -> Option<(Meter, UnitPrice)> {
+        if let Self::DirectionalTokens { threshold } = self {
+            return directional_token_rate(prices, meter, usage, threshold);
+        }
         let Self::SdkTokens(sources) = self else {
             return resolve(prices, meter, band, usage, when);
         };
@@ -120,6 +127,35 @@ impl SelectionPolicy<'_> {
             ),
         }
     }
+}
+
+fn directional_token_rate(
+    prices: &Prices,
+    meter: &Meter,
+    usage: &Usage,
+    threshold: NonZeroU64,
+) -> Option<(Meter, UnitPrice)> {
+    if !meter.is_token() {
+        return None;
+    }
+    let source = match meter {
+        Meter::Output(_) => Meter::Output(OutputUnit::Token(TokenKind::Text)),
+        _ => Meter::TEXT_INPUT,
+    };
+    let base = Price::online(source.clone(), Default::default());
+    let rate = (usage.quantities.get(&source).copied().unwrap_or(0) > threshold.get())
+        .then(|| {
+            prices.get(&Price::online(
+                source.clone(),
+                crate::price::When {
+                    band: Band::OverPromptTokens(threshold),
+                    ..Default::default()
+                },
+            ))
+        })
+        .flatten()
+        .or_else(|| prices.get(&base));
+    rate.map(|rate| (source, rate))
 }
 
 fn sdk_batch_rate(prices: &Prices, meter: &Meter, usage: &Usage) -> Option<(Meter, UnitPrice)> {
@@ -443,6 +479,100 @@ mod tests {
             flat: prices.iter().map(|(key, _)| key.clone()).collect(),
             tiers: vec![],
         }
+    }
+
+    #[rstest]
+    #[case::below(127_999, 127_999, (1.0, 2.0))]
+    #[case::boundary(128_000, 128_000, (1.0, 2.0))]
+    #[case::input_only(128_001, 10, (3.0, 2.0))]
+    #[case::output_only(10, 128_001, (1.0, 4.0))]
+    #[case::both(128_001, 128_001, (3.0, 4.0))]
+    #[case::zero_input(0, 128_001, (1.0, 4.0))]
+    #[case::zero_output(128_001, 0, (3.0, 2.0))]
+    fn directional_threshold_uses_each_aggregate_and_exact_flat_band(
+        when: When,
+        #[case] input: u64,
+        #[case] output: u64,
+        #[case] expected: (f64, f64),
+        #[values(false, true)] inclusive: bool,
+    ) {
+        let prices = Prices::new(
+            [
+                rate(INPUT, ServiceTier::Standard, Band::Base, 1.0),
+                rate(OUTPUT, ServiceTier::Standard, Band::Base, 2.0),
+                rate(
+                    INPUT,
+                    ServiceTier::Standard,
+                    Band::over_prompt_tokens(128_000),
+                    3.0,
+                ),
+                rate(
+                    OUTPUT,
+                    ServiceTier::Standard,
+                    Band::over_prompt_tokens(128_000),
+                    4.0,
+                ),
+                rate(
+                    INPUT,
+                    ServiceTier::Standard,
+                    Band::over_prompt_tokens(50),
+                    9.0,
+                ),
+                rate(
+                    OUTPUT,
+                    ServiceTier::Standard,
+                    Band::over_prompt_tokens(50),
+                    9.0,
+                ),
+                rate(INPUT, ServiceTier::Priority, Band::Base, 7.0),
+                rate(OUTPUT, ServiceTier::Priority, Band::Base, 8.0),
+            ]
+            .into(),
+            overlay(None, Some(9.0)),
+        );
+        let usage = Usage {
+            quantities: [(INPUT, input), (OUTPUT, output)].into(),
+            prompt_tokens: 200_000,
+            inclusive_threshold: inclusive,
+            ..Default::default()
+        };
+        let evaluation = crate::calculate_with_rates(
+            &prices,
+            &usage,
+            &when,
+            SelectionPolicy::DirectionalTokens {
+                threshold: NonZeroU64::new(128_000).unwrap(),
+            },
+            &[INPUT, OUTPUT, READ, REASONING],
+            &[],
+        )
+        .unwrap();
+        let Priced::Known(priced) = evaluation.pricing else {
+            panic!("expected aggregate pricing")
+        };
+        assert_eq!(priced.input().get(), input as f64 * expected.0);
+        assert_eq!(priced.output().get(), output as f64 * expected.1);
+        assert_eq!(
+            evaluation.rates,
+            vec![
+                crate::SelectedRate {
+                    requested_meter: INPUT,
+                    resolved: Some((INPUT, UnitPrice::new(expected.0).unwrap()))
+                },
+                crate::SelectedRate {
+                    requested_meter: OUTPUT,
+                    resolved: Some((OUTPUT, UnitPrice::new(expected.1).unwrap()))
+                },
+                crate::SelectedRate {
+                    requested_meter: READ,
+                    resolved: Some((INPUT, UnitPrice::new(expected.0).unwrap()))
+                },
+                crate::SelectedRate {
+                    requested_meter: REASONING,
+                    resolved: Some((OUTPUT, UnitPrice::new(expected.1).unwrap()))
+                },
+            ]
+        );
     }
 
     fn overlay(reasoning: Option<f64>, output: Option<f64>) -> Option<OffPeak> {

@@ -1,8 +1,9 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::num::NonZeroU64;
 use std::sync::{Mutex, PoisonError};
 
-use litellm_cost::price::{Band, Channel, Meter, ServiceTier};
+use litellm_cost::price::{Band, Channel, InputUnit, Meter, OutputUnit, ServiceTier, TokenKind};
 use litellm_cost::{SelectionPolicy, Usage, When};
 use litellm_host_python::from_py;
 use litellm_model_catalog::wire::{Fields, FlatKey};
@@ -644,7 +645,10 @@ enum PricePolicy {
 }
 
 impl PricePolicy {
-    fn selection(self, model: &Model) -> SelectionPolicy<'_> {
+    fn selection(self, model: &Model, threshold: Option<NonZeroU64>) -> SelectionPolicy<'_> {
+        if let Some(threshold) = threshold {
+            return SelectionPolicy::DirectionalTokens { threshold };
+        }
         match self {
             Self::Generic => SelectionPolicy::Generic,
             Self::SdkTokens => SelectionPolicy::SdkTokens(&model.token_price_sources),
@@ -712,6 +716,46 @@ fn pricing_policy(policy: &str) -> PyResult<PricePolicy> {
         .map_err(|_| PyValueError::new_err("unknown pricing policy"))
 }
 
+fn parse_directional_threshold(
+    value: Option<&Bound<'_, PyAny>>,
+    policy: PricePolicy,
+    usage: &Usage,
+    when: &When,
+    has_cache_default: bool,
+) -> PyResult<Option<NonZeroU64>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if !matches!(policy, PricePolicy::SdkTokens)
+        || when.channel != Channel::Online
+        || has_cache_default
+    {
+        return Err(PyValueError::new_err(
+            "directional token pricing requires sdk_tokens online without cache defaults",
+        ));
+    }
+    if value.is_instance_of::<PyBool>() {
+        return Err(PyValueError::new_err(
+            "token threshold must be a positive integer",
+        ));
+    }
+    let threshold = NonZeroU64::new(value.extract()?)
+        .ok_or_else(|| PyValueError::new_err("token threshold must be a positive integer"))?;
+    if usage.quantities.iter().any(|(meter, quantity)| {
+        *quantity != 0
+            && !matches!(
+                meter,
+                Meter::Input(InputUnit::Token(TokenKind::Text))
+                    | Meter::Output(OutputUnit::Token(TokenKind::Text))
+            )
+    }) {
+        return Err(PyValueError::new_err(
+            "directional token pricing requires aggregate text input and output quantities",
+        ));
+    }
+    Ok(Some(threshold))
+}
+
 #[derive(IntoPyObject)]
 pub(crate) enum TokenPricePresence {
     Present(bool),
@@ -731,22 +775,30 @@ pub(crate) fn has_token_prices(
 }
 
 #[pyfunction]
-#[pyo3(signature = (row, usage, when, *, policy="generic", cache_read_default_ratio=None))]
+#[pyo3(signature = (row, usage, when, *, policy="generic", cache_read_default_ratio=None, directional_token_threshold=None))]
 pub(crate) fn price(
     row: &Bound<'_, PyAny>,
     usage: &UsageInput,
     when: &WhenInput,
     policy: &str,
     cache_read_default_ratio: Option<&Bound<'_, PyAny>>,
+    directional_token_threshold: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PriceResult> {
     let policy = pricing_policy(policy)?;
     let ratio = cache_read_default(policy, cache_read_default_ratio)?;
+    let threshold = parse_directional_threshold(
+        directional_token_threshold,
+        policy,
+        &usage.usage,
+        &when.when,
+        ratio.is_some(),
+    )?;
     let model = match policy.lower(row, when.when.channel) {
         Ok(model) => model,
         Err(errors) => return Ok(PriceResult::Errors(errors)),
     };
     let model = policy.prepare(model, when.when.channel, ratio)?;
-    let policy = policy.selection(&model);
+    let policy = policy.selection(&model, threshold);
     price_result(
         row.py(),
         litellm_cost::calculate_with_policy(&model.prices, &usage.usage, &when.when, policy),
@@ -765,8 +817,12 @@ fn price_result(py: Python<'_>, priced: litellm_cost::Priced) -> PyResult<PriceR
 
 #[pyfunction]
 #[pyo3(
-    signature = (row, usage, when, *, policy="generic", project=Vec::new(), factors=Vec::new(), cache_read_default_ratio=None),
-    text_signature = "(row, usage, when, *, policy='generic', project=(), factors=(), cache_read_default_ratio=None)"
+    signature = (row, usage, when, *, policy="generic", project=Vec::new(), factors=Vec::new(), cache_read_default_ratio=None, directional_token_threshold=None),
+    text_signature = "(row, usage, when, *, policy='generic', project=(), factors=(), cache_read_default_ratio=None, directional_token_threshold=None)"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "keyword-only pricing context preserves existing bindings"
 )]
 pub(crate) fn price_with_rates(
     row: &Bound<'_, PyAny>,
@@ -776,9 +832,17 @@ pub(crate) fn price_with_rates(
     project: Vec<String>,
     factors: Vec<Bound<'_, PyAny>>,
     cache_read_default_ratio: Option<&Bound<'_, PyAny>>,
+    directional_token_threshold: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<EvaluationResult> {
     let policy = pricing_policy(policy)?;
     let ratio = cache_read_default(policy, cache_read_default_ratio)?;
+    let threshold = parse_directional_threshold(
+        directional_token_threshold,
+        policy,
+        &usage.usage,
+        &when.when,
+        ratio.is_some(),
+    )?;
     let project = project
         .iter()
         .map(|key| {
@@ -808,7 +872,7 @@ pub(crate) fn price_with_rates(
         &model.prices,
         &usage.usage,
         &when.when,
-        policy.selection(&model),
+        policy.selection(&model, threshold),
         &project,
         &factors,
     )
@@ -1522,6 +1586,7 @@ assert n.model_info(models, "Model").input_cost_per_token == 2
                 &WhenInput::new(0, "standard", "online").unwrap(),
                 policy,
                 None,
+                None,
             )
             .unwrap() else {
                 panic!("expected invalid row")
@@ -2030,6 +2095,140 @@ else:
     }
 
     #[rstest]
+    #[case::under(json!({"input_cost_per_token_above_128k_tokens":3,"output_cost_per_token_above_128k_tokens":4}), (10,10), (Some(1.0),Some(2.0)))]
+    #[case::input_boundary(json!({"input_cost_per_token_above_128k_tokens":3}), (128000,10), (Some(1.0),Some(2.0)))]
+    #[case::output_boundary(json!({"output_cost_per_token_above_128k_tokens":4}), (10,128000), (Some(1.0),Some(2.0)))]
+    #[case::over_input(json!({"input_cost_per_token_above_128k_tokens":3,"output_cost_per_token_above_128k_tokens":4}), (128001,10), (Some(3.0),Some(2.0)))]
+    #[case::over_output(json!({"input_cost_per_token_above_128k_tokens":3,"output_cost_per_token_above_128k_tokens":4}), (10,128001), (Some(1.0),Some(4.0)))]
+    #[case::over_both(json!({"input_cost_per_token_above_128k_tokens":3,"output_cost_per_token_above_128k_tokens":4}), (128001,128001), (Some(3.0),Some(4.0)))]
+    #[case::absent_input_threshold(json!({"output_cost_per_token_above_128k_tokens":4}), (128001,128001), (Some(1.0),Some(4.0)))]
+    #[case::null_input_threshold(json!({"input_cost_per_token_above_128k_tokens":null,"output_cost_per_token_above_128k_tokens":4}), (128001,128001), (Some(1.0),Some(4.0)))]
+    #[case::zero_input_threshold(json!({"input_cost_per_token_above_128k_tokens":0}), (128001,10), (Some(0.0),Some(2.0)))]
+    #[case::absent_output_threshold(json!({"input_cost_per_token_above_128k_tokens":3}), (128001,128001), (Some(3.0),Some(2.0)))]
+    #[case::null_output_threshold(json!({"input_cost_per_token_above_128k_tokens":3,"output_cost_per_token_above_128k_tokens":null}), (128001,128001), (Some(3.0),Some(2.0)))]
+    #[case::zero_output_threshold(json!({"output_cost_per_token_above_128k_tokens":0}), (10,128001), (Some(1.0),Some(0.0)))]
+    #[case::null_used_input(json!({"input_cost_per_token":null,"output_cost_per_token_above_128k_tokens":4}), (10,10), (None,Some(2.0)))]
+    #[case::null_used_output(json!({"output_cost_per_token":null,"input_cost_per_token_above_128k_tokens":3}), (10,10), (Some(1.0),None))]
+    #[case::unused_missing_output(json!({"output_cost_per_token":null,"input_cost_per_token_above_128k_tokens":3}), (128001,0), (Some(3.0),None))]
+    #[case::unused_missing_input(json!({"input_cost_per_token":null,"output_cost_per_token_above_128k_tokens":4}), (0,128001), (None,Some(4.0)))]
+    #[case::zero_base(json!({"input_cost_per_token":0,"output_cost_per_token":0}), (10,10), (Some(0.0),Some(0.0)))]
+    #[case::other_bands(json!({"input_cost_per_token_above_50_tokens":9,"output_cost_per_token_above_200k_tokens":9}), (300001,300001), (Some(1.0),Some(2.0)))]
+    #[case::cache_modality_reasoning(json!({"cache_read_input_token_cost":0.1,"input_cost_per_audio_token":8,"output_cost_per_audio_token":8,"output_cost_per_reasoning_token":8}), (100,10), (Some(1.0),Some(2.0)))]
+    #[case::offpeak(json!({"off_peak_pricing":{"hours_utc":"00:00-02:00","input_cost_per_token":0.1,"output_cost_per_token":0.2}}), (100,10), (Some(1.0),Some(2.0)))]
+    #[case::tier_table(json!({"tiered_pricing":[{"range":[0,200000],"input_cost_per_token":7,"output_cost_per_token":8}]}), (100,10), (Some(1.0),Some(2.0)))]
+    #[case::null_base_with_tier(json!({"input_cost_per_token":null,"output_cost_per_token":null,"tiered_pricing":[{"range":[0,200000],"input_cost_per_token":7,"output_cost_per_token":8}]}), (100,10), (None,None))]
+    fn directional_tokens_share_actual_projection_and_factors(
+        #[from(interpreter)] _interpreter: (),
+        #[case] fields: Value,
+        #[case] quantities: (u64, u64),
+        #[case] rates: (Option<f64>, Option<f64>),
+        #[values(1.0, 1.1, 0.0)] factor: f64,
+    ) {
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("n", crate::native_module(py)).unwrap();
+            locals.set_item("extra", dict(py, fields)).unwrap();
+            locals.set_item("quantities", quantities).unwrap();
+            locals.set_item("rates", rates).unwrap();
+            locals.set_item("factor", factor).unwrap();
+            py.run(pyo3::ffi::c_str!(r#"
+import json
+import pytest
+row = {"litellm_provider":"vertex_ai", "input_cost_per_token":1, "output_cost_per_token":2,
+       "input_cost_per_token_priority":5, "output_cost_per_token_priority":6, **extra}
+before = json.dumps(row)
+inp, out = "input_cost_per_token", "output_cost_per_token"
+prompt, completion = quantities
+usage = n.UsageInput({inp:prompt, out:completion, "cache_read_input_token_cost":0}, prompt_tokens=prompt, inclusive_threshold=True)
+when = n.WhenInput(3600, tier="priority")
+kwargs = {"policy":"sdk_tokens", "directional_token_threshold":128000}
+actual = n.price(row, usage, when, **kwargs)
+evaluation = n.price_with_rates(row, usage, when, project=[inp, out, "cache_read_input_token_cost", "output_cost_per_audio_token"], factors=[factor], **kwargs)
+missing = ([inp] if prompt and rates[0] is None else []) + ([out] if completion and rates[1] is None else [])
+assert isinstance(actual, n.Unpriced if missing else n.Priced)
+assert isinstance(evaluation.pricing, n.Unpriced if missing else n.Priced)
+assert getattr(actual, "missing", []) == getattr(evaluation.pricing, "missing", []) == missing
+priced = actual.partial if missing else actual
+scaled = evaluation.pricing.partial if missing else evaluation.pricing
+assert priced.input == pytest.approx(prompt * (rates[0] or 0))
+assert priced.output == pytest.approx(completion * (rates[1] or 0))
+assert scaled.input == pytest.approx(priced.input * factor)
+assert scaled.output == pytest.approx(priced.output * factor)
+assert scaled.total == pytest.approx(priced.total * factor)
+input_rate = None if rates[0] is None else rates[0] * factor
+output_rate = None if rates[1] is None else rates[1] * factor
+assert [(r.source_meter,r.unit_price) for r in evaluation.rates] == [
+    (None if input_rate is None else inp,input_rate), (None if output_rate is None else out,output_rate),
+    (None if input_rate is None else inp,input_rate), (None if output_rate is None else out,output_rate)]
+selected = {r.requested_meter:r.unit_price for r in evaluation.rates}
+assert [(line.meter,line.unit_price) for line in scaled.lines] == [(line.meter,selected[line.meter]) for line in scaled.lines]
+assert len(scaled.lines) == (int(bool(prompt) and rates[0] is not None) + int(bool(completion) and rates[1] is not None))
+assert json.dumps(row) == before
+"#), Some(&locals), None).unwrap();
+        });
+    }
+
+    #[rstest]
+    #[case::zero("0")]
+    #[case::negative("-1")]
+    #[case::boolean("True")]
+    #[case::string("'128000'")]
+    #[case::float("128000.0")]
+    #[case::nan("float('nan')")]
+    #[case::infinity("float('inf')")]
+    #[case::overflow("2**64")]
+    #[case::object("object()")]
+    fn directional_threshold_rejects_invalid_values(
+        #[from(interpreter)] _interpreter: (),
+        #[case] argument: &str,
+        #[values("price", "price_with_rates")] api: &str,
+    ) {
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("n", crate::native_module(py)).unwrap();
+            locals.set_item("argument", argument).unwrap();
+            locals.set_item("api", api).unwrap();
+            py.run(pyo3::ffi::c_str!(r#"
+import pytest
+with pytest.raises((ValueError,TypeError,OverflowError)):
+    getattr(n,api)({"input_cost_per_token":1}, n.UsageInput({}), n.WhenInput(0), policy="sdk_tokens", directional_token_threshold=eval(argument))
+"#),Some(&locals),None).unwrap();
+        });
+    }
+
+    #[rstest]
+    #[case::generic("generic", "online", None, "input_cost_per_token")]
+    #[case::batch("sdk_tokens", "batch", None, "input_cost_per_token")]
+    #[case::decisions("sdk_tokens", "decisions", None, "input_cost_per_token")]
+    #[case::cache_default("sdk_tokens", "online", Some(0.5), "input_cost_per_token")]
+    #[case::cache_quantity("sdk_tokens", "online", None, "cache_read_input_token_cost")]
+    #[case::audio_quantity("sdk_tokens", "online", None, "output_cost_per_audio_token")]
+    #[case::non_token_quantity("sdk_tokens", "online", None, "input_cost_per_second")]
+    fn directional_context_rejects_mixed_usage_and_policies(
+        #[from(interpreter)] _interpreter: (),
+        #[case] policy: &str,
+        #[case] channel: &str,
+        #[case] ratio: Option<f64>,
+        #[case] meter: &str,
+        #[values("price", "price_with_rates")] api: &str,
+    ) {
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("n", crate::native_module(py)).unwrap();
+            locals.set_item("policy", policy).unwrap();
+            locals.set_item("channel", channel).unwrap();
+            locals.set_item("ratio", ratio).unwrap();
+            locals.set_item("meter", meter).unwrap();
+            locals.set_item("api", api).unwrap();
+            py.run(pyo3::ffi::c_str!(r#"
+import pytest
+with pytest.raises(ValueError):
+    getattr(n,api)({"input_cost_per_token":1}, n.UsageInput({meter:1}), n.WhenInput(0,channel=channel), policy=policy, cache_read_default_ratio=ratio, directional_token_threshold=128000)
+"#),Some(&locals),None).unwrap();
+        });
+    }
+
+    #[rstest]
     #[case::online("online", "sdk_tokens", Some(30.0))]
     #[case::generic("online", "generic", None)]
     #[case::batch("batch", "sdk_tokens", Some(5.0))]
@@ -2054,6 +2253,7 @@ else:
                 &usage,
                 &WhenInput::new(0, "standard", channel).unwrap(),
                 policy,
+                None,
                 None,
             )
             .unwrap();
@@ -2165,6 +2365,7 @@ assert json.dumps(row) == before
                 &usage,
                 &WhenInput::new(0, "standard", "online").unwrap(),
                 "sdk_tokens",
+                None,
                 None,
             )
             .unwrap();
@@ -2500,6 +2701,7 @@ assert isinstance(n.resolve_model(rows, model, inferred=inferred), n.ModelNotFou
                 &WhenInput::new(at, "standard", channel).unwrap(),
                 "generic",
                 None,
+                None,
             )
             .unwrap() else {
                 panic!("not priced")
@@ -2525,6 +2727,7 @@ assert isinstance(n.resolve_model(rows, model, inferred=inferred), n.ModelNotFou
                 &usage,
                 &WhenInput::new(0, "standard", "online").unwrap(),
                 "generic",
+                None,
                 None,
             )
             .unwrap() else {
@@ -2616,6 +2819,7 @@ assert seen == ["released"]
                     &WhenInput::new(0, "standard", "online").unwrap(),
                     "generic",
                     None,
+                    None,
                 )
                 .unwrap() else {
                     panic!("not priced: {}", fields[0])
@@ -2676,7 +2880,7 @@ assert seen == ["released"]
                             0,
                         )
                         .unwrap();
-                        match price(row.as_any(), &usage, &when, "generic", None).unwrap() {
+                        match price(row.as_any(), &usage, &when, "generic", None, None).unwrap() {
                             PriceResult::Priced(result) => assert_eq!(result.total, expected),
                             PriceResult::Unpriced(result) => {
                                 assert_eq!(expected, 0.0);
@@ -2711,7 +2915,7 @@ assert seen == ["released"]
                 json!({"litellm_provider":"test", "input_cost_per_token": 2}),
             );
             let PriceResult::Unpriced(result) =
-                price(row.as_any(), &usage, &when, "generic", None).unwrap()
+                price(row.as_any(), &usage, &when, "generic", None, None).unwrap()
             else {
                 panic!("expected unpriced")
             };
@@ -2728,7 +2932,7 @@ assert seen == ["released"]
             row.set_item("output_cost_per_token", 0).unwrap();
             row.set_item("input_cost_per_audio_token", 0).unwrap();
             let PriceResult::Priced(result) =
-                price(row.as_any(), &usage, &when, "generic", None).unwrap()
+                price(row.as_any(), &usage, &when, "generic", None, None).unwrap()
             else {
                 panic!("expected free")
             };
@@ -2755,6 +2959,7 @@ assert seen == ["released"]
                 &usage,
                 &WhenInput::new(0, "standard", "online").unwrap(),
                 "generic",
+                None,
                 None,
             )
             .unwrap() else {

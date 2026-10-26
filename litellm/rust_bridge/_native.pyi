@@ -301,6 +301,7 @@ def price(
     *,
     policy: Literal["generic", "sdk_tokens"] = "generic",
     cache_read_default_ratio: float | None = None,
+    directional_token_threshold: int | None = None,
 ) -> Priced | Unpriced | RowErrors: ...
 def price_with_rates(
     row: dict[str, object],
@@ -311,6 +312,7 @@ def price_with_rates(
     project: Sequence[str] = (),
     factors: Sequence[float] = (),
     cache_read_default_ratio: float | None = None,
+    directional_token_threshold: int | None = None,
 ) -> PriceEvaluation | RowErrors: ...
 def trace_encode_error(message: str) -> bytes: ...
 
