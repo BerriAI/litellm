@@ -20,6 +20,7 @@ litellm-gateway-ui.workspace = true
 litellm-auth-types.workspace = true
 litellm-config.workspace = true
 litellm-http = { workspace = true, features = ["mcp"] }
+litellm-layered.workspace = true
 litellm-llms.workspace = true
 litellm-secrets.workspace = true
 litellm-tracing.workspace = true
@@ -33,6 +34,7 @@ tower-sessions-moka-store = "0.15.0"
 [dev-dependencies]
 base64.workspace = true
 rstest.workspace = true
+serde_yaml_ng = "0.10.0"
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tower = { version = "0.5", features = ["util"] }
