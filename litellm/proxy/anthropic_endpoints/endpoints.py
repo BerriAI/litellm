@@ -13,8 +13,6 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.anthropic_interface.exceptions import (
-    AnthropicErrorDetail,
-    AnthropicErrorResponse,
     AnthropicExceptionMapping,
 )
 from litellm.integrations.custom_guardrail import ModifyResponseException
@@ -34,13 +32,14 @@ from litellm.proxy.common_request_processing import (
     proxy_exception_from_route_error,
     resolve_litellm_call_id,
 )
-from litellm.proxy.common_utils.error_body_call_id import error_body_call_id
+from litellm.proxy.common_utils.anthropic_error_payload import (
+    anthropic_error_json_response,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
 )
 from litellm.proxy.common_utils.openai_error_payload import (
-    LITELLM_CALL_ID_HEADER,
     error_status_code,
     openai_error_param,
     openai_error_type,
@@ -51,44 +50,13 @@ from litellm.proxy.litellm_pre_call_utils import should_auto_drop_params_for_age
 router: Final = APIRouter()
 
 
-def _with_provider_specific_fields(exc: ProxyException, detail: AnthropicErrorDetail) -> AnthropicErrorDetail:
-    if not exc.provider_specific_fields:
-        return detail
-    with_fields: Final[AnthropicErrorDetail] = {**detail, "provider_specific_fields": exc.provider_specific_fields}
-    return with_fields
-
-
-def _anthropic_error_detail(
-    exc: ProxyException, detail: AnthropicErrorDetail, call_id: str | None
-) -> AnthropicErrorDetail:
-    if call_id is None:
-        return _with_provider_specific_fields(exc, detail)
-    with_call_id: Final[AnthropicErrorDetail] = {
-        **_with_provider_specific_fields(exc, detail),
-        "litellm_call_id": call_id,
-    }
-    return with_call_id
-
-
 def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSONResponse:
-    from litellm.proxy.proxy_server import (
-        _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; error JSONResponses returned by the route must stamp the OTel server span like the global ProxyException handler does
-        general_settings_view,
-    )
+    """The Anthropic error envelope for a failure raised inside a Messages handler.
 
-    status_code: Final = int(exc.code) if exc.code is not None and exc.code.isdigit() else 500
-    _close_dangling_otel_server_span(request, status_code, exc=exc)
-    envelope: Final = AnthropicExceptionMapping.transform_to_anthropic_error(
-        status_code=status_code,
-        raw_message=exc.message,
-        request_id=request.headers.get("x-request-id"),
-    )
-    body_call_id: Final = error_body_call_id(general_settings_view(), exc.headers.get(LITELLM_CALL_ID_HEADER))
-    content: Final[AnthropicErrorResponse] = {
-        **envelope,
-        "error": _anthropic_error_detail(exc, envelope["error"], body_call_id),
-    }
-    return JSONResponse(status_code=status_code, content=content, headers=exc.headers)
+    Delegates to the shared renderer so a failure raised here and one raised by the auth
+    layer before the handler (see the central ProxyException handler) answer identically.
+    """
+    return anthropic_error_json_response(exc, request)
 
 
 def _strip_total_tokens_from_anthropic_response(response: object) -> None:

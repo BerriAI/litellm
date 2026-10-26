@@ -34,8 +34,16 @@ class AnthropicExceptionMapping:
 
     @staticmethod
     def get_error_type(status_code: int) -> AnthropicErrorType:
-        """Map HTTP status code to Anthropic error type."""
-        return ANTHROPIC_ERROR_TYPE_MAP.get(status_code, "api_error")
+        """Map HTTP status code to Anthropic error type.
+
+        A 4xx the table does not name is the caller's mistake, so it answers
+        ``invalid_request_error`` rather than ``api_error``, which the Anthropic taxonomy
+        reserves for server-side failures.
+        """
+        mapped: Final = ANTHROPIC_ERROR_TYPE_MAP.get(status_code)
+        if mapped is not None:
+            return mapped
+        return "invalid_request_error" if 400 <= status_code < 500 else "api_error"
 
     @staticmethod
     def create_error_response(

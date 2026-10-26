@@ -63,10 +63,15 @@ class TestCreateErrorResponse:
         )
         assert response["request_id"] == "req_123"
 
-    def test_unknown_status_defaults_to_api_error(self):
-        """Test unknown status code defaults to api_error."""
-        response = AnthropicExceptionMapping.create_error_response(418, "I'm a teapot")
-        assert response["error"]["type"] == "api_error"
+    @pytest.mark.parametrize(
+        ("status_code", "expected_error_type"),
+        [(418, "invalid_request_error"), (422, "invalid_request_error"), (502, "api_error"), (599, "api_error")],
+    )
+    def test_an_unmapped_status_is_the_callers_fault_when_4xx(self, status_code: int, expected_error_type: str):
+        """An unmapped 4xx is the client's mistake, so it must not answer api_error, which
+        the Anthropic taxonomy reserves for server-side failures; 5xx keeps api_error."""
+        response = AnthropicExceptionMapping.create_error_response(status_code, "mapped only by range")
+        assert response["error"]["type"] == expected_error_type
 
 
 class TestExtractErrorMessage:

@@ -371,6 +371,7 @@ from litellm.proxy.auth.auth_checks import (
 from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.auth_utils import (
     check_response_size_is_safe,
+    get_request_route,
     is_request_body_safe,
     log_model_access_denial,
     log_once_if_budget_reservation_disabled,
@@ -432,6 +433,10 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
     resolve_litellm_call_id,
     should_return_raw_model_name,
     ttft_keepalive_interval,
+)
+from litellm.proxy.common_utils.anthropic_error_payload import (
+    anthropic_error_json_response,
+    is_anthropic_messages_route,
 )
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AuthCacheInvalidationSubscriber,
@@ -2066,6 +2071,8 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
     # NOTE: DO NOT MODIFY THIS, its crucial to map to Openai exceptions
     log_model_access_denial(exc)
     headers: Final = exc.headers
+    if is_anthropic_messages_route(get_request_route(request)):
+        return anthropic_error_json_response(exc, request)
     error_dict: Final = with_call_id(
         JSON_OBJECT.validate_python(exc.to_dict()),
         error_body_call_id(general_settings_view(), headers.get(LITELLM_CALL_ID_HEADER)),
