@@ -224,6 +224,7 @@ export const recommendSolverPair = (
 
 export const solverPairConfig = (everyday: string, hard: string): ComplexityRouterConfigValue => ({
   classifier_type: "heuristic",
+  classification_mode: "user_turn",
   tiers: { SIMPLE: [everyday], MEDIUM: [everyday], COMPLEX: [hard], REASONING: [hard] },
 });
 

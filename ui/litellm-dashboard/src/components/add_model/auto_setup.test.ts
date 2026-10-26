@@ -281,6 +281,7 @@ describe("solverPairConfig", () => {
   it("builds two solver references using built-in rules without paid classifiers, custom tiers or output overrides", () => {
     expect(solverPairConfig("everyday", "hard")).toEqual({
       classifier_type: "heuristic",
+      classification_mode: "user_turn",
       tiers: { SIMPLE: ["everyday"], MEDIUM: ["everyday"], COMPLEX: ["hard"], REASONING: ["hard"] },
     });
   });

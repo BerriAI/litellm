@@ -222,6 +222,7 @@ describe("AddAutoRouterTab", () => {
       auto_router_name: "auto-router",
       complexity_router_config: {
         classifier_type: "heuristic",
+        classification_mode: "user_turn",
         tiers: { SIMPLE: ["middle"], MEDIUM: ["middle"], COMPLEX: ["large"], REASONING: ["large"] },
       },
     });
@@ -243,6 +244,7 @@ describe("AddAutoRouterTab", () => {
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls[0][0]).toMatchObject({
       complexity_router_config: {
         classifier_type: "heuristic",
+        classification_mode: "user_turn",
         tiers: {
           SIMPLE: ["openai/gpt-6-luna"],
           MEDIUM: ["openai/gpt-6-luna"],
@@ -1293,6 +1295,8 @@ describe("AddAutoRouterTab", () => {
     const toggle = screen.getByRole("switch", { name: "Cache-aware routing" });
     expect(toggle).not.toBeChecked();
     if (enabled) {
+      expect(toggle).toHaveAttribute("aria-disabled", "true");
+      await selectAutoRouterOption("How often to classify", "Every request");
       await user.click(toggle);
       fireEvent.change(screen.getByLabelText("Expected output tokens"), { target: { value: "512" } });
       fireEvent.change(screen.getByLabelText("Prediction timeout (ms)"), { target: { value: "750" } });
@@ -1519,7 +1523,7 @@ describe("AddAutoRouterTab", () => {
     });
   });
 
-  it("writes every_request into the create payload when the default frequency stays selected", async () => {
+  it("allows every request in Advanced while defaulting to every new user message", async () => {
     const user = userEvent.setup();
     vi.mocked(getMissingTiersError).mockReturnValue(null);
 
@@ -1528,7 +1532,10 @@ describe("AddAutoRouterTab", () => {
     fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "default-timing-router" } });
     expandDetailedConfiguration();
     openAutoRouterAdvanced("Classification Method");
-    expect(await screen.findByRole("combobox", { name: "How often to classify" })).toHaveTextContent("Every request");
+    expect(await screen.findByRole("combobox", { name: "How often to classify" })).toHaveTextContent(
+      "Every new user message",
+    );
+    await selectAutoRouterOption("How often to classify", "Every request");
 
     await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /add auto router/i }));

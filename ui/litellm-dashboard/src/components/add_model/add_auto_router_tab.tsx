@@ -197,6 +197,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const [advancedConfig, setComplexityRouterConfig] = useState<ComplexityRouterConfigValue>({
     tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
     classifier_type: "heuristic",
+    classification_mode: "user_turn",
   });
 
   const [advanced, setAdvanced] = useState(false);
@@ -316,6 +317,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     ? advancedConfig
     : simpleConfig ?? {
         classifier_type: "heuristic" as const,
+        classification_mode: "user_turn" as const,
         tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
       };
   const openAdvanced = () => {
