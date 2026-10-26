@@ -291,6 +291,8 @@ test-rust-extension:
 		--mypy-config-file tests/unit/rust_bridge/stubtest.ini \
 		litellm.rust_bridge._native && \
 	LITELLM_LOCAL_MODEL_COST_MAP=True \
+	"$$temporary/venv/bin/python" -I litellm-rust/crates/python-bridge/tests/catalog_refresh.py && \
+	LITELLM_LOCAL_MODEL_COST_MAP=True \
 	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib -m requires_rust_extension tests/test_litellm_rust
 
 rust-sqlx-prepare:

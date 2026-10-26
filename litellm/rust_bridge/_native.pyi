@@ -73,6 +73,7 @@ class ModelRegistry:
     def check_size(self, reference: int) -> RowError | None: ...
 
 def model_row_errors(key: str, row: dict[str, JsonValue]) -> list[RowError]: ...
+
 @final
 class FetchedRegistry:
     @property
@@ -97,6 +98,15 @@ class RegistryUnavailable:
 def fetch_once(
     source: str, *, if_none_match: str | None, timeout_seconds: float
 ) -> FetchedRegistry | RegistryNotModified | RegistryUnavailable: ...
+def fetch_with_retry(
+    source: str,
+    *,
+    if_none_match: str | None,
+    timeout_seconds: float,
+    max_attempts: int,
+    max_wait_seconds: float = 30.0,
+) -> FetchedRegistry | RegistryNotModified | RegistryUnavailable: ...
+
 @final
 class CatalogRefresher:
     def __new__(
@@ -113,6 +123,7 @@ class CatalogRefresher:
     def after_fork(self) -> None: ...
 
 def write_rows(target: dict[str, object], set: dict[str, object], remove: list[str]) -> None: ...
+
 @final
 class ModelCostLayers:
     def __new__(cls) -> ModelCostLayers: ...
@@ -240,6 +251,7 @@ def invalidate_model_cost_index() -> None: ...
 def model_info(model_cost: dict[str, object], key: str) -> ModelInfoView | RowErrors: ...
 def price(row: dict[str, object], usage: UsageInput, when: WhenInput) -> Priced | Unpriced | RowErrors: ...
 def trace_encode_error(message: str) -> bytes: ...
+
 @final
 class NativeClickHouseSpendConfig:
     def __new__(cls, database: str, url: str, retention_days: int) -> NativeClickHouseSpendConfig: ...
@@ -304,6 +316,7 @@ def messages(
 def amessages(
     call: NativeCall,
 ) -> Execution: ...
+
 @final
 class ResponsesWebSocketConnection:
     def __new__(cls, _uninstantiable: Never, /) -> Never: ...
@@ -465,6 +478,7 @@ __all__ = [
     "completion",
     "embedding",
     "fetch_once",
+    "fetch_with_retry",
     "gil_stats",
     "invalidate_model_cost_index",
     "messages",

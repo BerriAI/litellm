@@ -26,10 +26,14 @@ from litellm.rust_bridge import _native as native
 
 
 class Response:
-    def __init__(self, status: int = 200, body: bytes | None = None, hold: bool = False) -> None:
+    def __init__(
+        self, status: int = 200, body: bytes | None = None, hold: bool = False, retry_after: str | None = "0"
+    ) -> None:
         self.status = status
         self.body = native.ModelRegistry.bundled_bytes() if body is None else body
+        self.retry_after = retry_after
         self.requests: queue.Queue[tuple[str, str | None]] = queue.Queue()
+        self.request_times: queue.Queue[float] = queue.Queue()
         self.entered = threading.Event()
         self.release = threading.Event()
         if not hold:
@@ -37,20 +41,27 @@ class Response:
 
 
 @contextmanager
-def server(response: Response, tls: ssl.SSLContext | None = None) -> Iterator[str]:
+def server(
+    response: Response, tls: ssl.SSLContext | None = None, *, following: tuple[Response, ...] = ()
+) -> Iterator[str]:
+    responses: Final = iter((response, *following))
+
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
+            current: Final = next(responses, response)
             response.requests.put((self.path, self.headers.get("If-None-Match")))
-            response.entered.set()
-            response.release.wait(15)
-            self.send_response(response.status)
+            response.request_times.put(time.monotonic())
+            current.entered.set()
+            current.release.wait(15)
+            self.send_response(current.status)
             self.send_header("ETag", '"catalog-v1"')
-            self.send_header("Retry-After", "0")
-            self.send_header("Content-Length", str(len(response.body) if response.status == 200 else 0))
+            if current.retry_after is not None:
+                self.send_header("Retry-After", current.retry_after)
+            self.send_header("Content-Length", str(len(current.body) if current.status == 200 else 0))
             self.end_headers()
-            if response.status == 200:
+            if current.status == 200:
                 try:
-                    self.wfile.write(response.body)
+                    self.wfile.write(current.body)
                 except (BrokenPipeError, ConnectionResetError, ssl.SSLError):
                     pass
 
@@ -66,6 +77,8 @@ def server(response: Response, tls: ssl.SSLContext | None = None) -> Iterator[st
             yield f"{'https' if tls else 'http'}://127.0.0.1:{http.server_port}"
         finally:
             response.release.set()
+            for pending in following:
+                pending.release.set()
             http.shutdown()
             worker.join(5)
 
@@ -138,6 +151,179 @@ class CatalogRefreshTests(unittest.TestCase):
 
     def fetch(self, url: str, validator: str | None = None, timeout: float = 3) -> object:
         return native.fetch_once(url, if_none_match=validator, timeout_seconds=timeout)
+
+    def retry_fetch(
+        self,
+        url: str,
+        *,
+        validator: str | None = None,
+        timeout: float = 3,
+        attempts: int = 3,
+        max_wait: float = 0.05,
+    ) -> native.FetchedRegistry | native.RegistryNotModified | native.RegistryUnavailable:
+        return native.fetch_with_retry(
+            url,
+            if_none_match=validator,
+            timeout_seconds=timeout,
+            max_attempts=attempts,
+            max_wait_seconds=max_wait,
+        )
+
+    def test_retry_success_preserves_provenance_row_errors_and_process_state(self) -> None:
+        body: Final = json.dumps(
+            {
+                **json.loads(native.ModelRegistry.bundled_bytes()),
+                "retry-invalid": {"litellm_provider": "openai", "input_cost_per_token": -1},
+            }
+        ).encode()
+        response: Final = Response(503)
+        original: Final = litellm.model_cost
+        original_rows: Final = json.dumps(original, sort_keys=True)
+        with server(response, following=(Response(body=body),)) as url:
+            result: Final = self.retry_fetch(url, validator='"old"')
+        assert isinstance(result, native.FetchedRegistry)
+        self.assertEqual(response.requests.get_nowait(), ("/", '"old"'))
+        self.assertEqual(response.requests.get_nowait(), ("/", '"old"'))
+        self.assertTrue(response.requests.empty())
+        self.assertEqual(result.revision, hashlib.sha1(b"blob " + str(len(body)).encode() + b"\0" + body).hexdigest())
+        self.assertEqual(result.validator, '"catalog-v1"')
+        self.assertEqual(result.registry.source_revision, result.revision)
+        self.assertEqual(result.registry.source_validator, result.validator)
+        self.assertIn("retry-invalid", result.registry.to_dict())
+        self.assertEqual(
+            tuple((error.key, error.field, error.rejects) for error in result.registry.errors()),
+            (("retry-invalid", "input_cost_per_token", True),),
+        )
+        filtered, errors = result.registry.without_rejected()
+        self.assertNotIn("retry-invalid", filtered.to_dict())
+        self.assertEqual(tuple(error.key for error in errors), ("retry-invalid",))
+        self.assertEqual(filtered.source_revision, result.revision)
+        self.assertEqual(filtered.source_validator, result.validator)
+        self.assertIs(litellm.model_cost, original)
+        self.assertEqual(json.dumps(litellm.model_cost, sort_keys=True), original_rows)
+
+    def test_retry_exhaustion_is_capped(self) -> None:
+        response: Final = Response(503, retry_after="100")
+        with server(response) as url:
+            result: Final = self.retry_fetch(url, attempts=3, max_wait=0)
+        assert isinstance(result, native.RegistryUnavailable)
+        self.assertEqual(response.requests.qsize(), 3)
+        self.assertTrue(result.retryable)
+        self.assertEqual(result.retry_after, 100)
+        self.assertIn("503", result.reason)
+
+    def test_retry_terminal_response_does_not_retry(self) -> None:
+        response: Final = Response(503)
+        with server(response, following=(Response(404),)) as url:
+            result: Final = self.retry_fetch(url, attempts=4)
+        assert isinstance(result, native.RegistryUnavailable)
+        self.assertEqual(response.requests.qsize(), 2)
+        self.assertFalse(result.retryable)
+        self.assertIsNone(result.retry_after)
+        self.assertIn("404", result.reason)
+
+    def test_retry_after_is_honored(self) -> None:
+        response: Final = Response(429, retry_after="0.15")
+        with server(response, following=(Response(304),)) as url:
+            result: Final = self.retry_fetch(url, max_wait=1)
+        self.assertIsInstance(result, native.RegistryNotModified)
+        first, second = response.request_times.get_nowait(), response.request_times.get_nowait()
+        self.assertGreaterEqual(second - first, 0.15)
+        self.assertLess(second - first, 1)
+        self.assertEqual(response.requests.qsize(), 2)
+
+    def test_retry_after_is_capped(self) -> None:
+        response: Final = Response(503, retry_after="100")
+        with server(response, following=(Response(304),)) as url:
+            result: Final = self.retry_fetch(url, max_wait=0.05)
+        self.assertIsInstance(result, native.RegistryNotModified)
+        first, second = response.request_times.get_nowait(), response.request_times.get_nowait()
+        self.assertGreaterEqual(second - first, 0.05)
+        self.assertLess(second - first, 1)
+        self.assertEqual(response.requests.qsize(), 2)
+
+    def test_retry_backoff_without_header_is_capped(self) -> None:
+        response: Final = Response(503, retry_after=None)
+        with server(response, following=(Response(304),)) as url:
+            result: Final = self.retry_fetch(url, max_wait=0.05)
+        self.assertIsInstance(result, native.RegistryNotModified)
+        first, second = response.request_times.get_nowait(), response.request_times.get_nowait()
+        self.assertGreaterEqual(second - first, 0.05)
+        self.assertLess(second - first, 1)
+        self.assertEqual(response.requests.qsize(), 2)
+
+    def test_retry_conditional_not_modified_is_one_request(self) -> None:
+        response: Final = Response(304)
+        with server(response) as url:
+            result: Final = self.retry_fetch(url, validator='"old"')
+        self.assertIsInstance(result, native.RegistryNotModified)
+        self.assertEqual(response.requests.get_nowait(), ("/", '"old"'))
+        self.assertTrue(response.requests.empty())
+
+    def assert_rejected_body(self, body: bytes) -> None:
+        response: Final = Response(body=body)
+        with server(response) as url:
+            result: Final = self.retry_fetch(url)
+        assert isinstance(result, native.RegistryUnavailable)
+        self.assertFalse(result.retryable)
+        self.assertIsNone(result.retry_after)
+        self.assertTrue(result.reason)
+        self.assertEqual(response.requests.qsize(), 1)
+
+    def test_retry_parse_failure_is_terminal(self) -> None:
+        self.assert_rejected_body(b"not-json")
+
+    def test_retry_integrity_failure_is_terminal(self) -> None:
+        self.assert_rejected_body(b'{"small": {"litellm_provider": "openai"}}')
+
+    def test_retry_invalid_arguments_do_not_reach_transport(self) -> None:
+        response: Final = Response()
+        with server(response) as url:
+            for value in (-1.0, float("nan"), float("inf"), float("-inf"), 1e100, 1e19):
+                with self.subTest(value=value):
+                    with self.assertRaises(ValueError):
+                        self.retry_fetch(url, timeout=value)
+                    with self.assertRaises(ValueError):
+                        self.retry_fetch(url, max_wait=value)
+            for attempts in (0, -1, 2**128):
+                with self.subTest(attempts=attempts), self.assertRaises((ValueError, OverflowError)):
+                    self.retry_fetch(url, attempts=attempts)
+            with self.assertRaises(ValueError):
+                self.retry_fetch("ftp://127.0.0.1")
+            self.assertTrue(response.requests.empty())
+
+    def test_retry_releases_gil_during_fetch_and_wait(self) -> None:
+        response: Final = Response(503, hold=True, retry_after="0.2")
+        success: Final = Response(hold=True)
+        progress: Final[queue.Queue[str]] = queue.Queue()
+
+        def advance() -> None:
+            if not response.entered.wait(5):
+                return
+            progress.put("fetch")
+            response.release.set()
+            time.sleep(0.05)
+            progress.put("wait" if not success.entered.is_set() else "missed wait")
+            success.release.set()
+
+        worker: Final = threading.Thread(target=advance, daemon=True)
+        with server(response, following=(success,)) as url:
+            worker.start()
+            result: Final = self.retry_fetch(url, max_wait=1)
+            worker.join(5)
+        self.assertIsInstance(result, native.FetchedRegistry)
+        self.assertEqual(progress.get_nowait(), "fetch")
+        self.assertEqual(progress.get_nowait(), "wait")
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(response.requests.qsize(), 2)
+
+    def test_retry_timeout_is_per_attempt_and_bounded(self) -> None:
+        response: Final = Response(hold=True)
+        with server(response) as url:
+            result: Final = self.retry_fetch(url, timeout=0.05, attempts=2, max_wait=0)
+        assert isinstance(result, native.RegistryUnavailable)
+        self.assertTrue(result.retryable)
+        self.assertEqual(response.requests.qsize(), 2)
 
     def test_fetch_installs_nothing_and_preserves_validator_revision(self) -> None:
         response: Final = Response()
@@ -262,13 +448,13 @@ class CatalogRefreshTests(unittest.TestCase):
         self.assertEqual(observer.provenance, (None, None))
 
     def test_retryable_once_does_not_retry(self) -> None:
-        response: Final = Response(503)
+        response: Final = Response(503, retry_after="100")
         with server(response) as url:
             result: Final = self.fetch(url)
         self.assertIsInstance(result, native.RegistryUnavailable)
         assert isinstance(result, native.RegistryUnavailable)
         self.assertTrue(result.retryable)
-        self.assertEqual(result.retry_after, 0)
+        self.assertEqual(result.retry_after, 100)
         self.assertIn("503", result.reason)
         self.assertEqual(response.requests.qsize(), 1)
 
@@ -293,6 +479,11 @@ class CatalogRefreshTests(unittest.TestCase):
             assert isinstance(result, native.FetchedRegistry)
             self.assertIsNone(result.validator)
             self.assertIsInstance(self.fetch(path.as_uri(), '"old"'), native.FetchedRegistry)
+            retried: Final = self.retry_fetch(path.as_uri(), validator='"old"')
+            assert isinstance(retried, native.FetchedRegistry)
+            self.assertIsNone(retried.validator)
+            self.assertEqual(retried.revision, result.revision)
+            self.assertEqual(retried.registry.to_dict(), result.registry.to_dict())
 
     def test_s3_endpoint_and_conditional_header(self) -> None:
         response: Final = Response()
@@ -310,11 +501,17 @@ class CatalogRefreshTests(unittest.TestCase):
             ),
         ):
             result: Final = self.fetch("s3://bucket/catalog.json", '"old"')
+            retried: Final = self.retry_fetch("s3://bucket/catalog.json", validator='"old"')
         self.assertIsInstance(result, native.FetchedRegistry)
         assert isinstance(result, native.FetchedRegistry)
         self.assertEqual(result.registry.to_dict(), native.ModelRegistry.bundled().to_dict())
         self.assertEqual(response.requests.get_nowait(), ("/bucket/catalog.json?x-id=GetObject", '"old"'))
+        self.assertEqual(response.requests.get_nowait(), ("/bucket/catalog.json?x-id=GetObject", '"old"'))
         self.assertTrue(response.requests.empty())
+        assert isinstance(retried, native.FetchedRegistry)
+        self.assertEqual(retried.registry.to_dict(), result.registry.to_dict())
+        self.assertEqual(retried.validator, result.validator)
+        self.assertEqual(retried.revision, result.revision)
 
     def test_unsupported_source_and_invalid_timeout(self) -> None:
         with self.assertRaises(ValueError):
@@ -386,6 +583,7 @@ class CatalogRefreshTests(unittest.TestCase):
             with server(response, context) as url:
                 litellm.ssl_verify = False
                 self.assertIsInstance(self.fetch(url), native.FetchedRegistry)
+                self.assertIsInstance(self.retry_fetch(url), native.FetchedRegistry)
                 observer: Final = Observer()
                 refresher: Final = observer.start(url)
                 self.addCleanup(refresher.stop)
@@ -395,6 +593,7 @@ class CatalogRefreshTests(unittest.TestCase):
                 self.assertIsInstance(failed, native.RegistryUnavailable)
                 assert isinstance(failed, native.RegistryUnavailable)
                 self.assertTrue(failed.reason)
+                self.assertIsInstance(self.retry_fetch(url, attempts=1), native.RegistryUnavailable)
                 failure_observer: Final = Observer()
                 failure_refresher: Final = failure_observer.start(url)
                 self.addCleanup(failure_refresher.stop)

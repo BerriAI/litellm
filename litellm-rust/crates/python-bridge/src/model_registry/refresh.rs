@@ -82,12 +82,28 @@ pub(crate) fn fetch_once(
     if_none_match: Option<String>,
     timeout_seconds: f64,
 ) -> PyResult<Py<PyAny>> {
+    fetch_with_retry(py, source, if_none_match, timeout_seconds, 1, 30.0)
+}
+
+#[pyfunction]
+#[pyo3(signature = (source, *, if_none_match, timeout_seconds, max_attempts, max_wait_seconds = 30.0))]
+pub(crate) fn fetch_with_retry(
+    py: Python<'_>,
+    source: &str,
+    if_none_match: Option<String>,
+    timeout_seconds: f64,
+    max_attempts: usize,
+    max_wait_seconds: f64,
+) -> PyResult<Py<PyAny>> {
     let source = Source::parse(source).map_err(|error| PyValueError::new_err(error.to_string()))?;
-    let timeout = Duration::try_from_secs_f64(timeout_seconds)
-        .map_err(|_| PyValueError::new_err("timeout_seconds must be finite and non-negative"))?;
+    let timeout = duration(timeout_seconds, "timeout_seconds")?;
+    let max_wait = duration(max_wait_seconds, "max_wait_seconds")?;
+    if max_attempts == 0 {
+        return Err(PyValueError::new_err("max_attempts must be positive"));
+    }
     if tokio::runtime::Handle::try_current().is_ok() {
         return Err(PyRuntimeError::new_err(
-            "fetch_once cannot run from a Tokio context",
+            "model catalog fetch cannot run from a Tokio context",
         ));
     }
     let http = crate::http::call_config(py, &PyDict::new(py), false)?;
@@ -109,48 +125,73 @@ pub(crate) fn fetch_once(
             Ok(runtime) => runtime,
             Err(_) => return unavailable("model catalog runtime unavailable".into(), false, None),
         };
-        let reply = runtime.block_on(fetch.fetch(FetchRequest {
-            if_none_match,
-            timeout,
-        }));
+        let (state, step) = Revalidation::new(
+            source.id(),
+            &installed(None, if_none_match, &source),
+            RetryPolicy {
+                max_attempts,
+                max_wait,
+                timeout,
+                ..RetryPolicy::default()
+            },
+            None,
+        );
+        let result = runtime.block_on(drive_fetch(fetch.as_ref(), state, step));
         runtime.shutdown_background();
-        match reply {
-            Reply::Retry { after, reason } => unavailable(reason, true, after),
-            Reply::Failed { reason } => unavailable(reason, false, None),
-            Reply::NotModified => FetchResult::NotModified(RegistryNotModified),
-            reply @ Reply::Fetched { .. } => {
-                let (mut state, _) = Revalidation::new(
-                    source.id(),
-                    &installed(None, None, &source),
-                    RetryPolicy {
-                        max_attempts: 1,
-                        timeout,
-                        ..RetryPolicy::default()
-                    },
-                    None,
-                );
-                match state.on_reply(reply) {
-                    Step::Adopt { installed, errors } => FetchResult::Fetched(FetchedRegistry {
-                        registry: ModelRegistry {
-                            parsed: Arc::new(ParsedRegistry {
-                                catalog: installed.catalog,
-                                errors: Arc::from(errors),
-                            }),
-                            source_revision: Some(installed.revision.clone()),
-                            source_validator: installed.validator.clone(),
-                        },
-                        revision: installed.revision,
-                        validator: installed.validator,
-                    }),
-                    Step::Done { reason } => unavailable(reason.unwrap_or_default(), false, None),
-                    Step::Fetch(_) | Step::Sleep(_) => {
-                        unreachable!("a fetched reply never retries")
-                    }
-                }
-            }
-        }
+        result
     });
     Ok(result.into_pyobject(py)?.unbind())
+}
+
+fn duration(seconds: f64, name: &str) -> PyResult<Duration> {
+    Duration::try_from_secs_f64(seconds)
+        .ok()
+        .filter(|duration| std::time::Instant::now().checked_add(*duration).is_some())
+        .ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "{name} must be finite, non-negative and within the supported duration range"
+            ))
+        })
+}
+
+async fn drive_fetch(fetch: &dyn Fetch, mut state: Revalidation, mut step: Step) -> FetchResult {
+    let mut retry = None;
+    loop {
+        step = match step {
+            Step::Fetch(request) => {
+                let reply = fetch.fetch(request).await;
+                retry = match &reply {
+                    Reply::Retry { after, .. } => Some(*after),
+                    _ => None,
+                };
+                state.on_reply(reply)
+            }
+            Step::Sleep(delay) => {
+                tokio::time::sleep(delay).await;
+                state.on_slept()
+            }
+            Step::Adopt { installed, errors } => {
+                return FetchResult::Fetched(FetchedRegistry {
+                    registry: ModelRegistry {
+                        parsed: Arc::new(ParsedRegistry {
+                            catalog: installed.catalog,
+                            errors: Arc::from(errors),
+                        }),
+                        source_revision: Some(installed.revision.clone()),
+                        source_validator: installed.validator.clone(),
+                    },
+                    revision: installed.revision,
+                    validator: installed.validator,
+                });
+            }
+            Step::Done { reason: None } => return FetchResult::NotModified(RegistryNotModified),
+            Step::Done {
+                reason: Some(reason),
+            } => {
+                return unavailable(reason, retry.is_some(), retry.flatten());
+            }
+        };
+    }
 }
 
 struct PythonInstall {
@@ -448,6 +489,8 @@ mod tests {
         Python::attach(|py| {
             let error = fetch_once(py, source, None, 1.0).unwrap_err();
             assert!(error.is_instance_of::<PyValueError>(py));
+            let error = fetch_with_retry(py, source, None, 1.0, 3, 30.0).unwrap_err();
+            assert!(error.is_instance_of::<PyValueError>(py));
         });
     }
 
@@ -463,6 +506,29 @@ mod tests {
     }
 
     #[rstest]
+    #[case::negative_timeout(-1.0, 3, 30.0)]
+    #[case::nan_timeout(f64::NAN, 3, 30.0)]
+    #[case::infinite_timeout(f64::INFINITY, 3, 30.0)]
+    #[case::overflowing_timeout(1e19, 3, 30.0)]
+    #[case::zero_attempts(1.0, 0, 30.0)]
+    #[case::negative_wait(1.0, 3, -1.0)]
+    #[case::nan_wait(1.0, 3, f64::NAN)]
+    #[case::infinite_wait(1.0, 3, f64::INFINITY)]
+    #[case::overflowing_wait(1.0, 3, 1e19)]
+    fn invalid_retry_policy_precedes_python_config(
+        #[from(python)] _python: (),
+        #[case] timeout: f64,
+        #[case] attempts: usize,
+        #[case] wait: f64,
+    ) {
+        Python::attach(|py| {
+            let error = fetch_with_retry(py, "https://example.test", None, timeout, attempts, wait)
+                .unwrap_err();
+            assert!(error.is_instance_of::<PyValueError>(py));
+        });
+    }
+
+    #[rstest]
     fn nested_runtime_is_rejected(#[from(python)] _python: ()) {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
@@ -470,6 +536,9 @@ mod tests {
         let _entered = runtime.enter();
         Python::attach(|py| {
             let error = fetch_once(py, "https://example.test", None, 1.0).unwrap_err();
+            assert!(error.is_instance_of::<PyRuntimeError>(py));
+            let error =
+                fetch_with_retry(py, "https://example.test", None, 1.0, 3, 30.0).unwrap_err();
             assert!(error.is_instance_of::<PyRuntimeError>(py));
         });
     }
