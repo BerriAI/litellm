@@ -6749,10 +6749,32 @@ async def test_continuous_usage_stats_keeps_usage_on_every_chunk(sync_mode: bool
 
     emitted: Final = [chunk async for chunk in wrapper] if not sync_mode else list(wrapper)
 
-    usage_chunks: Final = [chunk for chunk in emitted if getattr(chunk, "usage", None) is not None]
-    assert [chunk.usage.total_tokens for chunk in usage_chunks] == [11, 12, 13]
-    assert emitted[-1].choices == []
+    assert all(getattr(chunk, "usage", None) is not None for chunk in emitted)
+    assert [chunk.usage.total_tokens for chunk in emitted] == [11, 12, 13]
     assert litellm.stream_chunk_builder(chunks=emitted).usage.total_tokens == 13
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_continuous_usage_stats_finishes_before_the_final_usage_chunk(sync_mode: bool):
+    content_usage: Final = {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11}
+    final_usage: Final = {"prompt_tokens": 10, "completion_tokens": 3, "total_tokens": 13}
+    chunks: Final = [
+        _vllm_chunk({"index": 0, "delta": {"content": "Hi"}, "finish_reason": None}, usage=content_usage),
+        _vllm_chunk({"index": 0, "delta": {"content": "!"}, "finish_reason": "length"}, usage=final_usage),
+        ModelResponseStream(id="c", created=1, model="hosted_vllm/m", choices=[], usage=Usage(**final_usage)),
+    ]
+    wrapper: Final = _vllm_wrapper(chunks, stream_options={"include_usage": True, "continuous_usage_stats": True})
+
+    emitted: Final = [chunk async for chunk in wrapper] if not sync_mode else list(wrapper)
+
+    finish_indexes: Final = [i for i, chunk in enumerate(emitted) if chunk.choices and chunk.choices[0].finish_reason]
+    assert len(finish_indexes) == 1
+    assert emitted[finish_indexes[0]].choices[0].finish_reason == "length"
+    assert finish_indexes[0] < len(emitted) - 1
+    terminal_chunk: Final = emitted[-1]
+    assert not (terminal_chunk.choices and terminal_chunk.choices[0].finish_reason)
+    assert terminal_chunk.usage.total_tokens == final_usage["total_tokens"]
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
