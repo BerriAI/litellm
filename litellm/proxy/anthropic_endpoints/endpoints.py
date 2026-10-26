@@ -383,6 +383,7 @@ async def count_tokens(
             call_endpoint=True,
             messages_format="anthropic",
             require_deployment=True,
+            user_api_key_dict=user_api_key_dict,
             **_count_tokens_body_options(
                 data,
                 should_auto_drop_params_for_agentic_cli(

@@ -11215,7 +11215,17 @@ async def test_jwt_builder_returns_every_team_grant_the_key_path_gets(is_proxy_a
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "route", ["/v1/messages", "/messages", "/v1/chat/completions", "/chat/completions", "/v1/responses", "/responses"]
+    "route",
+    [
+        "/v1/messages",
+        "/messages",
+        "/v1/messages/count_tokens",
+        "/messages/count_tokens",
+        "/v1/chat/completions",
+        "/chat/completions",
+        "/v1/responses",
+        "/responses",
+    ],
 )
 async def test_claude_view_normalizes_before_model_access(monkeypatch, route):
     from starlette.requests import Request

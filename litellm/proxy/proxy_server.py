@@ -14398,6 +14398,75 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 
 
+def _count_route_model_is_served(llm_router: Router, model: str, team_id: str | None) -> bool:
+    """Whether routing can pick a deployment for ``model`` on the Anthropic count route.
+
+    Mirrors route_request's servability ladder through the router's own read-only
+    resolver: recognized names (model_name, deployment id, model_group_alias, routing
+    group), deployment litellm model names, and the early-resolve fallbacks (team
+    routes, wildcard patterns, team pattern routers, default deployment).
+    """
+    return (
+        llm_router.has_model_id(model)
+        or model in llm_router.team_public_model_names
+        or model in cast(Collection[str], llm_router.deployment_names)  # cast-ok: Router.deployment_names is untyped
+        or bool(llm_router.get_candidate_model_ids_for_route(model, team_id))
+    )
+
+
+def _count_route_request_kwargs(user_api_key_dict: UserAPIKeyAuth | None) -> Mapping[str, object]:
+    """Routing-only metadata carrying the caller's team, so team-scoped deployments resolve."""
+    if user_api_key_dict is None:
+        return {}
+    team_id: Final = _count_route_team_id(user_api_key_dict)
+    team_scope: Final = {"user_api_key_team_id": team_id} if team_id is not None else {}
+    return {"metadata": {"user_api_key_auth": user_api_key_dict, **team_scope}}
+
+
+def _count_route_team_id(user_api_key_dict: UserAPIKeyAuth | None) -> str | None:
+    team_id: Final = None if user_api_key_dict is None else user_api_key_dict.team_id
+    return team_id if isinstance(team_id, str) and team_id else None
+
+
+def _resolve_count_route_model(requested: str, user_api_key_dict: UserAPIKeyAuth | None) -> str:
+    """Apply the caller's key alias, then the proxy-wide alias, as the completion routes do."""
+    if user_api_key_dict is None:
+        return requested
+    key_aliases: Final = as_str_mapping(
+        cast(object, user_api_key_dict.aliases)  # cast-ok: the auth model's aliases field is declared as a bare dict
+    )
+    if key_aliases is not None and requested in key_aliases:
+        target: Final = key_aliases[requested]
+        return target if isinstance(target, str) and target else requested
+    global_target: Final = litellm.model_alias_map.get(requested)
+    return global_target if isinstance(global_target, str) and global_target else requested
+
+
+async def _raise_if_count_route_model_unserved(
+    llm_router: Router,
+    model: str,
+    requested: str,
+    team_id: str | None,
+) -> None:
+    """Raise 404 not_found_error when routing cannot pick a deployment for ``model``.
+
+    A model a sibling replica loaded but this replica has not is read through before the
+    rejection, the way route_request recovers from the same miss.
+    """
+    if _count_route_model_is_served(llm_router, model, team_id):
+        return
+    from litellm.proxy.common_utils.registry_read_through import model_registry_read_through
+
+    if await model_registry_read_through.attempt(model) and _count_route_model_is_served(llm_router, model, team_id):
+        return
+    raise ProxyException(
+        message=f"Model not found: {requested}",
+        type=ProxyErrorTypes.not_found_error,
+        param="model",
+        code=404,
+    )
+
+
 def _get_provider_token_counter(
     deployment: dict, model_to_use: str
 ) -> tuple[BaseTokenCounter | None, str | None, str | None]:
@@ -14578,6 +14647,7 @@ async def count_request_tokens(
     context_management: JsonValue = None,
     request_litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
     require_deployment: bool = False,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -14598,26 +14668,19 @@ async def count_request_tokens(
         # An unserved model on the Anthropic count route is a 404, not a local estimate from an
         # unrelated tokenizer. pass_through_all_models opts out, as on the completion routes.
         pass_through_all_models: Final = llm_router.router_general_settings.pass_through_all_models
-        if (
-            require_deployment
-            and not pass_through_all_models
-            and not llm_router.get_routable_deployments(request.model)
-        ):
-            raise ProxyException(
-                message=f"Model not found: {request.model}",
-                type=ProxyErrorTypes.not_found_error,
-                param="model",
-                code=404,
+        request_kwargs: Final = dict(_count_route_request_kwargs(user_api_key_dict))
+        resolution_model: Final = _resolve_count_route_model(request.model, user_api_key_dict)
+        if require_deployment and not pass_through_all_models:
+            await _raise_if_count_route_model_unserved(
+                llm_router, resolution_model, request.model, _count_route_team_id(user_api_key_dict)
             )
         # get 1 deployment corresponding to the model
         try:
             deployment = await llm_router.async_get_available_deployment(
-                model=request.model,
-                request_kwargs={},
+                model=resolution_model,
+                request_kwargs=request_kwargs,
             )
         except Exception:
-            if require_deployment and not pass_through_all_models:
-                raise
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.token_counter(): Exception occured while getting deployment"
             )

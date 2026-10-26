@@ -851,7 +851,7 @@ def _anthropic_image_tokens(data: str, use_default_image_token_count: bool) -> i
         )
     try:
         width, height = get_image_dimensions(data)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # any decode failure keeps the flat estimate, never fails a count
         verbose_logger.debug("Could not read the image's dimensions (%s), keeping the flat estimate", e)
         return calculate_img_tokens(data=data, mode="auto")
     return math.ceil(_anthropic_image_pixels(width, height) / ANTHROPIC_IMAGE_PIXELS_PER_TOKEN)

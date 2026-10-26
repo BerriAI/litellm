@@ -29,7 +29,7 @@ from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import VertexAIPartnerModelsTokenCounter
-from litellm.proxy._types import ProxyException, TokenCountRequest
+from litellm.proxy._types import ProxyException, TokenCountRequest, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
 )
@@ -182,6 +182,7 @@ async def test_anthropic_messages_count_tokens_endpoint():
         context_management=None,
         request_litellm_params=None,
         require_deployment=False,
+        user_api_key_dict=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "claude-3-sonnet-20240229"
@@ -263,6 +264,7 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
         context_management=None,
         request_litellm_params=None,
         require_deployment=False,
+        user_api_key_dict=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "gpt-4"
@@ -1082,6 +1084,7 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
         context_management=None,
         request_litellm_params=None,
         require_deployment=False,
+        user_api_key_dict=None,
     ):
         raise ProxyException(
             message='{"detail":{"message":"Input is too long for requested model."}}',
@@ -1140,6 +1143,7 @@ async def test_anthropic_endpoint_403_permission_error_format():
         context_management=None,
         request_litellm_params=None,
         require_deployment=False,
+        user_api_key_dict=None,
     ):
         raise ProxyException(
             message='{"Message":"Bearer Token has expired"}',
@@ -1198,6 +1202,7 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         context_management=None,
         request_litellm_params=None,
         require_deployment=False,
+        user_api_key_dict=None,
     ):
         raise ProxyException(
             message="Rate limit exceeded",
@@ -1931,12 +1936,14 @@ async def test_anthropic_count_tokens_resolves_aliases_and_wildcards_before_coun
         patch.object(
             litellm.proxy.proxy_server,
             "_try_provider_token_count",
-            AsyncMock(return_value=TokenCountResponse(
-                total_tokens=11,
-                request_model=requested_model,
-                model_used=requested_model,
-                tokenizer_type="openai_tokenizer",
-            )),
+            AsyncMock(
+                return_value=TokenCountResponse(
+                    total_tokens=11,
+                    request_model=requested_model,
+                    model_used=requested_model,
+                    tokenizer_type="openai_tokenizer",
+                )
+            ),
         ),
     ):
         response: Final = await anthropic_count_tokens(mock_request, MagicMock())
@@ -1962,3 +1969,171 @@ async def test_utils_token_counter_keeps_the_local_fallback_for_an_unlisted_mode
 
     assert response.model_used == "unlisted-model"
     assert response.total_tokens > 0
+
+
+_TEAM_MODEL_ROUTER_MODEL_LIST: Final = [
+    {
+        "model_name": "model_name_team-abc_1111",
+        "litellm_params": {"model": "anthropic/claude-3-sonnet-20240229", "api_key": "test-key"},
+        "model_info": {"id": "dep-team", "team_id": "team-abc", "team_public_model_name": "claude-team"},
+    },
+]
+
+
+async def _count_through_the_anthropic_route(body: dict, user_api_key_dict: UserAPIKeyAuth) -> object:
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.headers = {}
+    mock_request.scope = {}
+    with patch.object(anthropic_endpoints, "read_request_body", AsyncMock(return_value=body)):
+        return await anthropic_count_tokens(mock_request, user_api_key_dict)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_resolves_a_team_scoped_model_the_messages_route_serves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A team's public model name counts from the team deployment's provider counter.
+
+    The gate and the router call both carry the caller's team id, so a team-scoped deployment
+    (public name `claude-team`, internal name `model_name_<team>_<uuid>`) is resolved instead of
+    being reported as unserved.
+    """
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", Router(model_list=_TEAM_MODEL_ROUTER_MODEL_LIST))
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    counted: Final = TokenCountResponse(
+        total_tokens=11, request_model="claude-team", model_used="claude-sonnet", tokenizer_type="anthropic_tokenizer"
+    )
+    seen_deployments: Final[list[object]] = []
+
+    async def fake_provider_count(**kwargs):
+        seen_deployments.append(kwargs["deployment"])
+        return counted
+
+    with patch.object(litellm.proxy.proxy_server, "_try_provider_token_count", fake_provider_count):
+        response: Final = await _count_through_the_anthropic_route(
+            {"model": "claude-team", "messages": [{"role": "user", "content": "Hello!"}]},
+            UserAPIKeyAuth(team_id="team-abc"),
+        )
+
+    assert response == {"input_tokens": 11}
+    assert seen_deployments and seen_deployments[0]["model_info"]["id"] == "dep-team"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_resolves_a_key_alias_before_counting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A name that is only a key alias resolves to the group it targets, as on the completion routes."""
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "llm_router", Router(model_list=_NONEXISTENT_MODEL_ROUTER_MODEL_LIST)
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+
+    with patch.object(
+        litellm.proxy.proxy_server,
+        "_try_provider_token_count",
+        AsyncMock(
+            return_value=TokenCountResponse(
+                total_tokens=11,
+                request_model="counted-alias",
+                model_used="claude-counted",
+                tokenizer_type="openai_tokenizer",
+            )
+        ),
+    ):
+        response: Final = await _count_through_the_anthropic_route(
+            {"model": "counted-alias", "messages": [{"role": "user", "content": "Hello!"}]},
+            UserAPIKeyAuth(aliases={"counted-alias": "claude-counted"}),
+        )
+
+    assert response == {"input_tokens": 11}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_counts_a_served_model_whose_deployments_are_in_cooldown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Routing-availability errors fall back to the local count, so a cooldown never fails a count.
+
+    Token counting consumes no generation capacity; only an unserved model is a 404.
+    """
+    router: Final = Router(model_list=_NONEXISTENT_MODEL_ROUTER_MODEL_LIST)
+    router.cooldown_cache.add_deployment_to_cooldown(
+        model_id=router.model_list[0]["model_info"]["id"],
+        original_exception=Exception("upstream 429"),
+        exception_status=429,
+        cooldown_time=120,
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+
+    response: Final = await _count_through_the_anthropic_route(
+        {"model": "claude-counted", "messages": [{"role": "user", "content": "Hello!"}]},
+        UserAPIKeyAuth(),
+    )
+
+    assert isinstance(response, dict)
+    assert response["input_tokens"] > 0
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_still_counts_any_name_when_passing_through_all_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`pass_through_all_models` opts out of the served-model requirement, as on the completion routes."""
+    router: Final = Router(model_list=_NONEXISTENT_MODEL_ROUTER_MODEL_LIST)
+    router.router_general_settings.pass_through_all_models = True
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+
+    response: Final = await _count_through_the_anthropic_route(
+        {"model": "unlisted-model", "messages": [{"role": "user", "content": "Hello!"}]},
+        UserAPIKeyAuth(),
+    )
+
+    assert isinstance(response, dict)
+    assert response["input_tokens"] > 0
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_reads_a_sibling_replicas_model_through_before_rejecting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A model this replica has not loaded but the registry has counts instead of 404ing.
+
+    With `store_model_in_db`, a row created on a sibling replica is absent from this replica's
+    router until the next reload. `/v1/messages` recovers through the model registry read-through,
+    so the count route does too rather than reporting a model the gateway serves as not found.
+    """
+    from litellm.proxy.common_utils import registry_read_through
+    from litellm.proxy.common_utils.registry_read_through import RegistryReadThrough
+
+    router: Final = Router(model_list=_NONEXISTENT_MODEL_ROUTER_MODEL_LIST)
+    sibling_deployment: Final[dict[str, object]] = {
+        "model_name": "claude-sibling",
+        "litellm_params": {"model": "anthropic/claude-3-sonnet-20240229", "api_key": "k"},
+    }
+
+    async def resync(_model: str) -> bool:
+        router.set_model_list([*router.model_list, sibling_deployment])
+        return True
+
+    read_through: Final = RegistryReadThrough(resync=resync, is_loaded=lambda name: name in router.model_names)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+
+    counted: Final = TokenCountResponse(
+        total_tokens=7, request_model="claude-sibling", model_used="claude-sonnet", tokenizer_type="anthropic_tokenizer"
+    )
+    with (
+        patch.object(registry_read_through, "model_registry_read_through", read_through),
+        patch.object(litellm.proxy.proxy_server, "_try_provider_token_count", AsyncMock(return_value=counted)),
+    ):
+        response: Final = await _count_through_the_anthropic_route(
+            {"model": "claude-sibling", "messages": [{"role": "user", "content": "Hello!"}]},
+            UserAPIKeyAuth(),
+        )
+
+    assert response == {"input_tokens": 7}
