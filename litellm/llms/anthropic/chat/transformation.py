@@ -106,6 +106,7 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import Message as LitellmMessage
 from litellm.utils import (
+    EXTRA_BODY_ROUTING_KEYS,
     ModelResponse,
     Usage,
     add_dummy_tool,
@@ -166,6 +167,7 @@ _DEFER_LOADING_ADAPTER: Final = TypeAdapter(bool)
 _TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_ADAPTER: Final = TypeAdapter(list[object])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_EXTRA_BODY_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
     ("date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid")
 )
@@ -2419,6 +2421,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         request_params: Final = cast(  # cast-ok: optional_params is the untyped dict of the shared transform signature
             dict[str, object], optional_params
         )
+        extra_body: Final = _EXTRA_BODY_ADAPTER.validate_python(request_params.pop("extra_body", None) or {})
         marked_tools: Final = tools_marked_for_a_tool_config_point(
             request_params.get("tools"), request_params.pop("cache_control_injection_points", None)
         )
@@ -2456,6 +2459,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "messages": anthropic_messages,
             **optional_params,
             **({} if marked_tools is None else {"tools": list(marked_tools)}),
+            **{k: v for k, v in extra_body.items() if k not in EXTRA_BODY_ROUTING_KEYS},
         }
 
         self._apply_output_config(data=data, model=model, optional_params=optional_params)
