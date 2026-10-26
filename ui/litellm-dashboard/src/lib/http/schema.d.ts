@@ -35223,14 +35223,22 @@ export interface components {
             cache_creation_input_token_cost_above_12hr?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens */
             cache_creation_input_token_cost_above_12hr_above_272k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Batches */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Flex */
             cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Priority */
             cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Ultrafast */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Batches */
+            cache_creation_input_token_cost_above_12hr_batches?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Flex */
             cache_creation_input_token_cost_above_12hr_flex?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Priority */
             cache_creation_input_token_cost_above_12hr_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Ultrafast */
+            cache_creation_input_token_cost_above_12hr_ultrafast?: number | null;
             /** Cache Creation Input Token Cost Above 1Hr */
             cache_creation_input_token_cost_above_1hr?: number | null;
             /** Cache Creation Input Token Cost Above 1Hr Above 100K Tokens */
@@ -46320,6 +46328,21 @@ export interface components {
             team_id: string;
         };
         /**
+         * TeamListCallerMembership
+         * @description The calling user's own spend and effective member budget in a team.
+         */
+        TeamListCallerMembership: {
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+        };
+        /**
          * TeamListItem
          * @description A team item in the paginated list response, enriched with computed fields.
          */
@@ -46355,6 +46378,7 @@ export interface components {
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
+            caller_membership?: components["schemas"]["TeamListCallerMembership"] | null;
             /** Created At */
             created_at?: string | null;
             /** Default Team Member Models */
@@ -50237,14 +50261,22 @@ export interface components {
             cache_creation_input_token_cost_above_12hr?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens */
             cache_creation_input_token_cost_above_12hr_above_272k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Batches */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Flex */
             cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Priority */
             cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Ultrafast */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Batches */
+            cache_creation_input_token_cost_above_12hr_batches?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Flex */
             cache_creation_input_token_cost_above_12hr_flex?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Priority */
             cache_creation_input_token_cost_above_12hr_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Ultrafast */
+            cache_creation_input_token_cost_above_12hr_ultrafast?: number | null;
             /** Cache Creation Input Token Cost Above 1Hr */
             cache_creation_input_token_cost_above_1hr?: number | null;
             /** Cache Read Input Token Cost */
@@ -50542,14 +50574,22 @@ export interface components {
             cache_creation_input_token_cost_above_12hr?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens */
             cache_creation_input_token_cost_above_12hr_above_272k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Batches */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Flex */
             cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Priority */
             cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Ultrafast */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Batches */
+            cache_creation_input_token_cost_above_12hr_batches?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Flex */
             cache_creation_input_token_cost_above_12hr_flex?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Priority */
             cache_creation_input_token_cost_above_12hr_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Ultrafast */
+            cache_creation_input_token_cost_above_12hr_ultrafast?: number | null;
             /** Cache Creation Input Token Cost Above 1Hr */
             cache_creation_input_token_cost_above_1hr?: number | null;
             /** Cache Creation Input Token Cost Above 1Hr Above 100K Tokens */
