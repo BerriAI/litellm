@@ -48,8 +48,15 @@ pub struct Price {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Prices {
-    rates: BTreeMap<Price, UnitPrice>,
+    rates: BTreeMap<(Price, PriceSource), UnitPrice>,
     off_peak: Option<OffPeak>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PriceSource {
+    #[default]
+    Flat,
+    TokenTier(u64),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -101,19 +108,42 @@ impl Price {
 
 impl Prices {
     pub fn new(rates: BTreeMap<Price, UnitPrice>, off_peak: Option<OffPeak>) -> Self {
+        Self::from_sources(
+            rates
+                .into_iter()
+                .map(|(price, rate)| ((price, PriceSource::Flat), rate))
+                .collect(),
+            off_peak,
+        )
+    }
+
+    pub fn from_sources(
+        rates: BTreeMap<(Price, PriceSource), UnitPrice>,
+        off_peak: Option<OffPeak>,
+    ) -> Self {
         Self { rates, off_peak }
     }
 
     pub fn get(&self, price: &Price) -> Option<UnitPrice> {
-        self.rates.get(price).copied()
+        self.get_from(price, PriceSource::Flat)
+    }
+
+    pub fn get_from(&self, price: &Price, source: PriceSource) -> Option<UnitPrice> {
+        self.rates.get(&(price.clone(), source)).copied()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&Price, UnitPrice)> {
-        self.rates.iter().map(|(price, rate)| (price, *rate))
+        self.rates.iter().filter_map(|((price, source), rate)| {
+            (*source == PriceSource::Flat).then_some((price, *rate))
+        })
     }
 
     pub fn off_peak(&self) -> Option<&OffPeak> {
         self.off_peak.as_ref()
+    }
+
+    pub fn has_token_prices(&self) -> bool {
+        self.rates.keys().any(|(price, _)| price.meter.is_token()) || self.off_peak.is_some()
     }
 
     /// The online prompt band a request falls in. Every token meter's `_above_` prices count,
@@ -129,8 +159,39 @@ impl Prices {
         prompt_tokens: u64,
         inclusive: bool,
     ) -> Band {
-        self.rates
-            .keys()
+        Self::find_band(
+            self.iter().map(|(price, _)| price),
+            channel,
+            tier,
+            prompt_tokens,
+            inclusive,
+        )
+    }
+
+    pub(crate) fn all_source_band(
+        &self,
+        channel: Channel,
+        tier: ServiceTier,
+        prompt_tokens: u64,
+        inclusive: bool,
+    ) -> Band {
+        Self::find_band(
+            self.rates.keys().map(|(price, _)| price),
+            channel,
+            tier,
+            prompt_tokens,
+            inclusive,
+        )
+    }
+
+    fn find_band<'a>(
+        prices: impl Iterator<Item = &'a Price>,
+        channel: Channel,
+        tier: ServiceTier,
+        prompt_tokens: u64,
+        inclusive: bool,
+    ) -> Band {
+        prices
             .filter(|price| {
                 price.channel == channel
                     && price.meter.sets_prompt_band()
@@ -246,6 +307,93 @@ mod tests {
         kind: TokenKind::Text,
         ttl: CacheTtl::OneHour,
     };
+
+    #[rstest]
+    fn source_qualified_rates_do_not_enter_generic_lookup_or_bands() {
+        let flat = Price::online(INPUT, When::default());
+        let first_tier = Price::online(OUTPUT, When::default());
+        let last_tier = Price::online(
+            OUTPUT,
+            When {
+                band: Band::over_prompt_tokens(100),
+                ..Default::default()
+            },
+        );
+        let prices = Prices::from_sources(
+            [
+                (
+                    (flat.clone(), PriceSource::Flat),
+                    UnitPrice::new(1.0).unwrap(),
+                ),
+                (
+                    (flat.clone(), PriceSource::TokenTier(0)),
+                    UnitPrice::new(3.0).unwrap(),
+                ),
+                (
+                    (first_tier.clone(), PriceSource::TokenTier(0)),
+                    UnitPrice::new(4.0).unwrap(),
+                ),
+                (
+                    (last_tier, PriceSource::TokenTier(100)),
+                    UnitPrice::new(5.0).unwrap(),
+                ),
+            ]
+            .into(),
+            None,
+        );
+        assert_eq!(prices.get(&flat), UnitPrice::new(1.0));
+        assert_eq!(
+            prices.get_from(&flat, PriceSource::TokenTier(0)),
+            UnitPrice::new(3.0)
+        );
+        assert_eq!(
+            prices.get_from(&first_tier, PriceSource::TokenTier(0)),
+            UnitPrice::new(4.0)
+        );
+        assert_eq!(prices.get(&first_tier), None);
+        assert_eq!(
+            prices.rate(&OUTPUT, ServiceTier::Standard, Band::Base),
+            None
+        );
+        assert_eq!(prices.band(ServiceTier::Standard, 101, true), Band::Base);
+        assert_eq!(
+            prices.iter().collect::<Vec<_>>(),
+            vec![(&flat, UnitPrice::new(1.0).unwrap())]
+        );
+        assert!(prices.has_token_prices());
+    }
+
+    #[rstest]
+    #[case::input(INPUT, true)]
+    #[case::output(OUTPUT, true)]
+    #[case::read(CACHE_READ, true)]
+    #[case::hour_write(CACHE_WRITE_HOUR, true)]
+    #[case::reasoning(Meter::Output(OutputUnit::ReasoningToken), true)]
+    #[case::audio(Meter::Input(InputUnit::Token(TokenKind::Audio)), true)]
+    #[case::image_token(Meter::Output(OutputUnit::Token(TokenKind::Image)), true)]
+    #[case::video_token(Meter::Output(OutputUnit::Token(TokenKind::Video)), true)]
+    #[case::image(Meter::Input(InputUnit::Image), false)]
+    #[case::characters(Meter::Output(OutputUnit::Character), false)]
+    #[case::query(Meter::Input(InputUnit::Query { over_results: None }), false)]
+    #[case::wall_clock(Meter::WallClockSecond, false)]
+    fn token_presence_is_explicit_and_independent_of_request(
+        #[case] meter: Meter,
+        #[case] expected: bool,
+        #[values(PriceSource::Flat, PriceSource::TokenTier(0))] source: PriceSource,
+        #[values(Channel::Online, Channel::Batch, Channel::Decisions)] channel: Channel,
+    ) {
+        let key = Price {
+            meter,
+            channel,
+            when: When {
+                tier: ServiceTier::Flex,
+                band: Band::over_prompt_tokens(100),
+            },
+        };
+        let prices =
+            Prices::from_sources([((key, source), UnitPrice::new(0.0).unwrap())].into(), None);
+        assert_eq!(prices.has_token_prices(), expected);
+    }
 
     fn over(tokens: u64) -> Band {
         Band::over_prompt_tokens(tokens)

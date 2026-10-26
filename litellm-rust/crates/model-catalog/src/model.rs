@@ -17,8 +17,22 @@ pub struct Model {
     pub unrecognized: Vec<String>,
 }
 
+#[derive(Clone, Copy, Default, strum::VariantArray)]
+pub enum PriceLowering {
+    #[default]
+    Generic,
+    SdkTokens,
+}
+
 impl Model {
     pub fn from_fields(fields: &Fields) -> Result<Self, Vec<Located>> {
-        Self::try_from(EntryWire::read(fields))
+        Self::from_fields_with_policy(fields, PriceLowering::Generic)
+    }
+
+    pub fn from_fields_with_policy(
+        fields: &Fields,
+        policy: PriceLowering,
+    ) -> Result<Self, Vec<Located>> {
+        Self::lower(EntryWire::read(fields), policy)
     }
 }

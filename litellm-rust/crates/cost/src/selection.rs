@@ -2,7 +2,10 @@ use std::collections::BTreeSet;
 
 use crate::calculate::{Usage, When, resolve};
 use crate::money::UnitPrice;
-use crate::price::{Band, Channel, Meter, OutputUnit, Price, Prices, ServiceTier, TokenKind};
+use crate::price::{
+    Band, CacheReadMode, CacheTtl, Channel, InputUnit, Meter, OutputUnit, Price, PriceSource,
+    Prices, ServiceTier, TokenKind,
+};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub enum SelectionPolicy<'a> {
@@ -48,13 +51,13 @@ impl SelectionPolicy<'_> {
                 if let Some(rate) = off_peak {
                     return Some((meter.clone(), rate));
                 }
-                if let Some(tier) = sources.priced_tier(usage.prompt_tokens) {
-                    if let Some(rate) = tier.rate(prices, meter) {
-                        return Some((meter.clone(), rate));
-                    }
-                    if let Some(rate) = tier.rate(prices, &output) {
-                        return Some((output, rate));
-                    }
+                if let Some(tier) = sources.priced_tier(usage.prompt_tokens)
+                    && (tier.meters.contains(meter) || tier.meters.contains(&output))
+                {
+                    return tier
+                        .rate(prices, meter)
+                        .map(|rate| (meter.clone(), rate))
+                        .or_else(|| tier.rate(prices, &output).map(|rate| (output, rate)));
                 }
                 if let Some(rate) = sources.flat_rate(prices, meter, when.tier) {
                     return Some((meter.clone(), rate));
@@ -62,20 +65,64 @@ impl SelectionPolicy<'_> {
                 if when.tier != ServiceTier::Standard
                     && sources.flat_rate(prices, &output, when.tier).is_some()
                 {
-                    return resolve(prices, &output, band, usage, when);
+                    return self.resolve(prices, &output, band, usage, when);
                 }
                 sources
                     .flat_rate(prices, meter, ServiceTier::Standard)
                     .map(|rate| (meter.clone(), rate))
-                    .or_else(|| resolve(prices, &output, band, usage, when))
+                    .or_else(|| self.resolve(prices, &output, band, usage, when))
             }
             Meter::Output(OutputUnit::Token(kind)) if *kind != TokenKind::Text => sources
                 .flat_rate(prices, meter, ServiceTier::Standard)
                 .map(|rate| (meter.clone(), rate))
-                .or_else(|| resolve(prices, &output, band, usage, when)),
-            _ => resolve(prices, meter, band, usage, when),
+                .or_else(|| self.resolve(prices, &output, band, usage, when)),
+            Meter::Input(InputUnit::Token(_))
+            | Meter::Output(OutputUnit::Token(_))
+            | Meter::CacheRead { .. }
+            | Meter::CacheWrite { .. } => {
+                if let Some(tier) = sources.priced_tier(usage.prompt_tokens)
+                    && matches!(
+                        meter,
+                        Meter::Input(InputUnit::Token(TokenKind::Text))
+                            | Meter::Output(OutputUnit::Token(TokenKind::Text))
+                            | Meter::CacheRead {
+                                kind: TokenKind::Text,
+                                ..
+                            }
+                            | Meter::CacheWrite {
+                                kind: TokenKind::Text,
+                                ..
+                            }
+                    )
+                {
+                    return tier.resolve(prices, meter, when);
+                }
+                overlay(prices, meter, when)
+                    .or_else(|| prices.direct_rate(meter, when.channel, when.tier, band))
+                    .map(|rate| (meter.clone(), rate))
+                    .or_else(|| self.resolve(prices, &meter.fallback()?, band, usage, when))
+            }
+            _ => resolve(
+                prices,
+                meter,
+                prices.all_source_band(
+                    when.channel,
+                    when.tier,
+                    usage.prompt_tokens,
+                    usage.inclusive_threshold,
+                ),
+                usage,
+                when,
+            ),
         }
     }
+}
+
+fn overlay(prices: &Prices, meter: &Meter, when: &When) -> Option<UnitPrice> {
+    prices
+        .off_peak()
+        .filter(|off_peak| off_peak.schedule().contains(when.at))
+        .and_then(|off_peak| off_peak.rates().get(meter))
 }
 
 impl TokenPriceSources {
@@ -104,17 +151,53 @@ impl TokenPriceSources {
 }
 
 impl TokenTier {
+    fn resolve(&self, prices: &Prices, meter: &Meter, when: &When) -> Option<(Meter, UnitPrice)> {
+        if matches!(
+            meter,
+            Meter::CacheWrite {
+                ttl: CacheTtl::OneHour | CacheTtl::TwelveHours,
+                ..
+            }
+        ) {
+            return self
+                .rate(prices, meter)
+                .map(|rate| (meter.clone(), rate))
+                .or_else(|| self.resolve(prices, &meter.fallback()?, when));
+        }
+        if let Some(rate) = overlay(prices, meter, when).or_else(|| self.rate(prices, meter)) {
+            return Some((meter.clone(), rate));
+        }
+        match meter {
+            Meter::Output(OutputUnit::Token(TokenKind::Text)) if !self.meters.contains(meter) => {
+                prices
+                    .get(&Price::online(meter.clone(), Default::default()))
+                    .map(|rate| (meter.clone(), rate))
+            }
+            Meter::CacheRead {
+                mode: CacheReadMode::Explicit,
+                ..
+            } => self.resolve(prices, &meter.fallback()?, when),
+            Meter::CacheRead { .. } | Meter::CacheWrite { .. } => self
+                .rate(prices, &Meter::TEXT_INPUT)
+                .map(|rate| (Meter::TEXT_INPUT, rate)),
+            _ => None,
+        }
+    }
+
     fn rate(&self, prices: &Prices, meter: &Meter) -> Option<UnitPrice> {
         self.meters
             .contains(meter)
             .then(|| {
-                prices.get(&Price::online(
-                    meter.clone(),
-                    crate::price::When {
-                        band: Band::over_prompt_tokens(self.range[0]),
-                        ..Default::default()
-                    },
-                ))
+                prices.get_from(
+                    &Price::online(
+                        meter.clone(),
+                        crate::price::When {
+                            band: Band::over_prompt_tokens(self.range[0]),
+                            ..Default::default()
+                        },
+                    ),
+                    PriceSource::TokenTier(self.range[0]),
+                )
             })
             .flatten()
     }
@@ -132,6 +215,132 @@ mod tests {
 
     const OUTPUT: Meter = Meter::Output(OutputUnit::Token(TokenKind::Text));
     const REASONING: Meter = Meter::Output(OutputUnit::ReasoningToken);
+    const INPUT: Meter = Meter::TEXT_INPUT;
+    const READ: Meter = Meter::CacheRead {
+        kind: TokenKind::Text,
+        mode: CacheReadMode::Implicit,
+    };
+    const EXPLICIT: Meter = Meter::CacheRead {
+        kind: TokenKind::Text,
+        mode: CacheReadMode::Explicit,
+    };
+    const WRITE: Meter = Meter::CacheWrite {
+        kind: TokenKind::Text,
+        ttl: CacheTtl::Default,
+    };
+    const HOUR: Meter = Meter::CacheWrite {
+        kind: TokenKind::Text,
+        ttl: CacheTtl::OneHour,
+    };
+    const TWELVE: Meter = Meter::CacheWrite {
+        kind: TokenKind::Text,
+        ttl: CacheTtl::TwelveHours,
+    };
+
+    #[fixture]
+    fn tier_prices() -> (Prices, TokenPriceSources) {
+        let flat = [INPUT, OUTPUT, READ, EXPLICIT, WRITE, HOUR, TWELVE]
+            .into_iter()
+            .map(|meter| rate(meter, ServiceTier::Standard, Band::Base, 9.0));
+        let tier_rates = [
+            (INPUT, 0, 1.0),
+            (OUTPUT, 0, 2.0),
+            (WRITE, 0, 3.0),
+            (INPUT, 100, 4.0),
+            (READ, 100, 0.0),
+            (WRITE, 100, 6.0),
+            (HOUR, 100, 0.0),
+        ]
+        .into_iter()
+        .map(|(meter, start, value)| {
+            let (price, rate) = rate(
+                meter,
+                ServiceTier::Standard,
+                Band::over_prompt_tokens(start),
+                value,
+            );
+            ((price, PriceSource::TokenTier(start)), rate)
+        });
+        let prices = Prices::from_sources(
+            flat.map(|(price, rate)| ((price, PriceSource::Flat), rate))
+                .chain(tier_rates)
+                .collect(),
+            OffPeak::new(
+                Schedule {
+                    windows: vec![Window {
+                        hours: vec!["01:00-02:00".parse().unwrap()],
+                        weekdays: None,
+                    }],
+                    weekday_timezone: None,
+                },
+                OffPeakRates {
+                    input: UnitPrice::new(7.0),
+                    output: UnitPrice::new(8.0),
+                    cache_write: UnitPrice::new(0.0),
+                    ..Default::default()
+                },
+            ),
+        );
+        let sources = TokenPriceSources {
+            flat: prices.iter().map(|(price, _)| price.clone()).collect(),
+            tiers: vec![
+                TokenTier {
+                    range: [0, 100],
+                    meters: [INPUT, OUTPUT, WRITE].into(),
+                },
+                TokenTier {
+                    range: [100, 200],
+                    meters: [INPUT, READ, WRITE, HOUR].into(),
+                },
+            ],
+        };
+        (prices, sources)
+    }
+
+    #[rstest]
+    #[case::input(INPUT, 10, 0, INPUT, 1.0)]
+    #[case::boundary(INPUT, 100, 0, INPUT, 1.0)]
+    #[case::next(INPUT, 101, 0, INPUT, 4.0)]
+    #[case::final_boundary(INPUT, 200, 0, INPUT, 4.0)]
+    #[case::above_last(INPUT, 201, 0, INPUT, 4.0)]
+    #[case::zero_prompt(INPUT, 0, 0, INPUT, 9.0)]
+    #[case::read_ignores_flat(READ, 10, 0, INPUT, 1.0)]
+    #[case::explicit_fallback(EXPLICIT, 10, 0, INPUT, 1.0)]
+    #[case::write_ignores_flat(WRITE, 10, 0, WRITE, 3.0)]
+    #[case::hour_ignores_flat(HOUR, 10, 0, WRITE, 3.0)]
+    #[case::twelve_ignores_flat(TWELVE, 10, 0, WRITE, 3.0)]
+    #[case::zero_read(READ, 101, 0, READ, 0.0)]
+    #[case::explicit_fallback_zero(EXPLICIT, 101, 0, READ, 0.0)]
+    #[case::zero_hour(HOUR, 101, 0, HOUR, 0.0)]
+    #[case::output_falls_back_flat_not_previous_tier(OUTPUT, 101, 0, OUTPUT, 9.0)]
+    #[case::input_offpeak(INPUT, 10, 3600, INPUT, 7.0)]
+    #[case::read_fallback_precedes_input_offpeak(READ, 10, 3600, INPUT, 1.0)]
+    #[case::default_write_offpeak(WRITE, 10, 3600, WRITE, 0.0)]
+    #[case::hour_follows_write_offpeak(HOUR, 10, 3600, WRITE, 0.0)]
+    #[case::twelve_follows_write_offpeak(TWELVE, 10, 3600, WRITE, 0.0)]
+    #[case::explicit_hour_isolated_offpeak(HOUR, 101, 3600, HOUR, 0.0)]
+    #[case::output_offpeak(OUTPUT, 10, 3600, OUTPUT, 8.0)]
+    #[case::offpeak_end_excluded(WRITE, 10, 7200, WRITE, 3.0)]
+    fn sdk_tier_cache_fallback_and_ttl_isolation(
+        tier_prices: (Prices, TokenPriceSources),
+        #[case] requested: Meter,
+        #[case] prompt: u64,
+        #[case] at: i64,
+        #[case] billed: Meter,
+        #[case] value: f64,
+        #[values(ServiceTier::Standard, ServiceTier::Priority)] tier: ServiceTier,
+    ) {
+        let (prices, sources) = tier_prices;
+        let usage = usage(requested.clone(), prompt, false);
+        let when = When {
+            tier,
+            channel: Channel::Online,
+            at: OffsetDateTime::from_unix_timestamp(at).unwrap(),
+        };
+        let result =
+            calculate_with_policy(&prices, &usage, &when, SelectionPolicy::SdkTokens(&sources));
+        assert_eq!(result, expected(billed, requested, value));
+    }
 
     #[fixture]
     fn when() -> When {
@@ -310,7 +519,7 @@ mod tests {
     ) {
         let (input_declared, output_declared) = declared;
         let (tier_reasoning, offpeak_reasoning) = reasoning;
-        let prices = Prices::new(
+        let prices = Prices::from_sources(
             [
                 rate(REASONING, ServiceTier::Standard, Band::Base, 5.0),
                 rate(OUTPUT, ServiceTier::Standard, Band::Base, 3.0),
@@ -330,6 +539,14 @@ mod tests {
                     value,
                 )
             }))
+            .map(|(price, value)| {
+                let source = match (price.meter.clone(), price.when.band) {
+                    (REASONING, Band::Base) => PriceSource::Flat,
+                    (_, Band::Base) => PriceSource::TokenTier(0),
+                    (_, Band::OverPromptTokens(start)) => PriceSource::TokenTier(start.get()),
+                };
+                ((price, source), value)
+            })
             .collect(),
             overlay(offpeak_reasoning, Some(1.0)),
         );

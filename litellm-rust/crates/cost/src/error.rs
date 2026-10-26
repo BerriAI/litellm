@@ -1,5 +1,13 @@
 use std::fmt;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error, strum::VariantArray)]
+pub enum PriceEvaluationError {
+    #[error("only token meters can be projected")]
+    NonTokenProjection,
+    #[error("pricing produced a non-finite amount or rate")]
+    NonFiniteValue,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InvalidUtcWindow;
 

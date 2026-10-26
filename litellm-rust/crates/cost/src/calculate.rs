@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 
 use time::OffsetDateTime;
 
-use crate::money::{UnitPrice, Usd};
+use crate::PriceEvaluationError;
+use crate::money::{ScaleFactor, UnitPrice, Usd};
 use crate::price::{Band, Channel, InputUnit, Meter, OutputUnit, Prices, ServiceTier};
 use crate::selection::SelectionPolicy;
 
@@ -43,6 +44,89 @@ pub struct Line {
     pub unit_price: UnitPrice,
     pub amount: Usd,
     pub fallback_from: Option<Meter>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SelectedRate {
+    pub requested_meter: Meter,
+    pub resolved: Option<(Meter, UnitPrice)>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PriceEvaluation {
+    pub pricing: Priced,
+    pub rates: Vec<SelectedRate>,
+}
+
+pub fn calculate_with_rates(
+    prices: &Prices,
+    usage: &Usage,
+    when: &When,
+    policy: SelectionPolicy<'_>,
+    project: &[Meter],
+    factors: &[ScaleFactor],
+) -> Result<PriceEvaluation, PriceEvaluationError> {
+    if project.iter().any(|meter| !meter.is_token()) {
+        return Err(PriceEvaluationError::NonTokenProjection);
+    }
+    let factor = ScaleFactor::combine(factors).ok_or(PriceEvaluationError::NonFiniteValue)?;
+    let band = prices.channel_band(
+        when.channel,
+        when.tier,
+        usage.prompt_tokens,
+        usage.inclusive_threshold,
+    );
+    let rates = project
+        .iter()
+        .map(|meter| {
+            let resolved = policy
+                .resolve(prices, meter, band, usage, when)
+                .map(|(source, rate)| {
+                    factor
+                        .price(rate)
+                        .map(|rate| (source, rate))
+                        .ok_or(PriceEvaluationError::NonFiniteValue)
+                })
+                .transpose()?;
+            Ok(SelectedRate {
+                requested_meter: meter.clone(),
+                resolved,
+            })
+        })
+        .collect::<Result<_, PriceEvaluationError>>()?;
+    let pricing = match calculate_with_policy(prices, usage, when, policy) {
+        Priced::Known(breakdown) => Priced::Known(scale_breakdown(breakdown, factor)?),
+        Priced::Unpriced { missing, partial } => Priced::Unpriced {
+            missing,
+            partial: scale_breakdown(partial, factor)?,
+        },
+    };
+    Ok(PriceEvaluation { pricing, rates })
+}
+
+fn scale_breakdown(
+    breakdown: Breakdown,
+    factor: ScaleFactor,
+) -> Result<Breakdown, PriceEvaluationError> {
+    let total = factor
+        .amount(breakdown.total)
+        .ok_or(PriceEvaluationError::NonFiniteValue)?;
+    let lines = breakdown
+        .lines
+        .into_iter()
+        .map(|line| {
+            Ok(Line {
+                unit_price: factor
+                    .price(line.unit_price)
+                    .ok_or(PriceEvaluationError::NonFiniteValue)?,
+                amount: factor
+                    .amount(line.amount)
+                    .ok_or(PriceEvaluationError::NonFiniteValue)?,
+                ..line
+            })
+        })
+        .collect::<Result<_, PriceEvaluationError>>()?;
+    Ok(Breakdown { total, lines })
 }
 
 impl Breakdown {
@@ -229,6 +313,136 @@ mod tests {
 
     const INPUT: Meter = Meter::TEXT_INPUT;
     const OUTPUT: Meter = Meter::Output(OutputUnit::Token(TokenKind::Text));
+
+    #[rstest]
+    #[case::unused_output(Some(2.0), 1.0)]
+    #[case::scaled_unused_output(Some(2.0), 6.0)]
+    #[case::missing_output(None, 1.0)]
+    #[case::missing_output_zero_factor(None, 0.0)]
+    #[case::explicit_zero_output(Some(0.0), 1.0)]
+    #[case::known_output_zero_factor(Some(2.0), 0.0)]
+    fn unused_projection_preserves_actual_pricing(
+        when: When,
+        #[case] output: Option<f64>,
+        #[case] factor: f64,
+    ) {
+        let prices = prices(
+            [(INPUT, 1.0)]
+                .into_iter()
+                .chain(output.map(|rate| (OUTPUT, rate))),
+        );
+        let usage = Usage {
+            quantities: BTreeMap::from([(INPUT, 10)]),
+            ..Usage::default()
+        };
+        let evaluated = calculate_with_rates(
+            &prices,
+            &usage,
+            &when,
+            SelectionPolicy::Generic,
+            &[OUTPUT],
+            &[ScaleFactor::new(factor).unwrap()],
+        )
+        .unwrap();
+        assert_eq!(
+            evaluated.rates,
+            vec![SelectedRate {
+                requested_meter: OUTPUT,
+                resolved: output.map(|rate| (OUTPUT, UnitPrice::new(rate * factor).unwrap()))
+            }]
+        );
+        assert_eq!(
+            evaluated.pricing,
+            Priced::Known(Breakdown {
+                total: Usd::new(10.0 * factor).unwrap(),
+                lines: vec![Line {
+                    meter: INPUT,
+                    quantity: 10,
+                    unit_price: UnitPrice::new(factor).unwrap(),
+                    amount: Usd::new(10.0 * factor).unwrap(),
+                    fallback_from: None
+                }],
+            })
+        );
+    }
+
+    #[rstest]
+    #[case::scaled_partial(6.0)]
+    #[case::free_partial_still_unknown(0.0)]
+    fn projection_scales_partial_without_inventing_missing_rates(when: When, #[case] factor: f64) {
+        let prices = prices([(INPUT, 1.0)]);
+        let usage = Usage {
+            quantities: BTreeMap::from([(INPUT, 10), (OUTPUT, 5)]),
+            ..Usage::default()
+        };
+        let evaluated = calculate_with_rates(
+            &prices,
+            &usage,
+            &when,
+            SelectionPolicy::Generic,
+            &[OUTPUT],
+            &[ScaleFactor::new(factor).unwrap()],
+        )
+        .unwrap();
+        assert_eq!(
+            evaluated.rates,
+            vec![SelectedRate {
+                requested_meter: OUTPUT,
+                resolved: None
+            }]
+        );
+        let Priced::Unpriced { missing, partial } = evaluated.pricing else {
+            panic!("missing output must remain unpriced")
+        };
+        assert_eq!(missing, vec![OUTPUT]);
+        assert_eq!(partial.total.get(), 10.0 * factor);
+        assert_eq!(partial.lines.len(), 1);
+        assert_eq!(partial.lines[0].quantity, 10);
+        assert_eq!(partial.lines[0].unit_price.get(), factor);
+    }
+
+    #[rstest]
+    #[case::projected_rate_overflow(0, true)]
+    #[case::actual_rate_overflow(1, false)]
+    #[case::actual_amount_overflow(2, false)]
+    fn adjusted_evaluation_rejects_nonfinite_money(
+        when: When,
+        #[case] quantity: u64,
+        #[case] project: bool,
+    ) {
+        let prices = prices([(INPUT, f64::MAX)]);
+        let usage = Usage {
+            quantities: BTreeMap::from([(INPUT, quantity)]),
+            ..Usage::default()
+        };
+        let projection = if project { vec![INPUT] } else { Vec::new() };
+        assert_eq!(
+            calculate_with_rates(
+                &prices,
+                &usage,
+                &when,
+                SelectionPolicy::Generic,
+                &projection,
+                &[ScaleFactor::new(2.0).unwrap()]
+            ),
+            Err(PriceEvaluationError::NonFiniteValue)
+        );
+    }
+
+    #[rstest]
+    fn projection_rejects_non_token_meters(when: When) {
+        assert_eq!(
+            calculate_with_rates(
+                &prices([]),
+                &Usage::default(),
+                &when,
+                SelectionPolicy::Generic,
+                &[Meter::Input(InputUnit::Image)],
+                &[]
+            ),
+            Err(PriceEvaluationError::NonTokenProjection)
+        );
+    }
     const READ: Meter = Meter::CacheRead {
         kind: TokenKind::Text,
         mode: CacheReadMode::Implicit,

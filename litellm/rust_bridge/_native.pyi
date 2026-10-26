@@ -248,6 +248,22 @@ class Unpriced:
     @property
     def partial(self) -> Priced: ...
 
+@final
+class SelectedRate:
+    @property
+    def requested_meter(self) -> str: ...
+    @property
+    def source_meter(self) -> str | None: ...
+    @property
+    def unit_price(self) -> float | None: ...
+
+@final
+class PriceEvaluation:
+    @property
+    def pricing(self) -> Priced | Unpriced: ...
+    @property
+    def rates(self) -> list[SelectedRate]: ...
+
 @overload
 def resolve_model(
     model_cost: dict[str, object],
@@ -275,6 +291,9 @@ def registration_target(
 ) -> RegistrationTarget: ...
 def invalidate_model_cost_index() -> None: ...
 def model_info(model_cost: dict[str, object], key: str) -> ModelInfoView | RowErrors: ...
+def has_token_prices(
+    row: dict[str, object], *, policy: Literal["generic", "sdk_tokens"] = "generic"
+) -> bool | RowErrors: ...
 def price(
     row: dict[str, object],
     usage: UsageInput,
@@ -282,6 +301,15 @@ def price(
     *,
     policy: Literal["generic", "sdk_tokens"] = "generic",
 ) -> Priced | Unpriced | RowErrors: ...
+def price_with_rates(
+    row: dict[str, object],
+    usage: UsageInput,
+    when: WhenInput,
+    *,
+    policy: Literal["generic", "sdk_tokens"] = "generic",
+    project: Sequence[str] = (),
+    factors: Sequence[float] = (),
+) -> PriceEvaluation | RowErrors: ...
 def trace_encode_error(message: str) -> bytes: ...
 
 @final
@@ -484,6 +512,7 @@ __all__ = [
     "NativeClickHouseSpendConfig",
     "NativeClickHouseSpendStorage",
     "NativeDiagnosticProcessor",
+    "PriceEvaluation",
     "PriceLine",
     "Priced",
     "ProcessReservedForForking",
@@ -497,6 +526,7 @@ __all__ = [
     "RowErrors",
     "RustBridgeDeclined",
     "RustUpstreamError",
+    "SelectedRate",
     "TokenCounter",
     "Tokenizer",
     "Unpriced",
@@ -513,6 +543,7 @@ __all__ = [
     "fetch_once",
     "fetch_with_retry",
     "gil_stats",
+    "has_token_prices",
     "invalidate_model_cost_index",
     "messages",
     "model_info",
@@ -521,6 +552,7 @@ __all__ = [
     "ocr_health_check_document",
     "ocr_passthrough_response",
     "price",
+    "price_with_rates",
     "process_state_started",
     "registration_target",
     "reserve_process_for_forking",

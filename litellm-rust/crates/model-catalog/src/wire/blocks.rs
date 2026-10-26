@@ -1,4 +1,7 @@
+use std::collections::BTreeSet;
+
 use litellm_cost::money::UnitPrice;
+use litellm_cost::price::{InputUnit, Meter, OutputUnit, TokenKind};
 use litellm_cost::schedule::{UtcWindow, Weekday};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -24,6 +27,7 @@ pub struct TierRow {
     pub range: Option<[u64; 2]>,
     pub max_results_range: Option<[u64; 2]>,
     pub prices: Vec<FlatPrice>,
+    pub declared_token_selection: BTreeSet<Meter>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -142,6 +146,23 @@ impl Reader<'_> {
         let fields = self.object(&path, value)?;
         let mut row = TierRow {
             path: path.clone(),
+            declared_token_selection: [
+                (
+                    "input_cost_per_token",
+                    Meter::Input(InputUnit::Token(TokenKind::Text)),
+                ),
+                (
+                    "output_cost_per_token",
+                    Meter::Output(OutputUnit::Token(TokenKind::Text)),
+                ),
+                (
+                    "output_cost_per_reasoning_token",
+                    Meter::Output(OutputUnit::ReasoningToken),
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(key, meter)| fields.contains_key(key).then_some(meter))
+            .collect(),
             ..TierRow::default()
         };
         for (name, value) in fields.iter().filter(|(_, value)| !value.is_null()) {

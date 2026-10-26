@@ -10,6 +10,32 @@ pub struct Usd(f64);
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct Multiplier(f64);
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScaleFactor(f64);
+
+impl ScaleFactor {
+    pub fn new(factor: f64) -> Option<Self> {
+        (factor.is_finite() && factor >= 0.0).then_some(Self(factor))
+    }
+
+    pub fn combine(factors: &[Self]) -> Option<Self> {
+        if factors.iter().any(|factor| factor.0 == 0.0) {
+            return Some(Self(0.0));
+        }
+        factors
+            .iter()
+            .try_fold(Self(1.0), |factor, next| Self::new(factor.0 * next.0))
+    }
+
+    pub fn price(self, price: UnitPrice) -> Option<UnitPrice> {
+        UnitPrice::new(price.get() * self.0)
+    }
+
+    pub fn amount(self, amount: Usd) -> Option<Usd> {
+        Usd::new(amount.get() * self.0)
+    }
+}
+
 impl UnitPrice {
     pub fn new(usd_per_unit: f64) -> Option<Self> {
         (usd_per_unit.is_finite() && usd_per_unit >= 0.0).then_some(Self(usd_per_unit))
@@ -184,6 +210,41 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    #[rstest]
+    #[case::uplift(6.0, true)]
+    #[case::neutral(1.0, true)]
+    #[case::discount(0.5, true)]
+    #[case::zero(0.0, true)]
+    #[case::negative(-1.0, false)]
+    #[case::nan(f64::NAN, false)]
+    #[case::infinite(f64::INFINITY, false)]
+    fn selected_factor_accepts_only_finite_non_negative_values(
+        #[case] value: f64,
+        #[case] accepted: bool,
+    ) {
+        assert_eq!(ScaleFactor::new(value).is_some(), accepted);
+    }
+
+    #[rstest]
+    #[case::identity(vec![], Some(1.0))]
+    #[case::product(vec![2.0, 3.0], Some(6.0))]
+    #[case::discount(vec![2.0, 0.25], Some(0.5))]
+    #[case::overflow(vec![f64::MAX, 2.0], None)]
+    #[case::zero_last(vec![f64::MAX, 2.0, 0.0], Some(0.0))]
+    #[case::zero_first(vec![0.0, f64::MAX, 2.0], Some(0.0))]
+    fn selected_factors_combine_once(#[case] factors: Vec<f64>, #[case] expected: Option<f64>) {
+        let factors: Vec<_> = factors
+            .into_iter()
+            .map(|factor| ScaleFactor::new(factor).unwrap())
+            .collect();
+        assert_eq!(
+            ScaleFactor::combine(&factors)
+                .and_then(|factor| factor.price(UnitPrice::new(1.0).unwrap()))
+                .map(UnitPrice::get),
+            expected
+        );
+    }
 
     #[rstest]
     #[case::price(0.5)]

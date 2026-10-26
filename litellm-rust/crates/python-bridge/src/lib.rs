@@ -33,10 +33,11 @@ mod _native {
     #[pymodule_export]
     use crate::model_registry::{
         CatalogRefresher, FetchedRegistry, InvalidProvider, ModelCostLayers, ModelInfoView,
-        ModelNotFound, ModelRegistry, PriceLine, Priced, RegistrationTarget, RegistryNotModified,
-        RegistryUnavailable, ResolvedModel, RowError, RowErrors, Unpriced, UsageInput, WhenInput,
-        fetch_once, fetch_with_retry, invalidate_model_cost_index, model_info, model_row_errors,
-        price, registration_target, resolve_model, write_rows,
+        ModelNotFound, ModelRegistry, PriceEvaluation, PriceLine, Priced, RegistrationTarget,
+        RegistryNotModified, RegistryUnavailable, ResolvedModel, RowError, RowErrors, SelectedRate,
+        Unpriced, UsageInput, WhenInput, fetch_once, fetch_with_retry, has_token_prices,
+        invalidate_model_cost_index, model_info, model_row_errors, price, price_with_rates,
+        registration_target, resolve_model, write_rows,
     };
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};

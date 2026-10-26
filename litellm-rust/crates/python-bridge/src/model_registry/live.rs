@@ -8,10 +8,11 @@ use litellm_host_python::from_py;
 use litellm_model_catalog::wire::{Fields, FlatKey};
 use litellm_model_catalog::{self as resolution, Keys, Query, Resolved};
 use litellm_model_catalog::{Error, Located, Model};
+use pyo3::IntoPyObjectExt;
 use pyo3::class::gc::{PyTraverseError, PyVisit};
 use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyModule, PySet, PyString};
+use pyo3::types::{PyAny, PyBool, PyDict, PyModule, PySet, PyString};
 use time::OffsetDateTime;
 
 use super::{RowError, escape_pointer_segment, fields_to_dict, nonfinite_errors, row_error};
@@ -327,6 +328,14 @@ pub(crate) struct RowErrors {
 }
 
 fn lower_row(key: &str, row: &Bound<'_, PyAny>) -> Result<(Fields, Model), RowErrors> {
+    lower_row_with_policy(key, row, litellm_model_catalog::PriceLowering::Generic)
+}
+
+fn lower_row_with_policy(
+    key: &str,
+    row: &Bound<'_, PyAny>,
+    policy: litellm_model_catalog::PriceLowering,
+) -> Result<(Fields, Model), RowErrors> {
     let path = format!("/{}", escape_pointer_segment(key));
     let located = |error| RowErrors {
         errors: vec![row_error(&Located::new(&path, error))],
@@ -348,7 +357,7 @@ fn lower_row(key: &str, row: &Bound<'_, PyAny>) -> Result<(Fields, Model), RowEr
     };
     valid.map_err(|_| invalid())?;
     let fields: Fields = from_py(row).map_err(|_| invalid())?;
-    let model = Model::from_fields(&fields).map_err(|errors| RowErrors {
+    let model = Model::from_fields_with_policy(&fields, policy).map_err(|errors| RowErrors {
         errors: errors
             .into_iter()
             .map(|error| row_error(&Located::new(format!("{path}{}", error.path), error.error)))
@@ -594,12 +603,85 @@ pub(crate) enum PriceResult {
     Errors(RowErrors),
 }
 
-#[derive(strum::EnumString, strum::VariantArray)]
+#[pyclass(
+    frozen,
+    get_all,
+    skip_from_py_object,
+    module = "litellm.rust_bridge._native"
+)]
+#[derive(Clone)]
+pub(crate) struct SelectedRate {
+    requested_meter: String,
+    source_meter: Option<String>,
+    unit_price: Option<f64>,
+}
+
+#[pyclass(frozen, get_all, module = "litellm.rust_bridge._native")]
+pub(crate) struct PriceEvaluation {
+    pricing: Py<PyAny>,
+    rates: Vec<SelectedRate>,
+}
+
+#[pymethods]
+impl PriceEvaluation {
+    fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+        visit.call(&self.pricing)
+    }
+}
+
+#[derive(IntoPyObject)]
+pub(crate) enum EvaluationResult {
+    Evaluated(PriceEvaluation),
+    Errors(RowErrors),
+}
+
+#[derive(Clone, Copy, strum::EnumString, strum::VariantArray)]
 enum PricePolicy {
     #[strum(serialize = "generic")]
     Generic,
     #[strum(serialize = "sdk_tokens")]
     SdkTokens,
+}
+
+impl PricePolicy {
+    fn selection(self, model: &Model) -> SelectionPolicy<'_> {
+        match self {
+            Self::Generic => SelectionPolicy::Generic,
+            Self::SdkTokens => SelectionPolicy::SdkTokens(&model.token_price_sources),
+        }
+    }
+
+    fn lower(self, row: &Bound<'_, PyAny>, channel: Channel) -> Result<Model, RowErrors> {
+        let lowering = match (self, channel) {
+            (Self::SdkTokens, Channel::Online) => litellm_model_catalog::PriceLowering::SdkTokens,
+            _ => litellm_model_catalog::PriceLowering::Generic,
+        };
+        lower_row_with_policy("", row, lowering).map(|(_, model)| model)
+    }
+}
+
+fn pricing_policy(policy: &str) -> PyResult<PricePolicy> {
+    policy
+        .parse()
+        .map_err(|_| PyValueError::new_err("unknown pricing policy"))
+}
+
+#[derive(IntoPyObject)]
+pub(crate) enum TokenPricePresence {
+    Present(bool),
+    Errors(RowErrors),
+}
+
+#[pyfunction]
+#[pyo3(signature = (row, *, policy="generic"))]
+pub(crate) fn has_token_prices(
+    row: &Bound<'_, PyAny>,
+    policy: &str,
+) -> PyResult<TokenPricePresence> {
+    Ok(match pricing_policy(policy)?.lower(row, Channel::Online) {
+        Ok(model) => TokenPricePresence::Present(model.prices.has_token_prices()),
+        Err(errors) => TokenPricePresence::Errors(errors),
+    })
 }
 
 #[pyfunction]
@@ -610,28 +692,87 @@ pub(crate) fn price(
     when: &WhenInput,
     policy: &str,
 ) -> PyResult<PriceResult> {
-    let policy = policy
-        .parse::<PricePolicy>()
-        .map_err(|_| PyValueError::new_err("unknown pricing policy"))?;
-    let model = match lower_row("", row) {
-        Ok((_, model)) => model,
+    let policy = pricing_policy(policy)?;
+    let model = match policy.lower(row, when.when.channel) {
+        Ok(model) => model,
         Err(errors) => return Ok(PriceResult::Errors(errors)),
     };
-    let policy = match policy {
-        PricePolicy::Generic => SelectionPolicy::Generic,
-        PricePolicy::SdkTokens => SelectionPolicy::SdkTokens(&model.token_price_sources),
-    };
-    Ok(
-        match litellm_cost::calculate_with_policy(&model.prices, &usage.usage, &when.when, policy) {
-            litellm_cost::Priced::Known(breakdown) => PriceResult::Priced(breakdown.into()),
-            litellm_cost::Priced::Unpriced { missing, partial } => {
-                PriceResult::Unpriced(Unpriced {
-                    missing: missing.iter().map(meter_name).collect(),
-                    partial: Py::new(row.py(), Priced::from(partial))?,
-                })
-            }
-        },
+    let policy = policy.selection(&model);
+    price_result(
+        row.py(),
+        litellm_cost::calculate_with_policy(&model.prices, &usage.usage, &when.when, policy),
     )
+}
+
+fn price_result(py: Python<'_>, priced: litellm_cost::Priced) -> PyResult<PriceResult> {
+    Ok(match priced {
+        litellm_cost::Priced::Known(breakdown) => PriceResult::Priced(breakdown.into()),
+        litellm_cost::Priced::Unpriced { missing, partial } => PriceResult::Unpriced(Unpriced {
+            missing: missing.iter().map(meter_name).collect(),
+            partial: Py::new(py, Priced::from(partial))?,
+        }),
+    })
+}
+
+#[pyfunction]
+#[pyo3(
+    signature = (row, usage, when, *, policy="generic", project=Vec::new(), factors=Vec::new()),
+    text_signature = "(row, usage, when, *, policy='generic', project=(), factors=())"
+)]
+pub(crate) fn price_with_rates(
+    row: &Bound<'_, PyAny>,
+    usage: &UsageInput,
+    when: &WhenInput,
+    policy: &str,
+    project: Vec<String>,
+    factors: Vec<Bound<'_, PyAny>>,
+) -> PyResult<EvaluationResult> {
+    let policy = pricing_policy(policy)?;
+    let project = project
+        .iter()
+        .map(|key| {
+            parse_meter(key)
+                .filter(Meter::is_token)
+                .ok_or_else(|| PyValueError::new_err("only token meters can be projected"))
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    let factors = factors
+        .iter()
+        .map(|factor| {
+            if factor.is_instance_of::<PyBool>() {
+                return Err(PyValueError::new_err(
+                    "factors must be finite non-negative numbers",
+                ));
+            }
+            litellm_cost::money::ScaleFactor::new(factor.extract()?)
+                .ok_or_else(|| PyValueError::new_err("factors must be finite non-negative numbers"))
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    let model = match policy.lower(row, when.when.channel) {
+        Ok(model) => model,
+        Err(errors) => return Ok(EvaluationResult::Errors(errors)),
+    };
+    let evaluation = litellm_cost::calculate_with_rates(
+        &model.prices,
+        &usage.usage,
+        &when.when,
+        policy.selection(&model),
+        &project,
+        &factors,
+    )
+    .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    Ok(EvaluationResult::Evaluated(PriceEvaluation {
+        pricing: price_result(row.py(), evaluation.pricing)?.into_py_any(row.py())?,
+        rates: evaluation
+            .rates
+            .into_iter()
+            .map(|rate| SelectedRate {
+                requested_meter: meter_name(&rate.requested_meter),
+                source_meter: rate.resolved.as_ref().map(|(meter, _)| meter_name(meter)),
+                unit_price: rate.resolved.map(|(_, price)| price.get()),
+            })
+            .collect(),
+    }))
 }
 
 fn meter_name(meter: &Meter) -> String {
@@ -1334,6 +1475,487 @@ assert n.model_info(models, "Model").input_cost_per_token == 2
             };
             assert_eq!(errors.errors[0].key, "");
             assert_eq!(errors.errors[0].kind, kind);
+            let TokenPricePresence::Errors(errors) = has_token_prices(&row, policy).unwrap() else {
+                panic!("presence must retain validation errors")
+            };
+            assert_eq!(errors.errors[0].kind, kind);
+        });
+    }
+
+    #[rstest]
+    #[case::metadata(json!({"mode":"chat"}), false)]
+    #[case::null(json!({"input_cost_per_token":null}), false)]
+    #[case::zero(json!({"input_cost_per_token":0}), true)]
+    #[case::output_only(json!({"output_cost_per_token":2}), true)]
+    #[case::read_only(json!({"cache_read_input_token_cost":0}), true)]
+    #[case::explicit_read(json!({"explicit_cache_read_input_token_cost":1}), true)]
+    #[case::write_only(json!({"cache_creation_input_token_cost_above_1hr":1}), true)]
+    #[case::twelve_hours(json!({"cache_creation_input_token_cost_above_12hr":1}), true)]
+    #[case::reasoning_only(json!({"output_cost_per_reasoning_token":1}), true)]
+    #[case::audio_only(json!({"output_cost_per_audio_token":1}), true)]
+    #[case::image_token_only(json!({"input_cost_per_image_token":1}), true)]
+    #[case::video_token_only(json!({"input_cost_per_video_token":1}), true)]
+    #[case::bounded_tier(json!({"tiered_pricing":[{"range":[0,1],"output_cost_per_token":0}]}), true)]
+    #[case::service_only(json!({"output_cost_per_token_priority":1}), true)]
+    #[case::band_only(json!({"input_cost_per_token_above_200k_tokens":1}), true)]
+    #[case::offpeak_only(json!({"off_peak_pricing":{"hours_utc":"01:00-02:00","cache_read_input_token_cost":0}}), true)]
+    #[case::batch_only(json!({"input_cost_per_token_batches":0}), true)]
+    #[case::decisions_only(json!({"output_cost_per_token_decisions":0}), true)]
+    #[case::seconds(json!({"input_cost_per_second":0}), false)]
+    #[case::images(json!({"output_cost_per_image":1}), false)]
+    #[case::query_tier(json!({"tiered_pricing":[{"max_results_range":[0,10],"input_cost_per_query":1}]}), false)]
+    fn explicit_token_presence_uses_validated_rates(
+        #[from(interpreter)] _interpreter: (),
+        #[case] fields: Value,
+        #[case] expected: bool,
+        #[values("generic", "sdk_tokens")] policy: &str,
+    ) {
+        Python::attach(|py| {
+            let row = dict(py, fields);
+            row.set_item("litellm_provider", "openai").unwrap();
+            let before: Value = from_py(row.as_any()).unwrap();
+            let TokenPricePresence::Present(present) =
+                has_token_prices(row.as_any(), policy).unwrap()
+            else {
+                panic!("expected valid row")
+            };
+            assert_eq!(present, expected);
+            assert_eq!(from_py::<Value>(row.as_any()).unwrap(), before);
+        });
+    }
+
+    #[rstest]
+    fn presence_binding_is_live_keyword_only_and_source_aware(
+        #[from(interpreter)] _interpreter: (),
+    ) {
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("n", crate::native_module(py)).unwrap();
+            py.run(
+                pyo3::ffi::c_str!(
+                    r#"
+import json
+row = {"litellm_provider": "openai", "tiered_pricing": [{"range": [0, 1]}]}
+assert n.has_token_prices(row) is False
+assert n.has_token_prices(row, policy="sdk_tokens") is False
+row["tiered_pricing"][0]["output_cost_per_token"] = 0
+before = json.dumps(row)
+assert n.has_token_prices(row) is True
+assert n.has_token_prices(row, policy="sdk_tokens") is True
+assert json.dumps(row) == before
+row["output_cost_per_token"] = 1
+assert isinstance(n.has_token_prices(row), n.RowErrors)
+assert n.has_token_prices(row, policy="sdk_tokens") is True
+row["tiered_pricing"][0]["output_cost_per_token"] = float("inf")
+assert isinstance(n.has_token_prices(row, policy="sdk_tokens"), n.RowErrors)
+row["tiered_pricing"][0]["output_cost_per_token"] = None
+del row["output_cost_per_token"]
+assert n.has_token_prices(row, policy="sdk_tokens") is False
+try:
+    n.has_token_prices(row, policy="unknown")
+except ValueError as error:
+    assert str(error) == "unknown pricing policy"
+else:
+    raise AssertionError("unknown policy accepted")
+try:
+    n.has_token_prices(row, "sdk_tokens")
+except TypeError:
+    pass
+else:
+    raise AssertionError("positional policy accepted")
+"#
+                ),
+                Some(&locals),
+                None,
+            )
+            .unwrap();
+        });
+    }
+
+    #[rstest]
+    #[case::identity(vec![], 1.0)]
+    #[case::speed(vec![6.0], 6.0)]
+    #[case::combined(vec![2.0, 3.0], 6.0)]
+    #[case::regional(vec![1.1], 1.1)]
+    #[case::discount(vec![0.5], 0.5)]
+    #[case::zero(vec![0.0], 0.0)]
+    fn all_cached_usage_projects_unused_rates_without_fake_lines(
+        #[from(interpreter)] _interpreter: (),
+        #[case] factors: Vec<f64>,
+        #[case] factor: f64,
+    ) {
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("n", crate::native_module(py)).unwrap();
+            locals.set_item("factors", factors).unwrap();
+            locals.set_item("factor", factor).unwrap();
+            py.run(pyo3::ffi::c_str!(r#"
+import json
+row = {"litellm_provider": "anthropic", "input_cost_per_token": 1, "output_cost_per_token": 2,
+       "cache_read_input_token_cost": 0.1, "cache_creation_input_token_cost": 1.25,
+       "provider_specific_entry": {"fast": 6}, "regional_processing_uplift_multiplier_eu": 1.1}
+before = json.dumps(row)
+meters = ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost",
+          "cache_creation_input_token_cost", "cache_creation_input_token_cost_above_1hr",
+          "cache_creation_input_token_cost_above_12hr", "output_cost_per_reasoning_token",
+          "cache_read_input_audio_token_cost")
+usage = n.UsageInput({"cache_read_input_token_cost": 100, "input_cost_per_token": 0, "output_cost_per_token": 0}, prompt_tokens=100)
+when = n.WhenInput(0)
+evaluated = n.price_with_rates(row, usage, when, policy="sdk_tokens", project=meters, factors=factors)
+assert isinstance(evaluated, n.PriceEvaluation)
+assert isinstance(evaluated.pricing, n.Priced)
+assert (evaluated.pricing.input, evaluated.pricing.output, evaluated.pricing.total) == (10 * factor, 0, 10 * factor)
+assert len(evaluated.pricing.lines) == 1
+line = evaluated.pricing.lines[0]
+assert (line.meter, line.quantity, line.unit_price, line.amount, line.fallback_from) == (meters[2], 100, 0.1 * factor, 10 * factor, None)
+assert tuple(rate.requested_meter for rate in evaluated.rates) == meters
+assert tuple(rate.source_meter for rate in evaluated.rates) == (meters[0], meters[1], meters[2], meters[3], meters[3], meters[3], meters[1], meters[2])
+assert tuple(rate.unit_price for rate in evaluated.rates) == (factor, 2 * factor, 0.1 * factor, 1.25 * factor, 1.25 * factor, 1.25 * factor, 2 * factor, 0.1 * factor)
+default = n.price_with_rates(row, usage, when)
+assert default.rates == []
+assert default.pricing.total == n.price(row, usage, when).total == 10
+assert json.dumps(row) == before
+"#), Some(&locals), None).unwrap();
+        });
+    }
+
+    #[rstest]
+    #[case::tier_read(json!({"cache_read_input_token_cost": 9, "tiered_pricing": [{"range": [0,100], "input_cost_per_token": 1, "output_cost_per_token": 2}]}), "cache_read_input_token_cost", (100, false, "standard", "online", 0), Some("input_cost_per_token"), Some(1.0))]
+    #[case::tier_hour(json!({"cache_creation_input_token_cost_above_1hr": 9, "tiered_pricing": [{"range": [0,100], "input_cost_per_token": 1, "output_cost_per_token": 2, "cache_creation_input_token_cost": 3}]}), "cache_creation_input_token_cost_above_1hr", (100, false, "standard", "online", 0), Some("cache_creation_input_token_cost"), Some(3.0))]
+    #[case::tier_twelve_hours(json!({"cache_creation_input_token_cost_above_12hr": 9, "tiered_pricing": [{"range": [0,100], "input_cost_per_token": 1, "output_cost_per_token": 2, "cache_creation_input_token_cost": 3}]}), "cache_creation_input_token_cost_above_12hr", (100, false, "standard", "online", 0), Some("cache_creation_input_token_cost"), Some(3.0))]
+    #[case::tier_reasoning(json!({"output_cost_per_reasoning_token": 5, "tiered_pricing": [{"range": [0,100], "input_cost_per_token": 2, "output_cost_per_token": 3}]}), "output_cost_per_reasoning_token", (100, false, "standard", "online", 0), Some("output_cost_per_token"), Some(3.0))]
+    #[case::priority_reasoning(json!({"input_cost_per_token": 1, "output_cost_per_token": 2, "output_cost_per_reasoning_token": 3, "output_cost_per_token_priority": 4}), "output_cost_per_reasoning_token", (100, false, "priority", "online", 0), Some("output_cost_per_token"), Some(4.0))]
+    #[case::priority_audio(json!({"input_cost_per_token": 1, "output_cost_per_token": 2, "output_cost_per_audio_token": 3, "output_cost_per_audio_token_priority": 4}), "output_cost_per_audio_token", (100, false, "priority", "online", 0), Some("output_cost_per_audio_token"), Some(3.0))]
+    #[case::offpeak_input(json!({"input_cost_per_token": 2, "output_cost_per_token": 4, "off_peak_pricing": {"hours_utc": "00:00-06:00", "input_cost_per_token": 1}}), "input_cost_per_token", (100, false, "standard", "online", 3600), Some("input_cost_per_token"), Some(1.0))]
+    #[case::peak_input(json!({"input_cost_per_token": 2, "output_cost_per_token": 4, "off_peak_pricing": {"hours_utc": "00:00-06:00", "input_cost_per_token": 1}}), "input_cost_per_token", (100, false, "standard", "online", 43200), Some("input_cost_per_token"), Some(2.0))]
+    #[case::offpeak_preserves_tier_read(json!({"tiered_pricing": [{"range": [0,100], "input_cost_per_token": 2, "output_cost_per_token": 3}], "off_peak_pricing": {"hours_utc": "00:00-06:00", "input_cost_per_token": 1}}), "cache_read_input_token_cost", (100, false, "standard", "online", 3600), Some("input_cost_per_token"), Some(2.0))]
+    #[case::inclusive_band(json!({"input_cost_per_token": 1, "output_cost_per_token": 2, "output_cost_per_token_above_200k_tokens": 4}), "output_cost_per_token", (200000, true, "standard", "online", 0), Some("output_cost_per_token"), Some(4.0))]
+    #[case::exclusive_band(json!({"input_cost_per_token": 1, "output_cost_per_token": 2, "output_cost_per_token_above_200k_tokens": 4}), "output_cost_per_token", (200000, false, "standard", "online", 0), Some("output_cost_per_token"), Some(2.0))]
+    #[case::batch(json!({"input_cost_per_token": 1, "output_cost_per_token": 2}), "output_cost_per_token", (100, false, "standard", "batch", 0), Some("output_cost_per_token"), Some(1.0))]
+    #[case::null_tier_output(json!({"input_cost_per_token": 1, "output_cost_per_token": 6, "tiered_pricing": [{"range": [0,100], "input_cost_per_token": 2, "output_cost_per_token": null}]}), "output_cost_per_token", (100, false, "standard", "online", 0), None, None)]
+    #[case::absent_tier_output(json!({"input_cost_per_token": 1, "output_cost_per_token": 6, "tiered_pricing": [{"range": [0,100], "input_cost_per_token": 2}]}), "output_cost_per_token", (100, false, "standard", "online", 0), Some("output_cost_per_token"), Some(6.0))]
+    #[case::zero_tier_output(json!({"input_cost_per_token": 1, "output_cost_per_token": 6, "tiered_pricing": [{"range": [0,100], "input_cost_per_token": 2, "output_cost_per_token": 0}]}), "output_cost_per_token", (100, false, "standard", "online", 0), Some("output_cost_per_token"), Some(0.0))]
+    fn projection_uses_the_actual_token_selector_and_context(
+        #[from(interpreter)] _interpreter: (),
+        #[case] fields: Value,
+        #[case] meter: &str,
+        #[case] context: (u64, bool, &str, &str, i64),
+        #[case] source: Option<&str>,
+        #[case] rate: Option<f64>,
+    ) {
+        let (prompt, inclusive, tier, channel, at) = context;
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("n", crate::native_module(py)).unwrap();
+            let row = dict(py, fields);
+            row.set_item("litellm_provider", "openai").unwrap();
+            locals.set_item("row", row).unwrap();
+            locals.set_item("meter", meter).unwrap();
+            locals.set_item("prompt", prompt).unwrap();
+            locals.set_item("inclusive", inclusive).unwrap();
+            locals.set_item("tier", tier).unwrap();
+            locals.set_item("channel", channel).unwrap();
+            locals.set_item("at", at).unwrap();
+            locals.set_item("source", source).unwrap();
+            locals.set_item("rate", rate).unwrap();
+            py.run(pyo3::ffi::c_str!(r#"
+import json
+before = json.dumps(row)
+when = n.WhenInput(at, tier=tier, channel=channel)
+unused = n.price_with_rates(row, n.UsageInput({}, prompt_tokens=prompt, inclusive_threshold=inclusive), when, policy="sdk_tokens", project=[meter], factors=[2,3])
+assert isinstance(unused.pricing, n.Priced)
+assert unused.pricing.total == 0 and unused.pricing.lines == []
+assert len(unused.rates) == 1
+selected = unused.rates[0]
+assert (selected.requested_meter, selected.source_meter, selected.unit_price) == (meter, source, None if rate is None else rate * 6)
+used = n.price_with_rates(row, n.UsageInput({meter: 1}, prompt_tokens=prompt, inclusive_threshold=inclusive), when, policy="sdk_tokens", project=[meter], factors=[2,3])
+if rate is None:
+    assert isinstance(used.pricing, n.Unpriced)
+    assert used.pricing.missing == [meter] and used.pricing.partial.total == 0
+else:
+    assert isinstance(used.pricing, n.Priced)
+    line = used.pricing.lines[0]
+    assert (line.meter, line.unit_price, line.amount, line.quantity, line.fallback_from) == (source, rate * 6, rate * 6, 1, None if meter == source else meter)
+    assert used.pricing.total == rate * 6
+assert json.dumps(row) == before
+"#), Some(&locals), None).unwrap();
+        });
+    }
+
+    #[rstest]
+    #[case::negative("[-1]")]
+    #[case::nan("[float('nan')]")]
+    #[case::infinite("[float('inf')]")]
+    #[case::zero_does_not_hide_invalid("[0, float('inf')]")]
+    #[case::boolean("[True]")]
+    #[case::string("['6']")]
+    #[case::not_sequence("6")]
+    #[case::null("None")]
+    #[case::overflow("[1e308, 1e308]")]
+    fn projection_binding_rejects_invalid_factors(
+        #[from(interpreter)] _interpreter: (),
+        #[case] factors: &str,
+    ) {
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("n", crate::native_module(py)).unwrap();
+            locals.set_item("factors", factors).unwrap();
+            py.run(pyo3::ffi::c_str!(r#"
+try:
+    n.price_with_rates({"litellm_provider": "openai", "input_cost_per_token": 1}, n.UsageInput({"input_cost_per_token": 1}), n.WhenInput(0), factors=eval(factors))
+except (ValueError, TypeError):
+    pass
+else:
+    raise AssertionError("invalid factors accepted")
+"#), Some(&locals), None).unwrap();
+        });
+    }
+
+    #[rstest]
+    #[case::absent(json!({}), None)]
+    #[case::null(json!({"output_cost_per_token": null}), None)]
+    #[case::zero(json!({"output_cost_per_token": 0}), Some(0.0))]
+    #[case::priced(json!({"output_cost_per_token": 2}), Some(2.0))]
+    fn unused_missing_projection_does_not_make_actual_cache_billing_unpriced(
+        #[from(interpreter)] _interpreter: (),
+        #[case] fields: Value,
+        #[case] expected: Option<f64>,
+        #[values(0.0, 1.0, 1.1)] factor: f64,
+    ) {
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("n", crate::native_module(py)).unwrap();
+            let row = dict(py, fields);
+            row.set_item("litellm_provider", "openai").unwrap();
+            row.set_item("input_cost_per_token", 1).unwrap();
+            row.set_item("cache_read_input_token_cost", 0.1).unwrap();
+            locals.set_item("row", row).unwrap();
+            locals
+                .set_item("expected", expected.map(|rate| rate * factor))
+                .unwrap();
+            locals.set_item("factor", factor).unwrap();
+            py.run(pyo3::ffi::c_str!(r#"
+usage = n.UsageInput({"cache_read_input_token_cost": 100, "output_cost_per_token": 0}, prompt_tokens=100)
+result = n.price_with_rates(row, usage, n.WhenInput(0), policy="sdk_tokens", project=["output_cost_per_token"], factors=[factor])
+assert isinstance(result.pricing, n.Priced)
+assert result.pricing.total == 10 * factor
+assert len(result.pricing.lines) == 1
+assert result.rates[0].unit_price == expected
+assert result.rates[0].source_meter == (None if expected is None else "output_cost_per_token")
+"#), Some(&locals), None).unwrap();
+        });
+    }
+
+    #[rstest]
+    fn projected_rates_validate_live_rows_and_keyword_binding(
+        #[from(interpreter)] _interpreter: (),
+    ) {
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("n", crate::native_module(py)).unwrap();
+            py.run(pyo3::ffi::c_str!(r#"
+import inspect
+import gc
+signature = inspect.signature(n.price_with_rates)
+assert signature.parameters['project'].default == ()
+assert signature.parameters['factors'].default == ()
+row = {"litellm_provider": "openai", "input_cost_per_token": 1, "output_cost_per_token": 2, "tiered_pricing": [{"range": [0,100], "input_cost_per_token": 3, "output_cost_per_token": 4}]}
+usage = n.UsageInput({"input_cost_per_token": 10}, prompt_tokens=10)
+when = n.WhenInput(0)
+assert isinstance(n.price_with_rates(row, usage, when), n.RowErrors)
+first = n.price_with_rates(row, usage, when, policy="sdk_tokens", project=["output_cost_per_token"])
+assert gc.get_referents(first) == [first.pricing]
+assert first.pricing.total == 30 and first.rates[0].unit_price == 4
+row["tiered_pricing"][0]["output_cost_per_token"] = 0
+assert n.price_with_rates(row, usage, when, policy="sdk_tokens", project=["output_cost_per_token"]).rates[0].unit_price == 0
+row["tiered_pricing"][0]["input_cost_per_token"] = None
+partial = n.price_with_rates(row, usage, when, policy="sdk_tokens", project=["input_cost_per_token", "output_cost_per_token"], factors=[0])
+assert isinstance(partial.pricing, n.Unpriced)
+assert partial.pricing.missing == ["input_cost_per_token"] and partial.pricing.partial.total == 0
+assert partial.rates[0].unit_price is None and partial.rates[1].unit_price == 0
+row["tiered_pricing"][0]["output_cost_per_token"] = "bad"
+assert isinstance(n.price_with_rates(row, usage, when, policy="sdk_tokens"), n.RowErrors)
+try:
+    n.price_with_rates(row, usage, when, policy="unknown")
+except ValueError as error:
+    assert str(error) == "unknown pricing policy"
+else:
+    raise AssertionError("unknown policy accepted")
+try:
+    n.price_with_rates(row, usage, when, "sdk_tokens")
+except TypeError:
+    pass
+else:
+    raise AssertionError("positional policy accepted")
+try:
+    n.price_with_rates({}, usage, when, project=["input_cost_per_image"])
+except ValueError as error:
+    assert str(error) == "only token meters can be projected"
+else:
+    raise AssertionError("non-token projection accepted")
+"#), Some(&locals), None).unwrap();
+        });
+    }
+
+    #[rstest]
+    #[case::online("online", "sdk_tokens", true)]
+    #[case::generic("online", "generic", false)]
+    #[case::batch("batch", "sdk_tokens", false)]
+    #[case::decisions("decisions", "sdk_tokens", false)]
+    fn conflicting_flat_and_token_tier_is_only_admitted_for_sdk_online(
+        #[from(interpreter)] _interpreter: (),
+        #[case] channel: &str,
+        #[case] policy: &str,
+        #[case] accepted: bool,
+    ) {
+        Python::attach(|py| {
+            let row = dict(
+                py,
+                json!({"litellm_provider":"openai","input_cost_per_token":1,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":3}]}),
+            );
+            let usage =
+                UsageInput::new(&dict(py, json!({"input_cost_per_token":10})), 10, false, 0)
+                    .unwrap();
+            let result = price(
+                row.as_any(),
+                &usage,
+                &WhenInput::new(0, "standard", channel).unwrap(),
+                policy,
+            )
+            .unwrap();
+            match result {
+                PriceResult::Priced(priced) => {
+                    assert!(accepted);
+                    assert_eq!(priced.total, 30.0);
+                }
+                PriceResult::Errors(errors) => {
+                    assert!(!accepted);
+                    assert_eq!(errors.errors[0].kind, "duplicate_price");
+                }
+                PriceResult::Unpriced(_) => panic!("unexpected missing price"),
+            }
+        });
+    }
+
+    #[rstest]
+    #[case::flat_and_tier("flat-and-tier", json!({"input_cost_per_token":1,"output_cost_per_token":2,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":3,"output_cost_per_token":4}]}), (10,json!({}),json!({"input_cost_per_token":10,"output_cost_per_token":10})), (30.0,40.0))]
+    #[case::tier_read("tier-read", json!({"cache_read_input_token_cost":9,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":1,"output_cost_per_token":2}]}), (100,json!({"cached_tokens":40}),json!({"input_cost_per_token":60,"cache_read_input_token_cost":40,"output_cost_per_token":10})), (100.0,20.0))]
+    #[case::tier_hour("tier-hour", json!({"cache_creation_input_token_cost_above_1hr":9,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":1,"output_cost_per_token":2,"cache_creation_input_token_cost":3}]}), (100,json!({"cache_creation_tokens":20,"cache_creation_token_details":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":10}}),json!({"input_cost_per_token":80,"cache_creation_input_token_cost":10,"cache_creation_input_token_cost_above_1hr":10,"output_cost_per_token":10})), (140.0,20.0))]
+    #[case::zero_tier("zero-tier", json!({"input_cost_per_token":1,"output_cost_per_token":2,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":0,"output_cost_per_token":0}]}), (10,json!({}),json!({"input_cost_per_token":10,"output_cost_per_token":10})), (0.0,0.0))]
+    #[case::output_fallback("output-fallback", json!({"input_cost_per_token":1,"output_cost_per_token":2,"output_cost_per_token_priority":8,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":3}]}), (10,json!({}),json!({"input_cost_per_token":10,"output_cost_per_token":10})), (30.0,20.0))]
+    #[case::zero_prompt("zero-prompt", json!({"input_cost_per_token":1,"output_cost_per_token":2,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":3,"output_cost_per_token":4}]}), (0,json!({}),json!({"output_cost_per_token":10})), (0.0,20.0))]
+    #[case::no_input("no-input", json!({"input_cost_per_token":1,"output_cost_per_token":2,"tiered_pricing":[{"range":[0,100],"output_cost_per_token":4}]}), (10,json!({}),json!({"input_cost_per_token":10,"output_cost_per_token":10})), (10.0,20.0))]
+    #[case::offpeak_hour("offpeak-hour", json!({"cache_creation_input_token_cost_above_1hr":9,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":1,"output_cost_per_token":2,"cache_creation_input_token_cost":3}],"off_peak_pricing":{"hours_utc":"00:00-00:00","cache_creation_input_token_cost":0}}), (100,json!({"cache_creation_tokens":20,"cache_creation_token_details":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":10}}),json!({"input_cost_per_token":80,"cache_creation_input_token_cost":10,"cache_creation_input_token_cost_above_1hr":10,"output_cost_per_token":10})), (80.0,20.0))]
+    #[case::explicit_hour("explicit-hour", json!({"cache_creation_input_token_cost_above_1hr":9,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":1,"output_cost_per_token":2,"cache_creation_input_token_cost":3,"cache_creation_input_token_cost_above_1hr":4}],"off_peak_pricing":{"hours_utc":"00:00-00:00","cache_creation_input_token_cost":0}}), (100,json!({"cache_creation_tokens":20,"cache_creation_token_details":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":10}}),json!({"input_cost_per_token":80,"cache_creation_input_token_cost":10,"cache_creation_input_token_cost_above_1hr":10,"output_cost_per_token":10})), (120.0,20.0))]
+    fn sdk_tier_cache_matches_public_raw_and_shaped(
+        #[from(interpreter)] _interpreter: (),
+        #[case] name: &str,
+        #[case] fields: Value,
+        #[case] usage: (u64, Value, Value),
+        #[case] expected: (f64, f64),
+        #[values("standard", "priority")] tier: &str,
+    ) {
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("n", crate::native_module(py)).unwrap();
+            let row = dict(py, fields);
+            row.set_item("litellm_provider", "openai").unwrap();
+            row.set_item("mode", "chat").unwrap();
+            locals.set_item("row", &row).unwrap();
+            locals.set_item("name", name).unwrap();
+            locals.set_item("tier", tier).unwrap();
+            locals.set_item("prompt", usage.0).unwrap();
+            locals.set_item("details", dict(py, usage.1)).unwrap();
+            locals.set_item("quantities", dict(py, usage.2)).unwrap();
+            locals.set_item("expected", expected).unwrap();
+            py.run(pyo3::ffi::c_str!(r#"
+import json
+import litellm
+before = json.dumps(row)
+usage = n.UsageInput(quantities, prompt_tokens=prompt)
+when = n.WhenInput(0, tier=tier)
+raw = n.price(row, usage, when, policy="sdk_tokens")
+assert isinstance(raw, n.Priced)
+assert (raw.input, raw.output) == expected
+model = f"openai/p2d-followup-{name}-{tier}"
+litellm.model_cost[model] = row
+try:
+    kwargs = dict(model=model, custom_llm_provider="openai", service_tier=tier)
+    public_usage = litellm.Usage(prompt_tokens=prompt, completion_tokens=10, prompt_tokens_details=details)
+    public = litellm.cost_per_token(prompt_tokens=prompt, completion_tokens=10, usage_object=public_usage, **kwargs)
+    assert public == expected, (public, expected)
+    assert litellm.completion_cost(completion_response=litellm.ModelResponse(model=model, usage=public_usage), **kwargs) == raw.total
+    info = litellm.get_model_info(model=model, custom_llm_provider="openai")
+    shaped = n.price(info, usage, when, policy="sdk_tokens")
+    assert isinstance(shaped, n.Priced)
+    assert (shaped.input, shaped.output, shaped.total) == (raw.input, raw.output, raw.total)
+    assert n.has_token_prices(info, policy="sdk_tokens") is True
+finally:
+    del litellm.model_cost[model]
+assert json.dumps(row) == before
+"#), Some(&locals), None).unwrap();
+        });
+    }
+
+    #[rstest]
+    #[case::null_input(json!({"input_cost_per_token":1,"output_cost_per_token":2,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":null,"output_cost_per_token":4}]}), json!({"input_cost_per_token":10,"output_cost_per_token":10}), &["input_cost_per_token"], (0.0,40.0), true)]
+    #[case::unused_null_input(json!({"input_cost_per_token":1,"output_cost_per_token":2,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":null,"output_cost_per_token":4}]}), json!({"input_cost_per_token":0,"output_cost_per_token":10}), &[], (0.0,40.0), true)]
+    #[case::null_only_not_free(json!({"tiered_pricing":[{"range":[0,100],"input_cost_per_token":null}]}), json!({"input_cost_per_token":10}), &["input_cost_per_token"], (0.0,0.0), false)]
+    #[case::null_output_no_flat_fallback(json!({"output_cost_per_token":9,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":1,"output_cost_per_token":null}]}), json!({"input_cost_per_token":10,"output_cost_per_token":10}), &["output_cost_per_token"], (10.0,0.0), true)]
+    #[case::absent_output_uses_flat(json!({"output_cost_per_token":9,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":1}]}), json!({"input_cost_per_token":10,"output_cost_per_token":10}), &[], (10.0,90.0), true)]
+    #[case::zero_output_is_free(json!({"output_cost_per_token":9,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":1,"output_cost_per_token":0}]}), json!({"input_cost_per_token":10,"output_cost_per_token":10}), &[], (10.0,0.0), true)]
+    #[case::null_read_falls_back_input(json!({"cache_read_input_token_cost":9,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":1,"cache_read_input_token_cost":null}]}), json!({"cache_read_input_token_cost":10}), &[], (10.0,0.0), true)]
+    #[case::null_write_falls_back_input(json!({"cache_creation_input_token_cost":9,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":1,"cache_creation_input_token_cost":null}]}), json!({"cache_creation_input_token_cost":10}), &[], (10.0,0.0), true)]
+    #[case::null_ttl_falls_back_write(json!({"cache_creation_input_token_cost_above_1hr":9,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":1,"cache_creation_input_token_cost":3,"cache_creation_input_token_cost_above_1hr":null}]}), json!({"cache_creation_input_token_cost_above_1hr":10}), &[], (30.0,0.0), true)]
+    #[case::null_ttl_falls_back_offpeak_write(json!({"cache_creation_input_token_cost_above_12hr":9,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":1,"cache_creation_input_token_cost":3,"cache_creation_input_token_cost_above_12hr":null}],"off_peak_pricing":{"hours_utc":"00:00-01:00","cache_creation_input_token_cost":0}}), json!({"cache_creation_input_token_cost_above_12hr":10}), &[], (0.0,0.0), true)]
+    #[case::null_reasoning_uses_tier_output(json!({"output_cost_per_reasoning_token":9,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":1,"output_cost_per_token":2,"output_cost_per_reasoning_token":null}]}), json!({"output_cost_per_reasoning_token":10}), &[], (0.0,20.0), true)]
+    #[case::null_reasoning_without_tier_output_is_unknown(json!({"output_cost_per_token":8,"output_cost_per_reasoning_token":9,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":1,"output_cost_per_reasoning_token":null}]}), json!({"output_cost_per_reasoning_token":10}), &["output_cost_per_reasoning_token"], (0.0,0.0), true)]
+    #[case::null_output_for_reasoning_is_unknown(json!({"output_cost_per_token":8,"output_cost_per_reasoning_token":9,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":1,"output_cost_per_token":null}]}), json!({"output_cost_per_reasoning_token":10}), &["output_cost_per_reasoning_token"], (0.0,0.0), true)]
+    #[case::null_cache_input_does_not_use_offpeak_input(json!({"tiered_pricing":[{"range":[0,100],"input_cost_per_token":null}],"off_peak_pricing":{"hours_utc":"00:00-01:00","input_cost_per_token":2}}), json!({"cache_read_input_token_cost":10}), &["cache_read_input_token_cost"], (0.0,0.0), true)]
+    #[case::offpeak_supplies_null_input(json!({"tiered_pricing":[{"range":[0,100],"input_cost_per_token":null}],"off_peak_pricing":{"hours_utc":"00:00-01:00","input_cost_per_token":2}}), json!({"input_cost_per_token":10}), &[], (20.0,0.0), true)]
+    #[case::offpeak_supplies_null_output(json!({"tiered_pricing":[{"range":[0,100],"input_cost_per_token":1,"output_cost_per_token":null}],"off_peak_pricing":{"hours_utc":"00:00-01:00","output_cost_per_token":2}}), json!({"output_cost_per_token":10}), &[], (0.0,20.0), true)]
+    fn sdk_nullable_tiers_preserve_unknown_and_fallback_boundaries(
+        #[from(interpreter)] _interpreter: (),
+        #[case] fields: Value,
+        #[case] quantities: Value,
+        #[case] missing: &[&str],
+        #[case] amounts: (f64, f64),
+        #[case] present: bool,
+    ) {
+        Python::attach(|py| {
+            let row = dict(py, fields);
+            row.set_item("litellm_provider", "openai").unwrap();
+            let before: Value = from_py(row.as_any()).unwrap();
+            let usage = UsageInput::new(&dict(py, quantities), 10, false, 0).unwrap();
+            let result = price(
+                row.as_any(),
+                &usage,
+                &WhenInput::new(0, "standard", "online").unwrap(),
+                "sdk_tokens",
+            )
+            .unwrap();
+            let priced = match result {
+                PriceResult::Unpriced(unpriced) => {
+                    assert!(!missing.is_empty());
+                    assert_eq!(unpriced.missing, missing);
+                    unpriced.partial
+                }
+                PriceResult::Priced(priced) => {
+                    assert!(missing.is_empty());
+                    Py::new(py, priced).unwrap()
+                }
+                PriceResult::Errors(_) => panic!("nullable fields must not reject valid rows"),
+            };
+            let priced = priced.borrow(py);
+            assert_eq!((priced.input, priced.output), amounts);
+            assert_eq!(priced.total, amounts.0 + amounts.1);
+            let TokenPricePresence::Present(has_prices) =
+                has_token_prices(row.as_any(), "sdk_tokens").unwrap()
+            else {
+                panic!("invalid presence result")
+            };
+            assert_eq!(has_prices, present);
+            assert_eq!(from_py::<Value>(row.as_any()).unwrap(), before);
         });
     }
 

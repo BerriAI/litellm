@@ -91,6 +91,16 @@ pub struct ImageSize(Box<str>);
 pub struct Resolution(Box<str>);
 
 impl Meter {
+    pub fn is_token(&self) -> bool {
+        matches!(
+            self,
+            Self::Input(InputUnit::Token(_))
+                | Self::Output(OutputUnit::Token(_) | OutputUnit::ReasoningToken)
+                | Self::CacheRead { .. }
+                | Self::CacheWrite { .. }
+        )
+    }
+
     pub(crate) const TEXT_INPUT: Self = Self::Input(InputUnit::Token(TokenKind::Text));
 
     pub(crate) fn sets_prompt_band(&self) -> bool {

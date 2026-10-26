@@ -3,6 +3,7 @@ use std::collections::btree_map::Entry;
 use std::num::NonZeroU64;
 
 use litellm_cost::money::UnitPrice;
+use litellm_cost::price::PriceSource;
 use litellm_cost::price::{
     Adjustments, Band, CacheReadMode, CacheTtl, GuardrailUnit, InputUnit, Meter, OffPeak,
     OffPeakRates, OutputUnit, Price, Prices, Residency, SearchContextSize, TokenKind, Uplift, When,
@@ -11,7 +12,7 @@ use litellm_cost::schedule::{Schedule, Window};
 use litellm_cost::{TokenPriceSources, TokenTier};
 
 use crate::error::{Error, Located, pointer_child, pointer_for_key};
-use crate::model::Model;
+use crate::model::{Model, PriceLowering};
 use crate::wire::{EntryWire, FlatPrice, OffPeakBlock, TierRow};
 
 pub fn fatal(error: &Error) -> bool {
@@ -70,21 +71,25 @@ impl TryFrom<&EntryWire> for Prices {
     type Error = Vec<Located>;
 
     fn try_from(wire: &EntryWire) -> Result<Self, Self::Error> {
-        let mut problems = Vec::new();
-        let sourced = flat_prices(&wire.prices)
-            .chain(tier_prices(wire, &mut problems))
-            .chain(search_context_prices(wire))
-            .chain(guardrail_prices(wire));
-        let rates = dedupe(sourced, &mut problems);
-        let off_peak = wire
-            .off_peak
-            .as_ref()
-            .and_then(|block| off_peak(block, &mut problems));
-        if problems.is_empty() {
-            Ok(Prices::new(rates, off_peak))
-        } else {
-            Err(problems)
-        }
+        lower_prices(wire, PriceLowering::Generic)
+    }
+}
+
+fn lower_prices(wire: &EntryWire, policy: PriceLowering) -> Result<Prices, Vec<Located>> {
+    let mut problems = Vec::new();
+    let sourced = flat_prices(&wire.prices)
+        .chain(tier_prices(wire, &mut problems))
+        .chain(search_context_prices(wire))
+        .chain(guardrail_prices(wire));
+    let rates = dedupe(sourced, policy, &mut problems);
+    let off_peak = wire
+        .off_peak
+        .as_ref()
+        .and_then(|block| off_peak(block, &mut problems));
+    if problems.is_empty() {
+        Ok(Prices::from_sources(rates, off_peak))
+    } else {
+        Err(problems)
     }
 }
 
@@ -119,6 +124,7 @@ impl From<&EntryWire> for TokenPriceSources {
                             .prices
                             .iter()
                             .map(|flat| flat.flat.meter.clone())
+                            .chain(row.declared_token_selection.iter().cloned())
                             .collect(),
                     })
                 })
@@ -131,7 +137,13 @@ impl TryFrom<EntryWire> for Model {
     type Error = Vec<Located>;
 
     fn try_from(wire: EntryWire) -> Result<Self, Self::Error> {
-        let prices = Prices::try_from(&wire);
+        Self::lower(wire, PriceLowering::Generic)
+    }
+}
+
+impl Model {
+    pub(crate) fn lower(wire: EntryWire, policy: PriceLowering) -> Result<Self, Vec<Located>> {
+        let prices = lower_prices(&wire, policy);
         let adjustments = Adjustments::from(&wire);
         let token_price_sources = TokenPriceSources::from(&wire);
         let EntryWire {
@@ -165,6 +177,7 @@ impl TryFrom<EntryWire> for Model {
 
 struct Sourced {
     price: Price,
+    origin: PriceSource,
     rate: UnitPrice,
     source: String,
     path: String,
@@ -174,6 +187,7 @@ fn flat_prices(prices: &[FlatPrice]) -> impl Iterator<Item = Sourced> + '_ {
     prices.iter().map(|flat| {
         let (channel, when) = flat.flat.channel_and_when();
         Sourced {
+            origin: PriceSource::Flat,
             price: Price {
                 meter: flat.flat.meter.clone(),
                 channel,
@@ -188,17 +202,23 @@ fn flat_prices(prices: &[FlatPrice]) -> impl Iterator<Item = Sourced> + '_ {
 
 fn dedupe(
     sourced: impl Iterator<Item = Sourced>,
+    policy: PriceLowering,
     problems: &mut Vec<Located>,
-) -> BTreeMap<Price, UnitPrice> {
-    let mut seen: BTreeMap<Price, (UnitPrice, String, String)> = BTreeMap::new();
+) -> BTreeMap<(Price, PriceSource), UnitPrice> {
+    let mut seen: BTreeMap<(Price, PriceSource), (UnitPrice, String, String)> = BTreeMap::new();
     for Sourced {
         price,
+        origin,
         rate,
         source,
         path,
     } in sourced
     {
-        match seen.entry(price) {
+        let origin = match policy {
+            PriceLowering::Generic => PriceSource::Flat,
+            PriceLowering::SdkTokens => origin,
+        };
+        match seen.entry((price, origin)) {
             Entry::Occupied(first) if first.get().0 == rate => {}
             Entry::Occupied(first) => problems.push(Located::new(
                 path,
@@ -339,6 +359,10 @@ fn tier_price(basis: TierBasis, start: u64, flat: &FlatPrice) -> Result<Sourced,
         }
     };
     Ok(Sourced {
+        origin: match basis {
+            TierBasis::PromptTokens if meter.is_token() => PriceSource::TokenTier(start),
+            _ => PriceSource::Flat,
+        },
         price: Price::online(
             meter,
             When {
@@ -370,6 +394,7 @@ fn search_context_prices(wire: &EntryWire) -> impl Iterator<Item = Sourced> + '_
         .into_iter()
         .filter_map(|(size, name, rate)| {
             Some(Sourced {
+                origin: PriceSource::Flat,
                 price: Price::online(Meter::WebSearch(size), When::default()),
                 rate: rate?,
                 source: format!("search_context_cost_per_query.search_context_size_{name}"),
@@ -384,6 +409,7 @@ fn search_context_prices(wire: &EntryWire) -> impl Iterator<Item = Sourced> + '_
 
 fn guardrail_prices(wire: &EntryWire) -> impl Iterator<Item = Sourced> + '_ {
     wire.guardrail.iter().flatten().map(|(unit, rate)| Sourced {
+        origin: PriceSource::Flat,
         price: Price::online(Meter::Guardrail(GuardrailUnit::new(unit)), When::default()),
         rate: *rate,
         source: format!("guardrail_cost_per_unit.{unit}"),
@@ -505,35 +531,35 @@ mod tests {
     #[rstest]
     #[case::tier_output(
         serde_json::json!({"output_cost_per_reasoning_token":5,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":2,"output_cost_per_token":3},{"range":[100,1000],"input_cost_per_token":4,"output_cost_per_token":6}]}),
-        Meter::Output(OutputUnit::ReasoningToken), 101, 30.0
+        Meter::Output(OutputUnit::ReasoningToken), 101, Some(30.0)
     )]
     #[case::unpriced_tier(
         serde_json::json!({"output_cost_per_reasoning_token":5,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":2,"output_cost_per_token":3},{"range":[100,1000],"output_cost_per_reasoning_token":9,"output_cost_per_token":6}]}),
-        Meter::Output(OutputUnit::ReasoningToken), 101, 25.0
+        Meter::Output(OutputUnit::ReasoningToken), 101, Some(25.0)
     )]
     #[case::tier_modality_is_not_flat(
         serde_json::json!({"tiered_pricing":[{"range":[0,100],"input_cost_per_token":1,"output_cost_per_token":2,"output_cost_per_audio_token":3}]}),
-        Meter::Output(OutputUnit::Token(TokenKind::Audio)), 10, 10.0
+        Meter::Output(OutputUnit::Token(TokenKind::Audio)), 10, Some(10.0)
     )]
     #[case::tier_reasoning_is_not_flat(
         serde_json::json!({"tiered_pricing":[{"range":[0,100],"input_cost_per_token":1,"output_cost_per_token":2,"output_cost_per_reasoning_token":3}]}),
-        Meter::Output(OutputUnit::ReasoningToken), 0, 10.0
+        Meter::Output(OutputUnit::ReasoningToken), 0, None
     )]
     #[case::explicit_free_tier_output(
         serde_json::json!({"output_cost_per_reasoning_token":5,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":0,"output_cost_per_token":0}]}),
-        Meter::Output(OutputUnit::ReasoningToken), 10, 0.0
+        Meter::Output(OutputUnit::ReasoningToken), 10, Some(0.0)
     )]
     fn lowering_retains_token_rate_origins(
         #[case] fields: Value,
         #[case] meter: Meter,
         #[case] prompt_tokens: u64,
-        #[case] total: f64,
+        #[case] total: Option<f64>,
     ) {
         let mut entry = wire(fields);
         entry.attributes.litellm_provider = Some("test".into());
-        let model = Model::try_from(entry).unwrap();
+        let model = Model::lower(entry, PriceLowering::SdkTokens).unwrap();
         let usage = litellm_cost::Usage {
-            quantities: [(meter, 5)].into(),
+            quantities: [(meter.clone(), 5)].into(),
             prompt_tokens,
             ..Default::default()
         };
@@ -542,15 +568,23 @@ mod tests {
             channel: Default::default(),
             at: time::OffsetDateTime::UNIX_EPOCH,
         };
-        let litellm_cost::Priced::Known(result) = litellm_cost::calculate_with_policy(
+        let result = litellm_cost::calculate_with_policy(
             &model.prices,
             &usage,
             &when,
             litellm_cost::SelectionPolicy::SdkTokens(&model.token_price_sources),
-        ) else {
-            panic!("expected priced tokens")
-        };
-        assert_eq!(result.total.get(), total);
+        );
+        match (result, total) {
+            (litellm_cost::Priced::Known(result), Some(total)) => {
+                assert_eq!(result.total.get(), total)
+            }
+            (litellm_cost::Priced::Unpriced { missing, partial }, None) => {
+                assert_eq!(missing, [meter]);
+                assert!(partial.lines.is_empty());
+                assert_eq!(partial.total.get(), 0.0);
+            }
+            _ => panic!("unexpected pricing result"),
+        }
     }
 
     fn wire(entry: Value) -> EntryWire {
@@ -560,6 +594,81 @@ mod tests {
         let wire = EntryWire::read(&fields);
         assert!(wire.problems.is_empty(), "{:?}", wire.problems);
         wire
+    }
+
+    #[rstest]
+    #[case::flat_and_tier(json!({"input_cost_per_token":1,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":3}]}), Some("DuplicatePrice"), None)]
+    #[case::equal_sources(json!({"input_cost_per_token":1,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":1}]}), None, None)]
+    #[case::equal_flat_alias(json!({"input_cost_per_token":1,"input_cost_per_token_above_0k_tokens":1}), None, None)]
+    #[case::conflicting_flat_alias(json!({"input_cost_per_token":1,"input_cost_per_token_above_0k_tokens":2}), Some("DuplicatePrice"), Some("DuplicatePrice"))]
+    #[case::overlap(json!({"tiered_pricing":[{"range":[0,100],"input_cost_per_token":1},{"range":[50,200],"input_cost_per_token":2}]}), Some("TierGap"), Some("TierGap"))]
+    #[case::repeated_range(json!({"tiered_pricing":[{"range":[0,100],"input_cost_per_token":1},{"range":[0,100],"input_cost_per_token":1}]}), Some("TierGap"), Some("TierGap"))]
+    #[case::non_token(json!({"input_cost_per_second":1,"tiered_pricing":[{"range":[0,100],"input_cost_per_second":2}]}), Some("DuplicatePrice"), Some("DuplicatePrice"))]
+    #[case::results(json!({"input_cost_per_query":1,"tiered_pricing":[{"max_results_range":[0,100],"input_cost_per_query":2}]}), Some("DuplicatePrice"), Some("DuplicatePrice"))]
+    #[case::suffix(json!({"tiered_pricing":[{"range":[0,100],"input_cost_per_token_priority":2}]}), Some("SuffixInsideBlock"), Some("SuffixInsideBlock"))]
+    #[case::two_band_sources(json!({"input_cost_per_token_above_100_tokens":1,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":2}]}), Some("BandsFromTwoSources"), Some("BandsFromTwoSources"))]
+    fn source_preserving_lowering_only_admits_distinct_token_sources(
+        #[case] fields: Value,
+        #[case] generic_error: Option<&str>,
+        #[case] sdk_error: Option<&str>,
+        #[values(PriceLowering::Generic, PriceLowering::SdkTokens)] policy: PriceLowering,
+    ) {
+        let expected = match policy {
+            PriceLowering::Generic => generic_error,
+            PriceLowering::SdkTokens => sdk_error,
+        };
+        let result = lower_prices(&wire(fields), policy);
+        match (result, expected) {
+            (Ok(prices), None) => {
+                assert_eq!(
+                    prices.get(&online(TEXT_INPUT, ServiceTier::Standard, Band::Base)),
+                    UnitPrice::new(1.0)
+                );
+            }
+            (Err(errors), Some(expected)) => assert_eq!(variant_name(&errors[0].error), expected),
+            _ => panic!("unexpected lowering result"),
+        }
+    }
+
+    #[rstest]
+    #[case::below(99, false, 3.0)]
+    #[case::boundary(100, false, 3.0)]
+    #[case::inclusive(100, true, 5.0)]
+    #[case::above(101, false, 5.0)]
+    fn sdk_policy_preserves_mixed_tier_non_token_bands(
+        #[case] prompt: u64,
+        #[case] inclusive: bool,
+        #[case] rate: f64,
+    ) {
+        let fields = json!({"litellm_provider":"test","tiered_pricing":[
+            {"range":[0,100],"input_cost_per_token":1,"input_cost_per_second":3},
+            {"range":[100,200],"input_cost_per_token":4,"input_cost_per_second":5}
+        ]});
+        let generic = Model::try_from(wire(fields.clone())).unwrap();
+        let sdk = Model::lower(wire(fields), PriceLowering::SdkTokens).unwrap();
+        let usage = litellm_cost::Usage {
+            quantities: [(Meter::Input(InputUnit::Second), 10)].into(),
+            prompt_tokens: prompt,
+            inclusive_threshold: inclusive,
+            ..Default::default()
+        };
+        let when = litellm_cost::When {
+            tier: Default::default(),
+            channel: Default::default(),
+            at: time::OffsetDateTime::UNIX_EPOCH,
+        };
+        let result = litellm_cost::calculate_with_policy(
+            &sdk.prices,
+            &usage,
+            &when,
+            litellm_cost::SelectionPolicy::SdkTokens(&sdk.token_price_sources),
+        );
+        let generic = litellm_cost::calculate(&generic.prices, &usage, &when);
+        let litellm_cost::Priced::Known(ref priced) = generic else {
+            panic!("missing generic price")
+        };
+        assert_eq!(priced.total.get(), 10.0 * rate);
+        assert_eq!(result, generic);
     }
 
     fn prices(entry: Value) -> Result<Prices, Vec<Located>> {
