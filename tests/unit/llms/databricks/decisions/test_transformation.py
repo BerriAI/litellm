@@ -2,6 +2,7 @@ from typing import Final
 
 import pytest
 
+from litellm.llms.databricks.common_utils import DatabricksBase, OAuthM2MToken
 from litellm.llms.databricks.decisions.transformation import DatabricksDecisionsConfig
 from litellm.types.decisions import (
     DecisionsIRPredicateAnswer,
@@ -118,3 +119,43 @@ def test_classifier_response_unwraps_the_ai_decide_envelope_and_accounts_the_con
     body: Final = {"response": {"answers": {"tier": choice}}, "metadata": {"version": "1.0"}}
     normalized: Final = _CONFIG.classifier_response(body, "ai_decide")
     assert dict(normalized) == {"answers": {"tier": choice}, "metadata": {"version": "1.0"}, "model": "ai_decide"}
+
+
+def test_the_credential_falls_back_to_an_oauth_m2m_token_when_no_static_key_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_CLIENT_ID", "decisions-client")
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "decisions-secret")
+    monkeypatch.delenv("DATABRICKS_HOST", raising=False)
+    requested: Final[list[tuple[str, str, str]]] = []
+
+    def fake_token(_self: DatabricksBase, workspace: str, client_id: str, client_secret: str) -> OAuthM2MToken:
+        requested.append((workspace, client_id, client_secret))
+        return OAuthM2MToken(access_token="m2m-token", expires_in=3600)
+
+    monkeypatch.setattr(DatabricksBase, "get_oauth_m2m_token_and_lifetime", fake_token)
+
+    assert _CONFIG.resolve_credential(None, _BASE, {}) == "m2m-token"
+    assert _CONFIG.resolve_credential(None, _BASE, {}) == "m2m-token"
+    assert requested == [(_HOST, "decisions-client", "decisions-secret")]
+
+
+def test_a_static_key_wins_over_oauth_m2m_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABRICKS_CLIENT_ID", "decisions-client")
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "decisions-secret")
+
+    def fail(*_args: object) -> OAuthM2MToken:
+        raise AssertionError("no token exchange expected when a static key is set")
+
+    monkeypatch.setattr(DatabricksBase, "get_oauth_m2m_token_and_lifetime", fail)
+
+    assert _CONFIG.resolve_credential("static-key", _BASE, {}) == "static-key"
+
+
+def test_the_credential_is_missing_without_a_static_key_or_oauth_m2m_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+
+    assert _CONFIG.resolve_credential(None, _BASE, {}) is None
