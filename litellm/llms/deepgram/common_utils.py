@@ -34,8 +34,12 @@ class DeepgramException(BaseLLMException):
     pass
 
 
+def _requested_model(query_string: str, default_model: str) -> str:
+    return httpx.QueryParams(query_string).get("model") or default_model
+
+
 def deepgram_listen_requested_model(query_string: str) -> str:
-    return httpx.QueryParams(query_string).get("model") or DEEPGRAM_LISTEN_DEFAULT_MODEL
+    return _requested_model(query_string, DEEPGRAM_LISTEN_DEFAULT_MODEL)
 
 
 def _first_occurrences(query_string: str) -> httpx.QueryParams:
@@ -50,21 +54,29 @@ def _first_occurrences(query_string: str) -> httpx.QueryParams:
     )
 
 
-def deepgram_listen_websocket_target(api_base: str | None, query_string: str) -> str:
-    listen_url: Final = httpx.URL(join_api_base(api_base or DEEPGRAM_DEFAULT_API_BASE, "listen"))
-    websocket_url: Final = listen_url.copy_with(scheme=_WEBSOCKET_SCHEMES.get(listen_url.scheme, listen_url.scheme))
+def _deepgram_websocket_target(api_base: str | None, path: str, query_string: str, default_model: str) -> str:
+    http_url: Final = httpx.URL(join_api_base(api_base or DEEPGRAM_DEFAULT_API_BASE, path))
+    websocket_url: Final = http_url.copy_with(scheme=_WEBSOCKET_SCHEMES.get(http_url.scheme, http_url.scheme))
     params: Final = _first_occurrences(query_string)
-    query: Final = params if params.get("model") else params.remove("model").add("model", DEEPGRAM_LISTEN_DEFAULT_MODEL)
+    query: Final = params if params.get("model") else params.remove("model").add("model", default_model)
     return f"{websocket_url}?{query}"
+
+
+def deepgram_listen_websocket_target(api_base: str | None, query_string: str) -> str:
+    return _deepgram_websocket_target(api_base, "listen", query_string, DEEPGRAM_LISTEN_DEFAULT_MODEL)
 
 
 def deepgram_listen_callback_params(query_string: str) -> tuple[str, ...]:
     return tuple(sorted(DEEPGRAM_LISTEN_CALLBACK_PARAMS.intersection(httpx.QueryParams(query_string).keys())))
 
 
-def deepgram_listen_model(upstream_url: str) -> str:
+def _upstream_model(upstream_url: str, default_model: str) -> str:
     models: Final = parse_qs(urlparse(upstream_url).query).get("model")
-    return models[0] if models else DEEPGRAM_LISTEN_DEFAULT_MODEL
+    return models[0] if models else default_model
+
+
+def deepgram_listen_model(upstream_url: str) -> str:
+    return _upstream_model(upstream_url, DEEPGRAM_LISTEN_DEFAULT_MODEL)
 
 
 def _param_enabled(values: Sequence[str]) -> bool:
@@ -89,7 +101,10 @@ def deepgram_listen_registry_key(upstream_url: str) -> str:
 def deepgram_listen_is_priced(upstream_url: str) -> bool:
     """Only an exact registry hit counts: the cost calculator resolves a missing ``streaming/<model>`` row to the
     pre-recorded ``<model>`` row, which is not the rate Deepgram bills a WebSocket session at."""
-    registry_key: Final = deepgram_listen_registry_key(upstream_url)
+    return _has_exact_registry_entry(deepgram_listen_registry_key(upstream_url))
+
+
+def _has_exact_registry_entry(registry_key: str) -> bool:
     try:
         model_info: Final = litellm.get_model_info(model=registry_key, custom_llm_provider=LlmProviders.DEEPGRAM.value)
     except Exception:
