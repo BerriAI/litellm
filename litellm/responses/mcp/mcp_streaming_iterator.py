@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.agentic_loop_settings import validated_max_agentic_loops
 from litellm.responses.litellm_completion_transformation.streaming_iterator import LiteLLMCompletionStreamingIterator
 from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.responses.mcp.stream_round_billing import StreamedRoundBilling
@@ -289,6 +290,10 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.mcp_tools_with_litellm_proxy = mcp_tools_with_litellm_proxy or []
         self.user_api_key_auth = user_api_key_auth
         self.original_request_params = original_request_params or {}
+        configured_rounds: Final = validated_max_agentic_loops(
+            self.original_request_params.get("max_agentic_loops"), field="litellm_params.max_agentic_loops"
+        )
+        self.max_tool_call_rounds: int = MAX_MCP_TOOL_CALL_ROUNDS if configured_rounds is None else configured_rounds
         self.should_auto_execute = self._should_auto_execute_tools()
 
         # Streaming state management
@@ -509,7 +514,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         2. mcp_discovery - Emit MCP discovery events (after response.output_item.added)
         3. continue_initial_response - Stream the current round's response (initial or follow-up).
            On completion, if auto-execute is on and the response contains tool calls, loops back
-           through tool_execution/follow-up instead of ending, up to MAX_MCP_TOOL_CALL_ROUNDS.
+           through tool_execution/follow-up instead of ending, up to self.max_tool_call_rounds.
         4. tool_execution - Emit tool execution events
         5. finished - End iteration
         """
@@ -1015,14 +1020,14 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             # Remove tool_choice to avoid forcing more tool calls
             follow_up_params.pop("tool_choice", None)
 
-            if self.tool_call_round >= MAX_MCP_TOOL_CALL_ROUNDS:
+            if self.tool_call_round >= self.max_tool_call_rounds:
                 # Hit the round cap: drop tools entirely so the model must
                 # answer in text instead of emitting another (unexecuted)
                 # tool call that would otherwise end the stream in silence.
                 follow_up_params.pop("tools", None)
                 verbose_logger.warning(
-                    "MCP auto-execute hit MAX_MCP_TOOL_CALL_ROUNDS=%s; forcing a text-only follow-up.",
-                    MAX_MCP_TOOL_CALL_ROUNDS,
+                    "MCP auto-execute hit max_agentic_loops=%s; forcing a text-only follow-up.",
+                    self.max_tool_call_rounds,
                 )
 
             follow_up_response: Final = await aresponses(**follow_up_params)
