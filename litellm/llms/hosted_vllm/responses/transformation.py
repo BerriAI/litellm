@@ -11,7 +11,9 @@ from typing import Final
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import ResponseInputParam
+from litellm.types.llms.openai import (
+    ResponseInputParam,  # pyright: ignore[reportAttributeAccessIssue,reportUnknownVariableType]  # upstream openai export
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
@@ -52,27 +54,29 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.HOSTED_VLLM
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> list[str]:  # mutable-ok: mirrors OpenAIResponsesAPIConfig signature
-        params: Final = super().get_supported_openai_params(model)
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: mirrors base signature
+        params: Final[list[str]] = list(  # mutable-ok: accumulator list
+            super().get_supported_openai_params(model)  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]  # base returns untyped list
+        )
         params.extend(HOSTED_VLLM_RESPONSES_SUPPORTED_PARAMS)
         return params
 
     def transform_responses_api_request(
         self,
         model: str,
-        input: str | ResponseInputParam,
-        response_api_optional_request_params: dict,  # mutable-ok: mirrors OpenAIResponsesAPIConfig signature
+        input: str | ResponseInputParam,  # pyright: ignore[reportUnknownParameterType]  # mirrors OpenAIResponsesAPIConfig signature
+        response_api_optional_request_params: dict[str, object],  # mutable-ok: mirrors base signature
         litellm_params: GenericLiteLLMParams,
-        headers: dict,  # mutable-ok: mirrors OpenAIResponsesAPIConfig signature
-    ) -> dict:  # mutable-ok: mirrors OpenAIResponsesAPIConfig signature
-        request: Final = super().transform_responses_api_request(
-            model=model,
-            input=input,
-            response_api_optional_request_params=response_api_optional_request_params,
-            litellm_params=litellm_params,
-            headers=headers,
+        headers: dict[str, object],  # mutable-ok: mirrors base signature
+    ) -> dict[str, object]:  # mutable-ok: mirrors base signature
+        request: Final[dict[str, object]] = dict(  # mutable-ok: payload dict
+            super().transform_responses_api_request(  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]  # base returns untyped dict
+                model=model,
+                input=input,
+                response_api_optional_request_params=response_api_optional_request_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
         )
 
         for param in HOSTED_VLLM_RESPONSES_SUPPORTED_PARAMS:
@@ -81,12 +85,8 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 and response_api_optional_request_params[param] is not None
             ):
                 request[param] = response_api_optional_request_params[param]
-            elif litellm_params is not None:
-                val = (
-                    litellm_params.get(param)
-                    if hasattr(litellm_params, "get")
-                    else getattr(litellm_params, param, None)
-                )
+            else:
+                val: object = getattr(litellm_params, param, None)
                 if val is not None:
                     request[param] = val
 
