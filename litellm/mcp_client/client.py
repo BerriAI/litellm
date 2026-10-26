@@ -246,11 +246,11 @@ _ListItem = TypeVar("_ListItem")
 
 
 class _LenientListPromptsResult(ListPromptsResult):
-    prompts: list[Prompt] = Field(default_factory=list)
+    prompts: list[Prompt] = Field(default_factory=list)  # mutable-ok: MCP result model owns the decoded list
 
 
 class _LenientListResourcesResult(ListResourcesResult):
-    resources: list[Resource] = Field(default_factory=list)
+    resources: list[Resource] = Field(default_factory=list)  # mutable-ok: MCP result model owns the decoded list
 
 
 async def _run_bounded_cleanup(operation: Callable[[], Awaitable[TSessionResult]], deadline: float) -> TSessionResult:

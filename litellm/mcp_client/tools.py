@@ -25,7 +25,7 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _LenientListToolsResult(ListToolsResult):
-    tools: list[MCPTool] = Field(default_factory=list)
+    tools: list[MCPTool] = Field(default_factory=list)  # mutable-ok: MCP result model owns the decoded list
 
 
 ########################################################
