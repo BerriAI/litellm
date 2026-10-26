@@ -9615,6 +9615,8 @@ class ProviderConfigManager:
             return litellm.DatabricksDecisionsConfig()
         if provider == LlmProviders.HOSTED_VLLM:
             return litellm.HostedVLLMDecisionsConfig()
+        if provider == LlmProviders.LM_STUDIO:
+            return litellm.LMStudioDecisionsConfig()
         if provider == LlmProviders.LAYA:
             return litellm.LayaDecisionsConfig()
         if provider == LlmProviders.BESPOKE:
