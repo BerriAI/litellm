@@ -1,6 +1,10 @@
+import asyncio
 import json
 import re
 from datetime import datetime, timezone
+from importlib.resources import files
+from itertools import chain
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,12 +15,13 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.health_check_latest import LatestHealthCheckRow
 from litellm.proxy.public_endpoints import router
 from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
-from litellm.types.proxy.public_endpoints.public_endpoints import ProviderCreateInfo
+from litellm.types.proxy.public_endpoints.public_endpoints import ProviderCreateInfo, ProviderCredentialField
 from litellm.types.utils import LlmProviders
 
 
@@ -433,15 +438,16 @@ def _decisions_provider_entry(provider: str) -> ProviderCreateInfo:
     return entry
 
 
-def test_typesafe_provider_fields():
-    typesafe: Final = _decisions_provider_entry("TypeSafe")
+@pytest.mark.parametrize("display_name,provider", (("TypeSafe", LlmProviders.TYPESAFE), ("Nace", LlmProviders.NACE)))
+def test_decisions_provider_fields(display_name: str, provider: LlmProviders) -> None:
+    entry: Final = _decisions_provider_entry(display_name)
 
-    assert typesafe.provider_display_name == "TypeSafe"
-    assert typesafe.litellm_provider == LlmProviders.TYPESAFE.value
-    assert typesafe.default_model_placeholder is not None
-    assert typesafe.default_model_placeholder.startswith("typesafe/")
+    assert entry.provider_display_name == display_name
+    assert entry.litellm_provider == provider.value
+    assert entry.default_model_placeholder is not None
+    assert entry.default_model_placeholder.startswith(f"{provider.value}/")
 
-    fields_by_key: Final = {f.key: f for f in typesafe.credential_fields}
+    fields_by_key: Final = {f.key: f for f in entry.credential_fields}
 
     assert fields_by_key["api_key"].required is True
     assert fields_by_key["api_key"].field_type == "password"
@@ -467,6 +473,31 @@ def test_strands_decider_provider_fields():
     assert fields_by_key["api_key"].field_type == "password"
 
 
+@pytest.mark.parametrize(
+    ("provider", "display_name", "litellm_provider", "model_placeholder"),
+    (
+        ("Laya", "Laya", LlmProviders.LAYA.value, "laya/english"),
+        ("Bespoke", "Bespoke Nimble", LlmProviders.BESPOKE.value, "bespoke/nimble"),
+    ),
+)
+def test_oss_decisions_provider_fields(
+    provider: str, display_name: str, litellm_provider: str, model_placeholder: str
+) -> None:
+    entry: Final = _decisions_provider_entry(provider)
+
+    assert entry.provider_display_name == display_name
+    assert entry.litellm_provider == litellm_provider
+    assert entry.default_model_placeholder == model_placeholder
+
+    fields_by_key: Final = {f.key: f for f in entry.credential_fields}
+
+    assert fields_by_key["api_base"].required is True
+    assert fields_by_key["api_base"].field_type == "text"
+
+    assert fields_by_key["api_key"].required is False
+    assert fields_by_key["api_key"].field_type == "password"
+
+
 ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
     {
         "a2a",
@@ -478,6 +509,7 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "charity_engine",
         "chutes",
         "darkbloom",
+        "databricks_agent",
         "gdc",
         "helicone",
         "inception",
@@ -818,6 +850,46 @@ def test_public_model_hub_mixed_health_statuses():
         assert claude["health_status"] is None
         assert claude["health_response_time"] is None
         assert claude["health_checked_at"] is None
+    app.dependency_overrides.clear()
+
+
+def _stored_health_check(model_id: str | None, status: str, checked_at: datetime) -> LatestHealthCheckRow:
+    return LatestHealthCheckRow(
+        health_check_id=f"hc-{model_id}",
+        model_name="gpt-4",
+        model_id=model_id,
+        status=status,
+        checked_at=checked_at,
+        created_at=checked_at,
+        updated_at=checked_at,
+    )
+
+
+def test_public_model_hub_reports_the_newest_check_of_a_group_not_the_last_row_read():
+    """Rows come back in model_id order with NULL last, so a stale name-probe row used to overwrite the fresh one."""
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    client = TestClient(app)
+    fresh = _stored_health_check("deployment-a", "healthy", datetime(2026, 10, 16, 11, 10, tzinfo=timezone.utc))
+    stale = _stored_health_check(None, "unhealthy", datetime(2026, 9, 4, 11, 20, tzinfo=timezone.utc))
+    mock_prisma = MagicMock()
+    mock_prisma.get_all_latest_health_checks = AsyncMock(return_value=(fresh, stale))
+
+    with (
+        patch("litellm.public_model_groups", ["gpt-4"]),
+        patch("litellm.proxy.proxy_server.get_model_group_info") as mock_get_info,
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+    ):
+        mock_get_info.return_value = [
+            ModelGroupInfoProxy(model_group="gpt-4", providers=["openai"], is_public_model_group=True)
+        ]
+        response = client.get("/public/model_hub", headers={"Authorization": "Bearer test-key"})
+
+    assert response.status_code == 200
+    assert response.json()[0]["health_status"] == "healthy"
+    assert response.json()[0]["health_checked_at"] == "2026-10-16T11:10:00+00:00"
     app.dependency_overrides.clear()
 
 
@@ -1359,6 +1431,30 @@ async def test_get_autorouter_presets_fetches_once_per_process(monkeypatch, rese
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("flag", ["LITELLM_LOCAL_AUTOROUTER_PRESETS", "LITELLM_OFFLINE_MODE"])
+async def test_get_autorouter_presets_local_flags_serve_bundled_without_fetching(
+    monkeypatch, reset_autorouter_presets_cache, flag
+):
+    from litellm.proxy.public_endpoints.public_endpoints import (
+        _load_bundled_autorouter_presets,
+        get_autorouter_presets,
+    )
+
+    monkeypatch.delenv("LITELLM_LOCAL_AUTOROUTER_PRESETS", raising=False)
+    monkeypatch.setenv(flag, "True")
+    calls = []
+
+    async def fake_fetch(url):
+        calls.append(url)
+        raise AssertionError("no fetch when the bundled catalog is forced")
+
+    presets = await get_autorouter_presets(url="https://example.test/presets.json", fetch=fake_fetch)
+
+    assert presets == _load_bundled_autorouter_presets()
+    assert calls == []
+
+
+@pytest.mark.asyncio
 async def test_get_autorouter_presets_single_flight_on_concurrent_cold_start(
     monkeypatch, reset_autorouter_presets_cache
 ):
@@ -1534,3 +1630,96 @@ async def test_fetch_remote_autorouter_presets_parses_and_rejects_empty(monkeypa
     response.content = b"{}"
     with pytest.raises(ValueError, match="empty"):
         await _fetch_remote_autorouter_presets("https://example.test/presets.json")
+
+
+# ---------------------------------------------------------------------------
+# /public/agents/fields inherited provider credentials
+# ---------------------------------------------------------------------------
+
+
+def test_get_agent_fields_merge_does_not_compound_across_requests():
+    """The inherited-credentials merge runs once, so credential_fields cannot grow per request.
+
+    Caching the raw file contents instead of the merged result would let the merge
+    append inherited fields again on every request.
+    """
+    client = _make_client()
+
+    def counts():
+        return {
+            agent["agent_type"]: len(agent.get("credential_fields") or [])
+            for agent in client.get("/public/agents/fields").json()
+        }
+
+    first = counts()
+    assert first, "expected at least one agent type"
+    assert first == counts() == counts()
+
+
+def test_get_agent_fields_appends_inherited_provider_credential_fields():
+    client: Final = _make_client()
+    providers: Final = {p["provider"]: p for p in client.get("/public/providers/fields").json()}
+    agents: Final = client.get("/public/agents/fields").json()
+    bundled: Final = json.loads(
+        files("litellm.proxy.public_endpoints").joinpath("agent_create_fields.json").read_text(encoding="utf-8")
+    )
+    own_counts: Final = {agent["agent_type"]: len(agent["credential_fields"]) for agent in bundled}
+    expected_inherited: Final = {
+        agent["agent_type"]: providers.get(agent.get("inherit_credentials_from_provider"), {}).get(
+            "credential_fields", []
+        )
+        for agent in bundled
+    }
+    inherited: Final = {
+        agent["agent_type"]: agent["credential_fields"][own_counts[agent["agent_type"]] :] for agent in agents
+    }
+
+    assert any(expected_inherited.values()), "expected at least one agent to inherit provider credential fields"
+    assert all("inherit_credentials_from_provider" not in agent for agent in agents)
+    assert {
+        agent_type: [
+            {key: field[key] for key in field if key in ProviderCredentialField.model_fields} for field in fields
+        ]
+        for agent_type, fields in inherited.items()
+    } == expected_inherited
+    assert all(field["include_in_litellm_params"] is True for field in chain.from_iterable(inherited.values()))
+
+
+@pytest.mark.parametrize("preference", ["auto_install", None])
+def test_public_skill_hub_echoes_registered_installation_preference(preference):
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import register_plugin
+    from litellm.types.proxy.claude_code_endpoints import RegisterPluginRequest
+
+    table: Final = MagicMock()
+    table.find_unique = AsyncMock(return_value=None)
+    table.create = AsyncMock(side_effect=lambda data: SimpleNamespace(id="plugin-id", **data))
+    table.find_many = AsyncMock(
+        side_effect=lambda where: [SimpleNamespace(id="plugin-id", **table.create.call_args.kwargs["data"])]
+    )
+    prisma: Final = MagicMock()
+    prisma.db.litellm_claudecodeplugintable = table
+    app: Final = FastAPI()
+    app.include_router(router)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        asyncio.run(
+            register_plugin(
+                request=RegisterPluginRequest(
+                    name="security-review",
+                    source={
+                        "source": "archive",
+                        "url": "https://plugins.example.com/security-review-1.0.0.zip",
+                        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                    },
+                    installation_preference=preference,
+                ),
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+            )
+        )
+        response: Final = TestClient(app).get("/public/skill_hub")
+
+    assert response.status_code == 200
+    assert [(p["name"], p["installation_preference"]) for p in response.json()["plugins"]] == [
+        ("security-review", preference)
+    ]

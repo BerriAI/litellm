@@ -10,12 +10,13 @@ import MemberTable from "@/components/common_components/MemberTable";
 import type { StoredModelMaxBudget } from "@/components/key_team_helpers/modelMaxBudgetPayload";
 import { Member } from "@/components/networking";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
-import { DateCell, MoneyCell } from "@/components/shared/table_cells";
+import { MoneyCell } from "@/components/shared/table_cells";
 import { toast } from "@/lib/toast";
+import { describeBudgetResetSchedule } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import { CircleHelp } from "lucide-react";
-import { useState, type ComponentProps } from "react";
+import { useMemo, useState, type ComponentProps } from "react";
 import { TeamData, TeamMemberBudgetSource, TeamMembership } from "./TeamInfo";
 
 const BUDGET_SOURCE_LABELS: Record<Exclude<TeamMemberBudgetSource, "none">, string> = {
@@ -74,6 +75,14 @@ export default function TeamMemberTab({
   const { mutate: resetMemberBudget, isPending: isResettingBudget } = useResetTeamMemberBudget();
   const teamDefaultBudget = teamData.team_info.team_member_budget_table?.max_budget ?? null;
 
+  const membershipsByUserId = useMemo(
+    () => new Map(teamData.team_memberships.map((membership) => [membership.user_id, membership])),
+    [teamData.team_memberships],
+  );
+
+  const findMembership = (userId: string | null): TeamMembership | undefined =>
+    userId ? membershipsByUserId.get(userId) : undefined;
+
   const formatNumber = (value: number | null): string => {
     if (value === null || value === undefined) return "0";
 
@@ -95,32 +104,28 @@ export default function TeamMemberTab({
 
   const getUserCurrentCycleSpend = (userId: string | null): number => {
     if (!userId) return 0;
-    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    return membership?.spend ?? 0;
+    return findMembership(userId)?.spend ?? 0;
   };
 
   const getUserTotalSpend = (userId: string | null): number => {
     if (!userId) return 0;
-    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    return membership?.total_spend ?? 0;
+    return findMembership(userId)?.total_spend ?? 0;
   };
 
   const getUserBudgetSource = (userId: string | null): TeamMemberBudgetSource => {
     if (!userId) return "none";
-    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    return membership?.budget_source ?? "none";
+    return findMembership(userId)?.budget_source ?? "none";
   };
 
   const getUserBudget = (userId: string | null): number | null => {
     if (!userId) return null;
-    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    return membership?.litellm_budget_table?.max_budget ?? teamDefaultBudget;
+    return findMembership(userId)?.litellm_budget_table?.max_budget ?? teamDefaultBudget;
   };
 
   // Helper function to get rate limits for a user
   const getUserRateLimits = (userId: string | null): string => {
     if (!userId) return "No Limits";
-    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
+    const membership = findMembership(userId);
     const rpmLimit = membership?.litellm_budget_table?.rpm_limit;
     const tpmLimit = membership?.litellm_budget_table?.tpm_limit;
 
@@ -139,15 +144,23 @@ export default function TeamMemberTab({
 
   const getUserAllowedModels = (userId: string | null): string[] | null => {
     if (!userId) return null;
-    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    const models = membership?.litellm_budget_table?.allowed_models;
+    const models = findMembership(userId)?.litellm_budget_table?.allowed_models;
     return models && models.length > 0 ? models : null;
   };
 
   const getUserBudgetReset = (userId: string | null): string | null => {
     if (!userId) return null;
-    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    return membership?.litellm_budget_table?.budget_reset_at ?? null;
+    return findMembership(userId)?.litellm_budget_table?.budget_reset_at ?? null;
+  };
+
+  const renderBudgetReset = (userId: string | null) => {
+    const budget = findMembership(userId)?.litellm_budget_table;
+    const schedule = describeBudgetResetSchedule(budget?.budget_duration ?? null, budget?.budget_reset_at ?? null);
+    return (
+      <SimpleTooltip content={schedule.tooltip}>
+        <span>{schedule.label}</span>
+      </SimpleTooltip>
+    );
   };
 
   const extraColumns: NonNullable<ComponentProps<typeof MemberTable>["extraColumns"]> = [
@@ -188,7 +201,7 @@ export default function TeamMemberTab({
       title: (
         <span className="flex items-center gap-1">
           Current Cycle Spend (USD)
-          <SimpleTooltip content="Spend for the current budget cycle. Resets to $0 when the member's budget window rolls over. This is the value checked against the member's budget.">
+          <SimpleTooltip content="Spend in this member's current budget cycle, the value checked against their budget. The Budget Reset column shows when this cycle ends, or Never resets. Spend above a rollover cap at reset carries into the next cycle.">
             <CircleHelp className="size-4" aria-label="Current cycle spend information" />
           </SimpleTooltip>
         </span>
@@ -202,7 +215,7 @@ export default function TeamMemberTab({
       title: (
         <span className="flex items-center gap-1">
           Total Spend (USD)
-          <SimpleTooltip content="Cumulative spend by this member within this team, across all budget cycles. Tracking began 2026-04-21; spend from before that date is not included.">
+          <SimpleTooltip content="Cumulative spend by this member within this team, across budget cycles. This is a lower bound: lifetime tracking began 2026-04-21, so cycles completed before then are not included. It is never less than Current Cycle Spend.">
             <CircleHelp className="size-4" aria-label="Total spend information" />
           </SimpleTooltip>
         </span>
@@ -253,7 +266,7 @@ export default function TeamMemberTab({
       title: "Budget Reset",
       key: "budget_reset",
       sortValue: (record: Member) => getUserBudgetReset(record.user_id),
-      render: (record: Member) => <DateCell value={getUserBudgetReset(record.user_id)} precision="date" />,
+      render: (record: Member) => renderBudgetReset(record.user_id),
     },
     {
       title: (
@@ -312,7 +325,7 @@ export default function TeamMemberTab({
         members={teamData.team_info.members_with_roles}
         canEdit={canEditTeam}
         onEdit={(record) => {
-          const membership = teamData.team_memberships.find((tm) => tm.user_id === record.user_id);
+          const membership = findMembership(record.user_id);
           setSelectedEditMember(
             seedMemberBudgetFields(
               record,

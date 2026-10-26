@@ -149,6 +149,28 @@ def _standard_payload(
     return payload
 
 
+@pytest.mark.parametrize(("tracking_disabled", "expected_end_user"), [(True, ""), (None, "end-user-1")])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        _payload(),
+        _payload(end_user="", metadata={**_payload()["metadata"], "user_api_key_end_user_id": "end-user-1"}),
+    ],
+    ids=["end_user_on_payload", "end_user_only_in_key_metadata"],
+)
+def test_end_user_is_stored_only_while_end_user_cost_tracking_is_on(
+    monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any], tracking_disabled: bool | None, expected_end_user: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_end_user_cost_tracking", tracking_disabled)
+
+    row: Final = spend_log_row_from_payload(cast(StandardLoggingPayload, payload), {})
+
+    assert row["end_user"] == expected_end_user
+    assert json.loads(row["metadata"])["user_api_key_end_user_id"] == (
+        None if tracking_disabled else payload["metadata"]["user_api_key_end_user_id"]
+    )
+
+
 def test_success_row_mapping():
     row: Final = spend_log_row_from_payload(cast(StandardLoggingPayload, _payload()), {"response_cost": 0.00042})
 

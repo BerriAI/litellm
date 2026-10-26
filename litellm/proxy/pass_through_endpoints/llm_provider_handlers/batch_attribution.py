@@ -9,6 +9,8 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import strip_null_bytes
 
@@ -43,6 +45,17 @@ def request_tags_from_metadata(request_metadata: Mapping[str, object]) -> tuple[
     if isinstance(key_auth_metadata, dict):
         return _sanitized_str_tuple(key_auth_metadata.get("tags"))
     return None
+
+
+_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def request_tags_from_request_data(data: Mapping[str, object]) -> tuple[str, ...] | None:
+    """Tags of a request whose metadata travels as litellm_metadata (batches, responses)"""
+    metadata: Final = data.get("litellm_metadata")
+    if metadata is None:
+        return None
+    return request_tags_from_metadata(_METADATA_ADAPTER.validate_python(metadata))
 
 
 def log_batch_registration_result(

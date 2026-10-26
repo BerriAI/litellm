@@ -24,6 +24,7 @@ from litellm.types.proxy.model_inventory import (
     SupplierModelInventory,
 )
 from litellm.types.router import LiteLLM_Params
+from litellm.utils import resolve_api_key_secret_reference
 
 _EMPTY_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 _HEADERS: Final = TypeAdapter(Mapping[str, str])
@@ -110,7 +111,12 @@ async def get_deployment_model_metadata(
     model, provider, dynamic_api_key, api_base = connection
     if provider != "chatgpt" and provider not in MODEL_INFO_DISCOVERY_PROVIDERS:
         return _EMPTY_METADATA
-    api_key: Final = params.api_key or dynamic_api_key
+    api_key: Final = resolve_api_key_secret_reference(
+        params.api_key or dynamic_api_key,
+        model=model,
+        llm_provider=provider,
+        upstream=MappingProxyType({"api_base": params.api_base}),
+    )
     headers: Final = _HEADERS.validate_python(metadata.get("extra_headers") or metadata.get("headers") or {})
     inventory: Final = await get_provider_model_inventory(
         provider=provider,

@@ -91,7 +91,7 @@ way (`pod_lock`, `budget_reset`, `spend_queue`, `health_check`, `scheduler_queue
 rather than a bare `redis.set`; `tests/unit/test_internal_context.py` scans every
 module under `litellm/` and `enterprise/` that calls a shared cache or declares a
 read or write on the request batch (`reserve_redis_batch_reads`,
-`declare_batch_get`, `batch.mget`, `batch.set`, `batch.script`) and fails when
+`batch.mget`, `batch.set`, `batch.script`) and fails when
 one has no declared family, with the process-local `InMemoryCache` callers listed
 as the only exemptions. A batch op carries the family that was active when it was
 declared, so the routing prefetch armed before deployment selection
@@ -194,7 +194,10 @@ matching the FastAPI server span); only a genuine error sets `ERROR`.
 - **Server spans** (one per HTTP route) are created by the
   `opentelemetry-instrumentation-fastapi` package. It stamps `http.*` attributes
   and extracts inbound `traceparent` headers. This package does **not** create
-  or modify server spans — request routes never touch spans.
+  server spans. It renames passthrough server spans, sets `litellm.call_id` on
+  them, and returns each sampled server span to the client in a `traceresponse`
+  response header (`trace_response.py`). A relayed upstream `traceresponse` is
+  kept, and the server span links to it when that upstream restarted the trace.
 - **Gen-AI spans** (LLM calls, guardrails, internal service calls) are created
   by this package from LiteLLM's logging callbacks. Request-level spans parent to
   the server span via the captured anchor; DB/service spans parent to the active

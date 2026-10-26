@@ -42,6 +42,11 @@ class CacheControlSupportedModels(str, Enum):
     ZAI = "z-ai"
 
 
+def openrouter_model_supports_cache_control(model: str) -> bool:
+    model_lower: Final = model.lower()
+    return any(supported_model.value in model_lower for supported_model in CacheControlSupportedModels)
+
+
 class OpenrouterConfig(OpenAIGPTConfig):
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str:
@@ -84,8 +89,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
         Returns:
             bool: True if model supports cache_control (Claude or Gemini models)
         """
-        model_lower: Final = model.lower()
-        return any(supported_model.value in model_lower for supported_model in CacheControlSupportedModels)
+        return openrouter_model_supports_cache_control(model)
 
     def remove_cache_control_flag_from_messages_and_tools(
         self,

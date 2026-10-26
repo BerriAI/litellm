@@ -34,9 +34,11 @@ import { CommandPaletteTrigger } from "@/components/CommandPalette/CommandPalett
 export function DashboardHeader({
   accessToken,
   navigationTrigger,
+  deploymentHealth,
 }: {
   accessToken: string | null;
   navigationTrigger?: ReactNode;
+  deploymentHealth?: ReactNode;
 }) {
   const { title } = getBreadcrumb(usePathname());
   const isDesktop = useMediaQuery("(min-width: 768px)", { initializeWithValue: false });
@@ -84,10 +86,12 @@ export function DashboardHeader({
         {!hideCommunityLinks && <CommunityEngagementButtons />}
         <ToolbarSeparator />
         <ThemeToggle />
+        {deploymentHealth}
         <NotificationsBell accessToken={accessToken} />
       </div>
       <div className="flex shrink-0 items-center gap-1 md:hidden">
         <CommandPaletteTrigger mobile />
+        {deploymentHealth}
         <NotificationsBell accessToken={accessToken} />
         <Popover open={!isDesktop && mobileToolsOpen} onOpenChange={setMobileToolsOpen}>
           <PopoverTrigger render={<Button variant="ghost" size="icon" className="size-11" aria-label="More options" />}>

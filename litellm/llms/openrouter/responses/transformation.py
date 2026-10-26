@@ -18,6 +18,7 @@ import litellm
 from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.llms.openrouter.chat.transformation import OpenrouterConfig
 from litellm.secret_managers.main import get_secret_str
@@ -135,7 +136,7 @@ class OpenRouterResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base: str | None,
         litellm_params: dict,
     ) -> str:
-        return f"{OpenrouterConfig.get_api_base(api_base).rstrip('/')}/responses"
+        return join_api_base(OpenrouterConfig.get_api_base(api_base), "responses")
 
     def supports_native_websocket(self) -> bool:
         """OpenRouter does not support native WebSocket for Responses API"""
