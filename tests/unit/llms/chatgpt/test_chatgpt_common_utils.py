@@ -76,3 +76,15 @@ class TestSelectChatGPTClientCredentialHeaders:
         credential = get_chatgpt_client_credential({"authorization": f"Bearer {CHATGPT_JWT}"})
         assert credential is not None
         assert credential.account_id == "acct-alice"
+
+
+@pytest.mark.parametrize("scheme", ["Bearer", "bearer", "BEARER"])
+def test_bearer_scheme_is_case_insensitive(scheme):
+    credential = get_chatgpt_client_credential({"authorization": f"{scheme} {CHATGPT_JWT}"})
+    assert credential is not None
+    assert credential.access_token == CHATGPT_JWT
+    assert credential.account_id == "acct-alice"
+
+
+def test_other_authentication_schemes_are_not_chatgpt_logins():
+    assert not is_chatgpt_oauth_key(f"Basic {CHATGPT_JWT}")

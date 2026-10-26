@@ -7,6 +7,7 @@ Source: litellm/llms/chatgpt/responses/transformation.py
 import base64
 import json
 from collections.abc import Generator
+from pathlib import Path
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -400,9 +401,13 @@ class TestChatGPTResponsesAPITransformation:
 
 def _fake_chatgpt_oauth_token(account_id: str) -> str:
     header = base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()
-    payload = base64.urlsafe_b64encode(
-        json.dumps({"https://api.openai.com/auth": {"chatgpt_account_id": account_id}}).encode()
-    ).rstrip(b"=").decode()
+    payload = (
+        base64.urlsafe_b64encode(
+            json.dumps({"https://api.openai.com/auth": {"chatgpt_account_id": account_id}}).encode()
+        )
+        .rstrip(b"=")
+        .decode()
+    )
     return f"{header}.{payload}.fake-signature"
 
 
@@ -447,7 +452,9 @@ class TestChatGPTClientCredentialForwarding:
         assert headers["ChatGPT-Account-Id"] == "acct-from-header"
         assert [name for name in headers if name.lower() == "chatgpt-account-id"] == ["ChatGPT-Account-Id"]
 
-    @pytest.mark.parametrize("bearer", ["Bearer sk-proj-fake-platform-key", "Bearer not-a-jwt", "Bearer a.bm90LWpzb24.c"])
+    @pytest.mark.parametrize(
+        "bearer", ["Bearer sk-proj-fake-platform-key", "Bearer not-a-jwt", "Bearer a.bm90LWpzb24.c"]
+    )
     def test_non_chatgpt_bearer_falls_back_to_configured_key(self, bearer):
         authenticator = _gateway_authenticator()
 
@@ -496,3 +503,59 @@ class TestChatGPTClientCredentialForwarding:
 
         assert [h["Authorization"] for h in forwarded] == [f"Bearer {alice}", f"Bearer {bob}", f"Bearer {alice}"]
         assert [h["ChatGPT-Account-Id"] for h in forwarded] == ["acct-alice", "acct-bob", "acct-alice"]
+
+
+class TestChatGPTResponsesMultiAccount:
+    @pytest.fixture(autouse=True)
+    def fixed_clock(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("time.time", lambda: 1700000000)
+
+    @staticmethod
+    def _write_auth_record(path: Path, token: str, account_id: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "access_token": token,
+                    "account_id": account_id,
+                    "expires_at": 4102444800,
+                }
+            )
+        )
+
+    def test_validate_environment_uses_per_model_auth_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        default_dir: Final = tmp_path / "default"
+        monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(default_dir))
+        monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+        self._write_auth_record(default_dir / "auth.json", "token-default", "acct-default")
+        file_a: Final = tmp_path / "account-a" / "auth.json"
+        file_b: Final = tmp_path / "account-b" / "auth.json"
+        self._write_auth_record(file_a, "token-a", "acct-a")
+        self._write_auth_record(file_b, "token-b", "acct-b")
+
+        config: Final = ChatGPTResponsesAPIConfig()
+
+        headers_a: Final = config.validate_environment(
+            headers={},
+            model="gpt-6.1-sol",
+            litellm_params=GenericLiteLLMParams(chatgpt_auth_file=str(file_a)),
+        )
+        headers_b: Final = config.validate_environment(
+            headers={},
+            model="gpt-6.1-sol",
+            litellm_params=GenericLiteLLMParams(chatgpt_auth_file=str(file_b)),
+        )
+        headers_default: Final = config.validate_environment(
+            headers={},
+            model="gpt-6.1-sol",
+            litellm_params=GenericLiteLLMParams(),
+        )
+
+        assert headers_a["Authorization"] == "Bearer token-a"
+        assert headers_a["ChatGPT-Account-Id"] == "acct-a"
+        assert headers_b["Authorization"] == "Bearer token-b"
+        assert headers_b["ChatGPT-Account-Id"] == "acct-b"
+        assert headers_default["Authorization"] == "Bearer token-default"
+        assert headers_default["ChatGPT-Account-Id"] == "acct-default"

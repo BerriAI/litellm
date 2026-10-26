@@ -677,7 +677,8 @@ async def acompletion(
     }
     if custom_llm_provider is None:
         _supplemental: Final = cast(  # cast-ok: kwargs values are request-scoped objects
-            "dict[str, object]", {k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS if k in kwargs}
+            "dict[str, object]",
+            {k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS | {"provider_specific_header"} if k in kwargs},
         )
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
@@ -5678,7 +5679,9 @@ def completion(
         if deployment_id is not None:  # azure llms
             model = deployment_id
             custom_llm_provider = "azure"
-        _supplemental_provider_params: Final = {k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS if k in kwargs}
+        _supplemental_provider_params: Final = {
+            k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS | {"provider_specific_header"} if k in kwargs
+        }
         model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -5998,6 +6001,7 @@ def completion(
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
+            chatgpt_auth_file=routing_kwargs.get("chatgpt_auth_file"),
             gigachat_scope=kwargs.get("gigachat_scope"),
             gigachat_auth_url=kwargs.get("gigachat_auth_url"),
             gigachat_access_token=kwargs.get("gigachat_access_token"),

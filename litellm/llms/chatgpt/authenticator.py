@@ -1,7 +1,9 @@
 import json
 import os
 import time
-from typing import Final
+from collections.abc import Mapping
+from functools import lru_cache
+from typing import TYPE_CHECKING, Final
 
 import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -28,6 +30,9 @@ from .common_utils import (
     extract_chatgpt_account_id,
 )
 
+if TYPE_CHECKING:
+    from litellm.types.router import GenericLiteLLMParams
+
 TOKEN_EXPIRY_SKEW_SECONDS: Final = 60
 TOKEN_REFRESH_TIMEOUT_SECONDS: Final = 30
 DEVICE_CODE_TIMEOUT_SECONDS: Final = 15 * 60
@@ -41,6 +46,26 @@ def _optional_str(value: JsonValue | None) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def get_chatgpt_auth_file(
+    litellm_params: "Mapping[str, object] | GenericLiteLLMParams | None",
+) -> str | None:
+    if litellm_params is None:
+        return None
+    value: Final = (
+        litellm_params.get("chatgpt_auth_file")
+        if isinstance(litellm_params, Mapping)
+        else litellm_params.chatgpt_auth_file
+    )
+    if not isinstance(value, str) or not value:
+        return None
+    return os.path.abspath(os.path.expanduser(value))
+
+
+@lru_cache(maxsize=128)
+def get_cached_authenticator(auth_file: str) -> "Authenticator":
+    return Authenticator(auth_file=auth_file)
+
+
 def _token_refresh_timeout() -> httpx.Timeout:
     configured: Final = get_configured_request_timeout()
     seconds: Final = (
@@ -50,13 +75,13 @@ def _token_refresh_timeout() -> httpx.Timeout:
 
 
 class Authenticator:
-    def __init__(self) -> None:
-        self.token_dir = os.getenv(
-            "CHATGPT_TOKEN_DIR",
-            os.path.expanduser("~/.config/litellm/chatgpt"),
+    def __init__(self, auth_file: str | None = None) -> None:
+        default_auth_file: Final = os.path.join(
+            os.getenv("CHATGPT_TOKEN_DIR", os.path.expanduser("~/.config/litellm/chatgpt")),
+            os.getenv("CHATGPT_AUTH_FILE", "auth.json"),
         )
-        self.auth_file = os.path.join(self.token_dir, os.getenv("CHATGPT_AUTH_FILE", "auth.json"))
-        self._ensure_token_dir()
+        self.auth_file = os.path.abspath(os.path.expanduser(auth_file or default_auth_file))
+        self.token_dir = os.path.dirname(self.auth_file)
 
     def get_api_base(self) -> str:
         return os.getenv("CHATGPT_API_BASE") or os.getenv("OPENAI_CHATGPT_API_BASE") or CHATGPT_API_BASE
@@ -126,6 +151,7 @@ class Authenticator:
 
     def _write_auth_file(self, data: JsonObject) -> None:
         try:
+            self._ensure_token_dir()
             with open(self.auth_file, "w") as f:
                 json.dump(data, f)
         except OSError as exc:

@@ -4299,9 +4299,7 @@ def add_provider_specific_headers_to_request(
         for header, value in headers.items()
         if header.lower() == "authorization" and is_anthropic_oauth_key(value)
     }
-    chatgpt_oauth_credential_headers: Final = dict(  # mutable-ok: ProviderSpecificHeader.extra_headers is a dict field
-        select_chatgpt_client_credential_headers(headers)
-    )
+    chatgpt_oauth_credential_headers: Final = dict(select_chatgpt_client_credential_headers(headers))
 
     typesafe_danger_zone_headers: Final = {
         header: value
@@ -4337,7 +4335,7 @@ def add_provider_specific_headers_to_request(
 
     if scoped_headers:
         data["provider_specific_header"] = scoped_headers[0] if len(scoped_headers) == 1 else scoped_headers
-    return bool(anthropic_oauth_credential_headers)
+    return bool(anthropic_oauth_credential_headers or chatgpt_oauth_credential_headers)
 
 
 def _add_otel_traceparent_to_data(data: dict, request: Request):

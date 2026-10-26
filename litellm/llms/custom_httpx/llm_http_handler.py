@@ -199,25 +199,23 @@ from litellm.utils import (
 
 
 def _merge_headers_case_insensitive(
-    headers: dict[str, str], extra_headers: Mapping[str, object] | None
-) -> dict[str, str]:
-    if not extra_headers:
-        return headers
-    overridden: Final = frozenset(name.lower() for name in extra_headers)
-    return {  # mutable-ok: httpx request headers are a plain dict
-        **{name: value for name, value in headers.items() if name.lower() not in overridden},
-        **{name: str(value) for name, value in extra_headers.items()},
+    headers: Mapping[str, object], extra_headers: Mapping[str, object] | None
+) -> dict[str, str]:  # mutable-ok: legacy HTTP handler methods require a dict of headers
+    overridden: Final = frozenset(name.lower() for name in extra_headers or {})
+    return {
+        **{name: str(value) for name, value in headers.items() if name.lower() not in overridden},
+        **{name: str(value) for name, value in (extra_headers or {}).items()},
     }
 
 
 def _client_request_headers(
-    response_api_optional_request_params: ResponsesAPIOptionalRequestParams,
+    response_api_optional_request_params: Mapping[str, object],
     extra_headers: Mapping[str, object] | None,
-) -> dict:
-    return {  # mutable-ok: validate_environment takes the request header dict
-        **(response_api_optional_request_params.get("extra_headers", {}) or {}),
-        **(extra_headers or {}),
-    }
+) -> dict[str, str]:  # mutable-ok: provider validate_environment methods require a dict
+    from litellm.litellm_core_utils.core_helpers import as_str_mapping
+
+    optional_headers: Final = as_str_mapping(response_api_optional_request_params.get("extra_headers"))
+    return _merge_headers_case_insensitive(optional_headers or {}, extra_headers)
 
 
 def _rust_responses_websocket_enabled(
@@ -2928,7 +2926,7 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers = _merge_headers_case_insensitive(
+        headers = _merge_headers_case_insensitive(  # rebind-ok: validation replaces the method's incoming headers
             responses_api_provider_config.validate_environment(
                 headers=_client_request_headers(response_api_optional_request_params, extra_headers),
                 model=model,

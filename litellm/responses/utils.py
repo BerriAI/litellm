@@ -10,9 +10,9 @@ from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire pay
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, iter_items
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
+from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig, ReasoningSummaryLevel
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -36,7 +36,9 @@ from litellm.types.utils import (
     text_tokens_without_nested_reasoning,
 )
 
-_PROVIDER_SPECIFIC_HEADER_ADAPTER: Final = TypeAdapter(ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None)
+_PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[
+    TypeAdapter[ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None]
+] = TypeAdapter(ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None)
 
 
 class _UsageExtraFields(ExtraItemsTypedDict, total=False, extra_items=object):
@@ -239,19 +241,17 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def merge_provider_specific_headers(
-        extra_headers: dict[str, object] | None,
+        extra_headers: Mapping[str, object] | None,
         provider_specific_header: object,
         custom_llm_provider: str | None,
-    ) -> dict[str, object] | None:
+    ) -> dict[str, object] | None:  # mutable-ok: legacy Responses request fields require a dict
         scoped_headers: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
             provider_specific_header=_PROVIDER_SPECIFIC_HEADER_ADAPTER.validate_python(provider_specific_header),
             custom_llm_provider=custom_llm_provider,
         )
-        if not scoped_headers:
-            return extra_headers
-        if not extra_headers:
-            return scoped_headers
-        return {**extra_headers, **scoped_headers}  # mutable-ok: extra_headers is the request's mutable header dict
+        if extra_headers is None and not scoped_headers:
+            return None
+        return {**(extra_headers or {}), **scoped_headers}
 
     @staticmethod
     def _check_valid_arg(

@@ -98,6 +98,7 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, r
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     declared_authenticating_provider,
+    inferred_provider,
     is_registered_custom_provider,
     resolve_model_and_provider_for_metadata,
 )
@@ -4799,9 +4800,28 @@ class Router:
         deployment_litellm_model_name = deployment["litellm_params"]["model"]
         deployment_api_base = deployment["litellm_params"].get("api_base")
         deployment_model_name: Final = deployment["model_name"]
-        if is_clientside_credential(request_kwargs=kwargs):
+        from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
+
+        request_context: Final = cast(  # cast-ok: the router's legacy request dict has string keys
+            Mapping[str, object], kwargs
+        )
+        deployment_context: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment["litellm_params"])
+        declared_provider: Final = deployment_context.get("custom_llm_provider")
+        declared_model: Final = deployment_context.get("model")
+        forwarded_authorization: Final = ProviderSpecificHeaderUtils.forwarded_authorization(
+            request_context.get("provider_specific_header"),
+            declared_provider
+            if isinstance(declared_provider, str)
+            else inferred_provider(declared_model if isinstance(declared_model, str) else None),
+        )
+        if is_clientside_credential(request_kwargs=kwargs) or forwarded_authorization is not None:
             deployment_pydantic_obj: Final = self._handle_clientside_credential(
-                deployment=deployment, kwargs=kwargs, function_name=function_name
+                deployment=deployment,
+                kwargs={
+                    **kwargs,
+                    **({"api_key": forwarded_authorization} if forwarded_authorization is not None else {}),
+                },
+                function_name=function_name,
             )
             model_info = deployment_pydantic_obj.model_info.model_dump()
             deployment_litellm_model_name = deployment_pydantic_obj.litellm_params.model
@@ -11048,6 +11068,10 @@ class Router:
             custom_llm_provider = None
             dynamic_api_key = None
             api_base = None
+        elif declared_authenticating_provider(litellm_model, deployment.litellm_params.custom_llm_provider) is not None:
+            _model, custom_llm_provider = (  # rebind-ok: each branch resolves the deployment provider
+                self._model_group_llm_provider(deployment.litellm_params)
+            )
         else:
             # check if model provider in supported providers
             (
