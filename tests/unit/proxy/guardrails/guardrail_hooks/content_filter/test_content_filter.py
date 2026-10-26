@@ -1213,6 +1213,58 @@ class TestContentFilterGuardrail:
         assert entry["masked_entity_count"] == {"email": 1}
 
     @pytest.mark.asyncio
+    async def test_streaming_hook_blocks_generic_api_key_with_long_whitespace_separator(self):
+        """
+        Issue #48007: When a long run of whitespace separates an api_key: label from its
+        value across streamed chunks, the buffer trim must not discard the label before
+        the key arrives.
+        """
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-streaming-long-whitespace-key",
+            patterns=[
+                ContentFilterPattern(
+                    pattern_type="prebuilt",
+                    pattern_name="generic_api_key",
+                    action=ContentFilterAction.BLOCK,
+                )
+            ],
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        chunks: Final = [
+            "api_key:" + " " * (4 * CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS),
+            "7391826405518273640192837465",
+        ]
+        with pytest.raises(HTTPException) as exc_info:
+            await self._collect_streamed_text(guardrail, chunks, {})
+        assert exc_info.value.status_code == 400
+        assert "generic_api_key pattern detected" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_streaming_hook_masks_generic_api_key_with_long_whitespace_separator(self):
+        """
+        Issue #48007: When a long run of whitespace separates an api_key: label from its
+        value across streamed chunks, MASK action must replace the key rather than delivering it.
+        """
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-streaming-long-whitespace-key-mask",
+            patterns=[
+                ContentFilterPattern(
+                    pattern_type="prebuilt",
+                    pattern_name="generic_api_key",
+                    action=ContentFilterAction.MASK,
+                )
+            ],
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        spaces: Final = " " * (4 * CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS)
+        chunks: Final = [
+            "api_key:" + spaces,
+            "7391826405518273640192837465",
+        ]
+        streamed: Final = await self._collect_streamed_text(guardrail, chunks, {})
+        assert "7391826405518273640192837465" not in streamed
+
+    @pytest.mark.asyncio
     async def test_streaming_hook_logs_detection_masked_long_before_stream_end(self):
         """
         An email at the start of a long response is masked and then falls out of

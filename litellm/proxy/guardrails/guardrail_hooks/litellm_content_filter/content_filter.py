@@ -2028,7 +2028,11 @@ class ContentFilterGuardrail(CustomGuardrail):
         cut_sentence: Final = (
             SENTENCE_TERMINATORS.split(head.lower())[-1] + SENTENCE_TERMINATORS.split(tail_lower, maxsplit=1)[0]
         )
-        return any(word in cut_sentence for word in plan.conditional_words)
+        if any(word in cut_sentence for word in plan.conditional_words):
+            return True
+        if not tail.strip() or (head and head[-1].isspace() and tail and tail[0].isspace()):
+            return True
+        return False
 
     def _trim_streamed_choice_buffer(
         self, state: _StreamedChoiceState, masked_text: str, plan: _StreamedScanPlan
