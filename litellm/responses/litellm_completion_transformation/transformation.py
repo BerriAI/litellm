@@ -56,7 +56,7 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
+from litellm.llms.anthropic.common_utils import anthropic_server_tool_calls, supports_anthropic_cache_control
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_support
 from litellm.llms.openrouter.chat.transformation import openrouter_model_supports_cache_control
@@ -2892,13 +2892,12 @@ class LiteLLMCompletionResponsesConfig:
         all_chat_completion_tools: Final[list[ChatCompletionMessageToolCall]] = []
         for choice in chat_completion_response.choices:
             if isinstance(choice, Choices):
-                if choice.message.tool_calls:
-                    all_chat_completion_tools.extend(choice.message.tool_calls)
-                    for tool_call in choice.message.tool_calls:
-                        TOOL_CALLS_CACHE.set_cache(
-                            key=tool_call.id,
-                            value=tool_call,
-                        )
+                for tool_call in (*anthropic_server_tool_calls(choice.message), *(choice.message.tool_calls or ())):
+                    all_chat_completion_tools.append(tool_call)
+                    TOOL_CALLS_CACHE.set_cache(
+                        key=tool_call.id,
+                        value=tool_call,
+                    )
 
         request_tools: Final = responses_api_request.get("tools") if responses_api_request is not None else None
         custom_tool_names: Final = extract_custom_tool_names(request_tools)

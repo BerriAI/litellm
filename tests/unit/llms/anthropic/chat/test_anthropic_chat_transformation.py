@@ -1,7 +1,8 @@
 import copy
 import json
+from collections.abc import Mapping
 from itertools import chain
-from typing import Final
+from typing import Final, cast
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -22,8 +23,13 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.llms.anthropic.chat import ModelResponseIterator
-from litellm.llms.anthropic.common_utils import process_anthropic_headers
+from litellm.llms.anthropic.common_utils import (
+    anthropic_server_tool_call_params,
+    process_anthropic_headers,
+    validated_object_mapping,
+)
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.base_llm.base_utils import ResponseFormatSchema, response_format_schema
 from litellm.llms.anthropic.pass_through.messages.transformation import (
@@ -38,8 +44,8 @@ from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation im
     VertexAIAnthropicConfig,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
-from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
-from litellm.types.utils import ChatCompletionToolCallChunk, ModelResponse, ServerToolUse, Usage
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallFunctionChunk
+from litellm.types.utils import ChatCompletionToolCallChunk, Choices, Message, ModelResponse, ServerToolUse, Usage
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
@@ -3519,21 +3525,17 @@ def test_code_execution_tool_results_extraction():
         prefix_prompt=None,
     )
 
-    # Verify tool calls are present
-    assert transformed_response.choices[0].message.tool_calls is not None
-    assert len(transformed_response.choices[0].message.tool_calls) == 2
+    assert transformed_response.choices[0].message.tool_calls is None
 
-    # Verify first tool call
-    assert transformed_response.choices[0].message.tool_calls[0].id == "srvtoolu_01ABC"
-    assert transformed_response.choices[0].message.tool_calls[0].function.name == "bash_code_execution"
-
-    # Verify second tool call
-    assert transformed_response.choices[0].message.tool_calls[1].id == "srvtoolu_01DEF"
-    assert transformed_response.choices[0].message.tool_calls[1].function.name == "text_editor_code_execution"
-
-    # Verify tool results are in provider_specific_fields
     provider_fields = transformed_response.choices[0].message.provider_specific_fields
     assert provider_fields is not None
+    server_tool_calls: Final = anthropic_server_tool_call_params(transformed_response.choices[0].message)
+    assert [(call["id"], call["function"].get("name")) for call in server_tool_calls] == [
+        ("srvtoolu_01ABC", "bash_code_execution"),
+        ("srvtoolu_01DEF", "text_editor_code_execution"),
+    ]
+
+    # Verify tool results are in provider_specific_fields
     assert "tool_results" in provider_fields
     assert provider_fields["tool_results"] is not None
     assert len(provider_fields["tool_results"]) == 2
@@ -3643,7 +3645,7 @@ def _tool_search_turn(tool_references: list[str], last_block: dict[str, object])
     ]
 
 
-def _parsed_assistant_message(content: list[dict[str, object]], stop_reason: str):
+def _parsed_choice(content: list[dict[str, object]], stop_reason: str) -> Choices:
     anthropic_response: Final = {
         "id": "msg_01XYZ",
         "type": "message",
@@ -3658,7 +3660,7 @@ def _parsed_assistant_message(content: list[dict[str, object]], stop_reason: str
     raw_response.json.return_value = anthropic_response
     raw_response.status_code = 200
     raw_response.headers = {}
-    return (
+    choice: Final = (
         AnthropicConfig()
         .transform_parsed_response(
             completion_response=anthropic_response,
@@ -3668,14 +3670,19 @@ def _parsed_assistant_message(content: list[dict[str, object]], stop_reason: str
             prefix_prompt=None,
         )
         .choices[0]
-        .message
     )
+    assert isinstance(choice, Choices)
+    return choice
+
+
+def _parsed_assistant_message(content: list[dict[str, object]], stop_reason: str) -> Message:
+    return _parsed_choice(content, stop_reason).message
 
 
 _WEATHER_CALL: Final = {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}}
 
 
-def _web_search_turn(last_block: dict[str, object]) -> list[dict[str, object]]:
+def _web_search_turn(last_block: Mapping[str, object]) -> list[dict[str, object]]:
     return [
         {"type": "server_tool_use", "id": "srvtoolu_01Web", "name": "web_search", "input": {"query": "Paris facts"}},
         {
@@ -3691,7 +3698,7 @@ def _web_search_turn(last_block: dict[str, object]) -> list[dict[str, object]]:
                 }
             ],
         },
-        last_block,
+        dict(last_block),
     ]
 
 
@@ -3738,8 +3745,87 @@ def test_server_tool_result_round_trips_right_after_its_call(
     assert [block["tool_use_id"] for block in replayed[2]["content"]] == ["toolu_01Weather"]
 
 
-def _block_ids(message: dict[str, object], block_type: str, id_key: str) -> list[object]:
-    return sorted(block[id_key] for block in message["content"] if block["type"] == block_type)
+_PARIS_TEXT: Final = "Paris is the capital of France."
+_PARIS_ANSWER: Final[Mapping[str, str]] = {"type": "text", "text": _PARIS_TEXT}
+
+
+@pytest.mark.parametrize(
+    ("content", "stop_reason", "expected_tool_call_ids", "expected_finish_reason"),
+    [
+        pytest.param(_web_search_turn(_PARIS_ANSWER), "end_turn", [], "stop", id="web_search_then_answer"),
+        pytest.param(
+            _web_search_turn(_WEATHER_CALL), "tool_use", ["toolu_01Weather"], "tool_calls", id="web_search_then_tool"
+        ),
+        pytest.param([_WEATHER_CALL], "tool_use", ["toolu_01Weather"], "tool_calls", id="client_tool_only"),
+    ],
+)
+def test_server_tool_use_is_not_returned_as_a_client_tool_call(
+    content: list[dict[str, object]],
+    stop_reason: str,
+    expected_tool_call_ids: list[str],
+    expected_finish_reason: str,
+):
+    choice: Final = _parsed_choice(content, stop_reason)
+
+    assert (choice.message.tool_calls is None) == (not expected_tool_call_ids)
+    assert [call.id for call in choice.message.tool_calls or ()] == expected_tool_call_ids
+    assert choice.finish_reason == expected_finish_reason
+    assert [
+        (call["id"], call["function"].get("name"), call["function"].get("arguments"))
+        for call in anthropic_server_tool_call_params(choice.message)
+    ] == [
+        (block["id"], block["name"], json.dumps(block["input"]))
+        for block in content
+        if block["type"] == "server_tool_use"
+    ]
+    if not expected_tool_call_ids:
+        assert choice.message.content == _PARIS_TEXT
+
+
+def _replayed(*messages: object):
+    return anthropic_messages_pt(
+        messages=cast(list[AllMessageValues], list(messages)),  # cast-ok: replays history the way clients send it back
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+
+
+def test_web_search_answer_round_trips_without_any_client_tool_call():
+    message: Final = _parsed_assistant_message(_web_search_turn(_PARIS_ANSWER), "end_turn")
+
+    replayed: Final = _replayed(
+        {"role": "user", "content": "Tell me about Paris"},
+        message.model_dump(),
+        {"role": "user", "content": "And Lyon?"},
+    )
+
+    assert _block_ids(replayed[1], "server_tool_use", "id") == ["srvtoolu_01Web"]
+    assert _block_ids(replayed[1], "web_search_tool_result", "tool_use_id") == ["srvtoolu_01Web"]
+    assert [
+        message_field(block, "text")
+        for block in parts_of(replayed[1]["content"])
+        if message_field(block, "type") == "text"
+    ] == [_PARIS_TEXT]
+
+
+def _block_ids(message: Mapping[str, object], block_type: str, id_key: str) -> list[str]:
+    return sorted(
+        block_id
+        for block in parts_of(message["content"])
+        if message_field(block, "type") == block_type and isinstance(block_id := message_field(block, id_key), str)
+    )
+
+
+def _as_returned_before_server_tool_calls_moved(message: Message) -> Mapping[str, object]:
+    dumped: Final[Mapping[str, object]] = message.model_dump()
+    provider_fields: Final = validated_object_mapping(dumped.get("provider_specific_fields")) or {}
+    return {
+        **dumped,
+        "tool_calls": [*anthropic_server_tool_call_params(message), *parts_of(dumped.get("tool_calls"))],
+        "provider_specific_fields": {
+            key: value for key, value in provider_fields.items() if key != "server_tool_calls"
+        },
+    }
 
 
 _SEARCH_THAT_FOUND_NOTHING: Final = _tool_search_turn(
@@ -3774,19 +3860,31 @@ def test_replayed_search_that_found_nothing_answers_every_tool_use_and_ends_on_a
     server_tool_use_ids: list[str],
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
-
     message: Final = _parsed_assistant_message(_SEARCH_THAT_FOUND_NOTHING, "end_turn")
     monkeypatch.setattr(litellm, "modify_params", modify_params)
 
-    replayed: Final = anthropic_messages_pt(
-        messages=[{"role": "user", "content": "Find a tool and use it"}, message.model_dump(), *follow_ups],
-        model="claude-opus-5-5",
-        llm_provider="anthropic",
+    replayed: Final = _replayed(
+        {"role": "user", "content": "Find a tool and use it"},
+        _as_returned_before_server_tool_calls_moved(message),
+        *follow_ups,
     )
     assert [turn["role"] for turn in replayed] == ["user", "assistant", "user"]
     assert _block_ids(replayed[2], "tool_result", "tool_use_id") == _block_ids(replayed[1], "tool_use", "id")
     assert _block_ids(replayed[1], "server_tool_use", "id") == server_tool_use_ids
+
+
+def test_replayed_search_that_found_nothing_keeps_its_result_when_the_call_never_reached_the_client(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    message: Final = _parsed_assistant_message(_SEARCH_THAT_FOUND_NOTHING, "end_turn")
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    replayed: Final = _replayed({"role": "user", "content": "Find a tool and use it"}, message.model_dump())
+
+    assert [turn["role"] for turn in replayed] == ["user", "assistant"]
+    assert _block_ids(replayed[1], "server_tool_use", "id") == ["srvtoolu_01Search"]
+    assert _block_ids(replayed[1], "tool_search_tool_result", "tool_use_id") == ["srvtoolu_01Search"]
+    assert _block_ids(replayed[1], "tool_use", "id") == []
 
 
 _CODE_EXECUTION_BLOCKS: Final = [

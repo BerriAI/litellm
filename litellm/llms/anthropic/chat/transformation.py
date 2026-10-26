@@ -61,6 +61,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
+    ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
     ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
     AllAnthropicPassThroughMessageValues,
     AllAnthropicToolsValues,
@@ -2849,6 +2850,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         return usage
 
+    @staticmethod
+    def _is_server_tool_call(tool_call: ChatCompletionToolCallChunk) -> bool:
+        tool_call_id: Final = tool_call["id"]
+        return tool_call_id is not None and tool_call_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX)
+
     def _build_code_by_id_map(self, tool_calls: list[ChatCompletionToolCallChunk]) -> dict[str, str]:
         code_by_id: Final[dict[str, str]] = {}
         for tc in tool_calls:
@@ -2964,6 +2970,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if compaction_blocks is not None:
             provider_specific_fields["compaction_blocks"] = compaction_blocks
 
+        server_tool_calls: Final = [tc for tc in tool_calls if self._is_server_tool_call(tc)]
+        if server_tool_calls:
+            provider_specific_fields["server_tool_calls"] = server_tool_calls
+
         refusal_fields: Final = refusal_provider_specific_fields(
             REFUSAL_STOP_FIELDS.validate_python(completion_response)
         )
@@ -3023,6 +3033,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ):
             text_content = prefix_prompt + text_content
 
+        client_tool_calls: Final = [tc for tc in tool_calls if not self._is_server_tool_call(tc)]
         provider_specific_fields: Final = self._build_provider_specific_fields(
             completion_response,
             citations,
@@ -3035,7 +3046,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         json_mode_message, tool_calls_for_message, json_extra_content = self._resolve_json_mode_non_streaming(
             json_mode=json_mode,
-            tool_calls=tool_calls,
+            tool_calls=client_tool_calls,
             response_format_schema=response_format_schema,
         )
         merged_text = text_content or ""

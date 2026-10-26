@@ -8,6 +8,7 @@ import litellm
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items
 from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params, served_from_cache
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
+from litellm.llms.anthropic.common_utils import anthropic_server_tool_calls
 from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.compaction_items import compaction_output_item
 from litellm.responses.litellm_completion_transformation.custom_tools import (
@@ -459,11 +460,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
         try:
             message: Final = litellm_complete_object.choices[0].message
-            tool_calls = getattr(message, "tool_calls", None)
+            tool_calls = [
+                *anthropic_server_tool_calls(message),
+                *(getattr(message, "tool_calls", None) or ()),
+            ]
         except Exception:
             tool_calls = None
 
-        if not tool_calls or not isinstance(tool_calls, list):
+        if not tool_calls:
             return
 
         for tc in tool_calls:

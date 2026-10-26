@@ -118,9 +118,12 @@ def _replays_provider_specific_fields(
     client_tool_calls: tuple[ChatCompletionMessageToolCall, ...],
 ) -> bool:
     from litellm.completion_extras.litellm_responses_transformation.transformation import carries_tool_search_items
+    from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
 
-    return client_tool_calls != tool_calls or carries_tool_search_items(
-        getattr(message, "provider_specific_fields", None)
+    return (
+        client_tool_calls != tool_calls
+        or bool(anthropic_server_tool_call_params(message))
+        or carries_tool_search_items(getattr(message, "provider_specific_fields", None))
     )
 
 

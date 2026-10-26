@@ -59,10 +59,10 @@ from litellm.types.llms.anthropic import (
     AnthropicThinkingParam,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantToolCall
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
 from litellm.types.proxy.model_listing import ModelInfoResponse
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import ChatCompletionMessageToolCall, LlmProviders
 
 _MessageT = TypeVar("_MessageT")
 
@@ -115,6 +115,7 @@ _DOTTED_VERSION_RE: Final = re.compile(r"(\d)\.(\d)")
 _CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
 OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
 OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
+_SERVER_TOOL_CALLS_ADAPTER: Final = TypeAdapter(tuple[ChatCompletionAssistantToolCall, ...])
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
@@ -2012,6 +2013,21 @@ def _replayed_server_tool_use(block: object) -> _ReplayedServerToolUse | None:
         return _SERVER_TOOL_USE_ADAPTER.validate_python(block)
     except ValidationError:
         return None
+
+
+def anthropic_server_tool_call_params(message: object) -> tuple[ChatCompletionAssistantToolCall, ...]:
+    fields: Final = validated_object_mapping(message_field(message, "provider_specific_fields"))
+    try:
+        return _SERVER_TOOL_CALLS_ADAPTER.validate_python(fields.get("server_tool_calls", ()) if fields else ())
+    except ValidationError:
+        return ()
+
+
+def anthropic_server_tool_calls(message: object) -> tuple[ChatCompletionMessageToolCall, ...]:
+    return tuple(
+        ChatCompletionMessageToolCall(id=call["id"], type=call["type"], function=dict(call["function"]))
+        for call in anthropic_server_tool_call_params(message)
+    )
 
 
 def tool_call_is_rebuilt_as_server_tool_use(

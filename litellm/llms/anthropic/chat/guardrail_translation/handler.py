@@ -26,6 +26,7 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.common_utils import anthropic_server_tool_calls
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
     LiteLLMAnthropicMessagesAdapter,
@@ -1314,9 +1315,9 @@ class AnthropicMessagesHandler(BaseTranslation):
             if built_response is not None and hasattr(built_response, "choices") and built_response.choices:
                 model_response: Final = cast(ModelResponse, built_response)
                 first_choice: Final = cast(Choices, model_response.choices[0])
-                tool_calls_list: Final = cast(
-                    list[ChatCompletionMessageToolCall] | None,
-                    first_choice.message.tool_calls,
+                tool_calls_list: Final = (
+                    *anthropic_server_tool_calls(first_choice.message),
+                    *cast(list[ChatCompletionMessageToolCall], first_choice.message.tool_calls or []),
                 )
                 string_so_far = first_choice.message.content
                 pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_list or ())
@@ -1324,7 +1325,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 if string_so_far:
                     guardrail_inputs["texts"] = [string_so_far]
                 if tool_calls_list:
-                    guardrail_inputs["tool_calls"] = tool_calls_list
+                    guardrail_inputs["tool_calls"] = list(tool_calls_list)
 
                 try:
                     prepared_request_data = self._prepare_request_data(
