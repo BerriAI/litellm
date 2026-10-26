@@ -414,6 +414,7 @@ jobs:
               tests/unit/containers
               tests/unit/embeddings
               tests/unit/endpoints
+              tests/unit/evals
               tests/unit/files
               tests/unit/fine_tuning
               tests/unit/images
