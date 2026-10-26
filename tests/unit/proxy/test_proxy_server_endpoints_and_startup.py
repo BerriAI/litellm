@@ -15208,17 +15208,20 @@ async def test_token_counter_keeps_the_event_loop_free_during_a_huggingface_coun
 
 
 async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeypatch):
+    from threading import get_ident
+
     from litellm.rust_bridge._native import Tokenizer
 
     from litellm import Router
-    from tests.unit.litellm_core_utils.event_loop_lag import assert_loop_stayed_free, timed_with_loop_lags
+
+    event_loop_thread: Final = get_ident()
 
     claude_tokenizer: Final = litellm.utils.select_tokenizer("claude-fable-5")["tokenizer"]
 
     class SlowHubTokenizer:
         @staticmethod
         def from_pretrained(identifier: str, revision: str = "main", token: str | None = None) -> Tokenizer:
-            time.sleep(0.3)
+            assert get_ident() != event_loop_thread, "tokenizer loading blocks the event loop thread"
             return claude_tokenizer
 
     monkeypatch.setattr("litellm.rust_bridge.tokenizer.from_pretrained", SlowHubTokenizer.from_pretrained)
@@ -15237,15 +15240,12 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
         ),
     )
 
-    response, took, lags = await timed_with_loop_lags(
-        lambda: proxy_server_module.token_counter(
-            TokenCountRequest(model="self-hosted", prompt="count me off the loop")
-        )
+    response: Final = await proxy_server_module.token_counter(
+        TokenCountRequest(model="self-hosted", prompt="count me off the loop")
     )
 
     assert response.tokenizer_type == "huggingface_tokenizer"
     assert response.total_tokens > 0
-    assert_loop_stayed_free(took, lags)
 
 
 async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revision_and_token(monkeypatch):
