@@ -1133,7 +1133,10 @@ class PrismaManager:
         can be applied to the rows the database has."""
         from litellm_proxy_extras.utils import ProxyExtrasDBManager
 
-        return ProxyExtrasDBManager.preflight_report(use_migrate=use_migrate)
+        refusal: Final[str | None] = ProxyExtrasDBManager.preflight_report(  # pyright: ignore[reportUnknownMemberType]  # litellm-proxy-extras is an optional install
+            use_migrate=use_migrate
+        )
+        return refusal
 
     @staticmethod
     def start_request_log_index_build() -> None:

@@ -226,7 +226,7 @@ class ProxyInitializationHelpers:
             raise click.UsageError("--db_preflight requires DATABASE_URL")
         from litellm.proxy.db.prisma_client import PrismaManager
 
-        refusal: Final = PrismaManager.db_preflight_report(use_migrate=use_migrate)
+        refusal: Final[str | None] = PrismaManager.db_preflight_report(use_migrate=use_migrate)
         if refusal is None:
             print("LiteLLM Proxy: the pending migrations and indexes can be applied to the rows this database has.")
             return 0
