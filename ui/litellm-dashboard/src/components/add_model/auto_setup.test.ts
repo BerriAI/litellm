@@ -178,6 +178,18 @@ describe("recommendSolverPair", () => {
     expect(names(recommendSolverPair(models, "balanced", "openai"))).toEqual(["luna", "astra"]);
   });
 
+  it.each([
+    { models: ["grok-4.20", "grok-4.20-0309"], expected: "grok-4.20" },
+    { models: ["grok-4.20-0309", "grok-4.20-0410"], expected: "grok-4.20-0410" },
+    { models: ["grok-4.20-0309", "grok-4.21"], expected: "grok-4.21" },
+  ])("orders Grok releases and short-date snapshots: $expected", ({ models, expected }) => {
+    const available = resolve(
+      deployment("everyday", "openai/gpt-6-luna"),
+      ...models.map((model) => deployment(model, `xai/${model}`)),
+    );
+    expect(names(recommendSolverPair(available, "balanced", "grok"))).toEqual(["everyday", expected]);
+  });
+
   it("does not rank a major-release snapshot above a newer minor release", () => {
     const models = resolve(
       deployment("old", "anthropic/claude-5-haiku-20260101"),

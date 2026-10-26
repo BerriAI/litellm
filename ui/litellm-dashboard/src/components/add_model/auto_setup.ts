@@ -77,8 +77,8 @@ const parseModel = (raw: string): ModelIdentity | null => {
       ...releaseVersion(gemini[1]),
       model,
     };
-  const grok = model.match(/^grok-(\d+(?:[.-]\d+)*)$/);
-  if (grok) return { family: "grok", line: "grok", rank: 2, ...releaseVersion(grok[1]), model };
+  const grok = model.match(/^grok-(\d+(?:[.-]\d+)*?)(?:-(\d{4}))?$/);
+  if (grok) return { family: "grok", line: "grok", rank: 2, ...releaseVersion(grok[1], grok[2]), model };
   const glm = model.match(/^glm-(\d+(?:[.-]\d+)*)(-flash)?$/);
   if (glm)
     return {
