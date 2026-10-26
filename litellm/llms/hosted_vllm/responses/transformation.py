@@ -11,8 +11,31 @@ from typing import Final
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import ResponseInputParam
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+
+HOSTED_VLLM_RESPONSES_SUPPORTED_PARAMS: Final = (
+    "chat_template_kwargs",
+    "top_k",
+    "repetition_penalty",
+    "presence_penalty",
+    "frequency_penalty",
+    "min_p",
+    "best_of",
+    "stop_token_ids",
+    "spaces_between_special_tokens",
+    "prompt_logprobs",
+    "skip_special_tokens",
+    "include_stop_str_in_output",
+    "guided_json",
+    "guided_regex",
+    "guided_choice",
+    "guided_grammar",
+    "guided_decoding_backend",
+    "guided_whitespace_pattern",
+    "priority",
+)
 
 
 class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -28,6 +51,41 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.HOSTED_VLLM
+
+    def get_supported_openai_params(self, model: str) -> list[str]:
+        params = super().get_supported_openai_params(model)
+        params.extend(HOSTED_VLLM_RESPONSES_SUPPORTED_PARAMS)
+        return params
+
+    def transform_responses_api_request(
+        self,
+        model: str,
+        input: str | ResponseInputParam,
+        response_api_optional_request_params: dict,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> dict:
+        request: Final[dict] = super().transform_responses_api_request(
+            model=model,
+            input=input,
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        for param in HOSTED_VLLM_RESPONSES_SUPPORTED_PARAMS:
+            if param in response_api_optional_request_params and response_api_optional_request_params[param] is not None:
+                request[param] = response_api_optional_request_params[param]
+            elif litellm_params is not None:
+                val = (
+                    litellm_params.get(param)
+                    if hasattr(litellm_params, "get")
+                    else getattr(litellm_params, param, None)
+                )
+                if val is not None:
+                    request[param] = val
+
+        return request
 
     def validate_environment(
         self,

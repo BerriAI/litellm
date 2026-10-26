@@ -183,3 +183,74 @@ def test_hosted_vllm_validate_environment_custom_api_key():
     )
 
     assert headers.get("Authorization") == "Bearer my-custom-key"
+
+
+
+def test_hosted_vllm_responses_supported_params():
+    """Test get_supported_openai_params() includes vLLM provider-specific params."""
+    config = HostedVLLMResponsesAPIConfig()
+    supported = config.get_supported_openai_params(model="Qwen/Qwen3-8B")
+
+    assert "chat_template_kwargs" in supported
+    assert "top_k" in supported
+    assert "repetition_penalty" in supported
+    assert "presence_penalty" in supported
+    assert "frequency_penalty" in supported
+    assert "min_p" in supported
+
+
+def test_hosted_vllm_responses_forwards_provider_specific_params():
+    """
+    Regression test for Issue #48362:
+    hosted_vllm Responses API must not drop provider-specific params
+    (chat_template_kwargs, top_k, repetition_penalty, presence_penalty)
+    that chat completions forwards.
+    """
+    mock_client = _make_mock_http_client(_make_mock_responses_api_response("Test output"))
+
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.get_httpx_client",
+        return_value=mock_client,
+    ):
+        response = litellm.responses(
+            model="hosted_vllm/Qwen/Qwen3-8B",
+            input="hi",
+            api_base="https://test-vllm.example.com/v1",
+            api_key="test-key",
+            chat_template_kwargs={"enable_thinking": False},
+            top_k=20,
+            repetition_penalty=1.0,
+            presence_penalty=1.5,
+        )
+
+    assert response is not None
+    assert mock_client.post.call_count == 1
+    call_json = mock_client.post.call_args[1]["json"]
+    assert call_json["model"] == "Qwen/Qwen3-8B"
+    assert call_json["input"] == "hi"
+    assert call_json["chat_template_kwargs"] == {"enable_thinking": False}
+    assert call_json["top_k"] == 20
+    assert call_json["repetition_penalty"] == 1.0
+    assert call_json["presence_penalty"] == 1.5
+
+
+def test_hosted_vllm_responses_transform_request_from_litellm_params():
+    """Test transform_responses_api_request forwards provider params from litellm_params."""
+    config = HostedVLLMResponsesAPIConfig()
+    litellm_params = GenericLiteLLMParams(
+        chat_template_kwargs={"enable_thinking": False},
+        top_k=50,
+        min_p=0.05,
+    )
+
+    request = config.transform_responses_api_request(
+        model="Qwen/Qwen3-8B",
+        input="test input",
+        response_api_optional_request_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+
+    assert request["chat_template_kwargs"] == {"enable_thinking": False}
+    assert request["top_k"] == 50
+    assert request["min_p"] == 0.05

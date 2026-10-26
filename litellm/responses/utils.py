@@ -338,6 +338,14 @@ class ResponsesAPIRequestUtils:
         custom_llm_provider: Final = params.pop("custom_llm_provider", None)
         special_params: Final[dict[str, object]] = params.pop("kwargs", {})
 
+        allowed_openai_params: Final = (
+            params.get("allowed_openai_params")
+            or special_params.get("allowed_openai_params")
+            or []
+        )
+        allowed_set: Final = {p for p in allowed_openai_params if isinstance(p, str)}
+        default_keys: Final = set(valid_keys) | allowed_set
+
         additional_drop_params: Final[list[str] | None] = params.pop("additional_drop_params", None)
         non_default_params: Final = _apply_nested_drop_params(
             PreProcessNonDefaultParams.base_pre_process_non_default_params(
@@ -345,7 +353,7 @@ class ResponsesAPIRequestUtils:
                 special_params=special_params,
                 custom_llm_provider=custom_llm_provider,
                 additional_drop_params=additional_drop_params,
-                default_param_values={k: None for k in valid_keys},
+                default_param_values={k: None for k in default_keys},
                 additional_endpoint_specific_params=["input"],
             ),
             additional_drop_params,
