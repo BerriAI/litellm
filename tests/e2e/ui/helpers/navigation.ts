@@ -1,6 +1,7 @@
 import { Page } from "../fixtures/pages";
 import { Page as PlaywrightPage, expect } from "@playwright/test";
 import { UI_BASE_URL } from "../constants";
+import { ARIA_AGENT_LABEL } from "../../../../ui/litellm-dashboard/src/components/liteadmin/aria-brand";
 
 export const sidebarLink = (page: PlaywrightPage, name: string | RegExp) =>
   page.getByRole("complementary").getByRole("link", { name, exact: true });
@@ -66,14 +67,25 @@ export async function hideLiteAdmin(page: PlaywrightPage): Promise<void> {
   await page.getByRole("button", { name: /Account menu/i }).click();
   const panel = page.getByTestId("sidebar-account-menu-panel");
   await expect(panel).toBeVisible({ timeout: 5_000 });
-  const toggle = panel.getByRole("switch", { name: "Toggle hide LiteAdmin" });
+  const toggle = panel.getByRole("switch", {
+    name: `Toggle hide ${ARIA_AGENT_LABEL}`,
+    exact: true,
+  });
   if ((await toggle.getAttribute("aria-checked")) !== "true") {
     await toggle.click();
   }
   await expect(toggle).toHaveAttribute("aria-checked", "true");
   await page.keyboard.press("Escape");
   await expect(panel).toBeHidden();
-  await expect(page.getByRole("button", { name: "LiteAdmin", exact: true })).toBeHidden();
+  await expect(
+    page.getByRole("button", { name: ARIA_AGENT_LABEL, exact: true }),
+  ).toBeHidden();
+  await expect(
+    page.getByRole("button", {
+      name: `Launch ${ARIA_AGENT_LABEL}`,
+      exact: true,
+    }),
+  ).toBeHidden();
 }
 
 /**
