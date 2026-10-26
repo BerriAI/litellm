@@ -1,3 +1,4 @@
+import { autoRouterListKey } from "@/app/(dashboard)/hooks/models/useModels";
 import { normalizeTierModels } from "./complexity_router_tiers";
 import {
   openAutoRouterAdvanced,
@@ -225,6 +226,56 @@ describe("AddAutoRouterTab", () => {
       },
     });
   });
+
+  it("saves concrete solver names expanded by the backend from an openai wildcard route", async () => {
+    mockFetchAvailableModels.mockResolvedValue(
+      ["openai/gpt-6-luna", "openai/gpt-6.1-sol", "openai/gpt-6-astra"].map((model_group) => ({
+        model_group,
+        mode: "chat",
+        providers: ["openai"],
+      })),
+    );
+    mockFetchAllModelDeployments.mockResolvedValue([{ model_name: "openai/*", litellm_params: { model: "openai/*" } }]);
+    renderWithProviders(<Harness />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls[0][0]).toMatchObject({
+      complexity_router_config: {
+        classifier_type: "heuristic",
+        tiers: {
+          SIMPLE: ["openai/gpt-6-luna"],
+          MEDIUM: ["openai/gpt-6-luna"],
+          COMPLEX: ["openai/gpt-6-astra"],
+          REASONING: ["openai/gpt-6-astra"],
+        },
+      },
+    });
+  });
+
+  it.each(["groups", "deployments"])(
+    "keeps chosen models and saving available after a failed %s background refresh",
+    async (source) => {
+      mockFetchAvailableModels.mockResolvedValue(
+        ["claude-haiku-5-5", "claude-opus-5-5"].map((model_group) => ({ model_group, mode: "chat" })),
+      );
+      renderWithProviders(<Harness />);
+      await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
+      const fetch = source === "groups" ? mockFetchAvailableModels : mockFetchAllModelDeployments;
+      fetch.mockRejectedValue(new Error("Background refresh unavailable"));
+      const queryKey =
+        source === "groups" ? ["availableModels", "autoRouter", "token"] : autoRouterListKey("", "Admin");
+      await act(async () => {
+        await testQueryClient.refetchQueries({ queryKey });
+      });
+      await waitFor(() => expect(testQueryClient.getQueryState(queryKey)?.status).toBe("error"));
+      expect(screen.getByRole("combobox", { name: "Everyday model" })).toHaveTextContent("claude-haiku-5-5");
+      expect(screen.queryByText("Could not load deployed models.")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled();
+      fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
+    },
+  );
 
   it("keeps manual solver choices on goal changes and carries them into Advanced", async () => {
     mockFetchAvailableModels.mockResolvedValue(

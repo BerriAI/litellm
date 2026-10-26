@@ -277,6 +277,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   // can't tell "never loaded" apart from "loaded, then a background refetch errored" - only the
   // former leaves us with nothing trustworthy to verify a preset's models against.
   const modelsUnverifiable = modelsError && data === undefined;
+  const inventoryUnavailable = modelsUnverifiable || (deploymentsError && deployments === undefined);
 
   const isAdmin = all_admin_roles.includes(userRole);
 
@@ -420,9 +421,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     },
     !requiresTeamScope || Boolean(watchedTeamId),
   );
-  const simpleBlockedReason = advanced
-    ? null
-    : simpleSetupError(modelsLoading, modelsError || deploymentsError, everyday, hard);
+  const simpleBlockedReason = advanced ? null : simpleSetupError(modelsLoading, inventoryUnavailable, everyday, hard);
   const saveBlockedReason = simpleBlockedReason ?? submitBlockedReason ?? routerAvailability.saveBlockedReason;
   const handleClassifierChange = (config: ComplexityRouterConfigValue) => {
     setSelectedPreset(undefined);
@@ -660,7 +659,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   everyday={everyday}
                   hard={hard}
                   loading={modelsLoading}
-                  error={modelsError || deploymentsError}
+                  error={inventoryUnavailable}
                   notice={
                     Object.keys(solverOverrides).length > 0
                       ? "Your model choices are kept."

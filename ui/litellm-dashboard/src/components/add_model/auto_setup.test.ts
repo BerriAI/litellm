@@ -213,6 +213,32 @@ describe("recommendSolverPair", () => {
     expect(recommendSolverPair([], "balanced", "auto")).toBeNull();
   });
 
+  it("uses the latest deployed Terra as a fallback without replacing the preferred OpenAI pairs", () => {
+    const models = resolve(
+      deployment("terra-old", "openai/gpt-5.6-terra"),
+      deployment("terra", "openai/gpt-6.1-terra"),
+      deployment("sol", "openai/gpt-6.1-sol"),
+    );
+    expect(names(recommendSolverPair(models, "balanced", "openai"))).toEqual(["terra", "sol"]);
+    const complete = [
+      ...models,
+      ...resolve(deployment("luna", "openai/gpt-6-luna"), deployment("astra", "openai/gpt-6-astra")),
+    ];
+    expect(names(recommendSolverPair(complete, "cheapest", "openai"))).toEqual(["luna", "sol"]);
+    expect(names(recommendSolverPair(complete, "balanced", "openai"))).toEqual(["luna", "astra"]);
+    expect(names(recommendSolverPair(complete, "quality", "openai"))).toEqual(["sol", "astra"]);
+  });
+
+  it("suggests a deterministic equal-rank cross-family fallback only when no ordered pair exists", () => {
+    const models = resolve(deployment("opus", "anthropic/claude-opus-5-5"), deployment("astra", "openai/gpt-6-astra"));
+    const pair = recommendSolverPair(models, "balanced", "auto");
+    expect(names(pair)).toEqual(["astra", "opus"]);
+    expect(pair?.notice).toContain("two model families");
+    expect(names(recommendSolverPair([...models].reverse(), "balanced", "auto"))).toEqual(names(pair));
+    const withLuna = [...models, ...resolve(deployment("luna", "openai/gpt-6-luna"))];
+    expect(names(recommendSolverPair(withLuna, "balanced", "auto"))).toEqual(["luna", "astra"]);
+  });
+
   it("does not prefer native-provider deployments over a newer cloud deployment", () => {
     const models = resolve(
       deployment("native", "openai/gpt-6-luna"),

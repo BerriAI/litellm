@@ -51,12 +51,12 @@ const parseModel = (raw: string): ModelIdentity | null => {
       ...releaseVersion(claude[2], claude[3]),
       model,
     };
-  const openai = model.match(/^gpt-(\d+(?:[.-]\d+)*)-(luna|sol|astra)(?:-(\d{4}-\d{2}-\d{2}))?$/);
+  const openai = model.match(/^gpt-(\d+(?:[.-]\d+)*)-(luna|terra|sol|astra)(?:-(\d{4}-\d{2}-\d{2}))?$/);
   if (openai)
     return {
       family: "openai",
       line: openai[2],
-      rank: ["luna", "sol", "astra"].indexOf(openai[2]),
+      rank: openai[2] === "terra" ? 0.5 : ["luna", "sol", "astra"].indexOf(openai[2]),
       ...releaseVersion(openai[1], openai[3]),
       model,
     };
@@ -178,12 +178,17 @@ export const recommendSolverPair = (
     latest
       .filter((hard) => {
         const matchesFamily = family === "auto" || everyday.family === family || hard.family === family;
-        return hard.rank > everyday.rank && matchesFamily;
+        const ordered = hard.rank > everyday.rank;
+        const equalRankFallback = hard.rank === everyday.rank && hard.family !== everyday.family;
+        return (ordered || equalRankFallback) && matchesFamily;
       })
       .map((hard) => ({ everyday, hard })),
   );
   const score = ({ everyday, hard }: { everyday: RouterModel; hard: RouterModel }): number =>
-    (everyday.family === hard.family ? 0 : 100) + Math.abs(everyday.rank - low) + Math.abs(hard.rank - high);
+    (everyday.family === hard.family ? 0 : 100) +
+    (everyday.rank === hard.rank ? 10 : 0) +
+    Math.abs(everyday.rank - low) +
+    Math.abs(hard.rank - high);
   const chosen = pairs.sort(
     (a, b) =>
       score(a) - score(b) || a.everyday.name.localeCompare(b.everyday.name) || a.hard.name.localeCompare(b.hard.name),
