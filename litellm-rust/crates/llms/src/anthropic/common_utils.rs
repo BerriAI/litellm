@@ -1,9 +1,9 @@
 use crate::base_llm::messages::context::MessagesModelCapabilities;
 use litellm_auth::{CredentialPlacement, SecretValue};
-use litellm_core_utils::settings::resolve_non_empty;
 use litellm_http::request::{
     has_header, header_value, header_values, with_header, without_headers,
 };
+use litellm_layered::{Layered, non_blank};
 use litellm_llms_types::{
     formats::messages::{
         ContentBlock, ContentBlockType, EffortLevel, Message, MessageContent, MessagesTool,
@@ -85,16 +85,45 @@ impl<'a> OauthToken<'a> {
     }
 }
 
-/// Python's `AnthropicModelInfo.get_api_key`: the param, else `ANTHROPIC_API_KEY`.
+#[derive(Layered)]
+#[expect(dead_code, reason = "only the derived partial is read")]
+struct AnthropicKeys {
+    #[layer(
+        skip_blank,
+        litellm_param = "api_key",
+        env = "ANTHROPIC_API_KEY",
+        secret,
+        label = "API Key"
+    )]
+    api_key: String,
+    #[layer(skip_blank, env = "ANTHROPIC_AUTH_TOKEN", secret)]
+    auth_token: String,
+    #[layer(skip_blank,
+        litellm_param = "api_base",
+        env = ["ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"],
+        label = "API Base"
+    )]
+    api_base: String,
+}
+
+impl AnthropicKeysPartial {
+    fn env(env: &dyn Fn(&str) -> Option<String>) -> Self {
+        Self::from_env(&env).unwrap_or_default()
+    }
+}
+
+/// Python's `AnthropicModelInfo.get_api_key`: the param, else `ANTHROPIC_API_KEY`, stripped.
 pub fn get_api_key(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
-    resolve_non_empty(api_key, env_lookup, &[ANTHROPIC_API_KEY_ENV])
+    non_blank(api_key)
+        .or_else(|| AnthropicKeysPartial::env(env_lookup).api_key)
+        .map(|key| key.trim().to_owned())
 }
 
 pub fn get_auth_token(env_lookup: &dyn Fn(&str) -> Option<String>) -> Option<String> {
-    resolve_non_empty(None, env_lookup, &[ANTHROPIC_AUTH_TOKEN_ENV])
+    AnthropicKeysPartial::env(env_lookup).auth_token
 }
 
 /// Python's `AnthropicModelInfo.get_auth_header`, naming the credential instead of building
@@ -125,7 +154,7 @@ pub fn resolve_anthropic_api_key(
 ) -> Result<String, litellm_auth::Error> {
     get_api_key(api_key, env_lookup).ok_or(litellm_auth::Error::MissingApiKey {
         provider: "Anthropic",
-        environment_variable: ANTHROPIC_API_KEY_ENV,
+        environment_variable: AnthropicKeys::API_KEY.env[0],
     })
 }
 
@@ -138,12 +167,9 @@ pub fn resolve_anthropic_api_base(
     api_base: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> String {
-    resolve_non_empty(
-        api_base,
-        env_lookup,
-        &[ANTHROPIC_API_BASE_ENV, ANTHROPIC_BASE_URL_ENV],
-    )
-    .unwrap_or_else(|| API_BASE.to_string())
+    non_blank(api_base)
+        .or_else(|| AnthropicKeysPartial::env(env_lookup).api_base)
+        .unwrap_or_else(|| API_BASE.to_string())
 }
 
 pub fn complete_anthropic_url(
@@ -1649,6 +1675,15 @@ mod tests {
                 ));
             }),
             expected.map(str::to_string)
+        );
+    }
+
+    #[rstest]
+    fn an_explicit_key_resolves_without_reading_the_environment() {
+        let unread = |name: &str| -> Option<String> { panic!("read {name}") };
+        assert_eq!(
+            resolve_anthropic_api_key(Some("sk-param"), &unread).ok(),
+            Some("sk-param".to_owned())
         );
     }
 
