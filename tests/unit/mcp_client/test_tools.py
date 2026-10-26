@@ -39,6 +39,13 @@ def mock_session():
     session = MagicMock()
     session.list_tools = AsyncMock()
     session.call_tool = AsyncMock()
+
+    async def send_request(request, _result_type):
+        if request.params is not None:
+            return await session.list_tools(params=request.params)
+        return await session.list_tools()
+
+    session.send_request = AsyncMock(side_effect=send_request)
     return session
 
 
@@ -496,3 +503,14 @@ async def test_complete_discovery_preserves_tools_when_completeness_is_required(
     tool = MCPTool(name="complete", input_schema={"type": "object"})
     mock_session.list_tools.return_value = ListToolsResult(tools=[tool])
     assert await list_tools_with_pagination(mock_session, require_complete=True) == [tool]
+
+
+@pytest.mark.asyncio
+async def test_list_tools_tolerates_missing_tools_field(mock_session):
+    async def send_request(_request, result_type):
+        return result_type.model_validate({})
+
+    mock_session.send_request.side_effect = send_request
+
+    assert await list_tools_with_pagination(mock_session) == []
+    mock_session.send_request.assert_awaited_once()

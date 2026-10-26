@@ -79,6 +79,33 @@ _JSONRPC_MESSAGE_ADAPTER: Final = TypeAdapter(JSONRPCMessage)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "result_type"),
+    [
+        ("list_prompts", mcp_client_module._LenientListPromptsResult),
+        ("list_resources", mcp_client_module._LenientListResourcesResult),
+    ],
+)
+async def test_catalog_list_tolerates_missing_list_field(method_name: str, result_type: type[BaseModel]) -> None:
+    client = MCPClient(server_url="http://example.com/mcp", transport_type="http")
+    session = AsyncMock(spec=ClientSession)
+    session.server_capabilities = None
+
+    async def send_request(_request, actual_result_type):
+        assert actual_result_type is result_type
+        return actual_result_type.model_validate({})
+
+    async def run_optional_discovery(operation):
+        return await operation(session)
+
+    session.send_request.side_effect = send_request
+    client._run_optional_discovery = AsyncMock(side_effect=run_optional_discovery)
+
+    assert await getattr(client, method_name)() == []
+    session.send_request.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_tool_continuation_reaches_modern_upstream() -> None:
     from mcp.types import ElicitResult, TextContent
 
