@@ -2,7 +2,7 @@
 
 Real dashboard and proxy with an isolated local database and synthetic deployment records. No upstream inference requests were made
 
-Before is main `f96200bcea3`. After is `19c6162a94c`. Both comparison screenshots use the same URL, viewport, and deployed models. Red outlines only mark the form for comparison and are not part of the change
+Before is main `f96200bcea3`. After is `41cad716471`. Both comparison screenshots use the same URL, viewport, and deployed models. Red outlines only mark the form for comparison and are not part of the change
 
 ## Screenshots
 
@@ -20,7 +20,9 @@ Before is main `f96200bcea3`. After is `19c6162a94c`. Both comparison screenshot
 
 ## Verification
 
-21 resolver tests and 104 form integration tests passed, plus `make check` and `npm run build`
+Catalog-driven regression coverage recognizes all 108 standard chat Opus entries, including all 19 Opus 5.5 provider variants. Special fast and thinking variants remain in Advanced
+
+129 resolver tests and 104 form integration tests passed, plus `make check` and `npm run build`
 
 The focused tests cover all three goals, four model families, provider aliases and base-model metadata, numeric releases and dated snapshots, unavailable and blocked models, non-chat models, mixed-version groups, recursive routers, same-family substitutions, cross-family fallback, no valid pair, manual overrides, error/retry, team scope, and advanced configuration
 
