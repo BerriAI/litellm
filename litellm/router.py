@@ -631,6 +631,7 @@ _DEPLOYMENT_PARAMS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | GenericLite
 _OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
 _DEPLOYMENT_SELECTED_EVENT: Final = "litellm.request.deployment_selected"
 _CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
+_DEPLOYMENTS_ADAPTER: Final = TypeAdapter(Sequence[Mapping[str, object]])
 
 
 def _extend_trailing_text_block(blocks: Sequence[Mapping[str, object]], text: str) -> Sequence[Mapping[str, object]]:
@@ -690,6 +691,12 @@ def _deployment_pick_attributes(model: str, request_kwargs: Mapping[str, object]
 
 def _configured_model_info(deployment: Mapping[str, object]) -> Mapping[str, object]:
     return _MODEL_INFO_ADAPTER.validate_python(deployment.get("model_info") or {})
+
+
+def _every_deployment_refused(
+    deployments: Sequence[Mapping[str, object]], refused_deployment_ids: tuple[str, ...]
+) -> bool:
+    return all(_configured_model_info(deployment).get("id") in refused_deployment_ids for deployment in deployments)
 
 
 def _silent_experiment_targets(silent_model: object) -> tuple[str, ...]:
@@ -4706,7 +4713,13 @@ class Router:
     @staticmethod
     def _stamp_retry_skip_deployment_id(exception: Exception, kwargs: Mapping[str, object]) -> None:
         effective_model_info: Final = kwargs.get("model_info")
-        deployment_id: Final = effective_model_info.get("id") if isinstance(effective_model_info, Mapping) else None
+        if not isinstance(effective_model_info, Mapping):
+            return
+        model_info: Final = _MODEL_INFO_ADAPTER.validate_python(effective_model_info)
+        configured_deployment_id: Final = (
+            model_info.get("original_model_id") if isinstance(exception, litellm.UnsupportedEndpointError) else None
+        )
+        deployment_id: Final = configured_deployment_id or model_info.get("id")
         if isinstance(deployment_id, str) and deployment_id:
             exception.retry_skip_deployment_id = deployment_id  # pyright: ignore[reportAttributeAccessIssue]  # dynamic stamp, read by _deployment_ids_to_skip_on_retry
 
@@ -9048,6 +9061,10 @@ class Router:
                 )
                 if first_skipped_ids:
                     kwargs["_retry_skipped_deployment_ids"] = first_skipped_ids  # rebind-ok: the next attempt reads it
+                if isinstance(original_exception, litellm.UnsupportedEndpointError) and _every_deployment_refused(
+                    _DEPLOYMENTS_ADAPTER.validate_python(_healthy_deployments), first_skipped_ids
+                ):
+                    raise
             else:
                 raise
 
@@ -9127,6 +9144,10 @@ class Router:
                     )
                     if skipped_ids:
                         kwargs["_retry_skipped_deployment_ids"] = skipped_ids  # rebind-ok: the next attempt reads it
+                    if isinstance(e, litellm.UnsupportedEndpointError) and _every_deployment_refused(
+                        _DEPLOYMENTS_ADAPTER.validate_python(_healthy_deployments), skipped_ids
+                    ):
+                        raise
                     _timeout = self._time_to_sleep_before_retry(
                         e=e,
                         remaining_retries=remaining_retries,
@@ -9223,7 +9244,7 @@ class Router:
         status_code: Final = getattr(error, "status_code", None)
         if status_code is not None and not litellm.should_retry(status_code):
             # 401/403 are special cases - allow retry if multiple deployments exist (handled below)
-            if status_code not in (401, 403):
+            if status_code not in (401, 403) and not isinstance(error, litellm.UnsupportedEndpointError):
                 raise error
 
         if isinstance(error, litellm.NotFoundError):

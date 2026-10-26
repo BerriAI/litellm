@@ -21616,6 +21616,116 @@ def test_router_retry_policy_400_moves_off_the_refusing_deployment_on_every_sync
     assert accepting.call_count == 1
 
 
+_TRANSCRIPTION_AUDIO: Final = ("speech.wav", b"RIFF", "audio/wav")
+_TRANSCRIPTION_API_BASE: Final = "https://transcriber.local/v1"
+
+
+def _transcription_deployment(
+    model_name: str, deployment_id: str, litellm_model: str, weight: int
+) -> DeploymentTypedDict:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": litellm_model,
+            "api_key": "sk-fake",
+            "api_base": _TRANSCRIPTION_API_BASE,
+            "weight": weight,
+        },
+        "model_info": {"id": deployment_id},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy_scope", ["none", "router", "model_group", "request"])
+@pytest.mark.parametrize(
+    "caller_credentials",
+    ({}, {"api_key": "caller-key"}, {"api_base": _TRANSCRIPTION_API_BASE}, {"base_url": _TRANSCRIPTION_API_BASE}),
+    ids=("configured", "api_key", "api_base", "base_url"),
+)
+async def test_router_retries_a_transcription_off_a_deployment_whose_provider_cannot_transcribe(
+    monkeypatch: pytest.MonkeyPatch,
+    policy_scope: Literal["none", "router", "model_group", "request"],
+    caller_credentials: Mapping[str, str],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    policy: Final = RetryPolicy(BadRequestErrorRetries=0)
+    router: Final = litellm.Router(
+        model_list=[
+            _transcription_deployment("transcriber", "cannot-transcribe", "anthropic/claude-sonnet-5-5", weight=1),
+            _transcription_deployment("transcriber", "can-transcribe", "openai/gpt-transcribe", weight=0),
+        ],
+        num_retries=1,
+        retry_policy=policy if policy_scope == "router" else None,
+        model_group_retry_policy={"transcriber": policy} if policy_scope == "model_group" else None,
+        disable_cooldowns=True,
+    )
+    request_kwargs: Final = {"model_group_retry_policy": {"transcriber": policy}} if policy_scope == "request" else {}
+
+    with respx.mock as respx_mock:
+        upstream: Final = respx_mock.post(f"{_TRANSCRIPTION_API_BASE}/audio/transcriptions").mock(
+            return_value=httpx.Response(200, json={"text": "hi"})
+        )
+        response: Final = await router.atranscription(
+            model="transcriber", file=_TRANSCRIPTION_AUDIO, **request_kwargs, **caller_credentials
+        )
+
+    assert response.text == "hi"
+    assert upstream.call_count == 1
+
+
+@pytest.mark.parametrize("deployment_count", [1, 2, 3])
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "caller_credentials",
+    ({}, {"api_key": "caller-key"}, {"api_base": _TRANSCRIPTION_API_BASE}, {"base_url": _TRANSCRIPTION_API_BASE}),
+    ids=("configured", "api_key", "api_base", "base_url"),
+)
+async def test_router_tries_each_deployment_that_cannot_transcribe_once_then_answers_400(
+    deployment_count: int, caller_credentials: Mapping[str, str]
+) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            _transcription_deployment("transcriber", f"cannot-transcribe-{index}", "anthropic/claude-sonnet-5-5", 1)
+            for index in range(deployment_count)
+        ],
+        num_retries=5,
+        disable_cooldowns=True,
+    )
+
+    with respx.mock as respx_mock, pytest.raises(litellm.UnsupportedEndpointError) as raised:
+        await router.atranscription(model="transcriber", file=_TRANSCRIPTION_AUDIO, **caller_credentials)
+
+    assert raised.value.status_code == 400
+    assert router.fail_calls["transcriber"] == deployment_count
+    assert not respx_mock.calls
+
+
+@pytest.mark.asyncio
+async def test_router_falls_back_from_a_group_that_cannot_transcribe_when_unsupported_params_do_not(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _transcription_deployment("chat-only", "cannot-transcribe", "anthropic/claude-sonnet-5-5", weight=1),
+            _transcription_deployment("transcriber", "can-transcribe", "openai/gpt-transcribe", weight=1),
+        ],
+        fallbacks=[{"chat-only": ["transcriber"]}],
+        fallback_on_unsupported_params=False,
+        num_retries=0,
+        disable_cooldowns=True,
+    )
+
+    with respx.mock as respx_mock:
+        upstream: Final = respx_mock.post(f"{_TRANSCRIPTION_API_BASE}/audio/transcriptions").mock(
+            return_value=httpx.Response(200, json={"text": "hi"})
+        )
+        response: Final = await router.atranscription(model="chat-only", file=_TRANSCRIPTION_AUDIO)
+
+    assert response.text == "hi"
+    assert upstream.call_count == 1
+
+
 def _make_failure_logging_obj():
     return LiteLLMLogging(
         model="gpt-5.6",

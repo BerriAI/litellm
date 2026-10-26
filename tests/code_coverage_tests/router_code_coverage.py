@@ -95,6 +95,7 @@ ignored_function_names = [
     "arm_routing_read_prefetch",  # Tested in tests/unit/caching/test_request_redis_batch_pre_call.py (file lacks "router" in name)
     "_deployment_params_base_model",  # Tested through log_retry in test_router_helper_utils.py
     "_configured_model_info",  # Tested through get_configured_service_tiers in test_router.py
+    "_every_deployment_refused",  # Tested through the unsupported transcription retry tests in test_router.py
     "_routable_deployments",  # Tested through get_configured_service_tiers and get_routable_upstream_model in test_router.py
     "_async_get_available_deployment",  # Body of the `route {model}` phase wrapper, exercised through async_get_available_deployment in test_router.py
     "_async_get_available_deployment_for_pass_through",  # Same, through async_get_available_deployment_for_pass_through in test_router.py
