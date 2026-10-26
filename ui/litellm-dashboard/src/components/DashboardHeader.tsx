@@ -73,43 +73,46 @@ export function DashboardHeader({
 
       <CommandPaletteTrigger />
 
-      <div className="flex flex-none items-center gap-1 max-md:hidden">
-        {showWorkerSwitch && (
-          <>
-            <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />
-            <ToolbarSeparator />
-          </>
-        )}
+      <div className="flex shrink-0 items-center gap-1">
         <LiteAdmin />
-        <DocsLink />
-        <BlogDropdown />
-        {!hideCommunityLinks && <CommunityEngagementButtons />}
-        <ToolbarSeparator />
-        <ThemeToggle />
-        {deploymentHealth}
-        <NotificationsBell accessToken={accessToken} />
-      </div>
-      <div className="flex shrink-0 items-center gap-1 md:hidden">
-        <CommandPaletteTrigger mobile />
-        {deploymentHealth}
-        <NotificationsBell accessToken={accessToken} />
-        <Popover open={!isDesktop && mobileToolsOpen} onOpenChange={setMobileToolsOpen}>
-          <PopoverTrigger render={<Button variant="ghost" size="icon" className="size-11" aria-label="More options" />}>
-            <Ellipsis />
-          </PopoverTrigger>
-          <PopoverContent align="end" className="max-w-[calc(100vw-2rem)]">
-            <PopoverTitle>Gateway tools</PopoverTitle>
-            <ViewSwitcher />
-            {showWorkerSwitch && <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />}
-            <div className="flex flex-wrap items-center gap-2">
-              <LiteAdmin />
-              <ThemeToggle />
-              <DocsLink />
-              <BlogDropdown />
-              {!hideCommunityLinks && <CommunityEngagementButtons />}
-            </div>
-          </PopoverContent>
-        </Popover>
+        <div className="flex flex-none items-center gap-1 max-md:hidden">
+          {showWorkerSwitch && (
+            <>
+              <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />
+              <ToolbarSeparator />
+            </>
+          )}
+          <DocsLink />
+          <BlogDropdown />
+          {!hideCommunityLinks && <CommunityEngagementButtons />}
+          <ToolbarSeparator />
+          <ThemeToggle />
+          {deploymentHealth}
+          <NotificationsBell accessToken={accessToken} />
+        </div>
+        <div className="flex shrink-0 items-center gap-1 md:hidden">
+          <CommandPaletteTrigger mobile />
+          {deploymentHealth}
+          <NotificationsBell accessToken={accessToken} />
+          <Popover open={!isDesktop && mobileToolsOpen} onOpenChange={setMobileToolsOpen}>
+            <PopoverTrigger
+              render={<Button variant="ghost" size="icon" className="size-11" aria-label="More options" />}
+            >
+              <Ellipsis />
+            </PopoverTrigger>
+            <PopoverContent align="end" className="max-w-[calc(100vw-2rem)]">
+              <PopoverTitle>Gateway tools</PopoverTitle>
+              <ViewSwitcher />
+              {showWorkerSwitch && <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />}
+              <div className="flex flex-wrap items-center gap-2">
+                <ThemeToggle />
+                <DocsLink />
+                <BlogDropdown />
+                {!hideCommunityLinks && <CommunityEngagementButtons />}
+              </div>
+            </PopoverContent>
+          </Popover>
+        </div>
       </div>
     </header>
   );
