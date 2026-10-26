@@ -219,7 +219,7 @@ export default function TeamMemberTab({
       title: (
         <span className="flex items-center gap-1">
           Total Spend (USD)
-          <SimpleTooltip content="Cumulative spend by this member within this team since lifetime tracking began on 2026-04-21. Spend before that date is not included, so this is a lower bound and never less than Current Period Spend.">
+          <SimpleTooltip content="Cumulative spend by this member within this team, across budget periods. This is a lower bound: lifetime tracking began 2026-04-21, so periods that reset before then are not included. It is never less than Current Period Spend.">
             <CircleHelp className="size-4" aria-label="Total spend information" />
           </SimpleTooltip>
         </span>

@@ -60,7 +60,12 @@ export function getBudgetPeriodStart(budgetDuration: string, resetAt: Dayjs): Da
 }
 
 export function formatBudgetPeriod(start: Dayjs, end: Dayjs): string {
-  if (start.isSame(end, "day")) return `${start.format("MMM D, YYYY HH:mm")} - ${end.format("HH:mm")}`;
+  const windowSeconds = end.diff(start, "second");
+  if (windowSeconds < 24 * 60 * 60) {
+    const time = windowSeconds < 60 ? "HH:mm:ss" : "HH:mm";
+    const endFormat = start.isSame(end, "day") ? time : `MMM D, YYYY ${time}`;
+    return `${start.format(`MMM D, YYYY ${time}`)} - ${end.format(endFormat)}`;
+  }
   if (start.isSame(end, "year")) return `${start.format("MMM D")} - ${end.format("MMM D, YYYY")}`;
   return `${start.format("MMM D, YYYY")} - ${end.format("MMM D, YYYY")}`;
 }

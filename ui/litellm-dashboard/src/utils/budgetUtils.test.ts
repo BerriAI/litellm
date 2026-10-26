@@ -81,6 +81,16 @@ describe("describeBudgetResetSchedule", () => {
     expect(describeBudgetResetSchedule("30d", localIso(2027, 0, 10)).period).toBe("Dec 10, 2026 - Jan 10, 2027");
   });
 
+  it("keeps both clock times when an hourly window crosses midnight", () => {
+    expect(describeBudgetResetSchedule("1h", localIso(2026, 6, 16, 0)).period).toBe(
+      "Jul 15, 2026 23:00 - Jul 16, 2026 00:00",
+    );
+  });
+
+  it("shows seconds for a window shorter than a minute", () => {
+    expect(describeBudgetResetSchedule("30s", localIso(2026, 6, 15)).period).toBe("Jul 15, 2026 11:59:30 - 12:00:00");
+  });
+
   it("shows clock times for a window that starts and ends on the same day", () => {
     expect(describeBudgetResetSchedule("1h", localIso(2026, 6, 15)).period).toBe("Jul 15, 2026 11:00 - 12:00");
   });

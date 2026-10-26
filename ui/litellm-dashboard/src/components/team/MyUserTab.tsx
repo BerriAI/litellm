@@ -125,7 +125,7 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
           <CardContent>
             {labelWithTooltip(
               "Total Spend (USD)",
-              "Cumulative spend within this team since lifetime tracking began on 2026-04-21. Spend before that date is not included, so this is a lower bound and never less than Current Period Spend.",
+              "Cumulative spend within this team across budget periods. This is a lower bound: lifetime tracking began 2026-04-21, so periods that reset before then are not included. It is never less than Current Period Spend.",
             )}
             <h4 className="mt-2 text-xl font-semibold">${formatNumber(totalSpend, 4)}</h4>
           </CardContent>
