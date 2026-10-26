@@ -1,57 +1,52 @@
 ---
 name: database-access
-description: Work on database access through Python repositories and typed Rust queries. Explains the incremental migration from Prisma to SQLx without requiring unrelated migrations
+description: Add database queries, extract existing Prisma calls into repositories, or explicitly port queries to Rust and SQLx without expanding migration scope
 ---
 
 # Database access
 
-## Direction
+## Adding new database access
 
-- Gradually move application database calls behind `litellm/repositories`
-- Repositories provide the Python-facing boundary and may use either Prisma or Rust APIs backed by `litellm-rust/crates/db`
-- Keep backend selection inside that boundary so callers do not need to know which implementation handles an operation
-- Rust callers use `crates/db` directly without going through Python repositories
-- This is an incremental direction, not a requirement to migrate existing code whenever it is touched
-- Do not expand a feature or bug fix into a database migration unless needed for the task or explicitly requested
+- Put Python database access behind an operation in `litellm/repositories`
+- Give callers typed inputs and outputs, not Prisma clients, models, or query dictionaries
+- Keep query execution and backend selection inside the repository
+- Prisma is fine for the implementation, adding a query does not require a Rust port
+- Native Rust callers use `litellm-rust/crates/db` directly
 
-## Current state and future plan
+## Asked to move existing access behind a repository
 
-- Python repositories already exist, but database access is not fully centralized and existing interfaces still expose Prisma concepts
-- `crates/db` provides typed SQLx queries, inputs, and row projections
-- A Rust query existing does not mean its Python binding or repository integration exists yet
-- Prisma remains responsible for schema migrations today
-- The intended progression is
-  - Move database operations behind repositories, initially retaining Prisma where appropriate
-  - Replace individual repository implementations with Rust-backed operations
-  - Reduce Prisma runtime usage until it is needed only for migrations
-  - Move migration ownership to SQLx in a separate, explicitly planned transition, then remove Prisma
-- Do not introduce a competing SQLx migration history during a query port
+- Identify the calls being moved and their transaction boundary
+- Move the existing Prisma implementation into the relevant repository
+- Replace those direct database calls with repository operations
+- Preserve return values, errors, and transaction behavior, with focused regression tests
+- Keep this an extraction, not a backend migration or unrelated cleanup
 
-## Migrating one operation
+## An equivalent Rust or SQLx query already exists
 
-- Identify the existing query, callers, return values, errors, and transaction boundary
-- Reuse the relevant repository or add a focused operation to it
-  - Moving the existing Prisma implementation behind the repository is a useful standalone step
-  - Prefer operation-specific typed inputs and outputs over introducing new Prisma-shaped interfaces
-  - Preserve existing caller contracts without broadly redesigning unrelated repositories
-- Reuse an existing `crates/db` query when its behavior matches
-  - Otherwise add a typed query following the crate's local rules
-  - Keep static SQL in `queries/`, compile-check it with SQLx, and keep reusable input and row types in `src/`
-- For Python callers, expose the operation through the Python bridge and call it from the repository
-  - Keep Python conversion and compatibility handling at the boundary
-  - Keep `crates/db` independent of Python
-- Verify equivalent results, errors, and transaction behavior against real PostgreSQL before switching callers
-  - Include relevant null handling, conflict behavior, ordering, and affected-row semantics
-  - Refresh SQLx query metadata when changing SQL
-- Switch only the selected operation and remove its superseded implementation when no longer needed
+- Leave it and the current backend selection unchanged unless integration is explicitly requested
+- Its existence alone does not justify switching a Prisma caller to Rust
+- Repository extraction can keep using Prisma even when the Rust query is available
 
-## Connections and transactions
+## Asked to port a Prisma query to Rust or SQLx
 
-- Prisma and Rust may maintain separate connection pools during the transition
-- Both may connect through PgBouncer to manage PostgreSQL connection usage
-- Account for both pools across workers and replicas, and verify compatibility with the configured PgBouncer pooling mode
-- PgBouncer does not make Prisma and SQLx share a transaction
-- Keep each atomic unit of work on one backend and one transaction
-  - If an operation belongs to a larger transaction, migrate the whole transaction boundary together or leave it on Prisma
-- Select the backend before execution
-  - Do not retry a failed Rust write through Prisma when the original write may already have committed
+- Identify the existing inputs, outputs, errors, and transaction boundary
+- Check `crates/db` for an equivalent query and reuse it if its behavior matches
+- Otherwise follow `crates/db/AGENTS.md`
+  - Put static SQL in `queries/` and compile-check it with SQLx
+  - Keep typed inputs and reusable row projections in `src/`
+  - Refresh SQLx query metadata after SQL changes
+- Keep Python conversion in the Python bridge, not in `crates/db`
+- When caller integration is requested, expose the Rust operation through the bridge and call it from the repository
+  - A query-only port can land without switching callers
+- Verify behavior against real PostgreSQL before switching callers
+  - Check relevant null handling, conflicts, ordering, errors, and transaction semantics
+- Remove the old implementation only when no callers need it
+
+## Migration context and boundaries
+
+- Long-term direction is to centralize Python database access in repositories, then replace their Prisma implementations incrementally with Rust APIs
+- Mixed Prisma and Rust implementations are expected during the transition, unrelated existing calls can stay as they are
+- Both backends may have separate pools through PgBouncer, size them together and verify pooling-mode compatibility
+- PgBouncer does not share transactions between Prisma and SQLx, keep each atomic unit of work on one backend and transaction
+- Never retry a failed Rust write through Prisma when it may already have committed
+- Prisma owns schema migrations today, eventual SQLx migration ownership and Prisma removal are separate planned steps, not part of a query port
