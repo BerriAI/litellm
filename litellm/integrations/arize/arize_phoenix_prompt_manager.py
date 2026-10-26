@@ -118,9 +118,9 @@ class ArizePhoenixTemplateManager:
 
         # Load prompt from Arize Phoenix if prompt_id is provided
         if self.prompt_id:
-            self._load_prompt_from_arize(self.prompt_id)
+            self.load_prompt_from_arize(self.prompt_id)
 
-    def _load_prompt_from_arize(self, prompt_version_id: str) -> None:
+    def load_prompt_from_arize(self, prompt_version_id: str) -> None:
         """Load a specific prompt version from Arize Phoenix."""
         try:
             # Fetch the prompt version from Arize Phoenix
@@ -133,6 +133,8 @@ class ArizePhoenixTemplateManager:
                 raise ValueError(f"Prompt version '{prompt_version_id}' not found")
         except Exception as e:
             raise Exception(f"Failed to load prompt version '{prompt_version_id}' from Arize Phoenix: {e}")
+
+    _load_prompt_from_arize = load_prompt_from_arize
 
     def _parse_prompt_data(self, data: dict[str, Any], prompt_version_id: str) -> ArizePhoenixPromptTemplate:
         """Parse Arize Phoenix prompt data and extract messages and metadata."""
@@ -379,7 +381,7 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
         """Reload prompts from Arize Phoenix."""
         if self.prompt_id:
             self._prompt_manager = None  # Reset to force reload
-            self.prompt_manager  # This will trigger reload
+            _ = self.prompt_manager  # access triggers lazy reload
 
     def should_run_prompt_management(
         self,
@@ -418,7 +420,7 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
         try:
             # Load the prompt from Arize Phoenix if not already loaded
             if prompt_id not in self.prompt_manager.prompts:
-                self.prompt_manager._load_prompt_from_arize(prompt_id)
+                self.prompt_manager.load_prompt_from_arize(prompt_id)
 
             # Get the rendered messages and metadata
             rendered_messages, prompt_metadata = self.get_prompt_template(prompt_id, prompt_variables)

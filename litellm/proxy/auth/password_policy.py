@@ -21,6 +21,7 @@ from typing import Final
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version
 from litellm.constants import HIBP_RANGE_API_BASE
+from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -107,10 +108,10 @@ def validate_password_policy(password: str, general_settings: Mapping[str, objec
     )
 
 
-def _hibp_client() -> AsyncHTTPHandler:
+def get_hibp_client() -> AsyncHTTPHandler:
     return get_async_httpx_client(
         llm_provider=httpxSpecialProvider.PasswordBreachCheck,
-        params={"timeout": HIBP_TIMEOUT_SECONDS},  # mutable-ok: callee takes a bare dict (PEP 589)
+        params={"timeout": HIBP_TIMEOUT_SECONDS},
     )
 
 
@@ -125,7 +126,7 @@ def _is_suffix_in_range_response(response_body: str, hash_suffix: str) -> bool:
 async def _is_password_breached(password: str, client: AsyncHTTPHandler) -> bool:
     # usedforsecurity=False: SHA-1 is only a lookup key into the HIBP dataset, so no security property rests on it
     sha1_hex: Final = hashlib.sha1(password.encode("utf-8"), usedforsecurity=False).hexdigest().upper()
-    headers: Final = {  # mutable-ok: callee takes a bare dict (PEP 589)
+    headers: Final = {
         "Add-Padding": "true",
         "User-Agent": f"litellm-proxy/{version}",
     }
@@ -143,7 +144,7 @@ async def _is_password_breached(password: str, client: AsyncHTTPHandler) -> bool
 
 
 def is_breach_check_enabled(general_settings: Mapping[str, object]) -> bool:
-    return general_settings.get("password_policy_check_breached_passwords", True) is not False
+    return not is_offline_mode() and general_settings.get("password_policy_check_breached_passwords", True) is not False
 
 
 async def is_password_breached(
@@ -155,7 +156,7 @@ async def is_password_breached(
     corpus, or HIBP is unreachable (fail open)."""
     if not is_breach_check_enabled(general_settings):
         return False
-    return await _is_password_breached(password, client if client is not None else _hibp_client())
+    return await _is_password_breached(password, client if client is not None else get_hibp_client())
 
 
 def breached_password_error() -> ProxyException:

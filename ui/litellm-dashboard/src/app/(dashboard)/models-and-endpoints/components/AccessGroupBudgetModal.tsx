@@ -2,7 +2,7 @@
 
 import { CircleHelp } from "lucide-react";
 import React from "react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
@@ -102,6 +102,7 @@ const AccessGroupBudgetModal: React.FC<AccessGroupBudgetModalProps> = ({
                     id={id}
                     value={value || null}
                     onChange={(next) => onChange(next ?? undefined)}
+                    placeholder="Keep current"
                   />
                 )}
               </FormField>

@@ -180,15 +180,11 @@ class HarnessRun:
 
     @property
     def unique_checks(self) -> int:
-        return len(
-            {nodeid for result in self.results.values() for nodeid in result.collected}
-        )
+        return len({nodeid for result in self.results.values() for nodeid in result.collected})
 
     @property
     def completed_checks(self) -> int:
-        return len(
-            {nodeid for result in self.results.values() for nodeid in result.completed}
-        )
+        return len({nodeid for result in self.results.values() for nodeid in result.completed})
 
     @classmethod
     def from_cases(cls, cases: Iterable[HarnessCase]) -> HarnessRun:

@@ -8,17 +8,22 @@
 ## This provides an LLM Guard Integration for content moderation on the proxy
 
 import asyncio
-from typing import Optional
+from collections.abc import Mapping
+from typing import Final
 
 import aiohttp
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.openai.common_utils import decoded_json_object
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import CallTypesLiteral
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _ENTERPRISE_LLMGuard(CustomLogger):
@@ -26,7 +31,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
     def __init__(
         self,
         mock_testing: bool = False,
-        mock_redacted_text: Optional[dict] = None,
+        mock_redacted_text: Mapping[str, object] | None = None,
     ):
         self.mock_redacted_text = mock_redacted_text
         self.llm_guard_mode = litellm.llm_guard_mode
@@ -66,7 +71,9 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
                     async with session.post(
                         analyze_url, json={"prompt": text}
                     ) as response:
-                        redacted_text = await response.json()
+                        redacted_text = _DECODED_JSON.validate_python(
+                            await response.json()
+                        )
             verbose_proxy_logger.debug(
                 f"LLM Guard: Received response - {redacted_text}"
             )
@@ -77,12 +84,13 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
                         "error": f"Invalid content moderation response: {redacted_text}"
                     },
                 )
-            if redacted_text.get("is_valid", None) is False:
+            redacted_response: Final = decoded_json_object(redacted_text)
+            if redacted_response.get("is_valid", None) is False:
                 raise HTTPException(
                     status_code=400,
                     detail={"error": "Violated content safety policy"},
                 )
-            sanitized_prompt = redacted_text.get("sanitized_prompt")
+            sanitized_prompt: Final = redacted_response.get("sanitized_prompt")
             return sanitized_prompt if isinstance(sanitized_prompt, str) else text
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -137,15 +145,20 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
             return
 
         self.print_verbose("Makes LLM Guard Check")
-        if call_type not in [
+        accepted_call_types: Final = (
             "completion",
+            "acompletion",
+            "text_completion",
+            "atext_completion",
             "embeddings",
+            "embedding",
+            "aembedding",
             "image_generation",
-            "moderation",
-            "audio_transcription",
-        ]:
+            "aimage_generation",
+        )
+        if call_type not in accepted_call_types:
             self.print_verbose(
-                f"Call Type - {call_type}, not in accepted list - ['completion','embeddings','image_generation','moderation','audio_transcription']"
+                f"Call Type - {call_type}, not in accepted list - {accepted_call_types}"
             )
             return data
 
@@ -163,16 +176,14 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
                     *(self._moderate_message(message) for message in messages)
                 )
             )
-            return data
 
         input_ = data.get("input")
         if input_ is not None:
-            data["input"] = await self._moderate_input(input_)
-            return data
+            data["input"] = await self._moderate_text_or_list(input_)
 
         prompt = data.get("prompt")
-        if isinstance(prompt, str):
-            data["prompt"] = await self.moderation_check(text=prompt)
+        if prompt is not None:
+            data["prompt"] = await self._moderate_text_or_list(prompt)
         return data
 
     async def _moderate_message(self, message: dict) -> dict:
@@ -195,17 +206,17 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
             return {**part, "text": await self.moderation_check(text=part["text"])}
         return part
 
-    async def _moderate_input(self, input_: object) -> object:
-        if isinstance(input_, str):
-            return await self.moderation_check(text=input_)
-        if isinstance(input_, list):
+    async def _moderate_text_or_list(self, value: object) -> object:
+        if isinstance(value, str):
+            return await self.moderation_check(text=value)
+        if isinstance(value, list):
             return [
                 await self.moderation_check(text=item)
                 if isinstance(item, str)
                 else item
-                for item in input_
+                for item in value
             ]
-        return input_
+        return value
 
     async def async_post_call_streaming_hook(
         self, user_api_key_dict: UserAPIKeyAuth, response: str

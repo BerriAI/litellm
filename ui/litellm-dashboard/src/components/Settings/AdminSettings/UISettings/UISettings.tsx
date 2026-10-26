@@ -9,6 +9,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/ui/button";
+import { uiHref } from "@/utils/uiHref";
+import { relativeTimeOptions } from "@/components/shared/date_range_presets";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 import PageVisibilitySettings from "./PageVisibilitySettings";
 
 interface SettingRowProps {
@@ -66,6 +71,11 @@ export default function UISettings() {
   const scopeUserSearchProperty = schema?.properties?.scope_user_search_to_org;
   const disableCustomApiKeysProperty = schema?.properties?.disable_custom_api_keys;
   const values = data?.values ?? {};
+  const usageRange =
+    relativeTimeOptions.find((option) => option.settingValue === values.usage_default_time_range)?.settingValue ??
+    "last_7_days";
+  const usageRangeConfigOwned = data?.source?.usage_default_time_range === "config";
+  const moyaiUrl = (values.moyai_url as string | undefined) ?? null;
   const isDisabledForInternalUsers = Boolean(values.disable_model_add_for_internal_users);
   const isDisabledTeamAdminDeleteTeamUser = Boolean(values.disable_team_admin_delete_team_user);
   const isAgentsDisabled = Boolean(values.disable_agents_for_internal_users);
@@ -252,6 +262,20 @@ export default function UISettings() {
     );
   };
 
+  const handleDisconnectMoyai = () => {
+    updateSettings(
+      { moyai_url: null },
+      {
+        onSuccess: () => {
+          toast.success("UI settings updated successfully");
+        },
+        onError: (error) => {
+          toast.fromError(error);
+        },
+      },
+    );
+  };
+
   const handleToggleDisableCustomApiKeys = (checked: boolean) => {
     updateSettings(
       { disable_custom_api_keys: checked },
@@ -295,6 +319,46 @@ export default function UISettings() {
               </Alert>
             )}
 
+            <div className="space-y-2">
+              <Label htmlFor="usage-default-time-range">Default Usage time range</Label>
+              <p id="usage-default-time-range-help" className="text-sm text-muted-foreground">
+                The starting range for everyone opening Usage. Shared links and manual date selections take precedence.
+                Calendar ranges use your browser’s timezone.
+              </p>
+              <Select
+                value={usageRange}
+                disabled={isUpdating || usageRangeConfigOwned}
+                items={relativeTimeOptions.map((option) => ({ value: option.settingValue, label: option.label }))}
+                onValueChange={(value) => {
+                  if (value === null) return;
+                  updateSettings(
+                    { usage_default_time_range: value },
+                    {
+                      onSuccess: () => toast.success("UI settings updated successfully"),
+                      onError: (error) => toast.fromError(error),
+                    },
+                  );
+                }}
+              >
+                <SelectTrigger
+                  id="usage-default-time-range"
+                  aria-describedby="usage-default-time-range-help"
+                  className="w-64"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {relativeTimeOptions.map((option) => (
+                    <SelectItem key={option.settingValue} value={option.settingValue}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {usageRangeConfigOwned && (
+                <p className="text-sm text-muted-foreground">Managed by the deployment configuration.</p>
+              )}
+            </div>
             <SettingRow
               checked={isDisabledForInternalUsers}
               disabled={isUpdating}
@@ -365,6 +429,25 @@ export default function UISettings() {
                 "If enabled, shows the Chat page in the UI sidebar, letting users chat with an LLM and connect their own MCP server credentials via OAuth."
               }
             />
+
+            <Separator />
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-foreground">Moyai</p>
+                <p className="text-sm text-muted-foreground">
+                  {moyaiUrl ? `Connected to ${moyaiUrl}` : "Not connected"}
+                </p>
+              </div>
+              {moyaiUrl ? (
+                <Button variant="outline" size="sm" disabled={isUpdating} onClick={handleDisconnectMoyai}>
+                  Disconnect
+                </Button>
+              ) : (
+                <a href={uiHref("moyai")} className="text-sm text-primary underline underline-offset-4">
+                  Connect from the Moyai page
+                </a>
+              )}
+            </div>
 
             <Separator />
             <SettingRow

@@ -23,6 +23,7 @@ export interface VectorStore {
   updated_at: string;
   created_by?: string;
   updated_by?: string;
+  is_config?: boolean;
 }
 
 export interface VectorStoreInfoRequest {
