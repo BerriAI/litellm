@@ -49,6 +49,25 @@ def test_git_blob_id_is_what_git_hash_object_prints():
     assert git_blob_id(b'{"gpt-5.4-mini": {"mode": "chat"}}\n') == "18b9a8381e13a3b38a2128f184f631f95829e987"
 
 
+def test_fetch_policy_matches_the_fixture_the_rust_catalog_reads():
+    fixture_path: Final = Path(__file__).parents[3] / "litellm-rust/crates/model-catalog/tests/git_blob_id.json"
+    fixture: Final = json.loads(fixture_path.read_text())
+    blob: Final = fixture["git_blob_id"]
+    retry: Final = fixture["retry"]
+    assert git_blob_id(blob["example_body_utf8"].encode()) == blob["example_revision"]
+    assert (
+        retry["max_attempts"],
+        retry["max_wait_seconds"],
+        retry["minimum_model_count"],
+        retry["minimum_reference_ratio"],
+    ) == (
+        get_model_cost_map_module.MODEL_COST_MAP_FETCH_MAX_ATTEMPTS,
+        get_model_cost_map_module.MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS,
+        get_model_cost_map_module.MODEL_COST_MAP_MIN_MODEL_COUNT,
+        get_model_cost_map_module.MODEL_COST_MAP_MAX_SHRINK_RATIO,
+    )
+
+
 def _make_models(n: int) -> dict:
     return {f"model-{i}": {"litellm_provider": "openai", "mode": "chat"} for i in range(n)}
 

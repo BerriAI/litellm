@@ -1,0 +1,19 @@
+{
+  "retry": {
+    "max_attempts": 3,
+    "max_wait_seconds": 30,
+    "timeout_seconds": 5,
+    "first_retry_index": 1,
+    "backoff_base_seconds": 2,
+    "jitter_min_seconds": 0,
+    "jitter_max_seconds": 1,
+    "minimum_model_count": 50,
+    "minimum_reference_ratio": 0.5
+  },
+  "git_blob_id": {
+    "algorithm": "sha1",
+    "formula": "SHA1(b\"blob \" + len(body) + b\"\\0\" + body)",
+    "example_body_utf8": "hello\n",
+    "example_revision": "ce013625030ba8dba906f756967f9e9ca394464a"
+  }
+}
