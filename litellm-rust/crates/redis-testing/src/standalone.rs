@@ -9,7 +9,7 @@ use crate::{
     ports::{HOST, start_on_free_ports, wait_for_pong},
 };
 
-const REDIS_TAG: &str =
+pub(crate) const REDIS_TAG: &str =
     "7.4@sha256:44960b3100c48159a66d28c18b0588c193492e25f7551d60e51dd464fc3eca5b";
 
 pub struct RedisServer {
