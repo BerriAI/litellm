@@ -42,14 +42,22 @@ from litellm.caching.redis_batch import (
     active_request_redis_batch,
 )
 from litellm.caching.redis_cache import log_redis_failure
-from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.constants import (
+    DEFAULT_IMAGE_TOKEN_COUNT,
+    DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE,
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+)
 from litellm.cost_calculator import get_usage_object
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.audio_utils.utils import estimate_audio_tokens
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    get_str_from_messages,
+    as_openai_image_part,
+    get_token_count_text_and_document_sizes,
+    get_token_count_text_from_messages,
+    split_message_media,
 )
 from litellm.litellm_core_utils.ptu_pricing import is_ptu_cost_attribution_enabled
-from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.litellm_core_utils.token_counter import estimate_image_tokens, offload_token_count
 from litellm.llms.azure.ptu_capacity import normalized_tokens
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
@@ -73,7 +81,6 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
     canonical_provider_batch_id,
 )
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
-from litellm.responses.litellm_completion_transformation.compaction_items import billable_input_since_newest_compaction
 from litellm.router_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
     response_has_hidden_params,
@@ -98,6 +105,7 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
+    from litellm.router import Router
     from litellm.types.agents import AgentResponse
     from litellm.types.caching import RedisPipelineIncrementOperation
 
@@ -109,6 +117,9 @@ else:
 
 
 _REQUEST_RATE_LIMIT_DATA: Final = TypeAdapter(Mapping[str, object])
+_TOKEN_COUNT_ITEMS: Final = TypeAdapter(list[object])
+_TOKEN_COUNT_SEQUENCE: Final = TypeAdapter[Sequence[object] | None](Sequence[object] | None)
+_TOKEN_COUNT_TEXT: Final = TypeAdapter[str | list[str] | None](str | list[str] | None)
 _MCP_KEY_RPM_LIMITS: Final[TypeAdapter[dict[str, int] | None]] = TypeAdapter(dict[str, int] | None)
 
 
@@ -133,6 +144,24 @@ class RateLimitedModel:
             return None
         requested_limit: Final = limits.get(self.requested)
         return requested_limit if requested_limit is not None else limits.get(self.group)
+
+
+@dataclass(frozen=True, slots=True)
+class RequestInputTokenEstimate:
+    cheap_tokens: int
+    precise_tokens: int | None = None
+
+
+def _resolve_media_models(router: "Router | None", model: str, team_id: str | None) -> tuple[str, ...]:
+    if router is None:
+        return (model,)
+    return tuple(dict.fromkeys(router.resolved_litellm_models(model, team_id, use_base_model=True))) or (model,)
+
+
+def _resolve_media_models_via_proxy_router(model: str, team_id: str | None) -> tuple[str, ...]:
+    from litellm.proxy.proxy_server import llm_router
+
+    return _resolve_media_models(llm_router, model, team_id)
 
 
 def _resolve_model_group_alias_via_proxy_router(model: str) -> str | None:
@@ -502,18 +531,6 @@ GOOGLE_GENAI_NATIVE_CALL_TYPES: Final = (
     CallTypes.agenerate_content_stream.value,
 )
 RESPONSES_API_MIN_OUTPUT_TOKENS: Final = 16
-# litellm.token_counter has no per-type handling for "input_audio" content
-# blocks (unlike images, which use use_default_image_token_count) -- it
-# silently contributes 0 tokens for them. When the block carries a base64
-# payload, the estimate is derived from the decoded byte count; when the
-# block is a reference without a payload (or the payload is missing), this
-# flat per-block floor is used instead.
-DEFAULT_AUDIO_TOKEN_ESTIMATE: Final = 300
-# Conservative bytes-per-token assumption for size-based audio estimation:
-# equivalent to 8 kHz mono PCM-16 (16 000 bytes/s) at 10 tokens/s. Choosing
-# the lowest reasonable bitrate means we never under-reserve for higher-
-# quality audio recorded at the same wall-clock duration.
-_AUDIO_BYTES_PER_TOKEN: Final = 1600
 # Descriptor "key" values for project-scoped ITPM/OTPM. Distinct from
 # "model_per_project" (the combined-TPM descriptor) so both can be enforced
 # on the same project+model simultaneously without colliding on cache keys.
@@ -867,11 +884,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         ] = _resolve_ptu_team_ceiling_via_proxy_router,
         fail_closed_resolver: Callable[[], bool] = _fail_closed_rate_limit_enforcement_from_general_settings,
         force_hash_tag_grouping_resolver: Callable[[], bool] = _force_redis_hash_tag_grouping_from_litellm_settings,
+        media_model_resolver: Callable[[str, str | None], tuple[str, ...]] = _resolve_media_models_via_proxy_router,
     ):
         self.internal_usage_cache = internal_usage_cache
         self._time_provider = time_provider or datetime.now
         self._tag_rate_limit_resolver = tag_rate_limit_resolver
         self._model_group_resolver = model_group_resolver
+        self._media_model_resolver = media_model_resolver
         self._ptu_team_ceiling_resolver = ptu_team_ceiling_resolver
         self._fail_closed_resolver = fail_closed_resolver
         self._force_hash_tag_grouping_resolver = force_hash_tag_grouping_resolver
@@ -1138,6 +1157,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         min_configured_tpm_limit: int | None = None,
         call_type: str | None = None,
         configured_output_tokens: int | None = None,
+        input_estimate: RequestInputTokenEstimate | None = None,
     ) -> int:
         """
         Estimate total tokens this request will consume so we can reserve them
@@ -1159,11 +1179,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         floor entirely, so the reservation reflects what this tenant's model
         actually emits rather than one constant shared by every tenant.
         """
+        measured_input: Final = (
+            input_estimate
+            if input_estimate is not None
+            else self._estimate_request_input_tokens(_REQUEST_RATE_LIMIT_DATA.validate_python(data), model, call_type)
+        )
         estimated_input_tokens, max_tokens_estimate = self._estimate_input_and_output_tokens(
             data=data,
             min_configured_tpm_limit=min_configured_tpm_limit,
             call_type=call_type,
             configured_output_tokens=configured_output_tokens,
+            input_estimate=measured_input,
         )
         total_estimated: Final = estimated_input_tokens + max_tokens_estimate
 
@@ -1184,6 +1210,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         call_type: str | None,
         configured_output_tokens: int | None,
         raw_estimate: int,
+        input_estimate: RequestInputTokenEstimate | None = None,
     ) -> int:
         """The team PTU ceiling counts Azure normalized tokens, so its reservation weighs the
         output budget the way the ceiling does instead of the raw sum the other scopes reserve."""
@@ -1194,6 +1221,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             min_configured_tpm_limit=min_configured_tpm_limit,
             call_type=call_type,
             configured_output_tokens=configured_output_tokens,
+            input_estimate=input_estimate,
         )
         normalized: Final = normalized_tokens(
             ceiling, prompt_tokens=estimated_input_tokens, completion_tokens=max_tokens_estimate
@@ -1206,6 +1234,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         min_configured_tpm_limit: int | None = None,
         call_type: str | None = None,
         configured_output_tokens: int | None = None,
+        input_estimate: RequestInputTokenEstimate | None = None,
     ) -> tuple[int, int]:
         """
         Estimate input tokens and output (max_tokens) budget separately, so
@@ -1231,43 +1260,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         if not isinstance(data, dict):
             return 0, 0
-        translated_data: Final = self._translate_google_genai_native_request(data, call_type)
-        estimable_data: Final = translated_data if translated_data is not None else data
-        selected_fields: Final[tuple[object | None, object | None, object | None]] = (
-            (None, None, estimable_data.get("input"))
-            if call_type in RESPONSES_API_CALL_TYPES or call_type in EMBEDDING_API_CALL_TYPES
-            else (None, estimable_data.get("prompt"), None)
-            if call_type in TEXT_COMPLETION_API_CALL_TYPES
-            else (None, self._extraction_input_text(_REQUEST_RATE_LIMIT_DATA.validate_python(estimable_data)), None)
-            if call_type in EXTRACTION_API_CALL_TYPES
-            else (estimable_data.get("messages"), None, None)
-            if call_type
-            else (
-                estimable_data.get("messages"),
-                estimable_data.get("prompt"),
-                estimable_data.get("input"),
+        estimated_input_tokens: Final = (
+            input_estimate
+            if input_estimate is not None
+            else self._estimate_request_input_tokens(
+                _REQUEST_RATE_LIMIT_DATA.validate_python(data), call_type=call_type
             )
-        )
-        messages, prompt, raw_input = selected_fields
-        input_text: Final = (
-            billable_input_since_newest_compaction(raw_input) if call_type in RESPONSES_API_CALL_TYPES else raw_input
-        )
-
-        total_chars: Final = (
-            len(get_str_from_messages(messages))
-            if isinstance(messages, list) and messages
-            else len(prompt)
-            if isinstance(prompt, str)
-            else sum(len(str(item)) for item in prompt)
-            if isinstance(prompt, list)
-            else len(input_text)
-            if isinstance(input_text, str)
-            else sum(len(str(item)) for item in input_text)
-            if isinstance(input_text, list)
-            else 0
-        )
-
-        estimated_input_tokens: Final = max(1, total_chars // DEFAULT_CHARS_PER_TOKEN) if total_chars > 0 else 0
+        ).cheap_tokens
 
         explicit_max_tokens: Final = self._get_explicit_output_cap(data, call_type)
         generates_no_output: Final = (
@@ -1283,7 +1282,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         max_tokens_estimate: Final = (
             0
             if generates_no_output
-            or (explicit_max_tokens is None and total_chars == 0 and configured_output_tokens is None)
+            or (explicit_max_tokens is None and estimated_input_tokens == 0 and configured_output_tokens is None)
             else explicit_max_tokens
             if explicit_max_tokens is not None
             else configured_output_tokens
@@ -3753,72 +3752,37 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
 
     @staticmethod
-    def _estimate_audio_block_tokens(block: object) -> int:
-        """
-        Token estimate for one ``input_audio`` content block.
-
-        When the block carries a base64 ``data`` payload, the estimate comes
-        from the decoded byte count (``len(b64) * 3 // 4 // _AUDIO_BYTES_PER_TOKEN``),
-        assuming the lowest reasonable audio bitrate so we never under-reserve
-        for higher-quality recordings of the same duration.
-
-        When no payload is present (reference-only block or missing ``data``),
-        falls back to ``DEFAULT_AUDIO_TOKEN_ESTIMATE``.
-        """
-        if not isinstance(block, dict):
-            return DEFAULT_AUDIO_TOKEN_ESTIMATE
-        input_audio: Final = block.get("input_audio")
-        b64_data: Final = input_audio.get("data") if isinstance(input_audio, dict) else None
-        if b64_data and isinstance(b64_data, str):
-            decoded_bytes: Final = len(b64_data) * 3 // 4
-            return max(decoded_bytes // _AUDIO_BYTES_PER_TOKEN, DEFAULT_AUDIO_TOKEN_ESTIMATE)
-        return DEFAULT_AUDIO_TOKEN_ESTIMATE
-
-    @classmethod
-    def _estimate_audio_content_tokens(cls, messages: object) -> int:
-        """
-        Sum of per-block audio token estimates across all ``messages``.
-        Returns 0 when there are no ``input_audio`` blocks, which the caller
-        uses to skip the (relatively expensive) strip pass.
-        """
-        if not isinstance(messages, list):
-            return 0
-        return sum(
-            cls._estimate_audio_block_tokens(block)
-            for message in messages
-            if isinstance(message, dict)
-            for content in (message.get("content"),)
-            if isinstance(content, list)
-            for block in content
-            if isinstance(block, dict) and block.get("type") == "input_audio"
+    def _estimate_image_block_tokens(
+        block: Mapping[str, object], models: tuple[str, ...], fallback_model: str | None
+    ) -> int:
+        normalized: Final = as_openai_image_part(block)
+        image: Final = _callback_kwargs_mapping(normalized.get("image_url") if normalized is not None else None)
+        url: Final = image.get("url")
+        detail: Final = _callback_kwargs_mapping(block.get("image_url")).get("detail") or block.get("detail")
+        return estimate_image_tokens(
+            models,
+            url if isinstance(url, str) else "",
+            detail if isinstance(detail, str) else "auto",
+            fallback_model=fallback_model,
         )
 
     @staticmethod
-    def _strip_audio_content_blocks(messages: object) -> object:
-        """
-        Drop ``input_audio`` content blocks before passing ``messages`` to
-        ``token_counter``, which raises ``ValueError`` on them (no per-type
-        handling, unlike images). The audio contribution is added back
-        separately via ``DEFAULT_AUDIO_TOKEN_ESTIMATE`` so the rest of the
-        message (text/images/tools) still gets counted accurately instead of
-        the whole call falling back to the cheap char-count estimate.
-        """
-        if not isinstance(messages, list):
-            return messages
-        sanitized: Final[list[object]] = []  # mutable-ok: token_counter requires a list of message dicts
-        for message in messages:
-            if not isinstance(message, dict):
-                sanitized.append(message)
-                continue
-            content = message.get("content")
-            if not isinstance(content, list):
-                sanitized.append(message)
-                continue
-            filtered_content = [
-                block for block in content if not (isinstance(block, dict) and block.get("type") == "input_audio")
-            ]
-            sanitized.append({**message, "content": filtered_content})
-        return sanitized
+    def _estimate_audio_block_tokens(
+        block: object, models: tuple[str, ...] = (), fallback_model: str | None = None
+    ) -> int:
+        audio: Final = _callback_kwargs_mapping(_callback_kwargs_mapping(block).get("input_audio"))
+        data: Final = audio.get("data")
+        return estimate_audio_tokens(data if isinstance(data, str) else None, models, fallback_model=fallback_model)
+
+    @staticmethod
+    def _requires_input_count_offload(data: Mapping[str, object], call_type: str | None) -> bool:
+        if call_type in RESPONSES_API_CALL_TYPES + GOOGLE_GENAI_NATIVE_CALL_TYPES:
+            return True
+        messages: Final = data.get("messages")
+        return isinstance(messages, list) and any(
+            isinstance(_callback_kwargs_mapping(message).get("content"), list)
+            for message in _TOKEN_COUNT_ITEMS.validate_python(messages)
+        )
 
     @staticmethod
     def _responses_input_to_chat_messages(data: object) -> Sequence[object]:
@@ -3840,6 +3804,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             input=data.get("input") or "",
             responses_api_request=data,
             only_since_compaction=True,
+            preserve_unmapped_items=True,
         )
 
     @staticmethod
@@ -3873,93 +3838,110 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         state: Final = data.get("state")
         return f"{state if isinstance(state, str) else ''}\n{json.dumps(data.get('fields'), default=str)}"
 
-    def _estimate_precise_input_tokens(self, data: object, model: str | None, call_type: str | None = None) -> int:
-        """
-        Model-aware input token estimate for the project ITPM reservation,
-        using ``litellm.token_counter`` -- the same approach the
-        deployment-level itpm/otpm check uses in
-        ``io_token_rate_limit_check.py``. Unlike the cheap char-count
-        estimate the combined-TPM path uses, this accounts for image/tool
-        content and derives per-``input_audio``-block estimates from the
-        base64 payload size (assuming the lowest reasonable bitrate so
-        longer recordings always reserve proportionally more), so a burst
-        of multimodal, tool-heavy, or audio-heavy requests can't each
-        reserve only the one-token floor and blow past ITPM before
-        post-call reconciliation catches up.
-
-        For the Responses API, ``input`` is converted to chat messages first
-        (via ``_responses_input_to_chat_messages``) so its own multimodal
-        content blocks are counted the same way; ``token_counter``'s ``text``
-        argument can only see plain strings in a list, not content blocks.
-
-        Falls back to the cheap char-count estimate if ``token_counter``
-        can't resolve a tokenizer for this model (e.g. an unrecognized
-        custom model name) or otherwise raises -- the audio add-on still
-        applies on top of the fallback.
-        """
+    def _estimate_request_input_tokens(
+        self,
+        data: object,
+        model: str | None = None,
+        call_type: str | None = None,
+        models: tuple[str, ...] = (),
+        precise: bool = False,
+    ) -> RequestInputTokenEstimate:
         from litellm import token_counter
 
-        if not isinstance(data, dict):
-            return 0
+        if not isinstance(data, Mapping):
+            return RequestInputTokenEstimate(0, 0 if precise else None)
+        request: Final = _REQUEST_RATE_LIMIT_DATA.validate_python(data)
         is_responses_request: Final = call_type in RESPONSES_API_CALL_TYPES
-        translated_request: Final = (
-            None if is_responses_request else self._translate_google_genai_native_request(data, call_type)
+        translated: Final = (
+            None if is_responses_request else self._translate_google_genai_native_request(request, call_type)
         )
-        is_embedding_request: Final = self._is_embedding_request(data, call_type)
-        embedding_text: Final = data.get("input") if is_embedding_request else None
-        pretokenized_input_tokens: Final = (
-            self._count_pretokenized_embedding_input(embedding_text) if is_embedding_request else None
-        )
-        if pretokenized_input_tokens is not None:
-            return pretokenized_input_tokens
+        embedding_input: Final = request.get("input") if self._is_embedding_request(request, call_type) else None
+        pretokenized_tokens: Final = self._count_pretokenized_embedding_input(embedding_input)
+        is_rerank_request: Final = call_type in RERANK_API_CALL_TYPES
 
-        prompt: Final = data.get("prompt")
-        fallback_text: Final = prompt if prompt is not None else data.get("input")
-        selected_inputs: Final[tuple[object | None, object | None, object | None, object | None]] = (
-            (self._responses_input_to_chat_messages(data), None, data.get("tools"), data.get("tool_choice"))
+        prompt: Final = request.get("prompt")
+        selected: Final[tuple[object, object, object, object]] = (
+            (self._responses_input_to_chat_messages(request), None, request.get("tools"), request.get("tool_choice"))
             if is_responses_request
-            else (
-                translated_request.get("messages"),
-                None,
-                translated_request.get("tools"),
-                translated_request.get("tool_choice"),
-            )
-            if translated_request is not None
-            else (None, embedding_text, data.get("tools"), data.get("tool_choice"))
-            if is_embedding_request
-            else (None, self._rerank_input_to_text(data), data.get("tools"), data.get("tool_choice"))
-            if call_type in RERANK_API_CALL_TYPES
-            else (None, prompt, data.get("tools"), data.get("tool_choice"))
+            else (translated.get("messages"), None, translated.get("tools"), translated.get("tool_choice"))
+            if translated is not None
+            else (None, embedding_input, request.get("tools"), request.get("tool_choice"))
+            if self._is_embedding_request(request, call_type)
+            else (None, self._rerank_input_to_text(request), request.get("tools"), request.get("tool_choice"))
+            if is_rerank_request
+            else (None, prompt, request.get("tools"), request.get("tool_choice"))
             if call_type in TEXT_COMPLETION_API_CALL_TYPES
-            else (None, self._extraction_input_text(_REQUEST_RATE_LIMIT_DATA.validate_python(data)), None, None)
+            else (None, self._extraction_input_text(request), None, None)
             if call_type in EXTRACTION_API_CALL_TYPES
-            else (data.get("messages"), fallback_text, data.get("tools"), data.get("tool_choice"))
-        )
-        messages, selected_text, countable_tools, countable_tool_choice = selected_inputs
-
-        audio_token_estimate: Final = self._estimate_audio_content_tokens(messages)
-        countable_messages: Final = self._strip_audio_content_blocks(messages) if audio_token_estimate > 0 else messages
-
-        try:
-            estimate: Final = max(
-                0,
-                int(
-                    token_counter(
-                        model=model or "",
-                        messages=countable_messages,
-                        text=selected_text,
-                        tools=countable_tools,
-                        tool_choice=countable_tool_choice,
-                        use_default_image_token_count=True,
-                    )
-                ),
+            else (
+                request.get("messages"),
+                None if call_type else prompt if prompt is not None else request.get("input"),
+                request.get("tools"),
+                request.get("tool_choice"),
             )
-            return estimate + audio_token_estimate
-        except Exception:  # noqa: BLE001  # tokenizer failures degrade to the cheap estimate
-            if call_type in RERANK_API_CALL_TYPES and isinstance(selected_text, str):
-                return max(0, len(selected_text) // DEFAULT_CHARS_PER_TOKEN)
-            estimated_input_tokens, _ = self._estimate_input_and_output_tokens(data=data, call_type=call_type)
-            return estimated_input_tokens + audio_token_estimate
+        )
+        messages, text, tools, tool_choice = selected
+        countable_messages, media = split_message_media(messages)
+        model_value: Final = request.get("model")
+        fallback_model: Final = model if model is not None else model_value if isinstance(model_value, str) else None
+        media_tokens: Final = sum(
+            self._estimate_audio_block_tokens(block, models, fallback_model)
+            if block.get("type") == "input_audio"
+            else self._estimate_image_block_tokens(block, models, fallback_model)
+            for block in media
+        )
+        message_text, opaque_document_sizes = get_token_count_text_and_document_sizes(
+            countable_messages, include_tool_arguments=is_responses_request
+        )
+        text_chars: Final = (
+            len(message_text)
+            if isinstance(messages, list) and messages
+            else len(text)
+            if isinstance(text, str)
+            else sum(len(str(item)) for item in _TOKEN_COUNT_ITEMS.validate_python(text))
+            if isinstance(text, list)
+            else 0
+        )
+        cheap_chars: Final = (
+            len(get_token_count_text_from_messages(request.get("messages"))) if is_rerank_request else text_chars
+        )
+        # Keep opaque bytes' character fallback until precise counting can read their pages.
+        cheap_tokens: Final = (
+            (max(1, cheap_chars // DEFAULT_CHARS_PER_TOKEN) if cheap_chars > 0 else 0)
+            + media_tokens
+            + sum(
+                max(DEFAULT_IMAGE_TOKEN_COUNT, (size + DEFAULT_CHARS_PER_TOKEN - 1) // DEFAULT_CHARS_PER_TOKEN)
+                for size in opaque_document_sizes
+            )
+        )
+        if not precise:
+            return RequestInputTokenEstimate(cheap_tokens)
+        if pretokenized_tokens is not None:
+            return RequestInputTokenEstimate(cheap_tokens, pretokenized_tokens)
+        try:
+            precise_tokens: Final = (
+                max(
+                    0,
+                    int(
+                        token_counter(
+                            model=fallback_model or "",
+                            messages=_TOKEN_COUNT_SEQUENCE.validate_python(countable_messages),
+                            text=_TOKEN_COUNT_TEXT.validate_python(text),
+                            tools=_TOKEN_COUNT_SEQUENCE.validate_python(tools),
+                            tool_choice=tool_choice,
+                            use_default_image_token_count=True,
+                        )
+                    ),
+                )
+                + media_tokens
+            )
+        except Exception:  # noqa: BLE001  # tokenizer failures use the already measured input
+            fallback_tokens: Final = text_chars // DEFAULT_CHARS_PER_TOKEN if is_rerank_request else cheap_tokens
+            return RequestInputTokenEstimate(cheap_tokens, fallback_tokens)
+        return RequestInputTokenEstimate(cheap_tokens, precise_tokens)
+
+    def _estimate_precise_input_tokens(self, data: object, model: str | None, call_type: str | None = None) -> int:
+        return self._estimate_request_input_tokens(data, model, call_type, precise=True).precise_tokens or 0
 
     async def _reserve_project_io_tokens_or_raise(
         self,
@@ -3972,6 +3954,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         call_type: str | None = None,
         endpoint_type: EndpointType = EndpointType.GENERIC,
         reuses_request_slot: bool = False,
+        input_estimate: RequestInputTokenEstimate | None = None,
     ) -> None:
         """
         Reserve project-scoped ITPM/OTPM tokens (Bedrock Mantle-style
@@ -3999,15 +3982,27 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if v is not None
         ]
         min_configured_otpm_limit: Final = min(configured_otpm_limits) if configured_otpm_limits else None
+        measured_input: Final = (
+            input_estimate
+            if input_estimate is not None
+            else await offload_token_count(self._estimate_request_input_tokens)(
+                data=_REQUEST_RATE_LIMIT_DATA.validate_python(data),
+                model=requested_model,
+                call_type=call_type,
+                models=self._media_model_resolver(requested_model or "", user_api_key_dict.team_id),
+                precise=any(d["key"] == PROJECT_ITPM_DESCRIPTOR_KEY for d in io_token_descriptors),
+            )
+        )
         _, raw_estimated_output_tokens = self._estimate_input_and_output_tokens(
             data=data,
             min_configured_tpm_limit=min_configured_otpm_limit,
             call_type=call_type,
+            input_estimate=measured_input,
         )
-        raw_estimated_input_tokens: Final = await offload_token_count(self._estimate_precise_input_tokens)(
-            data=data, model=requested_model, call_type=call_type
+        estimated_input_tokens: Final = max(
+            measured_input.precise_tokens if measured_input.precise_tokens is not None else measured_input.cheap_tokens,
+            1,
         )
-        estimated_input_tokens: Final = max(raw_estimated_input_tokens, 1)
         estimated_output_tokens: Final = (
             raw_estimated_output_tokens
             if self._has_explicit_output_cap(data, call_type)
@@ -4323,6 +4318,27 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
             has_tpm_limits: Final = bool(configured_tpm_limits)
 
+            needs_precise_input: Final = any(d["key"] == PROJECT_ITPM_DESCRIPTOR_KEY for d in descriptors)
+            needs_input_estimate: Final = (has_tpm_limits and self.tpm_reservation_enabled) or any(
+                d["key"] in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY) for d in descriptors
+            )
+            offload_input: Final = self._requires_input_count_offload(request_data, call_type)
+            input_estimate: Final = (
+                await offload_token_count(self._estimate_request_input_tokens)(
+                    data=request_data,
+                    model=requested_model,
+                    call_type=call_type,
+                    models=self._media_model_resolver(requested_model or "", user_api_key_dict.team_id)
+                    if offload_input
+                    else (),
+                    precise=needs_precise_input,
+                )
+                if needs_input_estimate and (offload_input or needs_precise_input)
+                else self._estimate_request_input_tokens(request_data, requested_model, call_type)
+                if needs_input_estimate
+                else None
+            )
+
             # Populated on a successful combined-TPM reservation below, so the
             # project ITPM/OTPM block further down can roll it back if a
             # different bucket in the same request subsequently hits its
@@ -4366,6 +4382,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         min_configured_tpm_limit=min_configured_tpm_limit,
                         call_type=call_type,
                         configured_output_tokens=configured_output_tokens,
+                        input_estimate=input_estimate,
                     ),
                     1,
                 )
@@ -4390,6 +4407,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     call_type=call_type,
                     configured_output_tokens=configured_output_tokens,
                     raw_estimate=estimated_tokens,
+                    input_estimate=input_estimate,
                 )
                 if stash.ptu_ceiling is not None and ptu_estimated_tokens > stash.ptu_ceiling.tpm_limit:
                     if not reuses_request_slot:
@@ -4453,6 +4471,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 user_api_key_dict=user_api_key_dict,
                 tpm_reservation_scopes=tpm_reservation_scopes,
                 tpm_reservation_amount=tpm_reservation_amount,
+                input_estimate=input_estimate,
                 call_type=call_type,
                 endpoint_type=endpoint_type,
                 reuses_request_slot=reuses_request_slot,

@@ -24,6 +24,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_format_from_file_id,
     get_semantic_cache_prompt_from_messages,
     get_str_from_messages,
+    get_token_count_text_and_document_sizes,
+    get_token_count_text_from_messages,
     handle_any_messages_to_chat_completion_str_messages_conversion,
     hoist_images_from_tool_messages,
     is_encrypted_reasoning_block,
@@ -37,6 +39,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     schema_has_unresolvable_ref,
     schema_property_count,
     split_concatenated_json_objects,
+    split_message_media,
     strip_encrypted_reasoning_from_messages,
     strip_litellm_response_only_fields,
     system_messages_first,
@@ -2490,6 +2493,169 @@ def test_schema_has_unresolvable_ref_flags_refs_that_cannot_be_inlined(schema, u
 def test_schema_size_counts_every_written_object_once(schema, properties, branches):
     assert schema_property_count(schema) == properties
     assert schema_grammar_branch_count(schema) == branches
+
+
+@pytest.mark.parametrize(
+    "media",
+    [
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "high"}},
+        {"type": "input_image", "image_url": "https://example.com/image.png", "detail": "low"},
+        {"type": "image", "source": {"type": "file", "file_id": "opaque-image"}},
+        {"type": "input_audio", "input_audio": {"data": "AUDIO", "format": "wav"}},
+        {"type": "image"},
+        {"type": "input_audio", "input_audio": None},
+    ],
+)
+def test_split_message_media_preserves_every_nonmedia_sibling_and_media_detail(
+    media: Mapping[str, object],
+) -> None:
+    siblings: Final = ["visible", None, 7, {"type": []}, {"type": "text", "text": "caption"}]
+    messages: Final = [{"role": "tool", "tool_call_id": "call_1", "content": [*siblings, media, media]}]
+    original: Final = copy.deepcopy(messages)
+
+    sanitized, leaves = split_message_media(messages)
+
+    assert sanitized == [{"role": "tool", "tool_call_id": "call_1", "content": siblings}]
+    assert leaves == (media, media)
+    assert messages == original
+    assert split_message_media(sanitized) == (sanitized, ())
+
+
+def test_split_message_media_keeps_nested_tool_and_document_text_and_metadata() -> None:
+    direct: Final = {"type": "image_url", "image_url": "https://example.com/direct.png"}
+    image: Final = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "IMAGE"}}
+    audio: Final = {"type": "input_audio", "input_audio": {"data": "AUDIO", "format": "wav"}}
+    text: Final = {"type": "text", "text": "document text"}
+    file: Final = {"type": "file", "file": {"file_id": "opaque-file"}}
+    opaque: Final = {"type": "document", "source": {"type": "url", "url": "https://example.com/document.pdf"}}
+    document: Final = {
+        "type": "document", "title": "title", "context": "context", "citations": {"enabled": True},
+        "source": {"type": "content", "content": [text, image, file, "tail"]},
+    }
+    tool_result: Final = {
+        "type": "tool_result", "tool_use_id": "toolu_1", "is_error": False,
+        "content": ["tool text", audio, document, opaque],
+    }
+    messages: Final = [
+        {"role": "user", "content": [direct, tool_result]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_2", "content": "result"},
+            {"type": "document", "source": {"type": "content", "content": "document"}},
+            {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "declared"}},
+        ]},
+    ]
+    original: Final = copy.deepcopy(messages)
+
+    sanitized, leaves = split_message_media(messages)
+
+    assert sanitized == [{
+        "role": "user", "content": [{
+            **tool_result,
+            "content": ["tool text", {**document, "source": {"type": "content", "content": [text, file, "tail"]}}, opaque],
+        }],
+    }, messages[1]]
+    assert leaves == (direct, audio, image)
+    expected_text: Final = "tool texttitlecontextdocument texttailresultdocumentdeclared"
+    assert get_token_count_text_from_messages(sanitized) == expected_text
+    visible_text, opaque_sizes = get_token_count_text_and_document_sizes(sanitized)
+    assert visible_text == expected_text
+    assert len(opaque_sizes) == 2 and all(size > 0 for size in opaque_sizes)
+    assert messages == original
+
+
+def test_split_message_media_does_not_walk_arbitrary_tool_arguments_or_invalid_nesting() -> None:
+    image: Final = {"type": "image", "source": {"type": "url", "url": "https://example.com/image.png"}}
+    document: Final = {"type": "document", "source": {"type": "content", "content": [image]}}
+    tool: Final = {"type": "tool_result", "content": [image]}
+    blocks: Final = [
+        {"type": "tool_use", "name": "inspect", "input": {"content": [image]}},
+        {"type": "unknown", "content": [image]},
+        {"type": "document", "source": {"type": "content", "content": [document]}},
+        {"type": "tool_result", "content": [tool]},
+    ]
+    messages: Final = [{"role": "assistant", "content": blocks}]
+    sanitized, leaves = split_message_media(messages)
+    assert sanitized == messages
+    assert leaves == ()
+
+
+def test_token_count_text_includes_only_opaque_assistant_argument_strings_when_requested() -> None:
+    arguments: Final = '{"type":"input_image","image_url":"data:image/png;base64,IMAGE"}'
+    calls: Final = [
+        {"function": {"arguments": arguments}},
+        {"function": {"arguments": {"text": "do not traverse"}}},
+        {"function": None},
+        None,
+    ]
+    messages: Final = [
+        {"role": "assistant", "content": "before", "tool_calls": calls, "function_call": {"arguments": "legacy"}},
+        {"role": "user", "content": "after", "tool_calls": calls},
+    ]
+    original: Final = copy.deepcopy(messages)
+
+    assert get_token_count_text_from_messages(messages) == "beforeafter"
+    assert get_token_count_text_from_messages(messages, include_tool_arguments=True) == (
+        "beforelegacy" + arguments + "after"
+    )
+    assert messages == original
+
+
+@pytest.mark.parametrize(
+    ("part", "expected"),
+    [
+        (
+            {"type": "file", "file": {"file_data": "data:image/png;base64,IMAGE", "detail": "low"}},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "low"}},
+        ),
+        (
+            {"type": "input_file", "file_data": "data:image/png;base64,IMAGE", "detail": "low"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "low"}},
+        ),
+        (
+            {"type": "file", "file": {"file_id": "opaque", "mime_type": "image/jpeg"}},
+            {"type": "image_url", "image_url": {"url": "opaque", "detail": "auto"}},
+        ),
+        (
+            {"type": "file", "file": {"file_data": "data:audio/wav;base64,AUDIO"}},
+            {"type": "input_audio", "input_audio": {"data": "AUDIO", "format": "wav"}},
+        ),
+        (
+            {"type": "file", "file": {"file_data": "AUDIO", "content_type": "audio/mpeg"}},
+            {"type": "input_audio", "input_audio": {"data": "AUDIO", "format": "mpeg"}},
+        ),
+        (
+            {"type": "file", "file": {"file_id": "https://example.com/audio.wav", "format": "audio/wav"}},
+            {"type": "input_audio", "input_audio": {"data": "", "format": "wav"}},
+        ),
+    ],
+)
+def test_split_message_media_normalizes_only_explicit_image_and_audio_files(
+    part: Mapping[str, object], expected: Mapping[str, object],
+) -> None:
+    messages: Final = [{"role": "user", "content": [part]}]
+    assert split_message_media(messages) == ([{"role": "user", "content": []}], (expected,))
+    assert get_token_count_text_and_document_sizes(messages) == ("", ())
+
+
+@pytest.mark.parametrize(
+    "part",
+    [
+        {"type": "file", "file": {"file_data": "data:application/pdf;base64,PDF"}},
+        {"type": "file", "file": {"file_data": "data:video/mp4;base64,VIDEO"}},
+        {"type": "file", "file": {"file_id": "https://example.com/name.png"}},
+        {"type": "file", "file": {"file_data": "IMAGE", "format": "application/pdf"}},
+        {"type": "file", "file": None},
+        {"type": "thinking", "thinking": "thought", "signature": "opaque"},
+        {"type": "tool_use", "name": "read", "input": {"path": "file.txt"}},
+        {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "PDF"}},
+    ],
+)
+def test_split_message_media_preserves_opaque_documents_and_unclassified_files(part: Mapping[str, object]) -> None:
+    messages: Final = [{"role": "user", "content": [part]}]
+    sanitized, leaves = split_message_media(messages)
+    assert sanitized == messages
+    assert leaves == ()
+    assert get_token_count_text_from_messages(messages) == ""
 
 
 @pytest.mark.parametrize("part_type", ["image_url", "input_image"])

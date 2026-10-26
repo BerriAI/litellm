@@ -20318,8 +20318,9 @@ def _resolution_router() -> Router:
     ],
     ids=["exact-name", "model-group-alias", "every-member-of-a-pool", "wildcard-expands", "resolves-to-nothing"],
 )
+@pytest.mark.parametrize("use_base_model", (False, True))
 def test_resolved_litellm_models_answers_through_every_channel_a_request_uses(
-    model_name: str, expected: tuple[str, ...]
+    model_name: str, expected: tuple[str, ...], use_base_model: bool
 ) -> None:
     """A caller comparing two names by what serves them needs each channel the request path
     composes, since the deployment name an admin picked carries no information on its own.
@@ -20327,7 +20328,7 @@ def test_resolved_litellm_models_answers_through_every_channel_a_request_uses(
     `resolves-to-nothing` is the contract that keeps the fallback out of here: an empty
     result is not "the call fails", so what to do about it stays each caller's policy.
     """
-    assert set(_resolution_router().resolved_litellm_models(model_name)) == set(expected)
+    assert set(_resolution_router().resolved_litellm_models(model_name, use_base_model=use_base_model)) == set(expected)
 
 
 class TestTierParamsTheTargetAccepts:
@@ -30600,3 +30601,67 @@ async def test_anthropic_caller_rate_limit_does_not_block_other_credentials(
     finally:
         await GLOBAL_LOGGING_WORKER.flush()
         await client.close()
+
+
+@pytest.mark.parametrize("info_base,params_base", [(None, None), (None, "gpt-5.1"), ("gpt-6-astra", "gpt-5.1")])
+def test_resolved_litellm_models_can_use_configured_base_model(
+    info_base: str | None, params_base: str | None,
+) -> None:
+    router: Final = Router(
+        model_list=[{
+            "model_name": "deployment", "litellm_params": {
+                "model": "azure/custom-name", "api_key": "test", "api_base": "https://example.invalid",
+                "api_version": "2024-12-01-preview", **({"base_model": params_base} if params_base else {}),
+            }, "model_info": {"base_model": info_base}, "rpm": 10.5,
+        }], model_group_alias={"alias": "deployment"},
+    )
+    assert router.resolved_litellm_models("alias") == ("azure/custom-name",)
+    assert router.resolved_litellm_models("alias", use_base_model=True) == (
+        info_base or params_base or "azure/custom-name",
+    )
+
+
+def test_resolved_model_identity_does_not_revalidate_stored_quotas() -> None:
+    router: Final = Router(
+        model_list=[{
+            "model_name": "vision/*",
+            "litellm_params": {
+                "model": "azure/vision-deployment", "api_key": "test", "api_base": "https://example.invalid",
+                "api_version": "2024-12-01-preview", "base_model": "gpt-5.1",
+            },
+            "model_info": {"base_model": "gpt-6-astra"},
+            "tpm": 10.5,
+        }],
+        ignore_invalid_deployments=False,
+    )
+
+    assert router.resolved_litellm_models("vision/image") == ("azure/vision-deployment",)
+    assert router.resolved_litellm_models("vision/image", use_base_model=True) == ("gpt-6-astra",)
+
+
+@pytest.mark.parametrize("explicit_provider", (False, True))
+@pytest.mark.parametrize("profile_known", (False, True))
+def test_resolved_model_identity_uses_only_mapped_bedrock_profiles(
+    monkeypatch: pytest.MonkeyPatch, explicit_provider: bool, profile_known: bool,
+) -> None:
+    profile: Final = "us.anthropic.identity-test"
+    model: Final = "converse/anthropic.identity-test"
+    monkeypatch.setattr(litellm, "model_cost", {
+        **litellm.model_cost,
+        **({profile: {
+            "litellm_provider": "bedrock", "mode": "chat",
+            "input_cost_per_token": 0.01, "output_cost_per_token": 0.02,
+        }} if profile_known else {}),
+    })
+    configured_model: Final = model if explicit_provider else f"bedrock/{model}"
+    router: Final = Router(model_list=[{
+        "model_name": "profile", "litellm_params": {
+            "model": configured_model, "model_id": profile,
+            **({"custom_llm_provider": "bedrock"} if explicit_provider else {}),
+        },
+    }])
+
+    assert router.resolved_litellm_models("profile") == (configured_model,)
+    assert router.resolved_litellm_models("profile", use_base_model=True) == (
+        f"bedrock/{profile}" if profile_known else configured_model,
+    )

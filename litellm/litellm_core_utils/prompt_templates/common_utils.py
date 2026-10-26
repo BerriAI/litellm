@@ -9,6 +9,7 @@ import json
 import mimetypes
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from graphlib import CycleError, TopologicalSorter
 from itertools import chain, groupby, islice
 from os import PathLike
@@ -234,6 +235,199 @@ def is_non_content_values_set(message: AllMessageValues) -> bool:
 
 _IMAGE_CONTENT_PART_TYPES: Final = frozenset({"image_url", "input_image", "image"})
 _IMAGE_SCAN_MAX_DEPTH: Final = 4
+
+_MEDIA_CONTENT_PART_TYPES: Final = _IMAGE_CONTENT_PART_TYPES | {"input_audio"}
+_REMOVED_MEDIA_PART: Final = object()
+
+
+@dataclass(frozen=True, slots=True)
+class _ContentMediaSplit:
+    content: object
+    media: tuple[Mapping[str, object], ...] = ()
+    text: str = ""
+    opaque_document_sizes: tuple[int, ...] = ()
+
+
+def _message_content_parts(value: object) -> Sequence[object] | None:
+    if not isinstance(value, (list, tuple)):
+        return None
+    return cast(Sequence[object], value)  # cast-ok: finite JSON content arrays
+
+
+def _file_media_part(part: Mapping[str, object]) -> Mapping[str, object] | None:
+    from litellm.litellm_core_utils.prompt_templates.factory import parse_mime_type
+
+    file: Final = as_str_mapping(part.get("file")) if part.get("type") == "file" else part
+    if file is None:
+        return None
+    data: Final = file.get("file_data")
+    data_string: Final = data if isinstance(data, str) else ""
+    declared_type: Final = next(
+        (value for key in ("format", "mime_type", "content_type") if isinstance(value := file.get(key), str) and value),
+        "",
+    )
+    mime_type: Final = (declared_type or parse_mime_type(data_string[:256]) or "").split(";", 1)[0].strip().lower()
+    if mime_type.startswith("image/"):
+        file_id: Final = file.get("file_id")
+        url: Final = data_string or (file_id if isinstance(file_id, str) else "")
+        image_url: Final = (
+            url
+            if not data_string or url.startswith(("data:", "https://", "http://", "gs://"))
+            else f"data:{mime_type};base64,{url}"
+        )
+        return {"type": "image_url", "image_url": {"url": image_url, "detail": file.get("detail", "auto")}}
+    if mime_type.startswith("audio/"):
+        header_end: Final = data_string.find(",", 0, 256)
+        encoded: Final = (
+            data_string[header_end + 1 :]
+            if header_end >= 0 and data_string[:header_end].endswith(";base64")
+            else ""
+            if data_string.startswith(("data:", "https://", "http://", "gs://"))
+            else data_string
+        )
+        return {"type": "input_audio", "input_audio": {"data": encoded, "format": mime_type.removeprefix("audio/")}}
+    return None
+
+
+def _opaque_document_size(payload: object) -> int:
+    fields: Final = as_str_mapping(payload)
+    strings: Final = {key: value for key, value in (fields or {}).items() if isinstance(value, str)}
+    return len(str(strings))
+
+
+def _split_media_leaf(part: object) -> _ContentMediaSplit:
+    if isinstance(part, str):
+        return _ContentMediaSplit(part, text=part)
+    block: Final = as_str_mapping(part)
+    if block is None:
+        return _ContentMediaSplit(part)
+    part_type: Final = block.get("type")
+    media: Final = (
+        block
+        if isinstance(part_type, str) and part_type in _MEDIA_CONTENT_PART_TYPES
+        else _file_media_part(block)
+        if part_type in ("file", "input_file")
+        else None
+    )
+    if media is not None:
+        return _ContentMediaSplit(_REMOVED_MEDIA_PART, (media,))
+    text: Final = block.get("text")
+    return _ContentMediaSplit(
+        part,
+        text=text if isinstance(text, str) else "",
+        opaque_document_sizes=(
+            (_opaque_document_size(block.get("file") if part_type == "file" else block),)
+            if part_type in ("file", "input_file")
+            else ()
+        ),
+    )
+
+
+def _split_media_content(content: object, split_part: Callable[[object], _ContentMediaSplit]) -> _ContentMediaSplit:
+    parts: Final = _message_content_parts(content)
+    if parts is None:
+        return _ContentMediaSplit(content, text=content if isinstance(content, str) else "")
+    splits: Final = tuple(map(split_part, parts))
+    media: Final = tuple(chain.from_iterable(split.media for split in splits))
+    kept: Final = tuple(split.content for split in splits if split.content is not _REMOVED_MEDIA_PART)
+    sanitized: Final = content if not media else kept if isinstance(content, tuple) else list(kept)
+    return _ContentMediaSplit(
+        sanitized,
+        media,
+        "".join(split.text for split in splits),
+        tuple(chain.from_iterable(split.opaque_document_sizes for split in splits)),
+    )
+
+
+def _split_document_media(part: object) -> _ContentMediaSplit:
+    block: Final = as_str_mapping(part)
+    if block is None or block.get("type") != "document":
+        return _split_media_leaf(part)
+    source: Final = as_str_mapping(block.get("source"))
+    metadata: Final = "".join(value for key in ("title", "context") if isinstance(value := block.get(key), str))
+    if source is None:
+        return _ContentMediaSplit(part, text=metadata, opaque_document_sizes=(0,))
+    if source.get("type") == "text":
+        text: Final = source.get("data")
+        return _ContentMediaSplit(part, text=metadata + (text if isinstance(text, str) else ""))
+    if source.get("type") != "content":
+        return _ContentMediaSplit(part, text=metadata, opaque_document_sizes=(_opaque_document_size(source),))
+    split: Final = _split_media_content(source.get("content"), _split_media_leaf)
+    sanitized: Final = {**block, "source": {**source, "content": split.content}} if split.media else part
+    return _ContentMediaSplit(sanitized, split.media, metadata + split.text, split.opaque_document_sizes)
+
+
+def _split_tool_result_media(part: object) -> _ContentMediaSplit:
+    block: Final = as_str_mapping(part)
+    if block is None or block.get("type") != "tool_result":
+        return _split_document_media(part)
+    split: Final = _split_media_content(block.get("content"), _split_document_media)
+    sanitized: Final = {**block, "content": split.content} if split.media else part
+    return _ContentMediaSplit(sanitized, split.media, split.text, split.opaque_document_sizes)
+
+
+def _split_message_content(message: object) -> _ContentMediaSplit:
+    fields: Final = as_str_mapping(message)
+    if fields is None:
+        return _ContentMediaSplit(message)
+    split: Final = _split_media_content(fields.get("content"), _split_tool_result_media)
+    sanitized: Final = {**fields, "content": split.content} if split.media else message
+    return _ContentMediaSplit(sanitized, split.media, split.text, split.opaque_document_sizes)
+
+
+def split_message_media(messages: object) -> tuple[object, tuple[Mapping[str, object], ...]]:
+    """Split declared media from content without mutation, following at most tool-result and document nesting."""
+    parts: Final = _message_content_parts(messages)
+    if parts is None:
+        return messages, ()
+    splits: Final = tuple(map(_split_message_content, parts))
+    media: Final = tuple(chain.from_iterable(split.media for split in splits))
+    if not media:
+        return messages, ()
+    sanitized: Final = tuple(split.content for split in splits)
+    return (sanitized if isinstance(messages, tuple) else list(sanitized)), media
+
+
+def _message_tool_argument_text(message: Mapping[str, object]) -> str:
+    if message.get("role") != "assistant":
+        return ""
+    functions: Final = chain(
+        (message.get("function_call"),),
+        (
+            call_fields.get("function")
+            for call in _message_content_parts(message.get("tool_calls")) or ()
+            if (call_fields := as_str_mapping(call)) is not None
+        ),
+    )
+    return "".join(
+        arguments
+        for function in functions
+        if (function_fields := as_str_mapping(function)) is not None
+        and isinstance(arguments := function_fields.get("arguments"), str)
+    )
+
+
+def get_token_count_text_from_messages(messages: object, *, include_tool_arguments: bool = False) -> str:
+    """Visible message content, excluding media bytes and opaque document/reasoning payloads."""
+    text, _ = get_token_count_text_and_document_sizes(messages, include_tool_arguments=include_tool_arguments)
+    return text
+
+
+def get_token_count_text_and_document_sizes(
+    messages: object, *, include_tool_arguments: bool = False
+) -> tuple[str, tuple[int, ...]]:
+    """Visible text and serialized opaque payload sizes, without decoding or fetching documents."""
+    fields: Final = tuple(
+        message for value in _message_content_parts(messages) or () if (message := as_str_mapping(value)) is not None
+    )
+    splits: Final = tuple(_split_message_content(message) for message in fields)
+    text: Final = "".join(
+        split.text
+        + extract_search_results_text(message.get("search_results"))
+        + (_message_tool_argument_text(message) if include_tool_arguments else "")
+        for message, split in zip(fields, splits)
+    )
+    return text, tuple(chain.from_iterable(split.opaque_document_sizes for split in splits))
 
 
 def _content_parts_contain_image(parts: Sequence[object]) -> bool:

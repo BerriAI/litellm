@@ -340,6 +340,55 @@ def _decode_responses_media(item: Mapping[str, object]) -> _ResponsesMediaPart |
     return None
 
 
+def _code_interpreter_output_for_counting(output: object) -> tuple[object, _ResponsesImagePart | None]:
+    if not isinstance(output, Mapping):
+        return output, None
+    fields: Final = _STR_KEY_DICT_ADAPTER.validate_python(output)
+    url: Final = fields.get("url")
+    if fields.get("type") != "image" or not isinstance(url, str) or not url:
+        return output, None
+    return {key: value for key, value in fields.items() if key != "url"}, _responses_image_part({"url": url})
+
+
+def _unmapped_response_item_for_counting(
+    input_item: Mapping[str, object],
+) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
+    """Accounting-only projection of native items with no Chat representation; never used for provider replay."""
+    kind: Final = input_item.get("type")
+    if not isinstance(kind, str) or kind in ("message", "item_reference"):
+        return []
+    result: Final = input_item.get("result")
+    outputs: Final = input_item.get("outputs")
+    output_splits: Final = (
+        tuple(map(_code_interpreter_output_for_counting, _OBJECT_LIST_ADAPTER.validate_python(outputs)))
+        if kind == "code_interpreter_call" and isinstance(outputs, list)
+        else ()
+    )
+    generated_image: Final = (
+        _responses_image_part({"url": "data:application/octet-stream;base64," + result})
+        if kind == "image_generation_call" and isinstance(result, str) and result
+        else None
+    )
+    opaque: Final = (
+        {key: value for key, value in input_item.items() if key != "result"}
+        if generated_image is not None
+        else {**input_item, "outputs": [output for output, _ in output_splits]}
+        if output_splits
+        else dict(input_item)
+    )
+    images: Final = (
+        (generated_image,)
+        if generated_image is not None
+        else tuple(image for _, image in output_splits if image is not None)
+    )
+    return [
+        GenericChatCompletionMessage(
+            role="user",
+            content=[ChatCompletionTextObject(type="text", text=json.dumps(opaque, default=str)), *images],
+        )
+    ]
+
+
 @runtime_checkable
 class _SupportsIter(Protocol):
     def __iter__(self) -> Iterator[object]: ...
@@ -1201,6 +1250,7 @@ class LiteLLMCompletionResponsesConfig:
         item_cache_control: bool = False,
         native_compaction: bool = False,
         only_since_compaction: bool = False,
+        preserve_unmapped_items: bool = False,
     ) -> list[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -1235,6 +1285,10 @@ class LiteLLMCompletionResponsesConfig:
         messages, the way Anthropic ignores content before a compaction block.
         Guardrail scans leave it off because they write rewrites back by input
         item position.
+
+        ``preserve_unmapped_items`` is only for quota accounting: native items
+        without a Chat equivalent retain an opaque estimate, with declared
+        images separated from their transport bytes. Provider replay leaves it off.
         """
         messages: list[
             AllMessageValues
@@ -1257,6 +1311,7 @@ class LiteLLMCompletionResponsesConfig:
                 input=read_input if item_cache_control else without_item_cache_control(read_input),
                 replay_reasoning=replay_reasoning,
                 native_compaction=native_compaction,
+                preserve_unmapped_items=preserve_unmapped_items,
             )
         )
 
@@ -1416,6 +1471,7 @@ class LiteLLMCompletionResponsesConfig:
         input: str | ResponseInputParam,
         replay_reasoning: bool = False,
         native_compaction: bool = False,
+        preserve_unmapped_items: bool = False,
     ) -> list[
         AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall | ChatCompletionResponseMessage
     ]:
@@ -1442,6 +1498,7 @@ class LiteLLMCompletionResponsesConfig:
                         input_item=_input,
                         replay_reasoning=replay_reasoning,
                         native_compaction=native_compaction,
+                        preserve_unmapped_items=preserve_unmapped_items,
                     )
                 )
 
@@ -2142,6 +2199,7 @@ class LiteLLMCompletionResponsesConfig:
         input_item: Mapping[str, object],
         replay_reasoning: bool = False,
         native_compaction: bool = False,
+        preserve_unmapped_items: bool = False,
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
         """
         Transform a Responses API input item into a Chat Completion message
@@ -2246,7 +2304,7 @@ class LiteLLMCompletionResponsesConfig:
             # Handle None content: Responses API allows None content, but GenericChatCompletionMessage requires content
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:
-                return []
+                return _unmapped_response_item_for_counting(input_item) if preserve_unmapped_items else []
             return [LiteLLMCompletionResponsesConfig._transform_responses_api_message_item(input_item, content)]
 
     @staticmethod

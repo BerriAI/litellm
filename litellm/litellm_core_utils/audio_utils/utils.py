@@ -2,8 +2,12 @@
 Utils used for litellm.transcription() and litellm.atranscription()
 """
 
+import base64
+import binascii
 import hashlib
+import math
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
 
@@ -329,6 +333,44 @@ def calculate_request_duration(file: FileTypes) -> float | None:
     except Exception:
         # Silently fail if duration extraction fails
         return None
+
+
+DEFAULT_AUDIO_TOKEN_ESTIMATE: Final = 300
+AUDIO_TOKENS_PER_SECOND: Final = 10
+AUDIO_BYTES_PER_TOKEN: Final = 1600
+_MAX_AUDIO_ESTIMATE_BYTES: Final = 16 * 1024 * 1024
+
+
+def _audio_token_rate(model: str) -> int | None:
+    if model.startswith(
+        ("gemini-", "gemini/gemini-", "vertex_ai/gemini-", "vertex_ai_beta/gemini-", "openrouter/google/gemini-")
+    ):
+        return 32
+    if model.startswith(("gpt-", "openai/gpt-", "azure/gpt-", "openrouter/openai/gpt-")):
+        return AUDIO_TOKENS_PER_SECOND
+    return None
+
+
+def estimate_audio_tokens(data: str | None, models: Sequence[str] = (), fallback_model: str | None = None) -> int:
+    """Estimate audio tokens from container duration within a bounded decoding budget."""
+    if not data:
+        return DEFAULT_AUDIO_TOKEN_ESTIMATE
+    fallback_estimate: Final = max(len(data) * 3 // 4 // AUDIO_BYTES_PER_TOKEN, DEFAULT_AUDIO_TOKEN_ESTIMATE)
+    padding: Final = 2 if data.endswith("==") else 1 if data.endswith("=") else 0
+    if len(data) * 3 // 4 - padding > _MAX_AUDIO_ESTIMATE_BYTES:
+        return fallback_estimate
+    try:
+        duration: Final = calculate_request_duration(base64.b64decode(data, validate=True))
+    except (ValueError, binascii.Error):
+        return fallback_estimate
+    if duration is None or not math.isfinite(duration) or duration <= 0:
+        return fallback_estimate
+    fallback_rate: Final = _audio_token_rate(fallback_model) if fallback_model is not None else None
+    rate: Final = max(
+        (_audio_token_rate(model) or fallback_rate or AUDIO_TOKENS_PER_SECOND for model in models),
+        default=fallback_rate or AUDIO_TOKENS_PER_SECOND,
+    )
+    return max(1, math.ceil(duration * rate))
 
 
 DEFAULT_SPEECH_MEDIA_TYPE: Final = "audio/mpeg"
