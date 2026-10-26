@@ -57,7 +57,7 @@ impl SelectionPolicy<'_> {
             Meter::Output(OutputUnit::ReasoningToken) => {
                 let off_peak = prices
                     .off_peak()
-                    .filter(|off_peak| off_peak.schedule().contains(when.at))
+                    .filter(|off_peak| off_peak.schedule().contains_sdk_tokens(when.at))
                     .and_then(|off_peak| off_peak.rates().reasoning);
                 if let Some(rate) = off_peak {
                     return Some((meter.clone(), rate));
@@ -109,7 +109,13 @@ impl SelectionPolicy<'_> {
                     return tier.resolve(prices, meter, when);
                 }
                 overlay(prices, meter, when)
-                    .or_else(|| prices.direct_rate(meter, when.channel, when.tier, band))
+                    .or_else(|| {
+                        if meter.sets_prompt_band() {
+                            sdk_flat_rate(prices, meter, usage, when.tier)
+                        } else {
+                            prices.direct_rate(meter, when.channel, when.tier, band)
+                        }
+                    })
                     .map(|rate| (meter.clone(), rate))
                     .or_else(|| self.resolve(prices, &meter.fallback()?, band, usage, when))
             }
@@ -127,6 +133,30 @@ impl SelectionPolicy<'_> {
             ),
         }
     }
+}
+
+fn sdk_flat_rate(
+    prices: &Prices,
+    meter: &Meter,
+    usage: &Usage,
+    tier: ServiceTier,
+) -> Option<UnitPrice> {
+    prices
+        .iter()
+        .filter(|(price, _)| {
+            price.meter == *meter
+                && price.channel == Channel::Online
+                && (price.when.tier == tier || price.when.tier == ServiceTier::Standard)
+                && match price.when.band {
+                    Band::Base => true,
+                    Band::OverPromptTokens(floor) => {
+                        usage.prompt_tokens > floor.get()
+                            || (usage.inclusive_threshold && usage.prompt_tokens == floor.get())
+                    }
+                }
+        })
+        .max_by_key(|(price, _)| (price.when.band, price.when.tier == tier))
+        .map(|(_, rate)| rate)
 }
 
 fn directional_token_rate(
@@ -235,7 +265,7 @@ fn sdk_batch_rate(prices: &Prices, meter: &Meter, usage: &Usage) -> Option<(Mete
 fn overlay(prices: &Prices, meter: &Meter, when: &When) -> Option<UnitPrice> {
     prices
         .off_peak()
-        .filter(|off_peak| off_peak.schedule().contains(when.at))
+        .filter(|off_peak| off_peak.schedule().contains_sdk_tokens(when.at))
         .and_then(|off_peak| off_peak.rates().get(meter))
 }
 
@@ -478,6 +508,106 @@ mod tests {
             off_peak_cache_read_declared: false,
             flat: prices.iter().map(|(key, _)| key.clone()).collect(),
             tiers: vec![],
+        }
+    }
+
+    #[rstest]
+    #[case::below(199_999, false, (1.0, 2.0, 3.0, 4.0))]
+    #[case::lower_boundary(200_000, false, (1.0, 2.0, 3.0, 4.0))]
+    #[case::lower_inclusive(200_000, true, (5.0, 6.0, 3.0, 7.0))]
+    #[case::lower_crossed(200_001, false, (5.0, 6.0, 3.0, 7.0))]
+    #[case::upper_boundary(512_000, false, (5.0, 6.0, 3.0, 7.0))]
+    #[case::upper_inclusive(512_000, true, (5.0, 0.0, 9.0, 7.0))]
+    #[case::upper_crossed(512_001, false, (5.0, 0.0, 9.0, 7.0))]
+    fn sdk_flat_bands_carry_each_meter_independently(
+        when: When,
+        #[case] prompt: u64,
+        #[case] inclusive: bool,
+        #[case] expected: (f64, f64, f64, f64),
+    ) {
+        let prices = Prices::new(
+            [
+                rate(INPUT, ServiceTier::Standard, Band::Base, 1.0),
+                rate(OUTPUT, ServiceTier::Standard, Band::Base, 2.0),
+                rate(READ, ServiceTier::Standard, Band::Base, 3.0),
+                rate(WRITE, ServiceTier::Standard, Band::Base, 4.0),
+                rate(
+                    INPUT,
+                    ServiceTier::Standard,
+                    Band::over_prompt_tokens(200_000),
+                    5.0,
+                ),
+                rate(
+                    OUTPUT,
+                    ServiceTier::Standard,
+                    Band::over_prompt_tokens(200_000),
+                    6.0,
+                ),
+                rate(
+                    WRITE,
+                    ServiceTier::Standard,
+                    Band::over_prompt_tokens(200_000),
+                    7.0,
+                ),
+                rate(
+                    OUTPUT,
+                    ServiceTier::Standard,
+                    Band::over_prompt_tokens(512_000),
+                    0.0,
+                ),
+                rate(
+                    READ,
+                    ServiceTier::Standard,
+                    Band::over_prompt_tokens(512_000),
+                    9.0,
+                ),
+            ]
+            .into(),
+            None,
+        );
+        let sources = TokenPriceSources::default();
+        let usage = Usage {
+            quantities: [
+                (INPUT, prompt - 200),
+                (OUTPUT, 3),
+                (READ, 100),
+                (WRITE, 100),
+            ]
+            .into(),
+            prompt_tokens: prompt,
+            inclusive_threshold: inclusive,
+            ..Default::default()
+        };
+        let evaluated = crate::calculate_with_rates(
+            &prices,
+            &usage,
+            &when,
+            SelectionPolicy::SdkTokens(&sources),
+            &[INPUT, OUTPUT, READ, WRITE, HOUR],
+            &[],
+        )
+        .unwrap();
+        let Priced::Known(priced) = evaluated.pricing else {
+            panic!("expected known pricing")
+        };
+        assert_eq!(
+            priced.input().get(),
+            (prompt - 200) as f64 * expected.0 + 100.0 * (expected.2 + expected.3)
+        );
+        assert_eq!(priced.output().get(), 3.0 * expected.1);
+        assert_eq!(
+            evaluated
+                .rates
+                .iter()
+                .map(|rate| rate.resolved.as_ref().unwrap().1.get())
+                .collect::<Vec<_>>(),
+            [expected.0, expected.1, expected.2, expected.3, expected.3]
+        );
+        if prompt > 512_000 || (inclusive && prompt == 512_000) {
+            let Priced::Known(generic) = calculate(&prices, &usage, &when) else {
+                panic!("expected generic pricing")
+            };
+            assert_eq!(generic.input().get(), (prompt - 200) as f64 + 100.0 * 13.0);
         }
     }
 

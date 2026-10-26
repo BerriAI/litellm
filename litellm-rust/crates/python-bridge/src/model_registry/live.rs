@@ -2169,6 +2169,109 @@ assert json.dumps(row) == before
     }
 
     #[rstest]
+    #[case::carry_forward(json!({}), (512001,false,"standard"), (5.0,9.0,7.0,0.0,7.0))]
+    #[case::lower_boundary(json!({}), (200000,false,"standard"), (1.0,3.0,4.0,2.0,4.0))]
+    #[case::lower_inclusive(json!({}), (200000,true,"standard"), (5.0,3.0,7.0,6.0,7.0))]
+    #[case::upper_boundary(json!({}), (512000,false,"standard"), (5.0,3.0,7.0,6.0,7.0))]
+    #[case::upper_inclusive(json!({}), (512000,true,"standard"), (5.0,9.0,7.0,0.0,7.0))]
+    #[case::null_higher_input(json!({"input_cost_per_token_above_512k_tokens":null}), (512001,false,"standard"), (5.0,9.0,7.0,0.0,7.0))]
+    #[case::zero_higher_input(json!({"input_cost_per_token_above_512k_tokens":0}), (512001,false,"standard"), (0.0,9.0,7.0,0.0,7.0))]
+    #[case::null_higher_write(json!({"cache_creation_input_token_cost_above_512k_tokens":null}), (512001,false,"standard"), (5.0,9.0,7.0,0.0,7.0))]
+    #[case::zero_higher_write(json!({"cache_creation_input_token_cost_above_512k_tokens":0}), (512001,false,"standard"), (5.0,9.0,0.0,0.0,0.0))]
+    #[case::priority_same_band(json!({"input_cost_per_token_above_200k_tokens_priority":8}), (512001,false,"priority"), (8.0,9.0,7.0,0.0,7.0))]
+    #[case::standard_above_priority(json!({"input_cost_per_token_above_200k_tokens_priority":8,"input_cost_per_token_above_512k_tokens":11}), (512001,false,"priority"), (11.0,9.0,7.0,0.0,7.0))]
+    #[case::priority_base_below_standard(json!({"input_cost_per_token_priority":8}), (512001,false,"priority"), (5.0,9.0,7.0,0.0,7.0))]
+    #[case::other_service_ignored(json!({"input_cost_per_token_above_512k_tokens_priority":8}), (512001,false,"standard"), (5.0,9.0,7.0,0.0,7.0))]
+    #[case::ttl_carry(json!({"cache_creation_input_token_cost_above_1hr_above_200k_tokens":8}), (512001,false,"standard"), (5.0,9.0,7.0,0.0,8.0))]
+    #[case::ttl_zero(json!({"cache_creation_input_token_cost_above_1hr_above_200k_tokens":0}), (512001,false,"standard"), (5.0,9.0,7.0,0.0,0.0))]
+    #[case::cache_fallback(json!({"cache_read_input_token_cost":null,"cache_read_input_token_cost_above_512k_tokens":null,"cache_creation_input_token_cost":null,"cache_creation_input_token_cost_above_200k_tokens":null}), (512001,false,"standard"), (5.0,5.0,5.0,0.0,5.0))]
+    fn sdk_crossed_flat_bands_share_projection_and_fallbacks(
+        #[from(interpreter)] _interpreter: (),
+        #[case] fields: Value,
+        #[case] context: (u64, bool, &str),
+        #[case] rates: (f64, f64, f64, f64, f64),
+    ) {
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("n", crate::native_module(py)).unwrap();
+            locals.set_item("extra", dict(py, fields)).unwrap();
+            locals.set_item("context", context).unwrap();
+            locals.set_item("rates", rates).unwrap();
+            py.run(pyo3::ffi::c_str!(r#"
+import json
+import pytest
+inp, read, write, out, hour = "input_cost_per_token", "cache_read_input_token_cost", "cache_creation_input_token_cost", "output_cost_per_token", "cache_creation_input_token_cost_above_1hr"
+row = {"litellm_provider":"openai", inp:1, out:2, read:3, write:4,
+       "input_cost_per_token_above_200k_tokens":5,"output_cost_per_token_above_200k_tokens":6,
+       "cache_creation_input_token_cost_above_200k_tokens":7,
+       "output_cost_per_token_above_512k_tokens":0,"cache_read_input_token_cost_above_512k_tokens":9,**extra}
+before = json.dumps(row)
+prompt, inclusive, tier = context
+usage = n.UsageInput({inp:prompt-200, read:100, write:100, out:3}, prompt_tokens=prompt, inclusive_threshold=inclusive)
+when = n.WhenInput(0, tier=tier)
+actual = n.price(row, usage, when, policy="sdk_tokens")
+evaluated = n.price_with_rates(row, usage, when, policy="sdk_tokens", project=[inp,read,write,out,hour], factors=[1.1])
+assert isinstance(actual,n.Priced), actual
+assert isinstance(evaluated.pricing,n.Priced)
+assert actual.input == pytest.approx((prompt-200)*rates[0]+100*(rates[1]+rates[2]))
+assert actual.output == pytest.approx(3*rates[3])
+assert evaluated.pricing.total == pytest.approx(actual.total*1.1)
+assert [r.unit_price for r in evaluated.rates] == pytest.approx([r*1.1 for r in rates])
+projected = {r.requested_meter:(r.source_meter,r.unit_price) for r in evaluated.rates}
+assert [(line.meter,line.unit_price) for line in evaluated.pricing.lines] == [projected[line.fallback_from or line.meter] for line in evaluated.pricing.lines]
+assert len(evaluated.pricing.lines) == 4
+assert json.dumps(row) == before
+"#), Some(&locals), None).unwrap();
+        });
+    }
+
+    #[rstest]
+    #[case::missing(json!({}), 5, (1.0,1.0))]
+    #[case::utc(json!({"weekday_timezone":"UTC"}), 5, (1.0,1.0))]
+    #[case::unknown(json!({"weekday_timezone":"Not/AZone"}), 5, (1.0,10.0))]
+    #[case::empty(json!({"weekday_timezone":""}), 5, (1.0,10.0))]
+    #[case::padded(json!({"weekday_timezone":" UTC "}), 5, (1.0,10.0))]
+    #[case::local_next_day(json!({"weekday_timezone":"Asia/Shanghai"}), 6, (1.0,1.0))]
+    #[case::padded_local(json!({"weekday_timezone":" Asia/Shanghai "}), 6, (1.0,10.0))]
+    #[case::local_not_friday(json!({"weekday_timezone":"Asia/Shanghai"}), 5, (10.0,10.0))]
+    #[case::fallback_not_saturday(json!({"weekday_timezone":"Not/AZone"}), 6, (10.0,10.0))]
+    fn sdk_weekday_timezone_selection_is_policy_local(
+        #[from(interpreter)] _interpreter: (),
+        #[case] fields: Value,
+        #[case] weekday: u8,
+        #[case] expected: (f64, f64),
+        #[values(false, true)] tiered: bool,
+    ) {
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("n", crate::native_module(py)).unwrap();
+            locals.set_item("extra", dict(py, fields)).unwrap();
+            locals.set_item("weekday", weekday).unwrap();
+            locals.set_item("expected", expected).unwrap();
+            locals.set_item("tiered", tiered).unwrap();
+            py.run(pyo3::ffi::c_str!(r#"
+from datetime import datetime, timezone
+inp, out, reasoning = "input_cost_per_token", "output_cost_per_token", "output_cost_per_reasoning_token"
+row = {"litellm_provider":"openai", inp:10, out:10, reasoning:10,
+       "off_peak_pricing":{inp:1,out:1,reasoning:1,"windows":[{"hours_utc":"16:00-17:00","weekdays":[weekday]}],**extra}}
+usage=n.UsageInput({inp:1,reasoning:1},prompt_tokens=1)
+when=n.WhenInput(int(datetime(2026,8,28,16,30,tzinfo=timezone.utc).timestamp()))
+generic=n.price(row,usage,when)
+assert isinstance(generic,n.Priced)
+assert (generic.input,generic.output)==(expected[1],expected[1])
+if tiered:
+    row["tiered_pricing"]=[{"range":[0,100],inp:10,out:10}]
+actual=n.price(row,usage,when,policy="sdk_tokens")
+evaluated=n.price_with_rates(row,usage,when,policy="sdk_tokens",project=[inp,out,reasoning])
+assert isinstance(actual,n.Priced) and isinstance(evaluated.pricing,n.Priced)
+assert (actual.input,actual.output)==(expected[0],expected[0])
+assert actual.total==evaluated.pricing.total
+assert [r.unit_price for r in evaluated.rates]==[expected[0]]*3
+"#), Some(&locals), None).unwrap();
+        });
+    }
+
+    #[rstest]
     #[case::zero("0")]
     #[case::negative("-1")]
     #[case::boolean("True")]

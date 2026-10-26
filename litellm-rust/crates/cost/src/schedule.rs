@@ -36,16 +36,29 @@ pub enum Weekday {
 
 impl Schedule {
     pub fn contains(&self, at: OffsetDateTime) -> bool {
+        let zone = self
+            .weekday_timezone
+            .as_deref()
+            .map_or(Some(TimeZone::UTC), |name| TimeZone::get(name).ok());
+        self.contains_in_timezone(at, zone)
+    }
+
+    pub(crate) fn contains_sdk_tokens(&self, at: OffsetDateTime) -> bool {
+        let zone = self
+            .weekday_timezone
+            .as_deref()
+            .and_then(|name| TimeZone::get(name.trim()).ok())
+            .unwrap_or(TimeZone::UTC);
+        self.contains_in_timezone(at, Some(zone))
+    }
+
+    fn contains_in_timezone(&self, at: OffsetDateTime, zone: Option<TimeZone>) -> bool {
         let utc = at.to_offset(UtcOffset::UTC);
         let minute = u16::from(utc.hour()) * 60 + u16::from(utc.minute());
         let weekday = Timestamp::from_second(at.unix_timestamp())
             .ok()
             .and_then(|stamp| {
-                let zone = match self.weekday_timezone.as_deref() {
-                    Some(name) => TimeZone::get(name).ok()?,
-                    None => TimeZone::UTC,
-                };
-                Weekday::from_iso(stamp.to_zoned(zone).weekday().to_monday_one_offset() as u8)
+                Weekday::from_iso(stamp.to_zoned(zone?).weekday().to_monday_one_offset() as u8)
             });
         self.windows.iter().any(|window| {
             window
@@ -302,6 +315,39 @@ mod tests {
         #[case] expected: Option<Weekday>,
     ) {
         assert_eq!(name.parse().ok(), expected);
+    }
+
+    #[rstest]
+    #[case::missing(None, Weekday::Friday, true, true)]
+    #[case::utc(Some("UTC"), Weekday::Friday, true, true)]
+    #[case::unknown(Some("Not/AZone"), Weekday::Friday, true, false)]
+    #[case::empty(Some(""), Weekday::Friday, true, false)]
+    #[case::whitespace(Some("  "), Weekday::Friday, true, false)]
+    #[case::padded_utc(Some(" UTC "), Weekday::Friday, true, false)]
+    #[case::local_next_day(Some("Asia/Shanghai"), Weekday::Saturday, true, true)]
+    #[case::local_not_friday(Some("Asia/Shanghai"), Weekday::Friday, false, false)]
+    #[case::padded_local(Some(" Asia/Shanghai "), Weekday::Saturday, true, false)]
+    #[case::fallback_not_saturday(Some("Not/AZone"), Weekday::Saturday, false, false)]
+    fn sdk_weekday_timezone_trims_and_falls_back_to_utc(
+        #[case] timezone: Option<&str>,
+        #[case] weekday: Weekday,
+        #[case] sdk: bool,
+        #[case] generic: bool,
+    ) {
+        let schedule = Schedule {
+            windows: vec![Window {
+                hours: vec!["16:00-17:00".parse().unwrap()],
+                weekdays: Some(vec![weekday]),
+            }],
+            weekday_timezone: timezone.map(str::to_owned),
+        };
+        let at = OffsetDateTime::parse(
+            "2026-08-28T16:30:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+        assert_eq!(schedule.contains_sdk_tokens(at), sdk);
+        assert_eq!(schedule.contains(at), generic);
     }
 
     #[rstest]
