@@ -9,14 +9,24 @@ ignoreUntil = 2026-11-20
 reason = "the only fixed filelock is 4.2.1, a new major that requires Python >= 3.11 while litellm still supports 3.10, and the advisory is in ReadWriteLock, which litellm never uses (only FileLock); bump filelock and remove this entry once 3.10 is dropped or a 3.x fix ships"
 
 [[IgnoredVulns]]
+id = "GHSA-567q-5qvw-pf92"
+ignoreUntil = 2026-11-20
+reason = "Windows-only local DoS (CVSS 2.5) in filelock soft locks, fixed only in 4.2.1, a new major that requires Python >= 3.11 while litellm still supports 3.10 and pins filelock<4.0; litellm only uses FileLock, which takes an OS lock rather than a soft lock; bump filelock and remove this entry once 3.10 is dropped or a 3.x fix ships"
+
+[[IgnoredVulns]]
+id = "GHSA-9vhv-jxww-xfm5"
+ignoreUntil = 2026-11-20
+reason = "Windows-only local DoS (CVSS 3.3) in filelock ReadWriteLock, fixed only in 4.2.1, a new major that requires Python >= 3.11 while litellm still supports 3.10 and pins filelock<4.0; litellm never uses ReadWriteLock (only FileLock); bump filelock and remove this entry once 3.10 is dropped or a 3.x fix ships"
+
+[[IgnoredVulns]]
 id = "GHSA-vfj7-8cjw-p6xm"
 ignoreUntil = 2026-11-03
 reason = "braces has no fixed release published (3.0.3, 2024-05-21, is latest and last_affected); dev-only via knip > fast-glob > micromatch; remove this entry once one exists"
 
 [[IgnoredVulns]]
-id = "GHSA-6q48-6c7w-9gw2"
-ignoreUntil = 2026-10-23
-reason = "certifi 2026.10.19 (published 2026-10-20) is inside the 3-day uv exclude-newer window until 2026-10-23 02:24 UTC; bump certifi and remove this entry once it clears"
+id = "GHSA-xcx6-jx8p-x3h5"
+ignoreUntil = 2026-11-24
+reason = "@azure/msal-node is fixed only in 7.1.0 (published 2026-10-13), but it is dev-only in vscode-extension via @vscode/vsce > @azure/identity, and the latest @azure/identity (4.14.0) still requires msal-node ^6.0.0, so the lock cannot move without forcing a major override; the advisory is in the auth_code flow, which extension packaging does not run; bump and remove this entry once @azure/identity accepts msal-node >= 7.1.0"
 
 [[PackageOverrides]]
 name = "pillow"
