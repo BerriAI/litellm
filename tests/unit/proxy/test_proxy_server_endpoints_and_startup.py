@@ -14908,10 +14908,10 @@ def test_resolve_db_litellm_param_keeps_wif_secret_pointers(monkeypatch):
     monkeypatch.setenv("WIF_TEST_KC_SECRET", "kc-secret")
     proxy_config = ProxyConfig()
 
-    pointer = proxy_config._resolve_db_litellm_param(
+    pointer = proxy_config.resolve_db_litellm_param(
         "anthropic_keycloak_client_secret_ref", "os.environ/WIF_TEST_KC_SECRET"
     )
-    dereferenced = proxy_config._resolve_db_litellm_param("api_key", "os.environ/WIF_TEST_KC_SECRET")
+    dereferenced = proxy_config.resolve_db_litellm_param("api_key", "os.environ/WIF_TEST_KC_SECRET")
 
     assert pointer == "os.environ/WIF_TEST_KC_SECRET"
     assert dereferenced == "kc-secret"

@@ -141,6 +141,7 @@ from litellm.router_utils.auto_router_model_naming import (
     validate_strategy_router_model_write,
 )
 from litellm.router_utils.auto_router_tuning_baseline import is_mutable_tuned_candidate, tuning_quota_violation
+from litellm.router_utils.common_utils import with_admin_api_key_secret_reference, without_model_capability_flags
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import AwsSessionTag
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -151,6 +152,7 @@ from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
     Deployment,
     GenericLiteLLMParams,
+    LiteLLM_Params,
     ModelInfo,
     updateDeployment,
     updateLiteLLMParams,
@@ -391,6 +393,52 @@ def _raise_on_strategy_router_write_violation(
         code=status.HTTP_400_BAD_REQUEST,
         param="litellm_params.model",
     )
+
+
+_PROVIDER_ROUTING_PARAMS: Final = ("model", "custom_llm_provider", "api_base")
+
+
+def _deployment_as_reloaded(db_model: Deployment, patch_data: updateDeployment) -> Deployment | None:
+    """The deployment the router reload will build from the row this patch writes, or None when it
+    cannot be predicted here, which leaves the write to proceed as it always has"""
+    from litellm.proxy.proxy_server import proxy_config
+
+    try:
+        stored_params: Final = json.loads(
+            update_db_model(db_model=db_model, updated_patch=patch_data).get("litellm_params", "{}")
+        )
+        reloaded_params: Final = LiteLLM_Params.model_validate(
+            {key: proxy_config.resolve_db_litellm_param(key=key, value=value) for key, value in stored_params.items()}
+        )
+        return with_admin_api_key_secret_reference(
+            without_model_capability_flags(
+                Deployment(
+                    model_name=db_model.model_name, litellm_params=reloaded_params, model_info=db_model.model_info
+                )
+            )
+        )
+    except Exception:  # noqa: BLE001  # an unpredictable reload keeps the pre-existing write behavior
+        return None
+
+
+def _raise_on_unloadable_patch(db_model: Deployment, patch_data: updateDeployment) -> None:
+    """Reject a patch whose params the router reload would drop, which used to return 200 while the old
+    deployment kept serving and the model vanished on the next restart (#47964)"""
+    incoming: Final = patch_data.litellm_params
+    if incoming is None or all(getattr(incoming, field) is None for field in _PROVIDER_ROUTING_PARAMS):
+        return
+    reloaded: Final = _deployment_as_reloaded(db_model, patch_data)
+    if reloaded is None:
+        return
+    try:
+        Router.resolve_deployment_provider(reloaded.litellm_params)
+    except Exception as e:  # noqa: BLE001  # the router drops the deployment on any exception from this check
+        raise ProxyException(
+            message=f"The router cannot load this deployment, so the update was not saved: {e}",
+            type=ProxyErrorTypes.validation_error.value,
+            code=status.HTTP_400_BAD_REQUEST,
+            param="litellm_params.model",
+        ) from e
 
 
 def _reject_non_admin_blocked_flag_on_create(
@@ -1384,6 +1432,7 @@ async def patch_model(
             incoming_params=patch_data.litellm_params,
             existing_params=db_model.litellm_params,
         )
+        _raise_on_unloadable_patch(db_model, effective_patch)
 
         effective_params: Final = _effective_complexity_router_params(
             patch_data.litellm_params, db_model.litellm_params

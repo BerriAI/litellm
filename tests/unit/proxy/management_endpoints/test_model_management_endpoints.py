@@ -10137,3 +10137,90 @@ class TestNonAdminCannotSetPerUserOauthOnModel:
                 user_api_key_dict=admin,
             )
             assert result is created_row
+
+
+class TestPatchModelRejectsParamsTheRouterDrops:
+    """A patch the router reload would drop used to answer 200 while the old deployment kept serving
+    and the model vanished on the next restart (#47964)"""
+
+    @staticmethod
+    def _stored(**params: str) -> Deployment:
+        return Deployment(
+            model_name="clef",
+            litellm_params=LiteLLM_Params(**{key: encrypt_value_helper(value) for key, value in params.items()}),
+            model_info=ModelInfo(id="clef-1"),
+        )
+
+    @staticmethod
+    def _router_loads(params: Mapping[str, str]) -> bool:
+        router: Final = Router(
+            model_list=[{"model_name": "clef", "litellm_params": dict(params), "model_info": {"id": "clef-1"}}],
+            ignore_invalid_deployments=True,
+        )
+        return router.get_deployment(model_id="clef-1") is not None
+
+    @classmethod
+    def _rejection_code(cls, stored: Mapping[str, str], patched: Mapping[str, str]) -> str | None:
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import _raise_on_unloadable_patch
+
+        try:
+            _raise_on_unloadable_patch(
+                cls._stored(**stored), updateDeployment(litellm_params=updateLiteLLMParams(**patched))
+            )
+        except ProxyException as e:
+            return e.code
+        return None
+
+    @pytest.mark.parametrize(
+        "patched",
+        [
+            {"model": "@cf/cloudflare/clef-flash"},
+            {"model": "cloudflare/@cf/cloudflare/clef-flash"},
+            {"model": "gpt-4o"},
+            {"model": "not-a-provider/some-model"},
+            {"model": "my-model", "custom_llm_provider": "openai"},
+            {"model": "my-model", "custom_llm_provider": "not-a-provider"},
+            {"model": "hosted_vllm/llama", "api_base": "http://vllm.internal/v1"},
+            {"model": "langfuse/prompt-id"},
+            {"model": "dotprompt/clef"},
+            {"model": "azure/gpt-4o", "api_base": "os.environ/CLEF_TEST_AZURE_BASE"},
+            {"api_base": "http://127.0.0.1:9911/ai/run"},
+        ],
+    )
+    def test_patch_is_rejected_exactly_when_the_router_would_drop_it(
+        self, monkeypatch: pytest.MonkeyPatch, patched: Mapping[str, str]
+    ) -> None:
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import _raise_on_unloadable_patch
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-clef-test-salt")
+        monkeypatch.setenv("CLEF_TEST_AZURE_BASE", "https://clef.openai.azure.com")
+        stored: Final = {"model": "cloudflare/clef-flash", "api_base": "https://api.cloudflare.com/client/v4/ai/run"}
+        router_loads: Final = self._router_loads({**stored, **patched})
+        rejection_code: Final = self._rejection_code(stored, patched)
+        assert rejection_code == (None if router_loads else "400"), f"{router_loads=} {rejection_code=}"
+
+    def test_reported_workers_ai_id_without_provider_prefix_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import _raise_on_unloadable_patch
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-clef-test-salt")
+        with pytest.raises(ProxyException) as exc_info:
+            _raise_on_unloadable_patch(
+                self._stored(model="cloudflare/clef-flash"),
+                updateDeployment(litellm_params=updateLiteLLMParams(model="@cf/cloudflare/clef-flash")),
+            )
+        assert exc_info.value.code == "400"
+        assert exc_info.value.param == "litellm_params.model"
+        assert "@cf/cloudflare/clef-flash" in exc_info.value.message
+
+    def test_patch_not_touching_routing_params_is_never_judged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy.management_endpoints.model_management_endpoints import _raise_on_unloadable_patch
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-clef-test-salt")
+        verdict: Final = _raise_on_unloadable_patch(
+            self._stored(model="@cf/cloudflare/clef-flash"),
+            updateDeployment(litellm_params=updateLiteLLMParams(api_key="sk-rotated")),
+        )
+        assert verdict is None

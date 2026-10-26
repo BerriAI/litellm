@@ -3380,7 +3380,7 @@ def test_ProxyConfig__add_deployment_resolves_team_env_refs(monkeypatch):
     assert deployment.litellm_params.api_base == "https://team.example"
 
 
-def test_ProxyConfig__resolve_db_litellm_param_skips_non_string_values(monkeypatch):
+def test_ProxyConfig_resolve_db_litellm_param_skips_non_string_values(monkeypatch):
     def fail_on_call(value, key, return_original_value):
         raise AssertionError("decrypt_value_helper should only receive strings")
 
@@ -3390,7 +3390,7 @@ def test_ProxyConfig__resolve_db_litellm_param_skips_non_string_values(monkeypat
     )
     pc = ProxyConfig()
 
-    assert pc._resolve_db_litellm_param(key="tpm", value=100) == 100
+    assert pc.resolve_db_litellm_param(key="tpm", value=100) == 100
 
 
 def test_ProxyConfig__add_deployment_resolves_env_refs_for_aws_bedrock_auth_params(

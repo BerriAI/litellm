@@ -7692,7 +7692,7 @@ class ProxyConfig:
                 llm_router.delete_deployment(id=model_id)
         return frozenset(combined_id_list) | kept_config_ids
 
-    def _resolve_db_litellm_param(self, key: str, value: object) -> object:
+    def resolve_db_litellm_param(self, key: str, value: object) -> object:
         if not isinstance(value, str):
             return value
 
@@ -7725,7 +7725,7 @@ class ProxyConfig:
             if isinstance(_litellm_params, dict):
                 # decrypt values
                 for k, v in _litellm_params.items():
-                    _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)
+                    _litellm_params[k] = self.resolve_db_litellm_param(key=k, value=v)
                 _litellm_params = LiteLLM_Params.model_validate(_litellm_params)
 
             else:
@@ -7756,7 +7756,7 @@ class ProxyConfig:
             if isinstance(_litellm_params, dict):
                 # decrypt values
                 for k, v in _litellm_params.items():
-                    _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)
+                    _litellm_params[k] = self.resolve_db_litellm_param(key=k, value=v)
                 _litellm_params = LiteLLM_Params.model_validate(_litellm_params)
             else:
                 verbose_proxy_logger.error(

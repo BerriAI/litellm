@@ -11021,53 +11021,42 @@ class Router:
         # deployments have been registered.
         self._finalize_adaptive_router_if_configured()
 
+    @staticmethod
+    def resolve_deployment_provider(
+        litellm_params: LiteLLM_Params,
+    ) -> tuple[str, str | None, str | None, str | None]:
+        if "/" in litellm_params.model and (
+            litellm_params.model.split("/")[0] in litellm._known_custom_logger_compatible_callbacks
+        ):
+            return litellm_params.model, None, None, None
+        resolved: Final = litellm.get_llm_provider(
+            model=litellm_params.model,
+            custom_llm_provider=litellm_params.get("custom_llm_provider", None),
+            api_base=litellm_params.api_base,
+            litellm_params=litellm_params,
+        )
+        custom_llm_provider: Final = resolved[1]
+        if (
+            custom_llm_provider not in litellm.provider_list
+            and not JSONProviderRegistry.exists(custom_llm_provider)
+            and not is_registered_custom_provider(custom_llm_provider)
+        ):
+            raise Exception(f"Unsupported provider - {custom_llm_provider}")
+        return resolved
+
     def _add_deployment(self, deployment: Deployment) -> Deployment:
         import os
 
         #### VALIDATE MODEL ########
-        # Check if this is a prompt management model before validating as LLM provider
-        litellm_model: Final = deployment.litellm_params.model
         if isinstance(deployment.litellm_params.drop_params, str):
             verbose_router_logger.warning(
                 "model=%s drop_params=%r is not a flag value, treating it as unset",
                 deployment.model_name,
                 deployment.litellm_params.drop_params,
             )
-        is_prompt_management_model = False
-
-        if "/" in litellm_model:
-            split_litellm_model: Final = litellm_model.split("/")[0]
-            if split_litellm_model in litellm._known_custom_logger_compatible_callbacks:
-                is_prompt_management_model = True
-
-        if is_prompt_management_model:
-            # For prompt management models, skip LLM provider validation
-            # The actual model will be resolved at runtime from the prompt file
-            _model = litellm_model
-            custom_llm_provider = None
-            dynamic_api_key = None
-            api_base = None
-        else:
-            # check if model provider in supported providers
-            (
-                _model,
-                custom_llm_provider,
-                dynamic_api_key,
-                api_base,
-            ) = litellm.get_llm_provider(
-                model=deployment.litellm_params.model,
-                custom_llm_provider=deployment.litellm_params.get("custom_llm_provider", None),
-                api_base=deployment.litellm_params.api_base,
-                litellm_params=deployment.litellm_params,
-            )
-            # done reading model["litellm_params"]
-            # Check if provider is supported: either in enum or JSON-configured
-            if (
-                custom_llm_provider not in litellm.provider_list
-                and not JSONProviderRegistry.exists(custom_llm_provider)
-                and not is_registered_custom_provider(custom_llm_provider)
-            ):
-                raise Exception(f"Unsupported provider - {custom_llm_provider}")
+        _model, custom_llm_provider, dynamic_api_key, api_base = Router.resolve_deployment_provider(
+            deployment.litellm_params
+        )
 
         #### DEPLOYMENT NAMES INIT ########
         self.deployment_names.append(deployment.litellm_params.model)
