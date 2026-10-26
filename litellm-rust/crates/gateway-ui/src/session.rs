@@ -10,9 +10,7 @@ use tower_cookies::{Cookie, Cookies};
 use tower_sessions::{Expiry, Session, cookie::SameSite};
 
 use crate::Error;
-use litellm_gateway_auth::{
-    AccessRequest, UI_CSRF_KEY, UiAction, UiAuthError, UiAuthSession, UiCredentials, UiSession,
-};
+use litellm_gateway_auth::{UI_CSRF_KEY, UiAuthError, UiAuthSession, UiCredentials, UiSession};
 
 pub struct State {
     pub signing_key: EncodingKey,
@@ -109,11 +107,6 @@ pub async fn login(
 
 pub async fn info(session: Result<UiSession, UiAuthError>) -> Result<impl IntoResponse, Error> {
     let session = session?;
-    session
-        .identity
-        .authorize(AccessRequest::Ui(UiAction::SessionInfo))
-        .await
-        .map_err(|_| UiAuthError::Unauthorized)?;
     Ok(Json(SessionInfo {
         user_id: session.user.username,
         user_role: "proxy_admin",
@@ -125,12 +118,7 @@ pub async fn logout(
     mut auth: UiAuthSession,
     cookies: Cookies,
 ) -> Result<impl IntoResponse, Error> {
-    let validated = validated?;
-    validated
-        .identity
-        .authorize(AccessRequest::Ui(UiAction::Logout))
-        .await
-        .map_err(|_| UiAuthError::Unauthorized)?;
+    validated?;
     auth.logout().await?;
     cookies.add(
         Cookie::build(("token", ""))

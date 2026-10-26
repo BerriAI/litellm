@@ -1,27 +1,27 @@
 use std::sync::Arc;
 
 use axum::{extract::Request, middleware::Next, response::Response};
-use litellm_gateway_auth::{AccessRequest, AuthenticatedRequest, Error, McpAction};
+use litellm_gateway_auth::{AccessRequest, Caller, Error, McpAction};
 use litellm_gateway_mcp::{
     Authorization, GatewayFuture, OperationAuthorizer, ServerInfo, SessionOwner,
     rmcp::model::ClientRequest,
 };
 
 pub(crate) async fn bind_session_owner(
-    identity: AuthenticatedRequest,
+    caller: Caller,
     mut request: Request,
     next: Next,
 ) -> Response {
     request
         .extensions_mut()
-        .insert(SessionOwner(identity.caller().session_owner()));
+        .insert(SessionOwner(caller.owner()));
     request
         .extensions_mut()
-        .insert(Authorization(Arc::new(McpPolicy(identity))));
+        .insert(Authorization(Arc::new(McpPolicy(caller))));
     next.run(request).await
 }
 
-struct McpPolicy(AuthenticatedRequest);
+struct McpPolicy(Caller);
 
 impl OperationAuthorizer for McpPolicy {
     fn authorize<'a>(
@@ -49,15 +49,11 @@ impl OperationAuthorizer for McpPolicy {
                 }
                 Some(_) => return Err(litellm_gateway_mcp::Error::Forbidden),
             };
-            let access = AccessRequest::Mcp {
-                server: server.server_id.clone(),
-                action,
-            };
             self.0
-                .authorize(access.clone())
-                .await
-                .map_err(mcp_error)?
-                .consume(self.0.caller(), &access)
+                .authorize(&AccessRequest::Mcp {
+                    server: server.server_id.clone(),
+                    action,
+                })
                 .map_err(mcp_error)
         })
     }
@@ -65,9 +61,7 @@ impl OperationAuthorizer for McpPolicy {
 
 fn mcp_error(error: Error) -> litellm_gateway_mcp::Error {
     match error {
-        Error::InvalidToken | Error::Expired | Error::Forbidden => {
-            litellm_gateway_mcp::Error::Forbidden
-        }
+        Error::InvalidToken | Error::Forbidden => litellm_gateway_mcp::Error::Forbidden,
         _ => litellm_gateway_mcp::Error::Configuration("MCP authorization unavailable".into()),
     }
 }

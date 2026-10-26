@@ -1,7 +1,6 @@
-use std::{convert::Infallible, sync::Arc};
+use std::convert::Infallible;
 
-use axum::extract::FromRequestParts;
-use axum::http::{header::AUTHORIZATION, request::Parts};
+use axum::{extract::FromRequestParts, http::request::Parts};
 use axum_login::{AuthUser, AuthnBackend, UserId};
 use litellm_auth_types::SecretValue;
 use serde::Deserialize;
@@ -10,11 +9,7 @@ use subtle::ConstantTimeEq;
 use tower_sessions::Session;
 use veil::Redact;
 
-use crate::{
-    AccessRequest, AuthenticatedRequest, Authentication, AuthenticationMethod, LocalAdministrator,
-    NoAdditionalPolicy, Permissions, Principal, PrincipalKind, SystemClock, UiAction, UiAuthError,
-    VerifiedIdentity,
-};
+use crate::{Bearer, UiAuthError};
 
 pub const UI_CSRF_KEY: &str = "litellm.ui.csrf";
 pub type UiAuthSession = axum_login::AuthSession<UiBackend>;
@@ -85,7 +80,6 @@ impl AuthnBackend for UiBackend {
 
 pub struct UiSession {
     pub user: UiUser,
-    pub identity: AuthenticatedRequest,
 }
 
 impl<S: Send + Sync> FromRequestParts<S> for UiSession {
@@ -103,84 +97,12 @@ impl<S: Send + Sync> FromRequestParts<S> for UiSession {
             .get::<String>(UI_CSRF_KEY)
             .await?
             .ok_or(UiAuthError::Unauthorized)?;
-        let provided = parts
-            .headers
-            .get(AUTHORIZATION)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.strip_prefix("Bearer "))
-            .ok_or(UiAuthError::Unauthorized)?;
-        if !bool::from(Sha256::digest(expected).ct_eq(&Sha256::digest(provided))) {
+        let Bearer(provided) = Bearer::from_request_parts(parts, state)
+            .await
+            .map_err(|_| UiAuthError::Unauthorized)?;
+        if !bool::from(Sha256::digest(expected).ct_eq(&Sha256::digest(provided.expose()))) {
             return Err(UiAuthError::Unauthorized);
         }
-        let identity = session_identity(&user).await?;
-        parts.extensions.insert(identity.clone());
-        Ok(Self { user, identity })
-    }
-}
-
-async fn session_identity(user: &UiUser) -> Result<AuthenticatedRequest, UiAuthError> {
-    crate::authentication::resolve(
-        VerifiedIdentity {
-            principal: Principal::new(
-                "litellm:local-ui".into(),
-                user.username.clone(),
-                PrincipalKind::Human,
-            ),
-            authentication: Authentication {
-                method: AuthenticationMethod::Session,
-                verifier: "litellm:local-ui".into(),
-                credential_id: user.username.clone(),
-                expires_at: None,
-            },
-            restrictions: Permissions::Only(Arc::from([
-                AccessRequest::Ui(UiAction::SessionInfo),
-                AccessRequest::Ui(UiAction::Logout),
-            ])),
-        },
-        &LocalAdministrator,
-        Arc::new(NoAdditionalPolicy),
-        Arc::new(SystemClock),
-    )
-    .await
-    .map_err(|_| UiAuthError::Unauthorized)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rstest::rstest;
-
-    #[rstest]
-    #[tokio::test]
-    async fn ui_identity_is_scoped_to_session_operations() {
-        let backend = UiBackend::new("admin".into(), SecretValue::new("password")).unwrap();
-        let user = backend.get_user(&"admin".into()).await.unwrap().unwrap();
-        let identity = session_identity(&user).await.unwrap();
-        assert_eq!(identity.caller().principal().subject(), user.username);
-        assert_eq!(
-            identity.caller().authentication().method,
-            AuthenticationMethod::Session
-        );
-        assert!(
-            identity
-                .authorize(AccessRequest::Ui(UiAction::SessionInfo))
-                .await
-                .is_ok()
-        );
-        assert!(
-            identity
-                .authorize(AccessRequest::Ui(UiAction::Logout))
-                .await
-                .is_ok()
-        );
-        assert!(matches!(
-            identity
-                .authorize(AccessRequest::Model {
-                    name: "model".into(),
-                    deployment: "provider/model".into(),
-                })
-                .await,
-            Err(crate::Error::Forbidden)
-        ));
+        Ok(Self { user })
     }
 }

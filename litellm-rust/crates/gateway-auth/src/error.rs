@@ -17,12 +17,8 @@ pub enum KeyError {
 pub enum Error {
     #[error("operation is not permitted")]
     Forbidden,
-    #[error("credential has expired")]
-    Expired,
     #[error("authenticated request context is missing")]
     MissingIdentity,
-    #[error("authentication service unavailable")]
-    Unavailable,
     #[error("gateway auth not configured")]
     Unconfigured,
     #[error("missing or invalid bearer token")]
@@ -34,9 +30,8 @@ pub enum Error {
 impl Error {
     pub fn status(&self) -> StatusCode {
         match self {
-            Self::InvalidToken | Self::Expired => StatusCode::UNAUTHORIZED,
+            Self::InvalidToken => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
-            Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
             Self::MissingIdentity | Self::Unconfigured | Self::Secret(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }

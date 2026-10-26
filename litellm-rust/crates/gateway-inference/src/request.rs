@@ -90,8 +90,8 @@ fn object(body: &[u8]) -> Result<Map<String, Value>, Error> {
     }
 }
 
-pub(crate) async fn authorize_model(
-    identity: &litellm_gateway_auth::AuthenticatedRequest,
+pub(crate) fn authorize_model(
+    caller: &litellm_gateway_auth::Caller,
     deployment: &Deployment,
     body: &Map<String, Value>,
 ) -> Result<(), Error> {
@@ -103,11 +103,7 @@ pub(crate) async fn authorize_model(
         name: name.into(),
         deployment: deployment.model.clone(),
     };
-    identity
-        .authorize(access.clone())
-        .await?
-        .consume(identity.caller(), &access)?;
-    Ok(())
+    Ok(caller.authorize(&access)?)
 }
 
 pub(crate) fn resolve_deployment<'a>(

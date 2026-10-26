@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use litellm_cache_response::{CacheOptions, CachePolicy, CacheScope};
-use litellm_gateway_auth::AuthenticatedRequest;
+use litellm_gateway_auth::Caller;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
@@ -21,10 +21,7 @@ struct Controls {
 
 type Prepared = (Map<String, Value>, CacheOptions);
 
-pub(crate) fn prepare(
-    identity: &AuthenticatedRequest,
-    body: Map<String, Value>,
-) -> Result<Prepared, Error> {
+pub(crate) fn prepare(caller: &Caller, body: Map<String, Value>) -> Result<Prepared, Error> {
     let controls: Controls = match body.get("cache").filter(|value| !value.is_null()) {
         Some(value) => serde_json::from_value(value.clone())
             .map_err(|error| Error::InvalidBody(error.to_string()))?,
@@ -36,7 +33,6 @@ pub(crate) fn prepare(
         .map(|value| serde_json::from_value(value.clone()))
         .transpose()
         .map_err(|error| Error::InvalidBody(error.to_string()))?;
-    let caller = identity.caller();
     let options = CacheOptions {
         policy: CachePolicy {
             caching,
@@ -45,14 +41,7 @@ pub(crate) fn prepare(
             ttl: controls.ttl.map(duration).transpose()?,
             max_age: controls.max_age.map(duration).transpose()?,
         },
-        scope: CacheScope::Isolated(
-            serde_json::json!([
-                caller.principal().authority(),
-                caller.principal().subject(),
-                caller.authentication().credential_id
-            ])
-            .to_string(),
-        ),
+        scope: CacheScope::Isolated(caller.owner()),
     };
     Ok((
         body.into_iter()

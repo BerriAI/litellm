@@ -1,6 +1,6 @@
 //! `POST /v1/messages`, as the Python proxy's `anthropic_response` serves it.
 
-use litellm_gateway_auth::AuthenticatedRequest;
+use litellm_gateway_auth::Caller;
 use std::sync::Arc;
 
 use axum::{
@@ -28,13 +28,13 @@ const ANTHROPIC_API_HEADER_PROVIDERS: &str =
 
 pub async fn create(
     State(gateway): State<Arc<Gateway>>,
-    identity: AuthenticatedRequest,
+    caller: Caller,
     RequestId(request_id): RequestId,
     headers: HeaderMap,
     body: Result<JsonObject, Error>,
 ) -> impl IntoResponse {
     let result = match body {
-        Ok(JsonObject(body)) => handle(&gateway, &identity, &headers, body).await,
+        Ok(JsonObject(body)) => handle(&gateway, &caller, &headers, body).await,
         Err(error) => Err(error),
     };
     result.map_err(|error| (error.status(), Json(error.body(request_id.as_deref()))))
@@ -42,13 +42,13 @@ pub async fn create(
 
 async fn handle(
     gateway: &Gateway,
-    identity: &AuthenticatedRequest,
+    caller: &Caller,
     headers: &HeaderMap,
     body: Map<String, Value>,
 ) -> Result<Response, Error> {
     let deployment = request::resolve_deployment(gateway, &body)?;
-    request::authorize_model(identity, deployment, &body).await?;
-    let (body, cache_options) = crate::caching::prepare(identity, body)?;
+    request::authorize_model(caller, deployment, &body)?;
+    let (body, cache_options) = crate::caching::prepare(caller, body)?;
     let route = gateway.messages.clone();
     let route = match &gateway.cache {
         Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
