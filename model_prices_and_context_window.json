@@ -76439,9 +76439,10 @@
     "azure_ai/Microsoft-Decision-1": {
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "azure_ai",
+        "max_input_tokens": 32768,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=productName eq 'Microsoft Decision Models'"
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"
     },
     "gpt-rosalind-discovery": {
         "cache_read_input_token_cost": 5e-07,
