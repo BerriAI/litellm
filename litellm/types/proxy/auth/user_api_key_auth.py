@@ -10,6 +10,8 @@ from pydantic import ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import TypeIs  # noqa: TID251  # narrows the before-validator input without copying it
 
 from litellm._auth.key import hash_token as hash_token  # noqa: PLC0414  # public re-export
+from litellm._auth.key import is_jwt as is_jwt  # noqa: PLC0414  # public re-export
+from litellm._auth.key import stored_api_key
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.team import Member
 from litellm.models.verification_token import LiteLLM_VerificationToken
@@ -29,13 +31,6 @@ if TYPE_CHECKING:
     Span: TypeAlias = _Span | Any
 else:
     Span: TypeAlias = Any
-
-
-def is_jwt(token: str | None) -> bool:
-    if token is None:
-        return False
-    parts: Final = token.split(".")
-    return len(parts) == 3
 
 
 _UntypedDict: TypeAlias = dict[Any, Any]
@@ -234,27 +229,10 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("billing_agent_policy", None)
         api_key: Final = values.get("api_key")
         if api_key is not None:
-            values.update({"token": cls._safe_hash_litellm_api_key(api_key)})  # pyright: ignore[reportArgumentType]  # non-str fails in the hasher
+            values.update({"token": stored_api_key(api_key)})  # pyright: ignore[reportArgumentType]  # non-str fails in the hasher
             if isinstance(api_key, str):
-                values.update({"api_key": cls._safe_hash_litellm_api_key(api_key)})
+                values.update({"api_key": stored_api_key(api_key)})
         return values
-
-    @classmethod
-    def _safe_hash_litellm_api_key(cls, api_key: str) -> str:
-        """
-        Helper to ensure all logged keys are hashed
-        Covers:
-        1. Regular API keys from LiteLLM DB
-        2. JWT tokens used for connecting to LiteLLM API
-        """
-        normalized = api_key
-        if normalized[:7].lower() == "bearer ":
-            normalized = normalized[7:]
-        if normalized.startswith("sk-"):
-            return hash_token(normalized)
-        if is_jwt(token=normalized):
-            return f"hashed-jwt-{hash_token(token=normalized)}"
-        return normalized
 
     @classmethod
     def get_litellm_internal_health_check_user_api_key_auth(cls) -> "UserAPIKeyAuth":

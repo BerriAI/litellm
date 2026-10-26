@@ -9,6 +9,7 @@ from typing import Final, Literal, TypeVar
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm._auth.key import HASHED_JWT_PREFIX
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
@@ -107,7 +108,6 @@ _SPEND_LOG_STATEMENT_TIMEOUT_SQL: Final = f"SET LOCAL statement_timeout = {SPEND
 _SPEND_LOG_NO_BITMAP_SCAN_SQL: Final = "SET LOCAL enable_bitmapscan = off"
 _SPEND_LOG_TRANSACTION_TIMEOUT: Final = timedelta(milliseconds=2 * SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS)
 
-_HASHED_JWT_PREFIX: Final = "hashed-jwt-"
 _CLI_SESSION_KEY_PREFIX: Final = f"{CLI_SESSION_KEY_PREFIX}-"
 
 
@@ -386,7 +386,7 @@ async def recover_double_hashed_key_metadata(
 
 
 def _is_spend_log_digest(key: str) -> bool:
-    return is_valid_sha256_hash(key.removeprefix(_HASHED_JWT_PREFIX))
+    return is_valid_sha256_hash(key.removeprefix(HASHED_JWT_PREFIX))
 
 
 def _spend_log_cache_key(digest: str, window: tuple[datetime, datetime]) -> str:
