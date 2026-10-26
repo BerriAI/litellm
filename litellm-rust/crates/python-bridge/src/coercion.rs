@@ -1,4 +1,4 @@
-use litellm_core_utils::serde_compat::parse_str_bool;
+use litellm_core_utils::coercion::parse_str_bool;
 use pyo3::{
     exceptions::{PyAttributeError, PyRuntimeError, PyValueError},
     prelude::*,
