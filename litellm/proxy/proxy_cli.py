@@ -230,7 +230,9 @@ class ProxyInitializationHelpers:
         if refusal is None:
             print("LiteLLM Proxy: the pending migrations and indexes can be applied to the rows this database has.")
             return 0
-        print(f"\033[1;31mLiteLLM Proxy: Database migration cannot proceed. {refusal}\033[0m", file=sys.stderr, flush=True)
+        print(
+            f"\033[1;31mLiteLLM Proxy: Database migration cannot proceed. {refusal}\033[0m", file=sys.stderr, flush=True
+        )
         return 2
 
     @staticmethod
