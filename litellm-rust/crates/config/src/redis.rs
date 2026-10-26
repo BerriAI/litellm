@@ -195,7 +195,7 @@ impl fmt::Debug for RedisSettings {
 
 #[derive(Clone, Debug)]
 pub enum CacheSettings {
-    Redis(RedisSettings),
+    Redis(Box<RedisSettings>),
     Other(Object),
 }
 
@@ -211,7 +211,7 @@ impl<'de> Deserialize<'de> for CacheSettings {
             .map(|(key, value)| (Value::String(key), value))
             .collect();
         serde_yaml_ng::from_value(Value::Mapping(mapping))
-            .map(Self::Redis)
+            .map(|settings| Self::Redis(Box::new(settings)))
             .map_err(D::Error::custom)
     }
 }
