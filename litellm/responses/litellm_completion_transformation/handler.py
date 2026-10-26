@@ -8,6 +8,7 @@ from typing import Final
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.responses.additional_tools import hoist_additional_tools
 from litellm.responses.litellm_completion_transformation.compaction_items import holds_compaction_summary
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
@@ -73,9 +74,25 @@ class LiteLLMCompletionTransformationHandler:
                 **kwargs,
             )
 
+        previous_response_id: Final = bridged_request.get("previous_response_id")
+        sync_request: Final = (
+            _REQUEST_KWARGS_ADAPTER.validate_python(
+                run_async_function(
+                    LiteLLMCompletionResponsesConfig.async_responses_api_session_handler,
+                    previous_response_id=previous_response_id,
+                    litellm_completion_request=litellm_completion_request,
+                    instructions=bridged_request.get("instructions"),
+                    request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
+                    previous_response_client_ids=previous_response_client_ids,
+                    input_replaces_history=holds_compaction_summary(with_compaction_items_as_params(bridged_input)),
+                )
+            )
+            if previous_response_id
+            else litellm_completion_request
+        )
         completion_args: Final = {}
         completion_args.update(kwargs)
-        completion_args.update(litellm_completion_request)
+        completion_args.update(sync_request)
         completion_args["_skip_responses_api_bridge"] = True
 
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(

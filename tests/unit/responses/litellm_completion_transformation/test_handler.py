@@ -22,7 +22,7 @@ import httpx
 import pytest
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
@@ -209,15 +209,17 @@ async def test_bridged_follow_up_turn_keeps_the_addressed_response_id_off_the_pr
     client: Final = AsyncHTTPHandler()
     client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
 
-    response = await litellm.aresponses(
-        model="azure_ai/claude-sonnet-4-6",
-        api_base="https://fake-foundry-resource.services.ai.azure.com",
-        api_key="fake-api-key",
-        input="Double it",
-        previous_response_id="resp_turn_one",
-        client=client,
-        **{ADDRESSED_RESPONSE_ID_FIELD: "resp_turn_one"},
-    )
+    stored_turns: Final = _StoredTurns((_stored_mcp_turn("resp_turn_one"),))
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored_turns)):
+        response = await litellm.aresponses(
+            model="azure_ai/claude-sonnet-4-6",
+            api_base="https://fake-foundry-resource.services.ai.azure.com",
+            api_key="fake-api-key",
+            input="Double it",
+            previous_response_id="resp_turn_one",
+            client=client,
+            **{ADDRESSED_RESPONSE_ID_FIELD: "resp_turn_one"},
+        )
 
     assert provider.request_body is not None, "the bridged turn never reached the provider"
     assert ADDRESSED_RESPONSE_ID_FIELD not in provider.request_body, (
@@ -255,6 +257,59 @@ class _StoredTurns:
         return [dict(row) for row in self.rows if row["session_id"] in sessions]
 
 
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("async_call", [False, True])
+@pytest.mark.asyncio
+async def test_unknown_previous_response_fails_before_sending_a_contextless_completion(
+    async_call: bool, stream: bool
+) -> None:
+    provider: Final = _RecordingAnthropicHandler(
+        {
+            "id": "chatcmpl-local",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "test-model",
+            "choices": [
+                {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Lost context"}}
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
+    transport: Final = httpx.MockTransport(provider)
+    async_client: Final = AsyncHTTPHandler(transport=transport)
+    with httpx.Client(transport=transport) as sync_client:
+        try:
+            with pytest.raises(litellm.BadRequestError, match="previous_response_id") as raised:
+                if async_call:
+                    await litellm.aresponses(
+                        model="hosted_vllm/test-model",
+                        input="What is my favorite color?",
+                        previous_response_id="resp_does_not_exist",
+                        stream=stream,
+                        use_chat_completions_api=True,
+                        client=async_client,
+                        api_key="test",
+                        api_base="https://provider.invalid/v1",
+                        num_retries=0,
+                    )
+                else:
+                    litellm.responses(
+                        model="hosted_vllm/test-model",
+                        input="What is my favorite color?",
+                        previous_response_id="resp_does_not_exist",
+                        stream=stream,
+                        use_chat_completions_api=True,
+                        client=HTTPHandler(client=sync_client),
+                        api_key="test",
+                        api_base="https://provider.invalid/v1",
+                        num_retries=0,
+                    )
+            assert raised.value.status_code == 400
+            assert provider.request_body is None, "unresolved history must not send the current turn to the provider"
+        finally:
+            await async_client.client.aclose()
+
+
 def _stored_mcp_turn(request_id: str) -> Mapping[str, object]:
     return {
         "request_id": request_id,
@@ -279,7 +334,10 @@ def _stored_mcp_turn(request_id: str) -> Mapping[str, object]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stored_under", ["litellm_encoded_id", "proxy_issued_id"])
-async def test_bridged_next_turn_replays_a_turn_stored_under_the_id_the_client_holds(stored_under: str):
+@pytest.mark.parametrize("async_call", [False, True])
+async def test_bridged_next_turn_replays_a_turn_stored_under_the_id_the_client_holds(
+    stored_under: str, async_call: bool
+):
     litellm_encoded_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
         custom_llm_provider="azure_ai", model_id="deployment-a", response_id="chatcmpl-turn-one"
     )
@@ -291,21 +349,34 @@ async def test_bridged_next_turn_replays_a_turn_stored_under_the_id_the_client_h
     client: Final = AsyncHTTPHandler()
     client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
 
-    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored_turns)):
-        await litellm.aresponses(
-            model="azure_ai/claude-sonnet-4-6",
-            api_base="https://fake-foundry-resource.services.ai.azure.com",
-            api_key="fake-api-key",
-            input="Double it",
-            previous_response_id=litellm_encoded_id,
-            client=client,
-            **{ADDRESSED_RESPONSE_ID_FIELD: proxy_issued_id},
-        )
+    with httpx.Client(transport=httpx.MockTransport(provider)) as sync_client:
+        try:
+            with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored_turns)):
+                if async_call:
+                    await litellm.aresponses(
+                        model="azure_ai/claude-sonnet-4-6",
+                        api_base="https://fake-foundry-resource.services.ai.azure.com",
+                        api_key="fake-api-key",
+                        input="Double it",
+                        previous_response_id=litellm_encoded_id,
+                        client=client,
+                        **{ADDRESSED_RESPONSE_ID_FIELD: proxy_issued_id},
+                    )
+                else:
+                    litellm.responses(
+                        model="azure_ai/claude-sonnet-4-6",
+                        api_base="https://fake-foundry-resource.services.ai.azure.com",
+                        api_key="fake-api-key",
+                        input="Double it",
+                        previous_response_id=litellm_encoded_id,
+                        client=HTTPHandler(client=sync_client),
+                        **{ADDRESSED_RESPONSE_ID_FIELD: proxy_issued_id},
+                    )
+        finally:
+            await client.client.aclose()
 
     assert provider.request_body is not None, "the bridged turn never reached the provider"
-    assert [
-        (message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]
-    ] == [
+    assert [(message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]] == [
         ("user", json.dumps([{"type": "text", "text": "My favorite number is 7."}])),
         ("assistant", json.dumps([{"type": "text", "text": "Noted."}])),
         ("user", json.dumps([{"type": "text", "text": "Double it"}])),
