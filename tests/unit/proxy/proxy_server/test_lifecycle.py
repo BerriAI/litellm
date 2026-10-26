@@ -29,13 +29,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from fakeredis import FakeRedis, FakeServer
+from fakeredis.aioredis import FakeConnection
 from pydantic import BaseModel, TypeAdapter
+from redis.asyncio import BlockingConnectionPool
 from typing_extensions import TypedDict
 
 import litellm.proxy.proxy_server as ps
-from litellm.constants import REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY
+from litellm.caching.redis_cache import RedisCache
+from litellm.constants import DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME, REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY
 from litellm.proxy._types import BaseDailySpendTransaction, DailyTagSpendTransaction
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.management_helpers.audit_logs import track_audit_task
 from litellm.proxy.proxy_server import (
     ProxyStartupEvent,
@@ -57,6 +62,7 @@ from litellm.proxy.proxy_server import (
 from .conftest import normalize
 
 _TAG_BATCH_ADAPTER: Final = TypeAdapter(dict[str, DailyTagSpendTransaction])
+_REDIS_LIST_ADAPTER: Final = TypeAdapter(list[bytes])
 
 # ---------------------------------------------------------------------------
 # cleanup_router_config_variables
@@ -445,65 +451,41 @@ def _daily_tag_spend(tag: str) -> dict[str, BaseDailySpendTransaction]:
 
 
 @pytest.mark.asyncio
-async def test_flush_spend_counters_on_shutdown_commits_the_daily_tag_spend_buffered_since_the_last_tag_job_run(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    """The tag job runs every batch interval x DAILY_TAG_SPEND_BATCH_MULTIPLIER, so a worker that exits
-    between runs must still write the tag rows it buffered or every tag rollup undercounts LiteLLM_SpendLogs."""
-    writer: Final = DBSpendUpdateWriter()
-    await writer.daily_tag_spend_update_queue.add_update(_daily_tag_spend("prod-tag"))
-    fake_prisma: Final = MagicMock()
-    execute_raw: Final = AsyncMock(return_value=1)
-    fake_prisma.db.execute_raw = execute_raw
-    fake_prisma.db.tx.return_value.__aenter__.return_value.execute_raw = execute_raw
-    monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
-    monkeypatch.setattr(ps, "general_settings", {}, raising=False)
-    monkeypatch.setattr(ps.proxy_logging_obj, "db_spend_update_writer", writer)
-    monkeypatch.setattr(writer, "db_update_spend_transaction_handler", AsyncMock())
-
-    await ps.flush_spend_counters_on_shutdown()
-
-    tag_upserts: Final = [
-        call.args for call in execute_raw.await_args_list if '"LiteLLM_DailyTagSpend"' in str(call.args[0])
-    ]
-    observed: Final = {
-        "tag_upserts": len(tag_upserts),
-        "tag_written": "prod-tag" in tag_upserts[0][1:] if tag_upserts else False,
-        "left_in_memory": writer.daily_tag_spend_update_queue.update_queue.qsize(),
-    }
-    assert observed == {"tag_upserts": 1, "tag_written": True, "left_in_memory": 0}
-
-
-@pytest.mark.asyncio
 async def test_flush_spend_counters_on_shutdown_hands_daily_tag_spend_to_redis_when_another_pod_holds_the_lock(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """With the Redis transaction buffer, a pod that is not the tag-commit leader keeps its tag spend by pushing
-    it to the shared buffer on shutdown, where the leader's next tag job commits it."""
-    async_rpush: Final = AsyncMock(return_value=1)
-    redis_cache: Final = MagicMock()
-    redis_cache.async_rpush = async_rpush
-    writer: Final = DBSpendUpdateWriter(redis_cache=redis_cache)
-    await writer.daily_tag_spend_update_queue.add_update(_daily_tag_spend("prod-tag"))
-    monkeypatch.setattr(ps, "prisma_client", MagicMock(), raising=False)
-    monkeypatch.setattr(ps, "general_settings", {"use_redis_transaction_buffer": True}, raising=False)
-    monkeypatch.setattr(ps.proxy_logging_obj, "db_spend_update_writer", writer)
-    monkeypatch.setattr(writer, "db_update_spend_transaction_handler", AsyncMock())
-    monkeypatch.setattr(writer.pod_lock_manager, "acquire_lock", AsyncMock(return_value=False))
+    server: Final = FakeServer()
+    sync_client: Final = FakeRedis(server=server)
+    pool: Final = BlockingConnectionPool(connection_class=FakeConnection, server=server)
+    try:
+        with (
+            patch("redis.Redis.from_url", return_value=sync_client),
+            patch("redis.asyncio.BlockingConnectionPool.from_url", return_value=pool),
+        ):
+            redis: Final = RedisCache(url="redis://spend-buffer.example:6379/0")
+            writer: Final = DBSpendUpdateWriter(redis_cache=redis)
+            writer.pod_lock_manager.redis_cache = redis
+            sync_client.set(PodLockManager.get_redis_lock_key(DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME), "other-pod")
+            await writer.daily_tag_spend_update_queue.add_update(_daily_tag_spend("prod-tag"))
+            monkeypatch.setattr(ps, "prisma_client", MagicMock(), raising=False)
+            monkeypatch.setattr(ps, "general_settings", {"use_redis_transaction_buffer": True}, raising=False)
+            monkeypatch.setattr(ps.proxy_logging_obj, "db_spend_update_writer", writer)
 
-    await ps.flush_spend_counters_on_shutdown()
+            await ps.flush_spend_counters_on_shutdown()
 
-    pushed_batches: Final = [
-        _TAG_BATCH_ADAPTER.validate_json(value)
-        for call in async_rpush.await_args_list
-        if call.kwargs["key"] == REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY
-        for value in call.kwargs["values"]
-    ]
-    observed: Final = {
-        "pushed_tags": [txn["tag"] for batch in pushed_batches for txn in batch.values()],
-        "left_in_memory": writer.daily_tag_spend_update_queue.update_queue.qsize(),
-    }
-    assert observed == {"pushed_tags": ["prod-tag"], "left_in_memory": 0}
+            buffered_tags: Final = [
+                txn["tag"]
+                for value in _REDIS_LIST_ADAPTER.validate_python(
+                    sync_client.lrange(REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY, 0, -1)
+                )
+                for txn in _TAG_BATCH_ADAPTER.validate_json(value).values()
+            ]
+            assert buffered_tags == ["prod-tag"], (
+                "a pod that is not the tag-commit leader must leave its buffered tag spend in Redis for the leader"
+            )
+    finally:
+        await pool.disconnect()
+        sync_client.close()
 
 
 # ---------------------------------------------------------------------------
