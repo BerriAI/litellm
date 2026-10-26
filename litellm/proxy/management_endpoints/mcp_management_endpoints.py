@@ -104,6 +104,14 @@ class _HasServerId(Protocol):
     server_id: str
 
 
+class _TemporaryServerCacheWriter(Protocol):
+    async def async_set_cache(self, *, key: str, value: str, ttl: int) -> object: ...
+
+
+class _TemporaryServerCacheReader(Protocol):
+    async def async_get_cache(self, *, key: str) -> object: ...
+
+
 def _session_cookie_claims(claims: Mapping[str, object]) -> Mapping[str, object]:
     return claims
 
@@ -527,7 +535,7 @@ if MCP_AVAILABLE:
         """
         if litellm.cache is None or not hasattr(litellm.cache, "cache"):
             return
-        cache_backend: Final = getattr(litellm.cache, "cache", None)
+        cache_backend: Final[_TemporaryServerCacheWriter | None] = getattr(litellm.cache, "cache", None)
         if cache_backend is None or not hasattr(cache_backend, "async_set_cache"):
             return
 
@@ -566,7 +574,7 @@ if MCP_AVAILABLE:
         """
         if litellm.cache is None or not hasattr(litellm.cache, "cache"):
             return None
-        cache_backend: Final = getattr(litellm.cache, "cache", None)
+        cache_backend: Final[_TemporaryServerCacheReader | None] = getattr(litellm.cache, "cache", None)
         if cache_backend is None or not hasattr(cache_backend, "async_get_cache"):
             return None
 
