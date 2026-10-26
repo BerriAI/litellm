@@ -36,6 +36,7 @@ pub struct OffPeakBlock {
     pub windows: Option<Vec<OffPeakWindow>>,
     pub weekday_timezone: Option<String>,
     pub prices: Vec<FlatPrice>,
+    pub cache_read_declared: bool,
 }
 
 /// One UTC window or a list of them.
@@ -192,7 +193,10 @@ impl Reader<'_> {
     pub(crate) fn off_peak(&mut self, value: &Value) -> Option<OffPeakBlock> {
         let path = pointer_for_key("off_peak_pricing");
         let fields = self.object(&path, value)?;
-        let mut block = OffPeakBlock::default();
+        let mut block = OffPeakBlock {
+            cache_read_declared: fields.contains_key("cache_read_input_token_cost"),
+            ..OffPeakBlock::default()
+        };
         for (name, value) in fields.iter().filter(|(_, value)| !value.is_null()) {
             let key = format!("off_peak_pricing.{name}");
             let child_path = pointer_child(&path, name);

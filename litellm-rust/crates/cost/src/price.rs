@@ -5,7 +5,8 @@ use std::num::NonZeroU64;
 
 pub use meter::*;
 
-use crate::money::{Multiplier, UnitPrice};
+use crate::PriceEvaluationError;
+use crate::money::{Multiplier, ScaleFactor, UnitPrice};
 use crate::schedule::Schedule;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -140,6 +141,41 @@ impl Prices {
 
     pub fn off_peak(&self) -> Option<&OffPeak> {
         self.off_peak.as_ref()
+    }
+
+    pub fn with_cache_read_default(
+        mut self,
+        ratio: ScaleFactor,
+        off_peak_read_declared: bool,
+    ) -> Result<Self, PriceEvaluationError> {
+        let read = Price::online(
+            Meter::CacheRead {
+                kind: TokenKind::Text,
+                mode: CacheReadMode::Implicit,
+            },
+            When::default(),
+        );
+        if self.get(&read).is_some() {
+            return Ok(self);
+        }
+        let Some(input) = self.get(&Price::online(Meter::TEXT_INPUT, When::default())) else {
+            return Ok(self);
+        };
+        let rate = ratio
+            .price(input)
+            .ok_or(PriceEvaluationError::NonFiniteValue)?;
+        if !off_peak_read_declared
+            && let Some(off_peak) = self.off_peak.as_mut()
+            && off_peak.rates.cache_read.is_none()
+        {
+            off_peak.rates.cache_read = Some(
+                ratio
+                    .price(off_peak.rates.input.unwrap_or(input))
+                    .ok_or(PriceEvaluationError::NonFiniteValue)?,
+            );
+        }
+        self.rates.insert((read, PriceSource::Flat), rate);
+        Ok(self)
     }
 
     pub fn has_token_prices(&self) -> bool {
@@ -393,6 +429,98 @@ mod tests {
         let prices =
             Prices::from_sources([((key, source), UnitPrice::new(0.0).unwrap())].into(), None);
         assert_eq!(prices.has_token_prices(), expected);
+    }
+
+    #[rstest]
+    #[case::base(Some(2.0), None, (None, None, false), (Some(1.0), Some(1.0)))]
+    #[case::zero_input(Some(0.0), None, (Some(6.0), None, false), (Some(0.0), Some(3.0)))]
+    #[case::absent_input(None, None, (Some(6.0), None, false), (None, None))]
+    #[case::explicit_zero(Some(2.0), Some(0.0), (Some(6.0), None, false), (Some(0.0), None))]
+    #[case::explicit_read(Some(2.0), Some(0.25), (Some(6.0), None, false), (Some(0.25), None))]
+    #[case::offpeak_input(Some(2.0), None, (Some(6.0), None, false), (Some(1.0), Some(3.0)))]
+    #[case::offpeak_null_read(Some(2.0), None, (Some(6.0), None, true), (Some(1.0), None))]
+    #[case::offpeak_zero_read(Some(2.0), None, (Some(6.0), Some(0.0), true), (Some(1.0), Some(0.0)))]
+    #[case::offpeak_read(Some(2.0), None, (Some(6.0), Some(0.25), true), (Some(1.0), Some(0.25)))]
+    fn cache_defaults_derive_only_missing_rates_from_base_input(
+        #[case] input: Option<f64>,
+        #[case] read: Option<f64>,
+        #[case] off_peak: (Option<f64>, Option<f64>, bool),
+        #[case] expected: (Option<f64>, Option<f64>),
+    ) {
+        let read_meter = Meter::CacheRead {
+            kind: TokenKind::Text,
+            mode: CacheReadMode::Implicit,
+        };
+        let read_key = Price::online(read_meter, When::default());
+        let prices = Prices::new(
+            [
+                input.map(|value| {
+                    (
+                        Price::online(INPUT, When::default()),
+                        UnitPrice::new(value).unwrap(),
+                    )
+                }),
+                read.map(|value| (read_key.clone(), UnitPrice::new(value).unwrap())),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+            OffPeak::new(
+                Schedule {
+                    windows: vec![],
+                    weekday_timezone: None,
+                },
+                OffPeakRates {
+                    input: off_peak.0.and_then(UnitPrice::new),
+                    cache_read: off_peak.1.and_then(UnitPrice::new),
+                    output: UnitPrice::new(3.0),
+                    ..Default::default()
+                },
+            ),
+        );
+        let original = prices.clone();
+        let prepared = prices
+            .with_cache_read_default(ScaleFactor::new(0.5).unwrap(), off_peak.2)
+            .unwrap();
+        assert_eq!(prepared.get(&read_key).map(UnitPrice::get), expected.0);
+        assert_eq!(
+            prepared
+                .off_peak()
+                .unwrap()
+                .rates()
+                .cache_read
+                .map(UnitPrice::get),
+            expected.1
+        );
+        assert_eq!(original.get(&read_key).map(UnitPrice::get), read);
+        assert_eq!(original.has_token_prices(), prepared.has_token_prices());
+    }
+
+    #[rstest]
+    #[case::base_input(f64::MAX, 2.0)]
+    #[case::offpeak_input(2.0, f64::MAX)]
+    fn cache_default_overflow_is_an_error(#[case] input: f64, #[case] off_peak: f64) {
+        let prices = Prices::new(
+            [(
+                Price::online(INPUT, When::default()),
+                UnitPrice::new(input).unwrap(),
+            )]
+            .into(),
+            OffPeak::new(
+                Schedule {
+                    windows: vec![],
+                    weekday_timezone: None,
+                },
+                OffPeakRates {
+                    input: UnitPrice::new(off_peak),
+                    ..Default::default()
+                },
+            ),
+        );
+        assert_eq!(
+            prices.with_cache_read_default(ScaleFactor::new(2.0).unwrap(), false),
+            Err(PriceEvaluationError::NonFiniteValue)
+        );
     }
 
     fn over(tokens: u64) -> Band {

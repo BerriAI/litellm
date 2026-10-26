@@ -653,11 +653,57 @@ impl PricePolicy {
 
     fn lower(self, row: &Bound<'_, PyAny>, channel: Channel) -> Result<Model, RowErrors> {
         let lowering = match (self, channel) {
-            (Self::SdkTokens, Channel::Online) => litellm_model_catalog::PriceLowering::SdkTokens,
+            (Self::SdkTokens, Channel::Online | Channel::Batch) => {
+                litellm_model_catalog::PriceLowering::SdkTokens
+            }
             _ => litellm_model_catalog::PriceLowering::Generic,
         };
         lower_row_with_policy("", row, lowering).map(|(_, model)| model)
     }
+
+    fn prepare(
+        self,
+        mut model: Model,
+        channel: Channel,
+        ratio: Option<litellm_cost::money::ScaleFactor>,
+    ) -> PyResult<Model> {
+        if let Some(ratio) = ratio
+            && channel == Channel::Online
+        {
+            model.prices = model
+                .prices
+                .with_cache_read_default(
+                    ratio,
+                    model.token_price_sources.off_peak_cache_read_declared,
+                )
+                .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        }
+        Ok(model)
+    }
+}
+
+fn cache_read_default(
+    policy: PricePolicy,
+    value: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Option<litellm_cost::money::ScaleFactor>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if !matches!(policy, PricePolicy::SdkTokens) {
+        return Err(PyValueError::new_err(
+            "cache read defaults require sdk_tokens policy",
+        ));
+    }
+    if value.is_instance_of::<PyBool>() {
+        return Err(PyValueError::new_err(
+            "cache read default ratio must be finite and non-negative",
+        ));
+    }
+    litellm_cost::money::ScaleFactor::new(value.extract()?)
+        .map(Some)
+        .ok_or_else(|| {
+            PyValueError::new_err("cache read default ratio must be finite and non-negative")
+        })
 }
 
 fn pricing_policy(policy: &str) -> PyResult<PricePolicy> {
@@ -685,18 +731,21 @@ pub(crate) fn has_token_prices(
 }
 
 #[pyfunction]
-#[pyo3(signature = (row, usage, when, *, policy="generic"))]
+#[pyo3(signature = (row, usage, when, *, policy="generic", cache_read_default_ratio=None))]
 pub(crate) fn price(
     row: &Bound<'_, PyAny>,
     usage: &UsageInput,
     when: &WhenInput,
     policy: &str,
+    cache_read_default_ratio: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PriceResult> {
     let policy = pricing_policy(policy)?;
+    let ratio = cache_read_default(policy, cache_read_default_ratio)?;
     let model = match policy.lower(row, when.when.channel) {
         Ok(model) => model,
         Err(errors) => return Ok(PriceResult::Errors(errors)),
     };
+    let model = policy.prepare(model, when.when.channel, ratio)?;
     let policy = policy.selection(&model);
     price_result(
         row.py(),
@@ -716,8 +765,8 @@ fn price_result(py: Python<'_>, priced: litellm_cost::Priced) -> PyResult<PriceR
 
 #[pyfunction]
 #[pyo3(
-    signature = (row, usage, when, *, policy="generic", project=Vec::new(), factors=Vec::new()),
-    text_signature = "(row, usage, when, *, policy='generic', project=(), factors=())"
+    signature = (row, usage, when, *, policy="generic", project=Vec::new(), factors=Vec::new(), cache_read_default_ratio=None),
+    text_signature = "(row, usage, when, *, policy='generic', project=(), factors=(), cache_read_default_ratio=None)"
 )]
 pub(crate) fn price_with_rates(
     row: &Bound<'_, PyAny>,
@@ -726,8 +775,10 @@ pub(crate) fn price_with_rates(
     policy: &str,
     project: Vec<String>,
     factors: Vec<Bound<'_, PyAny>>,
+    cache_read_default_ratio: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<EvaluationResult> {
     let policy = pricing_policy(policy)?;
+    let ratio = cache_read_default(policy, cache_read_default_ratio)?;
     let project = project
         .iter()
         .map(|key| {
@@ -752,6 +803,7 @@ pub(crate) fn price_with_rates(
         Ok(model) => model,
         Err(errors) => return Ok(EvaluationResult::Errors(errors)),
     };
+    let model = policy.prepare(model, when.when.channel, ratio)?;
     let evaluation = litellm_cost::calculate_with_rates(
         &model.prices,
         &usage.usage,
@@ -1469,6 +1521,7 @@ assert n.model_info(models, "Model").input_cost_per_token == 2
                 &usage,
                 &WhenInput::new(0, "standard", "online").unwrap(),
                 policy,
+                None,
             )
             .unwrap() else {
                 panic!("expected invalid row")
@@ -1635,6 +1688,36 @@ assert json.dumps(row) == before
     #[case::null_tier_output(json!({"input_cost_per_token": 1, "output_cost_per_token": 6, "tiered_pricing": [{"range": [0,100], "input_cost_per_token": 2, "output_cost_per_token": null}]}), "output_cost_per_token", (100, false, "standard", "online", 0), None, None)]
     #[case::absent_tier_output(json!({"input_cost_per_token": 1, "output_cost_per_token": 6, "tiered_pricing": [{"range": [0,100], "input_cost_per_token": 2}]}), "output_cost_per_token", (100, false, "standard", "online", 0), Some("output_cost_per_token"), Some(6.0))]
     #[case::zero_tier_output(json!({"input_cost_per_token": 1, "output_cost_per_token": 6, "tiered_pricing": [{"range": [0,100], "input_cost_per_token": 2, "output_cost_per_token": 0}]}), "output_cost_per_token", (100, false, "standard", "online", 0), Some("output_cost_per_token"), Some(0.0))]
+    #[case::batch_reasoning_text(json!({"input_cost_per_token":1,"output_cost_per_token":2,"output_cost_per_reasoning_token":8}), "output_cost_per_reasoning_token", (100,false,"standard","batch",3600), Some("output_cost_per_token"), Some(1.0))]
+    #[case::batch_audio_text(json!({"output_cost_per_token":2,"output_cost_per_audio_token":8,"output_cost_per_audio_token_batches":6}), "output_cost_per_audio_token", (100,false,"standard","batch",3600), Some("output_cost_per_token"), Some(1.0))]
+    #[case::batch_video_text(json!({"output_cost_per_token":2,"output_cost_per_video_token":8}), "output_cost_per_video_token", (100,false,"standard","batch",3600), Some("output_cost_per_token"), Some(1.0))]
+    #[case::batch_reasoning_missing_text(json!({"output_cost_per_reasoning_token":8}), "output_cost_per_reasoning_token", (100,false,"standard","batch",3600), None, None)]
+    #[case::batch_output_zero(json!({"output_cost_per_token":2,"output_cost_per_token_batches":0,"output_cost_per_reasoning_token":8}), "output_cost_per_reasoning_token", (100,false,"standard","batch",3600), Some("output_cost_per_token"), Some(0.0))]
+    #[case::batch_image_online(json!({"output_cost_per_token":2,"output_cost_per_image_token":6}), "output_cost_per_image_token", (100,false,"standard","batch",3600), Some("output_cost_per_image_token"), Some(3.0))]
+    #[case::batch_image_zero(json!({"output_cost_per_token":2,"output_cost_per_image_token":6,"output_cost_per_image_token_batches":0}), "output_cost_per_image_token", (100,false,"standard","batch",3600), Some("output_cost_per_image_token"), Some(0.0))]
+    #[case::batch_image_text_fallback(json!({"output_cost_per_token":2,"output_cost_per_token_batches":3}), "output_cost_per_image_token", (100,false,"standard","batch",3600), Some("output_cost_per_token"), Some(3.0))]
+    #[case::batch_half_audio_input(json!({"input_cost_per_token":1,"input_cost_per_audio_token":8,"input_cost_per_audio_token_batches":6}), "input_cost_per_audio_token", (100,false,"standard","batch",3600), Some("input_cost_per_token"), Some(0.5))]
+    #[case::batch_half_video_input(json!({"input_cost_per_token":1,"input_cost_per_video_token":8}), "input_cost_per_video_token", (100,false,"standard","batch",3600), Some("input_cost_per_token"), Some(0.5))]
+    #[case::batch_half_image_input(json!({"input_cost_per_token":1,"input_cost_per_image_token":8}), "input_cost_per_image_token", (100,false,"standard","batch",3600), Some("input_cost_per_token"), Some(0.5))]
+    #[case::batch_explicit_audio_input(json!({"input_cost_per_token":1,"input_cost_per_token_batches":4,"input_cost_per_audio_token_batches":6}), "input_cost_per_audio_token", (100,false,"standard","batch",3600), Some("input_cost_per_audio_token"), Some(6.0))]
+    #[case::batch_explicit_video_input(json!({"input_cost_per_token_batches":4,"input_cost_per_video_token_batches":6}), "input_cost_per_video_token", (100,false,"standard","batch",3600), Some("input_cost_per_video_token"), Some(6.0))]
+    #[case::batch_explicit_audio_fallback(json!({"input_cost_per_token_batches":4,"input_cost_per_audio_token":8}), "input_cost_per_audio_token", (100,false,"standard","batch",3600), Some("input_cost_per_token"), Some(4.0))]
+    #[case::batch_zero_input(json!({"input_cost_per_token":1,"input_cost_per_token_batches":0,"input_cost_per_audio_token":8}), "input_cost_per_audio_token", (100,false,"standard","batch",3600), Some("input_cost_per_token"), Some(0.0))]
+    #[case::batch_read_ignores_online(json!({"input_cost_per_token":1,"input_cost_per_token_batches":4,"cache_read_input_token_cost":0.2}), "cache_read_input_token_cost", (100,false,"standard","batch",3600), Some("input_cost_per_token"), Some(4.0))]
+    #[case::batch_explicit_read(json!({"input_cost_per_token_batches":4,"cache_read_input_token_cost_batches":0.3}), "cache_read_input_token_cost", (100,false,"standard","batch",3600), Some("cache_read_input_token_cost"), Some(0.3))]
+    #[case::batch_zero_read(json!({"input_cost_per_token_batches":4,"cache_read_input_token_cost_batches":0}), "cache_read_input_token_cost", (100,false,"standard","batch",3600), Some("cache_read_input_token_cost"), Some(0.0))]
+    #[case::batch_half_read_ignores_batch_read(json!({"input_cost_per_token":1,"cache_read_input_token_cost":0.2,"cache_read_input_token_cost_batches":3}), "cache_read_input_token_cost", (100,false,"standard","batch",3600), Some("cache_read_input_token_cost"), Some(0.1))]
+    #[case::batch_half_explicit_mode(json!({"input_cost_per_token":1,"cache_read_input_token_cost":0.2,"explicit_cache_read_input_token_cost":9}), "explicit_cache_read_input_token_cost", (100,false,"standard","batch",3600), Some("cache_read_input_token_cost"), Some(0.1))]
+    #[case::batch_audio_read_without_text_read(json!({"input_cost_per_token_batches":4,"cache_read_input_audio_token_cost_batches":3}), "cache_read_input_audio_token_cost", (100,false,"standard","batch",3600), Some("input_cost_per_token"), Some(4.0))]
+    #[case::batch_audio_read(json!({"input_cost_per_token_batches":4,"cache_read_input_token_cost_batches":2,"cache_read_input_audio_token_cost_batches":3}), "cache_read_input_audio_token_cost", (100,false,"standard","batch",3600), Some("cache_read_input_audio_token_cost"), Some(3.0))]
+    #[case::batch_half_hourly_write(json!({"input_cost_per_token":1,"cache_creation_input_token_cost":0.2,"cache_creation_input_token_cost_above_1hr":9}), "cache_creation_input_token_cost_above_1hr", (100,false,"standard","batch",3600), Some("cache_creation_input_token_cost"), Some(0.1))]
+    #[case::batch_hourly_write(json!({"input_cost_per_token_batches":4,"cache_creation_input_token_cost_above_1hr_batches":3}), "cache_creation_input_token_cost_above_1hr", (100,false,"standard","batch",3600), Some("cache_creation_input_token_cost_above_1hr"), Some(3.0))]
+    #[case::batch_zero_hourly_write(json!({"input_cost_per_token_batches":4,"cache_creation_input_token_cost_above_1hr_batches":0}), "cache_creation_input_token_cost_above_1hr", (100,false,"standard","batch",3600), Some("cache_creation_input_token_cost_above_1hr"), Some(0.0))]
+    #[case::batch_twelve_write_fallback(json!({"input_cost_per_token_batches":4,"cache_creation_input_token_cost_batches":2}), "cache_creation_input_token_cost_above_12hr", (100,false,"standard","batch",3600), Some("cache_creation_input_token_cost"), Some(2.0))]
+    #[case::batch_exclusive_threshold(json!({"input_cost_per_token_batches":4,"input_cost_per_token_above_100_tokens_batches":6}), "input_cost_per_token", (100,false,"standard","batch",3600), Some("input_cost_per_token"), Some(4.0))]
+    #[case::batch_inclusive_threshold(json!({"input_cost_per_token_batches":4,"input_cost_per_token_above_100_tokens_batches":6}), "input_cost_per_token", (100,true,"standard","batch",3600), Some("input_cost_per_token"), Some(6.0))]
+    #[case::batch_per_meter_threshold(json!({"input_cost_per_token_above_50_tokens_batches":6,"output_cost_per_token_batches":3,"output_cost_per_token_above_150_tokens_batches":7}), "output_cost_per_token", (100,false,"standard","batch",3600), Some("output_cost_per_token"), Some(3.0))]
+    #[case::batch_offpeak_and_service_isolated(json!({"input_cost_per_token":1,"input_cost_per_token_priority":8,"off_peak_pricing":{"hours_utc":"00:00-06:00","input_cost_per_token":9}}), "input_cost_per_token", (100,false,"priority","batch",3600), Some("input_cost_per_token"), Some(0.5))]
     fn projection_uses_the_actual_token_selector_and_context(
         #[from(interpreter)] _interpreter: (),
         #[case] fields: Value,
@@ -1798,15 +1881,165 @@ else:
     }
 
     #[rstest]
-    #[case::online("online", "sdk_tokens", true)]
-    #[case::generic("online", "generic", false)]
-    #[case::batch("batch", "sdk_tokens", false)]
-    #[case::decisions("decisions", "sdk_tokens", false)]
-    fn conflicting_flat_and_token_tier_is_only_admitted_for_sdk_online(
+    #[case::base(json!({"input_cost_per_token":2}), "cache_read_input_token_cost", (100,false,"standard","online",3600), Some("cache_read_input_token_cost"), Some(1.0))]
+    #[case::null_read(json!({"input_cost_per_token":2,"cache_read_input_token_cost":null}), "cache_read_input_token_cost", (100,false,"standard","online",3600), Some("cache_read_input_token_cost"), Some(1.0))]
+    #[case::zero_read(json!({"input_cost_per_token":2,"cache_read_input_token_cost":0}), "cache_read_input_token_cost", (100,false,"standard","online",3600), Some("cache_read_input_token_cost"), Some(0.0))]
+    #[case::explicit_read(json!({"input_cost_per_token":2,"cache_read_input_token_cost":0.25}), "cache_read_input_token_cost", (100,false,"standard","online",3600), Some("cache_read_input_token_cost"), Some(0.25))]
+    #[case::null_input(json!({"input_cost_per_token":null}), "cache_read_input_token_cost", (100,false,"standard","online",3600), None, None)]
+    #[case::metadata_only(json!({"mode":"chat"}), "cache_read_input_token_cost", (100,false,"standard","online",3600), None, None)]
+    #[case::string_input(json!({"input_cost_per_token":"2"}), "cache_read_input_token_cost", (100,false,"standard","online",3600), Some("cache_read_input_token_cost"), Some(1.0))]
+    #[case::zero_input(json!({"input_cost_per_token":0}), "cache_read_input_token_cost", (100,false,"standard","online",3600), Some("cache_read_input_token_cost"), Some(0.0))]
+    #[case::offpeak_input(json!({"input_cost_per_token":2,"off_peak_pricing":{"hours_utc":"00:00-06:00","input_cost_per_token":6}}), "cache_read_input_token_cost", (100,false,"standard","online",3600), Some("cache_read_input_token_cost"), Some(3.0))]
+    #[case::offpeak_only_input(json!({"off_peak_pricing":{"hours_utc":"00:00-06:00","input_cost_per_token":6}}), "cache_read_input_token_cost", (100,false,"standard","online",3600), Some("input_cost_per_token"), Some(6.0))]
+    #[case::offpeak_no_input(json!({"input_cost_per_token":2,"off_peak_pricing":{"hours_utc":"00:00-06:00","output_cost_per_token":6}}), "cache_read_input_token_cost", (100,false,"standard","online",3600), Some("cache_read_input_token_cost"), Some(1.0))]
+    #[case::offpeak_null_input(json!({"input_cost_per_token":2,"off_peak_pricing":{"hours_utc":"00:00-06:00","input_cost_per_token":null,"output_cost_per_token":6}}), "cache_read_input_token_cost", (100,false,"standard","online",3600), Some("cache_read_input_token_cost"), Some(1.0))]
+    #[case::offpeak_null_read(json!({"input_cost_per_token":2,"off_peak_pricing":{"hours_utc":"00:00-06:00","input_cost_per_token":6,"cache_read_input_token_cost":null}}), "cache_read_input_token_cost", (100,false,"standard","online",3600), Some("cache_read_input_token_cost"), Some(1.0))]
+    #[case::offpeak_zero_read(json!({"input_cost_per_token":2,"off_peak_pricing":{"hours_utc":"00:00-06:00","input_cost_per_token":6,"cache_read_input_token_cost":0}}), "cache_read_input_token_cost", (100,false,"standard","online",3600), Some("cache_read_input_token_cost"), Some(0.0))]
+    #[case::offpeak_zero_input(json!({"input_cost_per_token":2,"off_peak_pricing":{"hours_utc":"00:00-06:00","input_cost_per_token":0}}), "cache_read_input_token_cost", (100,false,"standard","online",3600), Some("cache_read_input_token_cost"), Some(0.0))]
+    #[case::offpeak_end(json!({"input_cost_per_token":2,"off_peak_pricing":{"hours_utc":"00:00-06:00","input_cost_per_token":6}}), "cache_read_input_token_cost", (100,false,"standard","online",21600), Some("cache_read_input_token_cost"), Some(1.0))]
+    #[case::zero_flat_blocks_offpeak(json!({"input_cost_per_token":2,"cache_read_input_token_cost":0,"off_peak_pricing":{"hours_utc":"00:00-06:00","input_cost_per_token":6}}), "cache_read_input_token_cost", (100,false,"standard","online",3600), Some("cache_read_input_token_cost"), Some(0.0))]
+    #[case::tier_fallback(json!({"input_cost_per_token":2,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":3}]}), "cache_read_input_token_cost", (100,false,"standard","online",3600), Some("input_cost_per_token"), Some(3.0))]
+    #[case::null_tier_read(json!({"input_cost_per_token":2,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":3,"cache_read_input_token_cost":null}]}), "cache_read_input_token_cost", (100,false,"standard","online",3600), Some("input_cost_per_token"), Some(3.0))]
+    #[case::zero_tier_read(json!({"input_cost_per_token":2,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":3,"cache_read_input_token_cost":0}]}), "cache_read_input_token_cost", (100,false,"standard","online",3600), Some("cache_read_input_token_cost"), Some(0.0))]
+    #[case::tier_only(json!({"tiered_pricing":[{"range":[0,100],"input_cost_per_token":3}]}), "cache_read_input_token_cost", (100,false,"standard","online",3600), Some("input_cost_per_token"), Some(3.0))]
+    #[case::zero_prompt(json!({"input_cost_per_token":2,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":3}]}), "cache_read_input_token_cost", (0,false,"standard","online",3600), Some("cache_read_input_token_cost"), Some(1.0))]
+    #[case::tier_offpeak_overlay(json!({"input_cost_per_token":2,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":4,"cache_read_input_token_cost":0.25}],"off_peak_pricing":{"hours_utc":"00:00-06:00","input_cost_per_token":6}}), "cache_read_input_token_cost", (100,false,"standard","online",3600), Some("cache_read_input_token_cost"), Some(3.0))]
+    #[case::tier_offpeak_null_blocks(json!({"input_cost_per_token":2,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":4}],"off_peak_pricing":{"hours_utc":"00:00-06:00","input_cost_per_token":6,"cache_read_input_token_cost":null}}), "cache_read_input_token_cost", (100,false,"standard","online",3600), Some("input_cost_per_token"), Some(4.0))]
+    #[case::above_threshold_input(json!({"input_cost_per_token":2,"input_cost_per_token_above_100_tokens":8}), "cache_read_input_token_cost", (101,false,"standard","online",3600), Some("cache_read_input_token_cost"), Some(1.0))]
+    #[case::inclusive_threshold_input(json!({"input_cost_per_token":2,"input_cost_per_token_above_100_tokens":8}), "cache_read_input_token_cost", (100,true,"standard","online",3600), Some("cache_read_input_token_cost"), Some(1.0))]
+    #[case::priority_input(json!({"input_cost_per_token":2,"input_cost_per_token_priority":8}), "cache_read_input_token_cost", (100,false,"priority","online",3600), Some("cache_read_input_token_cost"), Some(1.0))]
+    #[case::audio_fallback(json!({"input_cost_per_token":2}), "cache_read_input_audio_token_cost", (100,false,"standard","online",3600), Some("cache_read_input_token_cost"), Some(1.0))]
+    #[case::explicit_cache_fallback(json!({"input_cost_per_token":2}), "explicit_cache_read_input_token_cost", (100,false,"standard","online",3600), Some("cache_read_input_token_cost"), Some(1.0))]
+    #[case::write_unchanged(json!({"input_cost_per_token":2}), "cache_creation_input_token_cost_above_1hr", (100,false,"standard","online",3600), Some("input_cost_per_token"), Some(2.0))]
+    #[case::batch_ignores_default(json!({"input_cost_per_token":2}), "cache_read_input_token_cost", (100,false,"standard","batch",3600), Some("input_cost_per_token"), Some(1.0))]
+    fn caller_cache_defaults_share_actual_and_projected_selection(
+        #[from(interpreter)] _interpreter: (),
+        #[case] fields: Value,
+        #[case] meter: &str,
+        #[case] context: (u64, bool, &str, &str, i64),
+        #[case] source: Option<&str>,
+        #[case] rate: Option<f64>,
+    ) {
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("n", crate::native_module(py)).unwrap();
+            let row = dict(py, fields);
+            row.set_item("litellm_provider", "openai").unwrap();
+            locals.set_item("row", row).unwrap();
+            locals.set_item("meter", meter).unwrap();
+            locals.set_item("context", context).unwrap();
+            locals.set_item("source", source).unwrap();
+            locals.set_item("rate", rate).unwrap();
+            py.run(pyo3::ffi::c_str!(r#"
+import json
+before = json.dumps(row)
+present = n.has_token_prices(row, policy="sdk_tokens")
+prompt, inclusive, tier, channel, at = context
+when = n.WhenInput(at, tier=tier, channel=channel)
+usage = n.UsageInput({meter: 2}, prompt_tokens=prompt, inclusive_threshold=inclusive)
+priced = n.price(row, usage, when, policy="sdk_tokens", cache_read_default_ratio=0.5)
+evaluated = n.price_with_rates(row, usage, when, policy="sdk_tokens", project=[meter], factors=[2,3], cache_read_default_ratio=0.5)
+unused = n.price_with_rates(row, n.UsageInput({}, prompt_tokens=prompt, inclusive_threshold=inclusive), when, policy="sdk_tokens", project=[meter], factors=[2,3], cache_read_default_ratio=0.5)
+assert isinstance(unused.pricing, n.Priced) and unused.pricing.total == 0 and unused.pricing.lines == []
+assert (unused.rates[0].source_meter, unused.rates[0].unit_price) == (source, None if rate is None else rate * 6)
+assert (evaluated.rates[0].source_meter, evaluated.rates[0].unit_price) == (source, None if rate is None else rate * 6)
+if rate is None:
+    assert isinstance(priced, n.Unpriced) and priced.missing == [meter] and priced.partial.total == 0
+    assert isinstance(evaluated.pricing, n.Unpriced) and evaluated.pricing.missing == [meter]
+else:
+    assert priced.total == rate * 2 and evaluated.pricing.total == rate * 12
+    line = evaluated.pricing.lines[0]
+    assert (line.meter, line.fallback_from, line.unit_price, line.quantity, line.amount) == (source, None if source == meter else meter, rate * 6, 2, rate * 12)
+assert n.has_token_prices(row, policy="sdk_tokens") == present
+assert json.dumps(row) == before
+"#), Some(&locals), None).unwrap();
+        });
+    }
+
+    #[rstest]
+    #[case::negative("-1")]
+    #[case::nan("float('nan')")]
+    #[case::infinite("float('inf')")]
+    #[case::boolean("True")]
+    #[case::string("'0.5'")]
+    #[case::sequence("[0.5]")]
+    #[case::object("{}")]
+    #[case::overflow("1e308")]
+    fn invalid_cache_default_is_rejected(
+        #[from(interpreter)] _interpreter: (),
+        #[case] argument: &str,
+        #[values("price", "price_with_rates")] entry: &str,
+    ) {
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("n", crate::native_module(py)).unwrap();
+            locals.set_item("argument", argument).unwrap();
+            locals.set_item("entry", entry).unwrap();
+            py.run(pyo3::ffi::c_str!(r#"
+try:
+    getattr(n, entry)({"litellm_provider":"openai", "input_cost_per_token":2}, n.UsageInput({}), n.WhenInput(0), policy="sdk_tokens", cache_read_default_ratio=eval(argument))
+except (TypeError, ValueError):
+    pass
+else:
+    raise AssertionError("invalid default accepted")
+"#), Some(&locals), None).unwrap();
+        });
+    }
+
+    #[rstest]
+    fn cache_defaults_remain_opt_in_live_and_do_not_hide_invalid_rows(
+        #[from(interpreter)] _interpreter: (),
+    ) {
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("n", crate::native_module(py)).unwrap();
+            py.run(pyo3::ffi::c_str!(r#"
+row = {"litellm_provider":"openai", "input_cost_per_token":2, "off_peak_pricing":{"hours_utc":"00:00-06:00", "input_cost_per_token":6}}
+usage = n.UsageInput({"cache_read_input_token_cost":2})
+when = n.WhenInput(3600)
+assert n.price(row, usage, when).total == n.price(row, usage, when, policy="generic", cache_read_default_ratio=None).total == 12
+assert n.price(row, usage, when, policy="sdk_tokens").total == n.price(row, usage, when, policy="sdk_tokens", cache_read_default_ratio=None).total == 12
+assert n.price(row, usage, when, policy="sdk_tokens", cache_read_default_ratio=0.5).total == 6
+row["off_peak_pricing"]["cache_read_input_token_cost"] = None
+assert n.price(row, usage, when, policy="sdk_tokens", cache_read_default_ratio=0.5).total == 2
+row["off_peak_pricing"]["cache_read_input_token_cost"] = 0
+assert n.price_with_rates(row, usage, when, policy="sdk_tokens", cache_read_default_ratio=0.5).pricing.total == 0
+row["off_peak_pricing"]["cache_read_input_token_cost"] = "invalid"
+assert isinstance(n.price(row, usage, when, policy="sdk_tokens", cache_read_default_ratio=0.5), n.RowErrors)
+assert isinstance(n.price_with_rates(row, usage, when, policy="sdk_tokens", cache_read_default_ratio=0.5), n.RowErrors)
+missing = {"litellm_provider":"openai", "input_cost_per_token":None}
+assert isinstance(n.price(missing, usage, when, policy="sdk_tokens", cache_read_default_ratio=0), n.Unpriced)
+assert n.has_token_prices(missing, policy="sdk_tokens") is False
+known = {"litellm_provider":"openai", "input_cost_per_token":2}
+assert n.price(known, usage, when, policy="sdk_tokens", cache_read_default_ratio=0).total == 0
+assert n.price_with_rates(known, usage, when, policy="sdk_tokens", cache_read_default_ratio=0, project=["cache_read_input_token_cost"], factors=[6]).rates[0].unit_price == 0
+try:
+    n.price(known, usage, when, cache_read_default_ratio=0.5)
+except ValueError:
+    pass
+else:
+    raise AssertionError("generic default option accepted")
+try:
+    n.has_token_prices(known, cache_read_default_ratio=0.5)
+except TypeError:
+    pass
+else:
+    raise AssertionError("presence accepts a derived default")
+"#), Some(&locals), None).unwrap();
+        });
+    }
+
+    #[rstest]
+    #[case::online("online", "sdk_tokens", Some(30.0))]
+    #[case::generic("online", "generic", None)]
+    #[case::batch("batch", "sdk_tokens", Some(5.0))]
+    #[case::batch_generic("batch", "generic", None)]
+    #[case::decisions("decisions", "sdk_tokens", None)]
+    fn conflicting_flat_and_token_tier_is_only_admitted_for_sdk_token_channels(
         #[from(interpreter)] _interpreter: (),
         #[case] channel: &str,
         #[case] policy: &str,
-        #[case] accepted: bool,
+        #[case] expected: Option<f64>,
     ) {
         Python::attach(|py| {
             let row = dict(
@@ -1821,15 +2054,15 @@ else:
                 &usage,
                 &WhenInput::new(0, "standard", channel).unwrap(),
                 policy,
+                None,
             )
             .unwrap();
             match result {
                 PriceResult::Priced(priced) => {
-                    assert!(accepted);
-                    assert_eq!(priced.total, 30.0);
+                    assert_eq!(Some(priced.total), expected);
                 }
                 PriceResult::Errors(errors) => {
-                    assert!(!accepted);
+                    assert_eq!(expected, None);
                     assert_eq!(errors.errors[0].kind, "duplicate_price");
                 }
                 PriceResult::Unpriced(_) => panic!("unexpected missing price"),
@@ -1932,6 +2165,7 @@ assert json.dumps(row) == before
                 &usage,
                 &WhenInput::new(0, "standard", "online").unwrap(),
                 "sdk_tokens",
+                None,
             )
             .unwrap();
             let priced = match result {
@@ -2265,6 +2499,7 @@ assert isinstance(n.resolve_model(rows, model, inferred=inferred), n.ModelNotFou
                 &usage,
                 &WhenInput::new(at, "standard", channel).unwrap(),
                 "generic",
+                None,
             )
             .unwrap() else {
                 panic!("not priced")
@@ -2290,6 +2525,7 @@ assert isinstance(n.resolve_model(rows, model, inferred=inferred), n.ModelNotFou
                 &usage,
                 &WhenInput::new(0, "standard", "online").unwrap(),
                 "generic",
+                None,
             )
             .unwrap() else {
                 panic!("not priced")
@@ -2379,6 +2615,7 @@ assert seen == ["released"]
                     &usage,
                     &WhenInput::new(0, "standard", "online").unwrap(),
                     "generic",
+                    None,
                 )
                 .unwrap() else {
                     panic!("not priced: {}", fields[0])
@@ -2439,7 +2676,7 @@ assert seen == ["released"]
                             0,
                         )
                         .unwrap();
-                        match price(row.as_any(), &usage, &when, "generic").unwrap() {
+                        match price(row.as_any(), &usage, &when, "generic", None).unwrap() {
                             PriceResult::Priced(result) => assert_eq!(result.total, expected),
                             PriceResult::Unpriced(result) => {
                                 assert_eq!(expected, 0.0);
@@ -2474,7 +2711,7 @@ assert seen == ["released"]
                 json!({"litellm_provider":"test", "input_cost_per_token": 2}),
             );
             let PriceResult::Unpriced(result) =
-                price(row.as_any(), &usage, &when, "generic").unwrap()
+                price(row.as_any(), &usage, &when, "generic", None).unwrap()
             else {
                 panic!("expected unpriced")
             };
@@ -2491,7 +2728,7 @@ assert seen == ["released"]
             row.set_item("output_cost_per_token", 0).unwrap();
             row.set_item("input_cost_per_audio_token", 0).unwrap();
             let PriceResult::Priced(result) =
-                price(row.as_any(), &usage, &when, "generic").unwrap()
+                price(row.as_any(), &usage, &when, "generic", None).unwrap()
             else {
                 panic!("expected free")
             };
@@ -2518,6 +2755,7 @@ assert seen == ["released"]
                 &usage,
                 &WhenInput::new(0, "standard", "online").unwrap(),
                 "generic",
+                None,
             )
             .unwrap() else {
                 panic!("not priced")

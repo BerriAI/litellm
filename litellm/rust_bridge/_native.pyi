@@ -300,6 +300,7 @@ def price(
     when: WhenInput,
     *,
     policy: Literal["generic", "sdk_tokens"] = "generic",
+    cache_read_default_ratio: float | None = None,
 ) -> Priced | Unpriced | RowErrors: ...
 def price_with_rates(
     row: dict[str, object],
@@ -309,6 +310,7 @@ def price_with_rates(
     policy: Literal["generic", "sdk_tokens"] = "generic",
     project: Sequence[str] = (),
     factors: Sequence[float] = (),
+    cache_read_default_ratio: float | None = None,
 ) -> PriceEvaluation | RowErrors: ...
 def trace_encode_error(message: str) -> bytes: ...
 

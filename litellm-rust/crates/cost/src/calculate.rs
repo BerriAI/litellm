@@ -256,7 +256,11 @@ pub(crate) fn resolve(
         .or_else(|| resolve(prices, &meter.fallback()?, band, usage, when))
 }
 
-fn batch_direct_rate(prices: &Prices, meter: &Meter, usage: &Usage) -> Option<UnitPrice> {
+pub(crate) fn batch_direct_rate(
+    prices: &Prices,
+    meter: &Meter,
+    usage: &Usage,
+) -> Option<UnitPrice> {
     let band = prices
         .iter()
         .filter(|(price, _)| price.channel == Channel::Batch && price.meter == *meter)

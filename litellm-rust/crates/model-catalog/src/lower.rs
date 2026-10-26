@@ -110,6 +110,10 @@ impl From<&EntryWire> for Adjustments {
 impl From<&EntryWire> for TokenPriceSources {
     fn from(wire: &EntryWire) -> Self {
         Self {
+            off_peak_cache_read_declared: wire
+                .off_peak
+                .as_ref()
+                .is_some_and(|block| block.cache_read_declared),
             flat: flat_prices(&wire.prices)
                 .map(|sourced| sourced.price)
                 .collect(),
@@ -594,6 +598,33 @@ mod tests {
         let wire = EntryWire::read(&fields);
         assert!(wire.problems.is_empty(), "{:?}", wire.problems);
         wire
+    }
+
+    #[rstest]
+    #[case::absent(json!({"output_cost_per_token":2}), false, None)]
+    #[case::null(json!({"output_cost_per_token":2,"cache_read_input_token_cost":null}), true, None)]
+    #[case::zero(json!({"output_cost_per_token":2,"cache_read_input_token_cost":0}), true, Some(0.0))]
+    #[case::priced(json!({"output_cost_per_token":2,"cache_read_input_token_cost":0.25}), true, Some(0.25))]
+    fn offpeak_cache_presence_survives_nullable_lowering(
+        #[case] fields: Value,
+        #[case] declared: bool,
+        #[case] rate: Option<f64>,
+    ) {
+        let mut block = fields.as_object().unwrap().clone();
+        block.insert("hours_utc".into(), json!("00:00-06:00"));
+        let wire = wire(json!({"off_peak_pricing":block}));
+        let sources = TokenPriceSources::from(&wire);
+        let prices = Prices::try_from(&wire).unwrap();
+        assert_eq!(sources.off_peak_cache_read_declared, declared);
+        assert_eq!(
+            prices
+                .off_peak()
+                .unwrap()
+                .rates()
+                .cache_read
+                .map(UnitPrice::get),
+            rate
+        );
     }
 
     #[rstest]

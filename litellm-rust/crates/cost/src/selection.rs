@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use crate::calculate::{Usage, When, resolve};
+use crate::calculate::{Usage, When, batch_direct_rate, resolve};
 use crate::money::UnitPrice;
 use crate::price::{
     Band, CacheReadMode, CacheTtl, Channel, InputUnit, Meter, OutputUnit, Price, PriceSource,
@@ -18,6 +18,7 @@ pub enum SelectionPolicy<'a> {
 pub struct TokenPriceSources {
     pub flat: BTreeSet<Price>,
     pub tiers: Vec<TokenTier>,
+    pub off_peak_cache_read_declared: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,6 +39,9 @@ impl SelectionPolicy<'_> {
         let Self::SdkTokens(sources) = self else {
             return resolve(prices, meter, band, usage, when);
         };
+        if when.channel == Channel::Batch && meter.is_token() {
+            return sdk_batch_rate(prices, meter, usage);
+        }
         if when.channel != Channel::Online {
             return resolve(prices, meter, band, usage, when);
         }
@@ -115,6 +119,80 @@ impl SelectionPolicy<'_> {
                 when,
             ),
         }
+    }
+}
+
+fn sdk_batch_rate(prices: &Prices, meter: &Meter, usage: &Usage) -> Option<(Meter, UnitPrice)> {
+    let base = |meter: &Meter, channel| {
+        prices.get(&Price {
+            meter: meter.clone(),
+            channel,
+            when: Default::default(),
+        })
+    };
+    let half = |meter: &Meter| base(meter, Channel::Online).map(UnitPrice::half);
+    let output = Meter::Output(OutputUnit::Token(TokenKind::Text));
+    let text_output = || {
+        batch_direct_rate(prices, &output, usage)
+            .or_else(|| half(&output))
+            .map(|rate| (output.clone(), rate))
+    };
+    let read = Meter::CacheRead {
+        kind: TokenKind::Text,
+        mode: CacheReadMode::Implicit,
+    };
+    let write = Meter::CacheWrite {
+        kind: TokenKind::Text,
+        ttl: CacheTtl::Default,
+    };
+    let batch_input = batch_direct_rate(prices, &Meter::TEXT_INPUT, usage);
+    let input = || {
+        batch_input
+            .or_else(|| half(&Meter::TEXT_INPUT))
+            .map(|rate| (Meter::TEXT_INPUT, rate))
+    };
+    match meter {
+        Meter::Output(OutputUnit::Token(TokenKind::Image)) => base(meter, Channel::Batch)
+            .or_else(|| half(meter))
+            .map(|rate| (meter.clone(), rate))
+            .or_else(text_output),
+        Meter::Output(OutputUnit::Token(_) | OutputUnit::ReasoningToken) => text_output(),
+        Meter::Input(InputUnit::Token(kind))
+            if batch_input.is_some() && *kind != TokenKind::Text =>
+        {
+            base(meter, Channel::Batch)
+                .map(|rate| (meter.clone(), rate))
+                .or_else(input)
+        }
+        Meter::Input(InputUnit::Token(_)) => input(),
+        Meter::CacheRead { kind, .. } if batch_input.is_some() => {
+            let Some(rate) = batch_direct_rate(prices, &read, usage) else {
+                return input();
+            };
+            let audio = Meter::CacheRead {
+                kind: TokenKind::Audio,
+                mode: CacheReadMode::Implicit,
+            };
+            if *kind == TokenKind::Audio
+                && let Some(audio_rate) = base(&audio, Channel::Batch)
+            {
+                return Some((audio, audio_rate));
+            }
+            Some((read, rate))
+        }
+        Meter::CacheRead { .. } => half(&read).map(|rate| (read, rate)).or_else(input),
+        Meter::CacheWrite { ttl, .. } if batch_input.is_some() => {
+            let selected = Meter::CacheWrite {
+                kind: TokenKind::Text,
+                ttl: *ttl,
+            };
+            batch_direct_rate(prices, &selected, usage)
+                .map(|rate| (selected, rate))
+                .or_else(|| batch_direct_rate(prices, &write, usage).map(|rate| (write, rate)))
+                .or_else(input)
+        }
+        Meter::CacheWrite { .. } => half(&write).map(|rate| (write, rate)).or_else(input),
+        _ => None,
     }
 }
 
@@ -282,6 +360,7 @@ mod tests {
             ),
         );
         let sources = TokenPriceSources {
+            off_peak_cache_read_declared: false,
             flat: prices.iter().map(|(price, _)| price.clone()).collect(),
             tiers: vec![
                 TokenTier {
@@ -360,6 +439,7 @@ mod tests {
 
     fn sources(prices: &Prices) -> TokenPriceSources {
         TokenPriceSources {
+            off_peak_cache_read_declared: false,
             flat: prices.iter().map(|(key, _)| key.clone()).collect(),
             tiers: vec![],
         }
@@ -560,6 +640,7 @@ mod tests {
         .collect();
         let sources = TokenPriceSources {
             flat: [Price::online(REASONING, PriceWhen::default())].into(),
+            off_peak_cache_read_declared: false,
             tiers: vec![
                 TokenTier {
                     range: [100, 1000],
@@ -629,8 +710,7 @@ mod tests {
     #[case::input_audio(Meter::Input(InputUnit::Token(TokenKind::Audio)), Channel::Online)]
     #[case::output_text(OUTPUT, Channel::Online)]
     #[case::image(Meter::Output(OutputUnit::Image(None)), Channel::Online)]
-    #[case::batch_reasoning(REASONING, Channel::Batch)]
-    #[case::batch_audio(Meter::Output(OutputUnit::Token(TokenKind::Audio)), Channel::Batch)]
+    #[case::batch_image(Meter::Output(OutputUnit::Image(None)), Channel::Batch)]
     #[case::decisions(REASONING, Channel::Decisions)]
     fn unrelated_meters_and_channels_use_the_generic_engine(
         when: When,
@@ -655,6 +735,71 @@ mod tests {
                 SelectionPolicy::SdkTokens(&sources(&prices))
             ),
             calculate(&prices, &usage, &when)
+        );
+    }
+
+    #[rstest]
+    #[case::text_present(Some(2.0))]
+    #[case::text_zero(Some(0.0))]
+    #[case::text_missing(None)]
+    fn sdk_batch_nonimage_outputs_resolve_only_through_text(
+        when: When,
+        #[case] text: Option<f64>,
+        #[values(
+            REASONING,
+            Meter::Output(OutputUnit::Token(TokenKind::Audio)),
+            Meter::Output(OutputUnit::Token(TokenKind::Video))
+        )]
+        meter: Meter,
+    ) {
+        let prices = Prices::new(
+            [
+                Some(rate(meter.clone(), ServiceTier::Standard, Band::Base, 8.0)),
+                text.map(|value| rate(OUTPUT, ServiceTier::Standard, Band::Base, value)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+            None,
+        );
+        let sources = sources(&prices);
+        let when = When {
+            channel: Channel::Batch,
+            ..when
+        };
+        let usage = usage(meter.clone(), 100, false);
+        let evaluation = crate::calculate_with_rates(
+            &prices,
+            &usage,
+            &when,
+            SelectionPolicy::SdkTokens(&sources),
+            std::slice::from_ref(&meter),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            evaluation.rates[0].resolved,
+            text.map(|value| (OUTPUT, UnitPrice::new(value / 2.0).unwrap()))
+        );
+        match text {
+            Some(value) => assert_eq!(
+                evaluation.pricing,
+                expected(OUTPUT, meter.clone(), value / 2.0)
+            ),
+            None => assert_eq!(
+                evaluation.pricing,
+                Priced::Unpriced {
+                    missing: vec![meter.clone()],
+                    partial: Breakdown {
+                        lines: vec![],
+                        total: crate::money::Usd::ZERO
+                    },
+                }
+            ),
+        }
+        assert_eq!(
+            calculate(&prices, &usage, &when),
+            expected(meter.clone(), meter, 4.0)
         );
     }
 
