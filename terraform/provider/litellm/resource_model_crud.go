@@ -1,9 +1,13 @@
 package litellm
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
+	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -53,9 +57,132 @@ func retryModelRead(d *schema.ResourceData, m interface{}, maxRetries int) error
 const (
 	endpointModelNew    = "/model/new"
 	endpointModelUpdate = "/model/update"
+	endpointModelPatch  = "/model/%s/update"
 	endpointModelInfo   = "/model/info"
 	endpointModelDelete = "/model/delete"
 )
+
+// secretFromResource reads a secret that can be configured either in state
+// (attr) or write-only (attr + "_wo"); the schema forbids setting both.
+func secretFromResource(d *schema.ResourceData, attr string) string {
+	if v := writeOnlyString(d, attr+"_wo"); v != "" {
+		return v
+	}
+	return d.Get(attr).(string)
+}
+
+const additionalDropParamsKey = "additional_drop_params"
+
+func parseAdditionalDropParams(raw string) ([]string, error) {
+	var items []interface{}
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return nil, fmt.Errorf("additional_litellm_params.%s must be a JSON list of parameter names, such as jsonencode([\"store\"]): %w", additionalDropParamsKey, err)
+	}
+	names := []string{}
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		name, ok := item.(string)
+		if !ok {
+			return nil, fmt.Errorf("additional_litellm_params.%s entries must be parameter names, got %v", additionalDropParamsKey, item)
+		}
+		names = append(names, name)
+	}
+	return names, nil
+}
+
+func validateAdditionalDropParams(_ context.Context, d *schema.ResourceDiff, _ interface{}) error {
+	params, _ := d.Get("additional_litellm_params").(map[string]interface{})
+	raw, set := params[additionalDropParamsKey].(string)
+	if !set {
+		return nil
+	}
+	_, err := parseAdditionalDropParams(raw)
+	return err
+}
+
+func suppressEquivalentDropParams(key, oldValue, newValue string, _ *schema.ResourceData) bool {
+	if key != "additional_litellm_params."+additionalDropParamsKey {
+		return false
+	}
+	oldNames, oldErr := parseAdditionalDropParams(oldValue)
+	newNames, newErr := parseAdditionalDropParams(newValue)
+	return oldErr == nil && newErr == nil && slices.Equal(oldNames, newNames)
+}
+
+var attributeSentAsLiteLLMParam = map[string]string{
+	"custom_llm_provider":                "custom_llm_provider",
+	"tpm":                                "tpm",
+	"rpm":                                "rpm",
+	"input_cost_per_token":               "input_cost_per_million_tokens",
+	"output_cost_per_token":              "output_cost_per_million_tokens",
+	"api_key":                            "model_api_key",
+	"api_base":                           "model_api_base",
+	"api_version":                        "api_version",
+	"input_cost_per_pixel":               "input_cost_per_pixel",
+	"output_cost_per_pixel":              "output_cost_per_pixel",
+	"input_cost_per_second":              "input_cost_per_second",
+	"output_cost_per_second":             "output_cost_per_second",
+	"aws_access_key_id":                  "aws_access_key_id",
+	"aws_secret_access_key":              "aws_secret_access_key",
+	"aws_region_name":                    "aws_region_name",
+	"aws_session_name":                   "aws_session_name",
+	"aws_role_name":                      "aws_role_name",
+	"vertex_project":                     "vertex_project",
+	"vertex_location":                    "vertex_location",
+	"vertex_credentials":                 "vertex_credentials",
+	"reasoning_effort":                   "reasoning_effort",
+	"thinking":                           "thinking_enabled",
+	"merge_reasoning_content_in_choices": "merge_reasoning_content_in_choices",
+}
+
+func refreshAdditionalDropParams(d *schema.ResourceData, stored interface{}) {
+	params, _ := d.Get("additional_litellm_params").(map[string]interface{})
+	raw, managed := params[additionalDropParamsKey].(string)
+	if !managed {
+		return
+	}
+	refreshed := maps.Clone(params)
+	if stored != nil {
+		encoded, _ := json.Marshal(stored)
+		refreshed[additionalDropParamsKey] = string(encoded)
+		d.Set("additional_litellm_params", refreshed)
+		return
+	}
+	delete(refreshed, additionalDropParamsKey)
+	listed, _ := parseAdditionalDropParams(raw)
+	for _, key := range listed {
+		delete(refreshed, key)
+		if attribute, ok := attributeSentAsLiteLLMParam[key]; ok {
+			d.Set(attribute, nil)
+		}
+	}
+	d.Set("additional_litellm_params", refreshed)
+}
+
+func coerceAdditionalParamValue(strValue string) interface{} {
+	trimmedValue := strings.TrimSpace(strValue)
+	if strings.HasPrefix(trimmedValue, "[") || strings.HasPrefix(trimmedValue, "{") {
+		var parsedValue interface{}
+		if err := json.Unmarshal([]byte(strValue), &parsedValue); err == nil {
+			return parsedValue
+		}
+	}
+	switch strValue {
+	case "true":
+		return true
+	case "false":
+		return false
+	}
+	if intValue, err := strconv.Atoi(strValue); err == nil {
+		return intValue
+	}
+	if floatValue, err := strconv.ParseFloat(strValue, 64); err == nil {
+		return floatValue
+	}
+	return strValue
+}
 
 func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) error {
 	client, ok := m.(*Client)
@@ -112,7 +239,7 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 	if outputCostPerMillion := d.Get("output_cost_per_million_tokens").(float64); outputCostPerMillion > 0 {
 		litellmParams["output_cost_per_token"] = outputCostPerMillion / 1000000.0
 	}
-	if apiKey := d.Get("model_api_key").(string); apiKey != "" {
+	if apiKey := secretFromResource(d, "model_api_key"); apiKey != "" {
 		litellmParams["api_key"] = apiKey
 	}
 	if apiBase := d.Get("model_api_base").(string); apiBase != "" {
@@ -136,7 +263,7 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 	if awsAccessKeyID := d.Get("aws_access_key_id").(string); awsAccessKeyID != "" {
 		litellmParams["aws_access_key_id"] = awsAccessKeyID
 	}
-	if awsSecretAccessKey := d.Get("aws_secret_access_key").(string); awsSecretAccessKey != "" {
+	if awsSecretAccessKey := secretFromResource(d, "aws_secret_access_key"); awsSecretAccessKey != "" {
 		litellmParams["aws_secret_access_key"] = awsSecretAccessKey
 	}
 	if awsRegionName := d.Get("aws_region_name").(string); awsRegionName != "" {
@@ -154,7 +281,7 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 	if vertexLocation := d.Get("vertex_location").(string); vertexLocation != "" {
 		litellmParams["vertex_location"] = vertexLocation
 	}
-	if vertexCredentials := d.Get("vertex_credentials").(string); vertexCredentials != "" {
+	if vertexCredentials := secretFromResource(d, "vertex_credentials"); vertexCredentials != "" {
 		litellmParams["vertex_credentials"] = vertexCredentials
 	}
 	if reasoningEffort := d.Get("reasoning_effort").(string); reasoningEffort != "" {
@@ -164,76 +291,17 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 		litellmParams["thinking"] = thinking
 	}
 
-	// Add additional parameters if provided
 	if additionalParams, ok := d.GetOk("additional_litellm_params"); ok {
-		var dropParams []string
-
 		for key, value := range additionalParams.(map[string]interface{}) {
-			// Convert string values to appropriate types where possible
-			if strValue, ok := value.(string); ok {
-				// Check if it's JSON (starts with [ or {)
-				trimmedValue := strings.TrimSpace(strValue)
-				if strings.HasPrefix(trimmedValue, "[") || strings.HasPrefix(trimmedValue, "{") {
-					var parsedValue interface{}
-					if err := json.Unmarshal([]byte(strValue), &parsedValue); err == nil {
-						// Successfully parsed JSON
-						if key == "additional_drop_params" {
-							// Handle drop params specially
-							if dropList, ok := parsedValue.([]interface{}); ok {
-								for _, item := range dropList {
-									if paramStr, ok := item.(string); ok {
-										dropParams = append(dropParams, paramStr)
-									}
-								}
-							}
-							continue // Don't add to litellmParams
-						} else {
-							litellmParams[key] = parsedValue
-						}
-					} else {
-						// Not valid JSON, apply existing conversion logic
-						if strValue == "true" {
-							litellmParams[key] = true
-						} else if strValue == "false" {
-							litellmParams[key] = false
-						} else {
-							// Try to convert numeric strings
-							if intValue, err := strconv.Atoi(strValue); err == nil {
-								litellmParams[key] = intValue
-							} else if floatValue, err := strconv.ParseFloat(strValue, 64); err == nil {
-								litellmParams[key] = floatValue
-							} else {
-								// Keep as string
-								litellmParams[key] = strValue
-							}
-						}
-					}
-				} else {
-					// Apply existing conversion logic for non-JSON strings
-					if strValue == "true" {
-						litellmParams[key] = true
-					} else if strValue == "false" {
-						litellmParams[key] = false
-					} else {
-						// Try to convert numeric strings
-						if intValue, err := strconv.Atoi(strValue); err == nil {
-							litellmParams[key] = intValue
-						} else if floatValue, err := strconv.ParseFloat(strValue, 64); err == nil {
-							litellmParams[key] = floatValue
-						} else {
-							// Keep as string
-							litellmParams[key] = strValue
-						}
-					}
-				}
-			} else {
-				litellmParams[key] = value
+			if key != additionalDropParamsKey {
+				litellmParams[key] = coerceAdditionalParamValue(value.(string))
+				continue
 			}
-		}
-
-		// Apply drop params at the end
-		for _, paramToDrop := range dropParams {
-			delete(litellmParams, paramToDrop)
+			dropParams, err := parseAdditionalDropParams(value.(string))
+			if err != nil {
+				return err
+			}
+			litellmParams[key] = dropParams
 		}
 	}
 
@@ -246,12 +314,13 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 		ModelName:     d.Get("model_name").(string),
 		LiteLLMParams: litellmParams,
 		ModelInfo: ModelInfo{
-			ID:        modelID,
-			DBModel:   true,
-			BaseModel: pricingBaseModel,
-			Tier:      d.Get("tier").(string),
-			Mode:      d.Get("mode").(string),
-			TeamID:    d.Get("team_id").(string),
+			ID:          modelID,
+			DBModel:     true,
+			BaseModel:   pricingBaseModel,
+			Tier:        d.Get("tier").(string),
+			Mode:        d.Get("mode").(string),
+			TeamID:      d.Get("team_id").(string),
+			DisplayName: d.Get("display_name").(string),
 		},
 		Additional: make(map[string]interface{}),
 	}
@@ -275,11 +344,30 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 		return fmt.Errorf("failed to %s model: %w", map[bool]string{true: "update", false: "create"}[isUpdate], err)
 	}
 
+	if isUpdate && d.HasChange("display_name") {
+		if err := patchModelDisplayName(client, modelID, d.Get("display_name").(string)); err != nil {
+			return fmt.Errorf("failed to update model display_name: %w", err)
+		}
+	}
+
 	d.SetId(modelID)
 
 	log.Printf("[INFO] Model created with ID %s. Starting retry mechanism to read the model...", modelID)
 	// Read back the resource with retries to ensure the state is consistent
 	return retryModelRead(d, m, 5)
+}
+
+// /model/update only merges litellm_params, so model_info changes go through the PATCH endpoint.
+func patchModelDisplayName(client *Client, modelID, displayName string) error {
+	resp, err := MakeRequest(client, "PATCH", fmt.Sprintf(endpointModelPatch, url.PathEscape(modelID)), ModelInfoPatch{
+		ModelInfo: ModelInfoPatchFields{ID: modelID, DisplayName: displayName},
+	})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, err = handleAPIResponse(resp, nil, client)
+	return err
 }
 
 func resourceLiteLLMModelCreate(d *schema.ResourceData, m interface{}) error {
@@ -306,6 +394,9 @@ func resourceLiteLLMModelRead(d *schema.ResourceData, m interface{}) error {
 		}
 		return fmt.Errorf("failed to read model: %w", err)
 	}
+	if modelResp == nil {
+		return fmt.Errorf("failed to read model: empty response body")
+	}
 
 	// Update the state with values from the response or fall back to the data passed in during creation
 	d.Set("model_name", GetStringValue(modelResp.ModelName, d.Get("model_name").(string)))
@@ -327,6 +418,7 @@ func resourceLiteLLMModelRead(d *schema.ResourceData, m interface{}) error {
 	d.Set("tier", GetStringValue(modelResp.ModelInfo.Tier, d.Get("tier").(string)))
 	d.Set("mode", GetStringValue(modelResp.ModelInfo.Mode, d.Get("mode").(string)))
 	d.Set("team_id", GetStringValue(modelResp.ModelInfo.TeamID, d.Get("team_id").(string)))
+	d.Set("display_name", modelResp.ModelInfo.DisplayName)
 
 	// Preserve credential name from state since it might not be returned by API
 	d.Set("litellm_credential_name", d.Get("litellm_credential_name").(string))
@@ -384,6 +476,7 @@ func resourceLiteLLMModelRead(d *schema.ResourceData, m interface{}) error {
 	if _, ok := d.GetOk("additional_litellm_params"); ok {
 		d.Set("additional_litellm_params", d.Get("additional_litellm_params"))
 	}
+	refreshAdditionalDropParams(d, modelResp.LiteLLMParams.AdditionalDropParams)
 
 	return nil
 }

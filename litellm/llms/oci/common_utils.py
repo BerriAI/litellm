@@ -1,17 +1,23 @@
 import base64
 import hashlib
+import importlib
 import json
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from email.utils import formatdate
-from typing import Final, Protocol
+from pathlib import Path
+from types import MappingProxyType
+from typing import Final, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import JsonValue
+from pydantic import ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, field_validator
 
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.llms.base import LiteLLMBaseModel
 
 try:
     from cryptography.hazmat.primitives import hashes, serialization
@@ -154,7 +160,7 @@ _OCI_KEY_ENV: Final = "OCI_KEY"
 _OCI_COMPARTMENT_ID_ENV: Final = "OCI_COMPARTMENT_ID"
 
 
-def resolve_oci_credentials(optional_params: dict) -> dict:
+def resolve_oci_credentials(optional_params: Mapping[str, object]) -> dict:
     """
     Merge OCI credentials from optional_params (explicit, always wins) and
     environment variables (fallback).
@@ -174,11 +180,140 @@ def resolve_oci_credentials(optional_params: dict) -> dict:
     }
 
 
-_OCI_REGION_RE: Final = re.compile(r"^[a-z][a-z0-9-]{0,30}[a-z0-9]$")
+_OCI_REGION_PATTERN: Final = r"^[a-z][a-z0-9-]{0,30}[a-z0-9]$"
+_OCI_REALM_DOMAIN_PATTERN: Final = r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$"
+_OCI_REGION_RE: Final = re.compile(_OCI_REGION_PATTERN)
 _OCI_ACTION_PATH_RE: Final = re.compile(rf"/{OCI_API_VERSION}/actions/[^/?#]+/?$")
+_OCI_COMMERCIAL_REALM_DOMAIN: Final = "oraclecloud.com"
+_OCI_INFERENCE_ENDPOINT_TEMPLATE: Final = "https://inference.generativeai.{region}.oci.{secondLevelDomain}"
+_OCI_REGION_METADATA_ENV: Final = "OCI_REGION_METADATA"
+_OCI_REGIONS_CONFIG_FILE: Final = "~/.oci/regions-config.json"
+_OCID_REALM_RE: Final = re.compile(r"^ocid1\.[a-z0-9]+\.([a-z0-9]+)\.", re.IGNORECASE)
+_OCI_REALM_DOMAINS: Final = MappingProxyType(
+    {
+        "oc1": "oraclecloud.com",
+        "oc2": "oraclegovcloud.com",
+        "oc3": "oraclegovcloud.com",
+        "oc4": "oraclegovcloud.uk",
+        "oc8": "oraclecloud8.com",
+        "oc9": "oraclecloud9.com",
+        "oc10": "oraclecloud10.com",
+        "oc14": "oraclecloud14.com",
+        "oc15": "oraclecloud15.com",
+        "oc19": "oraclecloud.eu",
+        "oc20": "oraclecloud20.com",
+        "oc21": "oraclecloud21.com",
+        "oc23": "oraclecloud23.com",
+        "oc24": "oraclecloud24.com",
+        "oc26": "oraclecloud26.com",
+        "oc29": "oraclecloud29.com",
+        "oc35": "oraclecloud35.com",
+        "oc42": "oraclecloud42.com",
+        "oc51": "oraclecloud51.com",
+        "oc52": "oraclecloud52.com",
+    }
+)
 
 
-def get_oci_base_url(optional_params: dict, api_base: str | None = None) -> str:
+class OCIRegionMetadata(LiteLLMBaseModel):
+    """One entry of the OCI SDK's region metadata schema, as found in
+    ``~/.oci/regions-config.json`` (a JSON array) or ``OCI_REGION_METADATA`` (one object).
+    Values are lowercased before validation, as the SDK does."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    region_identifier: str = Field(alias="regionIdentifier", pattern=_OCI_REGION_PATTERN)
+    realm_domain_component: str = Field(alias="realmDomainComponent", pattern=_OCI_REALM_DOMAIN_PATTERN)
+
+    @field_validator("region_identifier", "realm_domain_component", mode="before")
+    @classmethod
+    def _lowercase(cls, value: object) -> object:
+        return value.lower() if isinstance(value, str) else value
+
+
+_JSON_ARRAY: Final = TypeAdapter(tuple[JsonValue, ...])
+
+
+def _validated_region_metadata(raw: JsonValue, source: str) -> OCIRegionMetadata | None:
+    try:
+        return OCIRegionMetadata.model_validate(raw)
+    except ValidationError as e:
+        verbose_logger.warning("Ignoring OCI region metadata entry in %s: %s", source, e)
+        return None
+
+
+def _region_metadata_from_file() -> tuple[OCIRegionMetadata, ...]:
+    path: Final = Path(os.path.expanduser(_OCI_REGIONS_CONFIG_FILE))
+    if not path.is_file():
+        return ()
+    try:
+        raw_entries: Final = _JSON_ARRAY.validate_json(path.read_bytes())
+    except (OSError, ValidationError) as e:
+        verbose_logger.warning("Ignoring OCI region metadata in %s: %s", path, e)
+        return ()
+    candidates: Final = (_validated_region_metadata(raw, str(path)) for raw in raw_entries)
+    return tuple(entry for entry in candidates if entry is not None)
+
+
+def _region_metadata_from_env() -> tuple[OCIRegionMetadata, ...]:
+    raw: Final = os.environ.get(_OCI_REGION_METADATA_ENV)
+    if not raw:
+        return ()
+    try:
+        return (OCIRegionMetadata.model_validate_json(raw),)
+    except ValidationError as e:
+        verbose_logger.warning("Ignoring OCI region metadata in %s: %s", _OCI_REGION_METADATA_ENV, e)
+        return ()
+
+
+def _realm_domain_from_ocid(ocid: str | None) -> str | None:
+    match: Final = _OCID_REALM_RE.match(ocid) if ocid else None
+    return _OCI_REALM_DOMAINS.get(match.group(1).lower()) if match else None
+
+
+def _realm_domain_from_metadata(region: str) -> str | None:
+    entries: Final = (*_region_metadata_from_file(), *_region_metadata_from_env())
+    return next((entry.realm_domain_component for entry in entries if entry.region_identifier == region), None)
+
+
+@runtime_checkable
+class _OCIRegionRegistry(Protocol):
+    def endpoint_for(self, service: str, region: str, service_endpoint_template: str) -> str: ...
+
+
+def _load_oci_region_registry() -> _OCIRegionRegistry | None:
+    try:
+        registry: Final = importlib.import_module("oci.regions")
+    except ImportError:
+        return None
+    return registry if isinstance(registry, _OCIRegionRegistry) else None
+
+
+def resolve_oci_inference_endpoint(region: str, compartment_id: str | None = None) -> str:
+    """Return the GenAI inference endpoint for ``region`` in whichever OCI realm hosts it.
+
+    The realm's second-level domain comes first from the realm key inside ``compartment_id``
+    (``ocid1.compartment.oc2..`` is the Government realm), then from the OCI SDK's region
+    registry when the SDK is installed, then from the per-region metadata sources the SDK
+    reads, ``~/.oci/regions-config.json`` and ``OCI_REGION_METADATA``, and otherwise defaults
+    to the commercial realm. Realm domains per ``oci/regions_definitions.py`` in oci 2.187.0.
+    A region that is not described anywhere therefore keeps its commercial endpoint, so one
+    government deployment never redirects the others.
+    """
+    realm_domain: Final = _realm_domain_from_ocid(compartment_id)
+    if realm_domain is not None:
+        return _OCI_INFERENCE_ENDPOINT_TEMPLATE.format(region=region, secondLevelDomain=realm_domain)
+    registry: Final = _load_oci_region_registry()
+    if registry is not None:
+        return registry.endpoint_for(
+            "generative_ai_inference", region=region, service_endpoint_template=_OCI_INFERENCE_ENDPOINT_TEMPLATE
+        )
+    return _OCI_INFERENCE_ENDPOINT_TEMPLATE.format(
+        region=region, secondLevelDomain=_realm_domain_from_metadata(region) or _OCI_COMMERCIAL_REALM_DOMAIN
+    )
+
+
+def get_oci_base_url(optional_params: Mapping[str, object], api_base: str | None = None) -> str:
     """Return the OCI inference base URL, respecting any explicit api_base override.
 
     If ``api_base`` already ends with a fully-formed OCI action path
@@ -196,7 +331,8 @@ def get_oci_base_url(optional_params: dict, api_base: str | None = None) -> str:
                 f"Invalid OCI region {region!r}: must match ^[a-z][a-z0-9-]{{0,30}}[a-z0-9]$ (e.g. 'us-ashburn-1')."
             ),
         )
-    return f"https://inference.generativeai.{region}.oci.oraclecloud.com"
+    compartment_id: Final = creds["oci_compartment_id"]
+    return resolve_oci_inference_endpoint(region, compartment_id if isinstance(compartment_id, str) else None)
 
 
 # ---------------------------------------------------------------------------

@@ -1,71 +1,67 @@
-"""
-Returns a random deployment from the list of healthy deployments.
+"""Choose among eligible deployments using request weights, then global metrics."""
 
-If weights are provided, it will return a deployment based on the weights.
+from __future__ import annotations
 
-"""
-
+import logging
 import random
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Callable, Mapping, Sequence
+from itertools import chain
+from typing import Final, TypeVar
 
-from litellm._logging import verbose_router_logger
+from litellm.types.router_weights import validate_router_weights
 
-if TYPE_CHECKING:
-    from litellm.router import Router as _Router
+_DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
+_ROUTER_LOGGER: Final = logging.getLogger("LiteLLM Router")
 
-    LitellmRouter = _Router
-else:
-    LitellmRouter = Any
+
+def _metric_weight(deployment: Mapping[str, object], metric: str) -> float:
+    params: Final = deployment.get("litellm_params")
+    value: Final = params.get(metric) if isinstance(params, Mapping) else None
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    raise TypeError(f"Deployment {metric} must be numeric")
+
+
+def _scoped_weights(
+    deployments: Sequence[Mapping[str, object]],
+    model: str,
+    request_kwargs: Mapping[str, object] | None,
+) -> tuple[float, ...]:
+    settings: Final = validate_router_weights((request_kwargs or {}).get("_router_weights"))
+    model_weights: Final = settings.get(model) if settings is not None else None
+    if not model_weights:
+        return ()
+    return tuple(
+        model_weights.get(str(info.get("id")), 0.0) if isinstance(info, Mapping) else 0.0
+        for deployment in deployments
+        for info in (deployment.get("model_info"),)
+    )
 
 
 def simple_shuffle(
-    llm_router_instance: LitellmRouter,
-    healthy_deployments: list[Any] | dict[Any, Any],
+    resolve_model_alias: Callable[[str], str | None],
+    healthy_deployments: Sequence[_DeploymentT],
     model: str,
-) -> dict:
-    """
-    Returns a random deployment from the list of healthy deployments.
-
-    If weights are provided, it will return a deployment based on the weights.
-
-    If users pass `rpm` or `tpm`, we do a random weighted pick - based on `rpm`/`tpm`.
-
-    Args:
-        llm_router_instance: LitellmRouter instance
-        healthy_deployments: List of healthy deployments
-        model: Model name
-
-    Returns:
-        Dict: A single healthy deployment
-    """
-
-    ############## Check if 'weight' or 'rpm' or 'tpm' param set for a weighted pick #################
-    for weight_by in ["weight", "rpm", "tpm"]:
-        if any(m["litellm_params"].get(weight_by) is not None for m in healthy_deployments):
-            weights = [m["litellm_params"].get(weight_by, 0) for m in healthy_deployments]
-            verbose_router_logger.debug("\nweight %s", weights)
-            total_weight = sum(weights)
-            if total_weight <= 0:
-                # All remaining candidates have weight 0 for this metric (e.g.
-                # after a weighted-failover exclusion left only zero-weight
-                # backups). Skip to the next metric (rpm/tpm) which may still
-                # provide a meaningful weighted pick; if none do, we fall
-                # through to the uniform random pick at the end.
-                continue
-            weights = [weight / total_weight for weight in weights]
-            verbose_router_logger.debug("\n weights %s by %s", weights, weight_by)
-            # Perform weighted random pick
-            selected_index = random.choices(range(len(weights)), weights=weights)[0]
-            verbose_router_logger.debug("\n selected index, %s", selected_index)
-            deployment = healthy_deployments[selected_index]
-            verbose_router_logger.info(
-                "get_available_deployment for model: %s, Selected deployment: %s for model: %s",
-                model,
-                llm_router_instance.print_deployment(deployment) or deployment[0],
-                model,
-            )
-            return deployment or deployment[0]
-
-    ############## No RPM/TPM passed, we do a random pick #################
-    item: Final = random.choice(healthy_deployments)
-    return item or item[0]
+    request_kwargs: Mapping[str, object] | None,
+) -> _DeploymentT:
+    resolved_model: Final = resolve_model_alias(model) or model
+    weight_sets: Final = chain(
+        (_scoped_weights(healthy_deployments, resolved_model, request_kwargs),),
+        (
+            tuple(_metric_weight(deployment, metric) for deployment in healthy_deployments)
+            for metric in ("weight", "rpm", "tpm")
+        ),
+    )
+    for weights in weight_sets:
+        largest = max(weights, default=0.0)
+        if largest <= 0:
+            continue
+        normalized = tuple(weight / largest for weight in weights)
+        if sum(normalized) <= 0:
+            continue
+        selected = random.choices(healthy_deployments, weights=normalized)[0]
+        _ROUTER_LOGGER.info("Selected deployment for model %s: %s", model, selected.get("model_info"))
+        return selected
+    return random.choice(healthy_deployments)

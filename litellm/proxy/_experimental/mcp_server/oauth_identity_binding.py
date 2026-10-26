@@ -18,6 +18,7 @@ from typing import Final, Literal, Protocol, TypeAlias
 import jwt
 from fastapi import HTTPException
 from jwt.types import Options
+from pydantic import TypeAdapter
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
@@ -38,14 +39,15 @@ _ALLOWED_ID_TOKEN_ALGORITHMS: Final = (
     "PS512",
 )
 _JWKS_CACHE_TTL_SECONDS: Final = 3600
+_DECODED_JSON: Final = TypeAdapter(object)
 _jwks_cache: Final = InMemoryCache(default_ttl=_JWKS_CACHE_TTL_SECONDS)
 
 JwksFetcher: TypeAlias = Callable[
-    [MCPOAuthIdentityBinding],  # mutable-ok: Callable parameter syntax requires a list
+    [MCPOAuthIdentityBinding],
     Awaitable[Sequence[Mapping[str, object]]],
 ]
 CallerPrincipalLoader: TypeAlias = Callable[
-    [str, MCPOAuthIdentityBinding],  # mutable-ok: Callable parameter syntax requires a list
+    [str, MCPOAuthIdentityBinding],
     Awaitable[str | None],
 ]
 
@@ -57,7 +59,7 @@ class VerifiedRefreshToken:
 
 
 StoredRefreshTokenLoader: TypeAlias = Callable[
-    [str, str, MCPOAuthIdentityBinding],  # mutable-ok: Callable parameter syntax requires a list
+    [str, str, MCPOAuthIdentityBinding],
     Awaitable[VerifiedRefreshToken | None],
 ]
 
@@ -103,7 +105,7 @@ async def _fetch_issuer_jwks(binding: MCPOAuthIdentityBinding) -> Sequence[Mappi
     client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     response: Final = await client.get(jwks_url)
     response.raise_for_status()
-    document: Final = response.json()
+    document: Final = _DECODED_JSON.validate_python(response.json())
     keys: Final = document.get("keys") if isinstance(document, dict) else None
     if not isinstance(keys, list):
         raise TypeError(f"JWKS document at {jwks_url} has no 'keys' array")
@@ -116,7 +118,7 @@ async def _discover_jwks_url(issuer: str) -> str:
     client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     response: Final = await client.get(discovery_url)
     response.raise_for_status()
-    metadata: Final = response.json()
+    metadata: Final = _DECODED_JSON.validate_python(response.json())
     jwks_uri: Final = metadata.get("jwks_uri") if isinstance(metadata, dict) else None
     if not isinstance(jwks_uri, str) or not jwks_uri:
         raise ValueError(f"OIDC discovery at {discovery_url} returned no jwks_uri")
@@ -128,7 +130,7 @@ def _select_signing_key(id_token: str, keys: Sequence[Mapping[str, object]]) -> 
     kid: Final = header.get("kid")
     for key in keys:
         if kid is None or key.get("kid") == kid:
-            return jwt.PyJWK(dict(key))  # mutable-ok: PyJWT requires a concrete JWK dictionary
+            return jwt.PyJWK(dict(key))
     return _BindingRejection(
         code="oauth_identity_binding_failed",
         description=f"id_token signing key (kid={kid!r}) not found in the issuer's JWKS",

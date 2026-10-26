@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 from e2e_config import unique_marker
 from e2e_http import UnknownApiError, ValidationError
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from guardrails_client import GuardrailsClient
 
 pytestmark = pytest.mark.e2e
@@ -27,6 +28,14 @@ MODEL = "gemini-2.5-flash"
 @pytest.mark.covers(
     "guardrail.dispatch.pre_call.rejects_unknown_name",
     exercised_on=["chat_completions"],
+)
+@meta(
+    Subject(
+        domain=Domain.GUARDRAILS,
+        providers=(Provider.GEMINI,),
+        models=(MODEL,),
+        mode=Mode.NONSTREAM,
+    )
 )
 def test_request_naming_an_unknown_guardrail_fails_closed(client: GuardrailsClient, scoped_key: str) -> None:
     result = client.chat(scoped_key, MODEL, "say hi", guardrails=[f"e2e-no-such-guardrail-{unique_marker()}"])
