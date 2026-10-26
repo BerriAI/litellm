@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _SERVICE_TIER_TO_COST_KEY_SUFFIX,
     BilledTokenRates,
     CostCalculatorUtils,
+    calculate_cache_writing_cost,
     calculate_cost_component,
     generic_cost_per_character,
     generic_cost_per_token,
@@ -1550,6 +1551,8 @@ def completion_cost(
     """
     try:
         call_type = infer_call_type(call_type, completion_response) or "completion"
+        if isinstance(completion_response, DecisionsResponse) and completion_response.usage is None:
+            raise ValueError("Cannot calculate Decisions cost: provider did not report usage")
         if pricing_provider is not None:
             custom_llm_provider = pricing_provider  # rebind-ok: model_info.pricing_provider overrides the routing provider for cost-map lookups
 
@@ -2969,7 +2972,12 @@ def batch_cost_calculator(
     total_completion_cost = 0.0
     if batch_rates.input is not None:
         total_prompt_cost = _batch_prompt_cost(
-            usage, model_info, batch_rates.input, batch_rates.cache_read, batch_rates.cache_creation
+            usage,
+            model_info,
+            batch_rates.input,
+            batch_rates.cache_read,
+            batch_rates.cache_creation,
+            batch_rates.cache_creation_rates_by_ttl,
         )
     elif input_cost_per_token:
         details: Final = parse_prompt_tokens_details(usage)
@@ -3014,11 +3022,13 @@ def _batch_prompt_cost(
     input_rate: float,
     cache_read_rate: float | None,
     cache_creation_rate: float | None,
+    cache_creation_rates_by_ttl: Mapping[str, float],
 ) -> float:
     details: Final = parse_prompt_tokens_details(usage)
     cached_tokens: Final = details["cache_hit_tokens"] if cache_read_rate is not None else 0
     cached_audio_tokens: Final = details["cache_hit_audio_tokens"] if cache_read_rate is not None else 0
-    written_tokens: Final = details["cache_creation_tokens"] if cache_creation_rate is not None else 0
+    bills_cache_writes: Final = cache_creation_rate is not None or bool(cache_creation_rates_by_ttl)
+    written_tokens: Final = details["cache_creation_tokens"] if bills_cache_writes else 0
     audio_tokens, image_tokens, video_tokens = (
         details["audio_tokens"],
         details["image_tokens"],
@@ -3035,7 +3045,16 @@ def _batch_prompt_cost(
         + (cached_tokens - cached_audio_tokens) * (cache_read_rate or 0.0)
         + cached_audio_tokens
         * _batch_rate(model_info, "cache_read_input_audio_token_cost_batches", cache_read_rate or 0.0)
-        + written_tokens * (cache_creation_rate or 0.0)
+        + (
+            calculate_cache_writing_cost(
+                written_tokens,
+                details["cache_creation_token_details"],
+                input_rate if cache_creation_rate is None else cache_creation_rate,
+                cache_creation_rates_by_ttl,
+            )
+            if bills_cache_writes
+            else 0.0
+        )
     )
 
 

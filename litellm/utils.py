@@ -6842,6 +6842,18 @@ def get_model_info_helper(
                 cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority=_model_info.get(
                     "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority", None
                 ),
+                cache_creation_input_token_cost_above_12hr_batches=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_batches", None
+                ),
+                cache_creation_input_token_cost_above_12hr_ultrafast=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_ultrafast", None
+                ),
+                cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches", None
+                ),
+                cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast", None
+                ),
                 off_peak_pricing=_model_info.get("off_peak_pricing", None),
                 input_cost_per_character=_model_info.get("input_cost_per_character", None),
                 input_cost_per_token_above_128k_tokens=_model_info.get("input_cost_per_token_above_128k_tokens", None),
@@ -9126,6 +9138,7 @@ class ProviderConfigManager:
             LlmProviders.DATABRICKS: (lambda: litellm.DatabricksConfig(), False),
             LlmProviders.XAI: (lambda: litellm.XAIChatConfig(), False),
             LlmProviders.ZAI: (lambda: litellm.ZAIChatConfig(), False),
+            LlmProviders.OPENCODE_GO: (ProviderConfigManager.get_opencode_go_config, True),
             LlmProviders.LAMBDA_AI: (lambda: litellm.LambdaAIChatConfig(), False),
             LlmProviders.INCEPTION: (lambda: litellm.InceptionChatConfig(), False),
             LlmProviders.LLAMA: (lambda: litellm.LlamaAPIConfig(), False),
@@ -9316,6 +9329,12 @@ class ProviderConfigManager:
         from litellm.llms.bedrock.common_utils import get_bedrock_chat_config
 
         return get_bedrock_chat_config(model=model)
+
+    @staticmethod
+    def get_opencode_go_config(model: str) -> BaseConfig:
+        from litellm.llms.opencode.chat.transformation import go_chat_config
+
+        return go_chat_config(model)
 
     @staticmethod
     def get_bedrock_mantle_config(model: str) -> BaseConfig:
@@ -9620,6 +9639,11 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> BaseAnthropicMessagesConfig | None:
+        if provider == LlmProviders.OPENCODE_GO:
+            from litellm.llms.opencode.common_utils import go_endpoint
+            from litellm.llms.opencode.messages.transformation import OpenCodeGoMessagesConfig
+
+            return OpenCodeGoMessagesConfig() if go_endpoint(model) == "/v1/messages" else None
         model_lower: Final = model.lower()
         if litellm.LlmProviders.ANTHROPIC == provider:
             return litellm.AnthropicMessagesConfig()
@@ -9846,6 +9870,11 @@ class ProviderConfigManager:
         if provider is None:
             return None
 
+        if provider == LlmProviders.OPENCODE_GO:
+            from litellm.llms.opencode.common_utils import go_endpoint
+            from litellm.llms.opencode.responses.transformation import OpenCodeGoResponsesConfig
+
+            return OpenCodeGoResponsesConfig() if go_endpoint(model or "") == "/v1/responses" else None
         if litellm.LlmProviders.OPENAI == provider:
             return litellm.OpenAIResponsesAPIConfig()
         elif litellm.LlmProviders.AZURE == provider:
@@ -9985,6 +10014,10 @@ class ProviderConfigManager:
         model: str | None,
         provider: LlmProviders,
     ) -> BaseLLMModelInfo | None:
+        if provider == LlmProviders.OPENCODE_GO:
+            from litellm.llms.opencode.chat.transformation import OpenCodeGoChatConfig
+
+            return OpenCodeGoChatConfig()
         if LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIConfig()
         elif LlmProviders.BASETEN == provider:
