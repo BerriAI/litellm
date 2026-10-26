@@ -1206,7 +1206,7 @@ async def test_completed_event_survives_a_failing_usage_estimate():
     malformed_input: Final = [{"type": "message", "role": "user", "content": 42}]
     with pytest.raises(ValueError, match="Invalid content type"):
         _estimate_usage_from_text(
-            "gpt-4o-mini", malformed_input, {"input": malformed_input}, "hello world", use_default_image_token_count=False
+            "gpt-4o-mini", malformed_input, {"input": malformed_input}, "hello world"
         )
 
     response = _responses_api_response_without_usage()

@@ -1751,7 +1751,7 @@ def _estimate_usage_from_text(
     responses_api_request: Mapping[str, object],
     generated_text: str,
     *,
-    use_default_image_token_count: bool,
+    use_default_image_token_count: bool = False,
 ) -> ResponseAPIUsage:
     messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # the transformer's signature is partially untyped
         input=request_input,  # pyright: ignore[reportArgumentType]  # the raw Responses API input is a str or ResponseInputParam list, matching the helper's declared union
