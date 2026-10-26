@@ -1,7 +1,7 @@
 import copy
 import enum
 import re
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Collection, Iterator
 from typing import TYPE_CHECKING, Final, cast
 
 import httpx
@@ -12,6 +12,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     audio_or_image_in_message_content,
     convert_content_list_to_str,
+    drop_tool_reference_parts_from_tool_messages,
     filter_value_from_dict,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
@@ -104,6 +105,8 @@ class AzureAIStudioConfig(OpenAIConfig):
         optional_params: dict[str, object],  # mutable-ok: OpenAIConfig.map_openai_params signature
         model: str,
         drop_params: bool,
+        *,
+        declared_reasoning_efforts: Collection[str] = (),
     ) -> dict[str, object]:  # mutable-ok: OpenAIConfig.map_openai_params signature
         if not azureAIGPT5Config.is_model_gpt_5_model(model):
             return super().map_openai_params(
@@ -117,6 +120,7 @@ class AzureAIStudioConfig(OpenAIConfig):
             optional_params=optional_params,
             model=model,
             drop_params=drop_params,
+            declared_reasoning_efforts=declared_reasoning_efforts,
         )
 
     def _supports_stop_reason(self, model: str) -> bool:
@@ -247,7 +251,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         Operates on a deep copy so the caller's messages keep their thinking blocks
         and provider metadata, which a fallback to another provider still needs.
         """
-        stripped_messages: Final = copy.deepcopy(messages)
+        stripped_messages: Final = copy.deepcopy(drop_tool_reference_parts_from_tool_messages(messages))
         for message in stripped_messages:
             message_dict = cast(dict, message)  # cast-ok: TypedDict is a runtime dict stripped on our copy
             for field in NON_OPENAI_SPEC_MESSAGE_FIELDS:
@@ -393,7 +397,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         return data
 
     def _drop_tool_level_extra_fields(self, request_data: dict, error_text: str) -> dict:
-        fields_to_drop: Final = set(re.findall(r"tools\[\d+\]\.([\w-]+)", error_text))
+        fields_to_drop: Final[Collection[str]] = set(re.findall(r"tools\[\d+\]\.([\w-]+)", error_text))
         tools: Final = request_data.get("tools")
         if fields_to_drop and isinstance(tools, list):
             for tool in tools:

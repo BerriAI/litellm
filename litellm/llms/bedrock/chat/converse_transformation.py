@@ -12,7 +12,8 @@ from itertools import chain
 from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -21,6 +22,7 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     filter_exceptions_from_params,
     filter_internal_params,
     map_finish_reason,
@@ -61,12 +63,16 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_cleaned_output_schema,
     bedrock_model_supports_regex_lookaround,
     bedrock_native_output_format,
+    bedrock_native_output_is_opt_in,
     bedrock_supports_tool_search,
     deployment_model_info,
+    requests_output_config_format,
 )
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
-    bedrock_request_metadata_is_owned,
+    bedrock_request_metadata_is_rewritten,
+    bedrock_request_metadata_violation,
+    caller_request_metadata_violations_are_dropped,
     merge_bedrock_invoke_headers,
     resolve_bedrock_request_metadata,
 )
@@ -156,6 +162,14 @@ _TOOLS_AS_SENT: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _JSON_VALUE: Final = TypeAdapter(object)
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_AS_RECEIVED: Final = TypeAdapter(list[object])
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _ToolCallInContent(TypedDict):
+    name: ReadOnly[str]
+
+
+_TOOL_CALL_IN_CONTENT: Final = TypeAdapter(_ToolCallInContent)
 CLAUDE_ON_BEDROCK_INVOKE_REMEDY: Final = " This model runs tool search on Bedrock through `bedrock/invoke/<model>`."
 _DEPLOYMENT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
@@ -166,6 +180,18 @@ def _tools_the_model_accepts(
     if bedrock_model_supports_regex_lookaround(model, litellm_params):
         return list(tools)
     return [tool_with_sanitized_parameters(tool, drop_lookaround_regex_patterns) for tool in tools]
+
+
+_OUTPUT_CONFIG_BLOCK: Final = TypeAdapter(OutputConfigBlock)
+
+
+def _has_native_text_format(output_config: object) -> bool:
+    if not isinstance(output_config, Mapping):
+        return False
+    try:
+        return _OUTPUT_CONFIG_BLOCK.validate_python(output_config).get("textFormat") is not None
+    except ValidationError:
+        return False
 
 
 class AmazonConverseConfig(BaseConfig):
@@ -354,76 +380,14 @@ class AmazonConverseConfig(BaseConfig):
             and v is not None
         }
 
-    def _validate_request_metadata(self, metadata: dict) -> None:
-        """
-        Validate requestMetadata according to AWS Bedrock Converse API constraints.
-
-        Constraints:
-        - Maximum of 16 items
-        - Keys: 1-256 characters, pattern [a-zA-Z0-9\\s:_@$#=/+,-.]{1,256}
-        - Values: 0-256 characters, pattern [a-zA-Z0-9\\s:_@$#=/+,-.]{0,256}
-        """
-        import re
-
-        if not isinstance(metadata, dict):
+    def _validate_request_metadata(self, metadata: object) -> None:
+        violation: Final = bedrock_request_metadata_violation(metadata)
+        if violation is not None:
             raise litellm.exceptions.BadRequestError(
-                message="requestMetadata must be a dictionary",
+                message=violation.message,
                 model="bedrock",
                 llm_provider="bedrock",
             )
-
-        if len(metadata) > 16:
-            raise litellm.exceptions.BadRequestError(
-                message="requestMetadata can contain a maximum of 16 items",
-                model="bedrock",
-                llm_provider="bedrock",
-            )
-
-        key_pattern: Final = re.compile(r"^[a-zA-Z0-9\s:_@$#=/+,.-]{1,256}$")
-        value_pattern: Final = re.compile(r"^[a-zA-Z0-9\s:_@$#=/+,.-]{0,256}$")
-
-        for key, value in metadata.items():
-            if not isinstance(key, str):
-                raise litellm.exceptions.BadRequestError(
-                    message="requestMetadata keys must be strings",
-                    model="bedrock",
-                    llm_provider="bedrock",
-                )
-
-            if not isinstance(value, str):
-                raise litellm.exceptions.BadRequestError(
-                    message="requestMetadata values must be strings",
-                    model="bedrock",
-                    llm_provider="bedrock",
-                )
-
-            if len(key) == 0 or len(key) > 256:
-                raise litellm.exceptions.BadRequestError(
-                    message="requestMetadata key length must be 1-256 characters",
-                    model="bedrock",
-                    llm_provider="bedrock",
-                )
-
-            if len(value) > 256:
-                raise litellm.exceptions.BadRequestError(
-                    message="requestMetadata value length must be 0-256 characters",
-                    model="bedrock",
-                    llm_provider="bedrock",
-                )
-
-            if not key_pattern.match(key):
-                raise litellm.exceptions.BadRequestError(
-                    message=f"requestMetadata key '{key}' contains invalid characters. Allowed: [a-zA-Z0-9\\s:_@$#=/+,.-]",
-                    model="bedrock",
-                    llm_provider="bedrock",
-                )
-
-            if not value_pattern.match(value):
-                raise litellm.exceptions.BadRequestError(
-                    message=f"requestMetadata value '{value}' contains invalid characters. Allowed: [a-zA-Z0-9\\s:_@$#=/+,.-]",
-                    model="bedrock",
-                    llm_provider="bedrock",
-                )
 
     @staticmethod
     def _is_openai_gpt_reasoning_model(model: str) -> bool:
@@ -431,7 +395,7 @@ class AmazonConverseConfig(BaseConfig):
 
     @staticmethod
     def _requires_min_max_tokens(model: str) -> bool:
-        return re.search(r"openai\.gpt-\d|xai\.grok-", model) is not None
+        return re.search(r"openai\.gpt-\d|xai\.grok-|moonshotai\.kimi-k3", model) is not None
 
     def _is_nova_2_model(self, model: str) -> bool:
         """
@@ -1244,7 +1208,7 @@ class AmazonConverseConfig(BaseConfig):
             elif param == "context_management" and isinstance(value, (dict, list)):
                 self._map_context_management_param(value, optional_params)
             if param == "requestMetadata":
-                self._map_request_metadata_param(value, optional_params)
+                self._map_request_metadata_param(value, optional_params, drop_params)
             if param == "service_tier" and isinstance(value, str):
                 self._map_service_tier_param(value, optional_params)
 
@@ -1277,9 +1241,10 @@ class AmazonConverseConfig(BaseConfig):
 
         return optional_params
 
-    def _map_request_metadata_param(self, value: object, optional_params: dict) -> None:
+    def _map_request_metadata_param(self, value: object, optional_params: dict, drop_params: bool) -> None:
         if value is not None and isinstance(value, dict):
-            self._validate_request_metadata(value)
+            if not caller_request_metadata_violations_are_dropped(drop_params):
+                self._validate_request_metadata(value)
             optional_params["requestMetadata"] = value
 
     def _map_context_management_param(self, value: dict | list, optional_params: dict) -> None:
@@ -1391,6 +1356,22 @@ class AmazonConverseConfig(BaseConfig):
 
         optional_params["json_mode"] = True
         return optional_params
+
+    @staticmethod
+    def sends_native_text_format(optional_params: Mapping[str, object]) -> bool:
+        return _has_native_text_format(optional_params.get("outputConfig"))
+
+    def uses_opt_in_native_output(
+        self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+    ) -> bool:
+        native_output_requested: Final = (
+            optional_params.get("json_mode") is True and self.sends_native_text_format(optional_params)
+        ) or requests_output_config_format(optional_params)
+        return native_output_requested and bedrock_native_output_is_opt_in(
+            bedrock_capability_model(model, litellm_params.get("base_model")),
+            self.custom_llm_provider or "bedrock_converse",
+            deployment_model_info(litellm_params),
+        )
 
     def update_optional_params_with_thinking_tokens(self, non_default_params: dict, optional_params: dict):
         """
@@ -1737,7 +1718,7 @@ class AmazonConverseConfig(BaseConfig):
 
         # Extract requestMetadata before processing other parameters
         request_metadata: Final = inference_params.pop("requestMetadata", None)
-        if request_metadata is not None:
+        if request_metadata is not None and not caller_request_metadata_violations_are_dropped(drop_params):
             self._validate_request_metadata(request_metadata)
 
         output_config: OutputConfigBlock | None = inference_params.pop("outputConfig", None)
@@ -2156,6 +2137,7 @@ class AmazonConverseConfig(BaseConfig):
                     llm_provider="bedrock_converse",
                     user_continue_message=litellm_params.pop("user_continue_message", None),
                     base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
+                    drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
                 ),
                 capability_model,
             )
@@ -2164,7 +2146,7 @@ class AmazonConverseConfig(BaseConfig):
         request_metadata: Final = resolve_bedrock_request_metadata(
             litellm_params=litellm_params, caller_metadata=_data.get("requestMetadata")
         )
-        if bedrock_request_metadata_is_owned():
+        if bedrock_request_metadata_is_rewritten(litellm_params.get("drop_params") is True):
             _data.pop("requestMetadata", None)
             if request_metadata is not None:
                 _data["requestMetadata"] = request_metadata
@@ -2236,6 +2218,7 @@ class AmazonConverseConfig(BaseConfig):
                     llm_provider="bedrock_converse",
                     user_continue_message=litellm_params.pop("user_continue_message", None),
                     base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
+                    drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
                 ),
                 capability_model,
             )
@@ -2244,7 +2227,7 @@ class AmazonConverseConfig(BaseConfig):
         request_metadata: Final = resolve_bedrock_request_metadata(
             litellm_params=litellm_params, caller_metadata=_data.get("requestMetadata")
         )
-        if bedrock_request_metadata_is_owned():
+        if bedrock_request_metadata_is_rewritten(litellm_params.get("drop_params") is True):
             _data.pop("requestMetadata", None)
             if request_metadata is not None:
                 _data["requestMetadata"] = request_metadata
@@ -2480,9 +2463,17 @@ class AmazonConverseConfig(BaseConfig):
         if message.content is not None:
             try:
                 tool_call_names: Final = self.get_tool_call_names(tools)
-                json_content: Final = json.loads(message.content)
-                if json_content.get("type") == "function" and json_content.get("name") in tool_call_names:
-                    tool_calls: Final = [ChatCompletionMessageToolCall(function=Function(**json_content))]
+                json_content: Final = as_str_mapping(_JSON_VALUE.validate_python(json.loads(message.content)))
+                if (
+                    json_content is not None
+                    and json_content.get("type") == "function"
+                    and json_content.get("name") in tool_call_names
+                ):
+                    tool_calls: Final = [
+                        ChatCompletionMessageToolCall(
+                            function=Function(**_TOOL_CALL_IN_CONTENT.validate_python(json_content))
+                        )
+                    ]
 
                     message.tool_calls = tool_calls
                     message.content = None

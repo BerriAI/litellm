@@ -7,9 +7,9 @@ import subprocess
 import sys
 import time
 import uuid
-from collections.abc import Generator, Iterable, Iterator, Mapping
+from collections.abc import Callable, Generator, Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager, suppress
+from contextlib import AbstractContextManager, contextmanager, suppress
 from dataclasses import dataclass
 from enum import Enum
 from datetime import UTC, datetime, timedelta
@@ -17,7 +17,7 @@ from ipaddress import IPv4Address
 from itertools import accumulate
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final, TypeAlias
 from urllib.parse import urlsplit
 
 import httpx
@@ -30,8 +30,14 @@ from cryptography.x509.oid import NameOID
 from pydantic import TypeAdapter
 
 from tests.integration._support.budget import import_seconds, readiness_for, readiness_seconds
-from tests.integration._support.client import GATEWAY_LIMITS, Gateway
+from tests.integration._support.client import GATEWAY_LIMITS, Gateway, gateway_from_environment
+from tests.integration._support.database import scratch_database
 from tests.integration._support.ports import allocate_port
+from tests.integration._support.redis_process import owned_redis
+from tests.integration._support.workers import gateway_profile, replica_urls
+
+if TYPE_CHECKING:
+    import pytest
 
 DB_PUSH: Final = ("--use_prisma_db_push",)
 MIGRATE_DEPLOY: Final = ()
@@ -39,6 +45,75 @@ LEGACY_MIGRATE_DEPLOY: Final = ("--use_legacy_migration_resolver",)
 CONFIGURATION: Final = TypeAdapter(dict[str, object])
 _DEPLOYMENT_IDS: Final = TypeAdapter(dict[str, list[str]])
 MCP_COVERAGE_CONFIG: Final = Path(__file__).resolve().parents[1] / "mcp_coverage.toml"
+OWNED_STATE_VARIABLE: Final = "INTEGRATION_OWNED_STATE"
+
+
+class OwnedState(Enum):
+    PRIVATE = "private"
+    SHARED_WITH_WORKER = "shared_with_worker"
+
+
+@dataclass(frozen=True, slots=True)
+class PrivateState:
+    database_url: str
+    environment: Mapping[str, str]
+
+
+PrivateStateFactory: TypeAlias = Callable[[Path, Mapping[str, str]], AbstractContextManager[PrivateState]]
+
+
+def boots_private_state(
+    state: OwnedState | None,
+    overrides: Mapping[str, str],
+    remove_environment: tuple[str, ...],
+    inherited: Mapping[str, str],
+) -> bool:
+    chosen: Final = state or OwnedState(inherited.get(OWNED_STATE_VARIABLE, OwnedState.PRIVATE.value))
+    return chosen is OwnedState.PRIVATE and "DATABASE_URL" not in overrides and "DATABASE_URL" not in remove_environment
+
+
+@contextmanager
+def private_state(directory: Path, inherited: Mapping[str, str]) -> Iterator[PrivateState]:
+    with scratch_database("owned") as database, owned_redis(directory, inherited=inherited) as cache:
+        replica: Final = replica_urls(database, inherited) if gateway_profile(inherited).replica else None
+        yield PrivateState(
+            database,
+            MappingProxyType(
+                {
+                    "DATABASE_URL": database if replica is None else replica["INTEGRATION_PROXY_DATABASE_URL"],
+                    **(
+                        {}
+                        if replica is None
+                        else {"DATABASE_URL_READ_REPLICA": replica["INTEGRATION_PROXY_READ_REPLICA_URL"]}
+                    ),
+                    "REDIS_HOST": cache.host,
+                    "REDIS_PORT": str(cache.port),
+                }
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class OwnedEnvironment:
+    overrides: Mapping[str, str]
+    database_url: str | None
+
+
+@contextmanager
+def owned_environment(
+    directory: Path,
+    overrides: Mapping[str, str],
+    remove_environment: tuple[str, ...],
+    state: OwnedState | None,
+    inherited: Mapping[str, str],
+    private: PrivateStateFactory = private_state,
+) -> Iterator[OwnedEnvironment]:
+    if not boots_private_state(state, overrides, remove_environment, inherited):
+        yield OwnedEnvironment(overrides, None)
+        return
+    with private(directory, inherited) as booted:
+        kept: Final = {name: value for name, value in booted.environment.items() if name not in remove_environment}
+        yield OwnedEnvironment(MappingProxyType({**kept, **overrides}), booted.database_url)
 
 
 def proxy_database_environment(inherited: Mapping[str, str] = os.environ) -> Mapping[str, str]:
@@ -111,7 +186,7 @@ def _is_serving_worker(process: psutil.Process) -> bool:
 
 def _is_gone(process: psutil.Process) -> bool:
     try:
-        return process.status() == psutil.STATUS_ZOMBIE
+        return process.status() == psutil.STATUS_ZOMBIE and process.num_threads() <= 1
     except psutil.NoSuchProcess:
         return True
 
@@ -364,6 +439,7 @@ def owned_proxy(
     database_setup: tuple[str, ...] = DB_PUSH,
     coverage_file: Path | None = None,
     inherited: Mapping[str, str] = os.environ,
+    state: OwnedState | None = None,
 ) -> Iterator[Gateway]:
     with owned_proxy_process(
         gateway,
@@ -375,8 +451,21 @@ def owned_proxy(
         database_setup=database_setup,
         coverage_file=coverage_file,
         inherited=inherited,
+        state=state,
     ) as owned:
         yield owned.gateway
+
+
+@contextmanager
+def isolated_gateway(directory: Path, environment: "pytest.MonkeyPatch") -> Iterator[Gateway]:
+    with gateway_from_environment() as shared, owned_proxy(shared, directory, {}, state=OwnedState.PRIVATE) as owned:
+        assert owned.database_url is not None
+        environment.setenv("DATABASE_URL", owned.database_url)
+        environment.setenv("INTEGRATION_PROXY_DATABASE_URL", owned.database_url)
+        environment.delenv("INTEGRATION_PROXY_READ_REPLICA_URL", raising=False)
+        environment.delenv("DATABASE_URL_READ_REPLICA", raising=False)
+        owned.post("/config/update", {"router_settings": {"num_retries": 0}})
+        yield owned
 
 
 def _stop(process: subprocess.Popen[bytes]) -> None:
@@ -618,6 +707,32 @@ def _proxy_root() -> Path:
     return Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
 
 
+def _configuration_copy(config: Path, directory: Path, prefix: str) -> Path:
+    checkouts: Final = (_harness_root(), _proxy_root().resolve())
+    inside_checkout: Final = any(config.resolve().is_relative_to(checkout) for checkout in checkouts)
+    target: Final = directory if inside_checkout else config.parent
+    target.mkdir(parents=True, exist_ok=True)
+    return target / f"{prefix}-{uuid.uuid4().hex}.yaml"
+
+
+def private_configuration(config: Path, directory: Path) -> Path:
+    loaded: Final[object] = yaml.safe_load(config.read_text())
+    if not isinstance(loaded, dict):
+        return config
+    settings: Final = CONFIGURATION.validate_python(loaded)
+    router: Final = settings.get("router_settings") or {}
+    if not isinstance(router, dict) or "num_retries" in router:
+        return config
+    destination: Final = _configuration_copy(config, directory, "private-config")
+    destination.write_text(
+        yaml.safe_dump(
+            {**settings, "router_settings": {**CONFIGURATION.validate_python(router), "num_retries": 0}},
+            sort_keys=False,
+        )
+    )
+    return destination
+
+
 def worker_configuration(config: Path, directory: Path, inherited: Mapping[str, str] = os.environ) -> Path:
     if inherited.get("INTEGRATION_WORKER_ISOLATION") != "1":
         return config
@@ -628,11 +743,7 @@ def worker_configuration(config: Path, directory: Path, inherited: Mapping[str, 
         return f"http://127.0.0.1:{inherited['INTEGRATION_PROVIDER_PORT']}"
 
     contents: Final = re.sub(r"http://127[.]0[.]0[.]1:(8190|8191)(?![0-9])", endpoint, config.read_text())
-    checkouts: Final = (_harness_root(), _proxy_root().resolve())
-    inside_checkout: Final = any(config.resolve().is_relative_to(checkout) for checkout in checkouts)
-    target: Final = directory if inside_checkout else config.parent
-    target.mkdir(parents=True, exist_ok=True)
-    destination: Final = target / f"worker-config-{uuid.uuid4().hex}.yaml"
+    destination: Final = _configuration_copy(config, directory, "worker-config")
     loaded: Final[object] = yaml.safe_load(contents)
     if not isinstance(loaded, dict):
         destination.write_text(contents)
@@ -737,42 +848,58 @@ def owned_proxy_process(
     healthcheck: WorkerHealthcheck = WorkerHealthcheck.STRICT,
     inherited: Mapping[str, str] = os.environ,
     client_timeout: float = 15,
+    state: OwnedState | None = None,
 ) -> Iterator[OwnedProxy]:
     assert "--timeout_worker_healthcheck" not in extra_arguments, "Choose the worker healthcheck with `healthcheck`"
     root: Final = _proxy_root()
-    environment: Final = _proxy_environment(
-        gateway,
-        {**overrides, **({"COVERAGE_FILE": str(coverage_file)} if coverage_file else {})},
-        remove_environment,
-        inherited,
-    )
-    output: Final = Path(inherited.get("INTEGRATION_RESULTS_DIR", str(directory)))
-    output.mkdir(parents=True, exist_ok=True)
-    command: Final = (
-        sys.executable,
-        "-m",
-        *(("coverage", "run", f"--rcfile={MCP_COVERAGE_CONFIG}", "-m") if coverage_file else ()),
-        "integration._support.proxy",
-        "--config",
-        str(worker_configuration(config or root / "tests/integration/proxy_config.yaml", directory, inherited)),
-        "--host",
-        "127.0.0.1",
-        "--num_workers",
-        str(workers),
-        "--timeout_worker_healthcheck",
-        str(healthcheck_seconds(healthcheck)),
-        *database_setup,
-        *extra_arguments,
-    )
-    launch: Final = _launch_until_ready(command, root, environment, output, workers)
-    process: Final = launch.process
-    try:
-        with httpx.Client(
-            base_url=f"http://127.0.0.1:{launch.port}", timeout=client_timeout, trust_env=False, limits=GATEWAY_LIMITS
-        ) as client:
-            yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), process, launch.log, healthcheck)
-    finally:
-        _stop_launch(launch)
+    with owned_environment(directory, overrides, remove_environment, state, inherited) as owned:
+        configured: Final = worker_configuration(
+            config or root / "tests/integration/proxy_config.yaml", directory, inherited
+        )
+        owned_configuration: Final = (
+            configured if owned.database_url is None else private_configuration(configured, directory)
+        )
+        environment: Final = _proxy_environment(
+            gateway,
+            {**owned.overrides, **({"COVERAGE_FILE": str(coverage_file)} if coverage_file else {})},
+            remove_environment,
+            inherited,
+        )
+        output: Final = Path(inherited.get("INTEGRATION_RESULTS_DIR", str(directory)))
+        output.mkdir(parents=True, exist_ok=True)
+        command: Final = (
+            sys.executable,
+            "-m",
+            *(("coverage", "run", f"--rcfile={MCP_COVERAGE_CONFIG}", "-m") if coverage_file else ()),
+            "integration._support.proxy",
+            "--config",
+            str(owned_configuration),
+            "--host",
+            "127.0.0.1",
+            "--num_workers",
+            str(workers),
+            "--timeout_worker_healthcheck",
+            str(healthcheck_seconds(healthcheck)),
+            *database_setup,
+            *extra_arguments,
+        )
+        launch: Final = _launch_until_ready(command, root, environment, output, workers)
+        process: Final = launch.process
+        try:
+            with httpx.Client(
+                base_url=f"http://127.0.0.1:{launch.port}",
+                timeout=client_timeout,
+                trust_env=False,
+                limits=GATEWAY_LIMITS,
+            ) as client:
+                yield OwnedProxy(
+                    Gateway(client, gateway.key, gateway.upstream_url, owned.database_url, workers),
+                    process,
+                    launch.log,
+                    healthcheck,
+                )
+        finally:
+            _stop_launch(launch)
 
 
 @contextmanager

@@ -5,8 +5,9 @@ import struct
 import sys
 import types
 from binascii import crc32
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import patch
 
@@ -17,6 +18,7 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.passthrough.transformation import PassthroughStreamCollector
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.passthrough.transformation import (
     BedrockPassthroughConfig,
     is_bedrock_streaming_endpoint,
@@ -898,3 +900,471 @@ def test_stream_collector_logs_nothing_for_an_unrecognized_endpoint():
     collector.add(_event_frame("messageStart", {"role": "assistant"}))
 
     assert collector.build_logged_response(_converse_stream_logging_obj()) is None
+
+
+REQUEST_METADATA_HEADER = "x-amzn-bedrock-request-metadata"
+REQUEST_METADATA_FIELDS = ["user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata"]
+PROXY_IDENTITY = {
+    "user_api_key_alias": "prod-key",
+    "user_api_key_team_alias": "platform",
+    "spend_logs_metadata": {"agent": "triage-bot"},
+}
+EXPECTED_REQUEST_METADATA = {
+    "user_api_key_alias": "prod-key",
+    "user_api_key_team_alias": "platform",
+    "agent": "triage-bot",
+}
+CONVERSE_BODY = {"messages": [{"role": "user", "content": [{"text": "hi"}]}]}
+INVOKE_BODY = {
+    "anthropic_version": "bedrock-2023-05-31",
+    "max_tokens": 8,
+    "messages": [{"role": "user", "content": "hi"}],
+}
+
+
+async def _sent_passthrough_request(
+    action: str,
+    body: dict[str, object],
+    identity: dict[str, object],
+    deployment_params: Mapping[str, object] = MappingProxyType({}),
+    **kwargs: object,
+) -> httpx.Request:
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"ok": True}, request=request)
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-pt",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "aws_access_key_id": "AKIAROUTERKEY",
+                    "aws_secret_access_key": "router-secret",
+                    "aws_region_name": "us-west-2",
+                    **deployment_params,
+                },
+            }
+        ]
+    )
+    await router.allm_passthrough_route(
+        model="bedrock-pt",
+        method="POST",
+        endpoint=f"/model/bedrock-pt/{action}",
+        data=body,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)),
+        litellm_metadata=identity,
+        **kwargs,
+    )
+    return requests[0]
+
+
+def _signed_header_names(request: httpx.Request) -> frozenset[str]:
+    return frozenset(request.headers["authorization"].split("SignedHeaders=")[1].split(",")[0].split(";"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "query_params"),
+    [("converse", None), ("converse-stream", None), ("converse/", None), ("converse", {"trace": "1"})],
+)
+async def test_converse_passthrough_signs_proxy_identity_into_request_metadata(
+    action: str, query_params: dict[str, str] | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
+    caller_body: Final = {**CONVERSE_BODY, "requestMetadata": {"user_api_key_team_alias": "forged", "ticket": "T-42"}}
+
+    request: Final = await _sent_passthrough_request(
+        action, caller_body, PROXY_IDENTITY, request_query_params=query_params
+    )
+
+    assert json.loads(request.content) == {
+        **CONVERSE_BODY,
+        "requestMetadata": {**EXPECTED_REQUEST_METADATA, "ticket": "T-42"},
+    }
+    assert caller_body["requestMetadata"] == {"user_api_key_team_alias": "forged", "ticket": "T-42"}
+    assert REQUEST_METADATA_HEADER not in request.headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["invoke", "invoke-with-response-stream"])
+async def test_invoke_passthrough_sends_proxy_identity_as_a_signed_header(
+    action: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
+
+    request: Final = await _sent_passthrough_request(
+        action,
+        INVOKE_BODY,
+        PROXY_IDENTITY,
+        request_headers={f"x-pass-{REQUEST_METADATA_HEADER}": '{"user_api_key_team_alias":"forged"}'},
+    )
+
+    assert json.loads(request.headers[REQUEST_METADATA_HEADER]) == EXPECTED_REQUEST_METADATA
+    assert REQUEST_METADATA_HEADER in _signed_header_names(request)
+    assert json.loads(request.content) == INVOKE_BODY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["invoke", "invoke-with-response-stream"])
+async def test_invoke_passthrough_keeps_caller_body_request_metadata_in_the_body(
+    action: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
+    caller_body: Final = {**INVOKE_BODY, "requestMetadata": {"user_api_key_team_alias": "forged", "ticket": "T-42"}}
+
+    request: Final = await _sent_passthrough_request(
+        action,
+        caller_body,
+        PROXY_IDENTITY,
+        request_headers={f"x-pass-{REQUEST_METADATA_HEADER.upper()}": '{"user_api_key_team_alias":"forged"}'},
+    )
+
+    assert json.loads(request.content) == {
+        **INVOKE_BODY,
+        "requestMetadata": {**EXPECTED_REQUEST_METADATA, "ticket": "T-42"},
+    }
+    assert REQUEST_METADATA_HEADER not in request.headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("setting", [None, []])
+async def test_passthrough_requests_are_untouched_when_forwarding_is_off(
+    setting: list[str] | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", setting)
+    caller_body: Final = {**CONVERSE_BODY, "requestMetadata": {"user_api_key_team_alias": "forged"}}
+
+    converse: Final = await _sent_passthrough_request("converse", caller_body, PROXY_IDENTITY)
+    invoke: Final = await _sent_passthrough_request("invoke", INVOKE_BODY, PROXY_IDENTITY)
+
+    assert json.loads(converse.content) == caller_body
+    assert REQUEST_METADATA_HEADER not in invoke.headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("action", "body"), [("converse", CONVERSE_BODY), ("invoke", INVOKE_BODY)])
+async def test_passthrough_drops_reserved_caller_keys_when_nothing_resolves(
+    action: str, body: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
+    caller_body: Final = {**body, "requestMetadata": {"user_api_key_team_alias": "forged"}}
+
+    request: Final = await _sent_passthrough_request(action, caller_body, {})
+
+    assert json.loads(request.content) == body
+    assert REQUEST_METADATA_HEADER not in request.headers
+
+
+MALFORMED_REQUEST_METADATA: Final = (
+    pytest.param(
+        {"user_api_key_team_alias": "forged", "bad!": "x"}, "key 'bad!' must be", "ValidationException", id="bad-key"
+    ),
+    pytest.param({"ticket": "a\u00a0b"}, "value for key 'ticket' must be", "ValidationException", id="bad-value"),
+    pytest.param("ticket=T-42", "must be a dictionary", "SerializationException", id="not-a-dictionary"),
+    pytest.param({f"key_{index}": "v" for index in range(17)}, "maximum of 16 items", "ValidationException", id="17"),
+    pytest.param({"ticket": 42}, "must be strings", "SerializationException", id="non-string-value"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["converse", "converse-stream"])
+@pytest.mark.parametrize(("caller_metadata", "violation", "converse_error_type"), MALFORMED_REQUEST_METADATA)
+async def test_malformed_converse_request_metadata_is_rejected_with_the_error_type_bedrock_returns(
+    action: str, caller_metadata: object, violation: str, converse_error_type: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
+
+    with pytest.raises(BedrockError, match=violation) as rejected:
+        await _sent_passthrough_request(action, {**CONVERSE_BODY, "requestMetadata": caller_metadata}, PROXY_IDENTITY)
+
+    assert rejected.value.status_code == 400
+    assert httpx.Headers(rejected.value.headers).get("x-amzn-errortype") == converse_error_type
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["invoke", "invoke-with-response-stream"])
+@pytest.mark.parametrize(("caller_metadata", "violation", "converse_error_type"), MALFORMED_REQUEST_METADATA)
+async def test_malformed_invoke_request_metadata_is_rejected_as_a_bedrock_validation_error(
+    action: str, caller_metadata: object, violation: str, converse_error_type: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
+
+    with pytest.raises(BedrockError, match=violation) as rejected:
+        await _sent_passthrough_request(action, {**INVOKE_BODY, "requestMetadata": caller_metadata}, PROXY_IDENTITY)
+
+    assert rejected.value.status_code == 400
+    assert httpx.Headers(rejected.value.headers).get("x-amzn-errortype") == "ValidationException"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["invoke", "invoke-with-response-stream"])
+async def test_invoke_null_request_metadata_is_rejected_like_bedrock_does(
+    action: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
+
+    with pytest.raises(BedrockError, match="must be a dictionary") as rejected:
+        await _sent_passthrough_request(action, {**INVOKE_BODY, "requestMetadata": None}, PROXY_IDENTITY)
+
+    assert rejected.value.status_code == 400
+    assert httpx.Headers(rejected.value.headers).get("x-amzn-errortype") == "ValidationException"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["converse", "converse-stream"])
+async def test_converse_null_request_metadata_is_treated_as_absent_like_bedrock_does(
+    action: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
+
+    request: Final = await _sent_passthrough_request(action, {**CONVERSE_BODY, "requestMetadata": None}, PROXY_IDENTITY)
+
+    assert json.loads(request.content) == {**CONVERSE_BODY, "requestMetadata": EXPECTED_REQUEST_METADATA}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["invoke", "invoke-with-response-stream"])
+async def test_invoke_metadata_too_long_for_the_header_sends_the_leading_pairs_that_fit(
+    action: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
+    long_pairs: Final = {f"{index:02d}".ljust(256, "k"): "\n" * 256 for index in range(12)}
+    resolved: Final = tuple(
+        {"user_api_key_alias": "prod-key", "user_api_key_team_alias": "platform", **long_pairs}.items()
+    )
+
+    request: Final = await _sent_passthrough_request(
+        action,
+        INVOKE_BODY,
+        {**PROXY_IDENTITY, "spend_logs_metadata": long_pairs},
+        request_headers={f"x-pass-{REQUEST_METADATA_HEADER}": '{"user_api_key_team_alias":"forged"}'},
+    )
+
+    header: Final = request.headers[REQUEST_METADATA_HEADER]
+    sent: Final = json.loads(header)
+    one_more_pair: Final = json.dumps(dict(resolved[: len(sent) + 1]), separators=(",", ":"))
+    assert sent == dict(resolved[: len(sent)])
+    assert len(header) <= 8500 < len(one_more_pair)
+    assert json.loads(request.content) == INVOKE_BODY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("action", "body"), [("converse", CONVERSE_BODY), ("invoke", INVOKE_BODY)])
+@pytest.mark.parametrize("drop_globally", [True, False])
+async def test_malformed_caller_request_metadata_is_dropped_when_params_are_dropped(
+    action: str, body: dict[str, object], drop_globally: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
+    monkeypatch.setattr(litellm, "drop_params", drop_globally)
+    caller_body: Final = {**body, "requestMetadata": {"user_api_key_team_alias": "forged", "bad!": "x"}}
+
+    dropped: Final = await _sent_passthrough_request(
+        action, caller_body, PROXY_IDENTITY, **({} if drop_globally else {"drop_params": True})
+    )
+
+    assert json.loads(dropped.content) == {**body, "requestMetadata": EXPECTED_REQUEST_METADATA}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "body", "caller_metadata"),
+    [
+        ("converse", CONVERSE_BODY, {"user_api_key_team_alias": "caller-team", "bad!": "x"}),
+        ("invoke", INVOKE_BODY, {"user_api_key_team_alias": "caller-team", "bad!": "x"}),
+        ("invoke", INVOKE_BODY, None),
+    ],
+)
+@pytest.mark.parametrize("drop_globally", [True, False])
+async def test_passthrough_body_is_sent_as_is_when_params_are_dropped_and_forwarding_is_off(
+    action: str,
+    body: dict[str, object],
+    caller_metadata: dict[str, str] | None,
+    drop_globally: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
+    monkeypatch.setattr(litellm, "drop_params", drop_globally)
+    caller_body: Final = {**body, "requestMetadata": caller_metadata}
+
+    sent: Final = await _sent_passthrough_request(
+        action, caller_body, PROXY_IDENTITY, **({} if drop_globally else {"drop_params": True})
+    )
+
+    assert json.loads(sent.content) == caller_body
+    assert REQUEST_METADATA_HEADER not in sent.headers
+
+
+DEPLOYMENT_GUARDRAIL: Final[Mapping[str, str]] = {
+    "guardrailIdentifier": "deployment-guardrail",
+    "guardrailVersion": "3",
+    "trace": "enabled",
+    "streamProcessingMode": "sync",
+}
+DEPLOYMENT_INVOKE_GUARDRAIL_HEADERS: Final[Mapping[str, str]] = {
+    "x-amzn-bedrock-guardrailidentifier": "deployment-guardrail",
+    "x-amzn-bedrock-guardrailversion": "3",
+    "x-amzn-bedrock-trace": "ENABLED",
+}
+CALLER_GUARDRAIL: Final[Mapping[str, str]] = {
+    "guardrailIdentifier": "caller-guardrail",
+    "guardrailVersion": "9",
+    "trace": "disabled",
+}
+CALLER_INVOKE_GUARDRAIL_HEADERS: Final[Mapping[str, str]] = {
+    "x-pass-X-Amzn-Bedrock-GuardrailIdentifier": "caller-guardrail",
+    "x-pass-X-Amzn-Bedrock-GuardrailVersion": "9",
+    "x-pass-X-Amzn-Bedrock-Trace": "DISABLED",
+}
+
+
+def _invoke_guardrail_headers(request: httpx.Request) -> dict[str, str]:
+    return {
+        name: value
+        for name, value in request.headers.items()
+        if name.lower().startswith("x-amzn-bedrock-guardrail") or name.lower() == "x-amzn-bedrock-trace"
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "sent_guardrail"),
+    [
+        ("converse", {"guardrailIdentifier": "deployment-guardrail", "guardrailVersion": "3", "trace": "enabled"}),
+        ("converse-stream", DEPLOYMENT_GUARDRAIL),
+    ],
+)
+async def test_converse_passthrough_sends_the_deployment_guardrail_in_the_body(
+    action: str, sent_guardrail: Mapping[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
+
+    request: Final = await _sent_passthrough_request(
+        action, CONVERSE_BODY, {}, deployment_params={"guardrailConfig": DEPLOYMENT_GUARDRAIL}
+    )
+
+    assert json.loads(request.content) == {**CONVERSE_BODY, "guardrailConfig": sent_guardrail}
+    assert _invoke_guardrail_headers(request) == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["invoke", "invoke-with-response-stream"])
+async def test_invoke_passthrough_sends_the_deployment_guardrail_as_signed_headers(
+    action: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
+
+    request: Final = await _sent_passthrough_request(
+        action, INVOKE_BODY, PROXY_IDENTITY, deployment_params={"guardrailConfig": DEPLOYMENT_GUARDRAIL}
+    )
+
+    assert _invoke_guardrail_headers(request) == DEPLOYMENT_INVOKE_GUARDRAIL_HEADERS
+    assert {*DEPLOYMENT_INVOKE_GUARDRAIL_HEADERS, REQUEST_METADATA_HEADER} <= _signed_header_names(request)
+    assert json.loads(request.headers[REQUEST_METADATA_HEADER]) == EXPECTED_REQUEST_METADATA
+    assert json.loads(request.content) == INVOKE_BODY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "caller_guardrail"),
+    [("converse", CALLER_GUARDRAIL), ("converse-stream", {**CALLER_GUARDRAIL, "streamProcessingMode": "async"})],
+)
+async def test_deployment_guardrail_replaces_the_caller_converse_guardrail(
+    action: str, caller_guardrail: Mapping[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
+
+    request: Final = await _sent_passthrough_request(
+        action,
+        {**CONVERSE_BODY, "guardrailConfig": caller_guardrail},
+        {},
+        deployment_params={"guardrailConfig": {"guardrailIdentifier": "deployment-guardrail"}},
+    )
+
+    assert json.loads(request.content) == {
+        **CONVERSE_BODY,
+        "guardrailConfig": {"guardrailIdentifier": "deployment-guardrail"},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["invoke", "invoke-with-response-stream"])
+async def test_deployment_guardrail_replaces_every_invoke_guardrail_header_the_caller_sent(
+    action: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
+
+    request: Final = await _sent_passthrough_request(
+        action,
+        INVOKE_BODY,
+        {},
+        deployment_params={"guardrailConfig": {"guardrailIdentifier": "deployment-guardrail"}},
+        request_headers=CALLER_INVOKE_GUARDRAIL_HEADERS,
+    )
+
+    assert _invoke_guardrail_headers(request) == {"x-amzn-bedrock-guardrailidentifier": "deployment-guardrail"}
+    assert json.loads(request.content) == INVOKE_BODY
+
+
+@pytest.mark.asyncio
+async def test_passthrough_without_a_deployment_guardrail_sends_the_caller_guardrail_as_is(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
+    caller_body: Final = {**CONVERSE_BODY, "guardrailConfig": CALLER_GUARDRAIL}
+
+    converse: Final = await _sent_passthrough_request("converse", caller_body, {})
+    invoke: Final = await _sent_passthrough_request(
+        "invoke", INVOKE_BODY, {}, request_headers=CALLER_INVOKE_GUARDRAIL_HEADERS
+    )
+
+    assert json.loads(converse.content) == caller_body
+    assert _invoke_guardrail_headers(invoke) == {
+        "x-amzn-bedrock-guardrailidentifier": "caller-guardrail",
+        "x-amzn-bedrock-guardrailversion": "9",
+        "x-amzn-bedrock-trace": "DISABLED",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["invoke", "invoke-with-response-stream"])
+@pytest.mark.parametrize("guardrail_config", ["deployment-guardrail", {"guardrailVersion": "3"}])
+async def test_invoke_passthrough_refuses_a_deployment_guardrail_it_cannot_send(
+    action: str, guardrail_config: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
+
+    with pytest.raises(BedrockError, match="guardrailConfig") as rejected:
+        await _sent_passthrough_request(
+            action, INVOKE_BODY, {}, deployment_params={"guardrailConfig": guardrail_config}
+        )
+
+    assert rejected.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_converse_passthrough_forwards_a_non_object_deployment_guardrail_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
+
+    request: Final = await _sent_passthrough_request(
+        "converse", CONVERSE_BODY, {}, deployment_params={"guardrailConfig": "deployment-guardrail"}
+    )
+
+    assert json.loads(request.content) == {**CONVERSE_BODY, "guardrailConfig": "deployment-guardrail"}
+
+
+@pytest.mark.asyncio
+async def test_passthrough_leaves_actions_without_a_guardrail_field_as_sent(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
+    count_tokens_body: Final = {"input": {"converse": CONVERSE_BODY}}
+
+    request: Final = await _sent_passthrough_request(
+        "count-tokens", count_tokens_body, {}, deployment_params={"guardrailConfig": DEPLOYMENT_GUARDRAIL}
+    )
+
+    assert json.loads(request.content) == count_tokens_body
+    assert _invoke_guardrail_headers(request) == {}

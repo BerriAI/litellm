@@ -36,6 +36,8 @@ from integration._support.process import owned_proxy_process
 from integration._support.upstream import aws_event_stream_frame
 from integration._support.wire import Reply, Request, Wire, wire_server
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 MODEL_ID: Final = "anthropic.claude-sonnet-5-v1:0"
 ROUTER_MODEL: Final = "converse-relay"
 EVENT_STREAM: Final = "application/vnd.amazon.eventstream"

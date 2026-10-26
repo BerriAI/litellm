@@ -248,6 +248,7 @@ class SubjectTokenRefusal(LiteLLMBaseModel):
         "invalid_grant",
         "invalid_client",
         "invalid_scope",
+        "invalid_target",
         "temporarily_unavailable",
     ]
     description: str = Field(min_length=1)
@@ -1527,7 +1528,7 @@ def _subject_token_refusal_response(refusal: SubjectTokenRefusal) -> Response:
             return _oauth_error(503, refusal.error, refusal.description)
         case "invalid_client":
             return _oauth_error(401, refusal.error, refusal.description)
-        case "unsupported_grant_type" | "invalid_request" | "invalid_grant" | "invalid_scope":
+        case "unsupported_grant_type" | "invalid_request" | "invalid_grant" | "invalid_scope" | "invalid_target":
             return _oauth_error(400, refusal.error, refusal.description)
         case _:
             assert_never(refusal.error)

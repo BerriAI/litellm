@@ -13,6 +13,7 @@ mock_provider "aws" {
 mock_provider "random" {}
 
 variables {
+  image_tag           = "v9.9.9"
   region              = "us-east-1"
   tenant              = "acme"
   env                 = "test"
@@ -66,7 +67,7 @@ run "enabled_adds_a_sidecar_that_shares_the_gateway_transport" {
 
   assert {
     condition = (
-      local.collector_container[0].image == var.gateway_image &&
+      local.collector_container[0].image == local.gateway_image &&
       local.collector_container[0].entryPoint == ["sh", "-c"] &&
       local.collector_container[0].command == ["exec python -m litellm.proxy.collector"] &&
       local.collector_container[0].essential == false &&

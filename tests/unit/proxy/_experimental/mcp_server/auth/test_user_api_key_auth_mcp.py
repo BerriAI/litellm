@@ -23,6 +23,7 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     is_mcp_admitted_user_subject,
 )
 from litellm.proxy._types import (
+    UI_TEAM_ID,
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -8649,7 +8650,11 @@ class TestUserSubjectTeamUnion:
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.get_mcp_server_from_tool_name",
                 MagicMock(return_value=server),
             ):
-                billed = await MCPRequestHandler.billing_auth_for_tool_call(auth, tool_name="t-grant/tool_a")
+                billed = await MCPRequestHandler.billing_auth_for_tool_call(
+                    auth,
+                    tool_name="t-grant/tool_a",
+                    allowed_mcp_servers=(),
+                )
         assert (billed.team_id, billed.org_id) == ("t-grant", "org-team")
         assert (auth.team_id, auth.org_id) == (None, "org-user-primary"), "authz object must be untouched"
 
@@ -10901,7 +10906,19 @@ async def test_catalog_refresh_reads_current_user_org_without_losing_resource_sc
 @pytest.mark.asyncio
 @pytest.mark.parametrize("current_groups", [[], ["replacement-group"]])
 async def test_catalog_refresh_uses_current_virtual_key_policy_and_keeps_session_scope(monkeypatch, current_groups):
-    permission = LiteLLM_ObjectPermissionTable(object_permission_id="current-policy", mcp_servers=["current-server"])
+    from litellm.proxy import proxy_server
+    from litellm.types.mcp_server.mcp_toolset import MCPToolset
+
+    permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="current-policy", mcp_toolsets=["session-toolset"]
+    )
+    toolset: Final = MCPToolset(
+        toolset_id="session-toolset", toolset_name="session-toolset",
+        tools=[{"server_id": "current-server", "tool_name": "read"}],
+    )
+    tables: Final = SimpleNamespace(litellm_mcptoolsettable=SimpleNamespace(find_many=AsyncMock(return_value=[toolset])))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=tables, writer_db=tables))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
     current = UserAPIKeyAuth(
         object_permission=permission,
         object_permission_id="current-policy",
@@ -10926,7 +10943,10 @@ async def test_catalog_refresh_uses_current_virtual_key_policy_and_keeps_session
     caller.mcp_toolset_id = "session-toolset"
     refreshed = await MCPRequestHandler.refresh_catalog_authority(caller)
     reload_key.assert_awaited_once_with("owned-key-hash", check_db_only=True)
-    assert refreshed.object_permission == permission
+    assert refreshed.object_permission == permission.model_copy(update={
+        "mcp_servers": ["current-server"], "mcp_toolsets": [],
+        "mcp_tool_permissions": {"current-server": ["read"]},
+    })
     assert refreshed.object_permission_id == "current-policy"
     assert (refreshed.team_id, refreshed.org_id, refreshed.project_id, refreshed.user_id) == (
         "new-team",
@@ -11666,3 +11686,1016 @@ async def test_token_minted_credential_lists_tools_for_every_scope_shape(monkeyp
     assert database.writer_db.litellm_usertable.find_unique.await_count >= 1
     database.writer_db.litellm_verificationtoken.find_unique.assert_not_awaited()
     assert credential.team_id == "team-eng" and credential.allowed_routes == list(granted.allowed_routes or ())
+
+
+_PERSONAL_KEY_TEAMS: Final = {
+    "team-a": ("srv-a", {"srv-a": ["add"]}),
+    "team-b": ("srv-b", None),
+}
+
+
+def _personal_key_team(team_id: str) -> LiteLLM_TeamTable:
+    server_id, tool_permissions = _PERSONAL_KEY_TEAMS[team_id]
+    return LiteLLM_TeamTable(
+        team_id=team_id,
+        object_permission_id=f"perm-{team_id}",
+        organization_id=f"org-{team_id}",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id=f"perm-{team_id}",
+            mcp_servers=[server_id],
+            mcp_tool_permissions=tool_permissions,
+        ),
+    )
+
+
+def _personal_key_team_granting_tools(team_id: str, tools: tuple[str, ...]) -> LiteLLM_TeamTable:
+    return _personal_key_team(team_id).model_copy(
+        update={
+            "object_permission": LiteLLM_ObjectPermissionTable(
+                object_permission_id=f"perm-{team_id}",
+                mcp_servers=["srv-b"],
+                mcp_tool_permissions={"srv-b": list(tools)},
+            )
+        }
+    )
+
+
+@pytest.fixture
+def personal_key_owner_teams(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest):
+    """A personal key whose owner is on ``request.param`` teams, resolved against a registry of
+    srv-a (team-a, tool ``add`` only), srv-b (team-b, every tool), srv-c (granted to no team) and
+    srv-open (``allow_all_keys``, granted to no team)."""
+    import litellm
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.auth import auth_checks
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        return _personal_key_team(team_id)
+
+    monkeypatch.setattr(litellm, "personal_key_model_access_from_teams", True)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "should_load_db_object", lambda _: False)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", MagicMock())
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
+    monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
+    monkeypatch.setattr(auth_checks, "get_team_membership", AsyncMock(return_value=None))
+    monkeypatch.setattr(auth_checks, "_check_team_member_budget", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        auth_checks,
+        "get_user_object",
+        AsyncMock(return_value=LiteLLM_UserTable(user_id="alice", teams=list(request.param))),
+    )
+    for server_id in ("srv-a", "srv-b", "srv-c", "srv-open"):
+        global_mcp_server_manager.registry[server_id] = MCPServer(
+            server_id=server_id,
+            name=server_id,
+            server_name=server_id,
+            url=f"https://{server_id}.example.com",
+            transport=MCPTransport.http,
+            allow_all_keys=server_id == "srv-open",
+        )
+    yield UserAPIKeyAuth(api_key="sk-personal", user_id="alice", team_id=None)
+    for server_id in ("srv-a", "srv-b", "srv-c", "srv-open"):
+        global_mcp_server_manager.registry.pop(server_id, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "personal_key_owner_teams, expected_servers",
+    [(("team-a", "team-b"), {"srv-a", "srv-b"}), (("team-b",), {"srv-b"}), ((), set())],
+    indirect=["personal_key_owner_teams"],
+)
+async def test_personal_key_mcp_servers_are_the_union_of_its_owner_team_grants(
+    personal_key_owner_teams: UserAPIKeyAuth, expected_servers: set[str]
+) -> None:
+    assert set(await MCPRequestHandler.get_allowed_mcp_servers(personal_key_owner_teams)) == expected_servers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a", "team-b")], indirect=True)
+async def test_personal_key_mcp_listing_applies_agent_caller_ceiling(
+    personal_key_owner_teams: UserAPIKeyAuth,
+) -> None:
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPServerAccess
+    from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_from_headers
+
+    auth: Final = personal_key_owner_teams.model_copy(update={"agent_id": "agent-1"})
+    caller: Final = agent_caller_from_headers(
+        {"x-litellm-team-id": "team-b"},
+        auth,
+    )
+    auth_with_caller: Final = auth.model_copy(update={"agent_caller": caller})
+
+    capped: Final = await MCPRequestHandler.get_mcp_server_access(auth_with_caller)
+    uncapped: Final = await MCPRequestHandler.get_mcp_server_access(auth)
+
+    assert capped == MCPServerAccess(server_ids=("srv-b",), scope="scoped")
+    assert uncapped == MCPServerAccess(server_ids=("srv-a", "srv-b"), scope="scoped")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a", UI_TEAM_ID)], indirect=True)
+async def test_personal_key_ui_team_does_not_expand_mcp_access(
+    monkeypatch: pytest.MonkeyPatch, personal_key_owner_teams: UserAPIKeyAuth
+) -> None:
+    from litellm.proxy.auth import auth_checks
+
+    async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        if team_id == UI_TEAM_ID:
+            return LiteLLM_TeamTable(team_id=team_id)
+        return _personal_key_team(team_id)
+
+    monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
+    assert await MCPRequestHandler.get_allowed_mcp_servers(personal_key_owner_teams) == ["srv-a"]
+    assert (await MCPRequestHandler.get_mcp_server_access(personal_key_owner_teams)).scope == "scoped"
+    assert await MCPRequestHandler.get_allowed_tools_for_server("srv-c", personal_key_owner_teams) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a", "team-b")], indirect=True)
+async def test_personal_key_tool_call_bills_granting_team(
+    monkeypatch: pytest.MonkeyPatch, personal_key_owner_teams: UserAPIKeyAuth
+) -> None:
+    from litellm.models.budget import LiteLLM_BudgetTable
+    from litellm.models.team_membership import LiteLLM_TeamMembership
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.utils import MCP_TOOL_PREFIX_SEPARATOR, get_server_prefix
+    from litellm.proxy.auth import auth_checks
+
+    team_membership: Final = LiteLLM_TeamMembership(
+        user_id=personal_key_owner_teams.user_id,
+        team_id="team-a",
+        litellm_budget_table=LiteLLM_BudgetTable(rpm_limit=3),
+    )
+
+    async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        team: Final = _personal_key_team_granting_tools(team_id, ("divide",) if team_id == "team-a" else ("multiply",))
+        return team.model_copy(
+            update={
+                "metadata": {"guardrails": ["team-guardrail"]} if team_id == "team-b" else team.metadata,
+                "rpm_limit": 7 if team_id == "team-a" else team.rpm_limit,
+            }
+        )
+
+    monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
+    monkeypatch.setattr(auth_checks, "get_team_membership", AsyncMock(return_value=team_membership))
+    monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
+    server_b: Final = global_mcp_server_manager.registry["srv-b"]
+    server_open: Final = global_mcp_server_manager.registry["srv-open"]
+    tool_name: Final = f"{get_server_prefix(server_b)}{MCP_TOOL_PREFIX_SEPARATOR}multiply"
+    with patch.object(global_mcp_server_manager, "get_mcp_server_from_tool_name", return_value=server_b):
+        billed: Final = await MCPRequestHandler.billing_auth_for_tool_call(personal_key_owner_teams, tool_name)
+    assert billed is not personal_key_owner_teams
+    assert (billed.team_id, billed.org_id) == ("team-b", "org-team-b")
+    assert billed.team_metadata == {"guardrails": ["team-guardrail"]}
+    assert personal_key_owner_teams.team_id is None
+
+    team_a_tool_name: Final = f"{get_server_prefix(server_b)}{MCP_TOOL_PREFIX_SEPARATOR}divide"
+    with patch.object(global_mcp_server_manager, "get_mcp_server_from_tool_name", return_value=server_b):
+        team_a_billed: Final = await MCPRequestHandler.billing_auth_for_tool_call(
+            personal_key_owner_teams, team_a_tool_name
+        )
+    assert team_a_billed.team_id == "team-a"
+    assert team_a_billed.team_rpm_limit == 7
+    assert team_a_billed.team_member_rpm_limit == 3
+
+    open_tool_name: Final = f"{get_server_prefix(server_open)}{MCP_TOOL_PREFIX_SEPARATOR}tool"
+    with patch.object(global_mcp_server_manager, "get_mcp_server_from_tool_name", return_value=server_open):
+        unbilled: Final = await MCPRequestHandler.billing_auth_for_tool_call(personal_key_owner_teams, open_tool_name)
+    assert unbilled is personal_key_owner_teams
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_org_id,team_org_id,expected_org_id",
+    [("org-1", None, "org-1"), (None, "org-2", "org-2")],
+)
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a",)], indirect=True)
+async def test_personal_key_mcp_billing_preserves_key_organization(
+    monkeypatch: pytest.MonkeyPatch,
+    personal_key_owner_teams: UserAPIKeyAuth,
+    key_org_id: str | None,
+    team_org_id: str | None,
+    expected_org_id: str,
+) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.utils import MCP_TOOL_PREFIX_SEPARATOR, get_server_prefix
+    from litellm.proxy.auth import auth_checks
+
+    async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        return LiteLLM_TeamTable(
+            team_id=team_id,
+            object_permission_id=f"perm-{team_id}",
+            organization_id=team_org_id,
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id=f"perm-{team_id}",
+                mcp_servers=["srv-a"],
+                mcp_tool_permissions={"srv-a": ["add"]},
+            ),
+        )
+
+    monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
+    monkeypatch.setattr(auth_checks, "get_team_membership", AsyncMock(return_value=None))
+    monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
+    auth: Final = personal_key_owner_teams.model_copy(update={"org_id": key_org_id})
+    server: Final = global_mcp_server_manager.registry["srv-a"]
+    tool_name: Final = f"{get_server_prefix(server)}{MCP_TOOL_PREFIX_SEPARATOR}add"
+
+    with patch.object(global_mcp_server_manager, "get_mcp_server_from_tool_name", return_value=server):
+        billed: Final = await MCPRequestHandler.billing_auth_for_tool_call(auth, tool_name)
+
+    assert billed.team_id == "team-a"
+    assert billed.org_id == expected_org_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a",)], indirect=True)
+async def test_personal_key_display_name_billing_uses_original_tool_grant(
+    monkeypatch: pytest.MonkeyPatch, personal_key_owner_teams: UserAPIKeyAuth
+) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.auth import auth_checks
+
+    server: Final = global_mcp_server_manager.registry["srv-a"].model_copy(
+        update={
+            "name": "math_a",
+            "server_name": "math_a",
+            "tool_name_to_display_name": {"add": "Add Numbers"},
+        }
+    )
+    monkeypatch.setitem(global_mcp_server_manager.registry, "srv-a", server)
+    monkeypatch.setitem(global_mcp_server_manager.tool_name_to_mcp_server_name_mapping, "math_a-add", "math_a")
+    monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
+
+    billed: Final = await MCPRequestHandler.billing_auth_for_tool_call(
+        personal_key_owner_teams,
+        tool_name="Add Numbers",
+    )
+
+    assert billed.team_id == "team-a"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a",)], indirect=True)
+async def test_personal_key_display_name_billing_uses_allowed_servers(
+    monkeypatch: pytest.MonkeyPatch, personal_key_owner_teams: UserAPIKeyAuth
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.auth import auth_checks
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    hidden_server: Final = MCPServer(
+        server_id="srv_hidden",
+        name="srv_hidden",
+        server_name="srv_hidden",
+        transport=MCPTransport.http,
+        tool_name_to_display_name={"foo": "Shared"},
+    )
+    allowed_server: Final = MCPServer(
+        server_id="srv_a",
+        name="srv_a",
+        server_name="srv_a",
+        transport=MCPTransport.http,
+        tool_name_to_display_name={"bar": "Shared"},
+    )
+
+    async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        return _personal_key_team(team_id).model_copy(
+            update={
+                "object_permission": LiteLLM_ObjectPermissionTable(
+                    object_permission_id=f"perm-{team_id}",
+                    mcp_servers=["srv_a"],
+                    mcp_tool_permissions={"srv_a": ["bar"]},
+                )
+            }
+        )
+
+    monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
+    monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
+    monkeypatch.setitem(global_mcp_server_manager.registry, hidden_server.server_id, hidden_server)
+    monkeypatch.setitem(global_mcp_server_manager.registry, allowed_server.server_id, allowed_server)
+
+    billed: Final = await MCPRequestHandler.billing_auth_for_tool_call(
+        personal_key_owner_teams,
+        tool_name="Shared",
+    )
+
+    assert billed.team_id == "team-a"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a", "team-b")], indirect=True)
+async def test_personal_key_tool_call_bills_lowest_team_when_both_allow(
+    monkeypatch: pytest.MonkeyPatch, personal_key_owner_teams: UserAPIKeyAuth
+) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.utils import MCP_TOOL_PREFIX_SEPARATOR, get_server_prefix
+    from litellm.proxy.auth import auth_checks
+
+    async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        return _personal_key_team_granting_tools(team_id, ("multiply",))
+
+    monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
+    monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
+    server_b: Final = global_mcp_server_manager.registry["srv-b"]
+    tool_name: Final = f"{get_server_prefix(server_b)}{MCP_TOOL_PREFIX_SEPARATOR}multiply"
+    with patch.object(global_mcp_server_manager, "get_mcp_server_from_tool_name", return_value=server_b):
+        billed: Final = await MCPRequestHandler.billing_auth_for_tool_call(personal_key_owner_teams, tool_name)
+    assert (billed.team_id, billed.org_id) == ("team-a", "org-team-a")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a", "team-b")], indirect=True)
+async def test_personal_key_attribution_preserves_hyphenated_native_tool_names(
+    monkeypatch: pytest.MonkeyPatch, personal_key_owner_teams: UserAPIKeyAuth
+) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.auth import auth_checks
+
+    async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        return _personal_key_team_granting_tools(
+            team_id, ("math-divide",) if team_id == "team-a" else ("math-multiply",)
+        ).model_copy(update={"metadata": {"mcp_rpm_limit": {"srv-b": 3 if team_id == "team-b" else 9}}})
+
+    monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
+    monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
+    server: Final = global_mcp_server_manager.registry["srv-b"].model_copy(update={"alias": "math"})
+    with (
+        patch.object(global_mcp_server_manager, "get_mcp_server_from_tool_name", return_value=server),
+        patch.object(global_mcp_server_manager, "get_mcp_server_by_id", return_value=server),
+    ):
+        billed: Final = await MCPRequestHandler.billing_auth_for_tool_call(
+            personal_key_owner_teams, "math-math-multiply"
+        )
+    assert (billed.team_id, billed.org_id) == ("team-b", "org-team-b")
+    assert personal_key_owner_teams.team_id is None
+    assert await MCPRequestHandler.personal_key_team_rpm_limits(personal_key_owner_teams, server, "math-multiply") == {
+        "team-b": {"srv-b": 3}
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a", "team-b")], indirect=True)
+async def test_personal_key_guardrail_auth_preserves_native_tool_name_matching_server_alias(
+    monkeypatch: pytest.MonkeyPatch,
+    personal_key_owner_teams: UserAPIKeyAuth,
+) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.auth import auth_checks
+
+    async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        return _personal_key_team_granting_tools(
+            team_id, ("math-multiply",) if team_id == "team-b" else ("other",)
+        )
+
+    monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
+    monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
+    server: Final = global_mcp_server_manager.registry["srv-b"].model_copy(update={"alias": "math"})
+
+    billed: Final = await MCPRequestHandler.guardrail_auth_for_call(
+        None,
+        personal_key_owner_teams,
+        server,
+        "math-multiply",
+        allowed_mcp_servers=[server],
+    )
+
+    assert billed is not None
+    assert billed.team_id == "team-b"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a",)], indirect=True)
+async def test_personal_key_mcp_billing_inherits_adopted_organization_limits(
+    monkeypatch: pytest.MonkeyPatch, personal_key_owner_teams: UserAPIKeyAuth
+) -> None:
+    from litellm.models.budget import LiteLLM_BudgetTable
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy._types import LiteLLM_OrganizationTable
+
+    organization: Final = LiteLLM_OrganizationTable(
+        organization_id="org-1",
+        organization_alias="org-one",
+        budget_id="budget-1",
+        created_by="test",
+        updated_by="test",
+        metadata={"k": "v"},
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=100, rpm_limit=5, tpm_limit=50),
+    )
+
+    async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        return _personal_key_team_granting_tools(team_id, ("divide",)).model_copy(
+            update={"organization_id": "org-1"}
+        )
+
+    org_loader: Final = AsyncMock(return_value=organization)
+    monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
+    monkeypatch.setattr(auth_checks, "get_org_object_for_request", org_loader)
+    server: Final = global_mcp_server_manager.registry["srv-b"]
+    tool_name: Final = "srv-b-divide"
+
+    with patch.object(global_mcp_server_manager, "get_mcp_server_from_tool_name", return_value=server):
+        billed: Final = await MCPRequestHandler.billing_auth_for_tool_call(personal_key_owner_teams, tool_name)
+
+    assert (
+        billed.org_id,
+        billed.organization_rpm_limit,
+        billed.organization_tpm_limit,
+        billed.organization_metadata,
+    ) == ("org-1", 5, 50, {"k": "v"})
+    assert billed.organization_max_budget == 100
+    assert (
+        personal_key_owner_teams.org_id,
+        personal_key_owner_teams.organization_rpm_limit,
+        personal_key_owner_teams.organization_tpm_limit,
+        personal_key_owner_teams.organization_metadata,
+    ) == (None, None, None, None)
+    org_loader.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a",)], indirect=True)
+async def test_personal_key_mcp_billing_keeps_key_organization_limits(
+    monkeypatch: pytest.MonkeyPatch, personal_key_owner_teams: UserAPIKeyAuth
+) -> None:
+    from litellm.models.budget import LiteLLM_BudgetTable
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy._types import LiteLLM_OrganizationTable
+
+    organization: Final = LiteLLM_OrganizationTable(
+        organization_id="org-1",
+        budget_id="budget-1",
+        created_by="test",
+        updated_by="test",
+        litellm_budget_table=LiteLLM_BudgetTable(rpm_limit=5),
+    )
+
+    async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        return _personal_key_team_granting_tools(team_id, ("divide",)).model_copy(
+            update={"organization_id": "org-1"}
+        )
+
+    org_loader: Final = AsyncMock(return_value=organization)
+    monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
+    monkeypatch.setattr(auth_checks, "get_org_object_for_request", org_loader)
+    auth: Final = personal_key_owner_teams.model_copy(
+        update={"org_id": "org-k", "organization_rpm_limit": 9}
+    )
+    server: Final = global_mcp_server_manager.registry["srv-b"]
+
+    with patch.object(global_mcp_server_manager, "get_mcp_server_from_tool_name", return_value=server):
+        billed: Final = await MCPRequestHandler.billing_auth_for_tool_call(auth, "srv-b-divide")
+
+    assert (billed.org_id, billed.organization_rpm_limit) == ("org-k", 9)
+    org_loader.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a",)], indirect=True)
+async def test_personal_key_mcp_billing_keeps_team_controls_when_org_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch, personal_key_owner_teams: UserAPIKeyAuth
+) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        return _personal_key_team_granting_tools(team_id, ("divide",)).model_copy(
+            update={
+                "organization_id": "org-1",
+                "rpm_limit": 5,
+                "max_budget": 40,
+                "metadata": {"team_private": True},
+            }
+        )
+
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+    org_loader: Final = AsyncMock(side_effect=RuntimeError("org lookup failed"))
+    monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
+    monkeypatch.setattr(auth_checks, "get_team_membership", AsyncMock(return_value=None))
+    monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
+    monkeypatch.setattr(auth_checks, "get_org_object_for_request", org_loader)
+    server: Final = global_mcp_server_manager.registry["srv-b"]
+
+    with patch.object(global_mcp_server_manager, "get_mcp_server_from_tool_name", return_value=server):
+        billed: Final = await MCPRequestHandler.billing_auth_for_tool_call(
+            personal_key_owner_teams,
+            "srv-b-divide",
+            scoped_server=server,
+            native_tool_name="divide",
+            allowed_mcp_servers=[server],
+        )
+
+    assert billed is not personal_key_owner_teams
+    assert billed.team_id == "team-a"
+    assert billed.team_rpm_limit == 5
+    assert billed.team_metadata == {"team_private": True}
+    assert billed.team_max_budget == 40
+    assert billed.org_id == "org-1"
+    assert personal_key_owner_teams.team_id is None
+    assert personal_key_owner_teams.team_rpm_limit is None
+    org_loader.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a",)], indirect=True)
+async def test_personal_key_mcp_billing_keeps_team_id_when_membership_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    personal_key_owner_teams: UserAPIKeyAuth,
+) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        return _personal_key_team_granting_tools(team_id, ("divide",))
+
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+    membership_loader: Final = AsyncMock(side_effect=RuntimeError("membership lookup failed"))
+    monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
+    monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        auth_checks,
+        "get_team_membership",
+        membership_loader,
+    )
+    server: Final = global_mcp_server_manager.registry["srv-b"]
+
+    billed: Final = await MCPRequestHandler.billing_auth_for_tool_call(
+        personal_key_owner_teams,
+        "srv-b-divide",
+        scoped_server=server,
+        native_tool_name="divide",
+        allowed_mcp_servers=[server],
+    )
+
+    membership_loader.assert_awaited_once()
+    assert billed is not personal_key_owner_teams
+    assert billed.team_id == "team-a"
+    assert billed.org_id == "org-team-a"
+    assert personal_key_owner_teams.team_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requires_fresh_policy, expected_team_rpm, expected_member_rpm, expected_metadata",
+    [
+        pytest.param(False, 2, 3, {"policy_source": "cache"}, id="default-uses-cache"),
+        pytest.param(True, 7, 8, {"policy_source": "database"}, id="strict-uses-database"),
+    ],
+)
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a",)], indirect=True)
+async def test_personal_key_mcp_billing_uses_fresh_team_and_membership_for_strict_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    personal_key_owner_teams: UserAPIKeyAuth,
+    requires_fresh_policy: bool,
+    expected_team_rpm: int,
+    expected_member_rpm: int,
+    expected_metadata: dict[str, str],
+) -> None:
+    from litellm.models.budget import LiteLLM_BudgetTable
+    from litellm.models.team_membership import LiteLLM_TeamMembership
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    async def _get_team_object(team_id: str, **kwargs: object) -> LiteLLM_TeamTable:
+        database_value: Final = bool(kwargs.get("check_db_only"))
+        return _personal_key_team_granting_tools(team_id, ("divide",)).model_copy(
+            update={
+                "organization_id": None,
+                "rpm_limit": 7 if database_value else 2,
+                "metadata": {"policy_source": "database" if database_value else "cache"},
+            }
+        )
+
+    async def _get_team_membership(
+        user_id: str, team_id: str, **kwargs: object
+    ) -> LiteLLM_TeamMembership:
+        database_value: Final = bool(kwargs.get("check_db_only"))
+        return LiteLLM_TeamMembership(
+            user_id=user_id,
+            team_id=team_id,
+            litellm_budget_table=LiteLLM_BudgetTable(rpm_limit=8 if database_value else 3),
+        )
+
+    team_loader: Final = AsyncMock(side_effect=_get_team_object)
+    membership_loader: Final = AsyncMock(side_effect=_get_team_membership)
+    monkeypatch.setattr(auth_checks, "get_team_object", team_loader)
+    monkeypatch.setattr(auth_checks, "get_team_membership", membership_loader)
+    monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+    auth: Final = personal_key_owner_teams.model_copy(update={"requires_fresh_policy": requires_fresh_policy})
+    server: Final = global_mcp_server_manager.registry["srv-b"]
+
+    with patch.object(global_mcp_server_manager, "get_mcp_server_from_tool_name", return_value=server):
+        billed: Final = await MCPRequestHandler.billing_auth_for_tool_call(
+            auth,
+            "srv-b-divide",
+            scoped_server=server,
+            native_tool_name="divide",
+            allowed_mcp_servers=[server],
+        )
+
+    assert (billed.team_rpm_limit, billed.team_member_rpm_limit, billed.team_metadata) == (
+        expected_team_rpm,
+        expected_member_rpm,
+        expected_metadata,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a", "team-b")], indirect=True)
+async def test_personal_key_team_mcp_rpm_limit_charges_granting_team(
+    monkeypatch: pytest.MonkeyPatch, personal_key_owner_teams: UserAPIKeyAuth
+) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        PROXY_MaxParallelRequestsHandler_v3,
+        RateLimitDescriptor,
+    )
+
+    async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        team: Final = _personal_key_team_granting_tools(team_id, ("divide",) if team_id == "team-a" else ("multiply",))
+        return team.model_copy(
+            update={
+                "metadata": (
+                    {"mcp_rpm_limit": {"srv-b": 3, "srv-a": 9}}
+                    if team_id == "team-b"
+                    else {"mcp_rpm_limit": {"srv-b": 9}}
+                )
+            }
+        )
+
+    monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
+    monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
+    server_b: Final = global_mcp_server_manager.registry["srv-b"]
+    limits: Final = await MCPRequestHandler.personal_key_team_rpm_limits(personal_key_owner_teams, server_b, "multiply")
+    assert limits == {"team-b": {"srv-b": 3}}
+
+    stamped: Final = personal_key_owner_teams.model_copy(update={"mcp_source_team_rpm_limits": limits})
+    descriptors: list[RateLimitDescriptor] = []
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=MagicMock())
+    limiter._add_mcp_per_team_rate_limit_descriptor(stamped, server_b.name, descriptors)
+    assert len(descriptors) == 1
+    assert descriptors[0]["key"] == "mcp_per_team"
+    assert descriptors[0]["value"] == f"team-b:{server_b.name}"
+    assert descriptors[0]["rate_limit"]["requests_per_unit"] == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a", "team-b")], indirect=True)
+async def test_personal_key_over_budget_team_grants_no_mcp_access(
+    monkeypatch: pytest.MonkeyPatch, personal_key_owner_teams: UserAPIKeyAuth
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth import auth_checks
+
+    async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        team: Final = _personal_key_team(team_id)
+        return team.model_copy(update={"max_budget": 1, "spend": 5}) if team_id == "team-b" else team
+
+    async def _spend_from_fallback(*, fallback_spend: float, **_: object) -> float:
+        return fallback_spend
+
+    monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
+    monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
+    monkeypatch.setattr(proxy_server, "get_current_spend", _spend_from_fallback)
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "budget_alerts", AsyncMock())
+    assert await MCPRequestHandler.get_allowed_mcp_servers(personal_key_owner_teams) == ["srv-a"]
+    assert await MCPRequestHandler.get_allowed_tools_for_server("srv-b", personal_key_owner_teams) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a", "team-b")], indirect=True)
+async def test_personal_key_mcp_tools_follow_the_rule_of_the_team_granting_the_server(
+    personal_key_owner_teams: UserAPIKeyAuth,
+) -> None:
+    assert await MCPRequestHandler.get_allowed_tools_for_server("srv-a", personal_key_owner_teams) == ["add"]
+    assert await MCPRequestHandler.get_allowed_tools_for_server("srv-b", personal_key_owner_teams) is None
+    assert await MCPRequestHandler.get_allowed_tools_for_server("srv-c", personal_key_owner_teams) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [()], indirect=True)
+async def test_personal_key_without_teams_reaches_no_mcp_tool(personal_key_owner_teams: UserAPIKeyAuth) -> None:
+    assert await MCPRequestHandler.get_allowed_tools_for_server("srv-a", personal_key_owner_teams) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a", "team-b")], indirect=True)
+async def test_personal_key_mcp_access_is_unchanged_when_flag_off(
+    monkeypatch: pytest.MonkeyPatch, personal_key_owner_teams: UserAPIKeyAuth
+) -> None:
+    import litellm
+
+    monkeypatch.setattr(litellm, "personal_key_model_access_from_teams", False)
+    assert await MCPRequestHandler.get_allowed_mcp_servers(personal_key_owner_teams) == []
+    assert await MCPRequestHandler.get_allowed_tools_for_server("srv-a", personal_key_owner_teams) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a", "team-b")], indirect=True)
+async def test_team_key_mcp_access_ignores_its_owner_other_teams(personal_key_owner_teams: UserAPIKeyAuth) -> None:
+    from litellm.proxy.auth import auth_checks
+
+    team_key: Final = personal_key_owner_teams.model_copy(update={"team_id": "team-b"})
+    assert await MCPRequestHandler.get_allowed_mcp_servers(team_key) == ["srv-b"]
+    assert await MCPRequestHandler.get_allowed_tools_for_server("srv-a", team_key) is None
+    auth_checks.get_user_object.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [(), ("team-a",)], indirect=True)
+async def test_personal_key_keeps_its_own_tool_rule_on_an_allow_all_server(
+    personal_key_owner_teams: UserAPIKeyAuth,
+) -> None:
+    assert await MCPRequestHandler.get_allowed_tools_for_server("srv-open", personal_key_owner_teams) is None
+    scoped_key: Final = personal_key_owner_teams.model_copy(
+        update={
+            "object_permission": LiteLLM_ObjectPermissionTable(
+                object_permission_id="perm-key", mcp_tool_permissions={"srv-open": ["add"]}
+            )
+        }
+    )
+    assert await MCPRequestHandler.get_allowed_tools_for_server("srv-open", scoped_key) == ["add"]
+    assert await MCPRequestHandler.get_allowed_tools_for_server("srv-c", scoped_key) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a", "team-b")], indirect=True)
+async def test_personal_key_mcp_tools_are_denied_when_a_granting_team_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch, personal_key_owner_teams: UserAPIKeyAuth
+) -> None:
+    """team-b grants srv-b, but the tool-rule read behind the source pinned to team-b fails. The fault
+    must deny the server's tools, not become the allow-all ``None`` of a team without a tool rule."""
+
+    from litellm.proxy.auth import auth_checks
+
+    team_object_reads: Final = AsyncMock()
+
+    async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        team_b_reads: Final = tuple(
+            call for call in team_object_reads.await_args_list if call.kwargs.get("team_id") == "team-b"
+        )
+        if team_id == "team-b" and len(team_b_reads) == 3:
+            raise RuntimeError("connection reset by peer")
+        return _personal_key_team(team_id)
+
+    team_object_reads.side_effect = _get_team_object
+    monkeypatch.setattr(auth_checks, "get_team_object", team_object_reads)
+    srv_b_tools: Final = await MCPRequestHandler.get_allowed_tools_for_server("srv-b", personal_key_owner_teams)
+    team_b_reads: Final = tuple(
+        call for call in team_object_reads.await_args_list if call.kwargs.get("team_id") == "team-b"
+    )
+    assert len(team_b_reads) == 3
+    assert srv_b_tools == []
+    assert await MCPRequestHandler.get_allowed_tools_for_server("srv-a", personal_key_owner_teams) == ["add"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "personal_key_owner_teams, key_org, expected_orgs",
+    [
+        (("team-a", "team-b"), None, ("org-team-a", "org-team-b")),
+        (("team-a", "team-b"), "org-team-a", ("org-team-a",)),
+        (("team-a", "team-b"), "org-key", ()),
+    ],
+    indirect=["personal_key_owner_teams"],
+)
+async def test_personal_key_sources_keep_the_key_own_org_scope(
+    personal_key_owner_teams: UserAPIKeyAuth, key_org: str | None, expected_orgs: tuple[str, ...]
+) -> None:
+    """A key without an org takes each team's org. A key issued under an org keeps it and only its own org's
+    teams become sources, a team of another org grants nothing, so neither org ceiling is dropped."""
+    key: Final = personal_key_owner_teams.model_copy(update={"org_id": key_org})
+    sources: Final = await MCPRequestHandler.personal_key_team_sources(key)
+    assert tuple(source.org_id for source in sources) == expected_orgs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a",)], indirect=True)
+async def test_personal_key_unreadable_team_permission_is_not_a_server_or_billing_source(
+    monkeypatch: pytest.MonkeyPatch,
+    personal_key_owner_teams: UserAPIKeyAuth,
+) -> None:
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPServerAccess
+    from litellm.proxy.auth import auth_checks
+
+    async def _unreadable_team(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        return LiteLLM_TeamTable(
+            team_id=team_id,
+            organization_id="org-team-a",
+            object_permission_id="permission-that-cannot-be-loaded",
+        )
+
+    monkeypatch.setattr(auth_checks, "get_team_object", _unreadable_team)
+
+    assert await MCPRequestHandler.personal_key_team_sources(personal_key_owner_teams) == ()
+    assert await MCPRequestHandler.resolve_personal_key_team_servers(personal_key_owner_teams) == MCPServerAccess(
+        server_ids=(), scope="scoped"
+    )
+    assert await MCPRequestHandler.get_allowed_tools_for_server("srv-a", personal_key_owner_teams) == []
+    assert await MCPRequestHandler.personal_key_attributing_source(personal_key_owner_teams, "srv-a", "add") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a",)], indirect=True)
+async def test_personal_key_team_server_access_group_read_fault_stays_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+    personal_key_owner_teams: UserAPIKeyAuth,
+) -> None:
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPServerAccess
+    from litellm.proxy.auth import auth_checks
+
+    async def _team_with_access_group(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        return LiteLLM_TeamTable(team_id=team_id, access_group_ids=["unreadable-group"])
+
+    monkeypatch.setattr(auth_checks, "get_team_object", _team_with_access_group)
+    get_access_object: Final = AsyncMock(side_effect=RuntimeError("access group read failed"))
+    monkeypatch.setattr(auth_checks, "get_access_object", get_access_object)
+
+    team_grants: Final = await MCPRequestHandler.personal_key_team_server_grants(personal_key_owner_teams)
+    assert len(team_grants) == 1
+    assert team_grants[0][1] == MCPServerAccess(server_ids=(), scope="scoped")
+    assert await MCPRequestHandler.resolve_personal_key_team_servers(personal_key_owner_teams) == MCPServerAccess(
+        server_ids=(), scope="scoped"
+    )
+    get_access_object.assert_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a",)], indirect=True)
+async def test_personal_key_scoped_bare_tool_name_bills_granting_team(
+    monkeypatch: pytest.MonkeyPatch,
+    personal_key_owner_teams: UserAPIKeyAuth,
+) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth import auth_checks
+
+    async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        return _personal_key_team(team_id).model_copy(
+            update={
+                "object_permission": LiteLLM_ObjectPermissionTable(
+                    object_permission_id=f"perm-{team_id}",
+                    mcp_servers=["srv-a"],
+                    mcp_tool_permissions={"srv-a": ["add"]},
+                )
+            }
+        )
+
+    monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
+    monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
+    monkeypatch.setattr(proxy_server, "should_load_db_object", lambda _: False)
+
+    async with global_mcp_server_manager.catalog.operation():
+        billed: Final = await MCPRequestHandler.billing_auth_for_tool_call(
+            personal_key_owner_teams,
+            tool_name="add",
+            mcp_servers=("srv-a",),
+        )
+        unscoped: Final = await MCPRequestHandler.billing_auth_for_tool_call(
+            personal_key_owner_teams,
+            tool_name="add",
+        )
+
+    assert billed.team_id == "team-a"
+    assert unscoped is personal_key_owner_teams
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a",)], indirect=True)
+async def test_personal_key_prefixed_tool_billing_resolves_server_without_loaded_tools(
+    monkeypatch: pytest.MonkeyPatch,
+    personal_key_owner_teams: UserAPIKeyAuth,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.auth import auth_checks
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server: Final = MCPServer(
+        server_id="math_a",
+        name="math_a",
+        server_name="math_a",
+        transport=MCPTransport.http,
+    )
+
+    async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        return _personal_key_team(team_id).model_copy(
+            update={
+                "object_permission": LiteLLM_ObjectPermissionTable(
+                    object_permission_id=f"perm-{team_id}",
+                    mcp_servers=["math_a"],
+                    mcp_tool_permissions={"math_a": ["add"]},
+                )
+            }
+        )
+
+    monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
+    monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
+    monkeypatch.setattr(proxy_server, "should_load_db_object", lambda _: False)
+    monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
+
+    assert global_mcp_server_manager.tool_name_to_mcp_server_name_mapping == {}
+
+    billed: Final = await MCPRequestHandler.billing_auth_for_tool_call(
+        personal_key_owner_teams,
+        tool_name="math_a-add",
+    )
+    unknown_prefix: Final = await MCPRequestHandler.billing_auth_for_tool_call(
+        personal_key_owner_teams,
+        tool_name="unknown-add",
+    )
+
+    assert billed.team_id == "team-a"
+    assert unknown_prefix is personal_key_owner_teams
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a", "team-b")], indirect=True)
+async def test_personal_key_scoped_tool_billing_prefers_scoped_server(
+    monkeypatch: pytest.MonkeyPatch,
+    personal_key_owner_teams: UserAPIKeyAuth,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.auth import auth_checks
+
+    async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        server_id: Final = "srv-a" if team_id == "team-a" else "srv-b"
+        return LiteLLM_TeamTable(
+            team_id=team_id,
+            object_permission_id=f"perm-{team_id}",
+            organization_id=f"org-{team_id}",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id=f"perm-{team_id}",
+                mcp_servers=[server_id],
+                mcp_tool_permissions={server_id: ["search"]},
+            ),
+        )
+
+    monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
+    monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
+    monkeypatch.setattr(proxy_server, "should_load_db_object", lambda _: False)
+    monkeypatch.setitem(global_mcp_server_manager.tool_name_to_mcp_server_name_mapping, "search", "srv-a")
+
+    billed: Final = await MCPRequestHandler.billing_auth_for_tool_call(
+        personal_key_owner_teams,
+        tool_name="search",
+        mcp_servers=("srv-b",),
+    )
+
+    assert billed.team_id == "team-b"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [()], indirect=True)
+async def test_admin_view_personal_key_keeps_its_own_tools_on_every_server(
+    personal_key_owner_teams: UserAPIKeyAuth,
+) -> None:
+    """The admin-view role lists every registry server for a personal key, so its tools resolve from the
+    key's own rules (none here, so unrestricted) instead of being denied for lack of a team grant."""
+    from litellm.proxy._types import LitellmUserRoles
+
+    viewer: Final = personal_key_owner_teams.model_copy(update={"user_role": LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY})
+    assert await MCPRequestHandler.get_allowed_tools_for_server("srv-c", viewer) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a", "team-b")], indirect=True)
+async def test_keyless_grant_source_of_the_owner_does_not_inherit_its_teams(
+    personal_key_owner_teams: UserAPIKeyAuth,
+) -> None:
+    """A source auth of an admitted subject has the owner's user_id, no team and no api_key. It must
+    resolve as the plain caller it is, or a token scoped to one team reaches every team's servers."""
+    source: Final = UserAPIKeyAuth(user_id=personal_key_owner_teams.user_id, team_id=None)
+    assert await MCPRequestHandler.get_allowed_mcp_servers(source) == []
+    assert await MCPRequestHandler.get_allowed_tools_for_server("srv-a", source) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a", "team-b")], indirect=True)
+async def test_personal_key_mcp_access_is_denied_when_owner_teams_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch, personal_key_owner_teams: UserAPIKeyAuth
+) -> None:
+    from litellm.proxy.auth import auth_checks
+
+    monkeypatch.setattr(auth_checks, "personal_key_owner_teams", AsyncMock(side_effect=RuntimeError("db down")))
+    assert await MCPRequestHandler.get_allowed_mcp_servers(personal_key_owner_teams) == []
+    assert await MCPRequestHandler.get_allowed_tools_for_server("srv-a", personal_key_owner_teams) == []
+    assert await MCPRequestHandler.get_allowed_tools_for_server("srv-open", personal_key_owner_teams) == []

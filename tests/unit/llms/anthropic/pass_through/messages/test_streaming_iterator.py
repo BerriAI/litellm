@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Final, Literal
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 
@@ -25,7 +26,9 @@ from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
     is_provider_error_chunk,
     parse_anthropic_error_event,
 )
+from litellm.llms.anthropic.pass_through.messages.transformation import AnthropicMessagesConfig
 from litellm.llms.anthropic.pass_through.safeguards import SafeguardsEvaluator
+from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
 from litellm.types.utils import Choices, Message, ModelResponse
 
 
@@ -859,13 +862,15 @@ class _SuccessRecorder(CustomLogger):
         self.success_kwargs.append(kwargs)
 
 
-def _make_priced_logging_obj(call_id: str, recorder: _SuccessRecorder, model: str) -> LiteLLMLoggingObj:
+def _make_priced_logging_obj(
+    call_id: str, recorder: _SuccessRecorder, model: str, start_time: datetime | None = None
+) -> LiteLLMLoggingObj:
     logging_obj = LiteLLMLoggingObj(
         model=model,
         messages=[{"role": "user", "content": "hi"}],
         stream=True,
         call_type="anthropic_messages",
-        start_time=datetime.now(),
+        start_time=start_time or datetime.now(),
         litellm_call_id=call_id,
         function_id=call_id,
         dynamic_async_success_callbacks=[recorder],
@@ -878,6 +883,53 @@ def _make_priced_logging_obj(call_id: str, recorder: _SuccessRecorder, model: st
         custom_llm_provider="anthropic",
     )
     return logging_obj
+
+
+@pytest.mark.asyncio
+async def test_streamed_messages_log_the_call_start_instead_of_when_the_upstream_answered():
+    model: Final = "claude-sonnet-5"
+    call_start: Final = datetime(2026, 10, 9, 12, 0, 0)
+    recorder: Final = _SuccessRecorder()
+    logging_obj: Final = _make_priced_logging_obj("logs_call_start", recorder, model, start_time=call_start)
+    logging_obj._on_deferred_stream_complete = lambda logging_coroutine: logging_coroutine
+    iterator: Final = BaseAnthropicMessagesStreamingIterator(
+        litellm_logging_obj=logging_obj, request_body={"model": model, "stream": True}
+    )
+
+    async def _full_stream():
+        for event in (*_STREAM_PREFIX, *_STREAM_TAIL):
+            yield event
+
+    _ = [chunk async for chunk in iterator.async_sse_wrapper(_full_stream())]
+    (logging_coroutine,) = logging_obj._deferred_stream_complete_args
+    await logging_coroutine
+
+    assert len(recorder.success_kwargs) == 1
+    assert recorder.success_kwargs[0]["standard_logging_object"]["startTime"] == call_start.timestamp()
+
+
+@pytest.mark.asyncio
+async def test_streamed_messages_from_anthropic_log_the_call_start_instead_of_when_the_upstream_answered():
+    model: Final = "claude-sonnet-5"
+    call_start: Final = datetime(2026, 10, 9, 12, 0, 0)
+    recorder: Final = _SuccessRecorder()
+    logging_obj: Final = _make_priced_logging_obj("anthropic_logs_call_start", recorder, model, start_time=call_start)
+    logging_obj._on_deferred_stream_complete = lambda logging_coroutine: logging_coroutine
+    request_body: Final = {"model": model, "stream": True}
+    iterator: Final = BaseAnthropicMessagesStreamingIterator(litellm_logging_obj=logging_obj, request_body=request_body)
+    sse: Final = "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in (*_STREAM_PREFIX, *_STREAM_TAIL))
+
+    _ = [
+        chunk
+        async for chunk in iterator.get_async_streaming_response_iterator(
+            httpx.Response(200, content=sse.encode()), request_body, logging_obj
+        )
+    ]
+    (logging_coroutine,) = logging_obj._deferred_stream_complete_args
+    await logging_coroutine
+
+    assert len(recorder.success_kwargs) == 1
+    assert recorder.success_kwargs[0]["standard_logging_object"]["startTime"] == call_start.timestamp()
 
 
 class _UpstreamClosedOnDetach:
@@ -1306,6 +1358,33 @@ def test_anthropic_messages_streaming_response_reports_withheld_output_of_its_st
     )
 
 
+def test_anthropic_messages_response_as_sse_events_keeps_message_delta_fields_out_of_message_start():
+    safeguard_results = [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": {}}}]
+    stop_details = {"type": "refusal", "category": "cyber", "explanation": "declined"}
+    response = {
+        "id": "msg_1",
+        "model": "claude-haiku",
+        "role": "assistant",
+        "type": "message",
+        "stop_reason": "refusal",
+        "stop_sequence": None,
+        "stop_details": stop_details,
+        "safeguard_results": safeguard_results,
+        "content": [{"type": "text", "text": "no"}],
+        "usage": {"input_tokens": 3, "output_tokens": 1},
+    }
+    decoded = _decode_sse_events(anthropic_messages_response_as_sse_events(response))
+    message_start = decoded[0][1]["message"]
+    assert message_start["stop_details"] is None
+    assert "safeguard_results" not in message_start
+    assert decoded[-2][1]["delta"] == {
+        "stop_reason": "refusal",
+        "stop_sequence": None,
+        "stop_details": stop_details,
+        "safeguard_results": safeguard_results,
+    }
+
+
 def test_anthropic_messages_response_as_sse_events_no_content_blocks():
     response = {"id": "msg_4", "content": [], "stop_reason": "end_turn"}
     decoded = _decode_sse_events(anthropic_messages_response_as_sse_events(response))
@@ -1530,6 +1609,72 @@ async def test_relay_teardown_dispatches_deferred_billing_when_sentinel_never_co
     assert deferred_fired.is_set()
 
 
+_CLAUDE_CODE_SAFEGUARD_RESULTS: Final = [
+    {
+        "type": "dangerous_tool_use",
+        "status": {
+            "type": "available",
+            "tool_uses": {
+                "toolu_01": {"type": "evaluated", "outcome": "flagged", "explanation": "deletes the filesystem root"}
+            },
+        },
+    }
+]
+
+
+def _sse_events_message_delta(response: Mapping[str, object]) -> object:
+    decoded: Final = _decode_sse_events(anthropic_messages_response_as_sse_events(response))
+    deltas: Final = tuple(payload["delta"] for event_type, payload in decoded if event_type == "message_delta")
+    assert len(deltas) == 1
+    return deltas[0]
+
+
+def test_anthropic_messages_response_as_sse_events_message_delta_carries_safeguard_results():
+    """A Claude Code auto-mode request's classifier verdict rides in
+    message_delta.delta on a real Anthropic stream; a synthesized stream that
+    drops it leaves the client without the verdict."""
+    response = {
+        "id": "msg_7",
+        "content": [{"type": "text", "text": "I won't run that."}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "stop_details": None,
+        "safeguard_results": _CLAUDE_CODE_SAFEGUARD_RESULTS,
+    }
+    assert _sse_events_message_delta(response) == {
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "safeguard_results": _CLAUDE_CODE_SAFEGUARD_RESULTS,
+    }
+
+
+def test_anthropic_messages_response_as_sse_events_message_delta_carries_refusal_stop_details():
+    stop_details = {"type": "refusal", "category": "cyber", "explanation": "declined"}
+    response = {
+        "id": "msg_8",
+        "content": [],
+        "stop_reason": "refusal",
+        "stop_sequence": None,
+        "stop_details": stop_details,
+    }
+    assert _sse_events_message_delta(response) == {
+        "stop_reason": "refusal",
+        "stop_sequence": None,
+        "stop_details": stop_details,
+    }
+
+
+def test_anthropic_messages_response_as_sse_events_message_delta_omits_absent_optional_fields():
+    response = {
+        "id": "msg_9",
+        "content": [{"type": "text", "text": "hello"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "stop_details": None,
+    }
+    assert _sse_events_message_delta(response) == {"stop_reason": "end_turn", "stop_sequence": None}
+
+
 class _OneVerdictClassifier:
     def __init__(self, reply: str) -> None:
         self._reply = reply
@@ -1588,6 +1733,49 @@ async def _chunked(payload: bytes, size: int) -> AsyncIterator[bytes]:
 
 async def _drained(stream: AsyncIterator[bytes]) -> list[bytes]:
     return [chunk async for chunk in stream]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("config", (AnthropicMessagesConfig(), OpenAILikeAnthropicMessagesConfig()), ids=type)
+@pytest.mark.parametrize("stop_sequence", (None, ", 7"), ids=("null", "matched_stop"))
+async def test_native_stream_preserves_nullable_stop_fields_across_chunk_boundaries(
+    config: AnthropicMessagesConfig, stop_sequence: str | None
+) -> None:
+    logging_obj: Final = _make_logging_obj("native_stream_stop_fields")
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "model": logging_obj.model,
+                "content": [],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 19, "output_tokens": 0},
+            },
+        },
+        {
+            "type": "message_delta",
+            "delta": {
+                "stop_reason": "end_turn" if stop_sequence is None else "stop_sequence",
+                "stop_sequence": stop_sequence,
+            },
+            "usage": {"output_tokens": 0},
+        },
+        {"type": "message_stop"},
+    )
+    upstream: Final = b"".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events)
+    response: Final = httpx.Response(200, content=_chunked(upstream, 7))
+    stream: Final = config.get_async_streaming_response_iterator(
+        model=logging_obj.model,
+        httpx_response=response,
+        request_body={"model": logging_obj.model},
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert b"".join(await _drained(stream)) == upstream
 
 
 def _data_events(frames: Sequence[bytes]) -> list[Mapping[str, object]]:

@@ -1,3 +1,4 @@
+import { copyToClipboard } from "@/utils/dataUtils";
 /**
  * RealtimePrettyView - Structured pretty view for OpenAI Realtime API logs
  * Displays session config, conversation turns, and token usage
@@ -276,7 +277,7 @@ function ConversationCard({
         (r.output || []).flatMap((o) => (o.content || []).map((c) => `${o.role}: ${c.transcript || c.text || ""}`)),
       )
       .join("\n");
-    navigator.clipboard.writeText(transcripts);
+    void copyToClipboard(transcripts);
   };
 
   return (

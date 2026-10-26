@@ -352,7 +352,7 @@ class CustomGuardrail(CustomLogger):
         self,
         violation_message: str,
         request_data: dict[str, Any],
-        detection_info: dict[str, Any] | None = None,
+        detection_info: Mapping[str, object] | None = None,
         original_response: object = None,
     ) -> None:
         """
@@ -1139,6 +1139,17 @@ class CustomGuardrail(CustomLogger):
         """
         return False
 
+    def supports_structured_messages(self) -> bool:
+        """Whether this guardrail scans every row of ``structured_messages`` and returns texts that agree with them.
+
+        Guardrails that scan only part of the rows (the latest user turn, the
+        last row, the turns after the last assistant turn, or no tool results),
+        derive their returned texts from the rows, or cannot rewrite rows whose
+        content is a list of parts, override this to return False. Translation handlers that can rewrite the request from ``texts``
+        alone, like Bedrock Converse, then hand them only ``texts``.
+        """
+        return True
+
     def _suppressed_by_auto_router_compression(self) -> bool:
         """True when an auto router's own compression policy suppresses this guardrail.
 
@@ -1357,7 +1368,10 @@ class CustomGuardrail(CustomLogger):
         if event_type is not None:
             guardrail_mode = event_type
         elif isinstance(self.event_hook, Mode):
-            guardrail_mode = GuardrailMode(**dict(self.event_hook.model_dump()))
+            guardrail_mode = GuardrailMode(
+                tags=copy.deepcopy(self.event_hook.tags),
+                default=copy.deepcopy(self.event_hook.default),
+            )
         else:
             guardrail_mode = self.event_hook
 
