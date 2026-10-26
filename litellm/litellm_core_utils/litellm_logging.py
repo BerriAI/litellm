@@ -2749,9 +2749,10 @@ class Logging(LiteLLMLoggingBaseClass):
         litellm_params: Final[object] = self.model_call_details.get("litellm_params")
         if entry is None or not is_str_keyed_dict(litellm_params):
             return
-        metadata: Final[object] = litellm_params.setdefault("metadata", {})
-        if is_str_keyed_dict(metadata):
-            with_guardrail_entry(metadata, entry)
+        metadata: Final[object] = litellm_params.get("metadata")
+        bucket: Final = metadata if is_str_keyed_dict(metadata) else {}
+        litellm_params["metadata"] = bucket
+        with_guardrail_entry(bucket, entry)
 
     def _merge_hidden_params_from_response_into_metadata(self, logging_result: object) -> None:
         """
