@@ -1178,3 +1178,29 @@ describe("getUiConfig runtime backend discovery", () => {
     });
   });
 });
+
+describe("searchToolQueryCall", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("rejects with the backend error message for a denied search", async () => {
+    const errorMessage = "User not allowed to access search tool: exa-search-2";
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            message: errorMessage,
+            type: "user_search_tool_access_denied",
+            code: "403",
+          },
+        }),
+        { status: 403 },
+      ),
+    );
+
+    await expect(Networking.searchToolQueryCall("token", "exa-search-2", "litellm")).rejects.toThrow(errorMessage);
+  });
+});
