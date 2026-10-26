@@ -3,12 +3,19 @@ Azure AI Anthropic Token Counter implementation using the CountTokens API.
 """
 
 import os
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final
 
 from pydantic import JsonValue
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.llms.anthropic.count_tokens.transformation import (
+    AnthropicCountFields,
+    ChatCountTranslationError,
+    anthropic_count_fields,
+)
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
     AzureAIAnthropicCountTokensHandler,
 )
@@ -55,6 +62,8 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
         messages_format: TokenCountMessagesFormat = "anthropic",
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
+        chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+        count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         """
         Count tokens using Azure AI Anthropic's CountTokens API.
@@ -73,6 +82,30 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
 
         if not messages:
             return None
+
+        from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
+
+        match translated := await anthropic_count_fields(
+            model_to_use, messages, system, tools, messages_format, AzureAnthropicConfig(), chat_params
+        ):
+            case ChatCountTranslationError():
+                return translated.response(request_model, model_to_use, "azure_ai_anthropic_api")
+            case AnthropicCountFields():
+                return await self.count_tokens(
+                    model_to_use=model_to_use,
+                    messages=[dict(message) for message in translated.messages],
+                    contents=contents,
+                    deployment=deployment,
+                    request_model=request_model,
+                    tools=[dict(tool) for tool in translated.tools] if translated.tools is not None else None,
+                    system=translated.system,
+                    messages_format="anthropic",
+                    output_format=output_format,
+                    context_management=context_management,
+                    count_options=translated.options,
+                )
+            case None:
+                pass
 
         deployment = deployment or {}
         litellm_params: Final = deployment.get("litellm_params", {})
@@ -101,6 +134,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
                 litellm_params=litellm_params,
                 tools=tools,
                 system=system,
+                optional_params=count_options,
             )
 
             if result is not None:
