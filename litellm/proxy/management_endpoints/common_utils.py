@@ -25,6 +25,21 @@ def validate_finite_spend(spend: float | None) -> None:
         )
 
 
+def validate_non_negative_limits(limits: Mapping[str, int | None], status_code: int = 400) -> None:
+    """Reject negative rate/concurrency limits before they are persisted.
+
+    A negative value is not "unlimited" in LiteLLM: it is stored as-is and then
+    compared against live usage, so the entity (key/team/user/budget/customer)
+    fails every request with a 429 from the moment it is created.
+    """
+    for limit_name, limit_value in limits.items():
+        if limit_value is not None and limit_value < 0:
+            raise HTTPException(
+                status_code=status_code,
+                detail={"error": f"{limit_name} must be non-negative. Received: {limit_value}"},
+            )
+
+
 def validate_budget_duration(budget_duration: str | None, status_code: int = 400) -> None:
     """Reject budget durations that can't be parsed, are non-positive, or
     overflow date math, so a bad value can't be persisted and later crash the

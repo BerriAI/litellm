@@ -28,6 +28,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     user_api_key_has_admin_view,
     validate_budget_duration,
+    validate_non_negative_limits,
 )
 from litellm.proxy.utils import jsonify_object
 from litellm.repositories.budget_repository import BudgetRepository
@@ -80,6 +81,15 @@ async def new_budget(
             status_code=400,
             detail={"error": f"soft_budget must be a non-negative finite number. Received: {budget_obj.soft_budget}"},
         )
+
+    validate_non_negative_limits(
+        {
+            "rpm_limit": budget_obj.rpm_limit,
+            "tpm_limit": budget_obj.tpm_limit,
+            "tpd_limit": budget_obj.tpd_limit,
+            "max_parallel_requests": budget_obj.max_parallel_requests,
+        }
+    )
 
     validate_budget_duration(budget_obj.budget_duration)
 
@@ -164,6 +174,15 @@ async def update_budget(
             status_code=400,
             detail={"error": f"soft_budget must be a non-negative finite number. Received: {budget_obj.soft_budget}"},
         )
+
+    validate_non_negative_limits(
+        {
+            "rpm_limit": budget_obj.rpm_limit,
+            "tpm_limit": budget_obj.tpm_limit,
+            "tpd_limit": budget_obj.tpd_limit,
+            "max_parallel_requests": budget_obj.max_parallel_requests,
+        }
+    )
 
     validate_budget_duration(budget_obj.budget_duration)
 

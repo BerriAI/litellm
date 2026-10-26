@@ -68,6 +68,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     user_api_key_has_admin_view,
     validate_budget_duration,
     validate_finite_spend,
+    validate_non_negative_limits,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: F401  # legacy module exports
     _check_permissions_caller_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -546,6 +547,13 @@ async def new_user(
                 detail=CommonProxyErrors.db_not_connected_error.value,
             )
         validate_budget_duration(data.budget_duration)
+        validate_non_negative_limits(
+            {
+                "rpm_limit": data.rpm_limit,
+                "tpm_limit": data.tpm_limit,
+                "max_parallel_requests": data.max_parallel_requests,
+            }
+        )
 
         # Check for duplicate user_id or email
         await _check_duplicate_user_id(data.user_id, prisma_client)

@@ -166,6 +166,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     upsert_budget_and_membership,
     user_api_key_has_admin_view,
     validate_budget_duration,
+    validate_non_negative_limits,
     validate_team_model_max_budget,
 )
 from litellm.proxy.management_endpoints.organization_endpoints import (
@@ -1668,6 +1669,15 @@ async def new_team(
 
         validate_budget_duration(data.budget_duration)
         validate_budget_duration(data.team_member_budget_duration)
+        validate_non_negative_limits(
+            {
+                "rpm_limit": data.rpm_limit,
+                "tpm_limit": data.tpm_limit,
+                "tpd_limit": data.tpd_limit,
+                "team_member_rpm_limit": data.team_member_rpm_limit,
+                "team_member_tpm_limit": data.team_member_tpm_limit,
+            }
+        )
         validate_team_model_max_budget(model_max_budget=data.model_max_budget, premium_user=premium_user)
         validate_team_model_max_budget(
             model_max_budget=data.team_member_model_max_budget,
@@ -2444,6 +2454,15 @@ async def update_team(
 
         validate_budget_duration(data.budget_duration)
         validate_budget_duration(data.team_member_budget_duration)
+        validate_non_negative_limits(
+            {
+                "rpm_limit": data.rpm_limit,
+                "tpm_limit": data.tpm_limit,
+                "tpd_limit": data.tpd_limit,
+                "team_member_rpm_limit": data.team_member_rpm_limit,
+                "team_member_tpm_limit": data.team_member_tpm_limit,
+            }
+        )
         validate_team_model_max_budget(model_max_budget=data.model_max_budget, premium_user=premium_user)
         validate_team_model_max_budget(
             model_max_budget=data.team_member_model_max_budget,

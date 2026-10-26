@@ -105,6 +105,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     user_api_key_has_admin_view,
     validate_budget_duration,
     validate_finite_spend,
+    validate_non_negative_limits,
 )
 from litellm.proxy.management_endpoints.key_budget_change import (
     KeyBudgetAdminOnly,
@@ -2404,6 +2405,14 @@ async def generate_key_fn(
                 detail={"error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"},
             )
         _validate_soft_budget_value(data.soft_budget)
+        validate_non_negative_limits(
+            {
+                "rpm_limit": data.rpm_limit,
+                "tpm_limit": data.tpm_limit,
+                "tpd_limit": data.tpd_limit,
+                "max_parallel_requests": data.max_parallel_requests,
+            }
+        )
 
         custom_key_generate_hook: Final[Callable[..., Awaitable[Mapping[str, object]]] | None] = (
             _custom_key_generate_hook(proxy_server)
@@ -3118,6 +3127,14 @@ async def _process_single_key_update(
     """
     # Validate max_budget
     _validate_max_budget(update_key_request.max_budget)
+    validate_non_negative_limits(
+        {
+            "rpm_limit": update_key_request.rpm_limit,
+            "tpm_limit": update_key_request.tpm_limit,
+            "tpd_limit": update_key_request.tpd_limit,
+            "max_parallel_requests": update_key_request.max_parallel_requests,
+        }
+    )
 
     check_permissions_caller_permission(
         data=update_key_request,
