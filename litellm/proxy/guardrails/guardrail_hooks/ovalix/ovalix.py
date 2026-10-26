@@ -27,6 +27,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -38,6 +39,7 @@ from litellm.proxy.guardrails.guardrail_hooks.ovalix.ovalix_extraction import (
     extract_tool_calls_from_messages,
     extract_tool_results,
     make_tool_data,
+    str_or_none,
     tool_call_to_tool_data,
     tool_data_key,
     tool_result_text_indices,
@@ -109,11 +111,7 @@ class CheckpointTarget(NamedTuple):
 
 
 def _mapping_or_empty(value: object) -> Mapping[str, object]:
-    return value if isinstance(value, Mapping) else _NO_METADATA
-
-
-def _str_or_none(value: object) -> str | None:
-    return value if isinstance(value, str) and value else None
+    return as_str_mapping(value) or _NO_METADATA
 
 
 def _coerce_bool(value: bool | str) -> bool:
@@ -262,8 +260,8 @@ class OvalixGuardrail(CustomGuardrail):
         """Return a stable actor identifier from request metadata (e.g. user email or id)."""
         metadata: Final = _mapping_or_empty(data.get("metadata") or data.get("litellm_metadata"))
         return (
-            _str_or_none(metadata.get("user_api_key_user_email"))
-            or _str_or_none(metadata.get("user_api_key_user_id"))
+            str_or_none(metadata.get("user_api_key_user_email"))
+            or str_or_none(metadata.get("user_api_key_user_id"))
             or ""
         )
 
@@ -326,7 +324,7 @@ class OvalixGuardrail(CustomGuardrail):
         return response.json()
 
     def _verdict(self, resp: Mapping[str, object]) -> tuple[str, str | None]:
-        return (_str_or_none(resp.get("action_type")) or "").lower(), self._get_trackers_corrected_message(resp)
+        return (str_or_none(resp.get("action_type")) or "").lower(), self._get_trackers_corrected_message(resp)
 
     async def _block_reason_for_item(
         self,
@@ -566,8 +564,8 @@ class OvalixGuardrail(CustomGuardrail):
 
     def _get_trackers_corrected_message(self, resp: Mapping[str, object]) -> str | None:
         """Extract corrected/blocking message content from Tracker checkpoint response."""
-        modified: Final = resp.get("modified_data")
-        if not isinstance(modified, Mapping):
+        modified: Final = as_str_mapping(resp.get("modified_data"))
+        if modified is None:
             return None
         content: Final = modified.get("content")
         return content if isinstance(content, str) else None

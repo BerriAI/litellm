@@ -8,12 +8,28 @@ from types import MappingProxyType
 from typing import Final, NamedTuple
 from urllib.parse import unquote, urlparse
 
+from pydantic import TypeAdapter, ValidationError
+
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+
 _TOOL_NAME_MAX_LENGTH: Final = 100
 _DEFAULT_TOOL_RESULT_NAME: Final = "tool_result"
 _NO_TOOL_INPUT: Final[Mapping[str, object]] = MappingProxyType({})
 
 _DATA_URL_RE: Final = re.compile(r"^data:(?P<mime>[^;,]+)?(?P<params>(?:;[^;,]+)*?)(?P<b64>;base64)?,", re.IGNORECASE)
 _URLSAFE_TO_STANDARD_B64: Final = str.maketrans("-_", "+/")
+_OBJECT_LIST: Final = TypeAdapter(list[object])
+
+
+def str_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _list_items(value: object) -> Sequence[object]:
+    try:
+        return _OBJECT_LIST.validate_python(value, strict=True)
+    except ValidationError:
+        return ()
 
 
 class FilePart(NamedTuple):
@@ -72,10 +88,10 @@ def _name_from_url(url: str) -> str | None:
 
 
 def _part_from_file_block(block: Mapping[str, object], size_limit: int | None, message_index: int) -> FilePart | None:
-    file_obj: Final = block.get("file")
-    if not isinstance(file_obj, dict):
+    file_obj: Final = as_str_mapping(block.get("file"))
+    if file_obj is None:
         return None
-    name: Final = file_obj.get("filename") or file_obj.get("file_id") or None
+    name: Final = str_or_none(file_obj.get("filename")) or str_or_none(file_obj.get("file_id"))
     file_data: Final = file_obj.get("file_data")
     if isinstance(file_data, str) and file_data:
         mime_hint, payload = _split_data_url(file_data)
@@ -89,7 +105,8 @@ def _part_from_image_url_block(
     block: Mapping[str, object], size_limit: int | None, message_index: int
 ) -> FilePart | None:
     image_url: Final = block.get("image_url")
-    url: Final = image_url.get("url") if isinstance(image_url, dict) else image_url
+    image_url_fields: Final = as_str_mapping(image_url)
+    url: Final = image_url_fields.get("url") if image_url_fields is not None else image_url
     if not isinstance(url, str) or not url:
         return None
     if url.startswith("data:"):
@@ -104,7 +121,7 @@ def _part_from_image_url_block(
 def _part_from_input_file_block(
     block: Mapping[str, object], size_limit: int | None, message_index: int
 ) -> FilePart | None:
-    declared_name: Final = block.get("filename") or block.get("file_id") or None
+    declared_name: Final = str_or_none(block.get("filename")) or str_or_none(block.get("file_id"))
     file_data: Final = block.get("file_data")
     if isinstance(file_data, str) and file_data:
         mime_hint, payload = _split_data_url(file_data)
@@ -121,8 +138,8 @@ def _part_from_input_file_block(
 def _part_from_input_audio_block(
     block: Mapping[str, object], size_limit: int | None, message_index: int
 ) -> FilePart | None:
-    audio: Final = block.get("input_audio")
-    if not isinstance(audio, dict):
+    audio: Final = as_str_mapping(block.get("input_audio"))
+    if audio is None:
         return None
     data_b64: Final = audio.get("data")
     if not isinstance(data_b64, str) or not data_b64:
@@ -150,11 +167,8 @@ _BLOCK_PARSERS: Final[Mapping[str, Callable[[Mapping[str, object], int | None, i
 def _file_parts_of_message(
     message: Mapping[str, object], size_limit: int | None, message_index: int
 ) -> Iterator[FilePart]:
-    content: Final = message.get("content")
-    if not isinstance(content, list):
-        return
-    for block in content:
-        if not isinstance(block, Mapping):
+    for block in map(as_str_mapping, _list_items(message.get("content"))):
+        if block is None:
             continue
         block_type = block.get("type")
         if not isinstance(block_type, str):
@@ -171,8 +185,8 @@ def _file_parts_of_message(
 
 
 def _file_parts_of_messages(structured_messages: Sequence[object], size_limit: int | None) -> Iterator[FilePart]:
-    for message_index, message in enumerate(structured_messages):
-        if isinstance(message, Mapping):
+    for message_index, message in enumerate(map(as_str_mapping, structured_messages)):
+        if message is not None:
             yield from _file_parts_of_message(message, size_limit, message_index)
 
 
@@ -219,9 +233,8 @@ def make_tool_data(
 
 
 def _tool_call_field(tool_call: object, key: str) -> object:
-    if isinstance(tool_call, dict):
-        return tool_call.get(key)
-    return getattr(tool_call, key, None)
+    fields: Final = as_str_mapping(tool_call)
+    return fields.get(key) if fields is not None else getattr(tool_call, key, None)
 
 
 def _json_or_str(value: object) -> str:
@@ -238,7 +251,7 @@ def _parsed_tool_input(raw_arguments: str) -> Mapping[str, object]:
         parsed: Final = json.loads(raw_arguments)
     except (ValueError, TypeError):
         return _NO_TOOL_INPUT
-    return parsed if isinstance(parsed, dict) else _NO_TOOL_INPUT
+    return as_str_mapping(parsed) or _NO_TOOL_INPUT
 
 
 def _tool_content_and_input(raw_arguments: object) -> tuple[str, Mapping[str, object]]:
@@ -246,26 +259,22 @@ def _tool_content_and_input(raw_arguments: object) -> tuple[str, Mapping[str, ob
         return raw_arguments, _parsed_tool_input(raw_arguments)
     if raw_arguments is None:
         return "", _NO_TOOL_INPUT
-    if isinstance(raw_arguments, dict):
-        return _json_or_str(raw_arguments), raw_arguments
-    return _json_or_str(raw_arguments), _NO_TOOL_INPUT
+    arguments: Final = as_str_mapping(raw_arguments)
+    return _json_or_str(raw_arguments), arguments if arguments is not None else _NO_TOOL_INPUT
 
 
 def tool_call_to_tool_data(tool_call: object) -> Mapping[str, object] | None:
     function: Final = _tool_call_field(tool_call, "function")
-    name: Final = function.get("name") if isinstance(function, dict) else getattr(function, "name", None)
+    name: Final = _tool_call_field(function, "name")
     if not name or not str(name).strip():
         return None
-    raw_arguments: Final = (
-        function.get("arguments") if isinstance(function, dict) else getattr(function, "arguments", None)
-    )
-    content, tool_input = _tool_content_and_input(raw_arguments)
-    return make_tool_data(name, content, tool_input)
+    content, tool_input = _tool_content_and_input(_tool_call_field(function, "arguments"))
+    return make_tool_data(str(name), content, tool_input)
 
 
 def _message_tool_calls(message: object) -> Sequence[object]:
-    tool_calls: Final = message.get("tool_calls") if isinstance(message, Mapping) else None
-    return tool_calls if isinstance(tool_calls, list) else ()
+    fields: Final = as_str_mapping(message)
+    return _list_items(fields.get("tool_calls")) if fields is not None else ()
 
 
 def extract_tool_calls_from_messages(structured_messages: Sequence[object] | None) -> tuple[object, ...]:
@@ -282,43 +291,38 @@ def tool_data_key(tool_data: Mapping[str, object]) -> str:
     return json.dumps(tool_data, sort_keys=True, default=str)
 
 
-def _tool_content_blocks(content: Sequence[object]) -> Iterator[str]:
-    for block in content:
-        if isinstance(block, Mapping):
-            text = block.get("text")
-            if isinstance(text, str) and text:
-                yield text
-        elif isinstance(block, str):
-            yield block
+def _tool_content_block_text(block: object) -> str | None:
+    if isinstance(block, str):
+        return block
+    fields: Final = as_str_mapping(block)
+    return str_or_none(fields.get("text")) if fields is not None else None
 
 
-def _normalized_tool_content(content: object) -> object:
-    if isinstance(content, list):
-        return "\n".join(_tool_content_blocks(content))
-    if isinstance(content, dict):
-        return _json_or_str(content)
-    return content
+def _tool_content_text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    fields: Final = as_str_mapping(content)
+    if fields is not None:
+        return _json_or_str(fields)
+    texts: Final = (_tool_content_block_text(block) for block in _list_items(content))
+    return "\n".join(text for text in texts if text is not None)
 
 
 def _extract_tool_content(content: object) -> str | None:
-    text: Final = _normalized_tool_content(content)
-    if not isinstance(text, str) or not text.strip():
-        return None
-    return text
+    text: Final = _tool_content_text(content)
+    return text if text.strip() else None
 
 
 def _declared_names_for_call(message: object, call_id: str) -> Iterator[str]:
-    if not isinstance(message, Mapping) or message.get("role") != "assistant":
+    fields: Final = as_str_mapping(message)
+    if fields is None or fields.get("role") != "assistant":
         return
-    tool_calls: Final = message.get("tool_calls")
-    if not isinstance(tool_calls, list):
-        return
-    for tool_call in tool_calls:
-        if not isinstance(tool_call, Mapping) or tool_call.get("id") != call_id:
+    for tool_call in map(as_str_mapping, _list_items(fields.get("tool_calls"))):
+        if tool_call is None or tool_call.get("id") != call_id:
             continue
-        function = tool_call.get("function")
-        name = function.get("name") if isinstance(function, Mapping) else None
-        if name and str(name).strip():
+        function = as_str_mapping(tool_call.get("function"))
+        name = str_or_none(function.get("name")) if function is not None else None
+        if name and name.strip():
             yield name
 
 
@@ -333,12 +337,12 @@ def _resolve_tool_name(messages: Sequence[object], tool_index: int, tool_call_id
 
 def extract_tool_results(
     structured_messages: Sequence[object] | None,
-) -> tuple[tuple[str, str, str | None], ...]:
+) -> tuple[tuple[str, str, object], ...]:
     messages: Final = tuple(structured_messages or ())
 
-    def _results() -> Iterator[tuple[str, str, str | None]]:
-        for index, message in enumerate(messages):
-            if not isinstance(message, Mapping) or message.get("role") != "tool":
+    def _results() -> Iterator[tuple[str, str, object]]:
+        for index, message in enumerate(map(as_str_mapping, messages)):
+            if message is None or message.get("role") != "tool":
                 continue
             content = _extract_tool_content(message.get("content"))
             if content is None:
@@ -349,18 +353,21 @@ def extract_tool_results(
     return tuple(_results())
 
 
-def _message_text_origins(structured_messages: Sequence[object] | None) -> Iterator[tuple[str, bool]]:
-    for message in structured_messages or ():
-        if not isinstance(message, Mapping):
+def _block_texts(content: object) -> Iterator[object]:
+    blocks: Final = (as_str_mapping(block) for block in _list_items(content))
+    return (block.get("text") for block in blocks if block is not None and block.get("text") is not None)
+
+
+def _message_text_origins(structured_messages: Sequence[object] | None) -> Iterator[tuple[object, bool]]:
+    for message in map(as_str_mapping, structured_messages or ()):
+        if message is None:
             continue
         content = message.get("content")
         from_tool_result = message.get("role") == "tool" and _extract_tool_content(content) is not None
         if isinstance(content, str):
             yield content, from_tool_result
-        elif isinstance(content, list):
-            for block in content:
-                if isinstance(block, Mapping) and block.get("text") is not None:
-                    yield block["text"], from_tool_result
+        else:
+            yield from ((text, from_tool_result) for text in _block_texts(content))
 
 
 def tool_result_text_indices(structured_messages: Sequence[object] | None, texts: Sequence[str]) -> frozenset[int]:
