@@ -1154,6 +1154,34 @@ def test_stream_chunk_builder_tolerates_trailing_chunk_without_choices():
     assert response.choices[0].message.content == "Hello world"
 
 
+def test_stream_chunk_builder_keeps_reasoning_details_from_every_chunk():
+    """A streamed `reasoning_details` list must rebuild into the same
+    `provider_specific_fields["reasoning_details"]` that a non-streaming
+    response carries: every entry, in arrival order, not merged by `index`
+    (Vercel AI Gateway sends whole entries that all have `index: 0`)."""
+    text_entry: Final = {"type": "reasoning.text", "text": "step one", "index": 0}
+    encrypted_entry: Final = {"type": "reasoning.encrypted", "data": "ENC-TWO", "index": 0}
+    chunks: Final = [
+        ModelResponseStream(
+            model="m",
+            choices=[
+                StreamingChoices(index=0, delta=Delta(role="assistant", content="Hi", reasoning_details=[text_entry]))
+            ],
+        ),
+        ModelResponseStream(
+            model="m", choices=[StreamingChoices(index=0, delta=Delta(reasoning_details=[encrypted_entry]))]
+        ),
+        ModelResponseStream(model="m", choices=[StreamingChoices(index=0, delta=Delta(content=" there"))]),
+    ]
+
+    response = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    message = response.choices[0].message
+    assert message.content == "Hi there"
+    assert message.provider_specific_fields == {"reasoning_details": [text_entry, encrypted_entry]}
+
+
 def test_anthropic_speed_and_geo_survive_stream_assembly():
     """Anthropic prices fast mode and non-global regions with a multiplier read off
     ``usage.speed`` / ``usage.inference_geo``. Dropping them while reassembling a stream
