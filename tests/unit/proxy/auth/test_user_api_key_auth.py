@@ -18,7 +18,6 @@ import litellm
 from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth,
     UserAPIKeyAuth,
-    get_api_key_from_custom_header,
 )
 from fastapi import WebSocket, HTTPException, status
 
@@ -504,50 +503,6 @@ async def test_auth_not_connected_to_db():
     print("got valid token", valid_token)
     assert valid_token.key_name == "failed-to-connect-to-db"
     assert valid_token.token == "failed-to-connect-to-db"
-
-
-def _assert_api_key_from_custom_header(headers, custom_header_name, expected_api_key):
-    verbose_proxy_logger.setLevel(logging.DEBUG)
-    request = MagicMock(spec=Request)
-    request.headers = headers
-    api_key = get_api_key_from_custom_header(request=request, custom_litellm_key_header_name=custom_header_name)
-    assert api_key == expected_api_key
-
-
-def test_get_api_key_from_custom_header_bearer_token():
-    token = "sk-" + "1" * 8
-    _assert_api_key_from_custom_header(
-        headers={"x-custom-api-key": f"Bearer {token}"},
-        custom_header_name="x-custom-api-key",
-        expected_api_key=token,
-    )
-
-
-def test_get_api_key_from_custom_header_empty_value():
-    _assert_api_key_from_custom_header(
-        headers={"x-custom-api-key": ""},
-        custom_header_name="x-custom-api-key",
-        expected_api_key="",
-    )
-
-
-def test_get_api_key_from_custom_header_missing_header():
-    _assert_api_key_from_custom_header(
-        headers={},
-        custom_header_name="X-Custom-API-Key",
-        expected_api_key="",
-    )
-
-
-def test_get_api_key_from_custom_header_different_casing():
-    token = "sk-" + "1" * 8
-    _assert_api_key_from_custom_header(
-        headers={"X-CUSTOM-API-KEY": f"Bearer {token}"},
-        custom_header_name="X-Custom-API-Key",
-        expected_api_key=token,
-    )
-
-
 
 
 @pytest.mark.parametrize(

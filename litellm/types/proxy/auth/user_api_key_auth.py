@@ -9,6 +9,7 @@ from typing import (
 from pydantic import ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import TypeIs  # noqa: TID251  # narrows the before-validator input without copying it
 
+from litellm._auth.key import hash_token as hash_token  # noqa: PLC0414  # public re-export
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.team import Member
 from litellm.models.verification_token import LiteLLM_VerificationToken
@@ -35,15 +36,6 @@ def is_jwt(token: str | None) -> bool:
         return False
     parts: Final = token.split(".")
     return len(parts) == 3
-
-
-def hash_token(token: str) -> str:
-    import hashlib
-
-    # Hash the string using SHA-256
-    hashed_token: Final = hashlib.sha256(token.encode()).hexdigest()
-
-    return hashed_token
 
 
 _UntypedDict: TypeAlias = dict[Any, Any]

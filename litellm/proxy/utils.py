@@ -136,6 +136,7 @@ from litellm import (
     ModelResponseStream,
     Router,
 )
+from litellm._auth.key import hash_token as hash_token  # noqa: PLC0414  # public re-export
 from litellm._internal_context import service_target
 from litellm._logging import redact_string, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
@@ -5791,11 +5792,8 @@ class PrismaClient:
             # Default to success if metadata parsing fails
             return "success"
 
-    def hash_token(self, token: str):
-        # Hash the string using SHA-256
-        hashed_token: Final = hashlib.sha256(token.encode()).hexdigest()
-
-        return hashed_token
+    def hash_token(self, token: str) -> str:
+        return hash_token(token)
 
     def jsonify_object(self, data: Mapping[str, object]) -> dict[str, object]:
         db_data: Final[dict[str, object]] = copy.deepcopy(dict(data))
@@ -8359,15 +8357,6 @@ async def send_email(
         verbose_proxy_logger.exception("An error occurred while sending the email:" + str(e))
         return False
     return True
-
-
-def hash_token(token: str):
-    import hashlib
-
-    # Hash the string using SHA-256
-    hashed_token: Final = hashlib.sha256(token.encode()).hexdigest()
-
-    return hashed_token
 
 
 def hash_password(password: str) -> str:
