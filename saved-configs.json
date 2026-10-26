@@ -1,0 +1,58 @@
+[
+  {
+    "model_name": "auto-router",
+    "complexity_router_config": {
+      "tiers": {
+        "MEDIUM": [
+          "claude-haiku"
+        ],
+        "SIMPLE": [
+          "claude-haiku"
+        ],
+        "COMPLEX": [
+          "claude-opus"
+        ],
+        "REASONING": [
+          "claude-opus"
+        ]
+      },
+      "classifier_type": "heuristic",
+      "modality_routing": false,
+      "session_affinity": false,
+      "classification_mode": "every_request",
+      "deployment_affinity": true,
+      "escalation_keywords": [
+        "LITELLM ESCALATE"
+      ],
+      "modality_pin_override": false
+    }
+  },
+  {
+    "model_name": "auto-router-2",
+    "complexity_router_config": {
+      "tiers": {
+        "MEDIUM": [
+          "openai-sol"
+        ],
+        "SIMPLE": [
+          "openai-sol"
+        ],
+        "COMPLEX": [
+          "openai-astra"
+        ],
+        "REASONING": [
+          "openai-astra"
+        ]
+      },
+      "classifier_type": "heuristic",
+      "modality_routing": false,
+      "session_affinity": false,
+      "classification_mode": "every_request",
+      "deployment_affinity": true,
+      "escalation_keywords": [
+        "LITELLM ESCALATE"
+      ],
+      "modality_pin_override": false
+    }
+  }
+]
