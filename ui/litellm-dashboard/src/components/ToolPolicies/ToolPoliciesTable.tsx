@@ -1,6 +1,6 @@
 "use client";
 
-import { ColumnFiltersState } from "@tanstack/react-table";
+import { functionalUpdate } from "@tanstack/react-table";
 import { Wrench } from "lucide-react";
 import { useMemo, useState } from "react";
 
@@ -10,6 +10,8 @@ import {
   DataTableFilterDrawer,
   DataTableFilterField,
   DataTableToolbar,
+  useUrlTableState,
+  type UrlTableStateOptions,
 } from "@/components/shared/DataTable";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
@@ -17,6 +19,15 @@ import { INPUT_POLICY_OPTIONS, OUTPUT_POLICY_OPTIONS } from "./PolicySelect";
 import { getToolPoliciesTableColumns } from "./ToolPoliciesTableColumns";
 
 const ALL_VALUE = "all";
+
+type ToolFilterColumn = "input_policy" | "output_policy" | "team_id" | "key_alias";
+
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<ToolFilterColumn> = {
+  sortFields: ["created_at", "tool_name", "input_policy", "output_policy", "call_count", "team_id", "key_alias"],
+  defaultSort: { id: "created_at", desc: true },
+  defaultPageSize: 50,
+  filterColumns: ["input_policy", "output_policy", "team_id", "key_alias"],
+};
 
 const INPUT_POLICY_FILTER_ITEMS = [
   { value: ALL_VALUE, label: "All Input Policies" },
@@ -76,8 +87,16 @@ export function ToolPoliciesTable({
   onInputPolicyChange,
   onOutputPolicyChange,
 }: ToolPoliciesTableProps) {
-  const [globalFilter, setGlobalFilter] = useState("");
-  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const {
+    search,
+    setSearch,
+    sorting,
+    onSortingChange,
+    pagination,
+    onPaginationChange,
+    columnFilters,
+    onColumnFiltersChange,
+  } = useUrlTableState(TABLE_STATE_OPTIONS);
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   const columns = useMemo(() => {
@@ -108,24 +127,27 @@ export function ToolPoliciesTable({
       columns={columns}
       getRowId={(row) => row.tool_id}
       sortingMode="client"
-      defaultSorting={[{ id: "created_at", desc: true }]}
+      sorting={sorting}
+      onSortingChange={onSortingChange}
       paginationMode="client"
+      pagination={pagination}
+      onPaginationChange={onPaginationChange}
       pageSizeOptions={[50, 100]}
       filterMode="client"
       columnFilters={columnFilters}
-      onColumnFiltersChange={setColumnFilters}
-      globalFilter={globalFilter}
-      onGlobalFilterChange={setGlobalFilter}
+      onColumnFiltersChange={onColumnFiltersChange}
+      globalFilter={search}
+      onGlobalFilterChange={(updater) => setSearch(functionalUpdate(updater, search))}
       isLoading={isLoading}
       loadingMessage="Loading tools…"
-      noDataMessage={<ToolPoliciesEmptyState filtered={columnFilters.length > 0 || globalFilter !== ""} />}
+      noDataMessage={<ToolPoliciesEmptyState filtered={columnFilters.length > 0 || search !== ""} />}
       size="compact"
       toolbar={(table) => (
         <>
           <DataTableToolbar
             table={table}
-            searchValue={globalFilter}
-            onSearchChange={setGlobalFilter}
+            searchValue={search}
+            onSearchChange={setSearch}
             searchPlaceholder="Search by Tool Name"
             onRefresh={onRefresh}
             isRefreshing={isRefreshing}

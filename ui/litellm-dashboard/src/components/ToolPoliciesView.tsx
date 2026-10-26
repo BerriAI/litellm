@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useState } from "react";
+import { parseAsString, useQueryState } from "nuqs";
+import React, { useCallback } from "react";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import { ToolDetail } from "@/components/ToolDetail";
 import { ToolPoliciesPanel } from "@/components/ToolPolicies/ToolPoliciesPanel";
 
-type View = { type: "overview" } | { type: "detail"; toolName: string };
+const TOOL_PARAM = parseAsString.withOptions({ history: "push" });
 
 interface ToolPoliciesViewProps {
   accessToken: string | null;
@@ -13,15 +14,11 @@ interface ToolPoliciesViewProps {
 
 export default function ToolPoliciesView({ accessToken }: ToolPoliciesViewProps) {
   const canViewToolPolicies = useCan("viewToolPolicies");
-  const [view, setView] = useState<View>({ type: "overview" });
+  const [toolName, setToolName] = useQueryState("tool", TOOL_PARAM);
 
-  const handleSelectTool = (toolName: string) => {
-    setView({ type: "detail", toolName });
-  };
+  const handleSelectTool = useCallback((name: string) => void setToolName(name), [setToolName]);
 
-  const handleBack = () => {
-    setView({ type: "overview" });
-  };
+  const handleBack = useCallback(() => void setToolName(null), [setToolName]);
 
   if (!canViewToolPolicies) {
     return (
@@ -34,8 +31,8 @@ export default function ToolPoliciesView({ accessToken }: ToolPoliciesViewProps)
 
   return (
     <div className="p-6 w-full min-w-0 flex-1">
-      {view.type === "detail" ? (
-        <ToolDetail toolName={view.toolName} onBack={handleBack} accessToken={accessToken} />
+      {toolName ? (
+        <ToolDetail key={toolName} toolName={toolName} onBack={handleBack} accessToken={accessToken} />
       ) : (
         <ToolPoliciesPanel accessToken={accessToken} onSelectTool={handleSelectTool} />
       )}
