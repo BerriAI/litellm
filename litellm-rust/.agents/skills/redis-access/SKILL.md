@@ -5,11 +5,25 @@ description: Add Redis-backed operations, hide existing redis-py access behind t
 
 # Redis access
 
+## Start from RedisCache
+
+- Evolve `litellm/caching/redis_cache.py`'s `RedisCache` as the existing caller-facing facade
+- It is not yet a fully typed public contract
+  - `BaseCache` leaves common operations untyped
+  - `_AsyncRedisCommands` is a private typing aid and still exposes redis-py pipelines
+  - `init_async_client()`, `init_pubsub_client()`, client attributes, and script callbacks leak implementation details
+- Add or strengthen typed operation methods on `RedisCache` before creating another abstraction
+- Migrate callers to those methods, then make client access private to the implementation
+  - Include sync callers, pub/sub, script users, diagnostics, and shutdown paths
+  - Check external compatibility before removing public methods or attributes, deprecating them separately if needed
+- Do not require a new protocol or facade for each operation
+- Keep domain workflows in their owners, `RedisCache` should not absorb rate-limit or authentication policy
+
 ## Adding new Redis-backed access
 
 - Callers depend on typed operations, never redis-py
-- Reuse an existing cache or state interface when it fits
-- Otherwise add a small operation interface beside the code that owns the state
+- Prefer existing `RedisCache` operations, adding the missing typed capability there when appropriate
+- Use a separate state interface only when the operation belongs to a domain owner
   - Express the caller's need, such as reserving capacity or draining pending updates
   - Use a narrow Python `Protocol` when an injected dependency needs a contract
   - Do not mirror the whole redis-py API or grow a universal Redis wrapper
@@ -37,6 +51,38 @@ description: Add Redis-backed operations, hide existing redis-py access behind t
 - Translate errors at the implementation boundary without hiding an outage as a cache miss
 - Keep this an extraction, not a backend migration or unrelated cleanup
 - Leave unrelated legacy access unchanged, but add no new raw-client escape hatches
+
+## Example, a read that must distinguish missing from unavailable
+
+- The single-use guard in `litellm/proxy/_experimental/mcp_server/gateway_dcr_flow.py` bypasses the cache getter for this reason
+- Before, the caller gets the client, applies the namespace, and interprets Redis failures
+
+```python
+async def marker_state(cache: RedisCache, key: str) -> KeyPresence:
+    try:
+        client = cache.init_async_client()
+        value = await client.get(cache.check_and_fix_namespace(key=key))
+    except Exception:
+        return "unavailable"
+    return "missing" if value is None else "present"
+```
+
+- After, add a typed `RedisCache.async_key_presence(key: str) -> KeyPresence` operation
+  - `KeyPresence = Literal["present", "missing", "unavailable"]`
+  - These are proposed additions, not APIs implemented by this documentation PR
+
+```python
+async def marker_state(cache: RedisCache, key: str) -> KeyPresence:
+    return await cache.async_key_presence(key)
+```
+
+- The implementation owns the namespaced GET, failure translation, and diagnostics
+  - Preserve raw GET semantics, including wrong-type failures and stored JSON `null` counting as present
+  - Preserve the caller's existing fail-closed decision on `"unavailable"`
+- Do not substitute `async_get_cache()` unchanged, its default hides failures as misses and decodes values
+  - `raise_on_error=True` alone does not give a typed result or hide redis-py exceptions
+- Test a missing key, a stored value, stored JSON `null`, a wrong-type key, and an unavailable Redis
+- Apply the same pattern to scripts and transactions, expose a typed operation rather than returning an executor or pipeline
 
 ## An equivalent Rust operation already exists
 
