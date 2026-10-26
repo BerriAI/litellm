@@ -657,6 +657,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
               {!advanced && (
                 <AutoRouterSimpleSetup
                   customized={Boolean(solverOverrides.everyday || solverOverrides.hard)}
+                  hasSuggestions={Boolean(recommended || recommendSolverPair(solverModels, goal, "auto"))}
                   onReset={() => setSolverOverrides({})}
                   goal={goal}
                   family={family}

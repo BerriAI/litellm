@@ -104,7 +104,17 @@ describe("deployedRouterModels", () => {
       deployment("claude-sonnet-5", "openai/custom-model"),
       deployment("wildcard", "openai/*"),
     ];
-    expect(resolve(...rows)).toEqual([]);
+    const models = deployedRouterModels(
+      [
+        { model_group: "mixed", mode: "chat" },
+        { model_group: "claude-sonnet-5", mode: "chat" },
+        { model_group: "wildcard", mode: "chat" },
+      ],
+      rows,
+    );
+    expect(models.map((model) => model.name)).toEqual(["claude-sonnet-5", "mixed"]);
+    expect(models.every((model) => model.family === undefined)).toBe(true);
+    expect(recommendSolverPair(models, "balanced", "auto")).toBeNull();
   });
 
   it("keeps homogeneous replicas and ignores blocked replicas when resolving identity", () => {
@@ -123,7 +133,7 @@ describe("deployedRouterModels", () => {
       deployedRouterModels([{ model_group: "claude-opus-8-12" }, { model_group: "claude-opus-latest" }], []).map(
         (model) => model.name,
       ),
-    ).toEqual(["claude-opus-8-12"]);
+    ).toEqual(["claude-opus-8-12", "claude-opus-latest"]);
   });
 });
 

@@ -228,6 +228,46 @@ describe("AddAutoRouterTab", () => {
     });
   });
 
+  it("creates a router from two custom models without a goal or family decision", async () => {
+    const customModels = ["fast-custom", "quality-custom"];
+    mockFetchAvailableModels.mockResolvedValue(customModels.map((model_group) => ({ model_group, mode: "chat" })));
+    mockFetchAllModelDeployments.mockResolvedValue(
+      customModels.map((model_name) => ({
+        model_name,
+        litellm_params: { model: `openai/${model_name}` },
+      })),
+    );
+    renderWithProviders(<Harness />);
+    expect(await screen.findByText("Choose two models to get started.")).toBeVisible();
+    expect(screen.queryByRole("group", { name: "Routing goal" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Model family" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
+    await chooseSelectOption(
+      userEvent.setup(),
+      screen.getByRole("combobox", { name: "Everyday model" }),
+      /fast-custom/,
+    );
+    await chooseSelectOption(
+      userEvent.setup(),
+      screen.getByRole("combobox", { name: "Hard tasks model" }),
+      /quality-custom/,
+    );
+    expect(screen.queryByRole("button", { name: "Use suggested models" })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls[0][0].complexity_router_config).toMatchObject({
+      classifier_type: "heuristic",
+      classification_mode: "user_turn",
+      tiers: {
+        SIMPLE: ["fast-custom"],
+        MEDIUM: ["fast-custom"],
+        COMPLEX: ["quality-custom"],
+        REASONING: ["quality-custom"],
+      },
+    });
+  });
+
   it("saves concrete solver names expanded by the backend from an openai wildcard route", async () => {
     mockFetchAvailableModels.mockResolvedValue(
       ["openai/gpt-6-luna", "openai/gpt-6.1-sol", "openai/gpt-6-astra"].map((model_group) => ({
@@ -281,7 +321,7 @@ describe("AddAutoRouterTab", () => {
 
   it("keeps manual solver choices on goal changes and carries them into Advanced", async () => {
     mockFetchAvailableModels.mockResolvedValue(
-      ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"].map((model_group) => ({
+      ["claude-haiku-5-5", "custom-fast", "claude-opus-5-5"].map((model_group) => ({
         model_group,
         mode: "chat",
       })),
@@ -289,12 +329,12 @@ describe("AddAutoRouterTab", () => {
     renderWithProviders(<Harness />);
     const everyday = await screen.findByRole("combobox", { name: "Everyday model" });
     await userEvent.click(everyday);
-    await userEvent.click(await screen.findByRole("option", { name: /claude-sonnet-5-5/ }));
+    await userEvent.click(await screen.findByRole("option", { name: /custom-fast/ }));
     fireEvent.click(screen.getByRole("button", { name: "Cheapest", exact: true }));
-    expect(screen.getByRole("combobox", { name: "Everyday model" })).toHaveTextContent("claude-sonnet-5-5");
+    expect(screen.getByRole("combobox", { name: "Everyday model" })).toHaveTextContent("custom-fast");
     expect(screen.getByRole("combobox", { name: "Hard tasks model" })).toHaveTextContent("claude-opus-5-5");
     fireEvent.click(screen.getByRole("button", { name: "Advanced configuration", exact: true }));
-    expectTierModel("Simple", "claude-sonnet-5-5");
+    expectTierModel("Simple", "custom-fast");
     expectTierModel("Reasoning", "claude-opus-5-5");
   });
 
@@ -326,7 +366,7 @@ describe("AddAutoRouterTab", () => {
   it("offers Advanced instead of inventing a second solver for a one-model deployment", async () => {
     mockFetchAvailableModels.mockResolvedValue([{ model_group: "claude-opus-5-5", mode: "chat" }]);
     renderWithProviders(<Harness />);
-    expect(await screen.findByText(/Two distinct model lines are needed/)).toBeVisible();
+    expect(await screen.findByText(/Two deployed models are needed/)).toBeVisible();
     expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Advanced configuration", exact: true }));
     expect(screen.getByText("Define your tiers")).toBeVisible();
@@ -871,7 +911,7 @@ describe("AddAutoRouterTab", () => {
       <AddAutoRouterTab handleOk={vi.fn()} accessToken="token" userRole="Internal User" createScope="team-required" />,
     );
     expect(screen.getByText("Select a team to see available models.")).toBeInTheDocument();
-    expect(screen.queryByText(/Two distinct model lines are needed/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Two deployed models are needed/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled();
     await userEvent.selectOptions(screen.getByTestId("team-dropdown"), "team-1");
     expect(await screen.findByText("Chosen models")).toBeInTheDocument();

@@ -106,7 +106,7 @@ export function AutoRoutersPanel({
         >
           <DialogHeader>
             <DialogTitle>Add Auto Router</DialogTitle>
-            <DialogDescription>Choose a goal and review your models.</DialogDescription>
+            <DialogDescription>Choose models for your auto router.</DialogDescription>
           </DialogHeader>
           <AddAutoRouterTab
             handleOk={handleCreated}
