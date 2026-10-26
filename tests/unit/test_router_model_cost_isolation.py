@@ -3081,14 +3081,16 @@ def test_reload_keeps_custom_pricing_configured_on_litellm_params_for_a_db_model
         _invalidate_model_cost_lowercase_map()
 
 
-def test_reload_keeps_custom_pricing_of_a_db_model_on_a_router_built_without_a_model_list(monkeypatch):
+def test_reload_keeps_custom_pricing_of_a_db_model_on_a_router_built_without_a_model_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """
     A proxy whose config.yaml has no model_list builds its router without one and
     takes every deployment from the DB afterwards. A price data reload must restore
     that deployment's custom pricing exactly as it does for a config router.
     """
-    fetched_catalog = copy.deepcopy(litellm.model_cost)
-    router = Router()
+    fetched_catalog: Final = copy.deepcopy(litellm.model_cost)
+    router: Final = Router()
     router.add_deployment(
         deployment=Deployment(
             model_name="db-only-priced",
