@@ -4813,11 +4813,17 @@ class Router:
         )
         declared_provider: Final = deployment_context.get("custom_llm_provider")
         declared_model: Final = deployment_context.get("model")
-        forwarded_authorization: Final = ProviderSpecificHeaderUtils.forwarded_authorization(
-            request_context.get("provider_specific_header"),
+        deployment_provider: Final = (
             declared_provider
             if isinstance(declared_provider, str)
-            else inferred_provider(declared_model if isinstance(declared_model, str) else None),
+            else inferred_provider(declared_model if isinstance(declared_model, str) else None)
+        )
+        forwarded_authorization: Final = (
+            ProviderSpecificHeaderUtils.forwarded_authorization(
+                request_context.get("provider_specific_header"), deployment_provider
+            )
+            if deployment_provider == "chatgpt"
+            else None
         )
         if is_clientside_credential(request_kwargs=kwargs) or forwarded_authorization is not None:
             deployment_pydantic_obj: Final = self._handle_clientside_credential(
