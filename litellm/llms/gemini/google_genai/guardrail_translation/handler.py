@@ -15,7 +15,10 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional
 
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamTransformSink,
@@ -25,9 +28,10 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 _EMPTY_REQUEST_DATA: Final[Mapping[str, object]] = MappingProxyType({})
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _field(container: object, name: str) -> object | None:
@@ -96,7 +100,7 @@ def _part_texts(text_parts: Sequence[object]) -> tuple[str, ...]:
 def _texts_payload(
     texts: Sequence[str],
 ) -> list[str]:  # mutable-ok: GenericGuardrailAPIInputs.texts is declared list[str]
-    return list(texts)  # mutable-ok: GenericGuardrailAPIInputs.texts is declared list[str]
+    return list(texts)
 
 
 def _write_back_texts(text_parts: Sequence[object], guardrailed_texts: Sequence[str] | None) -> None:
@@ -108,12 +112,10 @@ def _write_back_texts(text_parts: Sequence[object], guardrailed_texts: Sequence[
 
 def _parse_json_dict_or_none(payload: str) -> Mapping[str, object] | None:
     try:
-        parsed: Final = json.loads(payload)
+        parsed: Final = _DECODED_JSON.validate_python(json.loads(payload))
     except json.JSONDecodeError:
         return None
-    if isinstance(parsed, dict):
-        return parsed
-    return None
+    return as_str_mapping(parsed)
 
 
 def _sse_payload_texts(sse_text: str) -> tuple[str, ...]:
@@ -252,4 +254,4 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
         metadata_pairs: Final = (
             (("litellm_metadata", user_metadata),) if user_metadata and "litellm_metadata" not in base else ()
         )
-        return dict((*base.items(), *context_pairs, *metadata_pairs))  # mutable-ok: apply_guardrail takes a plain dict
+        return dict((*base.items(), *context_pairs, *metadata_pairs))

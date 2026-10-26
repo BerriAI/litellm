@@ -70,7 +70,7 @@ Claude Code (Anthropic's official CLI) sends web search requests using Anthropic
 
 Native tools are converted to LiteLLM standard format **before** sending to the provider:
 
-1. **Conversion Point** (`litellm/llms/anthropic/experimental_pass_through/messages/handler.py`):
+1. **Conversion Point** (`litellm/llms/anthropic/pass_through/messages/handler.py`):
    - In `anthropic_messages()` function (lines 60-127)
    - Runs BEFORE the API request is made
    - Detects native web search tools using `is_web_search_tool()`

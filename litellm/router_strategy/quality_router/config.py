@@ -4,7 +4,9 @@ Configuration models for the QualityRouter.
 
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 # Default mapping from ComplexityTier name (string) to quality tier (int).
 # Higher tier = higher capability requirement.
@@ -16,7 +18,7 @@ DEFAULT_COMPLEXITY_TO_QUALITY: Final[dict[str, int]] = {
 }
 
 
-class QualityRouterConfig(BaseModel):
+class QualityRouterConfig(LiteLLMBaseModel):
     """Configuration for the QualityRouter."""
 
     available_models: list[str] = Field(
@@ -40,7 +42,7 @@ class QualityRouterConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
-class RoutingPreferences(BaseModel):
+class RoutingPreferences(LiteLLMBaseModel):
     """Per-deployment routing preferences declared on model_info."""
 
     quality_tier: int = Field(

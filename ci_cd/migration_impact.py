@@ -514,7 +514,7 @@ class _Site:
 
     @property
     def where(self) -> str:
-        return f" (`{self.star.location}`)" if self.star is not None else ""
+        return f" ({_inline_code(self.star.location)})" if self.star is not None else ""
 
     def rate(self, severity: str, effect: str) -> Finding:
         return Finding(
@@ -547,10 +547,10 @@ def _rule_drop(site: _Site) -> Finding | None:
     if site.knows(column):
         return site.rate(
             BREAKING,
-            f"Drops `{column}`, which the previous version's client selects on every read of this table{site.where}. "
+            f"Drops {_inline_code(column)}, which the previous version's client selects on every read of this table{site.where}. "
             "Old pods keep failing until they are gone; reconnecting does not help.",
         )
-    return site.rate(INFO, f"Drops `{column}`, a column the previous version does not know.")
+    return site.rate(INFO, f"Drops {_inline_code(column)}, a column the previous version does not know.")
 
 
 def _rule_rename(site: _Site) -> Finding | None:
@@ -560,10 +560,10 @@ def _rule_rename(site: _Site) -> Finding | None:
         if site.knows(old_name):
             return site.rate(
                 BREAKING,
-                f"Renames `{old_name}`, which the previous version still selects and writes by that name{site.where}. "
+                f"Renames {_inline_code(old_name)}, which the previous version still selects and writes by that name{site.where}. "
                 "Old pods cannot recover on their own.",
             )
-        return site.rate(INFO, f"Renames `{old_name}`, a column the previous version does not know.")
+        return site.rate(INFO, f"Renames {_inline_code(old_name)}, a column the previous version does not know.")
     if _ALTER_TABLE.search(site.statement) is None or _RENAME_TABLE.search(site.statement) is None:
         return None
     if site.context.knows_table(site.table):
@@ -582,7 +582,7 @@ def _rule_not_null(site: _Site) -> Finding | None:
         if unguarded or site.context.schema is None:
             return site.rate(
                 BREAKING,
-                f"Requires `{'`, `'.join(unguarded or required)}`, which the previous version may write as NULL. "
+                f"Requires {', '.join(_inline_code(column) for column in (unguarded or required))}, which the previous version may write as NULL. "
                 "Those writes are now rejected.",
             )
         return site.rate(INFO, "The previous version already always writes this column, so nothing changes for it.")
@@ -596,7 +596,7 @@ def _rule_type_change(site: _Site) -> Finding | None:
     if not changes:
         return None
     narrowing: Final = [
-        f"`{match.group('column')}` to {match.group('type').upper()}"
+        f"{_inline_code(match.group('column'))} to {match.group('type').upper()}"
         for match in changes
         if (known := site.context.column(site.table, match.group("column"))) is None
         or match.group("type").upper() not in WIDENING.get(known.prisma_type, frozenset())
@@ -628,7 +628,7 @@ def _rule_constraint(site: _Site) -> Finding | None:
         if checked:
             return site.rate(
                 WRITE_REJECT,
-                f"Adds a rule on `{'`, `'.join(checked)}` that the previous version never enforced. Rows it writes "
+                f"Adds a rule on {', '.join(_inline_code(column) for column in checked)} that the previous version never enforced. Rows it writes "
                 "that violate the rule are now rejected; whether any do depends on the data.",
             )
         if _NOT_VALID.search(site.statement) is not None:
@@ -645,7 +645,7 @@ def _rule_constraint(site: _Site) -> Finding | None:
         return None  # the key it replaces already rejected everything this one does
     return site.rate(
         WRITE_REJECT,
-        f"Makes `{'`, `'.join(covered)}` unique, which the previous version never enforced. Duplicate rows it "
+        f"Makes {', '.join(_inline_code(column) for column in covered)} unique, which the previous version never enforced. Duplicate rows it "
         "writes are now rejected; whether any are depends on the data.",
     )
 
@@ -655,7 +655,7 @@ def _rule_whole_row_read(site: _Site) -> Finding | None:
         return None
     return site.rate(
         PREPARED_PLAN,
-        f"Read whole-row by `{_shape(site.star)}`{site.where}, so the prepared plans cached on the previous "
+        f"Read whole-row by {_inline_code(_shape(site.star))}{site.where}, so the prepared plans cached on the previous "
         "version's pooled connections are rejected with `cached plan must not change result type` until those "
         "connections are recreated.",
     )
@@ -665,7 +665,7 @@ def _rule_lock(site: _Site) -> Finding | None:
     if _CREATE_INDEX.search(site.statement) is not None and _CONCURRENTLY.search(site.statement) is None:
         joined: Final = _joined_read_for(site.table, site.context.star_reads)
         read_note: Final = (
-            f" The table is joined by `{_shape(joined)}` (`{joined.location}`), so that read waits too."
+            f" The table is joined by {_inline_code(_shape(joined))} ({_inline_code(joined.location)}), so that read waits too."
             if joined is not None
             else ""
         )
@@ -800,34 +800,50 @@ def _cited_reads(report: Report) -> tuple[StarRead, ...]:
     return tuple(read for read in representatives if read is not None)
 
 
+def _inline_code(value: str) -> str:
+    text: Final = " ".join(value.split()).replace("|", "\\|")
+    fence: Final = "`" * (1 + max((len(run) for run in re.findall(r"`+", text)), default=0))
+    padding: Final = " " if "`" in text else ""
+    return f"{fence}{padding}{text}{padding}{fence}"
+
+
 def _evidence_line(report: Report) -> str:
     schema_note: Final = (
-        f"no `schema.prisma` at `{report.base}`, so drops, renames and constraints are rated as if the previous "
+        f"no `schema.prisma` at {_inline_code(report.base)}, so drops, renames and constraints are rated as if the previous "
         "version used every column"
         if report.schema_tables is None
-        else f"columns the previous version uses: `schema.prisma` at `{report.base}` ({report.schema_tables} tables)"
+        else f"columns the previous version uses: `schema.prisma` at {_inline_code(report.base)} ({report.schema_tables} tables)"
     )
     cited: Final = _cited_reads(report)
-    shapes: Final = ", ".join(sorted({f"`{_shape(read)}` on `{read.table}` (`{read.location}`)" for read in cited}))
+    shapes: Final = ", ".join(
+        sorted(
+            {
+                f"{_inline_code(_shape(read))} on {_inline_code(read.table)} ({_inline_code(read.location)})"
+                for read in cited
+            }
+        )
+    )
     reads_note: Final = (f"whole-row reads: {shapes}",) if cited else ()
     return f"<sub>Evidence: {'; '.join((schema_note, *reads_note))}.</sub>"
 
 
 def render_markdown(report: Report) -> str:
     if not report.migrations:
-        return f"## Database Schema Changes\n\nNo database schema changes since `{report.base}`.\n"
+        return f"## Database Schema Changes\n\nNo database schema changes since {_inline_code(report.base)}.\n"
 
     count: Final = len(report.migrations)
     notable: Final = tuple(finding for finding in report.findings if finding.severity != INFO)
     rows: Final = tuple(
-        f"| **{SEVERITY_LABEL[finding.severity]}** | `{finding.migration}` | `{_clip(finding.statement)}` | "
+        f"| **{SEVERITY_LABEL[finding.severity]}** | {_inline_code(finding.migration)} | {_inline_code(_clip(finding.statement))} | "
         f"{finding.effect} |"
         for finding in notable[:MAX_ROWS]
     )
     overflow: Final = (
         (
-            f"| | | | ...and {len(notable) - MAX_ROWS} more, worst first. Run "
-            f"`python3 ci_cd/migration_impact.py --base {report.base} --head {report.head}` for the full list. |",
+            (
+                f"| | | | ...and {len(notable) - MAX_ROWS} more, worst first. Run "
+                f"{_inline_code(f'python3 ci_cd/migration_impact.py --base {report.base} --head {report.head}')} for the full list. |"
+            ),
         )
         if len(notable) > MAX_ROWS
         else ()
@@ -841,8 +857,10 @@ def render_markdown(report: Report) -> str:
     lines: Final = (
         "## Database Schema Changes",
         "",
-        f"This release adds **{count} migration{'' if count == 1 else 's'}** to `litellm-proxy-extras`, applied by "
-        f"the first pod that boots (`prisma migrate deploy`). Rated against a pod still running `{report.base}`:",
+        (
+            f"This release adds **{count} migration{'' if count == 1 else 's'}** to `litellm-proxy-extras`, applied by "
+            f"the first pod that boots (`prisma migrate deploy`). Rated against a pod still running {_inline_code(report.base)}:"
+        ),
         "",
         "| | Migration | Statement | Effect on pods still on the previous version |",
         "|:--:|:--|:--|:--|",
@@ -870,7 +888,7 @@ def _clip(statement: str, limit: int = 90) -> str:
     match: Final = _DDL_START.search(statement)
     ddl: Final = statement[match.start() :] if match is not None else statement
     clipped: Final = ddl if len(ddl) <= limit else f"{ddl[: limit - 1]}…"
-    return clipped.replace("|", "\\|")
+    return clipped
 
 
 def render_json(report: Report) -> str:

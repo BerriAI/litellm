@@ -7,6 +7,9 @@ import { CellTooltip, IdentityCell, StatusBadge, type StatusTone } from "@/compo
 import { Badge } from "@/components/ui/badge";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import { PUBLIC_MODEL_HUB_SORTABLE_FIELDS } from "@/components/publicModelHub/publicModelHubFilters";
+import { displayMode } from "@/lib/decisionModels";
+import type { ModelCustomMetadataValue } from "@/components/AIHub/ModelCustomMetadata";
+import { formatModelModeLabel, ProviderLogo } from "@/components/AIHub/ModelHubProviders";
 
 export interface ModelGroupInfo {
   model_group: string;
@@ -25,6 +28,9 @@ export interface ModelGroupInfo {
   health_status?: string;
   health_response_time?: number;
   health_checked_at?: string;
+  description?: string;
+  custom_tags?: string[] | null;
+  custom_metadata?: Record<string, ModelCustomMetadataValue> | null;
   [key: string]: any;
 }
 
@@ -162,20 +168,42 @@ function OverflowChips({ items }: { items: string[] }) {
 
 interface PublicModelHubColumnsDeps {
   onModelClick: (model: ModelGroupInfo) => void;
+  showProviderLogos?: boolean;
 }
 
-export const getPublicModelHubColumns = ({ onModelClick }: PublicModelHubColumnsDeps): ColumnDef<ModelGroupInfo>[] => {
+export const getPublicModelHubColumns = ({
+  onModelClick,
+  showProviderLogos = false,
+}: PublicModelHubColumnsDeps): ColumnDef<ModelGroupInfo>[] => {
   const columns: ColumnDef<ModelGroupInfo>[] = [
     {
       id: "model_group",
       accessorKey: "model_group",
-      meta: { title: "Model Name" },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Model Name" />,
+      meta: { title: showProviderLogos ? "Model" : "Model Name" },
+      header: ({ column }) => (
+        <DataTableSortHeader column={column} title={showProviderLogos ? "Model" : "Model Name"} />
+      ),
       size: 200,
       sortingFn: "alphanumeric",
       cell: ({ row }) => (
         <IdentityCell
-          title={row.original.model_group}
+          title={
+            showProviderLogos && row.original.providers?.[0] ? (
+              <span className="flex min-w-0 items-center gap-2">
+                <ProviderLogo provider={row.original.providers[0]} className="chat-model-provider-logo-small" />
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <span className="truncate">{row.original.model_group}</span>{" "}
+                  <span className="truncate font-sans text-[11px] font-normal text-muted-foreground">
+                    {(row.original.providers ?? [])
+                      .map((provider) => getProviderLogoAndName(provider).displayName)
+                      .join(", ")}
+                  </span>
+                </span>
+              </span>
+            ) : (
+              row.original.model_group
+            )
+          }
           titleClassName="font-mono text-xs font-normal"
           className="max-w-72"
           onClick={() => onModelClick(row.original)}
@@ -201,8 +229,10 @@ export const getPublicModelHubColumns = ({ onModelClick }: PublicModelHubColumns
       sortingFn: "alphanumeric",
       cell: ({ row }) => (
         <span className="flex items-center gap-2 text-sm">
-          <span>{getModeIcon(row.original.mode || "")}</span>
-          <span>{row.original.mode || "Chat"}</span>
+          {!showProviderLogos && <span>{getModeIcon(row.original.mode || "")}</span>}
+          <span>
+            {showProviderLogos ? formatModelModeLabel(row.original.mode) : displayMode(row.original.mode) ?? "Chat"}
+          </span>
         </span>
       ),
     },
@@ -225,14 +255,26 @@ export const getPublicModelHubColumns = ({ onModelClick }: PublicModelHubColumns
     {
       id: "input_cost_per_token",
       accessorKey: "input_cost_per_token",
-      meta: { title: "Input $/1M", numeric: true },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Input $/1M" />,
-      size: 110,
-      cell: ({ row }) => (
-        <span className="text-sm">
-          {row.original.input_cost_per_token ? formatCost(row.original.input_cost_per_token) : "Free"}
-        </span>
+      meta: { title: showProviderLogos ? "Cost / 1M tokens" : "Input $/1M", numeric: true },
+      header: ({ column }) => (
+        <DataTableSortHeader column={column} title={showProviderLogos ? "Cost / 1M tokens" : "Input $/1M"} />
       ),
+      size: 110,
+      cell: ({ row }) =>
+        showProviderLogos ? (
+          <div className="flex flex-col gap-0.5 text-xs tabular-nums">
+            <span>
+              Input {row.original.input_cost_per_token ? formatCost(row.original.input_cost_per_token) : "Free"}
+            </span>
+            <span className="text-muted-foreground">
+              Output {row.original.output_cost_per_token ? formatCost(row.original.output_cost_per_token) : "Free"}
+            </span>
+          </div>
+        ) : (
+          <span className="text-sm">
+            {row.original.input_cost_per_token ? formatCost(row.original.input_cost_per_token) : "Free"}
+          </span>
+        ),
     },
     {
       id: "output_cost_per_token",
@@ -257,6 +299,13 @@ export const getPublicModelHubColumns = ({ onModelClick }: PublicModelHubColumns
           .map(([key]) => formatCapabilityName(key));
         return <OverflowChips items={features} />;
       },
+    },
+    {
+      id: "custom_tags",
+      meta: { title: "Tags", skeleton: "chips" },
+      header: "Tags",
+      size: 140,
+      cell: ({ row }) => <OverflowChips items={row.original.custom_tags ?? []} />,
     },
     {
       id: "health_status",
@@ -303,10 +352,22 @@ export const getPublicModelHubColumns = ({ onModelClick }: PublicModelHubColumns
       ),
     },
   ];
-  return columns.map((column) => ({
-    ...column,
-    enableSorting: PUBLIC_MODEL_HUB_SORTABLE_FIELDS.includes(String(column.id)),
-  }));
+  return columns
+    .filter(
+      (column) =>
+        !showProviderLogos || !["providers", "custom_tags", "output_cost_per_token"].includes(String(column.id)),
+    )
+    .map((column) => ({
+      ...column,
+      meta: {
+        ...column.meta,
+        className:
+          showProviderLogos && !["model_group", "input_cost_per_token"].includes(String(column.id))
+            ? "hidden md:table-cell"
+            : column.meta?.className,
+      },
+      enableSorting: PUBLIC_MODEL_HUB_SORTABLE_FIELDS.includes(String(column.id)),
+    }));
 };
 
 interface PublicAgentHubColumnsDeps {

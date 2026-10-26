@@ -1,0 +1,36 @@
+name: Migration Impact Report
+
+on:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: Version being upgraded from
+        required: true
+        type: string
+      head:
+        description: Version being upgraded to
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Summarize database schema changes
+        env:
+          BASE_REF: ${{ inputs.base }}
+          HEAD_REF: ${{ inputs.head }}
+        run: |
+          set -euo pipefail
+          base_sha=$(git rev-parse --verify --end-of-options "${BASE_REF}^{commit}")
+          head_sha=$(git rev-parse --verify --end-of-options "${HEAD_REF}^{commit}")
+          python3 ci_cd/migration_impact.py --base "${base_sha}" --head "${head_sha}" --output "${RUNNER_TEMP}/schema_section.md"
+          cat "${RUNNER_TEMP}/schema_section.md" >> "${GITHUB_STEP_SUMMARY}"
