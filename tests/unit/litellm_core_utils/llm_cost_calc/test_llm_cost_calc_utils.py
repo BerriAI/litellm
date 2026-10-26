@@ -4170,6 +4170,46 @@ def test_batch_cache_projection_agrees_with_billing_at_the_explicit_input_fallba
     )
 
 
+@pytest.mark.parametrize(
+    ("prices", "expected_cache_rate"),
+    (
+        pytest.param({}, 0.5, id="missing-cache-and-batch-input"),
+        pytest.param({"cache_read_input_token_cost": 0.3}, 0.15, id="regular-cache"),
+        pytest.param({"cache_read_input_token_cost": 0.0}, 0.0, id="free-regular-cache"),
+        pytest.param(
+            {"input_cost_per_token_batches": 4.0, "cache_read_input_token_cost_batches": 0.3}, 0.3, id="batch-cache"
+        ),
+        pytest.param(
+            {"input_cost_per_token_batches": 4.0, "cache_read_input_token_cost_batches": 0.0},
+            0.0,
+            id="free-batch-cache",
+        ),
+        pytest.param({"input_cost_per_token_batches": 4.0}, 4.0, id="batch-input-fallback"),
+        pytest.param({"input_cost_per_token_batches": 0.0}, 0.0, id="free-batch-input-fallback"),
+    ),
+)
+def test_batch_cache_billing_and_projection_preserve_fallback_and_explicit_rates(
+    prices: Mapping[str, float], expected_cache_rate: float
+) -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+
+    info: Final = _batch_rates_model_info(input_cost_per_token=1.0, output_cost_per_token=2.0, **prices)
+    usage: Final = Usage(
+        prompt_tokens=100,
+        completion_tokens=10,
+        total_tokens=110,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=100),
+    )
+    rates: Final = _batch_projected_rates(info, usage, "openai")
+    cache_rate: Final = rates["cache_read_input_token_cost"]
+    output_rate: Final = rates["output_cost_per_token"]
+    assert cache_rate is not None and output_rate is not None
+    assert (cache_rate, output_rate) == pytest.approx((expected_cache_rate, 1.0))
+    assert batch_cost_calculator(usage, "openai/batch-cache-fallback", "openai", model_info=info) == pytest.approx(
+        (100 * cache_rate, 10 * output_rate)
+    )
+
+
 @pytest.mark.parametrize(("prompt_tokens", "expected"), [(1_000, 2.5e-7), (272_000, 2.5e-7), (300_000, 5e-7)])
 def test_batch_projected_rates_reads_the_12h_batch_cache_write_rate_for_the_crossed_tier(
     prompt_tokens: int, expected: float
