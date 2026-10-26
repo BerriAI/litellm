@@ -896,6 +896,29 @@ def determine_role_from_groups(
     return role_mappings.default_role
 
 
+def _groups_from_claim(value: object) -> list[str]:
+    match value:
+        case None:
+            return []
+        case list():
+            groups: Final[Sequence[object]] = value
+            return [str(group) for group in groups]
+        case str():
+            return [group.strip() for group in value.split(",") if group.strip()]
+        case _:
+            return [str(value)]
+
+
+def role_from_role_mappings(claims: Mapping[str, object], role_mappings: RoleMappings) -> LitellmUserRoles | None:
+    user_groups: Final = _groups_from_claim(get_nested_value(claims, role_mappings.group_claim))
+    if not user_groups:
+        verbose_proxy_logger.debug(
+            "No groups found in '%s', using default_role: %s", role_mappings.group_claim, role_mappings.default_role
+        )
+        return role_mappings.default_role
+    return determine_role_from_groups(user_groups, role_mappings)
+
+
 def process_sso_jwt_access_token(
     access_token_str: str | None,
     sso_jwt_handler: JWTHandler | None,
@@ -953,25 +976,7 @@ def process_sso_jwt_access_token(
 
             # Try role_mappings first (group-based role determination)
             if role_mappings is not None and role_mappings.roles:
-                group_claim: Final = role_mappings.group_claim
-                user_groups_raw: Final[object] = get_nested_value(access_token_payload, group_claim)
-
-                user_groups: list[str] = []
-                if isinstance(user_groups_raw, list):
-                    raw_groups: Final[Sequence[object]] = user_groups_raw
-                    user_groups = [str(g) for g in raw_groups]
-                elif isinstance(user_groups_raw, str):
-                    user_groups = [g.strip() for g in user_groups_raw.split(",") if g.strip()]
-                elif user_groups_raw is not None:
-                    user_groups = [str(user_groups_raw)]
-
-                if user_groups:
-                    user_role = determine_role_from_groups(user_groups, role_mappings)
-                    verbose_proxy_logger.debug(
-                        "Determined role '%s' from access token groups '%s' using role_mappings", user_role, user_groups
-                    )
-                elif role_mappings.default_role:
-                    user_role = role_mappings.default_role
+                user_role = role_from_role_mappings(access_token_payload, role_mappings)
 
             # Fallback: try GENERIC_USER_ROLE_ATTRIBUTE on the access token payload
             if user_role is None:
@@ -1268,35 +1273,7 @@ def generic_response_convertor(
         "generic",
         "okta",
     ]:
-        # Use role_mappings to determine role from groups
-        group_claim: Final = role_mappings.group_claim
-        user_groups_raw: Final[object] = get_nested_value(response, group_claim)
-
-        # Handle different formats: could be a list, string (comma-separated), or single value
-        user_groups: list[str] = []
-        if isinstance(user_groups_raw, list):
-            raw_groups: Final[Sequence[object]] = user_groups_raw
-            user_groups = [str(g) for g in raw_groups]
-        elif isinstance(user_groups_raw, str):
-            # Handle comma-separated string
-            user_groups = [g.strip() for g in user_groups_raw.split(",") if g.strip()]
-        elif user_groups_raw is not None:
-            # Single value
-            user_groups = [str(user_groups_raw)]
-
-        if user_groups:
-            user_role = determine_role_from_groups(user_groups, role_mappings)
-            verbose_proxy_logger.debug(
-                "Determined role '%s' from groups '%s' using role_mappings",
-                user_role.value if user_role else None,
-                user_groups,
-            )
-        else:
-            # No groups found, use default_role
-            user_role = role_mappings.default_role
-            verbose_proxy_logger.debug(
-                "No groups found in '%s', using default_role: %s", group_claim, role_mappings.default_role
-            )
+        user_role = role_from_role_mappings(response, role_mappings)
 
     # Fallback to existing logic if role_mappings not used
     if user_role is None:
@@ -2165,6 +2142,7 @@ async def _sso_provider_callback(
             microsoft_client_id=microsoft_client_id,
             redirect_url=redirect_url,
             return_raw_sso_response=return_raw_sso_response,
+            role_mappings=await _setup_role_mappings(),
         )
         return microsoft_result, None, None, microsoft_assertion
     if generic_client_id is not None:
@@ -4575,6 +4553,7 @@ class MicrosoftSSOHandler:
         microsoft_client_id: str,
         redirect_url: str,
         return_raw_sso_response: bool = False,
+        role_mappings: RoleMappings | None = None,
     ) -> tuple[CustomOpenID | OpenID | dict[str, object], SSOIdentityAssertion | None]:
         """
         Get the Microsoft SSO callback response, with the IdP identity assertion the token
@@ -4630,8 +4609,12 @@ class MicrosoftSSOHandler:
         app_roles: Final = MicrosoftSSOHandler.get_app_roles_from_id_token(id_token=microsoft_sso.id_token)
         verbose_proxy_logger.debug("Extracted app roles from id_token: %s", app_roles)
 
-        # Combine groups and app roles
-        user_role: Final = MicrosoftSSOHandler.get_user_role_from_app_roles(app_roles)
+        mapped_role: Final = (
+            role_from_role_mappings(_decode_sso_token_claims(microsoft_tokens.id_token), role_mappings)
+            if role_mappings is not None and role_mappings.provider.lower() == "microsoft"
+            else None
+        )
+        user_role: Final = mapped_role or MicrosoftSSOHandler.get_user_role_from_app_roles(app_roles)
 
         verbose_proxy_logger.debug("Combined team_ids (groups + app roles): %s", user_team_ids)
 

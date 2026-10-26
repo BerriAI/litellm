@@ -17,7 +17,7 @@ from fastapi import HTTPException, Request
 import litellm
 from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.proxy._types import LiteLLM_UserTable, NewUserResponse, ProxyException
+from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, NewUserResponse, ProxyException
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.types import CustomOpenID
@@ -41,6 +41,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     MicrosoftGraphAPIUserGroupDirectoryObject,
     MicrosoftGraphAPIUserGroupResponse,
     MicrosoftServicePrincipalTeam,
+    RoleMappings,
     TeamMappings,
 )
 from tests._master_key import MASTER_KEY
@@ -408,6 +409,78 @@ def test_get_microsoft_callback_response_raw_sso_response(stubbed_graph_api):
     assert result["id"] == "msft123"
     assert result["givenName"] == "Microsoft"
     assert result["surname"] == "User"
+
+
+@pytest.mark.parametrize(
+    ("role_mappings", "id_token_claims", "expected_role"),
+    [
+        pytest.param(
+            RoleMappings(provider="microsoft", group_claim="groups", roles={LitellmUserRoles.PROXY_ADMIN: ["grp-a"]}),
+            {"groups": ["grp-b", "grp-a"]},
+            LitellmUserRoles.PROXY_ADMIN,
+            id="entra-group-mapped",
+        ),
+        pytest.param(
+            RoleMappings(
+                provider="microsoft", group_claim="roles", roles={LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY: ["Auditor"]}
+            ),
+            {"roles": ["Auditor"]},
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+            id="entra-app-role-mapped",
+        ),
+        pytest.param(
+            RoleMappings(
+                provider="microsoft",
+                group_claim="groups",
+                default_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+                roles={LitellmUserRoles.PROXY_ADMIN: ["grp-a"]},
+            ),
+            {},
+            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+            id="no-groups-uses-default-role",
+        ),
+        pytest.param(
+            RoleMappings(provider="microsoft", group_claim="groups", roles={LitellmUserRoles.PROXY_ADMIN: ["grp-a"]}),
+            {"groups": ["grp-b"], "roles": ["internal_user"]},
+            LitellmUserRoles.INTERNAL_USER,
+            id="unmatched-falls-back-to-app-role",
+        ),
+        pytest.param(
+            RoleMappings(provider="generic", group_claim="groups", roles={LitellmUserRoles.PROXY_ADMIN: ["grp-a"]}),
+            {"groups": ["grp-a"]},
+            None,
+            id="other-provider-mappings-ignored",
+        ),
+    ],
+)
+def test_get_microsoft_callback_response_applies_role_mappings(
+    stubbed_graph_api, role_mappings, id_token_claims, expected_role
+):
+    mock_request = MagicMock(spec=Request)
+    mock_request.scope = {}
+    id_token = _ema_id_token(sub="msft123", **id_token_claims)
+
+    async def fake_verify(self, *args, **kwargs):
+        self._id_token = id_token
+        return {"mail": "microsoft_user@example.com", "id": "msft123"}
+
+    with patch.dict(os.environ, {"MICROSOFT_CLIENT_SECRET": "mock_secret", "MICROSOFT_TENANT": "mock_tenant"}):
+        with patch(  # test-quality-ok: stubs the upstream Microsoft IdP boundary, where the token response is read
+            "fastapi_sso.sso.microsoft.MicrosoftSSO.verify_and_process",
+            autospec=True,
+            side_effect=fake_verify,
+        ):
+            result, _ = asyncio.run(
+                MicrosoftSSOHandler.get_microsoft_callback_response(
+                    request=mock_request,
+                    microsoft_client_id="mock_client_id",
+                    redirect_url="http://mock_redirect_url",
+                    role_mappings=role_mappings,
+                )
+            )
+
+    assert isinstance(result, CustomOpenID)
+    assert result.user_role == expected_role
 
 
 def test_get_google_callback_response():
@@ -9311,13 +9384,13 @@ async def test_auth_callback_without_oauth_error_proceeds_to_normal_flow():
 # ── SSO identity assertion capture + persist wiring (EMA) ─────────────────────
 
 
-def _ema_id_token(sub: str = "u1") -> str:
+def _ema_id_token(sub: str = "u1", **claims: object) -> str:
     import time as _time
 
     import jwt as _pyjwt
 
     return _pyjwt.encode(
-        {"iss": "https://idp.example.com", "sub": sub, "exp": int(_time.time()) + 3600},
+        {"iss": "https://idp.example.com", "sub": sub, "exp": int(_time.time()) + 3600, **claims},
         "test-idp-signing-key-32-bytes-long-xxxx",
         algorithm="HS256",
     )
