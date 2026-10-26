@@ -416,3 +416,82 @@ def test_drop_params_forwards_a_non_object_message_item_as_sent_on_the_native_re
 
     assert request["messages"][1] == 7
     assert request["messages"][2]["content"][0]["content"] == [{"type": "text", "text": "sunny"}]
+
+
+class TestPassthroughBearerForCustomBase:
+    """Regression tests for #33055: the /v1/messages passthrough dropped the deployment-level
+    ``use_bearer_for_custom_base`` flag, so gateways that accept only ``Authorization: Bearer``
+    answered 401 while the chat path worked. The flag now threads from ``litellm_params`` into
+    ``AnthropicModelInfo.get_auth_header`` on both the sync and async environment validation."""
+
+    @staticmethod
+    def _env(
+        monkeypatch: pytest.MonkeyPatch,
+        litellm_params: Mapping[str, object] | object,
+        api_key: str,
+        api_base: str,
+    ) -> tuple[Mapping[str, object], str | None]:
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+        return AnthropicMessagesConfig().validate_anthropic_messages_environment(
+            headers={},
+            model="claude-sonnet-4-6",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+            api_key=api_key,
+            api_base=api_base,
+        )
+
+    def test_flag_from_litellm_params_uses_bearer(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        headers, _ = self._env(
+            monkeypatch, {"use_bearer_for_custom_base": True}, "test-custom-key", "https://internal-gateway.example.com"
+        )
+        assert headers.get("authorization") == "Bearer test-custom-key"
+        assert "x-api-key" not in headers
+
+    def test_no_flag_keeps_x_api_key_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        headers, _ = self._env(monkeypatch, {}, "test-custom-key", "https://internal-gateway.example.com")
+        assert headers.get("x-api-key") == "test-custom-key"
+        assert "authorization" not in headers
+
+    def test_flag_is_inert_on_the_real_anthropic_base(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        headers, _ = self._env(
+            monkeypatch, {"use_bearer_for_custom_base": True}, "test-custom-key", "https://api.anthropic.com"
+        )
+        assert headers.get("x-api-key") == "test-custom-key"
+        assert "authorization" not in headers
+
+    def test_flag_is_inert_for_standard_anthropic_keys(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        headers, _ = self._env(
+            monkeypatch,
+            {"use_bearer_for_custom_base": True},
+            "sk-ant-api03-test",
+            "https://internal-gateway.example.com",
+        )
+        assert headers.get("x-api-key") == "sk-ant-api03-test"
+        assert "authorization" not in headers
+
+    def test_flag_from_generic_params_model_uses_bearer(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The proxy passes a GenericLiteLLMParams instance, not a bare dict: the helper must
+        # fall through to the attribute read when ``litellm_params`` is not a Mapping.
+        params: Final = GenericLiteLLMParams(use_bearer_for_custom_base=True)
+        headers, _ = self._env(monkeypatch, params, "test-custom-key", "https://internal-gateway.example.com")
+        assert headers.get("authorization") == "Bearer test-custom-key"
+        assert "x-api-key" not in headers
+
+    @pytest.mark.asyncio
+    async def test_async_validation_forwards_the_flag(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+        headers, _ = await AnthropicMessagesConfig().avalidate_anthropic_messages_environment(
+            headers={},
+            model="claude-sonnet-4-6",
+            messages=[],
+            optional_params={},
+            litellm_params={"use_bearer_for_custom_base": True},
+            api_key="test-custom-key",
+            api_base="https://internal-gateway.example.com",
+        )
+        assert headers.get("authorization") == "Bearer test-custom-key"
+        assert "x-api-key" not in headers

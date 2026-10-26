@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import ClassVar, Final
+from typing import ClassVar, Final, cast  # noqa: TID251  # narrows the shared untyped litellm_params dict
 
 import httpx
 
@@ -310,12 +310,16 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
 
         if not _carries_caller_credential(headers):
+            bearer_params: Final = cast(  # cast-ok: litellm_params is the untyped dict of the shared signature
+                dict[str, object], litellm_params
+            )
             self._apply_env_auth_header(
                 headers,
                 self._require_auth_header(
                     AnthropicModelInfo.get_auth_header(
                         api_key,
                         api_base=api_base,
+                        use_bearer_for_custom_base=_bearer_for_custom_base(bearer_params),
                         litellm_params=litellm_params,
                         allow_workload_identity=self._allows_workload_identity,
                     ),
@@ -350,12 +354,16 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         oauth_headers, oauth_api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
 
         if not _carries_caller_credential(oauth_headers):
+            bearer_params: Final = cast(  # cast-ok: litellm_params is the untyped dict of the shared signature
+                dict[str, object], litellm_params
+            )
             self._apply_env_auth_header(
                 oauth_headers,
                 self._require_auth_header(
                     await AnthropicModelInfo.aget_auth_header(
                         oauth_api_key,
                         api_base=api_base,
+                        use_bearer_for_custom_base=_bearer_for_custom_base(bearer_params),
                         litellm_params=litellm_params,
                         allow_workload_identity=self._allows_workload_identity,
                     ),
@@ -872,3 +880,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if forwarded_beta_values:
             merged["anthropic-beta"] = ",".join(sorted(forwarded_beta_values))
         return merged
+
+
+def _bearer_for_custom_base(litellm_params: object) -> bool:
+    if isinstance(litellm_params, dict):
+        params: Final = cast(  # cast-ok: callers pass the untyped dict of the shared signature
+            dict[str, object], litellm_params
+        )
+        return bool(params.get("use_bearer_for_custom_base", False))
+    return bool(getattr(litellm_params, "use_bearer_for_custom_base", False))
