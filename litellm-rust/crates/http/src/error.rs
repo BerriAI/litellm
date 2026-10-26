@@ -24,6 +24,8 @@ pub enum Error {
     Client(String),
     #[error("request body could not be serialized: {0}")]
     RequestBody(String),
+    #[error("invalid request: {0}")]
+    Request(String),
     #[error("request forwards a header the signer computes: {0}")]
     ComputedHeader(String),
     #[error("request signing failed: {0}")]
