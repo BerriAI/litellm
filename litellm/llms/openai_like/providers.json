@@ -249,5 +249,11 @@
       "/v1/responses",
       "/v1/messages"
     ]
+  },
+  "modelflare": {
+    "base_url": "https://modelflare.dev/v1",
+    "api_key_env": "MODELFLARE_API_KEY",
+    "api_base_env": "MODELFLARE_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
   }
 }
