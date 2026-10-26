@@ -472,6 +472,8 @@ _TEAM_ADVISORY_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext($1)) IS 
 # recreates the member. The rows travel as one JSON document, not as a numeric array: Prisma
 # types a raw array parameter from the first batch a connection sees, so after an all-$0 batch
 # (integers) every later fractional batch on that connection failed with "improper binary format".
+# total_spend is floored at spend before adding: rows written before total_spend existed (migration
+# 20260421135425, default 0) carry their history only in spend, so a plain increment keeps them behind forever.
 _TEAM_MEMBER_SPEND_SQL: Final = """
 INSERT INTO "LiteLLM_TeamMembership" (user_id, team_id, spend, total_spend)
 SELECT member.user_id, member.team_id, member.cost, member.cost
@@ -487,7 +489,7 @@ WHERE EXISTS (
 )
 ON CONFLICT (user_id, team_id) DO UPDATE
 SET spend = "LiteLLM_TeamMembership".spend + EXCLUDED.spend,
-    total_spend = "LiteLLM_TeamMembership".total_spend + EXCLUDED.total_spend
+    total_spend = GREATEST("LiteLLM_TeamMembership".total_spend, "LiteLLM_TeamMembership".spend) + EXCLUDED.total_spend
 """
 
 

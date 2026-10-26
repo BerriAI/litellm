@@ -328,6 +328,10 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost_above_12hr_above_272k_tokens: ReadOnly[float | None]
     cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex: ReadOnly[float | None]
     cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_batches: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_ultrafast: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast: ReadOnly[float | None]
     cache_creation_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_creation_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_creation_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
@@ -3973,6 +3977,10 @@ class MirroredPricingParams(LiteLLMBaseModel):
     cache_creation_input_token_cost_above_12hr_above_272k_tokens: float | None = None
     cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex: float | None = None
     cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority: float | None = None
+    cache_creation_input_token_cost_above_12hr_batches: float | None = None
+    cache_creation_input_token_cost_above_12hr_ultrafast: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast: float | None = None
     tiered_pricing: list[dict[str, Any]] | None = None
 
 
