@@ -7,12 +7,14 @@ Handles Authentication and generating request urls for Vertex AI and Google AI S
 import asyncio
 import json
 import threading
+from collections import OrderedDict
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 from urllib.parse import urlparse
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -70,16 +72,20 @@ class _VertexCredentialsObject(Protocol):
     def refresh(self, request: object) -> None: ...
 
 
+_VertexCredentialCacheKey = tuple[str | None, str | None]
+
+
 class VertexBase:
     def __init__(self) -> None:
         super().__init__()
         self.access_token: str | None = None
         self.refresh_token: str | None = None
         self._credentials: GoogleCredentialsObject | None = None
-        self._credentials_project_mapping: dict[
-            tuple[VERTEX_CREDENTIALS_TYPES | None, str | None],
+        self._credentials_project_mapping: OrderedDict[
+            _VertexCredentialCacheKey,
             tuple[_VertexCredentialsObject, str | None],
-        ] = {}
+        ] = OrderedDict()
+        self._credentials_cache_lock = threading.RLock()
         self.project_id: str | None = None
         self.async_handler: AsyncHTTPHandler | None = None
         # Per-credential-key asyncio.Lock for single-flight async refresh.
@@ -91,10 +97,10 @@ class VertexBase:
         # each lock; the entry is pruned when the count reaches zero, so the
         # dict stays bounded even in long-running high-cardinality deployments
         # without depending on any private asyncio internals.
-        self._async_refresh_locks: dict[tuple, asyncio.Lock] = {}
-        self._async_refresh_lock_refcounts: dict[tuple, int] = {}
+        self._async_refresh_locks: dict[_VertexCredentialCacheKey, asyncio.Lock] = {}
+        self._async_refresh_lock_refcounts: dict[_VertexCredentialCacheKey, int] = {}
         # Tracks in-flight background refresh tasks to avoid duplicate refreshes.
-        self._background_refresh_tasks: dict[tuple, asyncio.Task] = {}
+        self._background_refresh_tasks: dict[_VertexCredentialCacheKey, asyncio.Task] = {}
         # Protects the sync get_access_token refresh path.
         # Use RLock so that the reauthentication retry path (which calls
         # back into get_access_token while still holding the lock) can
@@ -378,7 +384,7 @@ class VertexBase:
         with self._sync_refresh_lock:
             credentials.refresh(Request())
 
-    def _acquire_async_refresh_lock(self, credential_cache_key: tuple) -> asyncio.Lock:
+    def _acquire_async_refresh_lock(self, credential_cache_key: _VertexCredentialCacheKey) -> asyncio.Lock:
         """Increment the refcount and return the lock for ``credential_cache_key``.
 
         Every call must be paired with ``_release_async_refresh_lock`` once the
@@ -391,7 +397,7 @@ class VertexBase:
         )
         return lock
 
-    def _release_async_refresh_lock(self, credential_cache_key: tuple, lock: asyncio.Lock) -> None:
+    def _release_async_refresh_lock(self, credential_cache_key: _VertexCredentialCacheKey, lock: asyncio.Lock) -> None:
         """Decrement the refcount and drop the lock entry when it reaches zero.
 
         Must be called only after the caller has released ``lock`` (i.e. once
@@ -409,7 +415,7 @@ class VertexBase:
 
     def _try_get_cached_token(
         self,
-        credential_cache_key: tuple,
+        credential_cache_key: _VertexCredentialCacheKey,
         project_id: str | None,
     ) -> tuple[str, str] | None:
         """
@@ -432,7 +438,7 @@ class VertexBase:
 
     def _try_get_usable_cached_token(
         self,
-        credential_cache_key: tuple,
+        credential_cache_key: _VertexCredentialCacheKey,
         project_id: str | None,
     ) -> tuple[str, str, "TokenState", _VertexCredentialsObject, str | None] | None:
         """
@@ -458,18 +464,36 @@ class VertexBase:
         return creds.token, resolved_project, token_state, creds, cached_project_id
 
     def _unpack_cached_credentials(
-        self, credential_cache_key: tuple
+        self, credential_cache_key: _VertexCredentialCacheKey
     ) -> tuple[_VertexCredentialsObject | None, str | None]:
         """
         Return (credentials, project_id) from the cache, or (None, None) if
         not cached. Handles both tuple and legacy cache formats.
         """
-        if credential_cache_key not in self._credentials_project_mapping:
-            return None, None
-        cached_entry: Final = self._credentials_project_mapping[credential_cache_key]
+        with self._credentials_cache_lock:
+            cached_entry: Final = self._credentials_project_mapping.get(credential_cache_key)
+            if cached_entry is None:
+                return None, None
+            self._credentials_project_mapping.move_to_end(credential_cache_key)
         if isinstance(cached_entry, tuple):
             return cached_entry
         return cached_entry, cached_entry.quota_project_id or getattr(cached_entry, "project_id", None)
+
+    def _cache_credentials(
+        self,
+        credential_cache_key: _VertexCredentialCacheKey,
+        credentials: _VertexCredentialsObject,
+        project_id: str | None,
+        *,
+        replace: bool = True,
+    ) -> None:
+        with self._credentials_cache_lock:
+            if not replace and credential_cache_key in self._credentials_project_mapping:
+                return
+            self._credentials_project_mapping[credential_cache_key] = (credentials, project_id)
+            self._credentials_project_mapping.move_to_end(credential_cache_key)
+            while len(self._credentials_project_mapping) > max(0, DEFAULT_MAX_LRU_CACHE_SIZE):
+                self._credentials_project_mapping.popitem(last=False)
 
     def _get_token_state(self, credentials: _VertexCredentialsObject) -> "TokenState":
         """
@@ -494,7 +518,7 @@ class VertexBase:
         self,
         credentials: VERTEX_CREDENTIALS_TYPES | None,
         project_id: str | None,
-        credential_cache_key: tuple,
+        credential_cache_key: _VertexCredentialCacheKey,
     ) -> tuple[_VertexCredentialsObject, str | None]:
         """Load credentials via load_auth (in thread) and cache the result."""
         try:
@@ -507,17 +531,12 @@ class VertexBase:
             raise
         if _credentials is None:
             raise ValueError("Could not resolve credentials")
-        self._credentials_project_mapping[credential_cache_key] = (
-            _credentials,
-            credential_project_id,
-        )
+        self._cache_credentials(credential_cache_key, _credentials, credential_project_id)
         return _credentials, credential_project_id
 
     async def _background_refresh_credentials(
         self,
         credentials: _VertexCredentialsObject,
-        credential_cache_key: tuple,
-        credential_project_id: str | None,
     ) -> None:
         """
         Refresh credentials in the background without blocking the calling request.
@@ -528,25 +547,13 @@ class VertexBase:
         try:
             verbose_logger.debug("Background proactive credential refresh")
             await asyncify(self.refresh_auth)(credentials)
-            # Only update the cache if it still points at the credentials
-            # object we just refreshed. The per-key async lock is not held
-            # here, so a concurrent INVALID path may have already replaced
-            # this entry (e.g. via _handle_reauthentication_async, which
-            # creates a fresh credentials object). In that case our write
-            # would clobber the newer entry with a stale reference.
-            cached_creds, _ = self._unpack_cached_credentials(credential_cache_key)
-            if cached_creds is credentials:
-                self._credentials_project_mapping[credential_cache_key] = (
-                    credentials,
-                    credential_project_id,
-                )
         except Exception:
             verbose_logger.debug(
                 "Background credential refresh failed, will retry on next request",
                 exc_info=True,
             )
 
-    async def _await_in_flight_background_refresh(self, credential_cache_key: tuple) -> None:
+    async def _await_in_flight_background_refresh(self, credential_cache_key: _VertexCredentialCacheKey) -> None:
         """Wait for an in-flight background refresh to finish, if any.
 
         google-auth's ``Credentials.refresh()`` is not safe to invoke
@@ -568,8 +575,7 @@ class VertexBase:
     def _schedule_background_refresh(
         self,
         credentials: _VertexCredentialsObject,
-        credential_cache_key: tuple,
-        credential_project_id: str | None,
+        credential_cache_key: _VertexCredentialCacheKey,
     ) -> None:
         """Kick off a single background refresh for ``credential_cache_key``.
 
@@ -581,9 +587,7 @@ class VertexBase:
         if existing is not None and not existing.done():
             return
         self._background_refresh_tasks.pop(credential_cache_key, None)
-        task: Final = asyncio.create_task(
-            self._background_refresh_credentials(credentials, credential_cache_key, credential_project_id)
-        )
+        task: Final = asyncio.create_task(self._background_refresh_credentials(credentials))
 
         def _drop_background_refresh_task(_fut: asyncio.Future[None]) -> None:
             if self._background_refresh_tasks.get(credential_cache_key) is _fut:
@@ -796,7 +800,7 @@ class VertexBase:
         self,
         credentials: VERTEX_CREDENTIALS_TYPES | None,
         project_id: str | None,
-        credential_cache_key: tuple,
+        credential_cache_key: _VertexCredentialCacheKey,
         error: Exception,
     ) -> tuple[str, str]:
         """
@@ -822,8 +826,8 @@ class VertexBase:
         )
 
         # Clear the cached credentials
-        if credential_cache_key in self._credentials_project_mapping:
-            del self._credentials_project_mapping[credential_cache_key]
+        with self._credentials_cache_lock:
+            self._credentials_project_mapping.pop(credential_cache_key, None)
 
         # Retry once with _retry_reauth=True to prevent infinite recursion
         try:
@@ -846,7 +850,7 @@ class VertexBase:
         self,
         credentials: VERTEX_CREDENTIALS_TYPES | None,
         project_id: str | None,
-        credential_cache_key: tuple,
+        credential_cache_key: _VertexCredentialCacheKey,
         error: Exception,
     ) -> tuple[str, str]:
         """
@@ -856,7 +860,8 @@ class VertexBase:
             "Handling async reauthentication for project_id: %s. Clearing cache and retrying once.", project_id
         )
 
-        self._credentials_project_mapping.pop(credential_cache_key, None)
+        with self._credentials_cache_lock:
+            self._credentials_project_mapping.pop(credential_cache_key, None)
 
         try:
             (
@@ -875,10 +880,7 @@ class VertexBase:
                 # references the OLD credentials object we just replaced, and
                 # leaving it would force the next request to do a redundant
                 # refresh/reauth before realizing the cached creds are stale.
-                self._credentials_project_mapping[resolved_cache_key] = (
-                    _credentials,
-                    credential_project_id,
-                )
+                self._cache_credentials(resolved_cache_key, _credentials, credential_project_id)
 
             if _credentials.token is None or not isinstance(_credentials.token, str):
                 raise ValueError(
@@ -924,21 +926,11 @@ class VertexBase:
         # Convert dict credentials to string for caching
         cache_credentials: Final = json.dumps(credentials) if isinstance(credentials, dict) else credentials
         credential_cache_key: Final = (cache_credentials, project_id)
-        _credentials: _VertexCredentialsObject | None = None
-
         verbose_logger.debug("Checking cached credentials for project_id: %s", project_id)
 
-        if credential_cache_key in self._credentials_project_mapping:
+        _credentials, credential_project_id = self._unpack_cached_credentials(credential_cache_key)
+        if _credentials is not None:
             verbose_logger.debug("Cached credentials found for project_id: %s.", project_id)
-            # Retrieve both credentials and cached project_id
-            cached_entry: Final = self._credentials_project_mapping[credential_cache_key]
-            verbose_logger.debug("cached_entry: %s", cached_entry)
-            if isinstance(cached_entry, tuple):
-                _credentials, credential_project_id = cached_entry
-            else:
-                # Backward compatibility with old cache format
-                _credentials = cached_entry
-                credential_project_id = _credentials.quota_project_id or getattr(_credentials, "project_id", None)
             verbose_logger.debug(
                 "Using cached credentials for project_id: %s",
                 credential_project_id,
@@ -963,10 +955,7 @@ class VertexBase:
                     f"Could not resolve credentials - either dynamically or from environment, for project_id: {project_id}"
                 )
             # Cache the project_id and credentials from load_auth result (resolved project_id)
-            self._credentials_project_mapping[credential_cache_key] = (
-                _credentials,
-                credential_project_id,
-            )
+            self._cache_credentials(credential_cache_key, _credentials, credential_project_id)
 
         ## VALIDATE CREDENTIALS
         verbose_logger.debug("Validating credentials")
@@ -974,11 +963,7 @@ class VertexBase:
             project_id = credential_project_id
             # Update cache with resolved project_id for future lookups
             resolved_cache_key: Final = (cache_credentials, project_id)
-            if resolved_cache_key not in self._credentials_project_mapping:
-                self._credentials_project_mapping[resolved_cache_key] = (
-                    _credentials,
-                    credential_project_id,
-                )
+            self._cache_credentials(resolved_cache_key, _credentials, credential_project_id, replace=False)
 
         # Check if credentials are None before accessing attributes
         if _credentials is None:
@@ -991,10 +976,6 @@ class VertexBase:
                     try:
                         verbose_logger.debug("Credentials expired, refreshing")
                         self.refresh_auth(_credentials)
-                        self._credentials_project_mapping[credential_cache_key] = (
-                            _credentials,
-                            credential_project_id,
-                        )
                     except Exception as e:
                         # if refresh fails, it's possible the user has re-authenticated via `gcloud auth application-default login`
                         # in this case, we should try to reload the credentials by clearing the cache and retrying
@@ -1043,9 +1024,9 @@ class VertexBase:
         # callers on the lock just to schedule that refresh.
         usable: Final = self._try_get_usable_cached_token(credential_cache_key, project_id)
         if usable is not None:
-            cached_token, resolved_project, token_state, creds, cached_project_id = usable
+            cached_token, resolved_project, token_state, creds, _cached_project_id = usable
             if token_state == TokenState.STALE:
-                self._schedule_background_refresh(creds, credential_cache_key, cached_project_id)
+                self._schedule_background_refresh(creds, credential_cache_key)
             return cached_token, resolved_project
 
         # === SLOW PATH (per-key lock) ===
@@ -1075,10 +1056,7 @@ class VertexBase:
                     # reauth that only repopulated the unresolved key), which
                     # would force the next request through an unnecessary
                     # refresh/reauth cycle.
-                    self._credentials_project_mapping[resolved_cache_key] = (
-                        _credentials,
-                        credential_project_id,
-                    )
+                    self._cache_credentials(resolved_cache_key, _credentials, credential_project_id)
 
                 # Use google-auth's token_state to decide refresh strategy:
                 # - STALE: token is usable but within REFRESH_THRESHOLD (3:45) of
@@ -1098,7 +1076,6 @@ class VertexBase:
                         self._schedule_background_refresh(
                             _credentials,
                             credential_cache_key,
-                            credential_project_id,
                         )
                         return current_token, project_id
 
@@ -1117,10 +1094,6 @@ class VertexBase:
                     try:
                         verbose_logger.debug("Credentials expired, refreshing")
                         await asyncify(self.refresh_auth)(_credentials)
-                        self._credentials_project_mapping[credential_cache_key] = (
-                            _credentials,
-                            credential_project_id,
-                        )
                     except Exception as e:
                         if "Reauthentication is needed" in str(e):
                             verbose_logger.debug("Reauthentication needed, clearing cache and retrying")
