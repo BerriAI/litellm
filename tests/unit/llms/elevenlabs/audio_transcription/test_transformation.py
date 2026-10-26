@@ -314,4 +314,4 @@ class TestElevenLabsTextToSpeechTransformation:
         )
 
         assert voice_id in url
-        assert "output_format=pcm_44100" in url
+        assert "output_format=pcm_24000" in url
