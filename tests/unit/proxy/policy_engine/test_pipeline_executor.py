@@ -1270,7 +1270,7 @@ def _assert_passed_with_discard_warning(result, caplog, reason):
     assert len(discard_warnings) == 1
     assert reason in discard_warnings[0]
     assert "text rewrites included" in discard_warnings[0]
-    assert "masker" not in ((result.modified_data or {}).get("metadata") or {}).get("applied_guardrails", [])
+    assert result.modified_data["metadata"]["applied_guardrails"] == ["masker"]
 
 
 @pytest.mark.asyncio
@@ -1430,6 +1430,16 @@ async def test_streaming_step_records_the_guardrail_in_the_applied_guardrails_he
 
     result = await _run_streaming_step(_WritingTranslation(), [_chunk()])
 
+    assert result.modified_data["metadata"]["applied_guardrails"] == ["masker"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_that_flags_the_stream_is_named_when_the_pipeline_moves_on(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [_BlockingStreamGuardrail()])
+
+    result = await _run_streaming_step(_WritingTranslation(), [_chunk()])
+
+    assert [(step.outcome, step.action_taken) for step in result.step_results] == [("fail", "next")]
     assert result.modified_data["metadata"]["applied_guardrails"] == ["masker"]
 
 

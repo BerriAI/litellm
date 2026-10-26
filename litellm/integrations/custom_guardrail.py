@@ -69,6 +69,7 @@ GUARDRAIL_SESSIONS_TARGET: Final = "guardrail_sessions"
 # field to suppress a guardrail on the direct-SDK path that never reaches the
 # proxy's metadata sanitizer.
 _PRE_CALL_EXECUTED_TOKEN: Final = secrets.token_hex(16)
+_PRE_CALL_RAISED_TOKEN: Final = secrets.token_hex(16)
 
 _GUARDRAIL_BLOCK_STATUS_CODES: Final = frozenset({400, 403, 422})
 
@@ -824,13 +825,13 @@ class CustomGuardrail(CustomLogger):
 
         return False
 
-    def _pre_call_marker(self) -> str | None:
+    def _pre_call_marker(self, *, raised: bool = False) -> str | None:
         name: Final = self.guardrail_name
         if not name:
             return None
-        return f"{_PRE_CALL_EXECUTED_TOKEN}:{name}"
+        return f"{_PRE_CALL_RAISED_TOKEN if raised else _PRE_CALL_EXECUTED_TOKEN}:{name}"
 
-    def mark_pre_call_hook_ran(self, data: dict[str, object]) -> None:
+    def mark_pre_call_hook_ran(self, data: dict[str, object], *, raised: bool = False) -> None:
         """
         Record that this guardrail's ``async_pre_call_hook`` already ran for this
         request, so the deployment-level hook does not run it a second time.
@@ -839,8 +840,11 @@ class CustomGuardrail(CustomLogger):
         router later spreads a deployment's model-level ``guardrails`` into the
         top-level request kwargs, which would otherwise re-trigger the same hook
         from ``async_pre_call_deployment_hook``.
+
+        With ``raised``, records instead that the hook raised as a policy pipeline
+        step the pipeline then moved past. The deployment-level hook still runs it.
         """
-        marker: Final = self._pre_call_marker()
+        marker: Final = self._pre_call_marker(raised=raised)
         if marker is None:
             return
         for meta_key in ("metadata", "litellm_metadata"):
@@ -855,8 +859,12 @@ class CustomGuardrail(CustomLogger):
                 return
         data["metadata"] = {PRE_CALL_EXECUTED_GUARDRAILS_KEY: [marker]}
 
-    def _pre_call_hook_already_ran(self, data: dict[str, object]) -> bool:
-        marker: Final = self._pre_call_marker()
+    def pre_call_hook_ran_or_raised(self, data: Mapping[str, object]) -> bool:
+        """Whether this guardrail's ``async_pre_call_hook`` ran for this request, whatever it decided."""
+        return self._pre_call_hook_already_ran(data) or self._pre_call_hook_already_ran(data, raised=True)
+
+    def _pre_call_hook_already_ran(self, data: Mapping[str, object], *, raised: bool = False) -> bool:
+        marker: Final = self._pre_call_marker(raised=raised)
         if marker is None:
             return False
         for meta_key in ("metadata", "litellm_metadata"):

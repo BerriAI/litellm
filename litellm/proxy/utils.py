@@ -706,6 +706,62 @@ def pipeline_managed_guardrail_names(
     )
 
 
+def _ran_or_runs_outside_pipelines(
+    callback: CustomGuardrail | None,
+    data: Mapping[str, object],
+    pipeline_modes: frozenset[str],
+) -> bool:
+    return callback is not None and (
+        callback.pre_call_hook_ran_or_raised(data)
+        or any(
+            callback._event_hook_is_event_type(hook)  # pyright: ignore[reportPrivateUsage]  # the only check of a guardrail's hooks
+            for hook in GuardrailEventHooks
+            if hook.value not in pipeline_modes
+        )
+    )
+
+
+# The A2A JSON-RPC methods answered with a stream, as both protocol versions spell them
+_A2A_STREAMING_METHODS: Final = frozenset(
+    ("message/stream", "tasks/resubscribe", "SendStreamingMessage", "SubscribeToTask")
+)
+
+
+def _post_call_steps_named_before_headers(
+    data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth
+) -> frozenset[str]:
+    """
+    Post_call pipeline steps the executor names, as it runs them, before the response
+    headers go out: every step of a whole response, and of a streamed one the steps of
+    the pipelines that hold the stream until they finish.
+    """
+    if data.get("stream") is not True and data.get("method") not in _A2A_STREAMING_METHODS:
+        return pipeline_managed_guardrail_names(data, "post_call")
+    gated: Final = _stream_gated_pipelines(data, user_api_key_dict)
+    return frozenset() if _pipelines_stream_live(gated) else _pipeline_step_guardrail_names(gated)
+
+
+def _pipeline_steps_that_have_not_run(data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth) -> frozenset[str]:
+    """
+    Guardrails only policy pipelines run whose pre_call hook has not run for this request:
+    pre_call steps a pipeline skipped and the post_call steps the executor names when it
+    runs them. A stream runs a pipeline it cannot hold as guardrails on their own, and one
+    whose steps all stream live after the headers go out, so those steps are named up front
+    like any other guardrail.
+    """
+    pre_call: Final = pipeline_managed_guardrail_names(data, "pre_call")
+    post_call: Final = _post_call_steps_named_before_headers(data, user_api_key_dict)
+    return frozenset(
+        name
+        for name in pre_call | post_call
+        if not _ran_or_runs_outside_pipelines(
+            PipelineExecutor.find_guardrail_callback(name),
+            data,
+            frozenset(mode for mode, names in (("pre_call", pre_call), ("post_call", post_call)) if name in names),
+        )
+    )
+
+
 def _partition_post_call_callbacks() -> tuple[tuple[CustomGuardrail, ...], tuple[CustomLogger, ...]]:
     resolved: Final = tuple(
         litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
@@ -927,19 +983,23 @@ def _streaming_pipeline_translation(user_api_key_dict: UserAPIKeyAuth) -> "BaseT
     return None if resolved is None else resolved[1]
 
 
+def _stream_gated_pipelines(
+    request_data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth
+) -> tuple[tuple[str, "GuardrailPipeline"], ...]:
+    translation: Final = _streaming_pipeline_translation(user_api_key_dict)
+    if translation is None:
+        return ()
+    return tuple(
+        (policy_name, pipeline)
+        for policy_name, pipeline in _post_call_pipelines(request_data)
+        if not _pipeline_unsupported_streaming_guardrails(pipeline, translation)
+    )
+
+
 def stream_gated_guardrail_names(
     request_data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth
 ) -> frozenset[str]:
-    translation: Final = _streaming_pipeline_translation(user_api_key_dict)
-    if translation is None:
-        return frozenset()
-    return _pipeline_step_guardrail_names(
-        tuple(
-            (policy_name, pipeline)
-            for policy_name, pipeline in _post_call_pipelines(request_data)
-            if not _pipeline_unsupported_streaming_guardrails(pipeline, translation)
-        )
-    )
+    return _pipeline_step_guardrail_names(_stream_gated_pipelines(request_data, user_api_key_dict))
 
 
 def _streamable_post_call_pipelines(
@@ -2639,7 +2699,7 @@ class ProxyLogging:
             data.pop("prompt_version", None)
             data.pop("prompt_environment", None)
 
-    def _process_guardrail_metadata(self, data: dict) -> None:
+    def _process_guardrail_metadata(self, data: dict, user_api_key_dict: UserAPIKeyAuth) -> None:
         """Process guardrails from metadata and add to applied_guardrails."""
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
@@ -2664,8 +2724,16 @@ class ProxyLogging:
             if not isinstance(applied_guardrails, list):
                 applied_guardrails = []
 
+            not_run: Final = _pipeline_steps_that_have_not_run(
+                cast(dict[str, object], data),  # cast-ok: request payload
+                user_api_key_dict,
+            )
             for guardrail_name in guardrails_in_metadata:
-                if isinstance(guardrail_name, str) and guardrail_name not in applied_guardrails:
+                if (
+                    isinstance(guardrail_name, str)
+                    and guardrail_name not in applied_guardrails
+                    and guardrail_name not in not_run
+                ):
                     add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=guardrail_name)
 
     async def _maybe_execute_pipelines(
@@ -2952,7 +3020,7 @@ class ProxyLogging:
                 and (guardrails_only or not caps.has_pre_call_override)
             ):
                 if data is not None:
-                    self._process_guardrail_metadata(data)
+                    self._process_guardrail_metadata(data, user_api_key_dict)
                 return data
 
             parallel_guardrails: Final[tuple[CustomGuardrail, ...]] = (
@@ -3056,17 +3124,17 @@ class ProxyLogging:
                 )
 
             if data is not None:
-                self._process_guardrail_metadata(data)
+                self._process_guardrail_metadata(data, user_api_key_dict)
 
             return data
         except SensitiveDataRouteException as e:
             data = await self._handle_sensitive_data_route_exception(e, data, user_api_key_dict)
             if data is not None:
-                self._process_guardrail_metadata(data)
+                self._process_guardrail_metadata(data, user_api_key_dict)
             return data
         except Exception:
             if data is not None:
-                self._process_guardrail_metadata(data)
+                self._process_guardrail_metadata(data, user_api_key_dict)
             raise
 
     async def _run_parallel_pre_call_guardrails(
