@@ -5062,6 +5062,22 @@ class TestHostedWebSearchReplay:
         assert replayed == search
         assert input_item == original
 
+    def test_replays_search_without_action(self) -> None:
+        # Azure and Codex replay web_search_call items without the SDK-required `action`.
+        input_item: Final = {"type": "web_search_call", "id": "ws_no_action", "status": "completed"}
+
+        messages: Final = (
+            LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+                input_item=input_item
+            )
+        )
+
+        assert len(messages) == 1
+        assert messages[0]["role"] == "assistant"
+        content: Final = messages[0].get("content")
+        assert isinstance(content, str)
+        assert json.loads(content[content.index("{") :]) == input_item
+
     @pytest.mark.parametrize("order", ((0, 1, 2, 3), (1, 0, 3, 2), (1, 3, 0, 2)))
     @pytest.mark.parametrize("modify_params", (False, True))
     @pytest.mark.parametrize("structured_content", (False, True))
