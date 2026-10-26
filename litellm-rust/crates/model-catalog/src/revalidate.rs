@@ -1,4 +1,7 @@
-use std::sync::{Arc, LazyLock};
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -229,13 +232,17 @@ impl Revalidation {
 }
 
 fn bundled_model_count() -> usize {
-    static COUNT: LazyLock<usize> = LazyLock::new(|| {
-        Catalog::parse(BUNDLED_REGISTRY)
-            .expect("bundled registry must parse")
-            .value
-            .model_count()
-    });
-    *COUNT
+    static COUNT: AtomicUsize = AtomicUsize::new(0);
+    let cached = COUNT.load(Ordering::Relaxed);
+    if cached != 0 {
+        return cached;
+    }
+    let count = Catalog::parse(BUNDLED_REGISTRY)
+        .expect("bundled registry must parse")
+        .value
+        .model_count();
+    COUNT.store(count, Ordering::Relaxed);
+    count
 }
 
 pub fn git_blob_id(body: &[u8]) -> String {

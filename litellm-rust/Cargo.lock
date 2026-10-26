@@ -4226,6 +4226,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-model-catalog-refresh"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "litellm-http",
+ "litellm-model-catalog",
+ "nix",
+ "rcgen",
+ "reqwest 0.12.28",
+ "rstest",
+ "rustls 0.23.42",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-rustls 0.26.4",
+ "tokio-util",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
@@ -7440,6 +7462,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]
