@@ -2932,7 +2932,7 @@ class BaseLLMHTTPHandler:
                 model=model,
                 litellm_params=litellm_params,
             ),
-            extra_headers,
+            extra_headers if custom_llm_provider != "chatgpt" else None,
         )
 
         # Check if streaming is requested
@@ -3128,7 +3128,7 @@ class BaseLLMHTTPHandler:
                 model=model,
                 litellm_params=litellm_params,
             ),
-            extra_headers,
+            extra_headers if custom_llm_provider != "chatgpt" else None,
         )
 
         # Check if streaming is requested

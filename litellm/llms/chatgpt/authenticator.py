@@ -121,8 +121,10 @@ class Authenticator:
         tokens: Final = self._login_device_code()
         return tokens["access_token"]
 
-    def get_account_id(self) -> str | None:
+    def get_account_id(self, access_token: str | None = None) -> str | None:
         auth_data: Final = self._read_auth_file()
+        if access_token and (not auth_data or auth_data.get("access_token") != access_token):
+            return extract_chatgpt_account_id(access_token)
         if not auth_data:
             return None
         account_id: Final = _optional_str(auth_data.get("account_id"))
@@ -361,8 +363,9 @@ class Authenticator:
             "refresh_token": _optional_str(data.get("refresh_token")) or refresh_token,
             "id_token": id_token,
         }
+        account_id: Final = self.get_account_id()
         auth_data: Final = self._build_auth_record(refreshed)
-        self._write_auth_file(auth_data)
+        self._write_auth_file({**auth_data, "account_id": account_id} if account_id else auth_data)
         return refreshed
 
     def _build_auth_record(self, tokens: dict[str, str]) -> JsonObject:

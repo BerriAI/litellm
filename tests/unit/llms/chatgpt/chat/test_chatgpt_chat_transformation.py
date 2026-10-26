@@ -172,7 +172,8 @@ class TestChatGPTMultiAccountChat:
 def _subscription_response(request: httpx.Request) -> httpx.Response:
     account: Final = request.headers["ChatGPT-Account-Id"]
     assert request.headers["Authorization"] in (
-        f"Bearer token-{account.removeprefix('acct-')}", f"Bearer {_client_token(account)}"
+        f"Bearer token-{account.removeprefix('acct-')}",
+        f"Bearer {_client_token(account)}",
     )
     assert "chatgpt_auth_file" not in request.content.decode()
     message: Final = {
@@ -441,6 +442,7 @@ async def test_client_login_cannot_be_redirected_to_another_host(
             **credential,
         }
     )
+
     async def request() -> None:
         if endpoint == "chat":
             if async_call:
@@ -566,3 +568,71 @@ async def test_sdk_extra_headers_use_client_login_without_gateway_auth(
             assert response.output[0].content[0].text == "acct-client-a"
         assert transport.calls.last.request.headers["Authorization"] == headers["Authorization"]
         assert len(transport.calls) == 1
+
+
+@pytest.mark.parametrize("endpoint", ["chat", "responses"])
+@pytest.mark.parametrize("sync", [False, True])
+@pytest.mark.parametrize("credential_source", ["default", "file", "api_key"])
+@pytest.mark.parametrize("authorization_header", [None, "Authorization", "authorization"])
+@pytest.mark.asyncio
+async def test_requests_preserve_gateway_token_and_selected_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: str,
+    sync: bool,
+    credential_source: str,
+    authorization_header: str | None,
+) -> None:
+    monkeypatch.setattr("time.time", lambda: 1700000000)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("CHATGPT_AUTH_FILE", str(tmp_path / "default.json"))
+    token: Final = _client_token("acct-token-default")
+    auth_file: Final = tmp_path / ("selected.json" if credential_source == "file" else "default.json")
+    _write_auth_record(auth_file, token, "acct-saved-workspace")
+    configured_token: Final = _client_token("acct-configured")
+    expected_token: Final = configured_token if credential_source == "api_key" else token
+    expected_account: Final = "acct-configured" if credential_source == "api_key" else "acct-saved-workspace"
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        assert request.headers.get_list("authorization") == [f"Bearer {expected_token}"]
+        assert request.headers.get_list("chatgpt-account-id") == [expected_account]
+        assert request.headers["originator"] == "codex_cli_rs"
+        return _subscription_response(
+            httpx.Request(
+                "POST",
+                request.url,
+                content=request.content,
+                headers={
+                    "Authorization": f"Bearer token-{expected_account.removeprefix('acct-')}",
+                    "ChatGPT-Account-Id": expected_account,
+                },
+            )
+        )
+
+    params: Final = MappingProxyType(
+        {
+            "model": "chatgpt/gpt-6.1-sol",
+            **({"chatgpt_auth_file": str(auth_file)} if credential_source == "file" else {}),
+            **({"api_key": configured_token} if credential_source == "api_key" else {}),
+            "extra_headers": {
+                "originator": "codex_cli_rs",
+                **({authorization_header: "Bearer sk-unrelated-example"} if authorization_header else {}),
+            },
+        }
+    )
+    with respx.mock as transport:
+        transport.post("https://chatgpt.com/backend-api/codex/responses").mock(side_effect=reply)
+        if endpoint == "chat":
+            result: Final = (
+                await asyncio.to_thread(litellm.completion, **params, messages=[{"role": "user", "content": "Hello"}])
+                if sync
+                else await litellm.acompletion(**params, messages=[{"role": "user", "content": "Hello"}])
+            )
+            assert result.choices[0].message.content == expected_account
+        else:
+            response: Final = (
+                await asyncio.to_thread(litellm.responses, **params, input=[{"role": "user", "content": "Hello"}])
+                if sync
+                else await litellm.aresponses(**params, input=[{"role": "user", "content": "Hello"}])
+            )
+            assert response.output[0].content[0].text == expected_account

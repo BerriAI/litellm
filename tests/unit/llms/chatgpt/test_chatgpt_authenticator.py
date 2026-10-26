@@ -7,6 +7,8 @@ from typing import Final
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
+import httpx
+import respx
 
 import litellm
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS, HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
@@ -280,3 +282,30 @@ class TestChatGPTMultiAccountAuthenticator:
         assert relative_key is not None and absolute_key is not None
 
         assert get_cached_authenticator(relative_key) is get_cached_authenticator(absolute_key)
+
+
+def test_refresh_keeps_saved_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("time.time", lambda: 1700000000)
+    auth_file: Final = tmp_path / "selected.json"
+    auth_file.write_text(
+        json.dumps(
+            {
+                "access_token": "expired-example-token",
+                "refresh_token": "example-refresh-token",
+                "expires_at": 1,
+                "account_id": "acct-selected-workspace",
+            }
+        )
+    )
+    token: Final = _make_jwt({"exp": 4102444800, "https://api.openai.com/auth": {"chatgpt_account_id": "acct-default"}})
+    authenticator: Final = Authenticator(auth_file=str(auth_file))
+    with respx.mock as transport:
+        transport.post("https://auth.openai.com/oauth/token").mock(
+            return_value=httpx.Response(
+                200,
+                json={"access_token": token, "id_token": token, "refresh_token": "example-rotated-refresh"},
+            )
+        )
+        assert authenticator.get_access_token() == token
+    assert authenticator.get_account_id(token) == "acct-selected-workspace"
+    assert json.loads(auth_file.read_text())["refresh_token"] == "example-rotated-refresh"

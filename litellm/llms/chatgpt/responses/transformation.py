@@ -30,7 +30,6 @@ from ..common_utils import (
     CHATGPT_API_BASE,
     GetAccessTokenError,
     ensure_chatgpt_session_id,
-    extract_chatgpt_account_id,
     get_chatgpt_client_credential,
     get_chatgpt_default_headers,
     get_chatgpt_default_instructions,
@@ -69,15 +68,16 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 **get_chatgpt_default_headers(client_credential.access_token, client_credential.account_id, session_id),
                 **strip_chatgpt_client_credential_headers(headers),
             }
+        authenticator: Final = self._resolve_authenticator(litellm_params)
+        safe_headers: Final = strip_chatgpt_client_credential_headers(headers)
         configured_api_key: Final = litellm_params.api_key if litellm_params is not None else None
         if configured_api_key and not get_chatgpt_auth_file(litellm_params):
             return {
                 **get_chatgpt_default_headers(
-                    configured_api_key, extract_chatgpt_account_id(configured_api_key), session_id
+                    configured_api_key, authenticator.get_account_id(configured_api_key), session_id
                 ),
-                **headers,
+                **safe_headers,
             }
-        authenticator: Final = self._resolve_authenticator(litellm_params)
         try:
             access_token: Final = authenticator.get_access_token()
         except GetAccessTokenError as e:
@@ -89,7 +89,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         account_id: Final = authenticator.get_account_id()
         default_headers: Final = get_chatgpt_default_headers(access_token, account_id, session_id)
-        return {**default_headers, **headers}
+        return {**default_headers, **safe_headers}
 
     def transform_responses_api_request(
         self,

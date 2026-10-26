@@ -15,6 +15,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.llms.chatgpt.authenticator import Authenticator
 from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.main import responses_api_bridge_check
@@ -455,17 +456,17 @@ class TestChatGPTClientCredentialForwarding:
     @pytest.mark.parametrize(
         "bearer", ["Bearer sk-proj-fake-platform-key", "Bearer not-a-jwt", "Bearer a.bm90LWpzb24.c"]
     )
-    def test_non_chatgpt_bearer_falls_back_to_configured_key(self, bearer):
-        authenticator = _gateway_authenticator()
+    def test_non_chatgpt_bearer_falls_back_to_configured_key(self, bearer, tmp_path):
+        authenticator = Authenticator(auth_file=str(tmp_path / "missing-default.json"))
 
-        headers = _config_with(authenticator).validate_environment(
+        headers = ChatGPTResponsesAPIConfig(authenticator=authenticator).validate_environment(
             headers={"Authorization": bearer},
             model="gpt-5.4",
             litellm_params=GenericLiteLLMParams(api_key="configured-gateway-key"),
         )
 
         assert "ChatGPT-Account-Id" not in headers
-        authenticator.get_access_token.assert_not_called()
+        assert headers["Authorization"] == "Bearer configured-gateway-key"
 
     def test_configured_key_is_used_without_client_credential(self):
         authenticator = _gateway_authenticator()

@@ -105,10 +105,16 @@ class ChatGPTConfig(OpenAIConfig):
             else api_key
         )
         validated_headers: Final = super().validate_environment(
-            headers, model, messages, optional_params, litellm_params, resolved_api_key, api_base
+            dict(strip_chatgpt_client_credential_headers(headers)),
+            model,
+            messages,
+            optional_params,
+            litellm_params,
+            resolved_api_key,
+            api_base,
         )
 
-        account_id: Final = authenticator.get_account_id()
+        account_id: Final = authenticator.get_account_id(resolved_api_key)
         session_id: Final = ensure_chatgpt_session_id(litellm_params)
         default_headers: Final = get_chatgpt_default_headers(resolved_api_key or "", account_id, session_id)
         return {**default_headers, **validated_headers}
