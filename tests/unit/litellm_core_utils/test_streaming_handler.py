@@ -2764,7 +2764,7 @@ class _StuckProvider:
             raise
 
 
-class _FailureRecorder(CustomLogger):
+class _StuckStreamFailureRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.failures: Final = queue.SimpleQueue[str]()
@@ -2781,7 +2781,7 @@ class _FailureRecorder(CustomLogger):
 def _stuck_stream_wrapper(
     provider_stream: Iterator[ModelResponseStream] | AsyncIterator[ModelResponseStream],
     call_type: Literal["completion", "acompletion"],
-    recorder: _FailureRecorder,
+    recorder: _StuckStreamFailureRecorder,
 ) -> CustomStreamWrapper:
     logging_obj: Final = Logging(
         model="test-model",
@@ -2811,7 +2811,7 @@ def _stuck_stream_wrapper(
 async def test_async_stream_stuck_on_one_chunk_closes_the_provider_stream_and_logs_one_failure():
     """https://github.com/BerriAI/litellm/issues/19428 and https://github.com/BerriAI/litellm/issues/13786"""
     provider: Final = _StuckProvider()
-    recorder: Final = _FailureRecorder()
+    recorder: Final = _StuckStreamFailureRecorder()
     wrapper: Final = _stuck_stream_wrapper(provider.async_stream(), "acompletion", recorder)
 
     with pytest.raises(Exception, match="repeating the same chunk"):
@@ -2833,7 +2833,7 @@ async def test_async_stream_stuck_on_one_chunk_closes_the_provider_stream_and_lo
 def test_sync_stream_stuck_on_one_chunk_closes_the_provider_stream_and_logs_one_failure():
     """Sync counterpart of the async test above"""
     provider: Final = _StuckProvider()
-    recorder: Final = _FailureRecorder()
+    recorder: Final = _StuckStreamFailureRecorder()
     wrapper: Final = _stuck_stream_wrapper(provider.sync_stream(), "completion", recorder)
 
     with pytest.raises(Exception, match="repeating the same chunk"):
