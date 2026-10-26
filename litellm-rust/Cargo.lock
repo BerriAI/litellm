@@ -2329,7 +2329,7 @@ dependencies = [
  "hmac 0.13.0",
  "http 1.4.2",
  "jiff",
- "reqwest 0.13.5",
+ "reqwest",
  "rustc_version",
  "rustls 0.23.42",
  "rustls-pki-types",
@@ -2387,7 +2387,7 @@ dependencies = [
  "pin-project",
  "prost",
  "prost-types",
- "reqwest 0.13.5",
+ "reqwest",
  "rustc_version",
  "serde",
  "serde_json",
@@ -2883,7 +2883,6 @@ dependencies = [
  "tokio",
  "tokio-rustls 0.26.4",
  "tower-service",
- "webpki-roots",
 ]
 
 [[package]]
@@ -3376,7 +3375,7 @@ dependencies = [
  "litellm-auth-types",
  "litellm-http",
  "moka",
- "reqwest 0.12.28",
+ "reqwest",
  "rstest",
  "serde",
  "serde_json",
@@ -3460,7 +3459,7 @@ dependencies = [
  "litellm-cache-response",
  "litellm-cache-testing",
  "litellm-http",
- "reqwest 0.12.28",
+ "reqwest",
  "rstest",
  "serde_json",
  "tokio",
@@ -3495,7 +3494,7 @@ dependencies = [
  "litellm-cache-testing",
  "litellm-http",
  "percent-encoding",
- "reqwest 0.12.28",
+ "reqwest",
  "rstest",
  "serde_json",
  "tokio",
@@ -3522,7 +3521,7 @@ dependencies = [
  "litellm-cache-testing",
  "litellm-http",
  "qdrant-client",
- "reqwest 0.12.28",
+ "reqwest",
  "rstest",
  "serde",
  "serde_json",
@@ -3598,7 +3597,7 @@ dependencies = [
  "litellm-cache",
  "litellm-cache-testing",
  "litellm-http",
- "reqwest 0.12.28",
+ "reqwest",
  "rstest",
  "serde_json",
  "tokio",
@@ -3945,9 +3944,7 @@ dependencies = [
  "hyper-util",
  "litellm-core-utils",
  "rcgen",
- "reqwest 0.12.28",
- "reqwest 0.13.5",
- "rmcp",
+ "reqwest",
  "rstest",
  "rustls 0.23.42",
  "rustls-native-certs",
@@ -3980,7 +3977,7 @@ dependencies = [
  "litellm-llms",
  "litellm-secrets",
  "litellm-tracing",
- "reqwest 0.12.28",
+ "reqwest",
  "rstest",
  "serde",
  "serde_json",
@@ -4039,7 +4036,7 @@ dependencies = [
  "litellm-router-types",
  "litellm-secrets",
  "litellm-tracing",
- "reqwest 0.12.28",
+ "reqwest",
  "rstest",
  "serde",
  "serde_json",
@@ -4100,7 +4097,7 @@ dependencies = [
  "litellm-llms-types",
  "litellm-secrets",
  "litellm-tracing",
- "reqwest 0.12.28",
+ "reqwest",
  "rstest",
  "serde_json",
  "tokio",
@@ -4163,7 +4160,7 @@ dependencies = [
  "litellm-python-compat",
  "litellm-router-types",
  "litellm-secrets",
- "reqwest 0.12.28",
+ "reqwest",
  "rstest",
  "serde",
  "serde_json",
@@ -4245,7 +4242,7 @@ dependencies = [
  "pyo3",
  "pyo3-async-runtimes",
  "redis",
- "reqwest 0.12.28",
+ "reqwest",
  "rstest",
  "serde",
  "serde_json",
@@ -4316,7 +4313,7 @@ dependencies = [
  "litellm-secrets-hashicorp",
  "litellm-secrets-types",
  "moka",
- "reqwest 0.12.28",
+ "reqwest",
  "rstest",
  "serde",
  "serde_json",
@@ -4358,7 +4355,7 @@ dependencies = [
  "litellm-http",
  "litellm-secrets-types",
  "percent-encoding",
- "reqwest 0.12.28",
+ "reqwest",
  "rstest",
  "serde",
  "serde_json",
@@ -4381,7 +4378,7 @@ dependencies = [
  "moka",
  "percent-encoding",
  "rcgen",
- "reqwest 0.12.28",
+ "reqwest",
  "rstest",
  "serde",
  "serde_json",
@@ -4408,7 +4405,7 @@ dependencies = [
  "litellm-secrets-types",
  "moka",
  "percent-encoding",
- "reqwest 0.12.28",
+ "reqwest",
  "rstest",
  "serde",
  "serde_json",
@@ -4496,7 +4493,7 @@ version = "0.1.0"
 dependencies = [
  "flate2",
  "futures-util",
- "reqwest 0.12.28",
+ "reqwest",
  "rstest",
  "semver",
  "serde",
@@ -5871,49 +5868,6 @@ checksum = "ba39f3699c378cd8970968dcbff9c43159ea4cfbd88d43c00b22f2ef10a435d2"
 
 [[package]]
 name = "reqwest"
-version = "0.12.28"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
-dependencies = [
- "base64 0.22.1",
- "bytes",
- "futures-core",
- "futures-util",
- "h2 0.4.15",
- "http 1.4.2",
- "http-body 1.1.0",
- "http-body-util",
- "hyper 1.10.1",
- "hyper-rustls 0.27.9",
- "hyper-util",
- "js-sys",
- "log",
- "mime_guess",
- "percent-encoding",
- "pin-project-lite",
- "quinn",
- "rustls 0.23.42",
- "rustls-pki-types",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "sync_wrapper",
- "tokio",
- "tokio-rustls 0.26.4",
- "tokio-util",
- "tower",
- "tower-http",
- "tower-service",
- "url",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "wasm-streams 0.4.2",
- "web-sys",
- "webpki-roots",
-]
-
-[[package]]
-name = "reqwest"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "16a1cfa75cc186dd73d5818e510e042e40927bccc9c236b061cea97e1eb08029"
@@ -5933,6 +5887,7 @@ dependencies = [
  "js-sys",
  "log",
  "mime",
+ "mime_guess",
  "percent-encoding",
  "pin-project-lite",
  "quinn",
@@ -5952,7 +5907,7 @@ dependencies = [
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "wasm-streams 0.5.0",
+ "wasm-streams",
  "web-sys",
 ]
 
@@ -5999,7 +5954,7 @@ dependencies = [
  "pin-project-lite",
  "process-wrap",
  "rand 0.10.2",
- "reqwest 0.13.5",
+ "reqwest",
  "schemars 1.2.2",
  "serde",
  "serde_json",
@@ -6122,7 +6077,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "http 1.4.2",
- "reqwest 0.13.5",
+ "reqwest",
  "rustify_derive",
  "serde",
  "serde_json",
@@ -7154,7 +7109,7 @@ dependencies = [
  "memchr",
  "parse-display",
  "pin-project-lite",
- "reqwest 0.13.5",
+ "reqwest",
  "serde",
  "serde_json",
  "serde_with",
@@ -7793,7 +7748,7 @@ dependencies = [
  "futures",
  "pin-project",
  "rand 0.10.2",
- "reqwest 0.13.5",
+ "reqwest",
  "serde",
  "serde_json",
  "time",
@@ -8007,7 +7962,7 @@ dependencies = [
  "async-trait",
  "derive_builder",
  "http 1.4.2",
- "reqwest 0.13.5",
+ "reqwest",
  "rustify",
  "rustify_derive",
  "serde",
@@ -8152,19 +8107,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc1b4cb0cc549fcf58d7dfc081778139b3d283a081644e833e84682ad71cea24"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "wasm-streams"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15053d8d85c7eccdbefef60f06769760a563c7f0a9d6902a13d35c7800b0ad65"
-dependencies = [
- "futures-util",
- "js-sys",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]

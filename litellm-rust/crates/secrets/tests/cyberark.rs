@@ -24,7 +24,7 @@ async fn cyberark_handler_reads_values_and_surfaces_errors() {
         .mount(&server)
         .await;
     let manager = SecretManager::Cyberark(CyberArkSecretManager::with_client(
-        litellm_http::Client::plain_for_test(),
+        litellm_http::Client::for_test(),
         server.uri().parse().unwrap(),
         "acct".into(),
         "admin".into(),
