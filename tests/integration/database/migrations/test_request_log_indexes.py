@@ -983,6 +983,7 @@ def test_the_migration_job_refuses_before_the_first_migration_when_spend_log_key
 
 
 @requires_db
+@pytest.mark.parametrize("release", (API_KEY_INDEX_MIGRATION,), ids=("v1.102.1",))
 def test_a_serving_proxy_index_build_that_meets_too_long_keys_reports_the_rows_instead_of_the_postgres_error(
     scratch_database: str, caplog: pytest.LogCaptureFixture
 ) -> None:
