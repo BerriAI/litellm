@@ -368,7 +368,9 @@ def _count_advanced(reset_ats: Iterable[object], cutoff: datetime) -> int:
 
 def _try_compute_budget_reset_at(duration: object, settings: BudgetResetSettings) -> datetime | None:
     if not isinstance(duration, str):
-        return None
+        raise ValueError(
+            f"Invalid budget_duration {duration!r}. Use the <int><unit> format (e.g. '1h', '7d', '30d', '1mo')."
+        )
     try:
         return compute_budget_reset_at(budget_duration=duration, settings=settings)
     except ValueError:
