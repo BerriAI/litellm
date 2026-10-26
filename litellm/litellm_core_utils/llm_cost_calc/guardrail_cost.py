@@ -4,7 +4,7 @@ from functools import partial
 from itertools import chain
 from typing import Annotated, Final
 
-from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 import litellm
@@ -148,39 +148,46 @@ def bedrock_guardrail_trace(response: object) -> Mapping[str, object] | None:
     return next((trace for trace in traces if trace is not None), None)
 
 
-def _keyed_assessments(by_id: object) -> Iterator[tuple[str, Mapping[str, object]]]:
-    mapping: Final = object_mapping(by_id)
-    if mapping is None:
-        return
-    pairs: Final = ((guardrail_id, object_mapping(assessment)) for guardrail_id, assessment in mapping.items())
-    yield from ((guardrail_id, assessment) for guardrail_id, assessment in pairs if assessment is not None)
+class _Assessment(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="allow")
+    invocation_metrics: Mapping[str, JsonValue] = Field(default_factory=dict, alias="invocationMetrics")
+
+    @property
+    def billable_usage(self) -> Mapping[str, int]:
+        usage: Final = self.invocation_metrics.get("usage")
+        if not isinstance(usage, dict):
+            return {}
+        return {
+            counter: units
+            for counter, units in usage.items()
+            if counter.endswith("Units") and isinstance(units, int) and not isinstance(units, bool)
+        }
 
 
-def _listed_assessments(guardrail_id: str, assessments: object) -> Iterator[tuple[str, Mapping[str, object]]]:
-    candidates: Final = map(object_mapping, object_items(assessments))
-    yield from ((guardrail_id, assessment) for assessment in candidates if assessment is not None)
+class _GuardrailTrace(BaseModel):
+    """Both trace shapes: Converse ``inputAssessment`` {id: a} and ``outputAssessments`` {id: [a, ...]}, Invoke
+    ``input`` {id: a} and ``outputs`` [{id: a}, ...]."""
+
+    model_config = ConfigDict(frozen=True, extra="allow")
+    input_assessment: Mapping[str, _Assessment] = Field(default_factory=dict, alias="inputAssessment")
+    input: Mapping[str, _Assessment] = Field(default_factory=dict)
+    output_assessments: Mapping[str, tuple[_Assessment, ...]] = Field(default_factory=dict, alias="outputAssessments")
+    outputs: tuple[Mapping[str, _Assessment], ...] = ()
+
+    @property
+    def assessments(self) -> tuple[tuple[str, _Assessment], ...]:
+        listed: Final = (
+            (gid, a) for gid, items in self.output_assessments.items() for a in items
+        )  # comprehension-ok: id then its list
+        return (
+            *self.input_assessment.items(),
+            *self.input.items(),
+            *listed,
+            *chain.from_iterable(by_id.items() for by_id in self.outputs),
+        )
 
 
-def _assessments(guardrail: Mapping[str, object]) -> Iterator[tuple[str, Mapping[str, object]]]:
-    """(guardrail id, assessment) pairs in both trace shapes: Converse ``inputAssessment`` {id: a} and
-    ``outputAssessments`` {id: [a, ...]}, Invoke ``input`` {id: a} and ``outputs`` [{id: a}, ...]."""
-    yield from _keyed_assessments(guardrail.get("inputAssessment"))
-    yield from _keyed_assessments(guardrail.get("input"))
-    output_assessments: Final = object_mapping(guardrail.get("outputAssessments")) or {}
-    yield from chain.from_iterable(_listed_assessments(*item) for item in output_assessments.items())
-    yield from chain.from_iterable(map(_keyed_assessments, object_items(guardrail.get("outputs"))))
-
-
-def _assessment_usage(assessment: Mapping[str, object]) -> Mapping[str, int]:
-    metrics: Final = object_mapping(assessment.get("invocationMetrics"))
-    usage: Final = object_mapping(metrics.get("usage")) if metrics is not None else None
-    if usage is None:
-        return {}
-    return {
-        counter: units
-        for counter, units in usage.items()
-        if counter.endswith("Units") and isinstance(units, int) and not isinstance(units, bool)
-    }
+_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
 
 def _summed_usage(usages: Sequence[Mapping[str, int]]) -> Mapping[str, int]:
@@ -188,15 +195,16 @@ def _summed_usage(usages: Sequence[Mapping[str, int]]) -> Mapping[str, int]:
     return {counter: sum(usage.get(counter, 0) for usage in usages) for counter in counters}
 
 
-def _actions(node: object) -> Iterator[str]:
-    mapping: Final = object_mapping(node)
-    if mapping is None:
-        yield from chain.from_iterable(map(_actions, object_items(node)))
+def _actions(node: JsonValue) -> Iterator[str]:
+    if isinstance(node, list):
+        yield from chain.from_iterable(map(_actions, node))
         return
-    action: Final = mapping.get("action")
+    if not isinstance(node, dict):
+        return
+    action: Final = node.get("action")
     if isinstance(action, str):
         yield action
-    yield from chain.from_iterable(map(_actions, mapping.values()))
+    yield from chain.from_iterable(map(_actions, node.values()))
 
 
 def native_bedrock_guardrail_information(
@@ -205,11 +213,12 @@ def native_bedrock_guardrail_information(
     """The guardrail entry for a trace Bedrock returned because the deployment's ``guardrailConfig`` ran with
     ``trace: enabled``: every assessment's ``invocationMetrics.usage`` summed and priced like the proxy-side Bedrock
     guardrail. None when the trace carries no usage, which is what ``trace: disabled`` leaves."""
-    guardrail: Final = object_mapping(trace.get("guardrail"))
-    if guardrail is None:
+    try:
+        guardrail: Final = _JSON_OBJECT.validate_python(trace.get("guardrail"))
+        pairs: Final = _GuardrailTrace.model_validate(guardrail).assessments
+    except ValidationError:
         return None
-    pairs: Final = tuple(_assessments(guardrail))
-    usage: Final = _summed_usage(tuple(_assessment_usage(assessment) for _, assessment in pairs))
+    usage: Final = _summed_usage(tuple(assessment.billable_usage for _, assessment in pairs))
     if not usage:
         return None
     cost_by_unit: Final = bedrock_guardrail_cost_by_unit(usage, aws_region_name)
@@ -225,19 +234,12 @@ def native_bedrock_guardrail_information(
         "guardrail_id": name,
         "guardrail_provider": "bedrock",
         "guardrail_mode": GuardrailEventHooks.during_call,
-        "guardrail_response": _redacted_guardrail_response(guardrail),
+        "guardrail_response": redact_nested_match_and_regex_keys(guardrail),
         "guardrail_status": status,
         "guardrail_usage": usage,
         "guardrail_cost": guardrail_cost_total(cost_by_unit),
         **priced,
     }
-
-
-def _redacted_guardrail_response(
-    guardrail: Mapping[str, object],
-) -> dict[str, object]:  # mutable-ok: StandardLoggingGuardrailInformation.guardrail_response is a dict
-    redacted: Final[object] = redact_nested_match_and_regex_keys(dict(guardrail))
-    return dict(object_mapping(redacted) or guardrail)
 
 
 def guardrail_entries(raw: object) -> tuple[object, ...]:
