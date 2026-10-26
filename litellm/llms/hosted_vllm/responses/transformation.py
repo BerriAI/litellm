@@ -52,7 +52,9 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.HOSTED_VLLM
 
-    def get_supported_openai_params(self, model: str) -> list[str]:
+    def get_supported_openai_params(
+        self, model: str
+    ) -> list[str]:  # mutable-ok: mirrors OpenAIResponsesAPIConfig signature
         params: Final = super().get_supported_openai_params(model)
         params.extend(HOSTED_VLLM_RESPONSES_SUPPORTED_PARAMS)
         return params
@@ -61,11 +63,11 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
         self,
         model: str,
         input: str | ResponseInputParam,
-        response_api_optional_request_params: dict,
+        response_api_optional_request_params: dict,  # mutable-ok: mirrors OpenAIResponsesAPIConfig signature
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> dict:
-        request: Final[dict] = super().transform_responses_api_request(
+        headers: dict,  # mutable-ok: mirrors OpenAIResponsesAPIConfig signature
+    ) -> dict:  # mutable-ok: mirrors OpenAIResponsesAPIConfig signature
+        request: Final = super().transform_responses_api_request(
             model=model,
             input=input,
             response_api_optional_request_params=response_api_optional_request_params,
