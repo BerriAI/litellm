@@ -3,7 +3,14 @@ import { isAutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels
 import type { ModelGroup } from "@/components/llm_calls/fetch_models";
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 
-export const ROUTER_FAMILIES = { claude: "Claude", openai: "OpenAI", glm: "GLM", deepseek: "DeepSeek" } as const;
+export const ROUTER_FAMILIES = {
+  claude: "Claude",
+  openai: "OpenAI",
+  gemini: "Gemini",
+  grok: "Grok",
+  glm: "GLM",
+  deepseek: "DeepSeek",
+} as const;
 export const ROUTER_GOALS = { cheapest: "Cheapest", balanced: "Balanced", quality: "Best quality" } as const;
 export type RouterFamily = keyof typeof ROUTER_FAMILIES;
 export type RouterGoal = keyof typeof ROUTER_GOALS;
@@ -60,6 +67,17 @@ const parseModel = (raw: string): ModelIdentity | null => {
       ...releaseVersion(openai[1], openai[3]),
       model,
     };
+  const gemini = model.match(/^gemini-(\d+(?:[.-]\d+)*)-(flash-lite|flash|pro)(?:-preview)?$/);
+  if (gemini)
+    return {
+      family: "gemini",
+      line: gemini[2],
+      rank: ["flash-lite", "flash", "pro"].indexOf(gemini[2]),
+      ...releaseVersion(gemini[1]),
+      model,
+    };
+  const grok = model.match(/^grok-(\d+(?:[.-]\d+)*)$/);
+  if (grok) return { family: "grok", line: "grok", rank: 2, ...releaseVersion(grok[1]), model };
   const glm = model.match(/^glm-(\d+(?:[.-]\d+)*)(-flash)?$/);
   if (glm)
     return {
@@ -90,13 +108,15 @@ const providerOf = (deployment: AutoRouterDeployment, group: ModelGroup, family:
   const provider =
     deployment.litellm_params?.custom_llm_provider ||
     (raw.includes("/") ? raw.split("/")[0] : group.providers?.join(", ")) ||
-    { claude: "anthropic", glm: "zai", openai: "openai", deepseek: "deepseek" }[family];
+    { claude: "anthropic", glm: "zai", openai: "openai", gemini: "gemini", grok: "xai", deepseek: "deepseek" }[family];
   if (provider.startsWith("bedrock")) return "Bedrock";
   return (
     (
       {
         anthropic: "Anthropic",
         openai: "OpenAI",
+        gemini: "Google AI",
+        xai: "xAI",
         azure: "Azure",
         azure_ai: "Azure AI",
         databricks: "Databricks",

@@ -213,6 +213,21 @@ describe("recommendSolverPair", () => {
     expect(recommendSolverPair([], "balanced", "auto")).toBeNull();
   });
 
+  it("retains Gemini family suggestions and recognizes the existing Grok fallback", () => {
+    const models = resolve(
+      deployment("lite", "gemini/gemini-3.5-flash-lite"),
+      deployment("flash-old", "vertex_ai/gemini-3.5-flash"),
+      deployment("flash", "vertex_ai/gemini-3.8-flash"),
+      deployment("pro", "gemini/gemini-3.1-pro-preview"),
+      deployment("grok", "xai/grok-4.6"),
+    );
+    expect(names(recommendSolverPair(models, "cheapest", "gemini"))).toEqual(["lite", "flash"]);
+    expect(names(recommendSolverPair(models, "balanced", "gemini"))).toEqual(["lite", "pro"]);
+    expect(names(recommendSolverPair(models, "quality", "gemini"))).toEqual(["flash", "pro"]);
+    expect(models.find((m) => m.name === "grok")).toMatchObject({ family: "grok", provider: "xAI" });
+    expect(names(recommendSolverPair(models, "balanced", "grok"))).toEqual(["lite", "grok"]);
+  });
+
   it("uses the latest deployed Terra as a fallback without replacing the preferred OpenAI pairs", () => {
     const models = resolve(
       deployment("terra-old", "openai/gpt-5.6-terra"),
