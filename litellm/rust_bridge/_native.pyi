@@ -70,7 +70,6 @@ class ModelRegistry:
 
 def model_row_errors(key: str, row: dict[str, JsonValue]) -> list[RowError]: ...
 def write_rows(target: dict[str, object], set: dict[str, object], remove: list[str]) -> None: ...
-
 @final
 class ModelCostLayers:
     def __new__(cls) -> ModelCostLayers: ...
@@ -82,8 +81,122 @@ class ModelCostLayers:
         self, base: ModelRegistry, keys: frozenset[str]
     ) -> list[tuple[str, dict[str, JsonValue] | None, frozenset[str]]]: ...
 
-def trace_encode_error(message: str) -> bytes: ...
+@final
+class ResolvedModel:
+    @property
+    def key(self) -> str: ...
+    @property
+    def via(self) -> str: ...
 
+@final
+class ModelNotFound:
+    @property
+    def tried(self) -> list[str]: ...
+
+@final
+class RegistrationTarget:
+    @property
+    def write(self) -> str: ...
+    @property
+    def inherit_from(self) -> str | None: ...
+
+@final
+class RowErrors:
+    @property
+    def errors(self) -> list[RowError]: ...
+
+@final
+class ModelInfoView:
+    @property
+    def key(self) -> str: ...
+    @property
+    def fields(self) -> dict[str, JsonValue]: ...
+    @property
+    def capabilities(self) -> dict[str, bool]: ...
+    @property
+    def provider(self) -> str | None: ...
+    @property
+    def mode(self) -> str | None: ...
+    @property
+    def max_tokens(self) -> int | None: ...
+    @property
+    def max_input_tokens(self) -> int | None: ...
+    @property
+    def max_output_tokens(self) -> int | None: ...
+    @property
+    def input_cost_per_token(self) -> float | None: ...
+    @property
+    def output_cost_per_token(self) -> float | None: ...
+
+@final
+class UsageInput:
+    """Disjoint quantities keyed by unsuffixed catalog price fields, web_search/{size}, or guardrail/{counter}."""
+
+    def __new__(
+        cls,
+        quantities: dict[str, int],
+        *,
+        prompt_tokens: int = 0,
+        inclusive_threshold: bool = False,
+        search_results: int = 0,
+    ) -> UsageInput:
+        """prompt_tokens is the full prompt size used for band selection, not the uncached input quantity."""
+
+@final
+class WhenInput:
+    def __new__(
+        cls,
+        at: int,
+        *,
+        tier: Literal["standard", "priority", "flex", "ultrafast", "balanced"] = "standard",
+        channel: Literal["online", "batch", "decisions"] = "online",
+    ) -> WhenInput:
+        """at is a UTC Unix timestamp in seconds."""
+
+@final
+class PriceLine:
+    @property
+    def meter(self) -> str: ...
+    @property
+    def quantity(self) -> int: ...
+    @property
+    def unit_price(self) -> float: ...
+    @property
+    def amount(self) -> float: ...
+    @property
+    def fallback_from(self) -> str | None: ...
+
+@final
+class Priced:
+    @property
+    def lines(self) -> list[PriceLine]: ...
+    @property
+    def total(self) -> float: ...
+    @property
+    def input(self) -> float: ...
+    @property
+    def output(self) -> float: ...
+
+@final
+class Unpriced:
+    @property
+    def missing(self) -> list[str]: ...
+    @property
+    def partial(self) -> Priced: ...
+
+def resolve_model(
+    model_cost: dict[str, object],
+    model: str,
+    *,
+    provider: str | None = None,
+    base_model: str | None = None,
+    region: str | None = None,
+) -> ResolvedModel | ModelNotFound: ...
+def registration_target(model_cost: dict[str, object], key: str) -> RegistrationTarget: ...
+def invalidate_model_cost_index() -> None: ...
+def model_info(model_cost: dict[str, object], key: str) -> ModelInfoView | RowErrors: ...
+def price(row: dict[str, object], usage: UsageInput, when: WhenInput) -> Priced | Unpriced | RowErrors: ...
+def trace_encode_error(message: str) -> bytes: ...
 @final
 class NativeClickHouseSpendConfig:
     def __new__(cls, database: str, url: str, retention_days: int) -> NativeClickHouseSpendConfig: ...
@@ -148,7 +261,6 @@ def messages(
 def amessages(
     call: NativeCall,
 ) -> Execution: ...
-
 @final
 class ResponsesWebSocketConnection:
     def __new__(cls, _uninstantiable: Never, /) -> Never: ...
@@ -275,18 +387,28 @@ __all__ = [
     "ForkedAfterNativeRuntimeStarted",
     "HuggingFaceEncoding",
     "ModelCostLayers",
+    "ModelInfoView",
+    "ModelNotFound",
     "ModelRegistry",
     "NativeClickHouseSpendConfig",
     "NativeClickHouseSpendStorage",
     "NativeDiagnosticProcessor",
+    "PriceLine",
+    "Priced",
     "ProcessReservedForForking",
+    "RegistrationTarget",
+    "ResolvedModel",
     "ResponsesWebSocketConnection",
     "RowError",
     "RowErrorKind",
+    "RowErrors",
     "RustBridgeDeclined",
     "RustUpstreamError",
     "TokenCounter",
     "Tokenizer",
+    "Unpriced",
+    "UsageInput",
+    "WhenInput",
     "acompletion",
     "aembedding",
     "amessages",
@@ -296,13 +418,18 @@ __all__ = [
     "completion",
     "embedding",
     "gil_stats",
+    "invalidate_model_cost_index",
     "messages",
+    "model_info",
     "model_row_errors",
     "ocr",
     "ocr_health_check_document",
     "ocr_passthrough_response",
+    "price",
     "process_state_started",
+    "registration_target",
     "reserve_process_for_forking",
+    "resolve_model",
     "responses",
     "trace_encode_error",
     "transcription",

@@ -32,7 +32,10 @@ mod _native {
     use crate::logger::NativeDiagnosticProcessor;
     #[pymodule_export]
     use crate::model_registry::{
-        ModelCostLayers, ModelRegistry, RowError, model_row_errors, write_rows,
+        ModelCostLayers, ModelInfoView, ModelNotFound, ModelRegistry, PriceLine, Priced,
+        RegistrationTarget, ResolvedModel, RowError, RowErrors, Unpriced, UsageInput, WhenInput,
+        invalidate_model_cost_index, model_info, model_row_errors, price, registration_target,
+        resolve_model, write_rows,
     };
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
@@ -62,6 +65,7 @@ mod _native {
 
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
+        crate::model_registry::init_model_key_index(module)?;
         let py = module.py();
         let dict = module.dict();
         dict.set_item(
@@ -125,6 +129,21 @@ assert live == {"model": {"litellm_provider": "openai", "input_cost_per_token": 
                 "RowErrorKind",
                 "model_row_errors",
                 "write_rows",
+                "ResolvedModel",
+                "ModelNotFound",
+                "RegistrationTarget",
+                "RowErrors",
+                "ModelInfoView",
+                "UsageInput",
+                "WhenInput",
+                "PriceLine",
+                "Priced",
+                "Unpriced",
+                "resolve_model",
+                "registration_target",
+                "model_info",
+                "price",
+                "invalidate_model_cost_index",
                 "RustBridgeDeclined",
                 "RustUpstreamError",
                 "ForkedAfterNativeRuntimeStarted",
