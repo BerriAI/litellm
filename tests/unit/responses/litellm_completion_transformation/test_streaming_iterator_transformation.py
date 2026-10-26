@@ -108,12 +108,14 @@ def _custom_tool_stream_chunk(delta: Delta, finish_reason: str | None = None) ->
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.parametrize("terminal_only", [True, False])
+@pytest.mark.parametrize("input_mode", ["split", "late_name", "terminal_only"])
 @pytest.mark.parametrize("raw_input", ["", "hello", 'line one\n"世界" \\path 😀'])
 @pytest.mark.asyncio
 async def test_custom_tool_input_events_round_trip_with_interleaved_function(
-    sync_mode: bool, terminal_only: bool, raw_input: str
+    sync_mode: bool, input_mode: str, raw_input: str
 ):
+    terminal_only: Final = input_mode == "terminal_only"
+    late_name: Final = input_mode == "late_name"
     arguments: Final = json.dumps({"content": raw_input}, ensure_ascii=True)
     first: Final = Delta(
         content=None,
@@ -122,21 +124,44 @@ async def test_custom_tool_input_events_round_trip_with_interleaved_function(
                 "index": 0,
                 "id": "call-custom",
                 "type": "function",
-                "function": {"name": "write_note", "arguments": arguments if terminal_only else ""},
+                "function": {
+                    **({} if late_name else {"name": "write_note"}),
+                    "arguments": arguments if terminal_only else arguments[:3] if late_name else "",
+                },
             },
             {
                 "index": 1,
                 "id": "call-function",
                 "type": "function",
-                "function": {"name": "lookup", "arguments": '{"query":"ready"}'},
+                "function": {
+                    **({} if late_name else {"name": "lookup"}),
+                    "arguments": '{"query":' if late_name else '{"query":"ready"}',
+                },
             },
         ],
     )
     pieces: Final = (
-        () if terminal_only else tuple(arguments[offset : offset + 3] for offset in range(0, len(arguments), 3))
+        ()
+        if terminal_only
+        else tuple(arguments[offset : offset + 3] for offset in range(3 if late_name else 0, len(arguments), 3))
     )
     chunks: Final = (
         _custom_tool_stream_chunk(first, "tool_calls" if terminal_only else None),
+        *(
+            (
+                _custom_tool_stream_chunk(
+                    Delta(
+                        content=None,
+                        tool_calls=[
+                            {"index": 0, "function": {"name": "write_note", "arguments": ""}},
+                            {"index": 1, "function": {"name": "lookup", "arguments": '"ready"}'}},
+                        ],
+                    )
+                ),
+            )
+            if late_name
+            else ()
+        ),
         *(
             _custom_tool_stream_chunk(Delta(content=None, tool_calls=[{"index": 0, "function": {"arguments": piece}}]))
             for piece in pieces
@@ -165,6 +190,20 @@ async def test_custom_tool_input_events_round_trip_with_interleaved_function(
     function_item: Final = next(item for item in completed["output"] if item["type"] == "function_call")
     custom_deltas: Final = tuple(event for event in events if event["type"] == "response.custom_tool_call_input.delta")
     custom_done: Final = tuple(event for event in events if event["type"] == "response.custom_tool_call_input.done")
+    custom_add: Final = next(
+        event
+        for event in events
+        if event["type"] == "response.output_item.added" and event["item"].get("call_id") == "call-custom"
+    )
+    function_add: Final = next(
+        event
+        for event in events
+        if event["type"] == "response.output_item.added" and event["item"].get("call_id") == "call-function"
+    )
+    assert custom_add["item"]["type"] == "custom_tool_call"
+    assert custom_add["item"]["id"] == custom_item["id"]
+    assert function_add["item"]["type"] == "function_call"
+    assert function_add["item"]["name"] == function_item["name"] == "lookup"
     assert custom_item["input"] == raw_input
     assert "".join(event["delta"] for event in custom_deltas) == raw_input
     assert len(custom_done) == 1
@@ -187,7 +226,11 @@ async def test_custom_tool_input_events_round_trip_with_interleaved_function(
         for event in events
         if event["type"] == "response.output_item.done" and event["item"]["id"] == custom_item["id"]
     )
-    assert item_done["item"]["input"] == raw_input
+    assert item_done["item"] == custom_item
+    custom_sequence: Final = tuple(
+        event["sequence_number"] for event in (*custom_deltas, *custom_done, item_done)
+    )
+    assert all(left < right for left, right in zip(custom_sequence, custom_sequence[1:]))
     assert item_done["sequence_number"] > custom_done[0]["sequence_number"]
 
 
