@@ -212,3 +212,36 @@ def test_sync_stream_that_raises_mid_stream_releases_the_connection() -> None:
         assert _open_sessions_settling_to(wire, at_most=0) == 0, (
             "a stream that raised mid-way left its TCP session open"
         )
+
+
+_STUCK: Final = _Shape(
+    "hosted_vllm",
+    "hosted_vllm/stuck-model",
+    _OPENAI_OPENING,
+    (_openai_delta("the model is stuck on this", None),) * (10 * litellm.REPEATED_STREAMING_CHUNK_LIMIT),
+)
+
+
+def _still_generating_peer(request: Request) -> Reply:
+    return Reply(content_type="text/event-stream", chunks=(_STUCK.opening, *_STUCK.closing), pause_between_chunks=0.01)
+
+
+def test_sync_stream_stuck_repeating_one_chunk_releases_the_connection() -> None:
+    with wire_server(_still_generating_peer, keep_alive=True) as wire:
+        stuck: Final = litellm.completion(**_request_kwargs(_STUCK, wire))
+        with pytest.raises(Exception, match="repeating the same chunk"):
+            for _ in stuck:
+                pass
+        assert _open_sessions_settling_to(wire, at_most=0) == 0, "a stream stuck on one chunk left its TCP session open"
+
+
+@pytest.mark.asyncio
+async def test_async_stream_stuck_repeating_one_chunk_releases_the_connection() -> None:
+    with wire_server(_still_generating_peer, keep_alive=True) as wire:
+        stuck: Final = await litellm.acompletion(**_request_kwargs(_STUCK, wire))
+        with pytest.raises(Exception, match="repeating the same chunk"):
+            async for _ in stuck:
+                pass
+        assert await _open_sessions_settling_to_while_the_loop_runs(wire, at_most=0) == 0, (
+            "a stream stuck on one chunk left its TCP session open"
+        )
