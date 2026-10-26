@@ -367,7 +367,7 @@ class _LabeledGauge(Protocol):
 
     def set(self, value: float) -> None: ...
 
-    def remove(self, *labelvalues: str) -> None: ...
+    def remove(self, *labelvalues: object) -> None: ...
 
 
 _TEAM_RATE_LIMIT_GAUGE_SPECS: Final[
@@ -798,25 +798,25 @@ class PrometheusLogger(CustomLogger):
             # LiteLLM Team rate limit metrics
             ########################################
 
-            self.litellm_remaining_team_requests_for_model = self._gauge_factory(
+            self.litellm_remaining_team_requests_for_model = self._gauge_factory(  # pyright: ignore[reportUnknownMemberType]  # _create_metric_factory is untyped upstream
                 "litellm_remaining_team_requests_for_model",
                 "Remaining Requests team can make for model (model based rpm limit on team)",
                 labelnames=self.get_labels_for_metric("litellm_remaining_team_requests_for_model"),
             )
 
-            self.litellm_remaining_team_tokens_for_model = self._gauge_factory(
+            self.litellm_remaining_team_tokens_for_model = self._gauge_factory(  # pyright: ignore[reportUnknownMemberType]  # _create_metric_factory is untyped upstream
                 "litellm_remaining_team_tokens_for_model",
                 "Remaining Tokens team can make for model (model based tpm limit on team)",
                 labelnames=self.get_labels_for_metric("litellm_remaining_team_tokens_for_model"),
             )
 
-            self.litellm_team_rpm_limit = self._gauge_factory(
+            self.litellm_team_rpm_limit = self._gauge_factory(  # pyright: ignore[reportUnknownMemberType]  # _create_metric_factory is untyped upstream
                 "litellm_team_rpm_limit",
                 "Configured RPM limit for team + model (model based rpm limit on team)",
                 labelnames=self.get_labels_for_metric("litellm_team_rpm_limit"),
             )
 
-            self.litellm_team_tpm_limit = self._gauge_factory(
+            self.litellm_team_tpm_limit = self._gauge_factory(  # pyright: ignore[reportUnknownMemberType]  # _create_metric_factory is untyped upstream
                 "litellm_team_tpm_limit",
                 "Configured TPM limit for team + model (model based tpm limit on team)",
                 labelnames=self.get_labels_for_metric("litellm_team_tpm_limit"),
@@ -1762,10 +1762,10 @@ class PrometheusLogger(CustomLogger):
 
         # set team rpm/tpm metrics for the requested model
         self._set_team_rate_limit_metrics(
-            user_api_team=user_api_team,
-            user_api_team_alias=user_api_team_alias,
-            model_group=standard_logging_payload["model_group"],
-            standard_logging_payload=standard_logging_payload,
+            user_api_team=cast("str | None", user_api_team),
+            user_api_team_alias=cast("str | None", user_api_team_alias),
+            model_group=cast("str | None", standard_logging_payload["model_group"]),
+            standard_logging_payload=standard_logging_payload,  # pyright: ignore[reportArgumentType]  # isinstance(dict) above narrows the TypedDict to dict[Unknown, Unknown]
         )
 
         self._set_v3_rate_limit_allowed_and_used_metrics(
@@ -2628,15 +2628,16 @@ class PrometheusLogger(CustomLogger):
             model=model_group,
             custom_metadata_labels=get_custom_labels_from_metadata(
                 metadata=_get_combined_custom_metadata_from_standard_logging_payload(
-                    standard_logging_payload=standard_logging_payload
+                    standard_logging_payload=cast("dict[str, object] | None", standard_logging_payload)
                 )
             ),
         )
         label_context: Final = PrometheusLabelFactoryContext(enum_values)
 
         for metric_name, value_type, rate_limit_type in _TEAM_RATE_LIMIT_GAUGE_SPECS:
+            gauge: _LabeledGauge = cast("_LabeledGauge", getattr(self, metric_name))
             self._sync_team_rate_limit_gauge(
-                gauge=getattr(self, metric_name),
+                gauge=gauge,
                 metric_name=metric_name,
                 value=self._get_v3_rate_limit_header(
                     standard_logging_payload=standard_logging_payload,
@@ -2688,12 +2689,12 @@ class PrometheusLogger(CustomLogger):
             # request wrote it last.
             return
 
-        labels: Final = prometheus_label_factory(
+        labels: Final[dict[str, str]] = cast("dict[str, str]", prometheus_label_factory(
             supported_enum_labels=labelnames,
             enum_values=enum_values,
             label_context=label_context,
-        )
-        label_values: Final = tuple(labels.get(name, "") for name in labelnames)
+        ))
+        label_values: Final[tuple[str, ...]] = tuple(labels.get(name, "") for name in labelnames)
         can_retire: Final = _series_retirement_supported()
         if can_retire:
             self._drop_superseded_team_series(
