@@ -62,6 +62,17 @@ describe("describeBudgetResetSchedule", () => {
     expect(describeBudgetResetSchedule("weekly", localIso(2026, 6, 15)).period).toBe("Jul 8 - Jul 15, 2026");
   });
 
+  it("walks the month back in UTC so a non-UTC viewer sees the proxy's window", () => {
+    const originalTz = process.env.TZ;
+    process.env.TZ = "America/New_York";
+    try {
+      const schedule = describeBudgetResetSchedule("30d", "2026-03-01T00:00:00Z");
+      expect(schedule.period).toBe("Jan 31 - Feb 28, 2026");
+    } finally {
+      process.env.TZ = originalTz;
+    }
+  });
+
   it("clamps month windows to the last day of a shorter month", () => {
     expect(describeBudgetResetSchedule("1mo", localIso(2026, 2, 31)).period).toBe("Feb 28 - Mar 31, 2026");
   });

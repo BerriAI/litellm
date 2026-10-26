@@ -74,7 +74,7 @@ export function describeBudgetResetSchedule(
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const label = resetDate.format("MMM D, YYYY HH:mm");
     const period = budgetDuration
-      ? formatBudgetPeriod(getBudgetPeriodStart(budgetDuration, resetDate), resetDate)
+      ? formatBudgetPeriod(getBudgetPeriodStart(budgetDuration, resetDate.utc()).local(), resetDate)
       : null;
     const coverage = period
       ? `Current Period Spend covers ${period} and resets every ${budgetDuration}.`
