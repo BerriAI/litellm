@@ -25,3 +25,14 @@ ecosystem = "PyPI"
 vulnerability.ignore = true
 effectiveUntil = 2026-10-27
 reason = "pillow 13.0.0 requires Python >= 3.11, so the Python 3.10 resolution of the ci and dev groups stays on 12.3.0; 3.11+ is on 13.0.0"
+
+
+[[IgnoredVulns]]
+id = "GHSA-567q-5qvw-pf92"
+ignoreUntil = 2026-11-20
+reason = "Windows soft-lock oplock issue; LiteLLM uses FileLock, which selects WindowsFileLock on Windows. huggingface-hub falls back to SoftFileLock only when Unix flock is unsupported. The fixed filelock 4.x requires Python >= 3.11, while LiteLLM supports 3.10; remove when a compatible fix ships or 3.10 is dropped"
+
+[[IgnoredVulns]]
+id = "GHSA-9vhv-jxww-xfm5"
+ignoreUntil = 2026-11-20
+reason = "Windows ReadWriteLock SQLite side-file issue; LiteLLM and its filelock consumer huggingface-hub do not use ReadWriteLock. The fixed filelock 4.x requires Python >= 3.11, while LiteLLM supports 3.10; remove when a compatible fix ships or 3.10 is dropped"
