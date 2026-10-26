@@ -106,10 +106,7 @@ export function AutoRoutersPanel({
         >
           <DialogHeader>
             <DialogTitle>Add Auto Router</DialogTitle>
-            <DialogDescription>
-              Choose a classifier to route each request to a model. Called like any other model, so clients keep using a
-              single model name.
-            </DialogDescription>
+            <DialogDescription>Choose a goal and review your models.</DialogDescription>
           </DialogHeader>
           <AddAutoRouterTab
             handleOk={handleCreated}
