@@ -290,7 +290,6 @@ from litellm.router_utils.handle_error import (
     send_llm_exception_alert,
 )
 from litellm.router_utils.health_state_cache import DeploymentHealthCache
-from litellm.router_utils.model_request_defaults import deployment_params_with_request_defaults, model_request_defaults
 from litellm.router_utils.kubernetes_pod_discovery import (
     KubernetesPodDiscovery,
     async_resolve_pods_after,
@@ -298,6 +297,7 @@ from litellm.router_utils.kubernetes_pod_discovery import (
     resolve_pods_after,
     resolve_pods_after_bound,
 )
+from litellm.router_utils.model_request_defaults import deployment_params_with_request_defaults, model_request_defaults
 from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
     MID_STREAM_CONTINUATION_MARKER,
     ContinuationOutput,
@@ -451,7 +451,6 @@ from litellm.utils import (
     lookup_model_info_for_registration,
     model_info_with_pricing_overrides,
     provider_rejectable_params,
-    resolve_api_key_secret_reference,
     set_live_deployment_replay,
 )
 
@@ -11541,7 +11540,7 @@ class Router:
         deployment alone, which is what lets a refresh rebuild the same entries.
         """
         model_info: Final = dict(
-            _MODEL_INFO_ADAPTER.validate_python(deployment.model_info.model_dump(exclude_none=True))
+            _MODEL_INFO_ADAPTER.validate_python(deployment.model_info.model_dump(mode="json", exclude_none=True))
         )
         for field in CustomPricingLiteLLMParams.model_fields:
             field_value = deployment.litellm_params.get(field)

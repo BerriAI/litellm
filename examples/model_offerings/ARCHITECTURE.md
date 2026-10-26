@@ -4,7 +4,7 @@ Automatic supplier metadata is the normal path for AUTO offerings. Selecting an 
 
 The schema still requires an explicit `source`. Normal automatic usage selects `source: auto` without copying a capability card; it does not mean an omitted `source` field is accepted
 
-This walkthrough is verified against runtime commit `ec1e681d95dca0e6660e21fba9060ec9e3c7afde`. Relative source links follow the code in the same checkout. The feature extends native LiteLLM adapters, types, authentication, listing and Router paths; referencing those paths does not mean every implementation in them originated in this PR. See the [setup guide](README.md) for configuration and lifecycle instructions
+This walkthrough includes the upstream sync through `dddbaa803d6e9fcc862ea7a5412f771cb1ae040e`. Relative source links follow the code in the same checkout, and the PR records validation against its published head. The feature extends native LiteLLM adapters, types, authentication, listing and Router paths; referencing those paths does not mean every implementation in them originated in this PR. See the [setup guide](README.md) for configuration and lifecycle instructions
 
 ```text
 supplier connection -> inventory -> native normalization -> offering resolution
@@ -177,6 +177,8 @@ It chooses the budget's effort key from request effort first, then deployment re
 
 The helper returns `max_output_tokens` for Responses calls and `max_tokens` for the other supported calls. It does not inject a reasoning effort just because a default was advertised. An explicit caller budget wins over this configured default-budget policy, and conflicting deployment budget parameters are removed in that policy path. Native/provider request translation still determines the eventual wire format
 
+The selector reads `reasoning_effort` and `reasoning.effort`; it is not a second implementation of every provider's thinking controls. In particular, its budget choice precedes later native request-level effort rounding. Do not assume an effort-specific default budget is recomputed for a different, unsupported effort that upstream subsequently rounds, or that every `output_config`/thinking-budget shape supplies this selector's effort key
+
 For the manual example, an omitted effort uses the base requested budget of `65536`; explicit `max` selects `131072`. Neither value means the physical output ceiling is known. This helper is defaulting, not a provider-independent quota or proof that a chosen budget is feasible
 
 An advertised reasoning default, a client electing to send that default, an explicit deployment request setting and a provider adapter's own default behavior are different things. The offering manager itself does not turn every advertised default into an outgoing request parameter. With no explicit effort setting or provider-specific injection, omission leaves the supplier's behavior in charge
@@ -198,6 +200,10 @@ A client reads its authorized gateway `/v1/models` result. A generic client can 
 Variant syntax and UI conversion belong to the client, not this LiteLLM PR. A client that rejects a requested effort variant when its catalog has no variants can do so before any inference request. This document does not claim to implement or test OpenCode's local validation or interactive UI, and no OpenCode source change is needed to define the gateway catalog contract
 
 For inference, the public alias resolves to a selected native deployment. The Router applies request-default budget policy and dispatches through the selected provider adapter. The [OpenRouter chat adapter](../../litellm/llms/openrouter/chat/transformation.py) preserves explicit gateway `max`/`xhigh`, and the [Messages bridge normalization](../../litellm/llms/anthropic/pass_through/utils.py) does not reduce OpenRouter effort using unrelated backend flags. Native Responses and Responses-to-chat paths retain their API-specific request shapes
+
+Upstream's [deployment reasoning resolver](../../litellm/router_utils/reasoning_effort_capability.py) now owns deployment-declared effort handling across chat, Responses and Messages. An accepted declared value is kept. A ranked request outside the declared set can be rounded according to native up/down policy, or dropped under native `drop_params` behavior; explicit `default` resolves to omission. Cost-map-only choices do not activate deployment rounding. Supplier choices resolved into an AUTO deployment's own `model_info` do count as its declaration. The external offering schema does not add a parallel rounding framework or expose every native Router setting
+
+Consequently, preserving accepted OpenRouter gateway efforts is not an all-provider or all-input passthrough guarantee. The fork still avoids the provider adapter's old unconditional max-to-xhigh rename and legacy undeclared OpenRouter approximation, while reusing upstream's declared-effort resolver. Other provider adapters keep their native request semantics. The shared native [deployment-pricing resolver](../../litellm/router_utils/deployment_pricing.py) also owns base-model key precedence for listing; the former fork-only key lookup is removed
 
 The offering guard merges the exact configured `only`/`allow_fallbacks: false` body and checks it again at deployment dispatch. Caller connection, deployment, provider, fallback, tier and parameter-dropping overrides cannot replace it. Pinned response-cache reads/writes are disabled to prevent output from another endpoint satisfying the request. No `require_parameters` setting or fallback supplier is silently added. Unsupported pinned API surfaces and native batches are rejected rather than bypassing selection
 

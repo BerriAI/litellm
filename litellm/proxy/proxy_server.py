@@ -167,8 +167,8 @@ from litellm.proxy.common_utils.token_count_settings import (
     resolve_token_count_settings,
 )
 from litellm.proxy.management_helpers.auto_router_availability import AutoRouterCatalogEntry, build_auto_router_catalog
-from litellm.proxy.model_discovery import discover_model_metadata
 from litellm.proxy.management_helpers.model_group_custom_fields import model_group_custom_fields
+from litellm.proxy.model_discovery import discover_model_metadata
 from litellm.router_utils.access_windows import access_windows_config_error
 from litellm.router_utils.add_retry_fallback_headers import (
     get_fallback_errors_from_headers,
