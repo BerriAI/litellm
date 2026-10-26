@@ -13,6 +13,7 @@ from litellm.completion_extras.litellm_responses_transformation.handler import (
     ResponsesToCompletionBridgeHandler,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.responses import bridge_executor
 from litellm.types.utils import ModelResponse
 
 MODEL = "openai.gpt-5.5"
@@ -73,11 +74,11 @@ def test_completion_forwards_custom_llm_provider_to_responses():
     bridge = ResponsesToCompletionBridgeHandler()
     cached = ModelResponse(id="chatcmpl-cached", model="gpt-5.5")
 
-    with patch("litellm.responses", return_value=cached) as fake_responses:
+    with patch.object(bridge_executor, "native_responses", return_value=cached) as fake_responses:
         result = bridge.completion(**_openai_kwargs())
 
     assert result is cached
-    assert fake_responses.call_args.kwargs["custom_llm_provider"] == "openai"
+    assert fake_responses.call_args.args[2]["custom_llm_provider"] == "openai"
 
 
 @pytest.mark.asyncio
@@ -85,13 +86,13 @@ async def test_acompletion_forwards_custom_llm_provider_to_aresponses():
     bridge = ResponsesToCompletionBridgeHandler()
     cached = ModelResponse(id="chatcmpl-cached", model="gpt-5.5")
 
-    async def _fake_aresponses(**kwargs):
-        _fake_aresponses.kwargs = kwargs
+    async def _fake_aresponses(request, model, forwarded_kwargs, logging_obj):
+        _fake_aresponses.kwargs = forwarded_kwargs
         return cached
 
     _fake_aresponses.kwargs = {}
 
-    with patch("litellm.aresponses", _fake_aresponses):
+    with patch.object(bridge_executor, "anative_responses", _fake_aresponses):
         result = await bridge.acompletion(**_openai_kwargs())
 
     assert result is cached
@@ -103,13 +104,13 @@ async def test_acompletion_forwards_aws_region_name_to_aresponses():
     bridge = ResponsesToCompletionBridgeHandler()
     cached = ModelResponse(id="chatcmpl-cached", model=MODEL)
 
-    async def _fake_aresponses(**kwargs):
-        _fake_aresponses.kwargs = kwargs
+    async def _fake_aresponses(request, model, forwarded_kwargs, logging_obj):
+        _fake_aresponses.kwargs = forwarded_kwargs
         return cached
 
     _fake_aresponses.kwargs = {}
 
-    with patch("litellm.aresponses", _fake_aresponses):
+    with patch.object(bridge_executor, "anative_responses", _fake_aresponses):
         result = await bridge.acompletion(**_bedrock_mantle_kwargs())
 
     assert result is cached
