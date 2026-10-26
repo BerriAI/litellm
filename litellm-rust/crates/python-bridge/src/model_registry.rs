@@ -572,7 +572,7 @@ mod tests {
     }
 
     fn json_error() -> serde_json::Error {
-        serde_json::from_str::<Value>("{").unwrap_err()
+        <serde_json::Error as serde::de::Error>::custom("invalid JSON")
     }
 
     #[rstest]

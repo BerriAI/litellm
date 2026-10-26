@@ -607,7 +607,7 @@ fn meter_name(meter: &Meter) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use litellm_host_python::to_py;
+    use litellm_host_python::{json_loads, to_py};
     use rstest::{fixture, rstest};
     use serde::Deserialize;
     use serde_json::{Value, json};
@@ -1371,11 +1371,13 @@ assert seen == ["released"]
 
     #[rstest]
     fn prices_existing_catalog_reference_through_live_rows(#[from(interpreter)] _interpreter: ()) {
-        let reference: Reference = serde_json::from_str(include_str!(
-            "../../../model-catalog/tests/price_lookup_reference.json"
-        ))
-        .unwrap();
         Python::attach(|py| {
+            let document = json_loads(
+                py,
+                include_bytes!("../../../model-catalog/tests/price_lookup_reference.json"),
+            )
+            .unwrap();
+            let reference: Reference = from_py(document.bind(py)).unwrap();
             for model in reference.models {
                 let row = fields_to_dict(py, &model.info).unwrap().into_bound(py);
                 row.set_item("litellm_provider", "test").unwrap();
