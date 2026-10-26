@@ -345,15 +345,12 @@ mod tests {
     }
 
     #[rstest]
-    fn redis_migration_regression_malformed_optional_environment_is_absent() {
-        assert_eq!(
-            resolved(
-                "model_list: []",
-                &[("REDIS_HOST", "env"), ("REDIS_PORT", "not-a-port")],
-            )
-            .unwrap(),
-            NO_REDIS
-        );
+    #[case::malformed_port(&[("REDIS_HOST", "env"), ("REDIS_PORT", "not-a-port")])]
+    #[case::malformed_cluster_nodes(&[("REDIS_CLUSTER_NODES", "[{\"host\": ")])]
+    fn redis_migration_regression_malformed_optional_environment_is_absent(
+        #[case] environment: &[(&str, &str)],
+    ) {
+        assert_eq!(resolved("model_list: []", environment).unwrap(), NO_REDIS);
     }
 
     #[rstest]

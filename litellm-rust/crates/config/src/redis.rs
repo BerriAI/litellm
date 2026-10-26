@@ -130,30 +130,44 @@ const CACHE_ONLY: &[&str] = &[
     "_backend",
 ];
 
-#[derive(Clone, Default, Deserialize)]
-#[serde(default)]
+#[derive(Clone, Default)]
 pub struct RedisSettings {
-    #[serde(deserialize_with = "secret")]
     pub url: Option<SecretValue>,
-    #[serde(deserialize_with = "text")]
     pub host: Option<Spelled<String>>,
-    #[serde(deserialize_with = "number")]
     pub port: Option<Spelled<u16>>,
-    #[serde(deserialize_with = "secret")]
     pub username: Option<SecretValue>,
-    #[serde(deserialize_with = "secret")]
     pub password: Option<SecretValue>,
-    #[serde(deserialize_with = "flag")]
     pub ssl: Option<Spelled<bool>>,
-    #[serde(deserialize_with = "number")]
     pub db: Option<Spelled<i64>>,
-    #[serde(deserialize_with = "number")]
     pub socket_timeout: Option<Spelled<f64>>,
     pub startup_nodes: Option<Value>,
-    #[serde(deserialize_with = "text")]
     pub namespace: Option<Spelled<String>>,
-    #[serde(flatten)]
     pub additional_fields: AdditionalFields,
+    unparsed: DeferredInputs,
+}
+
+impl<'de> Deserialize<'de> for RedisSettings {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let fields = BTreeMap::<String, Value>::deserialize(deserializer)?;
+        let scalar = |key: &str| fields.get(key).and_then(as_text);
+        Ok(Self {
+            url: scalar("url").map(SecretValue::new),
+            host: scalar("host").map(Spelled::Value),
+            port: spelled(scalar("port")),
+            username: scalar("username").map(SecretValue::new),
+            password: scalar("password").map(SecretValue::new),
+            ssl: spelled(scalar("ssl")),
+            db: spelled(scalar("db")),
+            socket_timeout: spelled(scalar("socket_timeout")),
+            startup_nodes: fields
+                .get("startup_nodes")
+                .filter(|value| !value.is_null())
+                .cloned(),
+            namespace: scalar("namespace").map(Spelled::Value),
+            additional_fields: cloned(&fields, |key, _| !SUPPORTED.contains(&key)),
+            unparsed: deferred_inputs(&fields),
+        })
+    }
 }
 
 impl fmt::Debug for RedisSettings {
@@ -174,6 +188,7 @@ impl fmt::Debug for RedisSettings {
             )
             .field("namespace", &self.namespace)
             .field("additional_fields", &self.additional_fields.keys())
+            .field("unparsed", &self.unparsed.keys())
             .finish()
     }
 }
@@ -410,7 +425,20 @@ impl RedisSettings {
                 },
             ))
         });
-        known.chain(startup_nodes).chain(extras).collect()
+        let unparsed = self.unparsed.iter().map(|(key, value)| {
+            (
+                key.clone(),
+                Entry {
+                    value: value.0.clone(),
+                    source: key.clone(),
+                },
+            )
+        });
+        extras
+            .chain(unparsed)
+            .chain(known)
+            .chain(startup_nodes)
+            .collect()
     }
 }
 
@@ -599,35 +627,41 @@ fn spelled_text<T: ToString>(value: Option<&Spelled<T>>) -> Option<String> {
     })
 }
 
-fn scalar(value: Value) -> Option<String> {
-    as_text(&value)
+fn spelled<T: std::str::FromStr>(text: Option<String>) -> Option<Spelled<T>> {
+    text.map(|text| match text.parse() {
+        Ok(value) => Spelled::Value(value),
+        Err(_) => Spelled::Text(text),
+    })
 }
 
-fn secret<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<SecretValue>, D::Error> {
-    Ok(Option::<Value>::deserialize(deserializer)?
-        .and_then(scalar)
-        .map(SecretValue::new))
+fn cloned(
+    fields: &BTreeMap<String, Value>,
+    keep: impl Fn(&str, &Value) -> bool,
+) -> AdditionalFields {
+    fields
+        .iter()
+        .filter(|(key, value)| keep(key, value))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
 }
 
-fn text<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Spelled<String>>, D::Error> {
-    Ok(Option::<Value>::deserialize(deserializer)?
-        .and_then(scalar)
-        .map(Spelled::Value))
+#[derive(Clone)]
+struct DeferredInput(Value);
+
+type DeferredInputs = BTreeMap<String, DeferredInput>;
+
+fn deferred_inputs(fields: &BTreeMap<String, Value>) -> DeferredInputs {
+    fields
+        .iter()
+        .filter(|(key, value)| is_unparsed(key, value))
+        .map(|(key, value)| (key.clone(), DeferredInput(value.clone())))
+        .collect()
 }
 
-fn number<'de, D, T>(deserializer: D) -> Result<Option<Spelled<T>>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: std::str::FromStr,
-{
-    Ok(Option::<Value>::deserialize(deserializer)?
-        .and_then(scalar)
-        .map(|text| match text.parse() {
-            Ok(value) => Spelled::Value(value),
-            Err(_) => Spelled::Text(text),
-        }))
-}
-
-fn flag<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Spelled<bool>>, D::Error> {
-    number(deserializer)
+fn is_unparsed(key: &str, value: &Value) -> bool {
+    SUPPORTED.contains(&key)
+        && match key {
+            "startup_nodes" => value.is_null(),
+            _ => as_text(value).is_none(),
+        }
 }

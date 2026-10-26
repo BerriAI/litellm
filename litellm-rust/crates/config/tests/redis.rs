@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use litellm_config::{Config, Error, RedisEndpoint, RedisSettings};
+use litellm_config::{CacheSettings, Config, Error, RedisEndpoint, RedisSettings, ResolvedRedis};
 use rstest::rstest;
 use tracing::{Event, Subscriber, field::Visit};
 use tracing_subscriber::{Layer, layer::Context, prelude::*};
@@ -24,6 +24,21 @@ fn resolve(
         .as_ref()
         .unwrap_or(&RedisSettings::default())
         .resolve(&|name| environment.get(name).cloned())
+}
+
+fn resolve_cache(yaml: &str) -> Result<ResolvedRedis, Error> {
+    let config = Config::from_yaml(yaml).unwrap();
+    match config.litellm_settings.cache_params.unwrap() {
+        CacheSettings::Redis(settings) => settings.resolve_cache(&|_| None),
+        CacheSettings::Other(_) => panic!("expected a Redis cache"),
+    }
+}
+
+fn cluster_ports(resolved: &ResolvedRedis) -> Vec<u16> {
+    match &resolved.endpoint {
+        RedisEndpoint::Cluster(cluster) => cluster.nodes.iter().map(|node| node.port).collect(),
+        endpoint => panic!("expected a cluster, got {endpoint:?}"),
+    }
 }
 
 #[rstest]
@@ -54,6 +69,31 @@ fn resolve(
 )]
 #[case::missing_reference_keeps_environment_fallback(
     "general_settings:\n  coordination_redis:\n    host: os.environ/MISSING_HOST",
+    &[("REDIS_HOST", "environment")],
+    "host:environment:6379:0:false::none"
+)]
+#[case::configured_values_beat_the_same_environment_values(
+    "general_settings:\n  coordination_redis:\n    host: configured\n    port: 6380\n    db: 3",
+    &[("REDIS_HOST", "environment"), ("REDIS_PORT", "6390"), ("REDIS_DB", "9")],
+    "host:configured:6380:3:false::none"
+)]
+#[case::environment_url_beats_the_environment_host(
+    "model_list: []",
+    &[("REDIS_URL", "redis://environment:6379"), ("REDIS_HOST", "ignored")],
+    "url:redis://environment:6379"
+)]
+#[case::startup_nodes_beat_a_url(
+    "general_settings:\n  coordination_redis:\n    url: redis://single:6379\n    startup_nodes:\n      - host: node-a\n        port: 7000",
+    &[],
+    "cluster:node-a:7000"
+)]
+#[case::environment_references_resolve_the_host_and_port(
+    "general_settings:\n  coordination_redis:\n    host: os.environ/COORD_HOST\n    port: os.environ/COORD_PORT",
+    &[("COORD_HOST", "referenced"), ("COORD_PORT", "6400")],
+    "host:referenced:6400:0:false::none"
+)]
+#[case::a_null_host_falls_back_to_the_environment(
+    "general_settings:\n  coordination_redis:\n    host: null",
     &[("REDIS_HOST", "environment")],
     "host:environment:6379:0:false::none"
 )]
@@ -145,6 +185,85 @@ fn rejected_settings_name_their_source(
     let error = resolve(yaml, environment).unwrap_err();
 
     assert!(matches!(error, Error::RedisSetting(setting) if setting == expected));
+}
+
+#[rstest]
+fn an_explicit_host_keeps_environment_credentials() {
+    let resolved = resolve(
+        "general_settings:\n  coordination_redis:\n    host: configured",
+        &[
+            ("REDIS_PASSWORD", "environment-secret"),
+            ("REDIS_SSL", "True"),
+        ],
+    )
+    .unwrap();
+
+    let RedisEndpoint::Host(host) = resolved.endpoint else {
+        panic!("expected a host endpoint");
+    };
+    assert_eq!(
+        host.password.as_ref().map(|password| password.expose()),
+        Some("environment-secret")
+    );
+    assert!(host.tls);
+}
+
+#[rstest]
+#[case::only_a_port("general_settings:\n  coordination_redis:\n    port: 6379", &[])]
+#[case::a_structured_host_with_an_environment_target(
+    "general_settings:\n  coordination_redis:\n    host: []",
+    &[("REDIS_HOST", "environment"), ("REDIS_URL", "redis://environment:6379")]
+)]
+fn a_block_without_a_usable_target_fails(#[case] yaml: &str, #[case] environment: &[(&str, &str)]) {
+    let error = resolve(yaml, environment).unwrap_err();
+
+    assert!(matches!(
+        error,
+        Error::RedisInvalid {
+            setting: "host",
+            ..
+        }
+    ));
+}
+
+#[rstest]
+fn the_cache_alias_names_cluster_nodes() {
+    let resolved = resolve_cache(
+        "litellm_settings:\n  cache_params:\n    type: redis\n    redis_startup_nodes:\n      - host: node-a\n        port: 7000",
+    )
+    .unwrap();
+
+    assert_eq!(cluster_ports(&resolved), vec![7000]);
+}
+
+#[rstest]
+fn canonical_startup_nodes_beat_the_cache_alias() {
+    let resolved = resolve_cache(
+        "litellm_settings:\n  cache_params:\n    type: redis\n    startup_nodes:\n      - host: canonical\n        port: 7000\n    redis_startup_nodes:\n      - host: alias\n        port: 7100\n      - host: alias\n        port: 7101",
+    )
+    .unwrap();
+
+    assert_eq!(cluster_ports(&resolved), vec![7000]);
+}
+
+#[rstest]
+fn a_null_canonical_startup_nodes_setting_shadows_the_cache_alias() {
+    let resolved = resolve_cache(
+        "litellm_settings:\n  cache_params:\n    type: redis\n    host: cache\n    startup_nodes: null\n    redis_startup_nodes:\n      - host: alias\n        port: 7100",
+    )
+    .unwrap();
+
+    assert!(matches!(resolved.endpoint, RedisEndpoint::Host(_)));
+}
+
+#[rstest]
+fn a_missing_canonical_startup_nodes_reference_shadows_the_cache_alias() {
+    let resolved = resolve_cache(
+        "litellm_settings:\n  cache_params:\n    type: redis\n    host: cache\n    startup_nodes: os.environ/MISSING_NODES\n    redis_startup_nodes:\n      - host: alias\n        port: 7100",
+    )
+    .unwrap();
+
+    assert!(matches!(resolved.endpoint, RedisEndpoint::Host(_)));
 }
 
 #[rstest]
