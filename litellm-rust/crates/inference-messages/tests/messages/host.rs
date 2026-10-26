@@ -1,3 +1,4 @@
+use litellm_core_utils::decline::Decline;
 use litellm_host::lifecycle::ExecutionEvent;
 use std::sync::Mutex;
 
@@ -81,7 +82,7 @@ impl litellm_host::interceptors::Interceptors<<Messages as litellm_host::protoco
     async fn result_ready(&self, facts: ExecutionFacts) -> Result<(), Error> {
         self.facts.lock().unwrap().push(facts);
         if self.reject_result {
-            return Err(Error::Unsupported("result rejected"));
+            return Err(Error::Declined(Decline::new("result rejected")));
         }
         Ok(())
     }
@@ -181,7 +182,7 @@ async fn rejected_results_are_not_delivered_or_cached(
         assert_eq!(
             result,
             if reject {
-                Err(Error::Unsupported("result rejected"))
+                Err(Error::Declined(Decline::new("result rejected")))
             } else {
                 Ok(())
             }

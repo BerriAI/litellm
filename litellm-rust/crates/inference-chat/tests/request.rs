@@ -354,7 +354,7 @@ async fn rejects_a_forwarded_header_the_signer_computes(#[case] forwarded: &str)
     let error = complete(call)
         .await
         .expect_err("conflicting signing headers fail");
-    assert!(matches!(error, Error::Unsupported(_)), "{error:?}");
+    assert!(error.declined().is_some(), "{error:?}");
     assert!(received(&upstream).await.is_empty());
 }
 
