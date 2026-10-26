@@ -15,7 +15,9 @@ dependencies = [
     # When changing a floor, verify it installs + imports on every supported
     # Python with: `uv pip install --resolution=lowest-direct .`
     "fastuuid>=0.14.0,<1.0",
-    "filelock>=3.16.1,<4.0",
+    # 3.20.3 fixes GHSA-qmgc-5h2g-mvrw and predates ReadWriteLock advisories
+    # introduced in 3.20.4; their fix (4.2.1) requires Python >=3.11.
+    "filelock>=3.20.3,<3.20.4",
     "httpx[http2]>=0.28.0,<1.0",
     "openai>=2.20.0,<4.0.0",
     "python-dotenv>=1.0.0,<2.0",
