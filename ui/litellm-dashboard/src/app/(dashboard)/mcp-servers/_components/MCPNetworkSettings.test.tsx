@@ -147,6 +147,45 @@ describe("MCPNetworkSettings", () => {
     expect(updateConfigFieldSetting).not.toHaveBeenCalled();
   });
 
+  it("loads both capability switches on and writes nothing on Save when the proxy reports no stored value", async () => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+      { field_name: "mcp_disabled_capabilities", field_value: null },
+    ]);
+    renderSettings();
+    const switches = await screen.findAllByRole("switch");
+    expect(switches.map((s) => s.getAttribute("aria-checked"))).toEqual(["true", "true"]);
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("MCP network settings saved"));
+    expect(deleteConfigFieldSetting).not.toHaveBeenCalled();
+    expect(updateConfigFieldSetting).not.toHaveBeenCalled();
+  });
+
+  it("stores the capabilities an admin switches off", async () => {
+    renderSettings();
+    await userEvent.click((await screen.findAllByRole("switch"))[0]);
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
+
+    await waitFor(() =>
+      expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_disabled_capabilities", ["prompts"]),
+    );
+    expect(deleteConfigFieldSetting).not.toHaveBeenCalled();
+  });
+
+  it("deletes the stored setting when the admin switches the last disabled capability back on", async () => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+      { field_name: "mcp_disabled_capabilities", field_value: ["resources"] },
+    ]);
+    renderSettings();
+    const switches = await screen.findAllByRole("switch");
+    expect(switches.map((s) => s.getAttribute("aria-checked"))).toEqual(["true", "false"]);
+    await userEvent.click(switches[1]);
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
+
+    await waitFor(() => expect(deleteConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_disabled_capabilities"));
+    expect(updateConfigFieldSetting).not.toHaveBeenCalled();
+  });
+
   it("labels the section Allowed Clients and renders each stored client as a card showing alias and value", async () => {
     vi.mocked(getGeneralSettingsCall).mockResolvedValue([
       { field_name: "mcp_allowed_clients", field_value: [ANTIGRAVITY, CODEX] },

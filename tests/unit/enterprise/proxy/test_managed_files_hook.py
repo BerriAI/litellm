@@ -1500,6 +1500,51 @@ async def test_create_still_upserts_and_claims_attribution():
 
 
 @pytest.mark.asyncio
+async def test_a_stored_background_response_names_its_creators_end_user_and_holds_none_of_its_output():
+    """Billing reads only a stored response's status and model, so neither the row nor its cache
+    entry keeps what the model generated, and the row names the end user the create billed to."""
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    managed_files, mock_prisma = _make_object_store_instance()
+    generated_text = "the generated answer"
+    response = ResponsesAPIResponse(
+        id="resp_unified",
+        object="response",
+        status="completed",
+        created_at=1,
+        model="gpt-5.6",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_1",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": generated_text, "annotations": []}],
+            }
+        ],
+        background=True,
+    )
+
+    await managed_files.store_unified_object_id(
+        unified_object_id="resp_unified",
+        file_object=response,
+        litellm_parent_otel_span=None,
+        model_object_id="resp_provider",
+        file_purpose="response",
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-the-creator", end_user_id="customer-42", parent_otel_span=None),
+        persist_attribution=True,
+    )
+
+    written = mock_prisma.db.litellm_managedobjecttable.upsert.await_args.kwargs["data"]
+    cached = managed_files.internal_usage_cache.async_set_cache.await_args.kwargs["value"]
+    assert generated_text not in json.dumps(written, default=str)
+    assert generated_text not in json.dumps(cached, default=str)
+    assert json.loads(written["create"]["file_object"])["status"] == "completed"
+    assert written["create"]["end_user_id"] == "customer-42"
+    assert generated_text in response.model_dump_json()
+
+
+@pytest.mark.asyncio
 async def test_default_callers_still_create_their_rows():
     """create_if_missing defaults to True, so the fine-tune, Responses and managed
     /v1/batches callers, none of which passes it, keep upserting exactly as before."""

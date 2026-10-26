@@ -2316,8 +2316,6 @@ def _cacheable_messages() -> list:
 @patch.object(ContextCachingEndpoints, "check_cache", return_value=None)
 @patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching", return_value=("token", "https://u"))
 def test_check_and_create_cache_records_creation_tokens_for_billing(mock_url, mock_check):
-    from litellm.types.llms.vertex_ai import VERTEX_AI_CACHE_CREATION_TOKENS_KEY
-
     logging_obj = MagicMock()
     logging_obj.model_call_details = {}
     client = MagicMock(spec=HTTPHandler)
@@ -2339,16 +2337,15 @@ def test_check_and_create_cache_records_creation_tokens_for_billing(mock_url, mo
     )
 
     assert cache_name == "cachedContents/created"
-    assert logging_obj.model_call_details[VERTEX_AI_CACHE_CREATION_TOKENS_KEY] == 1280
+    assert logging_obj.vertex_ai_cache_creation_input_tokens == 1280
 
 
 @patch.object(ContextCachingEndpoints, "check_cache", return_value="cachedContents/existing")
 @patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching", return_value=("token", "https://u"))
 def test_check_and_create_cache_records_no_creation_tokens_when_cache_exists(mock_url, mock_check):
-    from litellm.types.llms.vertex_ai import VERTEX_AI_CACHE_CREATION_TOKENS_KEY
-
     logging_obj = MagicMock()
     logging_obj.model_call_details = {}
+    logging_obj.vertex_ai_cache_creation_input_tokens = 0
     client = MagicMock(spec=HTTPHandler)
 
     _, _, cache_name = ContextCachingEndpoints().check_and_create_cache(
@@ -2368,15 +2365,13 @@ def test_check_and_create_cache_records_no_creation_tokens_when_cache_exists(moc
 
     assert cache_name == "cachedContents/existing"
     client.post.assert_not_called()
-    assert VERTEX_AI_CACHE_CREATION_TOKENS_KEY not in logging_obj.model_call_details
+    assert logging_obj.vertex_ai_cache_creation_input_tokens == 0
 
 
 @pytest.mark.asyncio
 @patch.object(ContextCachingEndpoints, "async_check_cache", return_value=None)
 @patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching", return_value=("token", "https://u"))
 async def test_async_check_and_create_cache_records_creation_tokens_for_billing(mock_url, mock_check):
-    from litellm.types.llms.vertex_ai import VERTEX_AI_CACHE_CREATION_TOKENS_KEY
-
     logging_obj = MagicMock()
     logging_obj.model_call_details = {}
     client = MagicMock(spec=AsyncHTTPHandler)
@@ -2398,4 +2393,33 @@ async def test_async_check_and_create_cache_records_creation_tokens_for_billing(
     )
 
     assert cache_name == "cachedContents/created"
-    assert logging_obj.model_call_details[VERTEX_AI_CACHE_CREATION_TOKENS_KEY] == 2048
+    assert logging_obj.vertex_ai_cache_creation_input_tokens == 2048
+
+
+def test_check_and_create_cache_clamps_negative_creation_tokens() -> None:
+    logging_obj = MagicMock(spec=Logging)
+    logging_obj.model_call_details = {}
+    client = MagicMock(spec=HTTPHandler)
+    client.post.return_value = MagicMock(json=lambda: _created_cache_body(-500))
+
+    with (
+        patch.object(ContextCachingEndpoints, "check_cache", return_value=None),
+        patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching", return_value=("token", "https://u")),
+    ):
+        _, _, cache_name = ContextCachingEndpoints().check_and_create_cache(
+            messages=_cacheable_messages(),
+            optional_params={},
+            api_key="k",
+            api_base=None,
+            model="gemini-3.1-pro",
+            client=client,
+            timeout=30.0,
+            logging_obj=logging_obj,
+            custom_llm_provider="gemini",
+            vertex_project=None,
+            vertex_location=None,
+            vertex_auth_header=None,
+        )
+
+    assert cache_name == "cachedContents/created"
+    assert logging_obj.vertex_ai_cache_creation_input_tokens == 0

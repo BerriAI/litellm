@@ -149,6 +149,7 @@ PROVIDERS: Final = (
     pytest.param("pillar", "pillar", {}, "pre_call", False, id="pillar"),
     pytest.param("cisco", "cisco_ai_defense", {}, "pre_call", False, id="cisco-ai-defense"),
     pytest.param("vigil", "vigil_guard", {}, "pre_call", False, id="vigil-guard"),
+    pytest.param("wingback", "wingback", {}, "pre_call", False, id="wingback"),
     pytest.param("singulr", "singulr", {}, "pre_call", False, id="singulr"),
     pytest.param("headroom", "headroom", {}, "pre_call", True, id="headroom"),
     pytest.param("onyx", "onyx", {}, "post_call", False, id="onyx"),

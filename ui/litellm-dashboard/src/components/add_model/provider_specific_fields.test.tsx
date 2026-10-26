@@ -113,6 +113,13 @@ vi.mock("../networking", async () => {
         ],
       },
       {
+        provider: "Oracle",
+        provider_display_name: Providers.Oracle,
+        litellm_provider: "oci",
+        default_model_placeholder: "oci/xai.grok-4",
+        credential_fields: [{ key: "oci_key", label: "OCI Private Key (PEM)", field_type: "textarea", required: true }],
+      },
+      {
         provider: "MICROSOFT_365_COPILOT",
         provider_display_name: Providers.MICROSOFT_365_COPILOT,
         litellm_provider: "microsoft_365_copilot",
@@ -180,6 +187,15 @@ const createQueryClient = () =>
 const VertexCredentialsProbe = () => {
   const { watch } = useFormContext<MountedFormValues>();
   return <output data-testid="vertex-credentials">{String(watch("vertex_credentials") ?? "")}</output>;
+};
+
+const ResetFormButton = () => {
+  const form = useFormContext<MountedFormValues>();
+  return (
+    <button type="button" onClick={() => form.reset({ litellm_credential_name: null })}>
+      Reset form
+    </button>
+  );
 };
 
 const ValidationForm = ({ children }: { readonly children: ReactNode }) => {
@@ -640,6 +656,49 @@ describe("ProviderSpecificFields", () => {
     await user.click(screen.getByRole("button", { name: "Submit" }));
 
     expect(await screen.findAllByText("Required")).toHaveLength(3);
+  });
+
+  it("renders typed password and text inputs empty after the form is reset", async () => {
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MountedFormHost>
+          <ProviderSpecificFields selectedProvider={Providers.OpenAI} />
+          <ResetFormButton />
+        </MountedFormHost>
+      </QueryClientProvider>,
+    );
+    const apiKey = await screen.findByLabelText("OpenAI API Key");
+    const organization = screen.getByLabelText("OpenAI Organization ID");
+    const apiBase = screen.getByLabelText(/API Base/);
+    expect(apiBase).toHaveValue("https://api.openai.com/v1");
+    fireEvent.change(apiKey, { target: { value: "sk-typed" } });
+    fireEvent.change(organization, { target: { value: "org-typed" } });
+    fireEvent.change(apiBase, { target: { value: "https://proxy.example.test/v1" } });
+    expect(apiKey).toHaveValue("sk-typed");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset form" }));
+
+    await waitFor(() => expect(apiKey).toHaveValue(""));
+    expect(organization).toHaveValue("");
+    expect(apiBase).toHaveValue("https://api.openai.com/v1");
+  });
+
+  it("renders a typed textarea input empty after the form is reset", async () => {
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MountedFormHost>
+          <ProviderSpecificFields selectedProvider={"Oracle" as Providers} />
+          <ResetFormButton />
+        </MountedFormHost>
+      </QueryClientProvider>,
+    );
+    const privateKey = await screen.findByLabelText(/OCI Private Key/);
+    fireEvent.change(privateKey, { target: { value: "-----BEGIN PRIVATE KEY-----" } });
+    expect(privateKey).toHaveValue("-----BEGIN PRIVATE KEY-----");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset form" }));
+
+    await waitFor(() => expect(privateKey).toHaveValue(""));
   });
 
   it("does not render an Auth Type selector for OpenAI", async () => {
