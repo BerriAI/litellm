@@ -490,6 +490,12 @@ def image_generation(
             or custom_llm_provider == LlmProviders.LITELLM_PROXY.value
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
+            if custom_llm_provider == "bitdeer-ai" and not (api_key or dynamic_api_key):
+                raise litellm.AuthenticationError(
+                    message="Bitdeer AI requires api_key or BITDEER_API_KEY",
+                    llm_provider=custom_llm_provider,
+                    model=model,
+                )
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
             # Forward OpenAI organization if present (set by proxy pre-call utils)

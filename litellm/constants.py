@@ -1053,6 +1053,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.libertai.io/v1",
     "https://pinstripes.io/v1",
     "https://api.meta.ai/v1",
+    "https://api-inference.bitdeer.ai/v1",
     "https://api.sailresearch.com/v1",
     "https://api.cognition.ai/v1",
     "https://inference.coralbricks.ai/v1",
@@ -1134,6 +1135,7 @@ openai_compatible_providers: Final[list[str]] = [
     "openinfer",
     "darkbloom",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
+    "bitdeer-ai",  # Bitdeer AI - JSON-configured provider
     "cognition",
     "coralbricks",
     "cortecs",

@@ -412,6 +412,28 @@ def rerank(
                 litellm_params=rerank_litellm_params,
             )
 
+        elif _custom_llm_provider == litellm.LlmProviders.BITDEER_AI:
+            if not dynamic_api_key:
+                raise litellm.AuthenticationError(
+                    message="bitdeer-ai rerank needs an api_key or BITDEER_API_KEY",
+                    llm_provider="bitdeer-ai",
+                    model=model,
+                )
+            response = base_llm_http_handler.rerank(  # rebind-ok: one assignment per provider branch
+                model=model,
+                custom_llm_provider=_custom_llm_provider,
+                provider_config=rerank_provider_config,
+                optional_rerank_params=optional_rerank_params,
+                logging_obj=litellm_logging_obj,
+                timeout=optional_params.timeout,
+                api_key=dynamic_api_key,
+                api_base=dynamic_api_base,
+                _is_async=_is_async,
+                headers=headers or litellm.headers or {},
+                client=client,
+                model_response=model_response,
+                litellm_params=rerank_litellm_params,
+            )
         elif _custom_llm_provider == litellm.LlmProviders.DEEPINFRA:
             api_key = dynamic_api_key or optional_params.api_key or get_secret_str("DEEPINFRA_API_KEY")
 
