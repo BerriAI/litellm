@@ -8,22 +8,6 @@ impl<F: Fn(&str) -> Option<String>> Lookup for F {
     }
 }
 
-pub fn resolve_non_empty(
-    value: Option<&str>,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
-    names: &[&str],
-) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            names
-                .iter()
-                .find_map(|name| env_lookup(name).filter(|value| !value.trim().is_empty()))
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
