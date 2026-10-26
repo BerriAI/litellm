@@ -1,15 +1,18 @@
+import io
 from collections.abc import Iterator
 from typing import Final
 
 import httpx
+import numpy as np
 import pytest
 import respx
+import soundfile
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.elevenlabs.audio_transcription.transformation import ElevenLabsAudioTranscriptionConfig
 from litellm.llms.elevenlabs.text_to_speech.transformation import ElevenLabsTextToSpeechConfig
-from litellm.types.utils import TranscriptionResponse
+from litellm.types.utils import TranscriptionResponse, TranscriptionUsageDurationObject
 from typing import Any, Dict
 from unittest.mock import patch, MagicMock
 
@@ -45,7 +48,7 @@ def test_transform_audio_transcription_response_keeps_only_spoken_words():
         "language_code": "en",
         "text": "Hello world",
         "words": [
-            {"type": "word", "text": "Hello", "start": 0.0, "end": 0.4, "speaker_id": "speaker_0"},
+            {"type": "word", "text": "Hello", "start": 0.0, "end": 0.4},
             {"type": "spacing", "text": " ", "start": 0.4, "end": 0.5},
             {"type": "audio_event", "text": "(laughter)", "start": 0.5, "end": 0.9},
             {"type": "word", "text": "world", "start": 0.9, "end": 1.3},
@@ -122,6 +125,205 @@ def test_transform_audio_transcription_response_without_words_key_has_no_word_li
 )
 def test_transform_audio_transcription_response_wraps_malformed_payloads_with_the_raw_body(payload: object):
     raw_response = httpx.Response(200, json=payload)
+
+    with pytest.raises(ValueError, match="Error transforming ElevenLabs response: ") as exc_info:
+        ElevenLabsAudioTranscriptionConfig().transform_audio_transcription_response(raw_response=raw_response)
+
+    assert str(exc_info.value).endswith(f"\nResponse: {raw_response.text}")
+
+
+def _wav_bytes(channels: int) -> bytes:
+    buffer: Final = io.BytesIO()
+    samples: Final = np.zeros((1600, channels) if channels > 1 else 1600, dtype="float32")
+    soundfile.write(buffer, samples, 16000, format="WAV")
+    return buffer.getvalue()
+
+
+def _map_params(non_default_params: dict[str, object]) -> dict:
+    return ElevenLabsAudioTranscriptionConfig().map_openai_params(
+        non_default_params=non_default_params,
+        optional_params={},
+        model="scribe_v2",
+        drop_params=False,
+    )
+
+
+def _form_data(audio: bytes, optional_params: dict[str, object]) -> dict | bytes:
+    return (
+        ElevenLabsAudioTranscriptionConfig()
+        .transform_audio_transcription_request(
+            model="scribe_v2",
+            audio_file=audio,
+            optional_params=optional_params,
+            litellm_params={},
+        )
+        .data
+    )
+
+
+def test_response_format_is_a_supported_openai_param():
+    assert "response_format" in ElevenLabsAudioTranscriptionConfig().get_supported_openai_params("scribe_v2")
+
+
+def test_diarized_json_response_format_maps_to_diarize():
+    assert _map_params({"response_format": "diarized_json"}) == {"diarize": True}
+
+
+def test_other_response_formats_do_not_enable_diarize():
+    assert _map_params({"response_format": "json"}) == {}
+
+
+def test_language_maps_to_language_code():
+    assert _map_params({"language": "pt"}) == {"language_code": "pt"}
+
+
+@pytest.mark.parametrize(
+    ("channels", "optional_params", "expected"),
+    [
+        pytest.param(1, {"diarize": True}, {"diarize": "True"}, id="mono-uses-acoustic-diarize"),
+        pytest.param(
+            2,
+            {"diarize": True},
+            {"use_multi_channel": "True", "multichannel_output_style": "combined"},
+            id="stereo-switches-to-multichannel",
+        ),
+        pytest.param(
+            1,
+            {"diarize": True, "use_multi_channel": True},
+            {"use_multi_channel": "True", "multichannel_output_style": "combined"},
+            id="explicit-multichannel-wins-on-mono",
+        ),
+        pytest.param(
+            2,
+            {"diarize": True, "use_multi_channel": False},
+            {"diarize": "True"},
+            id="explicit-no-multichannel-keeps-diarize-on-stereo",
+        ),
+        pytest.param(2, {}, {}, id="no-diarization-requested"),
+    ],
+)
+def test_diarization_mechanism_follows_audio_channel_count(
+    channels: int, optional_params: dict[str, object], expected: dict[str, str]
+):
+    assert _form_data(_wav_bytes(channels), optional_params) == {"model_id": "scribe_v2", **expected}
+
+
+def test_unreadable_audio_falls_back_to_acoustic_diarize():
+    assert _form_data(b"not audio at all", {"diarize": True}) == {"model_id": "scribe_v2", "diarize": "True"}
+
+
+def test_diarized_response_builds_speaker_segments():
+    response: Final = _transform(
+        {
+            "language_code": "por",
+            "text": "Bom dia. Oi?",
+            "audio_duration_secs": 70.5,
+            "words": [
+                {"text": "ev", "start": 1.0, "end": 2.0, "type": "audio_event", "speaker_id": "speaker_0"},
+                {"text": "Bom", "start": 3.0, "end": 3.4, "type": "word", "speaker_id": "speaker_1"},
+                {"text": "dia", "start": 3.4, "end": 3.8, "type": "word", "speaker_id": "speaker_1"},
+                {"text": "Oi", "start": 5.0, "end": 5.3, "type": "word", "speaker_id": "speaker_0"},
+            ],
+        }
+    )
+
+    assert response.text == "Bom dia. Oi?"
+    assert response["language"] == "por"
+    assert response["segments"] == (
+        {
+            "id": "segment_0",
+            "start": 3.0,
+            "end": 3.8,
+            "speaker": "speaker_1",
+            "text": "Bom dia",
+            "type": "transcript.text.segment",
+        },
+        {
+            "id": "segment_1",
+            "start": 5.0,
+            "end": 5.3,
+            "speaker": "speaker_0",
+            "text": "Oi",
+            "type": "transcript.text.segment",
+        },
+    )
+    assert "words" not in response
+
+
+def test_diarized_response_reports_fractional_duration_as_typed_usage():
+    response: Final = _transform(
+        {
+            "text": "oi",
+            "audio_duration_secs": 70.5,
+            "words": [{"text": "oi", "start": 1.0, "end": 1.5, "type": "word", "speaker_id": "speaker_0"}],
+        }
+    )
+
+    assert response["usage"] == TranscriptionUsageDurationObject(type="duration", seconds=70.5)
+    assert response["duration"] == 70.5
+    assert response.model_dump()["usage"] == {"type": "duration", "seconds": 70.5}
+
+
+def test_multichannel_response_uses_the_channel_as_speaker():
+    response: Final = _transform(
+        {
+            "audio_duration_secs": 40.0,
+            "transcripts": [
+                {
+                    "channel_index": 1,
+                    "language_code": "por",
+                    "text": "lado B",
+                    "words": [
+                        {"text": "lado", "start": 10.0, "end": 10.5, "type": "word", "speaker_id": "speaker_0"},
+                        {"text": "B", "start": 10.5, "end": 10.8, "type": "word", "speaker_id": "speaker_0"},
+                    ],
+                },
+                {
+                    "channel_index": 0,
+                    "language_code": "por",
+                    "text": "lado A",
+                    "words": [
+                        {"text": "lado", "start": 1.0, "end": 1.5, "type": "word", "speaker_id": "speaker_0"},
+                        {"text": "A", "start": 1.5, "end": 1.8, "type": "word", "speaker_id": "speaker_0"},
+                    ],
+                },
+            ],
+        }
+    )
+
+    assert [(s["speaker"], s["text"], s["start"]) for s in response["segments"]] == [
+        ("speaker_0", "lado A", 1.0),
+        ("speaker_1", "lado B", 10.0),
+    ]
+    assert response.text == "lado B lado A"
+    assert response["language"] == "por"
+    assert response["duration"] == 40.0
+
+
+def test_multichannel_response_without_channel_index_keeps_speakers_distinct():
+    response: Final = _transform(
+        {
+            "transcripts": [
+                {"text": "a", "words": [{"text": "a", "start": 1.0, "end": 1.2, "type": "word"}]},
+                {"text": "b", "words": [{"text": "b", "start": 2.0, "end": 2.2, "type": "word"}]},
+            ],
+        }
+    )
+
+    assert [s["speaker"] for s in response["segments"]] == ["speaker_0", "speaker_1"]
+    assert response["usage"] is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"text": "t", "words": [{"type": "word", "text": None, "speaker_id": "speaker_0"}]},
+        {"transcripts": "not a list"},
+        {"transcripts": [{"words": [{"type": "unknown", "text": "x"}]}]},
+    ],
+)
+def test_malformed_diarized_payloads_raise_with_the_raw_body(payload: object):
+    raw_response: Final = httpx.Response(200, json=payload)
 
     with pytest.raises(ValueError, match="Error transforming ElevenLabs response: ") as exc_info:
         ElevenLabsAudioTranscriptionConfig().transform_audio_transcription_response(raw_response=raw_response)
