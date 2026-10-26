@@ -11,8 +11,9 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
@@ -20,6 +21,7 @@ from litellm.llms.base_llm.search.transformation import (
     SearchResult,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -27,7 +29,7 @@ if TYPE_CHECKING:
 _NIMBLE_DOCS_URL: Final = "https://docs.nimbleway.com/api-reference/search/search"
 
 
-class _NimbleResult(BaseModel):
+class _NimbleResult(LiteLLMBaseModel):
     """One entry of Nimble's `results` array. Every field is optional so a single degraded
     result degrades to empty strings instead of failing the whole call."""
 
@@ -41,7 +43,7 @@ class _NimbleResult(BaseModel):
     additional_data: object = None
 
 
-class _NimbleSearchResponse(BaseModel):
+class _NimbleSearchResponse(LiteLLMBaseModel):
     """Nimble's /v2/search response envelope."""
 
     model_config = ConfigDict(extra="ignore", frozen=True)
@@ -51,7 +53,7 @@ class _NimbleSearchResponse(BaseModel):
     results: tuple[_NimbleResult, ...]
 
 
-class _AdditionalData(BaseModel):
+class _AdditionalData(LiteLLMBaseModel):
     """The slice of a result's free-form `additional_data` that maps onto SearchResult."""
 
     model_config = ConfigDict(extra="ignore", frozen=True)
@@ -59,7 +61,7 @@ class _AdditionalData(BaseModel):
     publish_date: str | None = None
 
 
-class _ErrorEnvelope(BaseModel):
+class _ErrorEnvelope(LiteLLMBaseModel):
     """Nimble reports errors as either `{"detail": ...}` (validation) or
     `{"success": "false", "task_id": ..., "message": ...}` (collection)."""
 
@@ -108,7 +110,7 @@ class NimbleSearchConfig(BaseSearchConfig):
         )
         if not resolved_api_key:
             raise ValueError("NIMBLE_API_KEY is not set. Set `NIMBLE_API_KEY` environment variable.")
-        return {  # mutable-ok: httpx requires a plain dict of headers
+        return {
             **headers,
             "Authorization": f"Bearer {resolved_api_key}",
             "Content-Type": "application/json",
@@ -123,10 +125,7 @@ class NimbleSearchConfig(BaseSearchConfig):
         data: dict[str, object] | list[dict[str, object]] | None = None,  # mutable-ok: base signature
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.get_complete_url signature
     ) -> str:
-        resolved_base: Final = (api_base or get_secret_str("NIMBLE_API_BASE") or self.NIMBLE_API_BASE).rstrip("/")
-        if resolved_base.endswith("/search"):
-            return resolved_base
-        return f"{resolved_base}/search"
+        return ensure_api_route(api_base or get_secret_str("NIMBLE_API_BASE") or self.NIMBLE_API_BASE, "search")
 
     def transform_search_request(
         self,
@@ -156,7 +155,7 @@ class NimbleSearchConfig(BaseSearchConfig):
             {param: value for param, value in optional_params.items() if param not in unified_params}
         )
 
-        return {  # mutable-ok: httpx requires a plain dict for the JSON body
+        return {
             **_domain_filters(optional_params.get("search_domain_filter")),
             **passthrough,
             "query": " ".join(query) if isinstance(query, list) else query,
@@ -188,11 +187,11 @@ class NimbleSearchConfig(BaseSearchConfig):
             raise self.get_error_class(
                 error_message=f"response does not match the documented /v2/search schema: {e}",
                 status_code=raw_response.status_code,
-                headers=dict(raw_response.headers),  # mutable-ok: BaseSearchConfig.get_error_class signature
+                headers=dict(raw_response.headers),
             )
 
         return SearchResponse(
-            results=[  # mutable-ok: SearchResponse.results is declared list[SearchResult]
+            results=[
                 SearchResult(
                     title=result.title or "",
                     url=result.url or "",

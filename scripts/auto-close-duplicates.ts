@@ -157,7 +157,7 @@ export function closingComment(duplicateOf: number, graceDays: number): string {
 ${CLOSED_MARKER}`;
 }
 
-async function listAll<T>(api: GitHubApi, path: string, page = 1): Promise<readonly T[]> {
+export async function listAll<T>(api: GitHubApi, path: string, page = 1): Promise<readonly T[]> {
   const separator = path.includes("?") ? "&" : "?";
   const batch = await api.request<readonly T[]>("GET", `${path}${separator}per_page=${PAGE_SIZE}&page=${page}`);
   return batch.length < PAGE_SIZE ? batch : [...batch, ...(await listAll<T>(api, path, page + 1))];
@@ -281,6 +281,9 @@ export function githubApi(token: string): GitHubApi {
       });
       if (!response.ok) {
         throw new Error(`${method} ${path} failed: ${response.status} ${response.statusText}`);
+      }
+      if (response.status === 204) {
+        return undefined as T;
       }
       return (await response.json()) as T;
     },

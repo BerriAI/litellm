@@ -3,6 +3,10 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.agentic_loop_settings import validated_max_agentic_loops
+from litellm.responses.litellm_completion_transformation.streaming_iterator import LiteLLMCompletionStreamingIterator
+from litellm.responses.mcp.request_context import MCPRequestContext
+from litellm.responses.mcp.stream_round_billing import StreamedRoundBilling
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
@@ -26,12 +30,35 @@ if TYPE_CHECKING:
 
     from mcp.types import Tool as MCPTool
 
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.responses.mcp.litellm_proxy_mcp_handler import MCPToolResult
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 else:
     MCPTool = Any
 
 MAX_MCP_TOOL_CALL_ROUNDS: Final = 5
+
+
+def _output_items(response: ResponsesAPIResponse) -> Sequence[object]:
+    """Read a response's output items as plain objects; the field is a wide union of item models."""
+    return tuple(cast("Sequence[object]", response.output))  # cast-ok: items are only carried, never inspected
+
+
+def _function_call_id(item: object) -> str | None:
+    """The call id of a function_call item, None for every other item kind."""
+    item_type: Final[object] = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+    if item_type != "function_call":
+        return None
+    call_id: Final[object] = (
+        item.get("call_id") or item.get("id")
+        if isinstance(item, dict)
+        else getattr(item, "call_id", None) or getattr(item, "id", None)
+    )
+    return call_id if isinstance(call_id, str) else None
+
+
+def _set_event_field(event: ResponsesAPIStreamingResponse, name: str, value: object) -> None:
+    """Events are pydantic models with extra fields allowed, so any event type can carry the field."""
+    setattr(event, name, value)
 
 
 async def create_mcp_list_tools_events(
@@ -67,16 +94,6 @@ async def create_mcp_list_tools_events(
         # Use the pre-processed MCP tools that were already fetched, filtered, and deduplicated by the parent
         filtered_mcp_tools: Final = pre_processed_mcp_tools
 
-        # Convert tools to dict format for the event
-        _mcp_tools_dict: Final = [
-            tool.model_dump()
-            if hasattr(tool, "model_dump") and callable(getattr(tool, "model_dump", None))
-            else tool.__dict__
-            if hasattr(tool, "__dict__")
-            else {"name": getattr(tool, "name", str(tool))}
-            for tool in filtered_mcp_tools
-        ]
-
         # Emit list tools completed event
         completed_event: Final = MCPListToolsCompletedEvent(
             type=ResponsesAPIStreamEvents.MCP_LIST_TOOLS_COMPLETED,
@@ -104,8 +121,8 @@ async def create_mcp_list_tools_events(
                 "description": getattr(tool, "description", ""),
                 "annotations": {"read_only": False},
                 **dict.fromkeys(
-                    ("input_schema",) if hasattr(tool, "inputSchema") or hasattr(tool, "input_schema") else (),
-                    getattr(tool, "inputSchema", getattr(tool, "input_schema", None)),
+                    ("input_schema",) if hasattr(tool, "input_schema") else (),
+                    getattr(tool, "input_schema", None),
                 ),
             }
             for tool in filtered_mcp_tools
@@ -170,6 +187,7 @@ def create_mcp_call_events(
     result: str | None = None,
     base_item_id: str | None = None,
     sequence_start: int = 1,
+    output_index: int = 0,
 ) -> list[ResponsesAPIStreamingResponse]:
     """Create MCP call events following OpenAI's specification"""
     events: Final[list[ResponsesAPIStreamingResponse]] = []
@@ -179,7 +197,7 @@ def create_mcp_call_events(
     in_progress_event: Final = MCPCallInProgressEvent(
         type=ResponsesAPIStreamEvents.MCP_CALL_IN_PROGRESS,
         sequence_number=sequence_start,
-        output_index=0,
+        output_index=output_index,
         item_id=item_id,
     )
     events.append(in_progress_event)
@@ -187,7 +205,7 @@ def create_mcp_call_events(
     # MCP call arguments delta event (streaming the arguments)
     arguments_delta_event: Final = MCPCallArgumentsDeltaEvent(
         type=ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA,
-        output_index=0,
+        output_index=output_index,
         item_id=item_id,
         delta=arguments,  # JSON string with arguments
         sequence_number=sequence_start + 1,
@@ -197,7 +215,7 @@ def create_mcp_call_events(
     # MCP call arguments done event
     arguments_done_event: Final = MCPCallArgumentsDoneEvent(
         type=ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DONE,
-        output_index=0,
+        output_index=output_index,
         item_id=item_id,
         arguments=arguments,  # Complete JSON string with finalized arguments
         sequence_number=sequence_start + 2,
@@ -210,7 +228,7 @@ def create_mcp_call_events(
             type=ResponsesAPIStreamEvents.MCP_CALL_COMPLETED,
             sequence_number=sequence_start + 3,
             item_id=item_id,
-            output_index=0,
+            output_index=output_index,
         )
         events.append(completed_event)
 
@@ -219,7 +237,7 @@ def create_mcp_call_events(
 
         output_item_done_event: Final = OutputItemDoneEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
-            output_index=0,
+            output_index=output_index,
             item=BaseLiteLLMOpenAIResponseObject(
                 **{
                     "id": item_id,
@@ -239,7 +257,7 @@ def create_mcp_call_events(
             type=ResponsesAPIStreamEvents.MCP_CALL_FAILED,
             sequence_number=sequence_start + 3,
             item_id=item_id,
-            output_index=0,
+            output_index=output_index,
         )
         events.append(failed_event)
 
@@ -266,11 +284,16 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         mcp_tools_with_litellm_proxy: Sequence[Mapping[str, object]] | None = None,
         user_api_key_auth: "UserAPIKeyAuth | None" = None,
         original_request_params: dict[str, Any] | None = None,
+        served_tools: Sequence[MCPTool] | None = None,
     ):
         # MCP setup
         self.mcp_tools_with_litellm_proxy = mcp_tools_with_litellm_proxy or []
         self.user_api_key_auth = user_api_key_auth
         self.original_request_params = original_request_params or {}
+        configured_rounds: Final = validated_max_agentic_loops(
+            self.original_request_params.get("max_agentic_loops"), field="litellm_params.max_agentic_loops"
+        )
+        self.max_tool_call_rounds: int = MAX_MCP_TOOL_CALL_ROUNDS if configured_rounds is None else configured_rounds
         self.should_auto_execute = self._should_auto_execute_tools()
 
         # Streaming state management
@@ -285,6 +308,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.mcp_discovery_generated = True  # Events are already generated
         self.mcp_events = mcp_events  # Store the initial MCP events for backward compatibility
         self.tool_server_map = tool_server_map
+        self.served_tools = tuple(served_tools) if served_tools is not None else None
 
         # Iterator references
         self.base_iterator: BaseResponsesAPIStreamingIterator | ResponsesAPIResponse | None = (
@@ -330,6 +354,15 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self._error_event_emitted = False
         self._last_sequence_number = 0
 
+        self._round_index = 0
+        self._output_index_offset = 0
+        self._round_max_output_index = -1
+        self._composed_output: list[object] = []  # mutable-ok: grows as each round finishes
+        self._pending_mcp_call_items: list[dict[str, object]] = []  # mutable-ok: grows per executed tool
+        self._iteration_started = False
+        self._round_billing: StreamedRoundBilling | None = None
+        self._bridged_round_billed: LiteLLMCompletionStreamingIterator | None = None
+
     def _extract_mcp_headers_from_params(self) -> None:
         """Extract MCP headers from original request params to pass to tool calls"""
 
@@ -353,9 +386,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         if raw_headers_from_request:
             headers_obj: Final = Headers(raw_headers_from_request)
-            self.mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers_obj)
-            self.mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj)
-            self.oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers_obj)
+            self.mcp_auth_header = MCPRequestHandler.get_mcp_auth_header_from_headers(headers_obj)
+            self.mcp_server_auth_headers = MCPRequestHandler.get_mcp_server_auth_headers_from_headers(headers_obj)
+            self.oauth2_headers = MCPRequestHandler.get_oauth2_headers_from_headers(headers_obj)
 
         # Also check if headers are provided in tools array (from request body)
         tools: Final[Sequence[object] | None] = self.original_request_params.get("tools")
@@ -366,7 +399,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     if tool_headers and isinstance(tool_headers, dict):
                         # Merge tool headers into mcp_server_auth_headers
                         headers_obj_from_tool = Headers(tool_headers)
-                        tool_mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(
+                        tool_mcp_server_auth_headers = MCPRequestHandler.get_mcp_server_auth_headers_from_headers(
                             headers_obj_from_tool
                         )
 
@@ -393,7 +426,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             LiteLLM_Proxy_MCP_Handler,
         )
 
-        return LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(self.mcp_tools_with_litellm_proxy)
+        return LiteLLM_Proxy_MCP_Handler.should_auto_execute_tools(self.mcp_tools_with_litellm_proxy)
 
     def _make_stream_error_event(self) -> ResponsesAPIStreamingResponse:
         err: Final = self._stream_error
@@ -413,11 +446,66 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         return self
 
     async def __anext__(self) -> ResponsesAPIStreamingResponse:
-        chunk: Final = await self._anext_impl()
+        if not self._iteration_started:
+            self._iteration_started = True
+            self._round_billing = self._bill_rounds_on_one_row()
+        try:
+            chunk: Final = await self._anext_impl()
+        except Exception:
+            if self._round_billing is not None:
+                self._round_billing.finish()
+            raise
         sequence_number: Final = getattr(chunk, "sequence_number", None)
-        if isinstance(sequence_number, int) and sequence_number > self._last_sequence_number:
-            self._last_sequence_number = sequence_number
+        if isinstance(sequence_number, int):
+            if sequence_number <= self._last_sequence_number and self._last_sequence_number > 0:
+                self._last_sequence_number += 1
+                _set_event_field(chunk, "sequence_number", self._last_sequence_number)
+            else:
+                self._last_sequence_number = max(self._last_sequence_number, sequence_number)
         return chunk
+
+    def __del__(self) -> None:
+        round_billing: Final[object] = getattr(self, "_round_billing", None)
+        if isinstance(round_billing, StreamedRoundBilling):
+            round_billing.release_abandoned()
+
+    def _bill_rounds_on_one_row(self) -> StreamedRoundBilling | None:
+        if not self.should_auto_execute:
+            return None
+        if isinstance(self.base_iterator, LiteLLMCompletionStreamingIterator):
+            return StreamedRoundBilling(self.base_iterator.litellm_logging_obj)
+        if isinstance(self.base_iterator, BaseResponsesAPIStreamingIterator):
+            return StreamedRoundBilling(self.base_iterator.logging_obj)
+        return None
+
+    def _restore_round_headers(self, logged_event: ResponsesAPIStreamingResponse) -> None:
+        if isinstance(self.base_iterator, LiteLLMCompletionStreamingIterator):
+            return
+        if isinstance(self.base_iterator, BaseResponsesAPIStreamingIterator):
+            self.base_iterator._restore_provider_response_headers(logged_event)
+
+    def _round_billed_early(self) -> bool:
+        return self._bridged_round_billed is not None and self._bridged_round_billed is self.base_iterator
+
+    def _bill_finished_bridged_round(self) -> None:
+        base: Final = self.base_iterator
+        if self._round_billing is None or not isinstance(base, LiteLLMCompletionStreamingIterator):
+            return
+        if self._round_billed_early():
+            return
+        finished: Final = base.finished_round_event()
+        if finished is None:
+            return
+        self._bridged_round_billed = base
+        round_output: Final = _output_items(finished.response)
+        self._round_billing.complete_round(
+            finished,
+            finished.response,
+            round_output
+            if finished.type == ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE
+            else (*self._composed_output, *round_output),
+            self._restore_round_headers,
+        )
 
     async def _anext_impl(self) -> ResponsesAPIStreamingResponse:
         """
@@ -426,7 +514,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         2. mcp_discovery - Emit MCP discovery events (after response.output_item.added)
         3. continue_initial_response - Stream the current round's response (initial or follow-up).
            On completion, if auto-execute is on and the response contains tool calls, loops back
-           through tool_execution/follow-up instead of ending, up to MAX_MCP_TOOL_CALL_ROUNDS.
+           through tool_execution/follow-up instead of ending, up to self.max_tool_call_rounds.
         4. tool_execution - Emit tool execution events
         5. finished - End iteration
         """
@@ -472,7 +560,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             await self._create_follow_up_iterator()
             if self.base_iterator is not None:
                 self.phase = "continue_initial_response"
-                return await self.__anext__()
+                return await self._anext_impl()
             self.phase = "finished"
             if self._stream_error is not None and not self._error_event_emitted:
                 self._error_event_emitted = True
@@ -530,17 +618,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                         if chunk_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED:
                             self.initial_events_emitted = True
                             self.phase = "mcp_discovery"
-                            return chunk
+                            return await self._compose_round_chunk(chunk)
 
-                    # If auto-execution is enabled, check for completed responses
-                    if self.should_auto_execute and self._is_response_completed(chunk):
-                        response_obj = getattr(chunk, "response", None)
-                        if isinstance(response_obj, ResponsesAPIResponse):
-                            self.collected_response = response_obj
-                        self.phase = "tool_execution"
-                        await self._generate_tool_execution_events()
-
-                    return chunk
+                    return await self._compose_round_chunk(chunk)
                 except StopAsyncIteration:
                     if self.should_auto_execute and self.collected_response:
                         self.phase = "tool_execution"
@@ -565,6 +645,105 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         chunk_type: Final[object] = getattr(chunk, "type", None)
         return chunk_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+
+    def _follow_up_pending(self) -> bool:
+        """True when the current round's tool calls were executed and a follow-up round will run."""
+        return self.collected_response is not None and self.collected_response is self._tool_results_for_response
+
+    def _round_output_width(self, response: ResponsesAPIResponse) -> int:
+        """How many output indexes this round used, counting items it streamed but never listed."""
+        return max(len(_output_items(response)), self._round_max_output_index + 1)
+
+    def _absorb_round(self, response: ResponsesAPIResponse) -> None:
+        """Bank a finished round's items, each function_call the gateway answered replaced by its mcp_call."""
+        width: Final = self._round_output_width(response)
+        answered_call_ids: Final = frozenset(
+            call_id for result in self.tool_results if (call_id := result.get("tool_call_id")) is not None
+        )
+        self._composed_output.extend(
+            item for item in _output_items(response) if _function_call_id(item) not in answered_call_ids
+        )
+        self._composed_output.extend(self._pending_mcp_call_items)
+        self._output_index_offset += width + len(self._pending_mcp_call_items)
+        self._pending_mcp_call_items.clear()
+        self._round_max_output_index = -1
+
+    async def _compose_round_chunk(self, chunk: ResponsesAPIStreamingResponse) -> ResponsesAPIStreamingResponse | None:
+        """
+        Fold one round's event into the single public lifecycle.
+
+        Returns None when the event must not reach the client: the lifecycle
+        openers of a follow-up round, and the response.completed of a round
+        whose tool calls the gateway executes itself. Shifts output_index on
+        follow-up rounds past the items already emitted, and lists every
+        round's items on the final response.completed.
+        """
+        self._bill_finished_bridged_round()
+        chunk_type: Final[object] = getattr(chunk, "type", None)
+        if self._round_index > 0 and chunk_type in (
+            ResponsesAPIStreamEvents.RESPONSE_CREATED,
+            ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS,
+        ):
+            return None
+
+        output_index: Final[object] = getattr(chunk, "output_index", None)
+        if isinstance(output_index, int):
+            self._round_max_output_index = max(self._round_max_output_index, output_index)
+            if self._output_index_offset:
+                _set_event_field(chunk, "output_index", output_index + self._output_index_offset)
+
+        if self.should_auto_execute and chunk_type == ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE:
+            return self._charge_incomplete_round(chunk)
+        if not (self.should_auto_execute and self._is_response_completed(chunk)):
+            return chunk
+
+        response_obj: Final[object] = getattr(chunk, "response", None)
+        if isinstance(response_obj, ResponsesAPIResponse):
+            self.collected_response = response_obj
+            if self._round_billing is not None and not self._round_billed_early():
+                self._round_billing.complete_round(
+                    chunk,
+                    response_obj,
+                    (*self._composed_output, *_output_items(response_obj)),
+                    self._restore_round_headers,
+                )
+        # Move to tool execution phase after this chunk
+        self.phase = "tool_execution"
+        await self._generate_tool_execution_events()
+
+        if not isinstance(response_obj, ResponsesAPIResponse):
+            return chunk
+        if self._follow_up_pending():
+            self._absorb_round(response_obj)
+            return None
+        merged_response: Final = (
+            response_obj.model_copy(update={"output": [*self._composed_output, *_output_items(response_obj)]})
+            if self._composed_output
+            else response_obj
+        )
+        client_response: Final = (
+            merged_response
+            if self._round_billing is None
+            else self._round_billing.charge_final_round(chunk, merged_response, self._restore_round_headers)
+        )
+        if client_response is not response_obj:
+            _set_event_field(chunk, "response", client_response)
+        return chunk
+
+    def _charge_incomplete_round(self, chunk: ResponsesAPIStreamingResponse) -> ResponsesAPIStreamingResponse:
+        response_obj: Final[object] = getattr(chunk, "response", None)
+        if self._round_billing is None or not isinstance(response_obj, ResponsesAPIResponse):
+            return chunk
+        if not self._round_billed_early():
+            self._round_billing.complete_round(
+                chunk, response_obj, _output_items(response_obj), self._restore_round_headers
+            )
+        client_response: Final = self._round_billing.charge_final_round(
+            chunk, response_obj, self._restore_round_headers
+        )
+        if client_response is not response_obj:
+            _set_event_field(chunk, "response", client_response)
+        return chunk
 
     async def _process_base_iterator_chunk(self) -> ResponsesAPIStreamingResponse:
         """
@@ -593,23 +772,16 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     )
                     response_obj.id = self._cached_response_id
 
-        # If auto-execution is enabled, check for completed responses
-        if self.should_auto_execute and self._is_response_completed(chunk):
-            # Collect the response for tool execution
-            response_obj = getattr(chunk, "response", None)
-            if isinstance(response_obj, ResponsesAPIResponse):
-                self.collected_response = response_obj
-            # Move to tool execution phase after emitting this chunk
-            self.phase = "tool_execution"
-            await self._generate_tool_execution_events()
-
-        return chunk
+        composed: Final = await self._compose_round_chunk(chunk)
+        if composed is None:
+            return await self._anext_impl()
+        return composed
 
     async def _create_initial_response_iterator(self) -> None:
         """Create the initial response iterator by making the first LLM call"""
         try:
             # Import the core aresponses function that doesn't have MCP logic
-            from litellm.responses.main import aresponses
+            from litellm.responses.main import aresponses  # noqa: TID251  # core call without MCP logic
 
             # Make the initial response API call - but avoid the MCP wrapper
             params: Final[dict[str, object]] = self.original_request_params.copy()
@@ -649,6 +821,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             # Don't set phase to "finished" here — let __anext__ emit any
             # pre-generated MCP discovery events before ending the iteration.
 
+    async def start_initial_response(self) -> None:
+        await self._create_initial_response_iterator()
+        if self._initial_creation_error is not None:
+            raise self._initial_creation_error
+
     async def _generate_tool_execution_events(self) -> None:
         """Generate tool execution events and execute tools"""
         if not self.collected_response:
@@ -660,35 +837,64 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         try:
             # Extract tool calls from the response
             if self.collected_response is not None:
-                tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response(self.collected_response)
+                tool_calls = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(self.collected_response)
             else:
                 tool_calls = []
             if not tool_calls:
                 return
             self.tool_call_round += 1
 
+            from litellm.types.llms.openai import OutputItemAddedEvent
+
+            next_output_index = self._output_index_offset + self._round_output_width(  # rebind-ok: advances per item
+                self.collected_response
+            )
+            call_items: Final[dict[str, tuple[str, int]]] = {}  # mutable-ok: filled per tool call as events queue
             for tool_call in tool_calls:
                 (
                     tool_name,
                     tool_arguments,
                     tool_call_id,
-                ) = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)
+                ) = LiteLLM_Proxy_MCP_Handler.extract_tool_call_details(tool_call)
                 if tool_name and tool_call_id:
+                    item_id = f"mcp_{uuid.uuid4().hex[:8]}"
+                    output_index = next_output_index
+                    next_output_index += 1
+                    call_items[tool_call_id] = (item_id, output_index)
+                    self.tool_execution_events.append(
+                        OutputItemAddedEvent.model_validate(
+                            {
+                                "type": ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                                "sequence_number": len(self.tool_execution_events) + 1,
+                                "output_index": output_index,
+                                "item": {
+                                    "id": item_id,
+                                    "type": "mcp_call",
+                                    "status": "in_progress",
+                                    "arguments": "",
+                                    "name": tool_name,
+                                    "server_label": "litellm",
+                                },
+                            }
+                        )
+                    )
                     # Create MCP call events for this tool execution
                     call_events = create_mcp_call_events(
                         tool_name=tool_name,
                         tool_call_id=tool_call_id,
                         arguments=tool_arguments or "{}",  # JSON string with arguments
                         result=None,  # Will be set after execution
-                        base_item_id=f"mcp_{uuid.uuid4().hex[:8]}",
+                        base_item_id=item_id,
                         sequence_start=len(self.tool_execution_events) + 1,
+                        output_index=output_index,
                     )
                     # Add the in_progress and arguments events (not the completed event yet)
                     self.tool_execution_events.extend(call_events[:-1])
 
             # Execute the tools
-            tool_results: Final = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+            tool_results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
                 tool_server_map=self.tool_server_map,
+                served_tools=self.served_tools,
                 tool_calls=tool_calls,
                 user_api_key_auth=self.user_api_key_auth,
                 mcp_auth_header=self.mcp_auth_header,
@@ -697,7 +903,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 raw_headers=self.raw_headers,
                 litellm_call_id=self.litellm_call_id,
                 litellm_trace_id=self.litellm_trace_id,
-                request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(self.original_request_params),
+                request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(self.original_request_params),
+                guardrail_context=MCPRequestContext.resolve_guardrail_context(self.original_request_params),
             )
 
             # Create completion events and output_item.done events for tool execution
@@ -713,43 +920,51 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                         name,
                         args,
                         call_id,
-                    ) = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)
+                    ) = LiteLLM_Proxy_MCP_Handler.extract_tool_call_details(tool_call)
                     if call_id == tool_call_id:
                         tool_name = name or "unknown"
                         tool_arguments = args or "{}"
                         break
 
-                item_id = f"mcp_{uuid.uuid4().hex[:8]}"
+                if tool_call_id in call_items:
+                    item_id, output_index = call_items[tool_call_id]
+                else:
+                    item_id = f"mcp_{uuid.uuid4().hex[:8]}"
+                    output_index = next_output_index
+                    next_output_index += 1
 
                 # Create the completion event
                 completed_event = MCPCallCompletedEvent(
                     type=ResponsesAPIStreamEvents.MCP_CALL_COMPLETED,
                     sequence_number=len(self.tool_execution_events) + 1,
                     item_id=item_id,
-                    output_index=0,
+                    output_index=output_index,
                 )
                 self.tool_execution_events.append(completed_event)
 
                 # Create output_item.done event with the tool call result
                 from litellm.types.llms.openai import OutputItemDoneEvent
 
+                mcp_call_item = BaseLiteLLMOpenAIResponseObject(
+                    **{
+                        "id": item_id,
+                        "type": "mcp_call",
+                        "status": "completed",
+                        "approval_request_id": f"mcpr_{uuid.uuid4().hex[:8]}",
+                        "arguments": tool_arguments,
+                        "error": None,
+                        "name": tool_name,
+                        "output": result_text,
+                        "server_label": "litellm",  # or extract from tool config
+                    }
+                )
                 output_item_done_event = OutputItemDoneEvent(
                     type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
-                    output_index=0,
-                    item=BaseLiteLLMOpenAIResponseObject(
-                        **{
-                            "id": item_id,
-                            "type": "mcp_call",
-                            "approval_request_id": f"mcpr_{uuid.uuid4().hex[:8]}",
-                            "arguments": tool_arguments,
-                            "error": None,
-                            "name": tool_name,
-                            "output": result_text,
-                            "server_label": "litellm",  # or extract from tool config
-                        }
-                    ),
+                    output_index=output_index,
+                    item=mcp_call_item,
                 )
                 self.tool_execution_events.append(output_item_done_event)
+                self._pending_mcp_call_items.append(mcp_call_item.model_dump())
 
             # Store tool results for follow-up call
             self.tool_results = tool_results
@@ -773,7 +988,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             self.base_iterator = None
             return
 
-        from litellm.responses.main import aresponses
+        from litellm.responses.main import aresponses  # noqa: TID251  # follow-up call without MCP logic
         from litellm.responses.mcp.litellm_proxy_mcp_handler import (
             LiteLLM_Proxy_MCP_Handler,
         )
@@ -781,11 +996,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         try:
             # Create follow-up input
             if self.collected_response is not None:
-                persistence_disabled: Final = LiteLLM_Proxy_MCP_Handler._is_persistence_disabled(
+                persistence_disabled: Final = LiteLLM_Proxy_MCP_Handler.is_persistence_disabled(
                     self.original_request_params
                 )
 
-                follow_up_input: Final = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
+                follow_up_input: Final = LiteLLM_Proxy_MCP_Handler.create_follow_up_input(
                     response=self.collected_response,
                     tool_results=self.tool_results,
                     original_input=self.original_request_params.get("input"),
@@ -805,14 +1020,14 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             # Remove tool_choice to avoid forcing more tool calls
             follow_up_params.pop("tool_choice", None)
 
-            if self.tool_call_round >= MAX_MCP_TOOL_CALL_ROUNDS:
+            if self.tool_call_round >= self.max_tool_call_rounds:
                 # Hit the round cap: drop tools entirely so the model must
                 # answer in text instead of emitting another (unexecuted)
                 # tool call that would otherwise end the stream in silence.
                 follow_up_params.pop("tools", None)
                 verbose_logger.warning(
-                    "MCP auto-execute hit MAX_MCP_TOOL_CALL_ROUNDS=%s; forcing a text-only follow-up.",
-                    MAX_MCP_TOOL_CALL_ROUNDS,
+                    "MCP auto-execute hit max_agentic_loops=%s; forcing a text-only follow-up.",
+                    self.max_tool_call_rounds,
                 )
 
             follow_up_response: Final = await aresponses(**follow_up_params)
@@ -824,6 +1039,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 self.base_iterator = follow_up_response
                 self.collected_response = None
                 self._cached_response_id = None
+                self._round_index += 1
+                if self._round_billing is not None:
+                    self._round_billing.record_billed_rounds(follow_up_response)
 
         except Exception as e:
             verbose_logger.error("Error creating follow-up iterator: %s", e)

@@ -1,12 +1,11 @@
 use serde::Serialize;
 
 use crate::Error;
-use crate::byte_level::ByteLevelCounter;
 use crate::python_json;
 use crate::tools::format_function_definitions;
 use crate::types::{
-    ContentBlock, ContentItem, CountableRequest, Message, MessageContent, TextValue, ToolChoice,
-    ToolDefinition,
+    ContentItem, CountableContentBlock, CountableRequest, Message, MessageContent, TextValue,
+    ToolChoice, ToolDefinition,
 };
 
 const TOKENS_PER_MESSAGE: usize = 3;
@@ -23,39 +22,22 @@ pub struct InputTokenCount {
     pub input_tokens: usize,
 }
 
-/// A loaded HuggingFace tokenizer plus the message accounting Python applies on
-/// top of it. Encoding is CPU-bound and synchronous; hosts run it off their
-/// event loop.
+/// A loaded tokenizer plus the message accounting Python applies on top of
+/// it. Encoding is CPU-bound and synchronous; hosts run it off their event
+/// loop.
 pub struct TokenCounter {
-    tokenizer: tokenizers::Tokenizer,
-    byte_level: Option<ByteLevelCounter>,
+    encoder: Box<dyn crate::Tokenizer>,
 }
 
 impl TokenCounter {
-    /// Load a HuggingFace `tokenizer.json` document. The host reads the file.
-    pub fn from_json(tokenizer_json: &str) -> Result<Self, Error> {
-        let tokenizer = tokenizer_json
-            .parse::<tokenizers::Tokenizer>()
-            .map_err(Error::Load)?;
-        let byte_level = ByteLevelCounter::detect(&tokenizer);
-        Ok(Self {
-            tokenizer,
-            byte_level,
-        })
+    pub fn new(tokenizer: impl crate::Tokenizer + 'static) -> Self {
+        Self {
+            encoder: Box::new(tokenizer),
+        }
     }
 
     pub fn count_text(&self, text: &str) -> Result<usize, Error> {
-        if let Some(count) = self
-            .byte_level
-            .as_ref()
-            .and_then(|counter| counter.count(&self.tokenizer, text))
-        {
-            return Ok(count);
-        }
-        self.tokenizer
-            .encode_fast(text, true)
-            .map(|encoding| encoding.len())
-            .map_err(Error::Encode)
+        self.encoder.count_tokens(text)
     }
 
     /// Mirrors the host's key precedence: `messages`, then `prompt`, then
@@ -148,20 +130,20 @@ impl TokenCounter {
     fn count_content_item(&self, item: &ContentItem) -> Result<usize, Error> {
         match item {
             ContentItem::Text(text) => self.count_text(text),
-            ContentItem::Block(ContentBlock::Text { text }) => self.count_text(text),
-            ContentItem::Block(ContentBlock::Thinking { thinking }) => {
+            ContentItem::Block(CountableContentBlock::Text { text }) => self.count_text(text),
+            ContentItem::Block(CountableContentBlock::Thinking { thinking }) => {
                 if thinking.is_empty() {
                     return Ok(0);
                 }
                 self.count_text(thinking)
             }
-            ContentItem::Block(ContentBlock::ToolReference { tool_name }) => {
+            ContentItem::Block(CountableContentBlock::ToolReference { tool_name }) => {
                 match tool_name.as_deref().filter(|name| !name.is_empty()) {
                     Some(name) => self.count_text(name),
                     None => Ok(0),
                 }
             }
-            ContentItem::Block(ContentBlock::Unsupported) => Err(Error::ContentBlock),
+            ContentItem::Block(CountableContentBlock::Unsupported) => Err(Error::ContentBlock),
         }
     }
 

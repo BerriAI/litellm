@@ -80,7 +80,7 @@ class TeamsManagementClient:
         page_size: int = 10,
         sort_by: str | None = None,
         sort_order: str = "asc",
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Get a paginated list of teams with filtering and sorting options.
 
