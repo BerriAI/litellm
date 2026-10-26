@@ -27,6 +27,23 @@ def prices() -> dict:
     return json.loads(PRICES_PATH.read_text())
 
 
+@pytest.mark.parametrize("model", ("azure/gpt-audio-1.5-2026-02-23", "azure/gpt-audio-mini-2025-10-06"))
+def test_azure_audio_snapshot_capabilities_match_declared_modalities(model: str, local_model_cost_map: None) -> None:
+    catalog: Final = TypeAdapter(dict[str, JsonValue]).validate_json(PRICES_PATH.read_bytes())
+    backup: Final = TypeAdapter(dict[str, JsonValue]).validate_json(BACKUP_PRICES_PATH.read_bytes())
+    entry: Final = catalog[model]
+    assert isinstance(entry, dict)
+    assert entry == backup[model]
+    input_modalities: Final = entry["supported_modalities"]
+    output_modalities: Final = entry["supported_output_modalities"]
+    assert isinstance(input_modalities, list)
+    assert isinstance(output_modalities, list)
+    expected: Final = ("audio" in input_modalities, "audio" in output_modalities)
+    info: Final = litellm.get_model_info(model)
+    assert (info["supports_audio_input"], info["supports_audio_output"]) == expected
+    assert (litellm.supports_audio_input(model), litellm.supports_audio_output(model)) == expected
+
+
 class _CopilotEndpointRow(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
