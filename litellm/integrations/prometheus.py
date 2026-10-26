@@ -2689,11 +2689,14 @@ class PrometheusLogger(CustomLogger):
             # request wrote it last.
             return
 
-        labels: Final[dict[str, str]] = cast("dict[str, str]", prometheus_label_factory(
-            supported_enum_labels=labelnames,
-            enum_values=enum_values,
-            label_context=label_context,
-        ))
+        labels: Final[dict[str, str]] = cast(
+            "dict[str, str]",
+            prometheus_label_factory(
+                supported_enum_labels=labelnames,
+                enum_values=enum_values,
+                label_context=label_context,
+            ),
+        )
         label_values: Final[tuple[str, ...]] = tuple(labels.get(name, "") for name in labelnames)
         can_retire: Final = _series_retirement_supported()
         if can_retire:
