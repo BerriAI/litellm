@@ -89,11 +89,11 @@ from litellm.types.router import (
     RoutingContext,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.llms.base_llm.vector_store.transformation import(
+from litellm.llms.base_llm.vector_store.transformation import (
     LiteLLMVectorStoreEmbeddingExecutor,
     RouterVectorStoreEmbeddingExecutor,
 )
-from litellm.types.utils import CallTypes, CredentialItem, Usage
+from litellm.types.utils import CallTypes, CredentialItem, ServiceTierInfo, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
@@ -1464,6 +1464,7 @@ def test_sync_deployment_callback_on_success_skips_batch_retrieves(
         get_deployment_successes_for_current_minute(litellm_router_instance=router, deployment_id="batch-dep")
         == expected_successes
     )
+
 
 _ROUTING_STRATEGY_CACHE_MARKERS = ("_map", "_request_count", ":tpm:", ":rpm:")
 
@@ -3568,16 +3569,31 @@ class _CutSSE(httpx.AsyncByteStream):
         raise httpx.RemoteProtocolError("peer closed connection without sending complete message body")
 
 
-_BACKUP_SSE: Final = "".join(
-    f"data: {json.dumps(chunk)}\n\n"
-    for chunk in (
-        {"id": "b", "object": "chat.completion.chunk", "created": 1700000000, "model": "mistral-large-latest",
-         "choices": [{"index": 0, "delta": {"role": "assistant", "content": " self-attention."}, "finish_reason": None}]},
-        {"id": "b", "object": "chat.completion.chunk", "created": 1700000000, "model": "mistral-large-latest",
-         "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "stop"}],
-         "usage": {"prompt_tokens": 91, "completion_tokens": 5, "total_tokens": 96}},
+_BACKUP_SSE: Final = (
+    "".join(
+        f"data: {json.dumps(chunk)}\n\n"
+        for chunk in (
+            {
+                "id": "b",
+                "object": "chat.completion.chunk",
+                "created": 1700000000,
+                "model": "mistral-large-latest",
+                "choices": [
+                    {"index": 0, "delta": {"role": "assistant", "content": " self-attention."}, "finish_reason": None}
+                ],
+            },
+            {
+                "id": "b",
+                "object": "chat.completion.chunk",
+                "created": 1700000000,
+                "model": "mistral-large-latest",
+                "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 91, "completion_tokens": 5, "total_tokens": 96},
+            },
+        )
     )
-) + "data: [DONE]\n\n"
+    + "data: [DONE]\n\n"
+)
 
 
 class _SpendRecorder(CustomLogger):
@@ -13502,7 +13518,12 @@ def test_credentials_for_a_mixed_group_name_keep_resolving_to_its_first_deployme
 
 _AZURE_CHAT_SKU_REJECTS_BATCH: Final = httpx.Response(
     400,
-    json={"error": {"code": "invalid_deployment_type", "message": "The current deployment is not supported for batch jobs"}},
+    json={
+        "error": {
+            "code": "invalid_deployment_type",
+            "message": "The current deployment is not supported for batch jobs",
+        }
+    },
 )
 
 
@@ -16417,6 +16438,7 @@ class TestAzureBaseModelFallbackLogging:
         )
         assert model_info["max_input_tokens"] == litellm.model_cost["azure/gpt-4o-mini"]["max_input_tokens"]
 
+
 def test_model_group_info_intersects_supported_reasoning_efforts():
     router = litellm.Router(
         model_list=[
@@ -16582,6 +16604,150 @@ def test_model_group_info_fast_mode_requires_every_deployment(
 
     assert result is not None
     assert result.supports_fast_mode is expected
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "isolate_router_model_cost_state")
+@pytest.mark.parametrize(
+    ("defaults", "expected_default"),
+    [(("shared", "shared"), "shared"), (("shared", "second-only"), None), ((None, "shared"), None)],
+)
+def test_model_group_info_intersects_published_tiers_and_requires_a_unanimous_default(
+    defaults: tuple[str | None, str | None], expected_default: str | None
+) -> None:
+    shared: Final[ServiceTierInfo] = {"id": "shared", "name": "Shared", "description": "Published tier"}
+    litellm.register_model(
+        {
+            "published-tier-first": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "service_tiers": [shared, {"id": "first-only"}],
+                "default_service_tier": defaults[0],
+            },
+            "published-tier-second": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "service_tiers": [{"id": "second-only"}, shared],
+                "default_service_tier": defaults[1],
+            },
+        }
+    )
+    router: Final = Router(
+        model_list=[
+            {"model_name": "tier-group", "litellm_params": {"model": f"openai/{model}", "api_key": "test-key"}}
+            for model in ("published-tier-first", "published-tier-second")
+        ]
+    )
+
+    result: Final = router.get_model_group_info("tier-group")
+
+    assert result is not None
+    assert result.service_tiers == (shared,)
+    assert result.default_service_tier == expected_default
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "isolate_router_model_cost_state")
+@pytest.mark.parametrize("second_tiers", (None, ()))
+def test_model_group_info_does_not_offer_a_tier_missing_from_one_deployment(
+    second_tiers: tuple[ServiceTierInfo, ...] | None,
+) -> None:
+    litellm.register_model(
+        {
+            "known-tier-route": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "service_tiers": [{"id": "future-tier"}],
+                "default_service_tier": "future-tier",
+            },
+            "unknown-tier-route": {"litellm_provider": "openai", "mode": "chat", "service_tiers": second_tiers},
+        }
+    )
+    router: Final = Router(
+        model_list=[
+            {"model_name": "tier-group", "litellm_params": {"model": f"openai/{model}", "api_key": "test-key"}}
+            for model in ("known-tier-route", "unknown-tier-route")
+        ]
+    )
+
+    result: Final = router.get_model_group_info("tier-group")
+
+    assert result is not None
+    assert result.service_tiers == second_tiers
+    assert result.default_service_tier is None
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "isolate_router_model_cost_state")
+def test_model_group_info_keeps_operator_tier_overrides_over_published_metadata() -> None:
+    litellm.register_model(
+        {
+            "overridden-tier-route": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "service_tiers": [{"id": "published"}],
+                "default_service_tier": "published",
+            },
+        }
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "tier-group",
+                "litellm_params": {"model": "openai/overridden-tier-route", "api_key": "test-key"},
+                "model_info": {"service_tiers": ["operator-tier", {"id": "operator-tier", "name": "Second"}]},
+            }
+        ]
+    )
+
+    result: Final = router.get_model_group_info("tier-group")
+
+    assert result is not None
+    assert result.service_tiers == ({"id": "operator-tier"},)
+    assert result.default_service_tier is None
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "isolate_router_model_cost_state")
+def test_operator_tiers_and_default_do_not_leak_to_a_sibling_on_the_same_backend() -> None:
+    catalog_candidates: Final = ("shared-tier-backend", "openai/shared-tier-backend")
+    litellm.register_model({
+        key: {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 1.0, "output_cost_per_token": 2.0}
+        for key in catalog_candidates
+    })
+    catalog_keys: Final = tuple(key for key in catalog_candidates if key in litellm.model_cost)
+    assert catalog_keys
+    catalog_before: Final = {
+        key: (litellm.model_cost[key].get("service_tiers"), litellm.model_cost[key].get("default_service_tier"))
+        for key in catalog_keys
+    }
+    router: Final = Router(model_list=[
+        {
+            "model_name": "shared-tier-group",
+            "litellm_params": {"model": "openai/shared-tier-backend", "api_key": "test-key"},
+            "model_info": {"id": "tier-owner", "service_tiers": [{"id": "operator-tier", "name": "Operator tier"}],
+                           "default_service_tier": "operator-tier"},
+        },
+        {
+            "model_name": "shared-tier-group",
+            "litellm_params": {"model": "openai/shared-tier-backend", "api_key": "test-key"},
+            "model_info": {"id": "tier-sibling"},
+        },
+    ])
+
+    owner: Final = router.get_deployment_model_info("tier-owner", "openai/shared-tier-backend")
+    sibling: Final = router.get_deployment_model_info("tier-sibling", "openai/shared-tier-backend")
+    grouped: Final = router.get_model_group_info("shared-tier-group")
+
+    assert owner is not None
+    assert owner["service_tiers"] == [{"id": "operator-tier", "name": "Operator tier"}]
+    assert owner["default_service_tier"] == "operator-tier"
+    assert sibling is not None
+    assert sibling.get("service_tiers") is None
+    assert sibling.get("default_service_tier") is None
+    assert grouped is not None
+    assert grouped.service_tiers is None
+    assert grouped.default_service_tier is None
+    assert {
+        key: (litellm.model_cost[key].get("service_tiers"), litellm.model_cost[key].get("default_service_tier"))
+        for key in catalog_keys
+    } == catalog_before
 
 
 def test_model_group_info_surfaces_supports_parallel_function_calling(local_model_cost_map):
@@ -16815,6 +16981,7 @@ class TestAddDeploymentApiBaseProviderResolution:
         deployment = router.get_deployment_by_model_group_name("openai-via-gateway")
         assert deployment is not None
         assert deployment.litellm_params.custom_llm_provider == "openai"
+
 
 # =====================================================================
 # anthropic_messages mid-stream-fallback helpers, added for #24004
@@ -23248,6 +23415,7 @@ async def test_failure_rpm_increment_declares_the_router_usage_key_family():
     assert seen == ["router_usage"]
     assert current_service_target() is None
 
+
 class _SpanRecordingInMemoryCache(InMemoryCache):
     """Records the live OTel span each read runs under, so the test sees what a Redis span would nest in."""
 
@@ -23442,6 +23610,8 @@ async def test_non_chat_surfaces_mark_their_deployment_pick(monkeypatch: pytest.
     router.completion(model="gpt-4o", messages=[{"role": "user", "content": "hi"}])
 
     assert events == [_pick("embed", "initial", 1), _pick("gpt-4o", "initial", 1)]
+
+
 class TestAutoRouterTraceProvenance:
     @pytest.fixture
     def _tracing(self, monkeypatch: pytest.MonkeyPatch) -> "tuple[OpenTelemetryV2, InMemorySpanExporter]":
@@ -23715,6 +23885,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
     """
@@ -23767,6 +23938,7 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
+
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -23786,6 +23958,7 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
+
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -23808,6 +23981,7 @@ def setup_and_teardown():
         if hasattr(litellm, "in_memory_llm_clients_cache"):
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @patch("azure.identity.get_bearer_token_provider")
@@ -23890,6 +24064,7 @@ def test_router_init_azure_service_principal_with_secret_with_environment_variab
     # finally verify if the mocked token was used by Azure SDK
     mocked_func_generating_token.assert_called()
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_audio_speech_router():
@@ -23933,6 +24108,7 @@ async def test_audio_speech_router():
         client_passed_in_request = mock_aspeech.call_args.kwargs["client"]
         assert client_passed_in_request == expected_openai_client
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_update_kwargs_before_fallbacks_unit_test():
     router = Router(
@@ -23957,6 +24133,7 @@ def test_update_kwargs_before_fallbacks_unit_test():
     )
 
     assert kwargs["litellm_trace_id"] is not None
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize(
@@ -24017,6 +24194,7 @@ async def test_update_kwargs_before_fallbacks(call_type):
             print(mock_client.call_args.kwargs)
             assert mock_client.call_args.kwargs["litellm_trace_id"] is not None
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_router_get_model_info_wildcard_routes():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -24035,6 +24213,7 @@ def test_router_get_model_info_wildcard_routes():
     assert model_info is not None
     assert model_info["tpm"] is not None
     assert model_info["rpm"] is not None
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -24065,6 +24244,7 @@ async def test_router_get_model_group_usage_wildcard_routes():
 
     assert tpm is not None, "tpm is None"
     assert rpm is not None, "rpm is None"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -24099,6 +24279,7 @@ async def test_call_router_callbacks_on_success():
                 assert increment["key"].startswith("global_router:1:gemini/gemini-2.5-flash:rpm")
                 assert increment["increment_value"] == 1
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.serial
 @pytest.mark.asyncio
@@ -24126,6 +24307,7 @@ async def test_call_router_callbacks_on_failure():
         assert mock_callback.call_count == 1
 
         assert mock_callback.call_args_list[0].kwargs["key"].startswith("global_router:1:gemini/gemini-2.5-flash:rpm")
+
 
 @pytest.mark.asyncio
 async def test_rate_limit_error_callback():
@@ -24226,6 +24408,7 @@ async def test_router_model_group_headers():
     assert "x-ratelimit-remaining-requests" in resp._hidden_params["additional_headers"]
     assert "x-ratelimit-remaining-tokens" in resp._hidden_params["additional_headers"]
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_get_remaining_model_group_usage():
@@ -24257,6 +24440,7 @@ async def test_get_remaining_model_group_usage():
     assert "x-ratelimit-remaining-requests" in remaining_usage
     assert "x-ratelimit-remaining-tokens" in remaining_usage
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize(
     "potential_access_group, expected_result",
@@ -24275,6 +24459,7 @@ def test_router_get_model_access_groups(potential_access_group, expected_result)
     access_groups = router.is_model_access_group_for_wildcard_route(model_access_group=potential_access_group)
     assert access_groups == expected_result
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_router_redis_cache():
     router = Router(model_list=[{"model_name": "gemini/*", "litellm_params": {"model": "gemini/*"}}])
@@ -24284,6 +24469,7 @@ def test_router_redis_cache():
     router.update_redis_cache(cache=redis_cache)
 
     assert router.cache.redis_cache == redis_cache
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_router_handle_clientside_credential():
@@ -24312,6 +24498,7 @@ def test_router_handle_clientside_credential():
     assert new_deployment.litellm_params.api_key == "123"
     assert len(router.get_model_list()) == 1
     assert router.get_deployment(model_id=new_deployment.model_info.id) is None
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 async def test_router_clientside_credential_not_reused_by_other_callers(respx_mock, monkeypatch: pytest.MonkeyPatch):
@@ -24370,6 +24557,7 @@ async def test_router_clientside_credential_not_reused_by_other_callers(respx_mo
     used_auth_headers = {call.request.headers["authorization"] for call in route.calls[1:]}
     assert used_auth_headers == {"Bearer configured-key"}
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_router_get_async_openai_model_client():
     router = Router(
@@ -24386,6 +24574,7 @@ def test_router_get_async_openai_model_client():
     model_client = router._get_async_openai_model_client(deployment=MagicMock(), kwargs={})
     assert model_client is None
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_router_get_deployment_credentials():
     router = Router(
@@ -24400,6 +24589,7 @@ def test_router_get_deployment_credentials():
     credentials = router.get_deployment_credentials(model_id="1")
     assert credentials is not None
     assert credentials["api_key"] == "123"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_router_get_deployment_credentials_with_provider():
@@ -24444,6 +24634,7 @@ def test_router_get_deployment_credentials_with_provider():
     # Test with non-existent model
     credentials3 = router.get_deployment_credentials_with_provider(model_id="non-existent")
     assert credentials3 is None
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_router_get_deployment_credentials_with_provider_wildcard():
@@ -24492,6 +24683,7 @@ def test_router_get_deployment_credentials_with_provider_wildcard():
     credentials3 = router.get_deployment_credentials_with_provider(model_id="vertex_ai/gemini-pro")
     assert credentials3 is None
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_router_get_deployment_model_info():
     router = Router(
@@ -24506,11 +24698,13 @@ def test_router_get_deployment_model_info():
     model_info = router.get_deployment_model_info(model_id="1", model_name="gemini/gemini-1.5-flash")
     assert model_info is not None
 
+
 @pytest.fixture()
 def _vcr_outcome_gate_router_unit(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
+
 
 @pytest.fixture(scope="function")
 def setup_and_teardown_router_unit():
@@ -24532,6 +24726,7 @@ def setup_and_teardown_router_unit():
     yield
     loop.close()
     asyncio.set_event_loop(None)
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 @pytest.mark.asyncio
@@ -24582,6 +24777,7 @@ async def test_acompletion_deployment_not_mutated():
     assert deployment_after is not None
     assert deployment_after.litellm_params.model_dump() == original_params
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 def test_completion_deployment_not_mutated():
     """
@@ -24629,6 +24825,7 @@ def test_completion_deployment_not_mutated():
     deployment_after = router.get_deployment_by_model_group_name("gpt-3.5")
     assert deployment_after is not None
     assert deployment_after.litellm_params.model_dump() == original_params
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 def test_default_deployment_isolation():
@@ -24702,9 +24899,11 @@ def test_default_deployment_isolation():
     assert deployment2["litellm_params"]["custom_config"]["nested_setting"] == "modified"  # type: ignore
     assert router.default_deployment["litellm_params"]["custom_config"]["nested_setting"] == "modified"  # type: ignore
 
+
 class NoItemsAliasDict(dict):
     def items(self):
         raise AssertionError("Unexpected full alias iteration via items()")
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 def test_get_model_list_from_model_alias_should_not_iterate_for_non_alias_lookup():
@@ -24721,6 +24920,7 @@ def test_get_model_list_from_model_alias_should_not_iterate_for_non_alias_lookup
 
     model_alias_list = router.get_model_list_from_model_alias(model_name="gpt-5-mini")
     assert model_alias_list == []
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 def test_map_team_model_should_not_iterate_aliases_for_non_alias_team_model_name():
@@ -24950,8 +25150,10 @@ class TestPreCallChecksOptimization:
         assert deployments[0].get("model_info", {}).get("id") == "small", "First deployment ID changed!"
         assert deployments[1].get("model_info", {}).get("id") == "large", "Second deployment ID changed!"
 
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 def test_is_prompt_management_model_optimization():
@@ -25007,6 +25209,7 @@ def test_is_prompt_management_model_optimization():
     finally:
         litellm._known_custom_logger_compatible_callbacks = original_callbacks
 
+
 @pytest.fixture
 def router():
     """Create a router with a mock deployment"""
@@ -25021,6 +25224,7 @@ def router():
             }
         ]
     )
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 @pytest.mark.asyncio
@@ -25044,6 +25248,7 @@ async def test_router_acancel_batch(router):
         assert mock_cancel.called
         assert response.id == "batch_123"
         assert response.status == "cancelled"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 @pytest.mark.asyncio
@@ -25085,6 +25290,7 @@ async def test_router_acancel_batch_resolves_credential_name():
     finally:
         litellm.credential_list = []
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 @pytest.mark.asyncio
 async def test_router_acancel_batch_removes_unresolved_credential_name():
@@ -25116,6 +25322,7 @@ async def test_router_acancel_batch_removes_unresolved_credential_name():
 
     call_kwargs = mock_cancel.call_args.kwargs
     assert "litellm_credential_name" not in call_kwargs
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 class TestRouterEmbeddingHeaders:
@@ -25431,6 +25638,7 @@ class TestRouterEmbeddingHeaders:
         assert "litellm_trace_id" in completion_kwargs
         assert "litellm_trace_id" in embedding_kwargs
 
+
 if __name__ == "__main__":
     # Run a simple test
     test = TestRouterEmbeddingHeaders()
@@ -25447,6 +25655,7 @@ OPENAI_EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings"
 
 STORE_EMBEDDINGS_URL = "https://embedding.example/v1/embeddings"
 
+
 def _mock_embedding_route(respx_mock: respx.MockRouter, url: str) -> respx.Route:
     return respx_mock.post(url).mock(
         return_value=httpx.Response(
@@ -25460,10 +25669,12 @@ def _mock_embedding_route(respx_mock: respx.MockRouter, url: str) -> respx.Route
         )
     )
 
+
 def _sent(route: respx.Route, index: int) -> tuple[str, str, list[str]]:
     request = route.calls[index].request
     body = json.loads(request.read())
     return request.headers["authorization"], body["model"], body["input"]
+
 
 def _alias_router() -> Router:
     return Router(
@@ -25477,6 +25688,7 @@ def _alias_router() -> Router:
             }
         ]
     )
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 class TestRouterEmbeddingIntegration:
@@ -25964,9 +26176,11 @@ class TestRouterEmbeddingIntegration:
             assert "headers" in call_kwargs
             assert call_kwargs["headers"]["X-Custom-Azure-Header"] == "azure-value"
 
+
 if __name__ == "__main__":
     # Run tests
     pytest.main([__file__, "-v"])
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 class TestRouterIndexManagement:
@@ -30015,7 +30229,10 @@ _IMAGE_RESPONSES_INPUT = [
         ],
     }
 ]
-_VISION_LEG: Final[dict[str, object]] = {"litellm_params": {"model": "openai/gpt-5.6-terra"}, "model_info": {"id": "vision"}}
+_VISION_LEG: Final[dict[str, object]] = {
+    "litellm_params": {"model": "openai/gpt-5.6-terra"},
+    "model_info": {"id": "vision"},
+}
 _DECLARED_TEXT_LEG: Final[dict[str, object]] = {
     "litellm_params": {"model": "bedrock/openai.gpt-oss-120b-1:0"},
     "model_info": {"id": "declared-text", "supports_vision": False},

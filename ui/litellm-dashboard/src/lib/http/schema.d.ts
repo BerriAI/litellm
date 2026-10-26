@@ -38404,6 +38404,8 @@ export interface components {
             } | null;
             /** Custom Tags */
             custom_tags?: string[] | null;
+            /** Default Service Tier */
+            default_service_tier?: string | null;
             /** Description */
             description?: string | null;
             /** Health Checked At */
@@ -38442,6 +38444,8 @@ export interface components {
             providers: string[];
             /** Rpm */
             rpm?: number | null;
+            /** Service Tiers */
+            service_tiers?: components["schemas"]["ServiceTierInfo"][] | null;
             /** Supported Endpoints */
             supported_endpoints?: string[] | null;
             /**
@@ -45215,6 +45219,15 @@ export interface components {
              * @default false
              */
             storage_ready: boolean;
+        };
+        /** ServiceTierInfo */
+        ServiceTierInfo: {
+            /** Description */
+            description?: string;
+            /** Id */
+            id: string;
+            /** Name */
+            name?: string;
         };
         /** SessionLogoutResponse */
         SessionLogoutResponse: {

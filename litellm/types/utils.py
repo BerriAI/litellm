@@ -189,7 +189,18 @@ class ProviderField(TypedDict):
     field_value: str
 
 
-class ProviderSpecificModelInfo(TypedDict, total=False):
+class ServiceTierInfo(TypedDict):
+    id: ReadOnly[str]
+    name: ReadOnly[NotRequired[str]]
+    description: ReadOnly[NotRequired[str]]
+
+
+class ServiceTierMetadata(TypedDict, total=False):
+    service_tiers: ReadOnly[Sequence[ServiceTierInfo] | None]
+    default_service_tier: ReadOnly[str | None]
+
+
+class ProviderSpecificModelInfo(ServiceTierMetadata, total=False):
     supports_system_messages: bool | None
     supports_response_schema: bool | None
     supports_vision: bool | None
@@ -4132,7 +4143,13 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
 DEPLOYMENT_SCOPED_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"off_peak_pricing"})
 
 DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
-    {"supports_regex_lookaround", "supports_assistant_prefill", "supports_bedrock_native_structured_output"}
+    {
+        "supports_regex_lookaround",
+        "supports_assistant_prefill",
+        "supports_bedrock_native_structured_output",
+        "service_tiers",
+        "default_service_tier",
+    }
 )
 
 DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS: Final[frozenset[str]] = frozenset({"token_count_framing", "token_count_model"})

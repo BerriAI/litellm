@@ -10,9 +10,10 @@ import respx
 
 import litellm
 from litellm import get_model_info
+from litellm.exceptions import ModelNotMappedError
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
-from litellm.types.utils import ModelInfoBase
+from litellm.types.utils import ModelInfoBase, ServiceTierInfo
 from litellm.utils import _invalidate_model_cost_lowercase_map
 import os
 from unittest.mock import MagicMock, patch
@@ -32,6 +33,187 @@ def test_get_model_info_simple_model_name():
     """
     model = "claude-opus-5-5"
     litellm.get_model_info(model)
+
+
+def test_get_model_info_preserves_published_service_tiers_and_the_explicit_default() -> None:
+    tiers: Final[tuple[ServiceTierInfo, ...]] = (
+        {"id": "default", "name": "Standard"},
+        {"id": "provider-future-tier", "name": "Future", "description": "Provider-published tier"},
+    )
+    litellm.register_model(
+        {
+            "published-tier-model": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "service_tiers": tiers,
+                "default_service_tier": "provider-future-tier",
+            }
+        }
+    )
+
+    info: Final = get_model_info("published-tier-model", custom_llm_provider="openai")
+
+    assert info["service_tiers"] == tiers
+    assert info["default_service_tier"] == "provider-future-tier"
+
+
+@pytest.mark.parametrize("tiers", (None, ()))
+def test_get_model_info_keeps_unreported_and_empty_service_tiers_distinct(
+    tiers: tuple[ServiceTierInfo, ...] | None,
+) -> None:
+    litellm.register_model(
+        {
+            "empty-tier-model": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "service_tiers": tiers,
+                "input_cost_per_token_priority": 1.0,
+                "default_service_tier": "priority",
+            }
+        }
+    )
+
+    info: Final = get_model_info("empty-tier-model", custom_llm_provider="openai")
+
+    assert info.get("service_tiers") == tiers
+    assert "default_service_tier" not in info
+
+
+def test_get_model_info_does_not_borrow_service_tiers_from_another_provider() -> None:
+    litellm.register_model(
+        {
+            "provider-scoped-tiers": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "service_tiers": [{"id": "priority", "name": "Fast"}],
+            }
+        }
+    )
+
+    with pytest.raises(ModelNotMappedError):
+        get_model_info("provider-scoped-tiers", custom_llm_provider="azure")
+
+    litellm.register_model({
+        "azure/provider-scoped-tiers": {"litellm_provider": "azure", "mode": "chat"},
+    })
+    info: Final = get_model_info("provider-scoped-tiers", custom_llm_provider="azure")
+
+    assert "service_tiers" not in info
+    assert "default_service_tier" not in info
+
+
+@pytest.mark.parametrize(
+    ("requested_provider", "catalog_provider"),
+    (
+        ("vertex_ai", "vertex_ai-anthropic_models"),
+        ("vertex_ai", "vertex_ai-ai21_models"),
+        ("fireworks_ai", "fireworks_ai-chat-models"),
+        ("bedrock", "bedrock_converse"),
+        ("bedrock_converse", "bedrock"),
+    ),
+)
+def test_get_model_info_preserves_service_tiers_from_the_same_provider_category(
+    requested_provider: str,
+    catalog_provider: str,
+) -> None:
+    tiers: Final[tuple[ServiceTierInfo, ...]] = ({"id": "provider-tier", "name": "Provider tier"},)
+    litellm.register_model(
+        {
+            "category-scoped-tiers": {
+                "litellm_provider": catalog_provider,
+                "mode": "chat",
+                "service_tiers": tiers,
+                "default_service_tier": "provider-tier",
+            },
+        }
+    )
+
+    info: Final = get_model_info("category-scoped-tiers", custom_llm_provider=requested_provider)
+
+    assert info["litellm_provider"] == catalog_provider
+    assert info["service_tiers"] == tiers
+    assert info["default_service_tier"] == "provider-tier"
+
+
+def test_get_model_info_azure_ai_cost_fallback_does_not_grant_openai_service_tiers() -> None:
+    litellm.register_model(
+        {
+            "cost-fallback-tiers": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 0.125,
+                "service_tiers": [{"id": "provider-tier"}],
+                "default_service_tier": "provider-tier",
+            },
+        }
+    )
+
+    info: Final = get_model_info("cost-fallback-tiers", custom_llm_provider="azure_ai")
+
+    assert info["input_cost_per_token"] == 0.125
+    assert info["litellm_provider"] == "openai"
+    assert "service_tiers" not in info
+    assert "default_service_tier" not in info
+
+
+@pytest.mark.parametrize(
+    ("requested_provider", "catalog_provider"),
+    (
+        ("bedrock_mantle", "bedrock"),
+        ("bedrock_mantle", "bedrock_converse"),
+        ("bedrock", "bedrock_mantle"),
+        ("bedrock_converse", "bedrock_mantle"),
+    ),
+)
+def test_get_model_info_mantle_cost_fallback_does_not_grant_another_bedrock_providers_service_tiers(
+    requested_provider: str,
+    catalog_provider: str,
+) -> None:
+    litellm.register_model(
+        {
+            "mantle-cost-fallback-tiers": {
+                "litellm_provider": catalog_provider,
+                "mode": "chat",
+                "input_cost_per_token": 0.125,
+                "service_tiers": [{"id": "provider-tier"}],
+                "default_service_tier": "provider-tier",
+            },
+        }
+    )
+
+    info: Final = get_model_info("mantle-cost-fallback-tiers", custom_llm_provider=requested_provider)
+
+    assert info["input_cost_per_token"] == 0.125
+    assert info["litellm_provider"] == catalog_provider
+    assert "service_tiers" not in info
+    assert "default_service_tier" not in info
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    (
+        {"service_tiers": ["priority"]},
+        {"service_tiers": [{"id": " "}]},
+        {"service_tiers": [{"id": "priority"}, {"id": "priority"}]},
+        {"service_tiers": [{"id": "priority", "name": None}]},
+    ),
+)
+def test_get_model_info_keeps_malformed_published_tiers_unknown(declaration: dict[str, object]) -> None:
+    litellm.register_model(
+        {
+            "invalid-tier-model": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                **declaration,
+                "default_service_tier": "priority",
+            },
+        }
+    )
+
+    info: Final = get_model_info("invalid-tier-model", custom_llm_provider="openai")
+
+    assert "service_tiers" not in info
+    assert "default_service_tier" not in info
 
 
 def test_get_model_info_custom_llm_with_model_name():

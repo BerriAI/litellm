@@ -1,5 +1,6 @@
 import json
 from types import MappingProxyType
+from typing import Final
 
 import pytest
 
@@ -16,6 +17,7 @@ from litellm.proxy.common_utils.codex_model_catalog import (
     codex_models_response_json,
     configured_service_tiers,
 )
+from litellm.router_utils.service_tier_capability import ServiceTierCapabilities, service_tier_capabilities
 
 _PROMPT = "base prompt"
 _FAST = {"id": "priority", "name": "Fast", "description": "2x speed, increased usage"}
@@ -193,7 +195,7 @@ def test_upgrade_nudge_survives_only_when_its_target_is_served():
         (
             _row("gpt-5.5", service_tiers=["priority", "ultrafast"]),
             [
-                ("priority", "Fast", "2x speed, increased usage"),
+                ("priority", "Priority", "Sends service_tier=priority upstream"),
                 ("ultrafast", "Ultrafast", "Sends service_tier=ultrafast upstream"),
             ],
         ),
@@ -202,12 +204,12 @@ def test_upgrade_nudge_survives_only_when_its_target_is_served():
             _row("gpt-5.5", service_tiers=["ultrafast", "priority", "ultrafast", {"id": "priority"}]),
             [
                 ("ultrafast", "Ultrafast", "Sends service_tier=ultrafast upstream"),
-                ("priority", "Fast", "2x speed, increased usage"),
+                ("priority", "Priority", "Sends service_tier=priority upstream"),
             ],
         ),
     ],
 )
-def test_configured_service_tiers_replace_stock_tiers_and_a_known_id_keeps_its_codex_name(row, expected):
+def test_configured_service_tiers_replace_stock_tiers_without_borrowing_stock_names(row, expected):
     (entry,) = _models(row)
 
     assert _tiers(entry) == expected
@@ -233,7 +235,7 @@ def test_invalid_service_tiers_offer_no_tier_even_on_a_model_codex_ships_tiers_f
         (
             (["priority", "ultrafast"], ["ultrafast", "flex", "priority"]),
             [
-                ("priority", "Fast", "2x speed, increased usage"),
+                ("priority", "Priority", "Sends service_tier=priority upstream"),
                 ("ultrafast", "Ultrafast", "Sends service_tier=ultrafast upstream"),
             ],
         ),
@@ -275,12 +277,43 @@ def test_an_invalid_value_on_one_deployment_offers_no_tier_for_the_whole_model(d
 
 @pytest.mark.parametrize(
     ("configured", "expected"),
-    [(None, "priority"), (["priority", "ultrafast"], "priority"), (["ultrafast"], None), ([], None)],
+    [(None, "priority"), (["priority", "ultrafast"], None), (["ultrafast"], None), ([], None)],
 )
-def test_default_service_tier_survives_only_while_still_offered(configured, expected):
+def test_configured_tiers_do_not_borrow_the_stock_default(configured, expected):
     (entry,) = _models(_row("gpt-6-sol", service_tiers=configured))
 
     assert entry["default_service_tier"] == expected
+
+
+@pytest.mark.parametrize("model", ("gpt-6-sol", "future-provider-model"))
+def test_published_tiers_supply_their_own_names_descriptions_and_default(model: str) -> None:
+    metadata: Final = service_tier_capabilities(
+        {
+            "service_tiers": [{"id": "provider-tier", "name": "Provider tier", "description": "Published description"}],
+            "default_service_tier": "provider-tier",
+        }
+    )
+
+    (entry,) = _models(_row(model, service_tier_capabilities=metadata))
+
+    assert _tiers(entry) == [("provider-tier", "Provider tier", "Published description")]
+    assert entry["default_service_tier"] == "provider-tier"
+
+
+def test_published_tiers_do_not_fill_missing_presentation_or_defaults_from_stock() -> None:
+    metadata: Final = service_tier_capabilities({"service_tiers": [{"id": "priority"}]})
+
+    (entry,) = _models(_row("gpt-6-sol", service_tier_capabilities=metadata))
+
+    assert _tiers(entry) == [("priority", "Priority", "Sends service_tier=priority upstream")]
+    assert entry["default_service_tier"] is None
+
+
+def test_declared_but_unknown_group_tiers_cannot_restore_stock_tiers() -> None:
+    (entry,) = _models(_row("gpt-6-sol", service_tier_capabilities=ServiceTierCapabilities(declared=True)))
+
+    assert entry["service_tiers"] == []
+    assert entry["default_service_tier"] is None
 
 
 def test_non_chat_and_wildcard_rows_are_left_out_of_the_catalog():
@@ -429,8 +462,14 @@ def test_catalog_rows_read_the_router_by_each_entry_lookup_id():
             upstream_model="openai/gpt-5.5",
             display_name="Team 5.5",
             service_tiers=(["ultrafast"], None),
+            service_tier_capabilities=ServiceTierCapabilities(declared=True),
         ),
-        CodexCatalogRow(id="plain", upstream_model="openai/some-unmapped-model", service_tiers=(None,)),
+        CodexCatalogRow(
+            id="plain",
+            upstream_model="openai/some-unmapped-model",
+            service_tiers=(None,),
+            service_tier_capabilities=ServiceTierCapabilities(),
+        ),
     )
 
 
@@ -452,7 +491,12 @@ def test_catalog_rows_read_an_alias_off_its_target_under_the_alias_name():
     (row,) = codex_catalog_rows(listing, (("gpt-6", "gpt-6"),), router)
 
     assert row == CodexCatalogRow(
-        id="gpt-6", mode="chat", max_input_tokens=9, upstream_model="openai/gpt-6-astra", service_tiers=(["ultrafast"],)
+        id="gpt-6",
+        mode="chat",
+        max_input_tokens=9,
+        upstream_model="openai/gpt-6-astra",
+        service_tiers=(["ultrafast"],),
+        service_tier_capabilities=ServiceTierCapabilities(tiers=({"id": "ultrafast"},), declared=True),
     )
     (entry,) = json.loads(codex_model_list_body(listing, (("gpt-6", "gpt-6"),), router))["models"]
     assert (entry["slug"], entry["display_name"], [tier["id"] for tier in entry["service_tiers"]]) == (
@@ -474,7 +518,7 @@ def test_model_list_body_offers_a_tier_only_off_the_deployments_the_key_team_can
             {
                 "model_name": "gpt-6-astra",
                 "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://team-2.example"},
-                "model_info": {"team_id": "team-2"},
+                "model_info": {"team_id": "team-2", "service_tiers": []},
             },
         ]
     )

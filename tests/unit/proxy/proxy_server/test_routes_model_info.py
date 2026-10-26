@@ -19,14 +19,68 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy import proxy_server
+from litellm.router_utils.service_tier_capability import service_tier_capabilities
+from litellm.types.utils import ServiceTierInfo
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
 from .conftest import normalize  # type: ignore[import-not-found]
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "isolate_router_model_cost_state")
+def test_published_service_tiers_reach_model_and_group_metadata_routes(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tiers: Final[tuple[ServiceTierInfo, ...]] = (
+        {"id": "provider-tier", "name": "Provider tier", "description": "Published metadata"},
+    )
+    litellm.register_model(
+        {
+            "metadata-tier-model": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "service_tiers": tiers,
+                "default_service_tier": "provider-tier",
+            },
+        }
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "published-tier-alias",
+                "litellm_params": {"model": "openai/metadata-tier-model", "api_key": "test-key"},
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    object_adapter: Final = TypeAdapter(dict[str, object])
+    rows_adapter: Final = TypeAdapter(tuple[dict[str, object], ...])
+
+    with auth_as():
+        for path in ("/model/info", "/v1/model/info"):
+            response: Final = client.get(path)
+            assert response.status_code == 200, response.text
+            body: Final = object_adapter.validate_json(response.content)
+            rows: Final = rows_adapter.validate_python(body["data"])
+            metadata: Final = service_tier_capabilities(object_adapter.validate_python(rows[0]["model_info"]))
+            assert metadata.tiers == tiers
+            assert metadata.default == "provider-tier"
+        group_response: Final = client.get("/model_group/info")
+        assert group_response.status_code == 200, group_response.text
+        groups: Final = rows_adapter.validate_python(object_adapter.validate_json(group_response.content)["data"])
+        grouped: Final = service_tier_capabilities(groups[0])
+        assert grouped.tiers == tiers
+        assert grouped.default == "provider-tier"
 
 
 @pytest.mark.parametrize(

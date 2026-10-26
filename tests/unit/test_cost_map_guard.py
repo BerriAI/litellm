@@ -79,6 +79,114 @@ def test_in_sync_files_pass_for_humans_and_bots() -> None:
     assert _failures(BASE, bot=True) == ()
 
 
+@pytest.mark.parametrize("bot", (True, False), ids=("bot", "human"))
+@pytest.mark.parametrize(
+    "metadata",
+    (
+        {},
+        {"service_tiers": []},
+        {"service_tiers": [{"id": "baseline"}]},
+        {"service_tiers": [{"id": "baseline", "name": "Standard", "description": ""}]},
+        {"service_tiers": [{"id": "baseline", "description": "Provider-defined tier"}]},
+        {
+            "service_tiers": [{"id": "baseline"}, {"id": "future:burst/v2", "name": "Burst"}],
+            "default_service_tier": "future:burst/v2",
+        },
+    ),
+    ids=("missing", "empty", "id-only", "presentation", "description-only", "future-id-default"),
+)
+def test_explicit_service_tier_metadata_passes(metadata: Mapping[str, object], bot: bool) -> None:
+    head: Final = _snapshot({**BASE_MAP, "openrouter/tier-capabilities": _entry(**metadata)})
+    assert _failures(head, bot=bot) == ()
+
+
+@pytest.mark.parametrize("bot", (True, False), ids=("bot", "human"))
+@pytest.mark.parametrize(
+    ("metadata", "failure"),
+    (
+        ({"service_tiers": None}, "service_tiers must be an array"),
+        ({"service_tiers": {"id": "baseline"}}, "service_tiers must be an array"),
+        ({"service_tiers": ["baseline"]}, "service_tiers[0] must be an object"),
+        ({"service_tiers": [{}]}, "service_tiers[0].id must be a nonblank string"),
+        ({"service_tiers": [{"id": ""}]}, "service_tiers[0].id must be a nonblank string"),
+        ({"service_tiers": [{"id": " \t"}]}, "service_tiers[0].id must be a nonblank string"),
+        ({"service_tiers": [{"id": 1}]}, "service_tiers[0].id must be a nonblank string"),
+        (
+            {"service_tiers": [{"id": "baseline"}, {"id": "baseline", "name": "Other"}]},
+            "service_tiers must contain unique ids",
+        ),
+        (
+            {"service_tiers": [{"id": "baseline", "name": " \t"}]},
+            "service_tiers[0].name must be a nonblank string when present",
+        ),
+        (
+            {"service_tiers": [{"id": "baseline", "name": None}]},
+            "service_tiers[0].name must be a nonblank string when present",
+        ),
+        (
+            {"service_tiers": [{"id": "baseline", "description": 1}]},
+            "service_tiers[0].description must be a string when present",
+        ),
+        (
+            {"service_tiers": [{"id": "baseline", "description": None}]},
+            "service_tiers[0].description must be a string when present",
+        ),
+        (
+            {"service_tiers": [{"id": "baseline"}], "default_service_tier": None},
+            "default_service_tier must be a nonblank string when present",
+        ),
+        (
+            {"service_tiers": [{"id": "baseline"}], "default_service_tier": " \t"},
+            "default_service_tier must be a nonblank string when present",
+        ),
+        (
+            {"service_tiers": [{"id": "baseline"}], "default_service_tier": False},
+            "default_service_tier must be a nonblank string when present",
+        ),
+        (
+            {"service_tiers": [{"id": "baseline"}], "default_service_tier": "other"},
+            "default_service_tier must name an advertised service_tiers id",
+        ),
+        (
+            {"service_tiers": [], "default_service_tier": "baseline"},
+            "default_service_tier must name an advertised service_tiers id",
+        ),
+        (
+            {"default_service_tier": "priority", "input_cost_per_token_priority": 0.000001},
+            "default_service_tier requires explicit service_tiers",
+        ),
+    ),
+    ids=(
+        "null-tiers",
+        "object-tiers",
+        "string-entry",
+        "missing-id",
+        "empty-id",
+        "blank-id",
+        "numeric-id",
+        "duplicate-id",
+        "blank-name",
+        "null-name",
+        "numeric-description",
+        "null-description",
+        "null-default",
+        "blank-default",
+        "boolean-default",
+        "unadvertised-default",
+        "empty-tiers-default",
+        "price-is-not-capability",
+    ),
+)
+def test_invalid_service_tier_metadata_fails(metadata: Mapping[str, object], failure: str, bot: bool) -> None:
+    head: Final = _snapshot({**BASE_MAP, "openrouter/tier-capabilities": _entry(**metadata)})
+    assert _failures(head, bot=bot) == (f"openrouter/tier-capabilities.{failure}",)
+
+
+def test_service_tier_documentation_is_not_validated_as_a_model() -> None:
+    head: Final = _snapshot({**BASE_MAP, "sample_spec": {"service_tiers": "Optional published capability metadata"}})
+    assert _failures(head, bot=False) == ()
+
+
 EVALUATION_MODEL: Final = "azure_ai/Microsoft-Decision-1"
 DECISIONS_MODEL: Final = "azure_ai/decisions/Microsoft-Decision-1"
 INPUT_ONLY_OUTPUT_PRICE_FAILURE: Final = (

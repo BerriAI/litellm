@@ -6287,7 +6287,19 @@ def _get_model_info_from_model_cost(key: str) -> dict[str, object]:
     return litellm.model_cost[key]
 
 
-def _check_provider_match(model_info: dict, custom_llm_provider: str | None) -> bool:
+def _same_provider_category(model_provider: str, requested_provider: str) -> bool:
+    return (
+        model_provider == requested_provider
+        or requested_provider == "vertex_ai"
+        and model_provider.startswith("vertex_ai")
+        or requested_provider == "fireworks_ai"
+        and model_provider.startswith("fireworks_ai")
+        or requested_provider in ("bedrock", "bedrock_converse")
+        and model_provider in ("bedrock", "bedrock_converse")
+    )
+
+
+def _check_provider_match(model_info: Mapping[str, object], custom_llm_provider: str | None) -> bool:
     """
     Check if the model info provider matches the custom provider.
 
@@ -6297,23 +6309,19 @@ def _check_provider_match(model_info: dict, custom_llm_provider: str | None) -> 
     ``get_model_info`` when a deployment is registered without a provider,
     so normalising the two cases keeps custom pricing applied consistently.
     """
-    if custom_llm_provider and (
-        model_info.get("litellm_provider") is not None and model_info["litellm_provider"] != custom_llm_provider
-    ):
-        if (
-            custom_llm_provider == "vertex_ai"
-            and model_info["litellm_provider"].startswith("vertex_ai")
-            or custom_llm_provider == "fireworks_ai"
-            and model_info["litellm_provider"].startswith("fireworks_ai")
+    model_provider: Final = model_info.get("litellm_provider")
+    if custom_llm_provider and model_provider is not None and model_provider != custom_llm_provider:
+        if isinstance(model_provider, str) and (
+            _same_provider_category(model_provider, custom_llm_provider)
             or custom_llm_provider.startswith("bedrock")
-            and model_info["litellm_provider"].startswith("bedrock")
+            and model_provider.startswith("bedrock")
         ):
             return True
         elif (
             custom_llm_provider == "litellm_proxy"
         ):  # litellm_proxy is a special case, it's not a provider, it's a proxy for the provider
             return True
-        elif custom_llm_provider == "azure_ai" and model_info["litellm_provider"] in (
+        elif custom_llm_provider == "azure_ai" and model_provider in (
             "azure",
             "openai",
         ):
@@ -6594,6 +6602,11 @@ def get_model_info_helper(
     Helper for 'get_model_info'. Separated out to avoid infinite loop caused by returning 'supported_openai_param's
     """
     from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+    from litellm.router_utils.service_tier_capability import (
+        ServiceTierCapabilities,
+        service_tier_capabilities,
+        service_tier_metadata,
+    )
 
     try:
         azure_llms: Final = {**litellm.azure_llms, **litellm.azure_embedding_models}
@@ -7031,7 +7044,15 @@ def get_model_info_helper(
             for cost_key, cost_value in _model_info.items():
                 if cost_key not in returned_model_info and _ABOVE_THRESHOLD_COST_KEY.search(cost_key) is not None:
                     returned_model_info[cost_key] = cost_value
-            return returned_model_info
+            published_info: Final = TypeAdapter(dict[str, object]).validate_python(_model_info)
+            published_provider: Final = published_info.get("litellm_provider")
+            tiers: Final = (
+                service_tier_capabilities(published_info)
+                if isinstance(published_provider, str)
+                and _same_provider_category(published_provider, custom_llm_provider)
+                else ServiceTierCapabilities()
+            )
+            return {**returned_model_info, **service_tier_metadata(tiers)}
     except ModelNotMappedError:
         raise
     except Exception as e:

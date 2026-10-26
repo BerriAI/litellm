@@ -37,7 +37,15 @@
         "supports_system_messages": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "vector_store_cost_per_gb_per_day": 0.0
+        "vector_store_cost_per_gb_per_day": 0.0,
+        "service_tiers": [
+            {
+                "id": "provider-tier-id",
+                "name": "Provider tier name",
+                "description": "Provider-reported processing tier description"
+            }
+        ],
+        "default_service_tier": "Provider-declared default tier ID, only when explicitly known and included in service_tiers"
     },
     "1024-x-1024/50-steps/bedrock/amazon.nova-canvas-v1:0": {
         "deprecation_date": "2026-09-30",
@@ -36925,7 +36933,29 @@
         "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "service_tiers": [
+            {
+                "id": "default",
+                "name": "Standard",
+                "description": "Standard processing and pricing"
+            },
+            {
+                "id": "flex",
+                "name": "Flex",
+                "description": "Lower-cost processing with slower responses and occasional resource unavailability"
+            },
+            {
+                "id": "priority",
+                "name": "Fast",
+                "description": "Faster processing with premium pricing"
+            },
+            {
+                "id": "ultrafast",
+                "name": "Ultrafast",
+                "description": "The fastest processing tier, with higher pricing and separate rate limits"
+            }
+        ]
     },
     "gpt-6-sol": {
         "cache_creation_input_token_cost": 2.5e-06,
@@ -37008,7 +37038,24 @@
         "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "service_tiers": [
+            {
+                "id": "default",
+                "name": "Standard",
+                "description": "Standard processing and pricing"
+            },
+            {
+                "id": "flex",
+                "name": "Flex",
+                "description": "Lower-cost processing with slower responses and occasional resource unavailability"
+            },
+            {
+                "id": "priority",
+                "name": "Fast",
+                "description": "Faster processing with premium pricing"
+            }
+        ]
     },
     "gpt-6-luna": {
         "cache_creation_input_token_cost": 1.25e-07,
@@ -37100,7 +37147,24 @@
         "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "service_tiers": [
+            {
+                "id": "default",
+                "name": "Standard",
+                "description": "Standard processing and pricing"
+            },
+            {
+                "id": "flex",
+                "name": "Flex",
+                "description": "Lower-cost processing with slower responses and occasional resource unavailability"
+            },
+            {
+                "id": "priority",
+                "name": "Fast",
+                "description": "Faster processing with premium pricing"
+            }
+        ]
     },
     "gpt-5.6": {
         "cache_creation_input_token_cost": 5e-06,
@@ -75131,7 +75195,29 @@
         "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "service_tiers": [
+            {
+                "id": "default",
+                "name": "Standard",
+                "description": "Standard processing and pricing"
+            },
+            {
+                "id": "flex",
+                "name": "Flex",
+                "description": "Lower-cost processing with slower responses and occasional resource unavailability"
+            },
+            {
+                "id": "priority",
+                "name": "Fast",
+                "description": "Faster processing with premium pricing"
+            },
+            {
+                "id": "ultrafast",
+                "name": "Ultrafast",
+                "description": "The fastest processing tier, with higher pricing and separate rate limits"
+            }
+        ]
     },
     "global.openai.gpt-6.1-sol": {
         "cache_creation_input_token_cost": 2.5e-06,

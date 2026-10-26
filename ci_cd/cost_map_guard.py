@@ -16,7 +16,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast
 
 COST_MAP_PATH: Final = "model_prices_and_context_window.json"
 BACKUP_PATH: Final = "litellm/model_prices_and_context_window_backup.json"
@@ -61,6 +61,57 @@ def _evaluation_output_price_failure(
     )
 
 
+def _nonblank_string(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _service_tier_entry_failure(path: str, tier: object) -> str | None:
+    if not isinstance(tier, dict):
+        return f"{path} must be an object"
+    fields: Final = cast(Mapping[str, object], tier)
+    if not _nonblank_string(fields.get("id")):
+        return f"{path}.id must be a nonblank string"
+    if "name" in fields and not _nonblank_string(fields["name"]):
+        return f"{path}.name must be a nonblank string when present"
+    if "description" in fields and not isinstance(fields["description"], str):
+        return f"{path}.description must be a string when present"
+    return None
+
+
+def _service_tier_metadata_failure(key: str, entry: Mapping[str, object]) -> str | None:
+    if key in SPECIAL_ROOT_KEYS:
+        return None
+    if "service_tiers" not in entry:
+        return (
+            f"{key}.default_service_tier requires explicit service_tiers" if "default_service_tier" in entry else None
+        )
+    tiers: Final = entry["service_tiers"]
+    if not isinstance(tiers, list):
+        return f"{key}.service_tiers must be an array"
+    values: Final = cast(Sequence[object], tiers)
+    shape_failure: Final = next(
+        (
+            failure
+            for index, tier in enumerate(values)
+            if (failure := _service_tier_entry_failure(f"{key}.service_tiers[{index}]", tier)) is not None
+        ),
+        None,
+    )
+    if shape_failure is not None:
+        return shape_failure
+    identifiers: Final = tuple(cast(Mapping[str, object], tier)["id"] for tier in values)
+    if len(frozenset(identifiers)) != len(identifiers):
+        return f"{key}.service_tiers must contain unique ids"
+    if "default_service_tier" not in entry:
+        return None
+    default: Final = entry["default_service_tier"]
+    if not _nonblank_string(default):
+        return f"{key}.default_service_tier must be a nonblank string when present"
+    if default not in identifiers:
+        return f"{key}.default_service_tier must name an advertised service_tiers id"
+    return None
+
+
 def _file_failures(
     head: Snapshot,
     head_map: CostMap,
@@ -77,12 +128,12 @@ def _file_failures(
         *(
             failure
             for key, entry in head_map.items()
-            if (
-                failure := _evaluation_output_price_failure(
-                    key, entry, evaluation_output_price_sources
-                )
-            )
-            is not None
+            if (failure := _evaluation_output_price_failure(key, entry, evaluation_output_price_sources)) is not None
+        ),
+        *(
+            failure
+            for key, entry in _entries(head_map).items()
+            if (failure := _service_tier_metadata_failure(key, entry)) is not None
         ),
     )
 
@@ -144,9 +195,7 @@ def guard_failures(
     if isinstance(head_map, str):
         return (head_map,)
     return (
-        *_file_failures(
-            head, head_map, evaluation_output_price_sources=evaluation_output_price_sources
-        ),
+        *_file_failures(head, head_map, evaluation_output_price_sources=evaluation_output_price_sources),
         *(_bot_failures(base, head_map, changed_files) if bot else ()),
     )
 

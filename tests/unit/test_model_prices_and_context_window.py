@@ -15,7 +15,7 @@ from litellm.litellm_core_utils.fallback_generalizations import match_capability
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
-from litellm.types.utils import SearchFreeRequests
+from litellm.types.utils import SearchFreeRequests, ServiceTierInfo
 
 REPO_ROOT = Path(__file__).parents[2]
 PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
@@ -100,6 +100,24 @@ def test_github_copilot_rows_resolve_through_get_model_info() -> None:
     assert {
         key: (litellm.get_model_info(key)["mode"], litellm.get_model_info(key)["max_input_tokens"]) for key in rows
     } == {key: (row.mode, row.max_input_tokens) for key, row in rows.items()}
+
+
+def test_published_service_tiers_round_trip_through_get_model_info() -> None:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(PRICES_PATH.read_bytes())
+    rows: Final = {
+        key: row
+        for key, row in prices.items()
+        if isinstance(row, dict) and "service_tiers" in row and key not in {"sample_spec", "fallback_generalizations"}
+    }
+    assert rows
+    tiers_adapter: Final = TypeAdapter(tuple[ServiceTierInfo, ...])
+    assert {
+        key: (litellm.get_model_info(key).get("service_tiers"), litellm.get_model_info(key).get("default_service_tier"))
+        for key in rows
+    } == {
+        key: (tiers_adapter.validate_python(row["service_tiers"]), row.get("default_service_tier"))
+        for key, row in rows.items()
+    }
 
 
 def test_github_copilot_rows_keep_the_reasoning_flag_their_family_fallback_supplies() -> None:

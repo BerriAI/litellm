@@ -363,6 +363,11 @@ from litellm.router_utils.routing_groups import (
     validate_routing_strategy,
 )
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET, RoutingPrefetch, RoutingReadBatch
+from litellm.router_utils.service_tier_capability import (
+    ServiceTierCapabilities,
+    intersect_service_tier_capabilities,
+    service_tier_capabilities,
+)
 from litellm.router_utils.stream_usage_injection import router_config_requests_stream_usage
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.secret_managers.main import str_to_bool
@@ -12018,6 +12023,24 @@ class Router:
             for deployment in self._routable_deployments(model_name, team_id)
         )
 
+    def _deployment_service_tiers(self, deployment: DeploymentTypedDict) -> ServiceTierCapabilities:
+        configured: Final = _configured_model_info(deployment)
+        model_id: Final = configured.get("id")
+        params: Final = _MODEL_INFO_ADAPTER.validate_python(deployment["litellm_params"])
+        model_name: Final = params.get("model")
+        if not isinstance(model_id, str) or not isinstance(model_name, str):
+            return service_tier_capabilities(configured, configured=True)
+        effective: Final = self.get_deployment_model_info(model_id, model_name)
+        return service_tier_capabilities(effective or configured, configured="service_tiers" in configured)
+
+    def get_service_tier_capabilities(self, model_name: str, team_id: str | None = None) -> ServiceTierCapabilities:
+        return intersect_service_tier_capabilities(
+            tuple(
+                self._deployment_service_tiers(deployment)
+                for deployment in self._routable_deployments(model_name, team_id)
+            )
+        )
+
     def get_routable_upstream_model(self, model_name: str, team_id: str | None = None) -> str | None:
         """
         Return the `litellm_params.model` of the first deployment a request
@@ -12525,6 +12548,8 @@ class Router:
                         **model_info,
                         "supports_fast_mode": True,
                         "supported_reasoning_efforts": None,
+                        "service_tiers": None,
+                        "default_service_tier": None,
                         "supported_endpoints": None,
                     }
                 )
@@ -12676,7 +12701,10 @@ class Router:
             if configurable_clientside_auth_params is not None:
                 model_group_info.configurable_clientside_auth_params = configurable_clientside_auth_params
 
-        return model_group_info
+        if model_group_info is None:
+            return None
+        tiers: Final = self.get_service_tier_capabilities(model_group, team_id)
+        return model_group_info.model_copy(update={"service_tiers": tiers.tiers, "default_service_tier": tiers.default})
 
     def get_model_group_info(
         self, model_group: str, *, include_hidden: bool = False, team_id: str | None = None

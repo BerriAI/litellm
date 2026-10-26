@@ -57,6 +57,7 @@ from .utils import (
     CustomPricingLiteLLMParams,
     MirroredPricingParams,
     ModelResponse,
+    ServiceTierInfo,
     StandardLoggingRoutingDecision,
 )
 from .utils import (
@@ -983,6 +984,8 @@ class ModelGroupInfo(LiteLLMBaseModel):
     supports_function_calling: bool = Field(default=False)
     supports_fast_mode: bool = Field(default=False)
     supported_reasoning_efforts: tuple[str, ...] | None = Field(default=None)
+    service_tiers: tuple[ServiceTierInfo, ...] | None = None
+    default_service_tier: str | None = None
     supported_openai_params: list[str] | None = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
     description: str | None = None

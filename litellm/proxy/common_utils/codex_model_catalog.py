@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal
 from pydantic import ConfigDict, StringConstraints, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.router_utils.service_tier_capability import ServiceTierCapabilities
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
@@ -91,6 +92,7 @@ class CodexFallbackModel(LiteLLMBaseModel):
     supported_in_api: Literal[True] = True
     priority: int
     service_tiers: tuple[CodexServiceTier, ...] = ()
+    default_service_tier: str | None = None
     availability_nux: NoneType = None
     upgrade: NoneType = None
     support_verbosity: Literal[False] = False
@@ -150,6 +152,7 @@ class CodexCatalogRow:
     upstream_model: str | None = None
     display_name: str | None = None
     service_tiers: tuple[object, ...] = ()
+    service_tier_capabilities: ServiceTierCapabilities | None = None
 
 
 @cache
@@ -262,16 +265,27 @@ def _entry(
     instructions: str,
 ) -> CodexCatalogEntry:
     stock_model: Final = _stock_for(row, stock)
-    stock_tiers: Final = MappingProxyType(
-        {tier.id: tier for tier in (stock_model.service_tiers if stock_model is not None else ())}
+    published: Final = row.service_tier_capabilities
+    configured: Final = (
+        tuple(
+            CodexServiceTier(
+                id=tier["id"],
+                name=tier.get("name", tier["id"].capitalize()),
+                description=tier.get("description", f"Sends service_tier={tier['id']} upstream"),
+            )
+            for tier in published.tiers or ()
+        )
+        if published is not None and published.declared
+        else configured_service_tiers(row.service_tiers, row.id)
     )
-    configured: Final = configured_service_tiers(row.service_tiers, row.id, stock_tiers)
+    default_tier: Final = published.default if published is not None and published.declared else None
     if stock_model is None:
         return CodexFallbackModel(
             slug=row.id,
             display_name=row.display_name if row.display_name is not None else row.id,
             priority=index,
             service_tiers=configured if configured is not None else (),
+            default_service_tier=default_tier,
             context_window=row.max_input_tokens,
             base_instructions=instructions,
         )
@@ -289,14 +303,11 @@ def _entry(
     }
     if configured is None:
         return stock_model.model_copy(update=listing)
-    configured_ids: Final = frozenset(tier.id for tier in configured)
     return stock_model.model_copy(
         update={
             **listing,
             "service_tiers": configured,
-            "default_service_tier": (
-                stock_model.default_service_tier if stock_model.default_service_tier in configured_ids else None
-            ),
+            "default_service_tier": default_tier,
         }
     )
 
@@ -385,6 +396,9 @@ def _catalog_row(
         upstream_model=llm_router.get_routable_upstream_model(lookup_id, team_id) if llm_router is not None else None,
         display_name=llm_router.get_configured_display_name(label_id) if llm_router is not None else None,
         service_tiers=llm_router.get_configured_service_tiers(lookup_id, team_id) if llm_router is not None else (),
+        service_tier_capabilities=(
+            llm_router.get_service_tier_capabilities(lookup_id, team_id) if llm_router is not None else None
+        ),
     )
 
 
