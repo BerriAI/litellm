@@ -751,16 +751,7 @@ describe("ModelInfoView", () => {
 
     await user.click(screen.getByRole("button", { name: /edit settings/i }));
 
-    const litellmParamsInput = screen
-      .getAllByRole("textbox")
-      .find(
-        (input) =>
-          input.tagName === "TEXTAREA" && (input as HTMLTextAreaElement).value.includes('"custom_llm_provider"'),
-      );
-    expect(litellmParamsInput).toBeDefined();
-    if (!litellmParamsInput) {
-      return;
-    }
+    const litellmParamsInput = screen.getByRole("textbox", { name: "LiteLLM Params" });
     expect((litellmParamsInput as HTMLTextAreaElement).value).not.toContain("litellm_credential_name");
     await user.clear(litellmParamsInput);
     await user.paste(`{"litellm_credential_name":"from-json","timeout":42}`);
@@ -774,6 +765,61 @@ describe("ModelInfoView", () => {
     const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
     expect(updatePayload.litellm_params).not.toHaveProperty("litellm_credential_name");
     expect(updatePayload.litellm_params.litellm_credential_name).not.toBe("from-json");
+  });
+
+  it("removes JSON params without losing hidden settings and keeps them absent after reload and another save", async () => {
+    const storedModel = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        api_key: "sk-****secret",
+        input_cost_per_token: 0.00001,
+        litellm_image_enabled: true,
+      },
+    };
+    const retained = { drop_params: false, temperature: 0, allowed_openai_params: [] };
+    mockUseModelsInfo.mockReturnValue({ data: { data: [storedModel] }, isLoading: false });
+    const user = userEvent.setup();
+    const { unmount } = render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    fireEvent.change(screen.getByRole("textbox", { name: "LiteLLM Params" }), {
+      target: { value: JSON.stringify(retained) },
+    });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(mockModelPatchUpdateCall).toHaveBeenCalledOnce());
+
+    const payload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(payload.litellm_params_to_remove).toEqual(["litellm_image_enabled"]);
+    expect(payload.litellm_params).toMatchObject(retained);
+    expect(payload.litellm_params).not.toHaveProperty("api_key");
+    const saved = DEFAULT_ADMIN_PROPS.onModelUpdate.mock.calls[0][0];
+    expect(saved.litellm_params).toMatchObject({ api_key: "sk-****secret", input_cost_per_token: 0.00001 });
+    expect(saved.litellm_params).not.toHaveProperty("litellm_image_enabled");
+
+    unmount();
+    mockUseModelsInfo.mockReturnValue({ data: { data: [saved] }, isLoading: false });
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    expect(JSON.parse((screen.getByRole("textbox", { name: "LiteLLM Params" }) as HTMLTextAreaElement).value)).toEqual(
+      retained,
+    );
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(mockModelPatchUpdateCall).toHaveBeenCalledTimes(2));
+    expect(mockModelPatchUpdateCall.mock.calls[1][1].litellm_params).not.toHaveProperty("litellm_image_enabled");
+    expect(mockModelPatchUpdateCall.mock.calls[1][1]).not.toHaveProperty("litellm_params_to_remove");
+  });
+
+  it("resets form values when the selected model changes without unmounting the detail view", async () => {
+    const { rerender } = render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    fireEvent.click(await screen.findByRole("button", { name: /edit settings/i }));
+    const otherModel = {
+      ...defaultModelData,
+      litellm_params: { model: "openai/other-model" },
+      model_info: { ...defaultModelData.model_info, id: "456" },
+    };
+    mockUseModelsInfo.mockReturnValue({ data: { data: [otherModel] }, isLoading: false });
+    rerender(<ModelInfoView {...DEFAULT_ADMIN_PROPS} modelId="456" />);
+    expect(screen.getByPlaceholderText("Enter LiteLLM model name")).toHaveValue("openai/other-model");
   });
 
   it("should not include vector_store_ids in update payload when model has none", async () => {
@@ -1090,25 +1136,20 @@ describe("ModelInfoView", () => {
     });
   });
 
-  it("blocks the save when the LiteLLM Params box does not hold valid JSON", async () => {
+  it.each(["{not json", "null", "[]", '"value"'])("rejects non-object params %s", async (value) => {
     const user = userEvent.setup();
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
 
     expect(await screen.findByRole("button", { name: /edit settings/i })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /edit settings/i }));
 
-    const extraParams = screen
-      .getAllByRole("textbox")
-      .find(
-        (input) =>
-          input.tagName === "TEXTAREA" && (input as HTMLTextAreaElement).value.includes('"custom_llm_provider"'),
-      ) as HTMLTextAreaElement;
+    const extraParams = screen.getByRole("textbox", { name: "LiteLLM Params" });
     await user.clear(extraParams);
-    await user.paste("{not json");
+    await user.paste(value);
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
-    expect(await screen.findByText("Please enter valid JSON")).toBeInTheDocument();
+    expect(await screen.findByText("Please enter a valid JSON object")).toBeInTheDocument();
     expect(mockModelPatchUpdateCall).not.toHaveBeenCalled();
   });
 
@@ -1830,7 +1871,10 @@ describe("ModelInfoView", () => {
         const payload = await save(user);
 
         expect(payload.litellm_params.cache_creation_input_token_cost_above_1hr).toBeNull();
-        expect(payload.litellm_params.cache_creation_input_token_cost).toBe(0.00000375);
+        expect(payload.litellm_params).not.toHaveProperty("cache_creation_input_token_cost");
+        expect(DEFAULT_ADMIN_PROPS.onModelUpdate.mock.calls[0][0].litellm_params.cache_creation_input_token_cost).toBe(
+          0.00000375,
+        );
       });
     });
 
@@ -1963,12 +2007,7 @@ describe("ModelInfoView", () => {
       const user = userEvent.setup();
       await enterEditMode(user);
 
-      const extraParams = screen
-        .getAllByRole("textbox")
-        .find(
-          (input) =>
-            input.tagName === "TEXTAREA" && (input as HTMLTextAreaElement).value.includes('"custom_llm_provider"'),
-        ) as HTMLTextAreaElement;
+      const extraParams = screen.getByRole("textbox", { name: "LiteLLM Params" });
       await user.clear(extraParams);
       await user.paste('{"drop_params":true}');
 
