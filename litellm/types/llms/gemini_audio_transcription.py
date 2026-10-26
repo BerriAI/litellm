@@ -18,9 +18,14 @@ class GeminiTranscriptionVerbatimMode(TypedDict, total=False):
     diarization_mode: ReadOnly[Literal["speaker"]]
 
 
+class GeminiTranscriptionSmartMode(TypedDict):
+    type: ReadOnly[Literal["smart"]]
+
+
 class GeminiTranscriptionConfig(TypedDict, total=False):
     language_codes: ReadOnly[tuple[str, ...]]
-    mode: ReadOnly[GeminiTranscriptionVerbatimMode]
+    mode: ReadOnly[GeminiTranscriptionVerbatimMode | GeminiTranscriptionSmartMode]
+    custom_vocabulary: ReadOnly[tuple[str, ...]]
 
 
 class GeminiTranscriptionGenerationConfig(TypedDict):
