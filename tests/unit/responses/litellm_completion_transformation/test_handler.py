@@ -374,3 +374,34 @@ def test_sync_bridged_follow_up_is_rejected_instead_of_dropping_the_history():
         )
 
     assert provider.request_body is None
+
+
+@pytest.mark.asyncio
+async def test_bridged_compaction_turn_without_stored_history_sends_only_its_own_input():
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+    summary: Final = {"type": "compaction", "content": "My favorite number is 7."}
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        await litellm.aresponses(
+            model="azure_ai/claude-sonnet-4-6",
+            api_base="https://fake-foundry-resource.services.ai.azure.com",
+            api_key="fake-api-key",
+            input=[
+                {"type": "compaction", "id": "cmp_turn_one", "encrypted_content": json.dumps(summary)},
+                {"role": "user", "content": "Double it"},
+            ],
+            previous_response_id="resp_turn_one",
+            client=client,
+        )
+
+    assert provider.request_body is not None, "the compaction turn never reached the provider"
+    assert [
+        (message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]
+    ] == [
+        (
+            "user",
+            json.dumps([{"type": "text", "text": "My favorite number is 7."}, {"type": "text", "text": "Double it"}]),
+        ),
+    ]
