@@ -1734,9 +1734,9 @@ def stream_chunk_builder(
             chain.from_iterable(_chunk_reasoning_items(chunk, "reasoning_details") for chunk in typed_chunks)
         )
         if reasoning_details:
-            _choice = response.choices[0]
-            _choice.message.provider_specific_fields = {
-                **(_choice.message.provider_specific_fields or {}),
+            message: Final = response.choices[0].message
+            message.provider_specific_fields = {
+                **(message.provider_specific_fields or {}),
                 "reasoning_details": list(reasoning_details),
             }
 
