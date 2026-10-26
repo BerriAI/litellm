@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 
 use litellm_cost::price::{Band, Channel, Meter, ServiceTier};
-use litellm_cost::{Usage, When};
+use litellm_cost::{SelectionPolicy, Usage, When};
 use litellm_host_python::from_py;
 use litellm_model_catalog::wire::{Fields, FlatKey};
 use litellm_model_catalog::{self as resolution, Keys, Query, Resolved};
@@ -594,18 +594,35 @@ pub(crate) enum PriceResult {
     Errors(RowErrors),
 }
 
+#[derive(strum::EnumString, strum::VariantArray)]
+enum PricePolicy {
+    #[strum(serialize = "generic")]
+    Generic,
+    #[strum(serialize = "sdk_tokens")]
+    SdkTokens,
+}
+
 #[pyfunction]
+#[pyo3(signature = (row, usage, when, *, policy="generic"))]
 pub(crate) fn price(
     row: &Bound<'_, PyAny>,
     usage: &UsageInput,
     when: &WhenInput,
+    policy: &str,
 ) -> PyResult<PriceResult> {
+    let policy = policy
+        .parse::<PricePolicy>()
+        .map_err(|_| PyValueError::new_err("unknown pricing policy"))?;
     let model = match lower_row("", row) {
         Ok((_, model)) => model,
         Err(errors) => return Ok(PriceResult::Errors(errors)),
     };
+    let policy = match policy {
+        PricePolicy::Generic => SelectionPolicy::Generic,
+        PricePolicy::SdkTokens => SelectionPolicy::SdkTokens(&model.token_price_sources),
+    };
     Ok(
-        match litellm_cost::calculate(&model.prices, &usage.usage, &when.when) {
+        match litellm_cost::calculate_with_policy(&model.prices, &usage.usage, &when.when, policy) {
             litellm_cost::Priced::Known(breakdown) => PriceResult::Priced(breakdown.into()),
             litellm_cost::Priced::Unpriced { missing, partial } => {
                 PriceResult::Unpriced(Unpriced {
@@ -1291,6 +1308,7 @@ assert n.model_info(models, "Model").input_cost_per_token == 2
         #[from(interpreter)] _interpreter: (),
         #[case] expression: &str,
         #[case] kind: &str,
+        #[values("generic", "sdk_tokens")] policy: &str,
     ) {
         Python::attach(|py| {
             let row = py
@@ -1309,12 +1327,130 @@ assert n.model_info(models, "Model").input_cost_per_token == 2
                 &row,
                 &usage,
                 &WhenInput::new(0, "standard", "online").unwrap(),
+                policy,
             )
             .unwrap() else {
                 panic!("expected invalid row")
             };
             assert_eq!(errors.errors[0].key, "");
             assert_eq!(errors.errors[0].kind, kind);
+        });
+    }
+
+    #[rstest]
+    #[case::priority_reasoning(
+        json!({"input_cost_per_token":1,"output_cost_per_token":2,"output_cost_per_reasoning_token":3,"output_cost_per_token_priority":4}),
+        "output_cost_per_reasoning_token", (10, "priority"), 10.0, (35.0, 40.0), Some("output_cost_per_reasoning_token")
+    )]
+    #[case::tier_reasoning(
+        json!({"output_cost_per_reasoning_token":5,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":2,"output_cost_per_token":3},{"range":[100,1000],"input_cost_per_token":4,"output_cost_per_token":6}]}),
+        "output_cost_per_reasoning_token", (10, "standard"), 20.0, (40.0, 30.0), Some("output_cost_per_reasoning_token")
+    )]
+    #[case::priority_audio(
+        json!({"input_cost_per_token":1,"output_cost_per_token":2,"output_cost_per_audio_token":3,"output_cost_per_audio_token_priority":4}),
+        "output_cost_per_audio_token", (10, "priority"), 10.0, (30.0, 25.0), None
+    )]
+    #[case::priority_threshold(
+        json!({"input_cost_per_token":1,"output_cost_per_token":2,"output_cost_per_reasoning_token":3,"output_cost_per_token_priority":4,"output_cost_per_token_above_200k_tokens_priority":8}),
+        "output_cost_per_reasoning_token", (200001, "priority"), 200001.0, (55.0, 80.0), Some("output_cost_per_reasoning_token")
+    )]
+    #[case::audio_threshold_fallback(
+        json!({"input_cost_per_token":1,"output_cost_per_token":2,"output_cost_per_audio_token_priority":4,"output_cost_per_token_above_128k_tokens":8}),
+        "output_cost_per_audio_token", (128001, "priority"), 128001.0, (60.0, 80.0), Some("output_cost_per_audio_token")
+    )]
+    fn sdk_token_policy_is_explicit_and_preserves_live_rows(
+        #[from(interpreter)] _interpreter: (),
+        #[case] fields: Value,
+        #[case] meter: &str,
+        #[case] context: (u64, &str),
+        #[case] input: f64,
+        #[case] outputs: (f64, f64),
+        #[case] fallback: Option<&str>,
+    ) {
+        let (prompt_tokens, tier) = context;
+        let (generic_output, sdk_output) = outputs;
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("n", crate::native_module(py)).unwrap();
+            let row = dict(py, fields);
+            row.set_item("litellm_provider", "openai").unwrap();
+            row.set_item("mode", "chat").unwrap();
+            locals.set_item("row", &row).unwrap();
+            locals.set_item("meter", meter).unwrap();
+            locals.set_item("tier", tier).unwrap();
+            locals.set_item("prompt", prompt_tokens).unwrap();
+            locals.set_item("expected_input", input).unwrap();
+            locals.set_item("generic_output", generic_output).unwrap();
+            locals.set_item("sdk_output", sdk_output).unwrap();
+            locals.set_item("fallback", fallback).unwrap();
+            py.run(pyo3::ffi::c_str!(r#"
+import json
+import litellm
+before = json.dumps(row)
+usage = n.UsageInput({"input_cost_per_token": prompt, "output_cost_per_token": 5, meter: 5}, prompt_tokens=prompt)
+when = n.WhenInput(0, tier=tier)
+default = n.price(row, usage, when)
+generic = n.price(row, usage, when, policy="generic")
+sdk = n.price(row, usage, when, policy="sdk_tokens")
+project = lambda result: (result.input, result.output, result.total, [(l.meter, l.quantity, l.unit_price, l.amount, l.fallback_from) for l in result.lines])
+assert project(default) == project(generic)
+assert (default.input, default.output, default.total) == (expected_input, generic_output, expected_input + generic_output)
+assert (sdk.input, sdk.output, sdk.total) == (expected_input, sdk_output, expected_input + sdk_output)
+assert sdk.lines[-1].fallback_from == fallback
+model = f"openai/p2d-{meter}-{tier}-{prompt}"
+litellm.model_cost[model] = row
+try:
+    details = {"reasoning_tokens" if meter == "output_cost_per_reasoning_token" else "audio_tokens": 5}
+    public_usage = litellm.Usage(prompt_tokens=prompt, completion_tokens=10, total_tokens=prompt+10, completion_tokens_details=details)
+    kwargs = dict(model=model, custom_llm_provider="openai", service_tier=tier)
+    assert litellm.cost_per_token(prompt_tokens=prompt, completion_tokens=10, usage_object=public_usage, **kwargs) == (sdk.input, sdk.output)
+    assert litellm.completion_cost(completion_response=litellm.ModelResponse(model=model, usage=public_usage), **kwargs) == sdk.total
+finally:
+    del litellm.model_cost[model]
+assert json.dumps(row) == before
+row["output_cost_per_reasoning_token_priority"] = 0
+live = n.price(row, n.UsageInput({"output_cost_per_reasoning_token": 5}), n.WhenInput(0, tier="priority"), policy="sdk_tokens")
+assert live.total == 0
+assert live.lines[0].fallback_from is None
+assert row["output_cost_per_reasoning_token_priority"] == 0
+"#), Some(&locals), None).unwrap();
+        });
+    }
+
+    #[rstest]
+    #[case::unknown("'unknown'")]
+    #[case::case_sensitive("'SDK_TOKENS'")]
+    #[case::null("None")]
+    #[case::positional("'sdk_tokens'")]
+    fn pricing_policy_rejects_invalid_arguments(
+        #[from(interpreter)] _interpreter: (),
+        #[case] argument: &str,
+    ) {
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("n", crate::native_module(py)).unwrap();
+            locals.set_item("argument", argument).unwrap();
+            py.run(
+                pyo3::ffi::c_str!(
+                    r#"
+row = {"litellm_provider": "test", "input_cost_per_token": 1}
+usage = n.UsageInput({"input_cost_per_token": 1})
+when = n.WhenInput(0)
+try:
+    if argument == "'sdk_tokens'":
+        n.price(row, usage, when, "sdk_tokens")
+    else:
+        n.price(row, usage, when, policy=eval(argument))
+except (TypeError, ValueError):
+    pass
+else:
+    raise AssertionError("invalid policy accepted")
+"#
+                ),
+                Some(&locals),
+                None,
+            )
+            .unwrap();
         });
     }
 
@@ -1506,6 +1642,7 @@ assert isinstance(n.resolve_model(rows, model, inferred=inferred), n.ModelNotFou
                 row.as_any(),
                 &usage,
                 &WhenInput::new(at, "standard", channel).unwrap(),
+                "generic",
             )
             .unwrap() else {
                 panic!("not priced")
@@ -1530,6 +1667,7 @@ assert isinstance(n.resolve_model(rows, model, inferred=inferred), n.ModelNotFou
                 row.as_any(),
                 &usage,
                 &WhenInput::new(0, "standard", "online").unwrap(),
+                "generic",
             )
             .unwrap() else {
                 panic!("not priced")
@@ -1618,6 +1756,7 @@ assert seen == ["released"]
                     row.as_any(),
                     &usage,
                     &WhenInput::new(0, "standard", "online").unwrap(),
+                    "generic",
                 )
                 .unwrap() else {
                     panic!("not priced: {}", fields[0])
@@ -1678,7 +1817,7 @@ assert seen == ["released"]
                             0,
                         )
                         .unwrap();
-                        match price(row.as_any(), &usage, &when).unwrap() {
+                        match price(row.as_any(), &usage, &when, "generic").unwrap() {
                             PriceResult::Priced(result) => assert_eq!(result.total, expected),
                             PriceResult::Unpriced(result) => {
                                 assert_eq!(expected, 0.0);
@@ -1712,7 +1851,9 @@ assert seen == ["released"]
                 py,
                 json!({"litellm_provider":"test", "input_cost_per_token": 2}),
             );
-            let PriceResult::Unpriced(result) = price(row.as_any(), &usage, &when).unwrap() else {
+            let PriceResult::Unpriced(result) =
+                price(row.as_any(), &usage, &when, "generic").unwrap()
+            else {
                 panic!("expected unpriced")
             };
             assert_eq!(result.missing, ["output_cost_per_token"]);
@@ -1727,7 +1868,9 @@ assert seen == ["released"]
             );
             row.set_item("output_cost_per_token", 0).unwrap();
             row.set_item("input_cost_per_audio_token", 0).unwrap();
-            let PriceResult::Priced(result) = price(row.as_any(), &usage, &when).unwrap() else {
+            let PriceResult::Priced(result) =
+                price(row.as_any(), &usage, &when, "generic").unwrap()
+            else {
                 panic!("expected free")
             };
             assert_eq!(result.total, 0.0);
@@ -1752,6 +1895,7 @@ assert seen == ["released"]
                 row.as_any(),
                 &usage,
                 &WhenInput::new(0, "standard", "online").unwrap(),
+                "generic",
             )
             .unwrap() else {
                 panic!("not priced")

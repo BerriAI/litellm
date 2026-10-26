@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use litellm_cost::TokenPriceSources;
 use litellm_cost::price::{Adjustments, Prices};
 
 use crate::error::Located;
@@ -10,6 +11,7 @@ use crate::wire::{Attributes, EntryWire, Fields};
 pub struct Model {
     pub attributes: Attributes,
     pub prices: Prices,
+    pub token_price_sources: TokenPriceSources,
     pub adjustments: Adjustments,
     pub capabilities: BTreeMap<String, bool>,
     pub unrecognized: Vec<String>,

@@ -4,6 +4,7 @@ use time::OffsetDateTime;
 
 use crate::money::{UnitPrice, Usd};
 use crate::price::{Band, Channel, InputUnit, Meter, OutputUnit, Prices, ServiceTier};
+use crate::selection::SelectionPolicy;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Usage {
@@ -63,6 +64,15 @@ impl Breakdown {
 }
 
 pub fn calculate(prices: &Prices, usage: &Usage, when: &When) -> Priced {
+    calculate_with_policy(prices, usage, when, SelectionPolicy::Generic)
+}
+
+pub fn calculate_with_policy(
+    prices: &Prices,
+    usage: &Usage,
+    when: &When,
+    policy: SelectionPolicy<'_>,
+) -> Priced {
     let band = prices.channel_band(
         when.channel,
         when.tier,
@@ -76,7 +86,7 @@ pub fn calculate(prices: &Prices, usage: &Usage, when: &When) -> Priced {
             continue;
         }
         let selected = select_meter(prices, meter, quantity, usage, when);
-        match resolve(prices, &selected, band, usage, when) {
+        match policy.resolve(prices, &selected, band, usage, when) {
             Some((priced_meter, unit_price)) => lines.push(Line {
                 fallback_from: (priced_meter != selected).then(|| meter.clone()),
                 meter: priced_meter,
@@ -141,7 +151,7 @@ fn select_meter(
         .map_or_else(|| meter.clone(), |(_, selected)| selected.clone())
 }
 
-fn resolve(
+pub(crate) fn resolve(
     prices: &Prices,
     meter: &Meter,
     band: Band,

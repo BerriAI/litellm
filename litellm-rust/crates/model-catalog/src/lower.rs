@@ -8,6 +8,7 @@ use litellm_cost::price::{
     OffPeakRates, OutputUnit, Price, Prices, Residency, SearchContextSize, TokenKind, Uplift, When,
 };
 use litellm_cost::schedule::{Schedule, Window};
+use litellm_cost::{TokenPriceSources, TokenTier};
 
 use crate::error::{Error, Located, pointer_child, pointer_for_key};
 use crate::model::Model;
@@ -101,12 +102,38 @@ impl From<&EntryWire> for Adjustments {
     }
 }
 
+impl From<&EntryWire> for TokenPriceSources {
+    fn from(wire: &EntryWire) -> Self {
+        Self {
+            flat: flat_prices(&wire.prices)
+                .map(|sourced| sourced.price)
+                .collect(),
+            tiers: wire
+                .tier_rows
+                .iter()
+                .flatten()
+                .filter_map(|row| {
+                    Some(TokenTier {
+                        range: row.range?,
+                        meters: row
+                            .prices
+                            .iter()
+                            .map(|flat| flat.flat.meter.clone())
+                            .collect(),
+                    })
+                })
+                .collect(),
+        }
+    }
+}
+
 impl TryFrom<EntryWire> for Model {
     type Error = Vec<Located>;
 
     fn try_from(wire: EntryWire) -> Result<Self, Self::Error> {
         let prices = Prices::try_from(&wire);
         let adjustments = Adjustments::from(&wire);
+        let token_price_sources = TokenPriceSources::from(&wire);
         let EntryWire {
             attributes,
             capabilities,
@@ -122,6 +149,7 @@ impl TryFrom<EntryWire> for Model {
             Ok(prices) if problems.is_empty() && missing_provider.is_none() => Ok(Model {
                 attributes,
                 prices,
+                token_price_sources,
                 adjustments,
                 capabilities,
                 unrecognized: unknown.into_iter().map(|(key, _)| key).collect(),
@@ -473,6 +501,57 @@ mod tests {
     use super::*;
 
     const TEXT_INPUT: Meter = Meter::Input(InputUnit::Token(TokenKind::Text));
+
+    #[rstest]
+    #[case::tier_output(
+        serde_json::json!({"output_cost_per_reasoning_token":5,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":2,"output_cost_per_token":3},{"range":[100,1000],"input_cost_per_token":4,"output_cost_per_token":6}]}),
+        Meter::Output(OutputUnit::ReasoningToken), 101, 30.0
+    )]
+    #[case::unpriced_tier(
+        serde_json::json!({"output_cost_per_reasoning_token":5,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":2,"output_cost_per_token":3},{"range":[100,1000],"output_cost_per_reasoning_token":9,"output_cost_per_token":6}]}),
+        Meter::Output(OutputUnit::ReasoningToken), 101, 25.0
+    )]
+    #[case::tier_modality_is_not_flat(
+        serde_json::json!({"tiered_pricing":[{"range":[0,100],"input_cost_per_token":1,"output_cost_per_token":2,"output_cost_per_audio_token":3}]}),
+        Meter::Output(OutputUnit::Token(TokenKind::Audio)), 10, 10.0
+    )]
+    #[case::tier_reasoning_is_not_flat(
+        serde_json::json!({"tiered_pricing":[{"range":[0,100],"input_cost_per_token":1,"output_cost_per_token":2,"output_cost_per_reasoning_token":3}]}),
+        Meter::Output(OutputUnit::ReasoningToken), 0, 10.0
+    )]
+    #[case::explicit_free_tier_output(
+        serde_json::json!({"output_cost_per_reasoning_token":5,"tiered_pricing":[{"range":[0,100],"input_cost_per_token":0,"output_cost_per_token":0}]}),
+        Meter::Output(OutputUnit::ReasoningToken), 10, 0.0
+    )]
+    fn lowering_retains_token_rate_origins(
+        #[case] fields: Value,
+        #[case] meter: Meter,
+        #[case] prompt_tokens: u64,
+        #[case] total: f64,
+    ) {
+        let mut entry = wire(fields);
+        entry.attributes.litellm_provider = Some("test".into());
+        let model = Model::try_from(entry).unwrap();
+        let usage = litellm_cost::Usage {
+            quantities: [(meter, 5)].into(),
+            prompt_tokens,
+            ..Default::default()
+        };
+        let when = litellm_cost::When {
+            tier: Default::default(),
+            channel: Default::default(),
+            at: time::OffsetDateTime::UNIX_EPOCH,
+        };
+        let litellm_cost::Priced::Known(result) = litellm_cost::calculate_with_policy(
+            &model.prices,
+            &usage,
+            &when,
+            litellm_cost::SelectionPolicy::SdkTokens(&model.token_price_sources),
+        ) else {
+            panic!("expected priced tokens")
+        };
+        assert_eq!(result.total.get(), total);
+    }
 
     fn wire(entry: Value) -> EntryWire {
         let Value::Object(fields) = entry else {
