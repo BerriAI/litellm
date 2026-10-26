@@ -1,7 +1,8 @@
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from itertools import filterfalse
+from types import MappingProxyType
 from typing import Any, Final, cast
 
 import litellm
@@ -189,7 +190,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         request_tools: Final = self.responses_api_request.get("tools")
         self._custom_tool_names: set[str] = extract_custom_tool_names(request_tools)
         self._custom_tool_call_ids: frozenset[str] = frozenset()
-        self._unnamed_tool_args_by_call_id: dict[str, str] = {}
+        self._unnamed_tool_args_by_call_id: Mapping[str, str] = MappingProxyType({})
         self._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(request_tools)
         self._web_search_calls: dict[str, object] = {}  # mutable-ok: latest call by provider id
         self._queued_web_search_call_ids: set[str] = set()  # mutable-ok: emitted call ids
@@ -427,11 +428,18 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _queue_named_tool_call_delta(self, call_id: str, fn_name: str, fn_args_delta: str) -> None:
         output_index: Final = self._get_or_assign_tool_output_index(call_id)
         if not fn_name and call_id not in self._tool_item_id_by_call_id:
-            self._unnamed_tool_args_by_call_id[call_id] = (
-                self._unnamed_tool_args_by_call_id.get(call_id, "") + fn_args_delta
+            self._unnamed_tool_args_by_call_id = MappingProxyType(
+                {
+                    **self._unnamed_tool_args_by_call_id,
+                    call_id: self._unnamed_tool_args_by_call_id.get(call_id, "") + fn_args_delta,
+                }
             )
             return
-        args_delta: Final = self._unnamed_tool_args_by_call_id.pop(call_id, "") + fn_args_delta
+        args_delta: Final = self._unnamed_tool_args_by_call_id.get(call_id, "") + fn_args_delta
+        if call_id in self._unnamed_tool_args_by_call_id:
+            self._unnamed_tool_args_by_call_id = MappingProxyType(
+                {key: value for key, value in self._unnamed_tool_args_by_call_id.items() if key != call_id}
+            )
         if self._is_tool_search_call(call_id, fn_name):
             self._queue_tool_search_call_added(call_id, output_index, args_delta)
             return
