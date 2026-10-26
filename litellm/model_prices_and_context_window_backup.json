@@ -67030,6 +67030,7 @@
         ]
     },
     "xai/grok-imagine-image-pro": {
+        "deprecation_date": "2026-05-15",
         "input_cost_per_image": 0.05,
         "litellm_provider": "xai",
         "mode": "image_generation",
