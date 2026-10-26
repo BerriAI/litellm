@@ -3694,11 +3694,13 @@ name = "litellm-cost"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "jiff",
  "proptest",
  "rstest",
  "schemars 1.2.2",
  "serde",
  "serde_json",
+ "time",
 ]
 
 [[package]]

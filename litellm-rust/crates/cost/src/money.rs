@@ -17,6 +17,10 @@ impl UnitPrice {
     pub fn get(self) -> f64 {
         self.0
     }
+
+    pub(crate) fn half(self) -> Self {
+        Self(self.0 / 2.0)
+    }
 }
 
 impl Usd {

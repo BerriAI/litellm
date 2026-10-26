@@ -1,64 +1,75 @@
-use criterion::{Criterion, criterion_group, criterion_main};
-use litellm_cost::{
-    Pricing, PromptConvention, Rate, Rates, Request, ServiceTier, ThresholdPolicy, ThresholdRates,
-    Usage, calculate, compile,
-};
 use std::hint::black_box;
 
+use criterion::{Criterion, criterion_group, criterion_main};
+use litellm_cost::money::UnitPrice;
+use litellm_cost::price::{
+    Band, CacheReadMode, Channel, InputUnit, Meter, OutputUnit, Price, Prices, ServiceTier,
+    TokenKind, When as PriceWhen,
+};
+use litellm_cost::{Usage, When, calculate};
+use time::OffsetDateTime;
+
 fn bench(c: &mut Criterion) {
-    let pricing = Pricing {
-        standard: Rates {
-            input: Rate::Value(0.000002),
-            output: Rate::Value(0.000008),
-            cache_read: Rate::Value(0.0000005),
-            cache_write: Rate::Missing,
-            cache_write_1h: Rate::Missing,
-        },
-        tiers: &[],
-        thresholds: &[],
-        off_peak: None,
+    let input = Meter::Input(InputUnit::Token(TokenKind::Text));
+    let output = Meter::Output(OutputUnit::Token(TokenKind::Text));
+    let cache = Meter::CacheRead {
+        kind: TokenKind::Text,
+        mode: CacheReadMode::Implicit,
     };
-    let request = Request {
-        usage: Usage {
-            prompt_tokens: 1000,
-            completion_tokens: 200,
-            cache_read_tokens: 250,
-            cache_write_tokens: 0,
-            cache_write_5m_tokens: None,
-            cache_write_1h_tokens: None,
-            prompt_convention: PromptConvention::IncludesCache,
-        },
-        service_tier: ServiceTier::Standard,
-        threshold_policy: ThresholdPolicy::Exclusive,
-        region_multiplier: None,
-        billed_at_utc_minute: None,
+    let prices = Prices::new(
+        [
+            (input.clone(), Band::Base, 0.000002),
+            (output.clone(), Band::Base, 0.000008),
+            (cache.clone(), Band::Base, 0.0000005),
+            (input.clone(), Band::over_prompt_tokens(1000), 0.000004),
+        ]
+        .into_iter()
+        .map(|(meter, band, rate)| {
+            (
+                Price::online(
+                    meter,
+                    PriceWhen {
+                        band,
+                        ..PriceWhen::default()
+                    },
+                ),
+                UnitPrice::new(rate).unwrap(),
+            )
+        })
+        .collect(),
+        None,
+    );
+    let usage = Usage {
+        quantities: [(input, 750), (output, 200), (cache, 250)].into(),
+        prompt_tokens: 1000,
+        ..Usage::default()
     };
-    let plan = compile(&pricing).unwrap();
-    c.bench_function("native_compiled_calculation", |b| {
-        b.iter(|| black_box(plan.calculate(black_box(&request)).unwrap()))
+    let when = When {
+        tier: ServiceTier::Standard,
+        channel: Channel::Online,
+        at: OffsetDateTime::UNIX_EPOCH,
+    };
+    c.bench_function("catalog_calculation", |b| {
+        b.iter(|| {
+            black_box(calculate(
+                black_box(&prices),
+                black_box(&usage),
+                black_box(&when),
+            ))
+        })
     });
-    c.bench_function("native_full_wrapper", |b| {
-        b.iter(|| black_box(calculate(black_box(&pricing), black_box(&request)).unwrap()))
-    });
-    c.bench_function("native_rate_compilation", |b| {
-        b.iter(|| black_box(compile(black_box(&pricing)).unwrap()))
-    });
-    let threshold = ThresholdRates {
-        above_prompt_tokens: 1000,
-        standard: Rates {
-            input: Rate::Value(0.000004),
-            output: Rate::Value(0.000016),
-            ..Rates::EMPTY
-        },
-        tiers: &[],
+    let above = Usage {
+        prompt_tokens: 1001,
+        ..usage
     };
-    let threshold_pricing = Pricing {
-        thresholds: &[threshold],
-        ..pricing
-    };
-    let threshold_plan = compile(&threshold_pricing).unwrap();
-    c.bench_function("native_threshold_boundary", |b| {
-        b.iter(|| black_box(threshold_plan.calculate(black_box(&request)).unwrap()))
+    c.bench_function("catalog_threshold_calculation", |b| {
+        b.iter(|| {
+            black_box(calculate(
+                black_box(&prices),
+                black_box(&above),
+                black_box(&when),
+            ))
+        })
     });
 }
 

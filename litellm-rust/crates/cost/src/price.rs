@@ -119,10 +119,20 @@ impl Prices {
     /// The online prompt band a request falls in. Every token meter's `_above_` prices count,
     /// and the highest band the prompt passes wins.
     pub fn band(&self, tier: ServiceTier, prompt_tokens: u64, inclusive: bool) -> Band {
+        self.channel_band(Channel::Online, tier, prompt_tokens, inclusive)
+    }
+
+    pub(crate) fn channel_band(
+        &self,
+        channel: Channel,
+        tier: ServiceTier,
+        prompt_tokens: u64,
+        inclusive: bool,
+    ) -> Band {
         self.rates
             .keys()
             .filter(|price| {
-                price.channel == Channel::Online
+                price.channel == channel
                     && price.meter.sets_prompt_band()
                     && (price.when.tier == ServiceTier::Standard || price.when.tier == tier)
             })
@@ -139,6 +149,17 @@ impl Prices {
     /// and `(standard, base)` in that order. A missing cache price falls back to the input price
     /// resolved the same way.
     pub fn rate(&self, meter: &Meter, tier: ServiceTier, band: Band) -> Option<UnitPrice> {
+        self.direct_rate(meter, Channel::Online, tier, band)
+            .or_else(|| self.rate(&meter.fallback()?, tier, band))
+    }
+
+    pub(crate) fn direct_rate(
+        &self,
+        meter: &Meter,
+        channel: Channel,
+        tier: ServiceTier,
+        band: Band,
+    ) -> Option<UnitPrice> {
         [
             When { tier, band },
             When {
@@ -152,8 +173,36 @@ impl Prices {
             When::default(),
         ]
         .into_iter()
-        .find_map(|when| self.get(&Price::online(meter.clone(), when)))
-        .or_else(|| self.rate(&meter.fallback()?, tier, band))
+        .find_map(|when| {
+            self.get(&Price {
+                meter: meter.clone(),
+                channel,
+                when,
+            })
+        })
+    }
+}
+
+impl OffPeakRates {
+    pub(crate) fn get(&self, meter: &Meter) -> Option<UnitPrice> {
+        match meter {
+            Meter::Input(InputUnit::Token(TokenKind::Text)) => self.input,
+            Meter::Output(OutputUnit::Token(TokenKind::Text)) => self.output,
+            Meter::Output(OutputUnit::ReasoningToken) => self.reasoning,
+            Meter::CacheRead {
+                kind: TokenKind::Text,
+                mode: CacheReadMode::Implicit,
+            } => self.cache_read,
+            Meter::CacheRead {
+                kind: TokenKind::Text,
+                mode: CacheReadMode::Explicit,
+            } => self.explicit_cache_read.or(self.cache_read),
+            Meter::CacheWrite {
+                kind: TokenKind::Text,
+                ttl: CacheTtl::Default,
+            } => self.cache_write,
+            _ => None,
+        }
     }
 }
 
@@ -329,11 +378,11 @@ mod tests {
         Band::Base,
         Some(2.0)
     )]
-    #[case::no_fallback_for_other_meters(
+    #[case::audio_falls_back_to_input(
         Meter::Input(InputUnit::Token(TokenKind::Audio)),
         ServiceTier::Standard,
         Band::Base,
-        None
+        Some(1.0)
     )]
     fn rate_walks_tier_then_band(
         priority_with_a_standard_band: Prices,

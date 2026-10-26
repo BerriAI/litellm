@@ -1,40 +1,52 @@
-use litellm_cost::{
-    Pricing, PromptConvention, Rate, Rates, Request, ServiceTier, ThresholdPolicy, Usage, compile,
+use litellm_cost::money::UnitPrice;
+use litellm_cost::price::{
+    CacheReadMode, Channel, InputUnit, Meter, OutputUnit, Price, Prices, ServiceTier, TokenKind,
 };
+use litellm_cost::{Priced, Usage, When, calculate};
+use time::OffsetDateTime;
 
 fn main() {
-    let pricing = Pricing {
-        standard: Rates {
-            input: Rate::Value(2.0),
-            output: Rate::Value(4.0),
-            cache_read: Rate::Value(0.5),
-            cache_write: Rate::Value(3.0),
-            cache_write_1h: Rate::Missing,
-        },
-        tiers: &[],
-        thresholds: &[],
-        off_peak: None,
+    let input = Meter::Input(InputUnit::Token(TokenKind::Text));
+    let output = Meter::Output(OutputUnit::Token(TokenKind::Text));
+    let cache = Meter::CacheRead {
+        kind: TokenKind::Text,
+        mode: CacheReadMode::Implicit,
     };
-    let request = Request {
-        usage: Usage {
-            prompt_tokens: 100,
-            completion_tokens: 20,
-            cache_read_tokens: 25,
-            cache_write_tokens: 10,
-            cache_write_5m_tokens: None,
-            cache_write_1h_tokens: None,
-            prompt_convention: PromptConvention::IncludesCache,
-        },
-        service_tier: ServiceTier::Standard,
-        threshold_policy: ThresholdPolicy::Exclusive,
-        region_multiplier: None,
-        billed_at_utc_minute: None,
-    };
-    let cost = compile(&pricing).unwrap().calculate(&request).unwrap();
-    println!(
-        "input={} output={} total={}",
-        cost.input(),
-        cost.output(),
-        cost.total()
+    let prices = Prices::new(
+        [
+            (input.clone(), 2.0),
+            (output.clone(), 4.0),
+            (cache.clone(), 0.5),
+        ]
+        .into_iter()
+        .map(|(meter, rate)| {
+            (
+                Price::online(meter, Default::default()),
+                UnitPrice::new(rate).unwrap(),
+            )
+        })
+        .collect(),
+        None,
     );
+    let usage = Usage {
+        quantities: [(input, 75), (cache, 25), (output, 20)].into(),
+        prompt_tokens: 100,
+        ..Usage::default()
+    };
+    let when = When {
+        tier: ServiceTier::Standard,
+        channel: Channel::Online,
+        at: OffsetDateTime::UNIX_EPOCH,
+    };
+    match calculate(&prices, &usage, &when) {
+        Priced::Known(cost) => println!(
+            "input={} output={} total={}",
+            cost.input().get(),
+            cost.output().get(),
+            cost.total.get()
+        ),
+        Priced::Unpriced { missing, partial } => {
+            println!("unpriced={missing:?} partial={}", partial.total.get())
+        }
+    }
 }

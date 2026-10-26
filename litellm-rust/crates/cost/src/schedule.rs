@@ -1,5 +1,8 @@
 use std::str::FromStr;
 
+use jiff::{Timestamp, tz::TimeZone};
+use time::{OffsetDateTime, UtcOffset};
+
 use crate::error::{InvalidUtcWindow, InvalidWeekday};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -29,6 +32,35 @@ pub enum Weekday {
     Friday,
     Saturday,
     Sunday,
+}
+
+impl Schedule {
+    pub fn contains(&self, at: OffsetDateTime) -> bool {
+        let utc = at.to_offset(UtcOffset::UTC);
+        let minute = u16::from(utc.hour()) * 60 + u16::from(utc.minute());
+        let weekday = Timestamp::from_second(at.unix_timestamp())
+            .ok()
+            .and_then(|stamp| {
+                let zone = match self.weekday_timezone.as_deref() {
+                    Some(name) => TimeZone::get(name).ok()?,
+                    None => TimeZone::UTC,
+                };
+                Weekday::from_iso(stamp.to_zoned(zone).weekday().to_monday_one_offset() as u8)
+            });
+        self.windows.iter().any(|window| {
+            window
+                .weekdays
+                .as_ref()
+                .is_none_or(|days| weekday.is_some_and(|day| days.contains(&day)))
+                && window.hours.iter().any(|hours| {
+                    if hours.start_minute < hours.end_minute {
+                        (hours.start_minute..hours.end_minute).contains(&minute)
+                    } else {
+                        minute >= hours.start_minute || minute < hours.end_minute
+                    }
+                })
+        })
+    }
 }
 
 impl FromStr for UtcWindow {
@@ -181,9 +213,66 @@ mod schema {
 
 #[cfg(test)]
 mod tests {
+    use time::format_description::well_known::Rfc3339;
+
     use rstest::rstest;
 
     use super::*;
+
+    #[rstest]
+    #[case::start("2026-01-05T22:00:00Z", "22:00-01:00", None, None, true)]
+    #[case::wrapped("2026-01-06T00:59:59Z", "22:00-01:00", None, None, true)]
+    #[case::end("2026-01-06T01:00:00Z", "22:00-01:00", None, None, false)]
+    #[case::outside("2026-01-05T21:59:59Z", "22:00-01:00", None, None, false)]
+    #[case::whole_day("2026-01-05T12:00:00Z", "00:00-00:00", None, None, true)]
+    #[case::utc_monday(
+        "2026-01-05T01:00:00Z",
+        "00:00-02:00",
+        Some(Weekday::Monday),
+        None,
+        true
+    )]
+    #[case::local_sunday(
+        "2026-01-05T01:00:00Z",
+        "00:00-02:00",
+        Some(Weekday::Sunday),
+        Some("America/Los_Angeles"),
+        true
+    )]
+    #[case::not_local_monday(
+        "2026-01-05T01:00:00Z",
+        "00:00-02:00",
+        Some(Weekday::Monday),
+        Some("America/Los_Angeles"),
+        false
+    )]
+    #[case::summer_offset(
+        "2026-07-06T07:30:00Z",
+        "07:00-08:00",
+        Some(Weekday::Monday),
+        Some("America/Los_Angeles"),
+        true
+    )]
+    #[case::supplied_offset("2026-01-05T23:00:00+02:00", "21:00-22:00", None, None, true)]
+    fn windows_use_utc_hours_and_local_weekdays(
+        #[case] at: &str,
+        #[case] hours: &str,
+        #[case] weekday: Option<Weekday>,
+        #[case] zone: Option<&str>,
+        #[case] expected: bool,
+    ) {
+        let schedule = Schedule {
+            windows: vec![Window {
+                hours: vec![hours.parse().unwrap()],
+                weekdays: weekday.map(|day| vec![day]),
+            }],
+            weekday_timezone: zone.map(str::to_owned),
+        };
+        assert_eq!(
+            schedule.contains(OffsetDateTime::parse(at, &Rfc3339).unwrap()),
+            expected
+        );
+    }
 
     #[rstest]
     #[case::same_day("10:00-18:30", Some((600, 1110)))]

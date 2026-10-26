@@ -121,11 +121,28 @@ impl Meter {
             } => Some(Self::TEXT_INPUT),
             Self::CacheWrite {
                 kind: TokenKind::Text,
-                ttl: CacheTtl::OneHour,
+                ttl: CacheTtl::OneHour | CacheTtl::TwelveHours,
             } => Some(Self::CacheWrite {
                 kind: TokenKind::Text,
                 ttl: CacheTtl::Default,
             }),
+            Self::CacheRead { .. } => Some(Self::CacheRead {
+                kind: TokenKind::Text,
+                mode: CacheReadMode::Implicit,
+            }),
+            Self::CacheWrite { kind, ttl } if *kind != TokenKind::Text => Some(Self::CacheWrite {
+                kind: TokenKind::Text,
+                ttl: *ttl,
+            }),
+            Self::Input(InputUnit::Token(
+                TokenKind::Audio | TokenKind::Image | TokenKind::Video,
+            )) => Some(Self::TEXT_INPUT),
+            Self::Output(OutputUnit::Token(
+                TokenKind::Audio | TokenKind::Image | TokenKind::Video,
+            ))
+            | Self::Output(OutputUnit::ReasoningToken) => {
+                Some(Self::Output(OutputUnit::Token(TokenKind::Text)))
+            }
             _ => None,
         }
     }
