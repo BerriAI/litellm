@@ -1086,6 +1086,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
                     "chat",
                     "completion",
                     "container",
+                    "decisions",
                     "image_edit",
                     "embedding",
                     "evaluation",
