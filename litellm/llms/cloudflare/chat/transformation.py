@@ -1,8 +1,12 @@
-from typing import Final
+from collections.abc import Coroutine
+from typing import Final, Literal, overload
 
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    handle_messages_with_content_list_to_str_conversion,
+)
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -86,6 +90,33 @@ class CloudflareChatConfig(OpenAIGPTConfig):
             api_key=api_key,
             api_base=api_base,
         )
+
+    @overload
+    def _transform_messages(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: base signature
+        model: str,
+        is_async: Literal[True],
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...  # mutable-ok: base signature
+
+    @overload
+    def _transform_messages(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: base signature
+        model: str,
+        is_async: Literal[False] = False,
+    ) -> list[AllMessageValues]: ...  # mutable-ok: base signature
+
+    def _transform_messages(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: base signature
+        model: str,
+        is_async: bool = False,
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:  # mutable-ok: base signature
+        flattened: Final = handle_messages_with_content_list_to_str_conversion(messages)
+        if is_async:
+            return super()._transform_messages(messages=flattened, model=model, is_async=True)
+        return super()._transform_messages(messages=flattened, model=model, is_async=False)
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return CloudflareError(
