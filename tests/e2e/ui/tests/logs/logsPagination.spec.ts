@@ -72,7 +72,7 @@ test.describe("Logs pagination with Aria in the header", () => {
             }),
           ),
         );
-        await waitForSpendLog(request, ids[ids.length - 1]);
+        await Promise.all(ids.map((id) => waitForSpendLog(request, id)));
         await openLogs(page);
         await applyKeyAliasFilter(page, await openFilterDrawer(page), alias);
         await setRowsPerPage(page, "25");
