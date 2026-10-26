@@ -248,6 +248,7 @@ def resolve_model(
     provider: str | None = None,
     base_model: str | None = None,
     region: str | None = None,
+    inferred: tuple[str, str | None] | None = None,
 ) -> ResolvedModel | ModelNotFound: ...
 def registration_target(
     model_cost: dict[str, object], key: str, *, provider: str | None = None

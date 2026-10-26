@@ -173,7 +173,7 @@ pub(crate) enum ResolutionResult {
     NotFound(ModelNotFound),
 }
 
-#[pyfunction(pass_module, signature = (model_cost, model, *, provider=None, base_model=None, region=None))]
+#[pyfunction(pass_module, signature = (model_cost, model, *, provider=None, base_model=None, region=None, inferred=None))]
 pub(crate) fn resolve_model(
     module: &Bound<'_, PyModule>,
     model_cost: &Bound<'_, PyDict>,
@@ -181,6 +181,7 @@ pub(crate) fn resolve_model(
     provider: Option<&str>,
     base_model: Option<&str>,
     region: Option<&str>,
+    inferred: Option<(&str, Option<&str>)>,
 ) -> PyResult<ResolutionResult> {
     let index = module.getattr("_model_key_index")?;
     let index = index.extract::<PyRef<'_, ModelKeyIndex>>()?;
@@ -189,15 +190,20 @@ pub(crate) fn resolve_model(
         index: &index,
         error: RefCell::default(),
     };
-    let result = resolution::resolve(
-        &view,
-        &Query {
-            model,
-            provider,
-            base_model,
-            region,
-        },
-    );
+    let query = Query {
+        model,
+        provider,
+        base_model,
+        region,
+    };
+    let result = match inferred {
+        Some((model, provider)) => resolution::resolve_inferred(
+            &view,
+            &query,
+            resolution::InferredProvider { model, provider },
+        ),
+        None => resolution::resolve(&view, &query),
+    };
     view.finish()?;
     Ok(match result {
         Resolved::Found { key, via } => ResolutionResult::Found(ResolvedModel {
@@ -785,7 +791,7 @@ mod tests {
                 }),
             );
             let ResolutionResult::Found(found) =
-                resolve_model(&module(py), &rows, model, provider, base, region).unwrap()
+                resolve_model(&module(py), &rows, model, provider, base, region, None).unwrap()
             else {
                 panic!("not found")
             };
@@ -879,7 +885,7 @@ mod tests {
         Python::attach(|py| {
             let rows = dict(py, json!({key: {"litellm_provider": provider}}));
             let ResolutionResult::Found(found) =
-                resolve_model(&module(py), &rows, model, Some(provider), None, None).unwrap()
+                resolve_model(&module(py), &rows, model, Some(provider), None, None, None).unwrap()
             else {
                 panic!("not found")
             };
@@ -908,7 +914,16 @@ mod tests {
             let rows = dict(py, json!({"model": {"litellm_provider": actual}}));
             assert_eq!(
                 matches!(
-                    resolve_model(&module(py), &rows, "model", Some(provider), None, None).unwrap(),
+                    resolve_model(
+                        &module(py),
+                        &rows,
+                        "model",
+                        Some(provider),
+                        None,
+                        None,
+                        None
+                    )
+                    .unwrap(),
                     ResolutionResult::Found(_)
                 ),
                 found
@@ -968,7 +983,7 @@ mod tests {
         Python::attach(|py| {
             let rows = dict(py, json!({"model": {}}));
             let ResolutionResult::NotFound(missing) =
-                resolve_model(&module(py), &rows, model, None, None, None).unwrap()
+                resolve_model(&module(py), &rows, model, None, None, None, None).unwrap()
             else {
                 panic!("unexpected match")
             };
@@ -1019,7 +1034,7 @@ assert n.price(row, usage, when).total == 21.0
             let module = module(py);
             let rows = dict(py, json!({"Model": {}}));
             let resolve = |rows: &Bound<'_, PyDict>, key| match resolve_model(
-                &module, rows, key, None, None, None,
+                &module, rows, key, None, None, None, None,
             )
             .unwrap()
             {
@@ -1180,11 +1195,52 @@ assert n.model_info(models, "Model").input_cost_per_token == 2
                 json!({"custom/Model": {}, "custom/model": {}, "MODEL": {}}),
             );
             let ResolutionResult::Found(found) =
-                resolve_model(&module(py), &rows, model, provider, None, None).unwrap()
+                resolve_model(&module(py), &rows, model, provider, None, None, None).unwrap()
             else {
                 panic!("not found")
             };
             assert_eq!((found.key.as_str(), found.via.as_str()), (key, via));
+        });
+    }
+
+    #[rstest]
+    #[case::bare("read-model", "read-model", "openai")]
+    #[case::mismatch("azure/read-model", "read-model", "azure")]
+    fn inferred_intent_is_bound_without_mutating_rows(
+        #[from(interpreter)] _interpreter: (),
+        #[case] model: &str,
+        #[case] normalized: &str,
+        #[case] provider: &str,
+    ) {
+        Python::attach(|py| {
+            let module = crate::native_module(py);
+            let rows = dict(
+                py,
+                json!({
+                    "read-model": {"litellm_provider": provider, "supports_vision": true},
+                    "openai/read-model": {"litellm_provider": "openai", "supports_vision": false},
+                    "azure/read-model": {"litellm_provider": "openai", "supports_vision": false}
+                }),
+            );
+            let locals = PyDict::new(py);
+            locals.set_item("n", &module).unwrap();
+            locals.set_item("rows", &rows).unwrap();
+            locals.set_item("model", model).unwrap();
+            locals.set_item("inferred", (normalized, provider)).unwrap();
+            py.run(
+                cr#"
+before = tuple((key, id(row), dict(row)) for key, row in rows.items())
+result = n.resolve_model(rows, model, inferred=inferred)
+assert result.key == "read-model"
+assert n.model_info(rows, result.key).capabilities["supports_vision"] is True
+assert tuple((key, id(row), dict(row)) for key, row in rows.items()) == before
+rows["read-model"]["litellm_provider"] = "wrong-scope"
+assert isinstance(n.resolve_model(rows, model, inferred=inferred), n.ModelNotFound)
+"#,
+                Some(&locals),
+                None,
+            )
+            .unwrap();
         });
     }
 
@@ -1196,14 +1252,21 @@ assert n.model_info(models, "Model").input_cost_per_token == 2
                 py,
                 json!({"openai/model": {"litellm_provider":"anthropic"}, "model": {"litellm_provider":"openai"}}),
             );
-            let ResolutionResult::NotFound(missing) =
-                resolve_model(&module, &rows, "model", None, Some("missing-base"), None).unwrap()
-            else {
+            let ResolutionResult::NotFound(missing) = resolve_model(
+                &module,
+                &rows,
+                "model",
+                None,
+                Some("missing-base"),
+                None,
+                None,
+            )
+            .unwrap() else {
                 panic!("unexpected base fallback")
             };
             assert_eq!(missing.tried, ["missing-base"]);
             let ResolutionResult::Found(found) =
-                resolve_model(&module, &rows, "model", Some("openai"), None, None).unwrap()
+                resolve_model(&module, &rows, "model", Some("openai"), None, None, None).unwrap()
             else {
                 panic!("not found")
             };
@@ -1214,7 +1277,7 @@ assert n.model_info(models, "Model").input_cost_per_token == 2
                 .set_item("litellm_provider", "openai")
                 .unwrap();
             let ResolutionResult::Found(found) =
-                resolve_model(&module, &rows, "model", Some("openai"), None, None).unwrap()
+                resolve_model(&module, &rows, "model", Some("openai"), None, None, None).unwrap()
             else {
                 panic!("not found")
             };
@@ -1231,6 +1294,7 @@ assert n.model_info(models, "Model").input_cost_per_token == 2
                 &PyDict::new(py),
                 "databricks/model-99",
                 Some("databricks"),
+                None,
                 None,
                 None,
             )

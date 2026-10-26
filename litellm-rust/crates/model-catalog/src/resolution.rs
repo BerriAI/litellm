@@ -44,6 +44,78 @@ pub fn resolve(keys: &impl Keys, query: &Query<'_>) -> Resolved {
     resolve_inner(keys, query, true)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InferredProvider<'a> {
+    pub model: &'a str,
+    pub provider: Option<&'a str>,
+}
+
+pub fn resolve_inferred(
+    keys: &impl Keys,
+    query: &Query<'_>,
+    inferred: InferredProvider<'_>,
+) -> Resolved {
+    if query.provider.is_some_and(|provider| !provider.is_empty()) {
+        return resolve(keys, query);
+    }
+    let model = query.base_model.unwrap_or(query.model);
+    let provider = inferred.provider.filter(|provider| !provider.is_empty());
+    let mut lookup = Lookup {
+        keys,
+        provider,
+        case_insensitive: true,
+        tried: Vec::new(),
+    };
+    let exact_via = if query.base_model.is_some() {
+        Via::BaseModel
+    } else {
+        Via::Exact
+    };
+    if let Some(found) = lookup.candidate(model, exact_via) {
+        return found;
+    }
+    let split = if matches!(provider, Some("bedrock" | "bedrock_converse")) {
+        strip_bedrock_nova_route(bedrock_routing_model(inferred.model))
+    } else {
+        inferred.model
+    };
+    let split = if provider == Some("bedrock_mantle") {
+        strip_region(split, provider, query.region)
+    } else {
+        split
+    };
+    if provider == Some("bedrock_mantle")
+        && let Some(found) =
+            lookup.candidate(&format!("bedrock_mantle/{split}"), Via::RegionStripped)
+    {
+        return found;
+    }
+    if let Some(found) = lookup.candidate(split, Via::ProviderStripped) {
+        return found;
+    }
+    if provider == Some("bedrock_mantle")
+        && let Some(found) = lookup.candidate(
+            &format!("bedrock_mantle/{}", strip_suffix(split, provider)),
+            Via::ProviderSuffixStripped,
+        )
+    {
+        return found;
+    }
+    if let Some(found) =
+        lookup.candidate(registration_stripped(model, provider), Via::SuffixStripped)
+    {
+        return found;
+    }
+    if provider == Some("fireworks_ai")
+        && let Some(found) = lookup.candidate(&fireworks_resource(split), Via::ProviderResource)
+    {
+        return found;
+    }
+    Resolved::NotFound {
+        tried: lookup.tried,
+    }
+}
+
 pub fn registration_target(keys: &impl Keys, caller_key: &str) -> RegistrationTarget {
     registration_target_with_provider(keys, caller_key, None)
 }
@@ -544,6 +616,144 @@ mod tests {
             base_model: None,
             region: None,
         }
+    }
+
+    #[rstest]
+    #[case::bare("model", "model", "openai", json!({"model": {}, "openai/model": {}}), "model")]
+    #[case::rejected_exact("azure/model", "model", "azure", json!({"azure/model": {"litellm_provider": "openai"}, "model": {"litellm_provider": "azure"}}), "model")]
+    #[case::dated_bare("model-2026-01-01", "model-2026-01-01", "openai", json!({"model": {}, "openai/model": {}}), "model")]
+    #[case::dated_prefixed("openai/model-2026-01-01", "model-2026-01-01", "openai", json!({"model-2026-01-01": {}, "openai/model": {}}), "model-2026-01-01")]
+    #[case::dated_original("openai/model-2026-01-01", "model-2026-01-01", "openai", json!({"model": {}, "openai/model": {}}), "openai/model")]
+    #[case::numeric_suffix("model-001", "model-001", "vertex_ai", json!({"model": {}, "vertex_ai/model": {}}), "model")]
+    #[case::regional("bedrock_mantle/us-east-1/model", "us-east-1/model", "bedrock_mantle", json!({"bedrock_mantle/model": {}, "model": {}}), "bedrock_mantle/model")]
+    #[case::regional_suffix("bedrock_mantle/us-east-1/model-2026-01-01", "us-east-1/model-2026-01-01", "bedrock_mantle", json!({"bedrock_mantle/model": {}, "model": {}}), "bedrock_mantle/model")]
+    #[case::route("bedrock/converse/anthropic.model", "converse/anthropic.model", "bedrock", json!({"anthropic.model": {}, "bedrock/anthropic.model": {}}), "anthropic.model")]
+    #[case::bedrock_region("bedrock/us-east-1/anthropic.model", "us-east-1/anthropic.model", "bedrock", json!({"anthropic.model": {}, "bedrock/anthropic.model": {}}), "anthropic.model")]
+    #[case::arn("bedrock/arn:aws:bedrock:us-east-1:123:inference-profile/us.anthropic.model", "arn:aws:bedrock:us-east-1:123:inference-profile/us.anthropic.model", "bedrock", json!({"us.anthropic.model": {}, "anthropic.model": {}}), "us.anthropic.model")]
+    #[case::bedrock_geo("bedrock/us.anthropic.model", "us.anthropic.model", "bedrock", json!({"anthropic.model": {}, "bedrock/anthropic.model": {}}), "anthropic.model")]
+    #[case::nova("bedrock/nova-2/arn:aws:bedrock:us-east-1:123:custom-model/a", "nova-2/arn:aws:bedrock:us-east-1:123:custom-model/a", "bedrock", json!({"amazon.nova-2-custom": {}}), "amazon.nova-2-custom")]
+    #[case::lowercase("MODEL", "MODEL", "openai", json!({"Model": {}, "openai/MODEL": {}}), "Model")]
+    #[case::lowercase_mismatch("azure/MODEL", "MODEL", "azure", json!({"azure/Model": {"litellm_provider": "openai"}, "Model": {"litellm_provider": "azure"}}), "Model")]
+    #[case::wildcard("model", "model", "azure", json!({"model": {"litellm_provider": null}}), "model")]
+    #[case::azure_ai("model", "model", "azure_ai", json!({"model": {"litellm_provider": "openai"}}), "model")]
+    #[case::family("model", "model", "vertex_ai", json!({"model": {"litellm_provider": "vertex_ai-language-models"}}), "model")]
+    #[case::resource("model", "model", "fireworks_ai", json!({"fireworks_ai/accounts/fireworks/models/model": {}}), "fireworks_ai/accounts/fireworks/models/model")]
+    fn inferred_provider_preserves_model_info_priority(
+        #[case] model: &str,
+        #[case] normalized: &str,
+        #[case] provider: &str,
+        #[case] rows: Value,
+        #[case] expected: &str,
+    ) {
+        let result = resolve_inferred(
+            &catalog(rows),
+            &query(model, None),
+            InferredProvider {
+                model: normalized,
+                provider: Some(provider),
+            },
+        );
+        let Resolved::Found { key, .. } = result else {
+            panic!("{result:?}")
+        };
+        assert_eq!(key, expected);
+    }
+
+    #[rstest]
+    #[case::mismatch("j2-light", "j2-light", Some("ai21_chat"), json!({"j2-light": {"litellm_provider": "ai21"}}), vec!["j2-light"])]
+    #[case::normalized_retains_prefix("azure/command-r-plus", "azure/command-r-plus", Some("openai"), json!({"command-r-plus": {"litellm_provider": "openai"}}), vec!["azure/command-r-plus"])]
+    #[case::inference_failed("unknown/model", "unknown/model", None, json!({"model": {}}), vec!["unknown/model"])]
+    #[case::inference_empty("unknown/model", "unknown/model", Some(""), json!({"model": {}}), vec!["unknown/model"])]
+    #[case::suffix_not_normalized("openai/model-2026-01-01", "model-2026-01-01", Some("openai"), json!({"model": {}}), vec!["openai/model-2026-01-01", "model-2026-01-01", "openai/model"])]
+    #[case::unqualified_suffix("model-2026-01-01", "model-2026-01-01", Some("openai"), json!({"openai/model": {}}), vec!["model-2026-01-01", "model"])]
+    fn inferred_misses_preserve_candidate_order(
+        #[case] model: &str,
+        #[case] normalized: &str,
+        #[case] provider: Option<&str>,
+        #[case] rows: Value,
+        #[case] tried: Vec<&str>,
+    ) {
+        assert_eq!(
+            resolve_inferred(
+                &catalog(rows),
+                &query(model, None),
+                InferredProvider {
+                    model: normalized,
+                    provider
+                }
+            ),
+            Resolved::NotFound {
+                tried: tried.into_iter().map(str::to_owned).collect()
+            },
+        );
+    }
+
+    #[rstest]
+    #[case::explicit(Some("openai"), "openai/model")]
+    #[case::empty(Some(""), "model")]
+    #[case::absent(None, "model")]
+    fn explicit_nonempty_provider_wins(#[case] provider: Option<&str>, #[case] expected: &str) {
+        let models = catalog(
+            json!({"model": {"litellm_provider": "azure"}, "openai/model": {"litellm_provider": "openai"}}),
+        );
+        let result = resolve_inferred(
+            &models,
+            &query("model", provider),
+            InferredProvider {
+                model: "model",
+                provider: Some("azure"),
+            },
+        );
+        let Resolved::Found { key, .. } = result else {
+            panic!("{result:?}")
+        };
+        assert_eq!(key, expected);
+    }
+
+    #[rstest]
+    #[case::base(None, "base", Some("openai"), "base", Via::BaseModel)]
+    #[case::region(
+        None,
+        "custom-region/base",
+        Some("bedrock_mantle"),
+        "bedrock_mantle/base",
+        Via::RegionStripped
+    )]
+    #[case::explicit_region(
+        Some("openai"),
+        "ignored",
+        Some("azure"),
+        "openai/custom-region/base",
+        Via::Region
+    )]
+    fn inferred_base_and_region(
+        #[case] explicit: Option<&str>,
+        #[case] normalized: &str,
+        #[case] provider: Option<&str>,
+        #[case] key: &str,
+        #[case] via: Via,
+    ) {
+        let models = catalog(json!({key: {}}));
+        let query = Query {
+            model: "deployment",
+            provider: explicit,
+            base_model: Some("base"),
+            region: Some("custom-region"),
+        };
+        assert_eq!(
+            resolve_inferred(
+                &models,
+                &query,
+                InferredProvider {
+                    model: normalized,
+                    provider
+                }
+            ),
+            Resolved::Found {
+                key: key.into(),
+                via
+            }
+        );
     }
 
     #[fixture]
