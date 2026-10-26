@@ -1453,7 +1453,7 @@ def clean_headers(
 
 def _is_credential_header(header: str) -> bool:
     """Whether `header` carries a caller credential rather than request context."""
-    return header.lower() in _CREDENTIAL_HEADER_NAMES
+    return header.lower().removeprefix("x-pass-") in _CREDENTIAL_HEADER_NAMES
 
 
 def redact_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
