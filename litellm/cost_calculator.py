@@ -16,7 +16,7 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 import litellm
 import litellm._logging
 from litellm import verbose_logger
-from litellm._cost import request_model_info
+from litellm._cost import price_quantities, request_model_info
 from litellm._internal_context import current_billing_time
 from litellm.constants import (
     DEFAULT_MAX_LRU_CACHE_SIZE,
@@ -1938,7 +1938,14 @@ def completion_cost(
                         prompt_cost,
                         completion_cost_result,
                     ) = (
-                        (number_of_queries * configured_cost_per_query, 0.0)
+                        (
+                            price_quantities(
+                                {"input_cost_per_query": configured_cost_per_query},
+                                {"input_cost_per_query": number_of_queries},
+                                model=search_model,
+                            ).total,
+                            0.0,
+                        )
                         if configured_cost_per_query is not None
                         else search_provider_cost_per_query(
                             model=search_model,

@@ -132,6 +132,26 @@ def require_priced(result: _native.Priced | _native.Unpriced | _native.RowErrors
     raise ModelNotMappedError(f"No valid pricing for model={model}: {detail}")
 
 
+def price_quantities(
+    row: Mapping[str, object],
+    quantities: Mapping[str, int],
+    *,
+    model: str = "",
+    factors: Sequence[float] = (),
+) -> _native.Priced:
+    from litellm._internal_context import current_billing_time
+
+    return require_priced(
+        price(
+            {"litellm_provider": "custom", **row},
+            _native.UsageInput(dict(quantities)),
+            billing_context(current_billing_time()),
+            factors=factors,
+        ),
+        model,
+    )
+
+
 def billing_context(
     current_time: datetime,
     service_tier: str | None = None,

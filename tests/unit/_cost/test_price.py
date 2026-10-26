@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Final
+from typing import Final, Literal
 
 import pytest
 
@@ -10,7 +10,169 @@ from litellm._internal_context import pinned_billing_time
 from litellm.exceptions import ModelNotMappedError
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.rust_bridge import _native
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.rerank import RerankResponse
+from litellm.types.utils import ImageObject, ImageResponse, ModelResponse, Usage
+
+
+@pytest.mark.parametrize("rate", (None, 0.0, 2.0))
+def test_image_count_without_a_rate_is_unknown_only_when_images_are_returned(rate: float | None) -> None:
+    from litellm.litellm_core_utils.llm_cost_calc.utils import flat_image_cost
+
+    response: Final = ImageResponse(data=[ImageObject(b64_json="image-one"), ImageObject(b64_json="image-two")])
+    if rate is None:
+        with pytest.raises(ModelNotMappedError, match="output_cost_per_image"):
+            flat_image_cost({"output_cost_per_image": None}, response)
+    else:
+        assert flat_image_cost({"output_cost_per_image": rate}, response) == pytest.approx(2 * rate)
+    assert flat_image_cost({}, ImageResponse(data=[])) == 0.0
+
+
+@pytest.mark.parametrize("rate", (None, 0.0, 2.0))
+def test_rerank_query_prices_distinguish_unknown_from_zero(monkeypatch: pytest.MonkeyPatch, rate: float | None) -> None:
+    model: Final = "cohere/m6-rerank"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"litellm_provider": "cohere", "mode": "rerank", "input_cost_per_query": rate},
+    )
+    response: Final = RerankResponse(id="m6-rerank", results=[], meta={"billed_units": {"search_units": 2}})
+    if rate is None:
+        with pytest.raises(ModelNotMappedError, match="input_cost_per_query"):
+            litellm.completion_cost(response, model=model, custom_llm_provider="cohere", call_type="rerank")
+    else:
+        assert litellm.completion_cost(
+            response, model=model, custom_llm_provider="cohere", call_type="rerank"
+        ) == pytest.approx(rate * 2)
+
+
+@pytest.mark.parametrize("rate", (None, 0.0, 2.0))
+@pytest.mark.parametrize("meter", ("image", "query"))
+def test_non_token_usage_is_unknown_unless_its_meter_is_priced(
+    monkeypatch: pytest.MonkeyPatch, rate: float | None, meter: str
+) -> None:
+    model: Final = "openai/m6-mixed-meters"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "openai",
+            "input_cost_per_token": 1.0,
+            "output_cost_per_token": 3.0,
+            f"input_cost_per_{meter}": rate,
+        },
+    )
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(prompt_tokens=0, completion_tokens=2, prompt_tokens_details={f"{meter}_count": 4}),
+    )
+    if rate is None:
+        with pytest.raises(ModelNotMappedError):
+            litellm.completion_cost(response, model=model, custom_llm_provider="openai")
+    else:
+        assert litellm.completion_cost(response, model=model, custom_llm_provider="openai") == pytest.approx(
+            4 * rate + 6
+        )
+
+
+@pytest.mark.parametrize("context_size", ("low", "medium", "high"))
+@pytest.mark.parametrize("rate", (None, 0.0, 2.0))
+def test_web_search_context_price_distinguishes_unknown_and_free(
+    context_size: Literal["low", "medium", "high"], rate: float | None
+) -> None:
+    from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import StandardBuiltInToolCostTracking
+
+    if rate is None:
+        with pytest.raises(ModelNotMappedError):
+            StandardBuiltInToolCostTracking.get_cost_for_web_search(
+                web_search_options={"search_context_size": context_size},
+                model_info={"search_context_cost_per_query": {}},
+            )
+    else:
+        assert StandardBuiltInToolCostTracking.get_cost_for_web_search(
+            web_search_options={"search_context_size": context_size},
+            model_info={
+                "search_context_cost_per_query": {
+                    "search_context_size_low": rate,
+                    "search_context_size_medium": rate,
+                    "search_context_size_high": rate,
+                }
+            },
+        ) == pytest.approx(rate)
+
+
+def test_mixed_pricing_preserves_character_context_and_regional_factors(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+
+    model: Final = "vertex_ai/m6-counted-context"
+    row: Final = {
+        "litellm_provider": "vertex_ai",
+        "input_cost_per_token": 1.0,
+        "output_cost_per_token": 3.0,
+        "input_cost_per_character": 2.0,
+        "input_cost_per_character_above_128k_tokens": 20.0,
+        "input_cost_per_character_priority": 200.0,
+        "regional_endpoint_uplift_multiplier": 1.5,
+    }
+    monkeypatch.setitem(litellm.model_cost, model, row)
+    usage: Final = Usage(prompt_tokens=200000, completion_tokens=2, prompt_tokens_details={"character_count": 4})
+    assert generic_cost_per_token(
+        model, usage, "vertex_ai", service_tier="priority", vertex_location="us-central1"
+    ) == pytest.approx((12.0, 9.0))
+    monkeypatch.setitem(row, "input_cost_per_character", 0.0)
+    assert generic_cost_per_token(
+        model, usage, "vertex_ai", service_tier="priority", vertex_location="us-central1"
+    ) == pytest.approx((0.0, 9.0))
+
+
+def test_counted_input_meters_apply_regional_factors_once_and_read_live_rates(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+
+    model: Final = "vertex_ai/m6-counted-uplift"
+    row: Final = {
+        "litellm_provider": "vertex_ai",
+        "output_cost_per_token": 3.0,
+        "input_cost_per_image": 5.0,
+        "input_cost_per_query": 7.0,
+        "regional_endpoint_uplift_multiplier": 1.5,
+    }
+    monkeypatch.setitem(litellm.model_cost, model, row)
+    usage: Final = Usage(
+        prompt_tokens=0, completion_tokens=2, prompt_tokens_details={"image_count": 2, "query_count": 3}
+    )
+    assert generic_cost_per_token(model, usage, "vertex_ai", vertex_location="us-central1") == pytest.approx(
+        (46.5, 9.0)
+    )
+    monkeypatch.setitem(row, "input_cost_per_image", 0.0)
+    assert generic_cost_per_token(model, usage, "vertex_ai", vertex_location="us-central1") == pytest.approx(
+        (31.5, 9.0)
+    )
+
+
+@pytest.mark.parametrize("rate", (None, 0.0, 2.0))
+def test_mixed_non_token_unknown_reaches_logging_without_becoming_free(
+    monkeypatch: pytest.MonkeyPatch, rate: float | None
+) -> None:
+    model: Final = "openai/m6-logged-queries"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"litellm_provider": "openai", "output_cost_per_token": 3.0, "input_cost_per_query": rate},
+    )
+    response: Final = ModelResponse(
+        model=model, usage=Usage(prompt_tokens=0, completion_tokens=2, prompt_tokens_details={"query_count": 4})
+    )
+    logging: Final = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "search"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="m6-logged-queries",
+        function_id="m6-logged-queries",
+    )
+    logging.update_environment_variables(litellm_params={}, optional_params={}, custom_llm_provider="openai")
+    expected: Final = None if rate is None else 6 + 4 * rate
+    assert logging.response_cost_calculator(response) == expected
 
 
 @pytest.mark.parametrize(

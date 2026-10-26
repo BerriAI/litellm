@@ -8,6 +8,7 @@ from typing import Final, Literal, cast
 from pydantic import ValidationError
 
 import litellm
+from litellm._cost import price_quantities
 from litellm._logging import verbose_logger
 from litellm.constants import OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
@@ -24,7 +25,6 @@ from litellm.types.utils import (
     Message,
     ModelInfo,
     ModelResponse,
-    SearchContextCostPerQuery,
     ServerToolUse,
     StandardBuiltInToolsParams,
     Usage,
@@ -208,6 +208,9 @@ class StandardBuiltInToolCostTracking:
             usage=usage, response_object=response_object
         )
 
+        if resolved_usage is not None and get_web_search_requests_from_usage(resolved_usage) == 0:
+            return 0.0
+
         if model_info is not None and resolved_usage is not None and resolved_provider is not None:
             result: Final = get_cost_for_web_search_request(
                 custom_llm_provider=resolved_provider,
@@ -217,11 +220,13 @@ class StandardBuiltInToolCostTracking:
             if result is not None:
                 return result
 
-        per_call_cost = StandardBuiltInToolCostTracking.get_cost_for_web_search(
-            web_search_options=standard_built_in_tools_params.get("web_search_options", None),
-            model_info=model_info,
-        )
-        return per_call_cost * StandardBuiltInToolCostTracking._count_web_search_calls(response_object)
+        options: Final = standard_built_in_tools_params.get("web_search_options") or {}
+        size: Final = options.get("search_context_size") or "medium"
+        return price_quantities(
+            model_info or {},
+            {f"web_search/{size}": StandardBuiltInToolCostTracking._count_web_search_calls(response_object)},
+            model=model,
+        ).total
 
     @staticmethod
     def _count_web_search_calls(response_object: object) -> int:
@@ -654,19 +659,9 @@ class StandardBuiltInToolCostTracking:
         """
         If request includes `web_search_options`, calculate the cost of the web search.
         """
-        web_search_options = web_search_options or {}
-        if model_info is None:
-            return 0.0
-
-        search_context_raw: Final = model_info.get("search_context_cost_per_query")
-        search_context_pricing: Final[SearchContextCostPerQuery] = search_context_raw or SearchContextCostPerQuery()
-        if web_search_options.get("search_context_size", None) == "low":
-            return search_context_pricing.get("search_context_size_low", 0.0)
-        elif web_search_options.get("search_context_size", None) == "medium":
-            return search_context_pricing.get("search_context_size_medium", 0.0)
-        elif web_search_options.get("search_context_size", None) == "high":
-            return search_context_pricing.get("search_context_size_high", 0.0)
-        return StandardBuiltInToolCostTracking.get_default_cost_for_web_search(model_info)
+        options: Final = web_search_options or {}
+        size: Final = options.get("search_context_size") or "medium"
+        return price_quantities(model_info or {}, {f"web_search/{size}": 1}).total
 
     @staticmethod
     def get_default_cost_for_web_search(
@@ -677,11 +672,7 @@ class StandardBuiltInToolCostTracking:
 
         https://platform.openai.com/docs/pricing#web-search
         """
-        if model_info is None:
-            return 0.0
-        search_context_raw: Final = model_info.get("search_context_cost_per_query")
-        search_context_pricing: Final[SearchContextCostPerQuery] = search_context_raw or SearchContextCostPerQuery()
-        return search_context_pricing.get("search_context_size_medium", 0.0)
+        return price_quantities(model_info or {}, {"web_search/medium": 1}).total
 
     @staticmethod
     def get_cost_for_file_search(

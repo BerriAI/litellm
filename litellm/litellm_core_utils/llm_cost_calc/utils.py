@@ -367,12 +367,12 @@ def prices_tokens(model_info: ModelInfo) -> bool:
 
 
 def flat_image_cost(model_info: ModelInfo | None, image_response: ImageResponse) -> float:
-    """The per-image price times the images returned; 0.0 when the table sets no per-image price."""
+    from litellm._cost import price_quantities
+
     if model_info is None:
         return 0.0
-    output_cost_per_image: Final = get_cost_per_unit(model_info, "output_cost_per_image", default_value=None) or 0.0
     num_images: Final = len(image_response.data) if image_response.data else 0
-    return output_cost_per_image * num_images
+    return price_quantities(model_info, {"output_cost_per_image": num_images}).total
 
 
 def resolve_image_model_info(model: str, custom_llm_provider: str, model_info: ModelInfo | None) -> ModelInfo:
@@ -688,9 +688,10 @@ def price_token_usage(
     current_time: datetime | None,
     factors: Sequence[float],
 ) -> tuple[float, float]:
-    from litellm._cost import billing_context, price, require_priced, token_usage
+    from litellm._cost import billing_context, price, price_quantities, require_priced, token_usage
 
     billing_time: Final = current_time if current_time is not None else current_billing_time()
+    details: Final = parse_prompt_tokens_details(usage)
     priced: Final = require_priced(
         price(
             {"litellm_provider": custom_llm_provider, **resolved_model_info},
@@ -705,18 +706,24 @@ def price_token_usage(
         ),
         model,
     )
-    details: Final = parse_prompt_tokens_details(usage)
     non_token_input: Final = sum(
         calculate_cost_component(resolved_model_info, key, quantity)
         for key, quantity in (
             ("input_cost_per_character", details["character_count"]),
-            ("input_cost_per_image", details["image_count"]),
             ("input_cost_per_video_per_second", details["video_length_seconds"]),
             ("input_cost_per_audio_per_second", details["audio_length_seconds"]),
-            ("input_cost_per_query", details["query_count"]),
         )
     )
-    return priced.input + non_token_input * prod(factors), priced.output
+    counted: Final = price_quantities(
+        resolved_model_info,
+        {
+            "input_cost_per_image": details["image_count"],
+            "input_cost_per_query": details["query_count"],
+        },
+        model=model,
+        factors=factors,
+    )
+    return priced.input + counted.input + non_token_input * prod(factors), priced.output
 
 
 def token_pricing_factors(

@@ -15,6 +15,7 @@ import pytest
 
 # Add the project root to Python path
 import litellm
+from litellm.exceptions import ModelNotMappedError
 from litellm.llms.perplexity.cost_calculator import (
     cost_per_token as perplexity_cost_per_token,
 )
@@ -81,14 +82,8 @@ class TestPerplexityCostCalculator:
                 # Missing search_queries_cost_per_query
             }
 
-            prompt_cost, completion_cost = perplexity_cost_per_token(model="sonar-deep-research", usage=usage)
-
-            # Should only calculate basic costs when fields are missing
-            expected_prompt_cost = 100 * 2e-6
-            expected_completion_cost = 50 * 8e-6
-
-            assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
-            assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
+            with pytest.raises(ModelNotMappedError, match="citation_cost_per_token"):
+                perplexity_cost_per_token(model="sonar-deep-research", usage=usage)
 
     def test_uses_perplexity_provided_cost_when_available(self):
         """

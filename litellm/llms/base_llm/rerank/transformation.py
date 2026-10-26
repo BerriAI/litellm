@@ -118,12 +118,9 @@ class BaseRerankConfig(ABC):
             Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
         """
 
-        if (
-            model_info is None
-            or "input_cost_per_query" not in model_info
-            or model_info["input_cost_per_query"] is None
-            or billed_units is None
-        ):
+        from litellm._cost import price_quantities
+
+        if billed_units is None:
             return 0.0, 0.0
 
         search_units: Final = billed_units.get("search_units")
@@ -131,6 +128,5 @@ class BaseRerankConfig(ABC):
         if search_units is None:
             return 0.0, 0.0
 
-        prompt_cost: Final = model_info["input_cost_per_query"] * search_units
-
-        return prompt_cost, 0.0
+        priced: Final = price_quantities(model_info or {}, {"input_cost_per_query": search_units}, model=model)
+        return priced.input, priced.output

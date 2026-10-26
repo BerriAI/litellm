@@ -70,6 +70,7 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
                     "input_cost_per_token": usage.prompt_tokens,
                     "output_cost_per_token": max(usage.completion_tokens - reasoning_tokens, 0),
                     "output_cost_per_reasoning_token": reasoning_tokens,
+                    "citation_cost_per_token": getattr(usage, "citation_tokens", 0) or 0,
                 },
                 prompt_tokens=usage.prompt_tokens,
             ),
@@ -79,13 +80,6 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
     )
     prompt_cost: float = priced.input
     completion_cost: float = priced.output
-
-    ## ADD CITATION TOKENS COST (if present)
-    citation_tokens: Final = getattr(usage, "citation_tokens", 0) or 0
-    citation_cost_value: Final = model_info.get("citation_cost_per_token")
-    if citation_tokens > 0 and citation_cost_value is not None:
-        citation_cost_per_token: Final = _safe_float_cast(citation_cost_value)
-        prompt_cost += citation_tokens * citation_cost_per_token
 
     ## ADD SEARCH QUERIES COST (if present)
     num_search_queries = 0

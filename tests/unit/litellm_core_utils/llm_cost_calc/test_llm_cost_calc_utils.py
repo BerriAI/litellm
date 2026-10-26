@@ -5,6 +5,7 @@ from typing import Final, cast
 import pytest
 
 import litellm
+from litellm.exceptions import ModelNotMappedError
 from litellm._internal_context import pinned_billing_time
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     BilledTokenRates,
@@ -2477,7 +2478,7 @@ def test_vertex_image_generation_cost_falls_back_to_flat_image_pricing(_local_mo
     assert round(cost, 10) == round(expected_cost, 10)
 
 
-def test_query_count_is_free_without_a_per_query_price(_local_model_cost_map):
+def test_query_count_is_unknown_without_a_per_query_price(_local_model_cost_map):
     usage = Usage(
         prompt_tokens=0,
         completion_tokens=0,
@@ -2485,9 +2486,8 @@ def test_query_count_is_free_without_a_per_query_price(_local_model_cost_map):
         prompt_tokens_details=PromptTokensDetailsWrapper(query_count=1),
     )
 
-    prompt_cost, _ = generic_cost_per_token(model="text-embedding-3-small", usage=usage, custom_llm_provider="openai")
-
-    assert prompt_cost == 0.0
+    with pytest.raises(ModelNotMappedError, match="input_cost_per_query"):
+        generic_cost_per_token(model="text-embedding-3-small", usage=usage, custom_llm_provider="openai")
 
 
 # ---------------------------------------------------------------------------

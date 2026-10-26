@@ -7,6 +7,7 @@ from typing import Final
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_image_response_cost_from_usage,
     calculate_image_response_web_search_cost,
+    flat_image_cost,
     resolve_image_model_info,
 )
 from litellm.types.utils import ImageResponse, ModelInfo
@@ -44,6 +45,4 @@ def cost_calculator(
     if token_based_cost is not None:
         return token_based_cost + web_search_cost
 
-    output_cost_per_image: Final[float] = _model_info.get("output_cost_per_image") or 0.0
-    num_images: Final[int] = len(image_response.data) if image_response.data else 0
-    return output_cost_per_image * num_images + web_search_cost
+    return flat_image_cost(_model_info, image_response) + web_search_cost

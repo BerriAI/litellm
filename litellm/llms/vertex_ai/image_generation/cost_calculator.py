@@ -4,6 +4,7 @@ Vertex AI Image Generation Cost Calculator
 
 from typing import Final
 
+from litellm._cost import price_quantities
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_image_response_cost_from_usage,
     calculate_image_response_web_search_cost,
@@ -44,7 +45,9 @@ def cost_calculator(
     if token_based_cost is not None:
         return token_based_cost + web_search_cost
 
-    output_cost_per_image: Final[float] = _model_info.get("output_cost_per_image") or 0.0
     num_images: Final[int] = len(image_response.data) if image_response.data else 0
     uplift: Final = get_vertex_regional_endpoint_uplift(_model_info, vertex_location)
-    return output_cost_per_image * num_images * uplift + web_search_cost
+    return (
+        price_quantities(_model_info, {"output_cost_per_image": num_images}, model=model, factors=(uplift,)).total
+        + web_search_cost
+    )

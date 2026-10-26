@@ -9,6 +9,7 @@ from typing import Final
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm._cost import price_quantities
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.utils import get_model_info
 
@@ -98,10 +99,9 @@ def search_provider_cost_per_query(
         custom_llm_provider=custom_llm_provider,
     )
 
-    # Check for tiered pricing (e.g., Exa AI based on max_results)
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if tiered_pricing and isinstance(tiered_pricing, list):
-        max_results: Final = (optional_params or {}).get("max_results", 10)  # default 10 results
+        max_results: Final = (optional_params or {}).get("max_results", 10)
         cost_per_query = 0.0
 
         for tier in tiered_pricing:
@@ -110,11 +110,8 @@ def search_provider_cost_per_query(
                 cost_per_query = tier["input_cost_per_query"]
                 break
         else:
-            # Fallback to highest tier if out of range
             cost_per_query = tiered_pricing[-1]["input_cost_per_query"]
-    else:
-        # Simple flat rate
-        cost_per_query = float(model_info.get("input_cost_per_query") or 0.0)
+        return number_of_queries * cost_per_query, 0.0
 
-    total_cost: Final = number_of_queries * cost_per_query
-    return (total_cost, 0.0)  # (input_cost, output_cost)
+    priced: Final = price_quantities(model_info, {"input_cost_per_query": number_of_queries}, model=model)
+    return priced.input, priced.output
