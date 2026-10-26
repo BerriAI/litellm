@@ -813,10 +813,12 @@ class TestAgentRBACProxyAdmin:
             )
             self.mock_registry.delete_agent_from_db = AsyncMock()
             self.mock_registry.deregister_agent = MagicMock()
-            resp = self.admin_client.delete(
-                "/v1/agents/agent-123", headers={"Authorization": "Bearer k"}
-            )
+            with patch.object(agent_endpoints, "remove_deleted_agent_from_access_groups", AsyncMock()) as prune:
+                resp = self.admin_client.delete(
+                    "/v1/agents/agent-123", headers={"Authorization": "Bearer k"}
+                )
             assert resp.status_code == 200
+            prune.assert_awaited_once_with(mock_prisma, "agent-123")
 
 
 class TestAgentProtocolVersionValidation:
