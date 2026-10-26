@@ -828,78 +828,76 @@ async def test_in_memory_reclaim_slides_idle_window_only_for_the_stored_deployme
 
 
 @pytest.mark.asyncio
-async def test_claim_pin_uses_redis_attached_after_construction():
-    """The proxy attaches Redis via Router._update_redis_cache after the Router (and
-    this callback) are built. The claim must resolve the redis tier per call, or pins
-    silently stay pod-local and cross-pod first-writer-wins is lost."""
-    cache = DualCache()
-    callback = DeploymentAffinityCheck(
+async def test_claim_pin_uses_redis_attached_after_construction(
+    shared_session_router: tuple[litellm.Router, FakeServer, RedisCache],
+) -> None:
+    _, _, redis = shared_session_router
+    cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=lambda: 100.0))
+    callback: Final = DeploymentAffinityCheck(
         cache=cache,
         ttl_seconds=3600,
         enable_user_key_affinity=False,
         enable_responses_api_affinity=False,
     )
+    cache.attach_redis_cache(redis)
+    pin_key: Final = _session_pin_key("late-redis-session", "key-1")
+    cache.in_memory_cache.set_cache(pin_key, {"model_id": "stale-local-winner"}, ttl=10)
+    runner: Final = AsyncMock(return_value=b'{"model_id": "other-pod-winner"}')
 
-    captured = {}
-
-    async def fake_runner(keys, args, client=None):
-        captured["keys"] = keys
-        captured["args"] = args
-        return b'{"model_id": "other-pod-winner"}'
-
-    late_redis = MagicMock()
-    late_redis.async_register_script = MagicMock(return_value=fake_runner)
-    cache.redis_cache = late_redis
-
-    import time as time_module
-
-    pin_key = _session_pin_key("late-redis-session", "key-1")
-    cache.in_memory_cache.set_cache(pin_key, {"model_id": "other-pod-winner"}, ttl=10)
-
-    claimed = await callback._claim_pin(
-        cache_key=pin_key,
-        pin_value={"model_id": "our-deployment"},
-        ttl_seconds=777,
-    )
+    with patch("redis.asyncio.client.Redis.register_script", return_value=runner):
+        with pytest.warns(FutureWarning, match="async_claim_affinity is experimental and may change"):
+            claimed: Final = await callback._claim_pin(
+                cache_key=pin_key,
+                pin_value={"model_id": "our-deployment"},
+                ttl_seconds=777,
+            )
 
     assert claimed == "other-pod-winner"
-    assert cache.in_memory_cache.ttl_dict[pin_key] == pytest.approx(time_module.time() + 777, abs=5)
-    assert captured["keys"] == (pin_key,)
-    assert captured["args"] == ('{"model_id": "our-deployment"}', 777)
-    assert cache.in_memory_cache.get_cache(_session_pin_key("late-redis-session", "key-1")) == {
-        "model_id": "other-pod-winner"
-    }
+    assert cache.in_memory_cache.ttl_dict[pin_key] == 877.0
+    runner.assert_awaited_once_with(keys=(pin_key,), args=('{"model_id": "our-deployment"}', 777), client=None)
+    assert cache.in_memory_cache.get_cache(pin_key) == {"model_id": "other-pod-winner"}
 
 
 @pytest.mark.asyncio
-async def test_claim_pin_falls_back_to_pod_local_when_redis_is_down():
-    """A Redis outage must cost cross-pod agreement, never same-pod stickiness. The write
-    hook only logs this result, so an escaping error would leave the session unpinned and
-    reshuffle every turn for the whole outage. DualCache's write path, which this claim
-    replaced, wrote the in-memory tier before ever touching Redis."""
-    cache = DualCache()
-    callback = DeploymentAffinityCheck(
+@pytest.mark.parametrize("reply, expected", [(b"\xff", "local"), ([1, 2], "candidate")])
+async def test_claim_pin_distinguishes_invalid_encoding_from_nontext_reply(
+    shared_session_router: tuple[litellm.Router, FakeServer, RedisCache], reply: object, expected: str,
+) -> None:
+    _, _, redis = shared_session_router
+    cache: Final = DualCache(redis_cache=redis, in_memory_cache=InMemoryCache(clock=lambda: 100.0))
+    cache.in_memory_cache.set_cache("pin", {"model_id": "local"}, ttl=30)
+    with patch("redis.asyncio.client.Redis.register_script", return_value=AsyncMock(return_value=reply)):
+        winner: Final = await claim_affinity_pin(cache, "pin", {"model_id": "candidate"}, 60)
+    assert winner == {"model_id": expected}
+    assert cache.in_memory_cache.get_cache("pin") == {"model_id": "local"}
+    assert cache.in_memory_cache.ttl_dict["pin"] == 130.0
+
+
+@pytest.mark.asyncio
+async def test_claim_pin_falls_back_to_pod_local_when_redis_is_down(
+    shared_session_router: tuple[litellm.Router, FakeServer, RedisCache],
+) -> None:
+    _, server, redis = shared_session_router
+    server.connected = False
+    cache: Final = DualCache(redis_cache=redis, in_memory_cache=InMemoryCache(clock=lambda: 100.0))
+    callback: Final = DeploymentAffinityCheck(
         cache=cache,
         ttl_seconds=3600,
         enable_user_key_affinity=False,
         enable_responses_api_affinity=False,
     )
-
-    async def exploding_runner(keys, args, client=None):
-        raise ConnectionError("redis is down")
-
-    down_redis = MagicMock()
-    down_redis.async_register_script = MagicMock(return_value=exploding_runner)
-    cache.redis_cache = down_redis
-
-    key = _session_pin_key("outage-session", "key-1")
-    claimed = await callback._claim_pin(cache_key=key, pin_value={"model_id": "our-deployment"}, ttl_seconds=777)
+    key: Final = _session_pin_key("outage-session", "key-1")
+    claimed: Final = await callback._claim_pin(cache_key=key, pin_value={"model_id": "our-deployment"}, ttl_seconds=777)
 
     assert claimed == "our-deployment"
     assert cache.in_memory_cache.get_cache(key) == {"model_id": "our-deployment"}
+    assert cache.in_memory_cache.ttl_dict[key] == 877.0
 
-    second = await callback._claim_pin(cache_key=key, pin_value={"model_id": "another-deployment"}, ttl_seconds=777)
+    second: Final = await callback._claim_pin(
+        cache_key=key, pin_value={"model_id": "another-deployment"}, ttl_seconds=10
+    )
     assert second == "our-deployment"
+    assert cache.in_memory_cache.ttl_dict[key] == 877.0
 
 
 @pytest.mark.asyncio
@@ -1004,10 +1002,12 @@ async def test_legacy_deployment_claim_retains_decoder_and_keepalive(
     ],
 )
 async def test_redis_deployment_claim_preserves_legacy_result_decoding(
-    raw: object, expected: str | None, stored: object
+    shared_session_router: tuple[litellm.Router, FakeServer, RedisCache],
+    raw: object,
+    expected: str | None,
+    stored: object,
 ) -> None:
-    redis: Final = MagicMock()
-    redis.async_register_script.return_value = AsyncMock(return_value=raw)
+    _, _, redis = shared_session_router
     cache: Final = DualCache(redis_cache=redis)
     callback: Final = DeploymentAffinityCheck(
         cache=cache,
@@ -1016,7 +1016,8 @@ async def test_redis_deployment_claim_preserves_legacy_result_decoding(
         enable_responses_api_affinity=False,
     )
 
-    winner: Final = await callback._claim_pin("deployment-pin", {"model_id": "candidate"}, 30)
+    with patch("redis.asyncio.client.Redis.register_script", return_value=AsyncMock(return_value=raw)):
+        winner: Final = await callback._claim_pin("deployment-pin", {"model_id": "candidate"}, 30)
 
     assert winner == expected
     assert cache.in_memory_cache.get_cache("deployment-pin") == stored

@@ -3,6 +3,7 @@ import hashlib
 import json
 import time
 from collections.abc import Iterable
+from typing import Final, cast
 from unittest.mock import patch
 
 import pytest
@@ -11,6 +12,7 @@ from redis.asyncio import Redis
 import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
 from litellm._internal_context import current_service_target
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AUTH_CACHE_INVALIDATION_CHANNEL,
@@ -66,14 +68,23 @@ class _Pipeline:
         self._messages.append(message)
         return self
 
-    async def execute(self) -> None:
+    async def execute(self) -> tuple[int, ...]:
         await self._client.send(tuple(self._messages))
+        return tuple(1 for _ in self._messages)
+
+    async def __aenter__(self) -> "_Pipeline":
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        self._client.closed = True
 
 
 class _PipelinedRedisClient:
     def __init__(self, wedged: bool = False) -> None:
         self.published: list[str] = []
         self.round_trips = 0
+        self.closed = False
+        self.transaction: bool | None = None
         self.release = asyncio.Event()
         if not wedged:
             self.release.set()
@@ -84,6 +95,7 @@ class _PipelinedRedisClient:
         self.published.extend(messages)
 
     def pipeline(self, transaction: bool = True) -> _Pipeline:
+        self.transaction = transaction
         return _Pipeline(self)
 
 
@@ -136,13 +148,13 @@ class _ScriptedPubSubRedisClient(Redis):
         return next(self._scripted_pubsubs)
 
 
-class _FakeRedisCache:
+class _FakeRedisCache(RedisCache):
     def __init__(self, client: object, namespace: str | None = None) -> None:
         self._client = client
         self.namespace = namespace
 
-    def init_pubsub_client(self) -> object:
-        return self._client
+    def init_pubsub_client(self) -> "Redis[bytes]":
+        return cast("Redis[bytes]", self._client)
 
 
 def _invalidation_message(cache_key: str) -> dict:
@@ -272,7 +284,8 @@ async def test_subscriber_deletes_additional_in_memory_cache_entry_on_message() 
 
 
 @pytest.mark.asyncio
-async def test_subscriber_ignores_malformed_messages() -> None:
+@pytest.mark.parametrize("message", (b"not json", b'{"other": "x"}', "raw string", "null", "[]"))
+async def test_subscriber_ignores_malformed_messages(message: str | bytes) -> None:
     cache = UserApiKeyCache()
     cache.in_memory_cache.set_cache("project_id:p-1", {"models": []})
 
@@ -280,10 +293,7 @@ async def test_subscriber_ignores_malformed_messages() -> None:
         redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[_QueuePubSub()])),
         user_api_key_cache=cache,
     )
-    subscriber._apply_message({"type": "message", "data": b"not json"})
-    subscriber._apply_message({"type": "message", "data": json.dumps({"other": "x"}).encode()})
-    subscriber._apply_message("raw string")
-    subscriber._apply_message(None)
+    subscriber._apply_message(message)
 
     assert cache.in_memory_cache.get_cache("project_id:p-1") is not None
 
@@ -351,6 +361,8 @@ async def test_broadcast_evictions_tells_redis_every_key_past_the_pending_publis
 
     assert [json.loads(message)["cache_key"] for message in client.published] == list(cache_keys)
     assert client.round_trips == 1
+    assert client.transaction is False
+    assert client.closed is True
 
 
 @pytest.mark.asyncio
@@ -375,6 +387,29 @@ async def test_broadcast_evictions_returns_within_its_bound_while_redis_never_an
 
     assert 0.05 <= waited < 1.0
     assert client.published == [json.dumps({"cache_key": "user-1"})]
+
+
+class _FailingPipeline(_Pipeline):
+    async def execute(self) -> tuple[int, ...]:
+        raise ConnectionError("publish batch lost")
+
+
+class _FailingBatchClient(_PipelinedRedisClient):
+    def pipeline(self, transaction: bool = True) -> _Pipeline:
+        return _FailingPipeline(self)
+
+
+async def test_batch_publish_failure_closes_resources_without_failing_the_write(caplog: pytest.LogCaptureFixture) -> None:
+    client: Final = _FailingBatchClient()
+    cache: Final = _FakeRedisCache(client)
+
+    with pytest.warns(FutureWarning, match="experimental.*may change"):
+        await pubsub_module._publish_batch_to_redis(cache, ("user-a", "user-b"))
+
+    assert client.closed is True
+    assert client.published == []
+    assert "auth cache invalidation publish for 2 keys failed:" in caplog.text
+    assert "publish batch lost" in caplog.text
 
 
 @pytest.mark.asyncio

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import itertools
 import json
 import logging
 import time
@@ -21,6 +22,9 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from types import MappingProxyType, TracebackType
 from typing import Final, Generic, Protocol, TypeVar
+
+from pydantic import TypeAdapter
+from typing_extensions import deprecated
 
 from litellm._internal_context import (
     REDIS_FAMILIES_METADATA_KEY,
@@ -42,6 +46,7 @@ _T = TypeVar("_T")
 _ScriptArg = str | bytes | int | float
 SettledHook = Callable[[asyncio.Future[_T]], Awaitable[None] | None]
 POST_CALL_FLUSH_DEADLINE_SECONDS: Final = 1.0
+_MGET_VALUES: Final = TypeAdapter(tuple[str | bytes | None, ...])
 
 
 class RegisteredScript(Protocol):
@@ -102,7 +107,7 @@ class _Op(Generic[_T]):
             except Exception as e:  # noqa: BLE001  # a reply this op cannot decode fails this op alone
                 self.future.set_exception(e)
             return None
-        if _is_missing_script(failure):
+        if isinstance(self, _Script) and _is_missing_script(failure):
             return self._settle_alone()
         self.future.set_exception(failure)
         return None
@@ -141,11 +146,14 @@ class _MGet(_Op[Mapping[str, object]]):
         return 1
 
     def resolve(self, replies: Sequence[object]) -> Mapping[str, object]:
-        values: Final = replies[0]
-        if not isinstance(values, (list, tuple)):
-            raise TypeError(f"MGET reply is not a list: {type(values).__name__}")
+        raw: Final = replies[0]
+        if not isinstance(raw, (list, tuple)):
+            raise TypeError(f"MGET reply is not a list: {type(raw).__name__}")
+        values: Final = _MGET_VALUES.validate_python(replies[0])
+        if len(values) != len(self._keys):
+            raise ValueError("MGET reply count does not match requested keys")
         return MappingProxyType(
-            {key: self._redis_cache._get_cache_logic(value) for key, value in zip(self._keys, values)}  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType, reportUnknownArgumentType]  # shared decode with async_batch_get_cache
+            {key: self._redis_cache._get_cache_logic(value) for key, value in zip(self._keys, values)}  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # shared decode with async_batch_get_cache
         )
 
     async def run_alone(self) -> Mapping[str, object]:
@@ -211,7 +219,7 @@ class _Increment(_Op[float]):
 
     async def run_alone(self) -> float:
         value: object = await self._redis_cache.async_increment(key=self._key, value=self._value, ttl=self._ttl)  # pyright: ignore[reportUnknownMemberType]  # untyped cache API
-        if not isinstance(value, (int, float)):
+        if not isinstance(value, (int, float)):  # pyright: ignore[reportUnnecessaryIsInstance]  # legacy subclasses can return malformed values
             raise TypeError(f"increment did not return a number: {type(value).__name__}")
         return float(value)
 
@@ -319,6 +327,7 @@ class RedisBatch:
         so a per-key GET later in the same request can be answered without another round trip."""
         return key in self._misses
 
+    @deprecated("Use typed RedisCache operations with batch= instead of script callbacks", category=None)
     def script(
         self, source: str, run: RegisteredScript, keys: Sequence[str], args: Sequence[_ScriptArg]
     ) -> BatchResult[object]:
@@ -370,16 +379,14 @@ class RedisBatch:
     async def _flush_pipeline(self, ops: Sequence[_Op[object]]) -> None:
         start_time: Final = time.time()
         target, metadata = _pipeline_service_event(ops)
-        widths: list[int] = []  # mutable-ok: filled while enqueuing
-
-        async def run() -> list[object]:
-            client: Final = self.redis_cache.init_async_client()
-            async with client.pipeline(transaction=False) as pipe:
-                widths.extend(op.enqueue(pipe) for op in ops)
-                return await pipe.execute(raise_on_error=False)
-
         try:
-            replies: Final = await _run_under_circuit_breaker(self.redis_cache._circuit_breaker, self.name, run)  # pyright: ignore[reportPrivateUsage]  # same breaker as the cache's own methods
+            widths, replies = await _run_under_circuit_breaker(
+                self.redis_cache._circuit_breaker,  # pyright: ignore[reportPrivateUsage]  # same breaker as the cache's own methods
+                self.name,
+                lambda: self.redis_cache._execute_batch_pipeline(ops),  # pyright: ignore[reportPrivateUsage]  # cache owns transport; batch owns settlement
+            )
+            if len(replies) != sum(widths):
+                raise ValueError("Redis pipeline reply count does not match declared operations")
         except Exception as e:  # noqa: BLE001  # each declaring caller applies its own Redis fallback
             log_redis_failure(verbose_logger, logging.WARNING, f"{self.name}: pipeline of {len(ops)} ops failed", e)
             with service_target(target):
@@ -408,13 +415,12 @@ class RedisBatch:
                     event_metadata=metadata,
                 )
             )
-        retries: list[Awaitable[None]] = []  # mutable-ok: collected while slicing replies
-        offset = 0
-        for op, width in zip(ops, widths):
-            retry = op.settle(replies[offset : offset + width])
-            offset += width
-            if retry is not None:
-                retries.append(retry)
+        offsets: Final = tuple(itertools.accumulate(widths, initial=0))
+        retries: Final = tuple(
+            retry
+            for op, start, end in zip(ops, offsets, offsets[1:])
+            if (retry := op.settle(replies[start:end])) is not None
+        )
         if retries:
             await asyncio.gather(*retries)
 

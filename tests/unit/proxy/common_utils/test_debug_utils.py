@@ -4,11 +4,17 @@ import socket
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import asdict
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Final
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from redis import Redis
+from redis.connection import Connection
 
+from litellm.caching.redis_cache import RedisCache
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -16,6 +22,7 @@ from litellm.proxy.bug_report_config import build_proxy_bug_report
 from litellm.proxy.common_utils.debug_utils import (
     PSUTIL_MISSING_ERROR,
     _ProcFilesystemProcess,
+    _redis_memory_stats,
     _summary_process_memory,
     get_memory_summary,
 )
@@ -198,3 +205,53 @@ def test_memory_routes_count_prompt_caching_pins(
 
     assert response.status_code == 200
     assert pin_count(response.json()) == expected
+
+
+@pytest.mark.parametrize(
+    ("pool", "expected"),
+    [
+        pytest.param(
+            SimpleNamespace(
+                max_connections=23,
+                connection_class=Connection,
+                _available_connections=(object(),),
+                _in_use_connections=(object(), object()),
+            ),
+            {
+                "enabled": True,
+                "cache_type": "RedisCache",
+                "connection_pool": {"max_connections": 23, "connection_class": Connection.__name__},
+            },
+            id="pool-metadata-preserves-diagnostic-shape",
+        ),
+        pytest.param(
+            SimpleNamespace(),
+            {
+                "enabled": True,
+                "cache_type": "RedisCache",
+                "connection_pool": {"max_connections": None, "connection_class": None},
+            },
+            id="unavailable-pool-fields",
+        ),
+        pytest.param(None, {"enabled": True, "cache_type": "RedisCache"}, id="no-pool"),
+        pytest.param(
+            SimpleNamespace(max_connections=object()),
+            {"enabled": True, "cache_type": "RedisCache"},
+            id="invalid-metadata-remains-best-effort",
+        ),
+    ],
+)
+def test_redis_memory_diagnostics_preserve_pool_shape(pool: object, expected: Mapping[str, object]) -> None:
+    client: Final = MagicMock(spec=Redis)
+    client.connection_pool = pool
+    with patch("redis.Redis", return_value=client):
+        cache: Final = RedisCache(host="diagnostic-pool", port=6379)
+
+    with pytest.warns(FutureWarning, match="get_connection_pool_info is experimental and may change"):
+        result: Final = _redis_memory_stats(cache)
+
+    assert result == expected
+
+
+def test_redis_memory_diagnostics_without_cache_remain_disabled() -> None:
+    assert _redis_memory_stats(None) == {"enabled": False}

@@ -47,10 +47,7 @@ def test_peer_worker_invalidation_message_evicts_the_cached_credential():
     )
 
     subscriber._apply_message(  # pyright: ignore[reportPrivateUsage]  # exercising the real cross-worker message handler
-        {
-            "type": "message",
-            "data": json.dumps({"cache_key": byok_credential_cache_key("mallory", "srv-byok")}).encode(),
-        }
+        json.dumps({"cache_key": byok_credential_cache_key("mallory", "srv-byok")}).encode()
     )
 
     assert get_cached_byok_credential("mallory", "srv-byok") is None

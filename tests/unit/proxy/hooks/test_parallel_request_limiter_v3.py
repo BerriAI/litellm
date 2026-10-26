@@ -10,8 +10,8 @@ import time
 from collections.abc import AsyncGenerator, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Final, List, Optional
-from unittest.mock import patch
+from typing import Any, Dict, Final, List
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -20,8 +20,10 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm import Router
+from litellm.caching import _redis_scripts as redis_scripts
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.litellm_core_utils import ptu_pricing
@@ -331,7 +333,7 @@ async def test_sliding_window_rate_limit_v3(monkeypatch, time_controller):
             results.append(new_counter)
         return results
 
-    parallel_request_handler.batch_rate_limiter_script = mock_batch_rate_limiter
+    parallel_request_handler._redis_cache = _script_cache(mock_batch_rate_limiter)
 
     # First request should succeed
     await parallel_request_handler.async_pre_call_hook(
@@ -424,7 +426,7 @@ async def test_rate_limiter_script_return_values_v3(monkeypatch, time_controller
             results.append(new_counter)
         return results
 
-    parallel_request_handler.batch_rate_limiter_script = mock_batch_rate_limiter
+    parallel_request_handler._redis_cache = _script_cache(mock_batch_rate_limiter)
 
     # Make first request
     await parallel_request_handler.async_pre_call_hook(
@@ -578,7 +580,7 @@ async def test_normal_router_call_tpm_v3(
             results.append(new_counter)
         return results
 
-    parallel_request_handler.batch_rate_limiter_script = mock_batch_rate_limiter
+    parallel_request_handler._redis_cache = _script_cache(mock_batch_rate_limiter)
     monkeypatch.setattr(litellm, "callbacks", [parallel_request_handler])
 
     # Helper to get the correct value for key construction
@@ -1049,7 +1051,7 @@ async def test_parallel_gauge_uses_atomic_redis_script_v3():
         captured_calls.append((list(keys), list(args)))
         return [0, 3]
 
-    handler.parallel_acquire_script = fake_acquire
+    handler._redis_cache = _script_cache(fake_acquire, redis_scripts.SLOT_ACQUIRE)
 
     data: Dict[str, Any] = {"model": "gpt-3.5-turbo"}
     await handler.async_pre_call_hook(
@@ -1090,7 +1092,7 @@ async def test_parallel_gauge_uses_atomic_redis_script_v3():
     async def fake_acquire_over_limit(keys, args):
         return [1, 1, 5, 5]
 
-    handler.parallel_acquire_script = fake_acquire_over_limit
+    handler._redis_cache = _script_cache(fake_acquire_over_limit, redis_scripts.SLOT_ACQUIRE)
 
     with pytest.raises(HTTPException) as exc_info:
         await handler.async_pre_call_hook(
@@ -1743,7 +1745,7 @@ async def test_async_increment_tokens_fallback_behavior():
     )
 
     # Mock the token_increment_script to None to simulate unavailable script
-    parallel_request_handler.token_increment_script = None
+    parallel_request_handler._redis_cache = None
 
     # Mock the fallback method
     fallback_called = False
@@ -1882,7 +1884,7 @@ def test_keyslot_for_redis_cluster():
 
 
 @pytest.mark.asyncio
-async def test_execute_redis_batch_rate_limiter_script_cluster_compatibility():
+async def test_increment_window_counters_by_group_cluster_compatibility():
     """
     Test that the Redis batch rate limiter script execution handles cluster compatibility
     by grouping keys and falling back gracefully on errors.
@@ -1906,7 +1908,7 @@ async def test_execute_redis_batch_rate_limiter_script_cluster_compatibility():
             ),  # First group fails
             [1234, 2],  # Second group succeeds
         ]
-        handler.batch_rate_limiter_script = mock_script
+        handler._redis_cache = _script_cache(mock_script)
 
         # Mock in-memory fallback (returns 2 values for 2 keys: window_start, counter)
         handler.in_memory_cache_sliding_window = AsyncMock(return_value=[1234, 1])
@@ -1920,11 +1922,11 @@ async def test_execute_redis_batch_rate_limiter_script_cluster_compatibility():
         ]
 
         # Execute the method
-        results = await handler._execute_redis_batch_rate_limiter_script(
+        results = await handler._increment_window_counters_by_group(
             keys_to_fetch=test_keys, now_int=1234
         )
 
-        assert results == [1234, 1, 1234, 2]
+        assert results == [1234, 1, "1234", 2]
 
         # Verify script was called twice (once per slot group)
         assert mock_script.call_count == 2
@@ -2105,7 +2107,7 @@ async def test_get_rate_limit_type_default_is_total(monkeypatch):
     )
 
     # Mock general_settings to return empty dict (no token_rate_limit_type set)
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     original_settings = getattr(proxy_server, "general_settings", {})
     monkeypatch.setattr(proxy_server, "general_settings", {})
@@ -2130,7 +2132,7 @@ async def test_get_rate_limit_type_invalid_falls_back_to_total(monkeypatch):
     )
 
     # Mock general_settings to return an invalid token_rate_limit_type
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     original_settings = getattr(proxy_server, "general_settings", {})
     monkeypatch.setattr(
@@ -2345,8 +2347,8 @@ async def test_execute_token_increment_script_cluster_compatibility():
     # Mock _is_redis_cluster to return True for this test
     with patch.object(handler, "_is_redis_cluster", return_value=True):
         # Mock script
-        mock_script = AsyncMock()
-        handler.token_increment_script = mock_script
+        mock_script = AsyncMock(side_effect=[[100.0, -1.0], [50.0]])
+        handler._redis_cache = _script_cache(mock_script, redis_scripts.COUNTER_INCREMENT)
 
         # Create pipeline operations with different hash tags
         pipeline_operations: List[RedisPipelineIncrementOperation] = [
@@ -2360,7 +2362,7 @@ async def test_execute_token_increment_script_cluster_compatibility():
         ]
 
         # Execute the method
-        await handler._execute_token_increment_script(pipeline_operations)
+        await handler._execute_token_increments(pipeline_operations)
 
         # Verify script was called (at least once, possibly more depending on slot grouping)
         assert mock_script.call_count >= 1, "Script should be called at least once"
@@ -2883,7 +2885,7 @@ async def test_agent_rate_limit_429_on_over_limit(monkeypatch, time_controller):
             results.append(new_counter)
         return results
 
-    parallel_request_handler.batch_rate_limiter_script = mock_batch_rate_limiter
+    parallel_request_handler._redis_cache = _script_cache(mock_batch_rate_limiter)
 
     with patch(
         "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry.get_agent_by_id",
@@ -4002,8 +4004,8 @@ async def test_billed_personal_key_auth_produces_team_rpm_descriptors(monkeypatc
     from litellm.proxy import proxy_server
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
-    from litellm.proxy.auth import auth_checks
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable
+    from litellm.proxy.auth import auth_checks
 
     server: Final = MCPServer(
         server_id="math_a",
@@ -4400,7 +4402,7 @@ async def test_concurrent_success_callbacks_release_parallel_slot_once_when_redi
         raise ConnectionError("redis unavailable")
 
     release_script = AsyncMock(side_effect=failing_release)
-    handler.parallel_release_script = release_script
+    handler._redis_cache = _script_cache(release_script, redis_scripts.SLOT_RELEASE)
     await local_cache.async_set_cache(key=parallel_key, value=2, local_only=True)
     stash = get_or_create_request_stash()
     stash.owner_litellm_call_id = call_id
@@ -4806,7 +4808,7 @@ async def test_read_only_gauge_check_counts_without_acquiring_v3():
         captured_calls.append((list(keys), list(args)))
         return [3]
 
-    handler.parallel_count_script = fake_count
+    handler._redis_cache = _script_cache(fake_count, redis_scripts.SLOT_COUNT)
 
     response = await handler.should_rate_limit(descriptors=descriptors, read_only=True)
     assert captured_calls == [
@@ -4827,7 +4829,7 @@ async def test_read_only_gauge_check_counts_without_acquiring_v3():
     async def failing_count(keys, args):
         raise ConnectionError("redis unavailable")
 
-    handler.parallel_count_script = failing_count
+    handler._redis_cache = _script_cache(failing_count, redis_scripts.SLOT_COUNT)
     await _seed_max_parallel_requests_slots(
         local_cache, counter_key, ["s1", "s2", "s3", "s4", "s5"]
     )
@@ -4856,7 +4858,7 @@ async def test_redis_release_script_updates_local_mirror_v3():
         captured_calls.append((list(keys), list(args)))
         return [2]
 
-    handler.parallel_release_script = fake_release
+    handler._redis_cache = _script_cache(fake_release, redis_scripts.SLOT_RELEASE)
 
     get_or_create_request_stash().parallel_slot = ParallelSlotAcquisition(
         slot_id="slot-redis-test",
@@ -4943,8 +4945,7 @@ async def test_in_memory_fallback_respects_mirrored_redis_count_v3():
     async def failing_script(keys, args):
         raise ConnectionError("redis unavailable")
 
-    handler.parallel_acquire_script = failing_script
-    handler.parallel_release_script = failing_script
+    handler._redis_cache = _TransportCache(_UnreachableRedis())
 
     await local_cache.async_set_cache(key=counter_key, value=5, local_only=True)
     with pytest.raises(HTTPException) as exc_info:
@@ -5068,7 +5069,7 @@ async def test_async_data_generator_releases_counter_on_disconnect_v3(disconnect
     gap that let a disconnect leak the slot in the default limiter-only config.
     A mid-stream disconnect must still refund the pre-call +1.
     """
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     limiter, cache, counter_key, user_api_key_dict = await _build_seeded_limiter()
     proxy_logging_obj = proxy_server.proxy_logging_obj
@@ -5122,8 +5123,8 @@ async def test_async_data_generator_releases_counter_when_wrapped_v3():
     from the outer generator: the counter returns to 0 (not -1), proving the
     nested hook does not also refund and there is no double decrement.
     """
-    import litellm.proxy.proxy_server as proxy_server
     from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy import proxy_server
 
     class _PassthroughIteratorOverride(CustomLogger):
         async def async_post_call_streaming_iterator_hook(
@@ -7067,16 +7068,45 @@ async def test_post_call_success_hook_leaves_raw_provider_dict_untouched():
     assert response == {"id": "msg_123", "type": "message", "role": "assistant", "content": []}
 
 
+class _TransportCache(RedisCache):
+    def __init__(self, transport):
+        self._transport = transport
+        with (
+            patch("litellm._redis.get_redis_client", return_value=MagicMock()),
+            patch("asyncio.get_running_loop", side_effect=RuntimeError("no running event loop")),
+        ):
+            super().__init__(host=f"limiter-test-{id(self)}", port=6379)
+    def _get_async_client(self):
+        return self._transport
+
+
+class _SingleScriptTransport:
+    def __init__(self, run, source):
+        self._run = run
+        self._source = source
+
+    def register_script(self, source):
+        async def run(keys, args, client=None):
+            if source != self._source:
+                raise ConnectionError("Only the configured operation is available")
+            return await self._run(keys=list(keys), args=list(args))
+        return run
+
+
+def _script_cache(run, source=redis_scripts.WINDOW_INCREMENT):
+    return _TransportCache(_SingleScriptTransport(run, source))
+
+
 class _OpenBreakerRedis:
-    def async_register_script(self, script: str):
-        async def refused(keys, args):
+    def register_script(self, script: str):
+        async def refused(keys, args, client=None):
             from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 
             raise RedisCircuitBreakerOpenError("Redis circuit breaker is open")
 
         return refused
 
-    async def async_increment_pipeline(self, increment_list, **kwargs):
+    def pipeline(self, transaction=False):
         from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 
         raise RedisCircuitBreakerOpenError("Redis circuit breaker is open")
@@ -7087,7 +7117,7 @@ async def test_an_open_circuit_breaker_falls_back_to_the_pipeline_without_a_warn
     from litellm.types.caching import RedisPipelineIncrementOperation
 
     handler = _PROXY_MaxParallelRequestsHandler(
-        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=_OpenBreakerRedis()))  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=_TransportCache(_OpenBreakerRedis())))  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
     )
 
     with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
@@ -7102,11 +7132,11 @@ async def test_an_open_circuit_breaker_falls_back_to_the_pipeline_without_a_warn
 @pytest.mark.asyncio
 async def test_an_open_circuit_breaker_reads_the_sliding_window_locally_without_a_warning(caplog):
     handler = _PROXY_MaxParallelRequestsHandler(
-        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=_OpenBreakerRedis()))  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=_TransportCache(_OpenBreakerRedis())))  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
     )
 
     with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
-        values = await handler._execute_redis_batch_rate_limiter_script(
+        values = await handler._increment_window_counters_by_group(
             ["{quiet}:window", "{quiet}:counter"], now_int=int(time.time())
         )
 
@@ -7116,8 +7146,8 @@ async def test_an_open_circuit_breaker_reads_the_sliding_window_locally_without_
 
 
 class _UnreachableRedis:
-    def async_register_script(self, script: str):
-        async def refused(keys, args):
+    def register_script(self, script: str):
+        async def refused(keys, args, client=None):
             raise ConnectionError("Error 61 connecting to 127.0.0.1:6379. Connection refused.")
 
         return refused
@@ -7144,29 +7174,29 @@ class _ScriptedRedis:
         self.increments.append((key, value))
         return value
 
-    def async_register_script(self, script: str):
-        from litellm.proxy.hooks import parallel_request_limiter_v3 as v3
+    def register_script(self, script: str):
+        from litellm.caching import _redis_scripts as scripts
 
-        async def run(keys, args):
+        async def run(keys, args, client=None):
             if script == self.failing_script:
                 raise ConnectionError("Error 61 connecting to 127.0.0.1:6379. Connection refused.")
-            if script == v3.WINDOW_GUARDED_TOKEN_INCREMENT_SCRIPT:
+            if script == scripts.GUARDED_INCREMENT:
                 self.guarded_increments.append((list(keys), list(args)))
                 return [1, 0] * (len(keys) // 2)
-            if script == v3.BATCH_RATE_LIMITER_SCRIPT:
+            if script == scripts.WINDOW_INCREMENT:
                 self.batch_calls += 1
                 self.batch_call_keys.append(list(keys))
                 self.batch_call_args.append(list(args))
                 if self.batch_calls == self.failing_batch_call:
                     raise ConnectionError("Error 61 connecting to 127.0.0.1:6379. Connection refused.")
                 return [args[0], self.batch_calls] * (len(keys) // 2)
-            if script == v3.BATCH_COUNTER_READ_SCRIPT:
+            if script == scripts.COUNTER_READ:
                 return [int(time.time()) if key.endswith(":window") else self.stored_counter_value for key in keys]
-            if script == v3.PARALLEL_COUNT_SCRIPT:
+            if script == scripts.SLOT_COUNT:
                 return [0 for _ in keys]
-            if script == v3.PARALLEL_ACQUIRE_SCRIPT:
+            if script == scripts.SLOT_ACQUIRE:
                 return [0, *[1 for _ in keys]]
-            if script == v3.PARALLEL_RELEASE_SCRIPT:
+            if script == scripts.SLOT_RELEASE:
                 self.released_slots.append((list(keys), list(args)))
                 return [0 for _ in keys]
             raise AssertionError(f"unexpected script: {script[:60]}")
@@ -7179,7 +7209,7 @@ def _handler_with_redis(
     fail_closed: bool | None = None,
     force_hash_tag_grouping: bool | None = None,
 ):
-    internal_usage_cache = InternalUsageCache(DualCache(redis_cache=redis))  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    internal_usage_cache = InternalUsageCache(DualCache(redis_cache=_TransportCache(redis)))
     if fail_closed is None and force_hash_tag_grouping is None:
         return PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=internal_usage_cache)
     if fail_closed is None:
@@ -7213,7 +7243,7 @@ async def test_redis_batch_rate_limiter_respects_hash_tag_grouping_opt_in(force_
         "{end_user:u28551}:requests",
     ]
 
-    await handler._execute_redis_batch_rate_limiter_script(keys_to_fetch=keys, now_int=1234)
+    await handler._increment_window_counters_by_group(keys_to_fetch=keys, now_int=1234)
 
     expected_calls: Final = (
         [
@@ -7245,11 +7275,11 @@ async def test_redis_batch_rate_limiter_returns_values_in_caller_order():
         "{end_user:u28551}:requests",
     ]
 
-    results: Final = await handler._execute_redis_batch_rate_limiter_script(
+    results: Final = await handler._increment_window_counters_by_group(
         keys_to_fetch=keys_to_fetch, now_int=now
     )
 
-    assert results == [now, 1, now, 2, now, 1]
+    assert results == [str(now), 1, str(now), 2, str(now), 1]
 
 
 def test_default_hash_tag_grouping_resolver_uses_litellm_setting(monkeypatch: pytest.MonkeyPatch):
@@ -7345,9 +7375,9 @@ async def test_fail_closed_is_a_no_op_while_redis_answers():
 
 @pytest.mark.asyncio
 async def test_fail_closed_tpm_rejection_releases_the_parallel_slot_it_acquired():
-    from litellm.proxy.hooks import parallel_request_limiter_v3 as v3
+    from litellm.caching import _redis_scripts as scripts
 
-    redis = _ScriptedRedis(failing_script=v3.CHECK_AND_INCREMENT_BY_N_SCRIPT)
+    redis = _ScriptedRedis(failing_script=scripts.WINDOW_RESERVE)
     handler = _handler_with_redis(redis, fail_closed=True)
     auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-slot"), max_parallel_requests=1, tpm_limit=1000)
     data = {"model": "test-model", "messages": [{"role": "user", "content": "hi"}]}
@@ -7368,7 +7398,7 @@ async def test_fail_closed_tpm_rejection_releases_the_parallel_slot_it_acquired(
 
 @pytest.mark.asyncio
 async def test_fail_closed_rate_limit_enforcement_is_read_from_general_settings(monkeypatch):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-settings"), rpm_limit=2)
 
@@ -7390,7 +7420,7 @@ async def test_fail_closed_rate_limit_enforcement_is_read_from_general_settings(
 async def test_fail_closed_rate_limit_enforcement_coerces_the_general_settings_value(
     monkeypatch, configured_value, rejects
 ):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-coerced"), rpm_limit=2)
     monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", configured_value)
@@ -7469,34 +7499,32 @@ async def test_batch_increment_refunds_counters_already_applied_when_a_later_clu
 @pytest.mark.parametrize("fail_closed", [True, False], ids=["fail_closed", "fail_open"])
 @pytest.mark.asyncio
 async def test_batch_increment_refunds_pipelined_groups_declared_after_the_one_that_failed(fail_closed):
-    from unittest.mock import patch
+    from unittest.mock import AsyncMock
+
+    from litellm.caching.redis_batch import request_redis_batch_scope
 
     redis = _ScriptedRedis()
-    handler = _handler_with_redis(redis, fail_closed=fail_closed)
-    now = int(time.time())
+    pipeline = MagicMock()
+    pipeline.__aenter__.return_value = pipeline
+    pipeline.execute = AsyncMock(return_value=[ConnectionError("Unavailable slot"), [1234, 1]])
+    redis.pipeline = MagicMock(return_value=pipeline)
+    handler = _handler_with_redis(redis, fail_closed=fail_closed, force_hash_tag_grouping=True)
     groups = {"a": ["{a}:window", "{a}:requests"], "b": ["{b}:window", "{b}:requests"]}
-    loop = asyncio.get_running_loop()
-    failed_group = loop.create_future()
-    failed_group.set_exception(ConnectionError("Error 61 connecting to 127.0.0.1:6379. Connection refused."))
-    landed_group = loop.create_future()
-    landed_group.set_result([now, 1])
 
-    with (
-        patch.object(handler, "_group_keys_by_hash_tag", return_value=groups),
-        patch.object(handler, "_pipeline_scripts", return_value=[failed_group, landed_group]),
-    ):
+    with request_redis_batch_scope():
         if fail_closed:
             with pytest.raises(HTTPException) as exc:
-                await handler._execute_redis_batch_rate_limiter_script(
-                    keys_to_fetch=[*groups["a"], *groups["b"]], now_int=now
+                await handler._increment_window_counters_by_group(
+                    keys_to_fetch=[*groups["a"], *groups["b"]], now_int=1234
                 )
             assert exc.value.status_code == 503
         else:
-            await handler._execute_redis_batch_rate_limiter_script(
-                keys_to_fetch=[*groups["a"], *groups["b"]], now_int=now
+            await handler._increment_window_counters_by_group(
+                keys_to_fetch=[*groups["a"], *groups["b"]], now_int=1234
             )
 
-    assert redis.guarded_increments == ([(groups["b"], [str(now), -1, 0])] if fail_closed else [])
+    pipeline.execute.assert_awaited_once_with(raise_on_error=False)
+    assert redis.guarded_increments == ([(groups["b"], ["1234", -1, 0])] if fail_closed else [])
 
 
 @pytest.mark.parametrize(
@@ -7572,7 +7600,7 @@ async def test_request_capacity_enforces_shared_rpm_scopes(
 
 @pytest.mark.asyncio
 async def test_request_capacity_keeps_dynamic_rpm_policy(monkeypatch):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     router = Router(model_list=[{
         "model_name": "test-model",
@@ -7945,7 +7973,7 @@ async def _rpm_request(handler: _PROXY_MaxParallelRequestsHandler, cache: DualCa
 async def test_model_group_alias_shares_deployment_default_rpm_bucket_with_its_target(
     monkeypatch: pytest.MonkeyPatch, first_name: str, second_name: str
 ) -> None:
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     router: Final = Router(
         model_list=[

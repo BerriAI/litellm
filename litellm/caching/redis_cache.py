@@ -25,9 +25,10 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import timedelta
 from types import FrameType, MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast
 
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
+from typing_extensions import deprecated
 
 import litellm
 from litellm._internal_context import current_service_caller
@@ -43,12 +44,33 @@ from litellm.constants import (
 from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.types.caching import (
+    CacheFailure,
+    CacheOperation,
+    CachePoolInfo,
+    CachePublish,
+    CacheQueueUpdate,
+    CacheSubscription,
+    CapacityExceeded,
+    ConcurrencyRead,
+    ConcurrencyRelease,
+    ConcurrencySlot,
+    CounterIncrement,
+    CounterUpdate,
+    GuardedIncrement,
+    KeyPresence,
+    LimitedIncrement,
     RedisPipelineIncrementOperation,
     RedisPipelineLpopOperation,
     RedisPipelineRpushOperation,
+    ThrottleKeys,
+    WindowCount,
+    WindowCounter,
+    WindowReservation,
 )
 from litellm.types.services import ServiceTypes
 
+from . import _redis_capabilities as _cap
+from . import _redis_scripts as _scripts
 from .base_cache import BaseCache
 
 if TYPE_CHECKING:
@@ -58,6 +80,11 @@ if TYPE_CHECKING:
     from redis.asyncio.cluster import ClusterPipeline
 
     from litellm._service_logger import ServiceLogging
+    from litellm.caching.redis_batch import (
+        RedisBatch,
+        _Op,  # pyright: ignore[reportPrivateUsage]  # cache-owned batch transport
+        _RedisPipeline,  # pyright: ignore[reportPrivateUsage]  # cache-owned batch transport
+    )
 
     pipeline = Pipeline
     cluster_pipeline = ClusterPipeline
@@ -80,6 +107,8 @@ class _AsyncRedisCommands(Protocol):
     """
 
     def ping(self) -> Awaitable[bool]: ...
+
+    def get(self, name: str) -> Awaitable[bytes | str | None]: ...
 
     def delete(self, *names: str) -> Awaitable[int]: ...
 
@@ -480,6 +509,11 @@ class RedisCircuitBreakerOpenError(Exception):
     pass
 
 
+@deprecated("Use RedisCache.async_publish and async_subscribe instead of raw pub/sub clients", category=None)
+def pubsub_capable_client(redis_cache: "RedisCache") -> "Redis[bytes]":
+    return redis_cache._get_pubsub_client()  # pyright: ignore[reportPrivateUsage]  # compatibility-only cache transport bridge
+
+
 class _RedisTimeoutLogThrottle:
     """Admits one Redis timeout log line per interval and counts the timeouts it suppressed in between."""
 
@@ -507,27 +541,30 @@ _redis_timeout_log_throttle: Final = _RedisTimeoutLogThrottle(REDIS_TIMEOUT_LOG_
 
 
 def log_redis_failure(
-    logger: logging.Logger, level: int, message: str, exc: BaseException, with_traceback: bool = False
+    logger: logging.Logger, level: int, message: str, exc: BaseException | CacheFailure, with_traceback: bool = False
 ) -> None:
-    if isinstance(exc, RedisCircuitBreakerOpenError):
-        logger.debug("%s: %s", message, exc, stacklevel=2)
+    detail: Final = exc.message if isinstance(exc, CacheFailure) else exc
+    circuit_open: Final = exc.reason == "circuit_open" if isinstance(exc, CacheFailure) else isinstance(exc, RedisCircuitBreakerOpenError)
+    if circuit_open:
+        logger.debug("%s: %s", message, detail, stacklevel=2)
         return
-    exc_info: Final = exc if with_traceback else None
-    if not is_redis_timeout_failure(exc):
-        logger.log(level, "%s: %s", message, exc, exc_info=exc_info, stacklevel=2)
+    exc_info: Final = exc if with_traceback and isinstance(exc, BaseException) else None
+    timeout: Final = exc.reason == "timeout" if isinstance(exc, CacheFailure) else is_redis_timeout_failure(exc)
+    if not timeout:
+        logger.log(level, "%s: %s", message, detail, exc_info=exc_info, stacklevel=2)
         return
     suppressed: Final = _redis_timeout_log_throttle.admit()
     if suppressed is None:
-        logger.debug("%s: %s", message, exc, stacklevel=2)
+        logger.debug("%s: %s", message, detail, stacklevel=2)
         return
     if suppressed == 0:
-        logger.log(level, "%s: %s", message, exc, exc_info=exc_info, stacklevel=2)
+        logger.log(level, "%s: %s", message, detail, exc_info=exc_info, stacklevel=2)
         return
     logger.log(
         level,
         "%s: %s (%d more Redis timeouts since the previous Redis timeout line were logged at DEBUG)",
         message,
-        exc,
+        detail,
         suppressed,
         exc_info=exc_info,
         stacklevel=2,
@@ -778,6 +815,7 @@ class RedisCache(BaseCache):
         kwargs_hash: Final = hashlib.sha256(kwargs_str.encode()).hexdigest()[:16]
         return f"async-redis-client-{kwargs_hash}"
 
+    @deprecated("Use typed RedisCache operations instead of raw client access", category=None)
     def init_async_client(
         self,
     ) -> async_redis_client | async_redis_cluster_client:
@@ -804,12 +842,13 @@ class RedisCache(BaseCache):
         self.redis_async_client = redis_async_client
         return redis_async_client
 
+    @deprecated("Raw pub/sub client access is deprecated, migrate to typed operations as available", category=None)
     def init_pubsub_client(self) -> async_redis_client:  # pyright: ignore[reportUnknownParameterType]  # redis generics
         from redis.asyncio import RedisCluster
 
         from litellm import in_memory_llm_clients_cache
 
-        client: Final = self.init_async_client()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # redis generics
+        client: Final = self._get_async_client()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # redis generics
         if not isinstance(client, RedisCluster):
             return client  # pyright: ignore[reportUnknownVariableType]  # redis generics
         cache_key: Final = f"{self._get_async_client_cache_key()}-pubsub"
@@ -826,8 +865,250 @@ class RedisCache(BaseCache):
         in_memory_llm_clients_cache.set_cache(key=cache_key, value=pubsub_client, litellm_owned_client=True)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped in-memory client cache
         return pubsub_client  # pyright: ignore[reportUnknownVariableType]  # redis generics
 
+    def _get_async_client(self) -> "Redis[bytes] | RedisCluster[bytes]":
+        return self.init_async_client()  # pyright: ignore[reportDeprecated, reportUnknownMemberType, reportUnknownVariableType]  # preserve dispatch to unparameterized legacy factories
+
+    def _get_pubsub_client(self) -> "Redis[bytes]":
+        return self.init_pubsub_client()  # pyright: ignore[reportDeprecated, reportUnknownMemberType, reportUnknownVariableType]  # preserve dispatch to unparameterized legacy factories
+
     def _async_commands(self) -> _AsyncRedisCommands:
-        return self.init_async_client()
+        return cast(_AsyncRedisCommands, self._get_async_client())  # cast-ok: RedisCluster stubs omit shared commands
+
+    def async_increment_window_counters(
+        self, *, counters: Sequence[WindowCounter], now: float, window_seconds: int, batch: "RedisBatch | None" = None
+    ) -> CacheOperation[tuple[WindowCount, ...]]:
+        _cap.provisional("async_increment_window_counters")
+        keys: Final = tuple(itertools.chain.from_iterable((item.window_key, item.counter_key) for item in counters))
+        return _cap.operation(
+            self,
+            _scripts.WINDOW_INCREMENT,
+            keys,
+            (now, window_seconds),
+            lambda reply: _cap.window_counts(reply, len(counters)),
+            batch,
+        )
+
+    def async_read_atomic_counts(
+        self, *, keys: Sequence[str], batch: "RedisBatch | None" = None
+    ) -> CacheOperation[tuple[int | None, ...]]:
+        _cap.provisional("async_read_atomic_counts")
+        return _cap.operation(
+            self, _scripts.COUNTER_READ, tuple(keys), (), lambda reply: _cap.optional_counts(reply, len(keys)), batch
+        )
+
+    def async_reserve_window_capacity(
+        self, *, reservations: Sequence[WindowReservation], batch: "RedisBatch | None" = None
+    ) -> CacheOperation[tuple[WindowCount, ...] | CapacityExceeded]:
+        _cap.provisional("async_reserve_window_capacity")
+        keys: Final = tuple(itertools.chain.from_iterable((item.window_key, item.counter_key) for item in reservations))
+        args: Final = tuple(
+            itertools.chain.from_iterable(
+                (item.limit, item.increment, item.ttl_seconds, item.window_seconds) for item in reservations
+            )
+        )
+        return _cap.operation(
+            self, _scripts.WINDOW_RESERVE, keys, args, lambda reply: _cap.reservation(reply, len(reservations)), batch
+        )
+
+    def async_increment_guarded_counters(
+        self, *, increments: Sequence[GuardedIncrement], batch: "RedisBatch | None" = None
+    ) -> CacheOperation[tuple[CounterUpdate, ...]]:
+        _cap.provisional("async_increment_guarded_counters")
+        keys: Final = tuple(itertools.chain.from_iterable((item.window_key, item.counter_key) for item in increments))
+        args: Final = tuple(
+            itertools.chain.from_iterable(
+                (item.expected_window_start, item.increment, item.ttl_seconds) for item in increments
+            )
+        )
+        return _cap.operation(
+            self, _scripts.GUARDED_INCREMENT, keys, args, lambda reply: _cap.guarded(reply, len(increments)), batch
+        )
+
+    def async_acquire_concurrency(
+        self, *, slots: Sequence[ConcurrencySlot], batch: "RedisBatch | None" = None
+    ) -> CacheOperation[tuple[int, ...] | CapacityExceeded]:
+        _cap.provisional("async_acquire_concurrency")
+        args: Final = tuple(
+            itertools.chain.from_iterable((item.limit, item.ttl_seconds, item.slot_id) for item in slots)
+        )
+        return _cap.operation(
+            self,
+            _scripts.SLOT_ACQUIRE,
+            tuple(item.key for item in slots),
+            args,
+            lambda reply: _cap.slots(reply, len(slots)),
+            batch,
+        )
+
+    def async_release_concurrency(
+        self, *, slots: Sequence[ConcurrencyRelease], batch: "RedisBatch | None" = None
+    ) -> CacheOperation[tuple[int, ...]]:
+        _cap.provisional("async_release_concurrency")
+        return _cap.operation(
+            self,
+            _scripts.SLOT_RELEASE,
+            tuple(item.key for item in slots),
+            tuple(item.slot_id for item in slots),
+            lambda reply: _cap.counts(reply, len(slots)),
+            batch,
+        )
+
+    def async_count_concurrency(
+        self, *, counters: Sequence[ConcurrencyRead], batch: "RedisBatch | None" = None
+    ) -> CacheOperation[tuple[int, ...]]:
+        _cap.provisional("async_count_concurrency")
+        return _cap.operation(
+            self,
+            _scripts.SLOT_COUNT,
+            tuple(item.key for item in counters),
+            tuple(item.ttl_seconds for item in counters),
+            lambda reply: _cap.counts(reply, len(counters)),
+            batch,
+        )
+
+    def async_increment_counters(
+        self, *, increments: Sequence[CounterIncrement], batch: "RedisBatch | None" = None
+    ) -> CacheOperation[tuple[float, ...]]:
+        _cap.provisional("async_increment_counters")
+        args: Final = tuple(itertools.chain.from_iterable((item.increment, item.ttl_seconds) for item in increments))
+        return _cap.operation(
+            self,
+            _scripts.COUNTER_INCREMENT,
+            tuple(item.key for item in increments),
+            args,
+            lambda reply: _cap.totals(reply, len(increments)),
+            batch,
+        )
+
+    def async_reserve_counter(
+        self, *, key: str, amount: int, limit: int, ttl_seconds: int, batch: "RedisBatch | None" = None
+    ) -> CacheOperation[LimitedIncrement]:
+        _cap.provisional("async_reserve_counter")
+        return _cap.operation(
+            self, _scripts.LIMITED_INCREMENT, (key,), (amount, ttl_seconds, limit), _cap.limited, batch
+        )
+
+    def async_refund_counter(self, *, key: str, amount: int, batch: "RedisBatch | None" = None) -> CacheOperation[None]:
+        _cap.provisional("async_refund_counter")
+        return _cap.operation(self, _scripts.REFUND, (key,), (amount,), _cap.acknowledged, batch)
+
+    def async_save_record(
+        self, *, key: str, value: str, ttl_seconds: int, batch: "RedisBatch | None" = None
+    ) -> CacheOperation[None]:
+        _cap.provisional("async_save_record")
+        return _cap.operation(self, _scripts.SAVE, (key,), (value, ttl_seconds), _cap.acknowledged, batch)
+
+    def async_delete_record(self, *, key: str) -> CacheOperation[bool]:
+        _cap.provisional("async_delete_record")
+        return _cap.delete_record(self, key)
+
+    def async_enqueue_updates(self, *, updates: Sequence[CacheQueueUpdate]) -> CacheOperation[tuple[int, ...]]:
+        _cap.provisional("async_enqueue_updates")
+        return _cap.enqueue_updates(self, updates)
+
+    def async_pop_record(
+        self, *, key: str, tombstone_ttl_seconds: int, batch: "RedisBatch | None" = None
+    ) -> CacheOperation[str | None]:
+        _cap.provisional("async_pop_record")
+        return _cap.operation(self, _scripts.POP, (key,), (tombstone_ttl_seconds,), _cap.text, batch)
+
+    def async_increment_iterations(
+        self, *, key: str, ttl_seconds: int, batch: "RedisBatch | None" = None
+    ) -> CacheOperation[int]:
+        _cap.provisional("async_increment_iterations")
+        return _cap.operation(self, _scripts.ITERATION_INCREMENT, (key,), (ttl_seconds,), _cap.integer, batch)
+
+    def async_increment_spend(
+        self, *, key: str, amount: float, ttl_seconds: int, batch: "RedisBatch | None" = None
+    ) -> CacheOperation[float]:
+        _cap.provisional("async_increment_spend")
+        return _cap.operation(self, _scripts.SPEND_INCREMENT, (key,), (str(amount), ttl_seconds), _cap.number, batch)
+
+    def async_claim_affinity(
+        self,
+        *,
+        key: str,
+        value: Mapping[str, str],
+        ttl_seconds: int,
+        eligible_values: tuple[Mapping[str, str], ...] | None = None,
+        preserve_legacy_model_ids: bool = False,
+    ) -> CacheOperation[JsonValue]:
+        _cap.provisional("async_claim_affinity")
+        args: Final = (
+            json.dumps(dict(value)),
+            ttl_seconds,
+            *((json.dumps(tuple(dict(item) for item in eligible_values)),) if eligible_values is not None else ()),
+            *(("1",) if preserve_legacy_model_ids and eligible_values is not None else ()),
+        )
+        return _cap.operation(self, _scripts.CLAIM, (key,), args, _cap.pin, None)
+
+    def async_read_throttle_ttls(self, *, keys: ThrottleKeys) -> CacheOperation[tuple[int, int]]:
+        _cap.provisional("async_read_throttle_ttls")
+        names: Final = (keys.pair_counter, keys.pair_block, keys.source_counter, keys.source_block)
+        return _cap.operation(self, _scripts.BLOCK_TTLS, names, (), _cap.block_ttls, None)
+
+    def async_record_throttle_failure(
+        self, *, keys: ThrottleKeys, pair_limit: int, source_limit: int, window_seconds: int, block_seconds: int
+    ) -> CacheOperation[tuple[int, int]]:
+        _cap.provisional("async_record_throttle_failure")
+        names: Final = (keys.pair_counter, keys.pair_block, keys.source_counter, keys.source_block)
+        return _cap.operation(
+            self,
+            _scripts.RECORD_FAILURE,
+            names,
+            (pair_limit, source_limit, window_seconds, block_seconds),
+            _cap.block_ttls,
+            None,
+        )
+
+    def async_acquire_lease(
+        self, *, key: str, token: str, ttl_seconds: float
+    ) -> CacheOperation[Literal["acquired", "held"]]:
+        _cap.provisional("async_acquire_lease")
+        return _cap.operation(
+            self, _scripts.LEASE_ACQUIRE, (key,), (token, int(ttl_seconds * 1000)), _cap.acquired, None
+        )
+
+    def async_extend_lease(self, *, key: str, token: str, ttl_seconds: float) -> CacheOperation[bool]:
+        _cap.provisional("async_extend_lease")
+        return _cap.operation(self, _scripts.LEASE_EXTEND, (key,), (token, int(ttl_seconds * 1000)), _cap.boolean, None)
+
+    def async_release_lease(self, *, key: str, token: str) -> CacheOperation[bool]:
+        _cap.provisional("async_release_lease")
+        return _cap.operation(self, _scripts.LEASE_RELEASE, (key,), (token,), _cap.boolean, None)
+
+    def async_lease_held(self, *, key: str) -> CacheOperation[bool]:
+        _cap.provisional("async_lease_held")
+        return _cap.operation(self, _scripts.LEASE_HELD, (key,), (), _cap.boolean, None)
+
+    async def async_publish(self, *, channel: str, message: str) -> int | CacheFailure:
+        _cap.provisional("async_publish")
+        return await _cap.publish(self, channel, message)
+
+    async def async_publish_many(self, *, messages: Sequence[CachePublish]) -> tuple[int, ...] | CacheFailure:
+        _cap.provisional("async_publish_many")
+        return await _cap.publish_many(self, messages)
+
+    async def async_subscribe(self, *, channel: str) -> CacheSubscription | CacheFailure:
+        _cap.provisional("async_subscribe")
+        return await _cap.subscribe(self, channel)
+
+    def get_connection_pool_info(self) -> CachePoolInfo | CacheFailure | None:
+        _cap.provisional("get_connection_pool_info")
+        return _cap.pool_info(self)
+
+    async def async_read_values(self, *, keys: Sequence[str]) -> Mapping[str, object] | CacheFailure:
+        _cap.provisional("async_read_values")
+        return await _cap.read_values(self, keys)
+
+    async def _execute_batch_pipeline(
+        self, operations: Sequence["_Op[object]"]
+    ) -> tuple[tuple[int, ...], Sequence[object]]:
+        async with self._get_async_client().pipeline(transaction=False) as pipe:
+            transport: Final = cast("_RedisPipeline", pipe)  # cast-ok: private RedisBatch command subset
+            widths: Final = tuple(operation.enqueue(transport) for operation in operations)
+            replies: Final = await transport.execute(raise_on_error=False)
+            return widths, replies
 
     def check_and_fix_namespace(self, key: str) -> str:
         """
@@ -995,7 +1276,7 @@ class RedisCache(BaseCache):
         start_time: Final = time.time()
         try:
             keys: Final = []
-            _redis_client: Final = self.init_async_client()
+            _redis_client: Final = self._get_async_client()
             if not hasattr(_redis_client, "scan_iter"):
                 verbose_logger.debug(
                     "Redis client does not support scan_iter, potentially using Redis Cluster. Returning empty list."
@@ -1040,7 +1321,11 @@ class RedisCache(BaseCache):
             )
             raise e
 
+    @deprecated("Use typed RedisCache operations instead of script callbacks", category=None)
     def async_register_script(self, script: str) -> Callable[..., Awaitable[Any]]:
+        return self._script_runner(script)
+
+    def _script_runner(self, script: str) -> Callable[..., Awaitable[object]]:
         """
         Register a Lua script with Redis asynchronously.
         Works with both standalone Redis and Redis Cluster.
@@ -1102,38 +1387,10 @@ class RedisCache(BaseCache):
         Kept separate from async_register_script so each loop caches its own
         executor; see that method for why the binding must be per loop.
         """
-        _redis_client: Final[Any] = self.init_async_client()
-        if hasattr(_redis_client, "register_script"):
-            registered_script: Final = _redis_client.register_script(script)
-
-            async def standalone_executor(
-                keys: Sequence[str],
-                args: Sequence[str | bytes | int | float],
-                client: object = None,
-            ) -> object:
-                namespaced_keys: Final = tuple(self.check_and_fix_namespace(key=key) for key in keys)
-                return await registered_script(keys=namespaced_keys, args=args, client=client)
-
-            return standalone_executor
-
-        if hasattr(_redis_client, "script_load"):
-            script_sha: Final = _redis_client.script_load(script)
-
-            async def cluster_executor(
-                keys: Sequence[str],
-                args: Sequence[str | bytes | int | float],
-                client: object = None,
-            ) -> object:
-                namespaced_keys: Final = tuple(self.check_and_fix_namespace(key=key) for key in keys)
-                return await _redis_client.evalsha(script_sha, len(namespaced_keys), *namespaced_keys, *args)
-
-            return cluster_executor
-
-        raise ValueError("Redis client does not support Lua script registration")
+        return _cap.script_executor(self, script)
 
     @_redis_circuit_breaker_guard
     async def async_set_cache(self, key: str | None, value: object, **kwargs):
-        from redis.asyncio import Redis
 
         if key is None:
             verbose_logger.debug(
@@ -1144,7 +1401,9 @@ class RedisCache(BaseCache):
 
         start_time: Final = time.time()
         try:
-            _redis_client: Final[Redis] = self.init_async_client()
+            _redis_client: Final = cast(  # cast-ok: RedisCluster stubs omit the shared Redis commands used here
+                "Redis[bytes]", self._get_async_client()
+            )
         except Exception as e:
             end_time = time.time()
             _duration = end_time - start_time
@@ -1253,7 +1512,7 @@ class RedisCache(BaseCache):
         if len(cache_list) == 0:
             return
 
-        _redis_client: Final = self.init_async_client()
+        _redis_client: Final = self._get_async_client()
         start_time: Final = time.time()
 
         print_verbose(
@@ -1319,7 +1578,7 @@ class RedisCache(BaseCache):
         )
         start_time: Final = time.time()
         try:
-            async with self.init_async_client().pipeline(transaction=False) as pipe:
+            async with self._get_async_client().pipeline(transaction=False) as pipe:
                 for cache_key, json_cache_value, ttl in commands:
                     pipe.set(name=cache_key, value=json_cache_value, ex=None if ttl is None else timedelta(seconds=ttl))
                 await pipe.execute()
@@ -1372,11 +1631,12 @@ class RedisCache(BaseCache):
 
     @_redis_circuit_breaker_guard
     async def async_set_cache_sadd(self, key, value: list, ttl: float | None, **kwargs):
-        from redis.asyncio import Redis
 
         start_time: Final = time.time()
         try:
-            _redis_client: Final[Redis] = self.init_async_client()
+            _redis_client: Final = cast(  # cast-ok: RedisCluster stubs omit the shared Redis commands used here
+                "Redis[bytes]", self._get_async_client()
+            )
         except Exception as e:
             end_time = time.time()
             _duration = end_time - start_time
@@ -1477,9 +1737,10 @@ class RedisCache(BaseCache):
         parent_otel_span: Span | None = None,
         refresh_ttl: bool = False,
     ) -> float:
-        from redis.asyncio import Redis
 
-        _redis_client: Final[Redis] = self.init_async_client()
+        _redis_client: Final = cast(  # cast-ok: RedisCluster stubs omit the shared Redis commands used here
+            "Redis[bytes]", self._get_async_client()
+        )
         start_time: Final = time.time()
         _used_ttl: Final = self.get_ttl(ttl=ttl)
         key = self.check_and_fix_namespace(key=key)
@@ -1544,7 +1805,7 @@ class RedisCache(BaseCache):
         GET/compare/SET runs in a single Lua call, so it is also atomic across
         racing callers and pods. Returns the resulting value.
         """
-        _redis_client: Final = self.init_async_client()
+        _redis_client: Final = self._get_async_client()
         _used_ttl: Final = self.get_ttl(ttl=ttl)
         key = self.check_and_fix_namespace(key=key)
         lua: Final = (
@@ -1670,7 +1931,7 @@ class RedisCache(BaseCache):
 
         We use a wrapper so RedisCluster can override this method
         """
-        async_redis_client: Final = self.init_async_client()
+        async_redis_client: Final = self._get_async_client()
         return await async_redis_client.mget(keys=keys)
 
     def batch_get_cache(
@@ -1737,13 +1998,23 @@ class RedisCache(BaseCache):
             _record_swallowed_redis_failure(self._circuit_breaker, e)
             return key_value_dict
 
+    async def async_key_presence(self, key: str) -> KeyPresence:
+        _cap.provisional("async_key_presence")
+        try:
+            value: Final = await self._async_commands().get(self.check_and_fix_namespace(key=key))
+        except Exception as e:  # noqa: BLE001  # Any failed marker read must remain unavailable, never missing
+            log_redis_failure(verbose_logger, logging.WARNING, "Redis key presence check failed", e)
+            return "unavailable"
+        return "missing" if value is None else "present"
+
     @_redis_circuit_breaker_guard
     async def async_get_cache(
         self, key, parent_otel_span: Span | None = None, *, raise_on_error: bool = False, **kwargs
     ):
-        from redis.asyncio import Redis
 
-        _redis_client: Final[Redis] = self.init_async_client()
+        _redis_client: Final = cast(  # cast-ok: RedisCluster stubs omit the shared Redis commands used here
+            "Redis[bytes]", self._get_async_client()
+        )
         key = self.check_and_fix_namespace(key=key)
         start_time: Final = time.time()
 
@@ -2061,9 +2332,10 @@ class RedisCache(BaseCache):
         if len(increment_list) == 0:
             return None
 
-        from redis.asyncio import Redis
 
-        _redis_client: Final[Redis] = self.init_async_client()
+        _redis_client: Final = cast(  # cast-ok: RedisCluster stubs omit the shared Redis commands used here
+            "Redis[bytes]", self._get_async_client()
+        )
         start_time: Final = time.time()
 
         print_verbose("Increment Async Redis Cache Pipeline: increment list: %s", increment_list)

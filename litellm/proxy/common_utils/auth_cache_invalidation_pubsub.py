@@ -9,15 +9,22 @@ from pydantic import TypeAdapter
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.proxy.common_utils.config_sync_pubsub import (  # noqa: F401  # legacy module exports
-    ConfigSyncPubSub,
-    _ConfigSyncPubSub,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    _pubsub_capable_client,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    coordination_redis_cache,
-    pubsub_capable_client,
+from litellm.caching.redis_cache import (
+    pubsub_capable_client as _pubsub_capable_client,  # noqa: F401  # pyright: ignore[reportDeprecated]  # compatibility-only re-export
 )
+from litellm.caching.redis_cache import (
+    pubsub_capable_client as pubsub_capable_client,  # noqa: PLC0414  # pyright: ignore[reportDeprecated]  # compatibility-only re-export
+)
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.proxy.common_utils.config_sync_pubsub import (
+    ConfigSyncPubSub as ConfigSyncPubSub,  # noqa: PLC0414  # backwards-compatible package export
+)
+from litellm.proxy.common_utils.config_sync_pubsub import (
+    _ConfigSyncPubSub as _ConfigSyncPubSub,  # noqa: PLC0414  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+)
+from litellm.proxy.common_utils.config_sync_pubsub import coordination_redis_cache
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
+from litellm.types.caching import CacheFailure, CachePublish, CacheSubscription
 
 if TYPE_CHECKING:
     from litellm.caching.dual_cache import DualCache
@@ -38,9 +45,7 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 
 def auth_cache_invalidation_channel(redis_cache: "RedisCache") -> str:
-    if redis_cache.namespace is None:
-        return AUTH_CACHE_INVALIDATION_CHANNEL
-    return f"{redis_cache.namespace}:{AUTH_CACHE_INVALIDATION_CHANNEL}"
+    return AUTH_CACHE_INVALIDATION_CHANNEL if redis_cache.namespace is None else f"{redis_cache.namespace}:{AUTH_CACHE_INVALIDATION_CHANNEL}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,22 +91,26 @@ def _message_from_data(data: object) -> _CacheInvalidationMessage | None:
 
 async def _publish_to_redis(redis_cache: "RedisCache", cache_key: str, message: str) -> None:
     try:
-        client: Final = pubsub_capable_client(redis_cache)
         async with _in_flight_publishes:
-            await client.publish(auth_cache_invalidation_channel(redis_cache), message)
+            result: Final = await redis_cache.async_publish(channel=AUTH_CACHE_INVALIDATION_CHANNEL, message=message)
+        if isinstance(result, CacheFailure):
+            verbose_proxy_logger.warning("auth cache invalidation publish for %s failed: %s", cache_key, result.message)
     except Exception as e:  # noqa: BLE001  # best-effort publish; mutations must never fail on redis errors
         verbose_proxy_logger.warning("auth cache invalidation publish for %s failed: %s", cache_key, e)
 
 
 async def _publish_batch_to_redis(redis_cache: "RedisCache", cache_keys: tuple[str, ...]) -> None:
     try:
-        client: Final = pubsub_capable_client(redis_cache)
-        channel: Final = auth_cache_invalidation_channel(redis_cache)
-        pipeline: Final = client.pipeline(transaction=False)
-        for cache_key in cache_keys:
-            _ = pipeline.publish(channel, _cache_invalidation_message_json(cache_key))
+        messages: Final = tuple(
+            CachePublish(channel=AUTH_CACHE_INVALIDATION_CHANNEL, message=_cache_invalidation_message_json(cache_key))
+            for cache_key in cache_keys
+        )
         async with _in_flight_publishes:
-            _ = await pipeline.execute()
+            result: Final = await redis_cache.async_publish_many(messages=messages)
+        if isinstance(result, CacheFailure):
+            verbose_proxy_logger.warning(
+                "auth cache invalidation publish for %d keys failed: %s", len(cache_keys), result.message
+            )
     except Exception as e:  # noqa: BLE001  # best-effort publish; mutations must never fail on redis errors
         verbose_proxy_logger.warning("auth cache invalidation publish for %d keys failed: %s", len(cache_keys), e)
 
@@ -232,7 +241,7 @@ async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "Us
 
 
 class AuthCacheInvalidationSubscriber:
-    __slots__ = ("_additional_in_memory_caches", "_redis_cache", "_task", "_user_api_key_cache")
+    __slots__ = ("_additional_in_memory_caches", "_backoff_seconds", "_redis_cache", "_task", "_user_api_key_cache")
 
     def __init__(
         self,
@@ -243,6 +252,7 @@ class AuthCacheInvalidationSubscriber:
         self._redis_cache = redis_cache
         self._user_api_key_cache = user_api_key_cache
         self._additional_in_memory_caches = tuple(additional_in_memory_caches)
+        self._backoff_seconds = _BACKOFF_INITIAL_SECONDS
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
@@ -262,39 +272,39 @@ class AuthCacheInvalidationSubscriber:
             pass
 
     async def _run(self) -> None:
-        backoff_seconds = _BACKOFF_INITIAL_SECONDS  # rebind-ok: exponential backoff accumulator across reconnects
-        while True:
-            try:
-                client = pubsub_capable_client(self._redis_cache)
-                pubsub = client.pubsub()
-                try:
-                    await pubsub.subscribe(auth_cache_invalidation_channel(self._redis_cache))
-                    backoff_seconds = _BACKOFF_INITIAL_SECONDS
-                    await self._consume(pubsub)
-                finally:
-                    await self._close_pubsub(pubsub)
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:  # noqa: BLE001  # any redis failure falls through to backoff and reconnect
-                verbose_proxy_logger.warning(
-                    "auth cache invalidation subscriber redis error: %s; reconnecting in %.0fs",
-                    e,
-                    backoff_seconds,
-                )
-                await asyncio.sleep(backoff_seconds)
-                backoff_seconds = min(backoff_seconds * 2, _BACKOFF_MAX_SECONDS)
+        self._backoff_seconds = _BACKOFF_INITIAL_SECONDS
+        while failure := await self._subscribe_and_consume():
+            verbose_proxy_logger.warning(
+                "auth cache invalidation subscriber redis error: %s; reconnecting in %.0fs",
+                failure.message,
+                self._backoff_seconds,
+            )
+            await asyncio.sleep(self._backoff_seconds)
+            self._backoff_seconds = min(self._backoff_seconds * 2, _BACKOFF_MAX_SECONDS)
 
-    async def _consume(self, pubsub: ConfigSyncPubSub) -> None:
-        while True:
-            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=_POLL_TIMEOUT_SECONDS)
+    async def _subscribe_and_consume(self) -> CacheFailure:
+        try:
+            subscription: Final = await self._redis_cache.async_subscribe(channel=AUTH_CACHE_INVALIDATION_CHANNEL)
+            if isinstance(subscription, CacheFailure):
+                return subscription
+            try:
+                self._backoff_seconds = _BACKOFF_INITIAL_SECONDS
+                return await self._consume(subscription)
+            finally:
+                await self._close_pubsub(subscription)
+        except Exception as error:  # noqa: BLE001  # custom cache subclasses and eviction errors must not stop reconnects
+            return CacheFailure("unavailable", str(error))
+
+    async def _consume(self, subscription: CacheSubscription) -> CacheFailure:
+        while not isinstance(message := await subscription.receive(timeout_seconds=_POLL_TIMEOUT_SECONDS), CacheFailure):
             if message is None:
                 continue
             self._apply_message(message)
+        return message
 
     @with_service_target(AUTH_OBJECTS_TARGET)
-    def _apply_message(self, message: object) -> None:
-        data: Final = message.get("data") if isinstance(message, dict) else None
-        parsed: Final = _message_from_data(data)
+    def _apply_message(self, message: str | bytes) -> None:
+        parsed: Final = _message_from_data(message)
         if parsed is None:
             return
         if parsed.new_value is not None:
@@ -306,8 +316,10 @@ class AuthCacheInvalidationSubscriber:
             additional_cache.delete_cache(parsed.cache_key)
 
     @staticmethod
-    async def _close_pubsub(pubsub: ConfigSyncPubSub) -> None:
+    async def _close_pubsub(subscription: CacheSubscription) -> None:
         try:
-            await pubsub.aclose()
-        except Exception as e:  # noqa: BLE001  # best-effort close of a possibly-broken connection
+            failure: Final = await subscription.close()
+            if failure is not None:
+                verbose_proxy_logger.debug("auth cache invalidation pubsub close failed: %s", failure.message)
+        except Exception as e:  # noqa: BLE001  # custom subscriptions must not interrupt reconnect or cancellation
             verbose_proxy_logger.debug("auth cache invalidation pubsub close failed: %s", e)

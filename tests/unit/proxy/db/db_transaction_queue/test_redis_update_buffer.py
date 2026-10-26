@@ -1,10 +1,14 @@
 import json
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fakeredis import FakeRedis, FakeServer
+from fakeredis.aioredis import FakeRedis as FakeAsyncRedis
 
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import DailyTagSpendTransaction
@@ -388,7 +392,9 @@ async def test_get_all_transactions_from_redis_buffer_pipeline_no_redis():
 
 
 @pytest.mark.asyncio
-async def test_restore_transactions_to_redis_pushes_only_provided(redis_update_buffer, mock_redis_cache):
+async def test_restore_transactions_to_redis_pushes_only_provided(
+    update_queue_cache: RedisCache, update_queue_server: FakeServer,
+) -> None:
     """
     restore_transactions_to_redis re-pushes only the transaction sets it was
     given, to their matching buffer keys, so uncommitted spend can be retried.
@@ -398,37 +404,27 @@ async def test_restore_transactions_to_redis_pushes_only_provided(redis_update_b
         REDIS_UPDATE_BUFFER_KEY,
     )
 
-    mock_redis_cache.async_rpush_pipeline = AsyncMock(return_value=[1, 1])
+    db_spend: Final = {"key_list_transactions": {"key1": 1.0}}
+    daily_user: Final = {"user_key1": {"spend": 1.0}}
 
-    db_spend = {"key_list_transactions": {"key1": 1.0}}
-    daily_user = {"user_key1": {"spend": 1.0}}
-
-    await redis_update_buffer.restore_transactions_to_redis(
+    await RedisUpdateBuffer(redis_cache=update_queue_cache).restore_transactions_to_redis(
         db_spend_update_transactions=db_spend,
         daily_spend_update_transactions=daily_user,
     )
 
-    mock_redis_cache.async_rpush_pipeline.assert_called_once()
-    rpush_list = mock_redis_cache.async_rpush_pipeline.call_args.kwargs["rpush_list"]
-    pushed_keys = {op["key"] for op in rpush_list}
-    assert pushed_keys == {
-        REDIS_UPDATE_BUFFER_KEY,
-        REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
-    }
-    # Payloads round-trip through the same JSON encoding used on the store path
-    payloads = {op["key"]: json.loads(op["values"][0]) for op in rpush_list}
-    assert payloads[REDIS_UPDATE_BUFFER_KEY] == db_spend
-    assert payloads[REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY] == daily_user
+    with FakeRedis(server=update_queue_server) as transport:
+        assert set(transport.keys()) == {
+            f"updates:{REDIS_UPDATE_BUFFER_KEY}".encode(), f"updates:{REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY}".encode(),
+        }
+    assert json.loads(await update_queue_cache.async_lpop(REDIS_UPDATE_BUFFER_KEY)) == db_spend
+    assert json.loads(await update_queue_cache.async_lpop(REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY)) == daily_user
 
 
 @pytest.mark.asyncio
-async def test_restored_window_spend_transactions_drain_back_unchanged(redis_update_buffer, mock_redis_cache):
+async def test_restored_window_spend_transactions_drain_back_unchanged(update_queue_cache: RedisCache) -> None:
     """A window commit that fails after the destructive lpop must be re-pushed
     in the store path's encoding, so the next drain returns the same increments."""
-    from litellm.constants import REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY
-    from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
-        build_window_spend_transaction,
-    )
+    from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import build_window_spend_transaction
 
     window_transactions = (
         build_window_spend_transaction(
@@ -440,17 +436,9 @@ async def test_restored_window_spend_transactions_drain_back_unchanged(redis_upd
             started_at=datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc),
         ),
     )
-    mock_redis_cache.async_rpush_pipeline = AsyncMock(return_value=[1])
-
-    await redis_update_buffer.restore_transactions_to_redis(window_spend_update_transactions=window_transactions)
-
-    rpush_list = mock_redis_cache.async_rpush_pipeline.call_args.kwargs["rpush_list"]
-    assert [op["key"] for op in rpush_list] == [REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY]
-
-    mock_redis_cache.async_lpop_pipeline = AsyncMock(
-        return_value=[None, None, None, None, None, None, list(rpush_list[0]["values"])]
-    )
-    drained = await redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
+    buffer: Final = RedisUpdateBuffer(redis_cache=update_queue_cache)
+    await buffer.restore_transactions_to_redis(window_spend_update_transactions=window_transactions)
+    drained: Final = await buffer.get_all_transactions_from_redis_buffer_pipeline()
 
     assert drained[6] == window_transactions
 
@@ -458,23 +446,21 @@ async def test_restored_window_spend_transactions_drain_back_unchanged(redis_upd
 @pytest.mark.asyncio
 async def test_restore_transactions_to_redis_noop_when_empty(redis_update_buffer, mock_redis_cache):
     """Nothing to restore -> no Redis call."""
-    mock_redis_cache.async_rpush_pipeline = AsyncMock()
+    mock_redis_cache.async_enqueue_updates = AsyncMock()
     await redis_update_buffer.restore_transactions_to_redis()
-    mock_redis_cache.async_rpush_pipeline.assert_not_called()
+    mock_redis_cache.async_enqueue_updates.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_restore_transactions_to_redis_swallows_redis_error(redis_update_buffer, mock_redis_cache):
+async def test_restore_transactions_to_redis_swallows_redis_error(
+    update_queue_cache: RedisCache, update_queue_server: FakeServer, caplog: pytest.LogCaptureFixture,
+) -> None:
     """A Redis failure during restore must not propagate to the caller's finally block."""
-    from redis.exceptions import RedisError
-
-    mock_redis_cache.async_rpush_pipeline = AsyncMock(side_effect=RedisError("redis down"))
-
-    await redis_update_buffer.restore_transactions_to_redis(
+    update_queue_server.connected = False
+    assert await RedisUpdateBuffer(redis_cache=update_queue_cache).restore_transactions_to_redis(
         db_spend_update_transactions={"key_list_transactions": {"key1": 1.0}},
-    )
-
-    mock_redis_cache.async_rpush_pipeline.assert_called_once()
+    ) is None
+    assert "failed to restore uncommitted transactions to Redis" in caplog.text
 
 
 def test_validate_redis_transaction_buffer_raises_without_redis():
@@ -641,20 +627,39 @@ async def test_store_in_memory_spend_updates_pushes_budget_window_spend(redis_up
     ]
 
 
+@pytest.fixture
+def update_queue_server() -> FakeServer:
+    return FakeServer()
+
+
+@pytest.fixture
+def update_queue_cache(update_queue_server: FakeServer) -> Iterator[RedisCache]:
+    with (
+        patch(  # test-quality-ok: Redis transport has no constructor injection point
+            "litellm._redis.get_redis_client", return_value=FakeRedis(server=update_queue_server)
+        ),
+        patch(  # test-quality-ok: only transport is replaced, cache serialization remains real
+            "litellm._redis.get_redis_async_client", return_value=FakeAsyncRedis(server=update_queue_server)
+        ),
+    ):
+        yield RedisCache(host="127.0.0.1", port=6379, namespace="updates")
+
+
 @pytest.mark.asyncio
-async def test_budget_window_payloads_keep_request_ids_for_older_workers(redis_update_buffer, mock_redis_cache):
+async def test_budget_window_payloads_keep_request_ids_for_older_workers(update_queue_cache: RedisCache) -> None:
     """A leader from before the field was dropped indexes request_ids while
     merging what it popped, and the pop is destructive, so a payload without
     the key would cost a rolling deploy those increments."""
     from datetime import datetime, timezone
 
+    from litellm.constants import REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY
     from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
         WindowSpendUpdateQueue,
         build_window_spend_transaction,
     )
 
-    mock_redis_cache.async_rpush_pipeline = AsyncMock(return_value=[1])
-    window_queue = WindowSpendUpdateQueue()
+    buffer: Final = RedisUpdateBuffer(redis_cache=update_queue_cache)
+    window_queue: Final = WindowSpendUpdateQueue()
     await window_queue.add_update(
         build_window_spend_transaction(
             entity_type="key",
@@ -665,12 +670,13 @@ async def test_budget_window_payloads_keep_request_ids_for_older_workers(redis_u
         )
     )
 
-    await redis_update_buffer.restore_transactions_to_redis(
+    await buffer.restore_transactions_to_redis(
         window_spend_update_transactions=await window_queue.flush_and_get_aggregated_window_spend_transactions(),
     )
 
-    rpush_list = mock_redis_cache.async_rpush_pipeline.call_args.kwargs["rpush_list"]
-    restored = json.loads(rpush_list[0]["values"][0])
+    queued: Final = await update_queue_cache.async_lpop(REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY, count=1)
+    assert len(queued) == 1
+    restored: Final = json.loads(queued[0])
     assert [payload["request_ids"] for payload in restored] == [[]]
 
 
@@ -771,15 +777,16 @@ async def test_store_spend_logs_in_redis_is_off_unless_transaction_buffering_is_
 
 
 @pytest.mark.asyncio
-async def test_tool_discoveries_go_back_on_the_queue_when_the_redis_push_fails():
+async def test_tool_discoveries_go_back_on_the_queue_when_the_redis_push_fails(
+    update_queue_cache: RedisCache, update_queue_server: FakeServer,
+) -> None:
     from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import ToolDiscoveryQueue
 
-    redis_cache = MagicMock()
-    redis_cache.async_rpush_pipeline = AsyncMock(side_effect=ConnectionError("redis down"))
-    queue = ToolDiscoveryQueue()
+    update_queue_server.connected = False
+    queue: Final = ToolDiscoveryQueue()
     queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
     queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
 
-    await RedisUpdateBuffer(redis_cache=redis_cache).store_tool_discoveries_in_redis(queue)
+    await RedisUpdateBuffer(redis_cache=update_queue_cache).store_tool_discoveries_in_redis(queue)
 
     assert queue.flush() == [{"tool_name": "get_weather", "origin": "user_defined", "call_count": 2}]

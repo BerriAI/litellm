@@ -13,7 +13,6 @@ from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
 from pydantic import TypeAdapter
-from redis.exceptions import RedisError
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
@@ -63,6 +62,8 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
 from litellm.proxy.db.spend_log_batching import SpendLogRow
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.caching import (
+    CacheFailure,
+    CacheQueueUpdate,
     RedisPipelineLpopOperation,
     RedisPipelineRpushOperation,
 )
@@ -549,25 +550,23 @@ class RedisUpdateBuffer:
         )
 
         rpush_list: Final = tuple(
-            RedisPipelineRpushOperation(key=redis_key, values=(safe_dumps(transactions),))
+            CacheQueueUpdate(key=redis_key, values=(safe_dumps(transactions),))
             for transactions, redis_key in restore_configs
             if transactions
         )
         if len(rpush_list) == 0:
             return
 
-        try:
-            await self.redis_cache.async_rpush_pipeline(rpush_list=rpush_list)
-            verbose_proxy_logger.info(
-                "Spend tracking - restored %d uncommitted transaction set(s) to Redis for retry on next tick.",
-                len(rpush_list),
-            )
-        except RedisError as e:
+        result: Final = await self.redis_cache.async_enqueue_updates(updates=rpush_list)
+        if isinstance(result, CacheFailure):
             verbose_proxy_logger.error(
                 "Spend tracking - failed to restore uncommitted transactions to Redis. "
-                "These spend updates are lost. Error: %s",
-                str(e),
+                "These spend updates are lost. Error: %s", result.message,
             )
+            return
+        verbose_proxy_logger.info(
+            "Spend tracking - restored %d uncommitted transaction set(s) to Redis for retry on next tick.", len(rpush_list)
+        )
 
     @with_service_target(SPEND_QUEUE_TARGET)
     async def store_tool_discoveries_in_redis(self, tool_discovery_queue: ToolDiscoveryQueue) -> None:
@@ -577,17 +576,13 @@ class RedisUpdateBuffer:
         items: Final = tool_discovery_queue.flush()
         if not items:
             return
-        try:
-            _ = await self.redis_cache.async_rpush_pipeline(
-                rpush_list=[
-                    RedisPipelineRpushOperation(key=REDIS_TOOL_DISCOVERY_BUFFER_KEY, values=[safe_dumps(items)])
-                ]
-            )
-        except (RedisError, OSError, asyncio.TimeoutError) as e:
+        result: Final = await self.redis_cache.async_enqueue_updates(
+            updates=(CacheQueueUpdate(key=REDIS_TOOL_DISCOVERY_BUFFER_KEY, values=(safe_dumps(items),)),)
+        )
+        if isinstance(result, CacheFailure):
             verbose_proxy_logger.error(
                 "Tool discovery - failed to push %d tool rows to Redis, restoring them for the next tick. Error: %s",
-                len(items),
-                str(e),
+                len(items), result.message,
             )
             for item in items:
                 tool_discovery_queue.add_update(item)

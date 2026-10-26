@@ -1,22 +1,24 @@
 import asyncio
 import json
 import random
-from typing import Callable, Coroutine, Final, Iterable, List, Optional, Tuple
+from collections.abc import Callable, Coroutine, Iterable
+from typing import Final, List, Tuple, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from redis.asyncio import Redis
 
 import litellm
+from litellm.caching.redis_cache import RedisCache
 from litellm.proxy.common_utils.config_sync_pubsub import (
+    _CONFIG_SYNCED_TABLE_NAMES,
+    _RESYNC_APPLIED_CONFIG_PARAM_NAMES,
+    _WRITE_ACTION_NAMES,
     CONFIG_SYNC_CHANNEL,
     CONFIG_SYNC_JITTER_MAX_SECONDS,
     CONFIG_SYNC_MIN_RESYNC_INTERVAL_SECONDS,
     ConfigSyncSubscriber,
-    _CONFIG_SYNCED_TABLE_NAMES,
     _PublishOnWriteActions,
-    _RESYNC_APPLIED_CONFIG_PARAM_NAMES,
-    _WRITE_ACTION_NAMES,
     publish_config_change,
     wrap_table_actions_for_config_sync,
 )
@@ -103,7 +105,7 @@ class _ScriptedPubSubClient:
 
 class _QueuePubSub:
     def __init__(self, initial_messages: Iterable[str] = ()) -> None:
-        self.queue: "asyncio.Queue[str]" = asyncio.Queue()
+        self.queue: asyncio.Queue[str] = asyncio.Queue()
         for message in initial_messages:
             self.queue.put_nowait(message)
         self.subscribed_channels: List[str] = []
@@ -112,14 +114,14 @@ class _QueuePubSub:
     async def subscribe(self, *channels: str) -> None:
         self.subscribed_channels.extend(channels)
 
-    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> Optional[str]:
+    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> dict[str, str] | None:
         if timeout == 0:
             try:
-                return self.queue.get_nowait()
+                return {"type": "message", "data": self.queue.get_nowait()}
             except asyncio.QueueEmpty:
                 return None
         try:
-            return await asyncio.wait_for(self.queue.get(), timeout)
+            return {"type": "message", "data": await asyncio.wait_for(self.queue.get(), timeout)}
         except asyncio.TimeoutError:
             return None
 
@@ -128,7 +130,7 @@ class _QueuePubSub:
 
 
 class _BrokenPubSub(_QueuePubSub):
-    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> Optional[str]:
+    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> dict[str, str] | None:
         raise ConnectionError("connection lost")
 
 
@@ -142,7 +144,7 @@ class _EmptyPollsThenMessagePubSub(_QueuePubSub):
         super().__init__(initial_messages=initial_messages)
         self.remaining_empty_polls = empty_polls
 
-    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> Optional[str]:
+    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> dict[str, str] | None:
         if timeout != 0 and self.remaining_empty_polls > 0:
             self.remaining_empty_polls -= 1
             return None
@@ -165,19 +167,20 @@ class _ScriptedPubSubRedisClient(Redis):
         return next(self._scripted_pubsubs)
 
 
-class _FakeRedisCache:
-    def __init__(self, client: object, namespace: Optional[str] = None) -> None:
+class _FakeRedisCache(RedisCache):
+    def __init__(self, client: object, namespace: str | None = None) -> None:
         self._client = client
         self.namespace = namespace
 
-    def init_pubsub_client(self) -> object:
-        return self._client
+    def init_pubsub_client(self) -> "Redis[bytes]":
+        return cast("Redis[bytes]", self._client)
 
 
-class _ExplodingRedisCache:
-    namespace: Optional[str] = None
+class _ExplodingRedisCache(RedisCache):
+    def __init__(self) -> None:
+        self.namespace = None
 
-    def init_pubsub_client(self) -> object:
+    def init_pubsub_client(self) -> "Redis[bytes]":
         raise ConnectionError("cannot connect")
 
 
@@ -211,19 +214,26 @@ async def test_publish_uses_namespaced_channel() -> None:
     client = _RecordingRedisClient()
     cache = _FakeRedisCache(client, namespace="prod-eu")
 
-    await publish_config_change(redis_cache=cache, object_type="litellm_credentialstable")
+    with pytest.warns(FutureWarning, match="experimental.*may change"):
+        await publish_config_change(redis_cache=cache, object_type="litellm_credentialstable")
 
     assert client.published[0][0] == "prod-eu:litellm_proxy.config_change"
 
 
-async def test_publish_swallows_redis_publish_errors() -> None:
+async def test_publish_swallows_redis_publish_errors(caplog: pytest.LogCaptureFixture) -> None:
     cache = _FakeRedisCache(_FailingPublishRedisClient())
 
     await publish_config_change(redis_cache=cache, object_type="litellm_proxymodeltable")
 
+    assert "config sync publish for litellm_proxymodeltable failed:" in caplog.text
+    assert "redis down" in caplog.text
 
-async def test_publish_swallows_client_init_errors() -> None:
+
+async def test_publish_swallows_client_init_errors(caplog: pytest.LogCaptureFixture) -> None:
     await publish_config_change(redis_cache=_ExplodingRedisCache(), object_type="litellm_proxymodeltable")
+
+    assert "config sync publish for litellm_proxymodeltable failed:" in caplog.text
+    assert "cannot connect" in caplog.text
 
 
 async def test_publish_reaches_cluster_derived_pubsub_clients() -> None:
@@ -619,6 +629,126 @@ async def test_subscriber_subscribes_on_cluster_derived_pubsub_client() -> None:
 
     assert pubsub.subscribed_channels == [CONFIG_SYNC_CHANNEL]
     assert resyncs == ["resync"]
+
+
+class _PollFailingPubSub(_QueuePubSub):
+    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> dict[str, str] | None:
+        if timeout != 0:
+            raise ConnectionError("connection lost while polling")
+        return None
+
+
+class _DrainFailingPubSub(_QueuePubSub):
+    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> dict[str, str] | None:
+        if timeout == 0:
+            raise ConnectionError("connection lost while draining")
+        return await super().get_message(ignore_subscribe_messages=ignore_subscribe_messages, timeout=timeout)
+
+
+class _SubscribeFailingPubSub(_QueuePubSub):
+    async def subscribe(self, *channels: str) -> None:
+        raise ConnectionError("subscribe failed")
+
+
+class _BlockingSubscribePubSub(_QueuePubSub):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def subscribe(self, *channels: str) -> None:
+        self.started.set()
+        await self.release.wait()
+
+
+class _SleepRecorder:
+    def __init__(self) -> None:
+        self.delays: tuple[float, ...] = ()
+
+    async def __call__(self, seconds: float) -> None:
+        self.delays += (seconds,)
+        await asyncio.sleep(0)
+
+
+async def test_drain_failure_reconnects_before_reloading_missed_changes() -> None:
+    broken: Final = _DrainFailingPubSub(initial_messages=("change",))
+    healthy: Final = _QueuePubSub()
+    recovered: Final = asyncio.Event()
+    closed_before_reload: Final[asyncio.Queue[bool]] = asyncio.Queue()
+
+    async def reload_config() -> None:
+        closed_before_reload.put_nowait(broken.closed)
+        recovered.set()
+
+    subscriber: Final = ConfigSyncSubscriber(
+        redis_cache=_FakeRedisCache(_ScriptedPubSubClient((broken, healthy))),
+        resync_callbacks=(reload_config,),
+        debounce_seconds=0,
+        jitter_max_seconds=0,
+        backoff_initial_seconds=0,
+        sleep=_SleepRecorder(),
+    )
+    subscriber.start()
+    try:
+        await asyncio.wait_for(recovered.wait(), timeout=1)
+    finally:
+        await subscriber.stop()
+
+    assert closed_before_reload.qsize() == 1
+    assert closed_before_reload.get_nowait() is True
+    assert healthy.subscribed_channels == [CONFIG_SYNC_CHANNEL]
+    assert healthy.closed is True
+
+
+async def test_subscription_backoff_caps_and_resets_after_recovery() -> None:
+    failed_subscriptions: Final = tuple(_SubscribeFailingPubSub() for _ in range(3))
+    broken: Final = _PollFailingPubSub()
+    healthy: Final = _QueuePubSub()
+    sleeps: Final = _SleepRecorder()
+    recovered: Final = asyncio.Event()
+    reloads: Final[asyncio.Queue[None]] = asyncio.Queue()
+
+    async def reload_config() -> None:
+        reloads.put_nowait(None)
+        if reloads.qsize() == 2:
+            recovered.set()
+
+    subscriber: Final = ConfigSyncSubscriber(
+        redis_cache=_FakeRedisCache(_ScriptedPubSubClient((*failed_subscriptions, broken, healthy))),
+        resync_callbacks=(reload_config,),
+        debounce_seconds=0,
+        jitter_max_seconds=0,
+        min_resync_interval_seconds=0,
+        backoff_initial_seconds=2,
+        backoff_max_seconds=5,
+        sleep=sleeps,
+    )
+    subscriber.start()
+    try:
+        await asyncio.wait_for(recovered.wait(), timeout=1)
+    finally:
+        await subscriber.stop()
+
+    assert sleeps.delays == (2, 4, 5, 0, 2, 0)
+    assert tuple(subscription.closed for subscription in failed_subscriptions) == (True, True, True)
+    assert broken.closed is True
+    assert healthy.closed is True
+    assert reloads.qsize() == 2
+
+
+async def test_stop_closes_a_subscription_cancelled_during_subscribe() -> None:
+    pubsub: Final = _BlockingSubscribePubSub()
+    subscriber: Final = ConfigSyncSubscriber(
+        redis_cache=_FakeRedisCache(_ScriptedPubSubClient((pubsub,))), resync_callbacks=()
+    )
+    subscriber.start()
+    try:
+        await asyncio.wait_for(pubsub.started.wait(), timeout=1)
+    finally:
+        await subscriber.stop()
+
+    assert pubsub.closed is True
+    assert pubsub.release.is_set() is False
 
 
 class _FakeTableActions:

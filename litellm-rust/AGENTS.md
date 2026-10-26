@@ -1,6 +1,6 @@
 # Rust workspace rules
 
-For Redis-backed operations and incremental redis-py migration, follow [.agents/skills/redis-access/SKILL.md](.agents/skills/redis-access/SKILL.md)
+For Redis-backed operations, typed RedisCache extensions, or explicit Rust ports, follow [.agents/skills/redis-access/SKILL.md](.agents/skills/redis-access/SKILL.md)
 
 For diagnostic tracing changes, follow [.agents/skills/rust-tracing/SKILL.md](.agents/skills/rust-tracing/SKILL.md)
 

@@ -9,7 +9,6 @@ Recovery is the master key over the API, which never passes through here, or wai
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import ipaddress
 import math
@@ -17,16 +16,15 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import cache
-from typing import Final, Literal, NamedTuple, Protocol, TypeAlias
+from typing import Final, Literal, Protocol, TypeAlias
 
 from fastapi import Request, status
 from pydantic import TypeAdapter, ValidationError
-from redis.exceptions import RedisError
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     EMPTY_MAPPING,
     LOGIN_THROTTLE_CACHE_KEY_PREFIX,
@@ -38,6 +36,7 @@ from litellm.constants import (
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.network import TrustedProxyConfig, resolve_client_ip
 from litellm.secret_managers.main import get_secret_bool
+from litellm.types.caching import CacheFailure, ThrottleKeys
 
 _LOGIN_THROTTLE_TARGET: Final = "login_throttle"
 
@@ -54,7 +53,6 @@ WINDOW_KEY: Final = "failed_login_window_seconds"
 BLOCK_KEY: Final = "failed_login_block_seconds"
 TRUSTED_PROXY_RANGES_KEY: Final = "trusted_proxy_ranges"
 
-_REDIS_FAILURES: Final = (RedisError, RedisCircuitBreakerOpenError, OSError, asyncio.TimeoutError)
 _LOCAL_BLOCK_EXPIRY: Final = TypeAdapter[float | None](float | None)
 _SOURCE_LIMIT_OVERRIDES: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object])
 _RANGE_ENTRIES: Final = TypeAdapter[tuple[object, ...]](tuple[object, ...])
@@ -62,7 +60,6 @@ _RANGE_ENTRIES: Final = TypeAdapter[tuple[object, ...]](tuple[object, ...])
 Scope: TypeAlias = Literal["user", "source"]
 
 _BlockTtls: TypeAlias = tuple[int, int]
-_LUA_BLOCK_TTLS: Final = TypeAdapter[_BlockTtls](_BlockTtls)
 _Network: TypeAlias = ipaddress.IPv4Network | ipaddress.IPv6Network
 
 
@@ -77,25 +74,6 @@ class LocalStore(Protocol):
 
     def delete_cache(self, key: str) -> None: ...
 
-
-# KEYS: pair counter, pair block, source counter, source block (one cluster slot via the source hash tag)
-# ARGV: pair limit, source limit (0 = source scope off), window seconds, block seconds
-# Both scripts return {pair block TTL, source block TTL}; 0 or below means not blocked
-_BLOCK_TTLS_LUA: Final = "return {redis.call('TTL', KEYS[2]), redis.call('TTL', KEYS[4])}"
-_RECORD_FAILURE_LUA: Final = (
-    "local function bump(count_key, block_key, limit) "
-    "local blocked = redis.call('TTL', block_key) "
-    "if blocked > 0 then return blocked end "
-    "local count = redis.call('INCR', count_key) "
-    "if redis.call('TTL', count_key) < 0 then redis.call('EXPIRE', count_key, ARGV[3]) end "
-    "if count > limit then redis.call('SET', block_key, '1', 'EX', ARGV[4]) return tonumber(ARGV[4]) end "
-    "return 0 end "
-    "local user_block = bump(KEYS[1], KEYS[2], tonumber(ARGV[1])) "
-    "local source_block = 0 "
-    "if tonumber(ARGV[2]) > 0 and user_block == 0 then "
-    "source_block = bump(KEYS[3], KEYS[4], tonumber(ARGV[2])) end "
-    "return {user_block, source_block}"
-)
 
 _COUNTERS: Final = InMemoryCache(
     max_size_in_memory=LOGIN_THROTTLE_MAX_TRACKED_COUNTERS, default_ttl=DEFAULT_FAILED_LOGIN_WINDOW_SECONDS
@@ -253,13 +231,6 @@ def source_group(client_ip: str) -> str:
     return str(address)
 
 
-class _Keys(NamedTuple):
-    pair_counter: str
-    pair_block: str
-    source_counter: str
-    source_block: str
-
-
 @dataclass(frozen=True, slots=True)
 class Block:
     scope: Scope
@@ -312,10 +283,10 @@ class LoginThrottle:
             enabled=not exempt and not _rate_limit_disabled(),
         )
 
-    def _keys(self, username: str) -> _Keys:
+    def _keys(self, username: str) -> ThrottleKeys:
         group: Final = source_group(self.client_ip)
         user: Final = hashlib.sha256(username.casefold().encode("utf-8")).hexdigest()
-        return _Keys(
+        return ThrottleKeys(
             pair_counter=f"{LOGIN_THROTTLE_CACHE_KEY_PREFIX}:{{{group}}}:user:{user}",
             pair_block=f"{LOGIN_THROTTLE_CACHE_KEY_PREFIX}:{{{group}}}:block:user:{user}",
             source_counter=f"{LOGIN_THROTTLE_CACHE_KEY_PREFIX}:{{{group}}}:source",
@@ -338,7 +309,7 @@ class LoginThrottle:
         )
         raise self.refused(block.retry_after)
 
-    async def _active_block(self, keys: _Keys) -> Block | None:
+    async def _active_block(self, keys: ThrottleKeys) -> Block | None:
         local: Final = self._local_block_ttls(keys)
         shared: Final = await self._shared_block_ttls(keys)
         user_ttl: Final = max(local[0], shared[0])
@@ -350,18 +321,13 @@ class LoginThrottle:
         return None
 
     @with_service_target("login_throttle")
-    async def _shared_block_ttls(self, keys: _Keys) -> _BlockTtls:
+    async def _shared_block_ttls(self, keys: ThrottleKeys) -> _BlockTtls:
         if self.redis_cache is None:
             return LOGIN_THROTTLE_NOT_BLOCKED
-        try:
-            return _LUA_BLOCK_TTLS.validate_python(
-                await self.redis_cache.async_register_script(_BLOCK_TTLS_LUA)(keys, ())
-            )
-        except _REDIS_FAILURES as err:
-            self._warn_redis(err)
-            return LOGIN_THROTTLE_NOT_BLOCKED
+        result: Final = await self.redis_cache.async_read_throttle_ttls(keys=keys)
+        return self._shared_ttls_or_fallback(result) or LOGIN_THROTTLE_NOT_BLOCKED
 
-    def _local_block_ttls(self, keys: _Keys) -> _BlockTtls:
+    def _local_block_ttls(self, keys: ThrottleKeys) -> _BlockTtls:
         return self._local_block_ttl(keys.pair_block), self._local_block_ttl(keys.source_block)
 
     def _local_block_ttl(self, block_key: str) -> int:
@@ -375,14 +341,16 @@ class LoginThrottle:
         keys: Final = self._keys(username)
         source_limit: Final = self.source_limit or 0
         if self.redis_cache is not None:
-            try:
-                return _LUA_BLOCK_TTLS.validate_python(
-                    await self.redis_cache.async_register_script(_RECORD_FAILURE_LUA)(
-                        keys, (self.user_limit, source_limit, self.window_seconds, self.block_seconds)
-                    )
-                )
-            except _REDIS_FAILURES as err:
-                self._warn_redis(err)
+            result: Final = await self.redis_cache.async_record_throttle_failure(
+                keys=keys,
+                pair_limit=self.user_limit,
+                source_limit=source_limit,
+                window_seconds=self.window_seconds,
+                block_seconds=self.block_seconds,
+            )
+            shared: Final = self._shared_ttls_or_fallback(result)
+            if shared is not None:
+                return shared
         user_block: Final = self._local_bump(keys.pair_counter, keys.pair_block, self.user_limit)
         if source_limit == 0 or user_block > 0:
             return user_block, 0
@@ -402,13 +370,22 @@ class LoginThrottle:
     async def clear_pair(self, username: str) -> None:
         pair_counter: Final = self._keys(username).pair_counter
         if self.redis_cache is not None:
-            try:
-                await self.redis_cache.async_delete_cache(pair_counter)
-            except _REDIS_FAILURES as err:
-                self._warn_redis(err)
+            result: Final = await self.redis_cache.async_delete_record(key=pair_counter)
+            if isinstance(result, CacheFailure):
+                self._warn_redis(result.message)
         self.counters.delete_cache(pair_counter)
 
-    def _warn_redis(self, err: Exception) -> None:
+    def _shared_ttls_or_fallback(self, result: _BlockTtls | CacheFailure) -> _BlockTtls | None:
+        match result:
+            case CacheFailure(kind="invalid_response", validation_error=error):
+                raise error if error is not None else ValueError("Invalid shared login throttle state")
+            case CacheFailure(message=message):
+                self._warn_redis(message)
+                return None
+            case _:
+                return result
+
+    def _warn_redis(self, err: str) -> None:
         verbose_proxy_logger.warning(
             "Redis failed while counting Admin UI sign-in attempts; using this worker's own counters "
             "until it recovers: %s",

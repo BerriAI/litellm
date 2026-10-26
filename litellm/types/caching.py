@@ -1,7 +1,10 @@
-from collections.abc import Sequence
+import asyncio
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Final, Literal, Optional, Union
+from typing import Any, Final, Literal, Protocol, TypeVar
 
+from pydantic import ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -40,6 +43,140 @@ CachingSupportedCallTypes = Literal[
     "anthropic_messages",
     "aanthropic_messages",
 ]
+
+KeyPresence = Literal["present", "missing", "unavailable"]
+
+
+@dataclass(frozen=True, slots=True)
+class CacheFailure:
+    kind: Literal["unavailable", "invalid_response"]
+    message: str
+    reason: Literal["circuit_open", "timeout", "other"] = "other"
+    validation_error: ValidationError | None = field(default=None, compare=False, repr=False)
+
+
+CacheValue: Final = TypeVar("CacheValue")
+
+
+class CacheOperation(Awaitable[CacheValue | CacheFailure], Protocol[CacheValue]):
+    @property
+    def done(self) -> bool: ...
+
+    def on_settled(
+        self, hook: Callable[[asyncio.Future[CacheValue | CacheFailure]], Awaitable[None] | None]
+    ) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class WindowCounter:
+    window_key: str
+    counter_key: str
+
+
+@dataclass(frozen=True, slots=True)
+class WindowCount:
+    window_start: str
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class WindowReservation:
+    window_key: str
+    counter_key: str
+    limit: int
+    increment: int
+    ttl_seconds: int
+    window_seconds: int
+
+
+@dataclass(frozen=True, slots=True)
+class CapacityExceeded:
+    index: int
+    count: int
+    limit: int
+
+
+@dataclass(frozen=True, slots=True)
+class ConcurrencySlot:
+    key: str
+    limit: int
+    ttl_seconds: int
+    slot_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ConcurrencyRelease:
+    key: str
+    slot_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ConcurrencyRead:
+    key: str
+    ttl_seconds: int
+
+
+@dataclass(frozen=True, slots=True)
+class CounterIncrement:
+    key: str
+    increment: float
+    ttl_seconds: int
+
+
+@dataclass(frozen=True, slots=True)
+class GuardedIncrement:
+    window_key: str
+    counter_key: str
+    expected_window_start: str
+    increment: int
+    ttl_seconds: int
+
+
+@dataclass(frozen=True, slots=True)
+class CounterUpdate:
+    applied: bool
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class LimitedIncrement:
+    accepted: bool
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class ThrottleKeys:
+    pair_counter: str
+    pair_block: str
+    source_counter: str
+    source_block: str
+
+
+class CacheSubscription(Protocol):
+    async def receive(self, *, timeout_seconds: float) -> str | bytes | None | CacheFailure: ...
+
+    async def close(self) -> None | CacheFailure: ...
+
+
+@dataclass(frozen=True, slots=True)
+class CachePoolInfo:
+    available_connections: int | None
+    in_use_connections: int | None
+    max_connections: int | None
+    connection_class: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class CachePublish:
+    channel: str
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class CacheQueueUpdate:
+    key: str
+    values: tuple[str, ...]
+
 
 DEFAULT_CACHING_SUPPORTED_CALL_TYPES: tuple[CachingSupportedCallTypes, ...] = (
     "completion",

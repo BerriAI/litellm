@@ -8,9 +8,9 @@ Tests that session-scoped budget tracking works correctly:
 - Requests without agent_id pass through
 """
 
+import logging
 from unittest.mock import patch
 
-import logging
 import pytest
 from fastapi import HTTPException
 
@@ -199,3 +199,33 @@ async def test_an_open_circuit_breaker_reads_session_spend_locally_without_a_war
     assert spend == 0.0
     assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
     assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply,expected", [(b"3.75", 3.75), ("malformed", 0.5), (ConnectionError("offline"), 0.5)])
+async def test_session_spend_uses_typed_result_or_local_fallback(reply: object, expected: float) -> None:
+    from typing import Final
+    from unittest.mock import AsyncMock, MagicMock
+    from uuid import uuid4
+
+    from litellm.caching.redis_cache import RedisCache
+
+    transport: Final = MagicMock()
+    execute: Final = AsyncMock(side_effect=[reply])
+    transport.register_script.return_value = execute
+    with (
+        patch("litellm._redis.get_redis_client", return_value=MagicMock()),
+        patch("litellm._redis.get_redis_async_client", return_value=transport),
+    ):
+        with patch("asyncio.get_running_loop", side_effect=RuntimeError("no running event loop")):
+            redis: Final = RedisCache(host=f"session-spend-{uuid4().hex}", namespace="test")
+        cache: Final = DualCache(redis_cache=redis)
+        handler: Final = PROXY_MaxBudgetPerSessionHandler(InternalUsageCache(cache))
+        key: Final = handler._make_cache_key("budget-session")
+        with pytest.warns(FutureWarning, match="experimental.*may change"):
+            result: Final = await handler._increment_spend(key, 0.5)
+
+    assert result == expected
+    assert tuple(execute.call_args.kwargs["keys"]) == ("test:{session_budget:budget-session}:spend",)
+    assert execute.call_args.kwargs["args"] == ("0.5", handler.ttl)
+    assert cache.in_memory_cache.get_cache(key) == (None if expected == 3.75 else 0.5)

@@ -5,7 +5,7 @@ import ssl
 import weakref
 from collections.abc import Awaitable, Callable
 from importlib import import_module
-from typing import cast
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -17,6 +17,7 @@ from litellm.caching.evicted_client_closer import EvictedClientCloser
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.caching.redis_cache import RedisCache
 from litellm.caching.redis_cluster_cache import ClusterConnectionGate, RedisClusterCache
+from litellm.types.caching import CacheFailure
 
 
 @patch("litellm._redis.init_redis_cluster")
@@ -52,7 +53,7 @@ async def test_redis_cluster_async_batch_get(mock_init_redis_cluster):
     """
     # Create a mock Redis client
     mock_redis = MagicMock()
-    mock_redis.mget_nonatomic.return_value = [None, None]  # Simulate no cache hits
+    mock_redis.mget_nonatomic = AsyncMock(return_value=[None, None])
 
     # Create RedisClusterCache instance with mock client
     cache = RedisClusterCache(
@@ -65,10 +66,10 @@ async def test_redis_cluster_async_batch_get(mock_init_redis_cluster):
 
     # Test async_batch_get_cache
     keys = ["key1", "key2"]
-    await cache.async_batch_get_cache(keys)
+    result: Final = await cache.async_batch_get_cache(keys)
 
-    # Verify mget_nonatomic was called instead of mget
-    mock_redis.mget_nonatomic.assert_called_once()
+    assert result == {"key1": None, "key2": None}
+    mock_redis.mget_nonatomic.assert_awaited_once_with(keys=keys)
     assert not mock_redis.mget.called
 
 
@@ -597,3 +598,78 @@ def test_closed_event_loop_is_collected_after_contended_gate_use() -> None:
     gc.collect()
 
     assert loop_ref() is None
+
+
+@pytest.mark.asyncio
+async def test_typed_cluster_read_decodes_values_and_namespaces_each_key_once() -> None:
+    with (
+        patch("redis.RedisCluster", return_value=MagicMock()),
+        patch(
+            "redis.asyncio.RedisCluster.mget_nonatomic",
+            new=AsyncMock(return_value=[b'{"id": 7}', None, b"null", b'""']),
+        ) as mget,
+    ):
+        cache: Final = RedisClusterCache(
+            startup_nodes=[{"host": "typed-cluster-read", "port": 7000}], namespace="ns", max_connections=1
+        )
+        with pytest.warns(FutureWarning, match="async_read_values is experimental and may change"):
+            result: Final = await cache.async_read_values(keys=("hit", "ns:miss", "null", "empty"))
+
+    assert result == {"hit": {"id": 7}, "ns:miss": None, "null": None, "empty": ""}
+    mget.assert_awaited_once_with(keys=["ns:hit", "ns:miss", "ns:null", "ns:empty"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reply", "failure", "expected_kind"),
+    [
+        pytest.param([], None, "invalid_response", id="missing-key-reply"),
+        pytest.param([object()], None, "invalid_response", id="unexpected-value-type"),
+        pytest.param(None, ConnectionError("offline"), "unavailable", id="unavailable-cluster"),
+    ],
+)
+async def test_typed_cluster_read_never_turns_failure_into_a_miss(
+    reply: object, failure: Exception | None, expected_kind: str
+) -> None:
+    with (
+        patch("redis.RedisCluster", return_value=MagicMock()),
+        patch("redis.asyncio.RedisCluster.mget_nonatomic", new=AsyncMock(return_value=reply, side_effect=failure)),
+    ):
+        cache: Final = RedisClusterCache(startup_nodes=[{"host": "typed-cluster-failures", "port": 7000}])
+        with pytest.warns(FutureWarning, match="async_read_values is experimental and may change"):
+            result: Final = await cache.async_read_values(keys=("key",))
+
+    assert isinstance(result, CacheFailure)
+    assert result.kind == expected_kind
+
+
+@pytest.mark.asyncio
+async def test_cancelled_typed_cluster_read_releases_its_connection_admission() -> None:
+    entered: Final[asyncio.Queue[str]] = asyncio.Queue()
+    release: Final = asyncio.Event()
+
+    async def read(*, keys: list[str]) -> list[bytes | None]:
+        await entered.put(keys[0])
+        await release.wait()
+        return [b"1"]
+
+    with (
+        patch("redis.RedisCluster", return_value=MagicMock()),
+        patch("redis.asyncio.RedisCluster.mget_nonatomic", new=AsyncMock(side_effect=read)),
+    ):
+        cache: Final = RedisClusterCache(
+            startup_nodes=[{"host": "typed-cluster-cancellation", "port": 7000}],
+            connection_gate=ClusterConnectionGate(limit=1, wait_timeout=60),
+        )
+        with pytest.warns(FutureWarning, match="async_read_values is experimental and may change"):
+            first: Final = asyncio.create_task(cache.async_read_values(keys=("cancelled",)))
+            assert await asyncio.wait_for(entered.get(), timeout=1) == "cancelled"
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        release.set()
+        with pytest.warns(FutureWarning, match="async_read_values is experimental and may change"):
+            result: Final = await asyncio.wait_for(cache.async_read_values(keys=("next",)), timeout=1)
+
+    assert result == {"next": 1}
+    assert entered.get_nowait() == "next"

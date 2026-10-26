@@ -23,8 +23,10 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.bug_report_config import build_proxy_environment_report
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
+from litellm.types.caching import CacheFailure, CachePoolInfo
 
 if TYPE_CHECKING:
+    from litellm.caching.redis_cache import RedisCache
     from litellm.router import Router
 
 router: Final = APIRouter()
@@ -501,8 +503,33 @@ def _get_uncollectable_objects_info() -> Mapping[str, object]:
     }
 
 
+def _redis_memory_stats(cache: "RedisCache | None") -> Mapping[str, object]:
+    if cache is None:
+        return {"enabled": False}
+    summary: Final[Mapping[str, object]] = {"enabled": True, "cache_type": type(cache).__name__}
+    try:
+        pool: Final = cache.get_connection_pool_info()
+    except Exception as error:
+        verbose_proxy_logger.debug("Error getting Redis pool info: %s", error)
+        return summary
+    match pool:
+        case CachePoolInfo():
+            return {
+                **summary,
+                "connection_pool": {
+                    "max_connections": pool.max_connections,
+                    "connection_class": pool.connection_class,
+                },
+            }
+        case CacheFailure():
+            verbose_proxy_logger.debug("Error getting Redis pool info: %s", pool.message)
+            return summary
+        case None:
+            return summary
+
+
 def _get_cache_memory_stats(
-    user_api_key_cache, llm_router: "Router | None", proxy_logging_obj, redis_usage_cache
+    user_api_key_cache, llm_router: "Router | None", proxy_logging_obj, redis_usage_cache: "RedisCache | None"
 ) -> Mapping[str, object]:
     """Calculate memory usage for all caches."""
     cache_stats: Final[dict[str, object]] = {}
@@ -553,29 +580,7 @@ def _get_cache_memory_stats(
             "total_size_mb": round((logging_cache_size + logging_ttl_size) / (1024 * 1024), 2),
         }
 
-        # Redis cache info
-        if redis_usage_cache is not None:
-            cache_stats["redis_usage_cache"] = {
-                "enabled": True,
-                "cache_type": type(redis_usage_cache).__name__,
-            }
-            # Try to get Redis connection pool info if available
-            try:
-                if hasattr(redis_usage_cache, "redis_client") and redis_usage_cache.redis_client:
-                    if hasattr(redis_usage_cache.redis_client, "connection_pool"):
-                        pool_info: Final = redis_usage_cache.redis_client.connection_pool
-                        cache_stats["redis_usage_cache"]["connection_pool"] = {
-                            "max_connections": (
-                                pool_info.max_connections if hasattr(pool_info, "max_connections") else None
-                            ),
-                            "connection_class": (
-                                pool_info.connection_class.__name__ if hasattr(pool_info, "connection_class") else None
-                            ),
-                        }
-            except Exception as e:
-                verbose_proxy_logger.debug("Error getting Redis pool info: %s", e)
-        else:
-            cache_stats["redis_usage_cache"] = {"enabled": False}
+        cache_stats["redis_usage_cache"] = _redis_memory_stats(redis_usage_cache)
 
     except Exception as e:
         verbose_proxy_logger.debug("Error calculating cache stats: %s", e)

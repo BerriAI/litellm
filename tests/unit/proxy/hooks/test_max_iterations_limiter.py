@@ -150,3 +150,33 @@ async def test_max_iterations_no_agent_id_passes():
         call_type="",
     )
     assert result is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply,expected", [(b"7", 7), ("malformed", 1), (ConnectionError("offline"), 1)])
+async def test_iteration_count_uses_typed_result_or_local_fallback(reply: object, expected: int) -> None:
+    from typing import Final
+    from unittest.mock import AsyncMock
+    from uuid import uuid4
+
+    from litellm.caching.redis_cache import RedisCache
+
+    transport: Final = MagicMock()
+    execute: Final = AsyncMock(side_effect=[reply])
+    transport.register_script.return_value = execute
+    with (
+        patch("litellm._redis.get_redis_client", return_value=MagicMock()),
+        patch("litellm._redis.get_redis_async_client", return_value=transport),
+    ):
+        with patch("asyncio.get_running_loop", side_effect=RuntimeError("no running event loop")):
+            redis: Final = RedisCache(host=f"iterations-{uuid4().hex}", namespace="test")
+        cache: Final = DualCache(redis_cache=redis)
+        handler: Final = PROXY_MaxIterationsHandler(InternalUsageCache(cache))
+        key: Final = handler._make_cache_key("iteration-session")
+        with pytest.warns(FutureWarning, match="experimental.*may change"):
+            result: Final = await handler._increment_and_get(key)
+
+    assert result == expected
+    assert tuple(execute.call_args.kwargs["keys"]) == ("test:{session_iterations:iteration-session}:count",)
+    assert execute.call_args.kwargs["args"] == (handler.ttl,)
+    assert cache.in_memory_cache.get_cache(key) == (None if expected == 7 else 1)

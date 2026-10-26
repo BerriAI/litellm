@@ -1,6 +1,7 @@
 """Tests for the cross-replica refresh coordinator: winner refreshes, losers wait then re-read."""
 
 import asyncio
+from typing import Final
 
 import pytest
 
@@ -268,3 +269,67 @@ async def test_winner_stops_renewing_after_the_refresh_budget():
     assert result is not None and result.access_token == "new"
     assert extends_during_budget == 4  # renewed at clock 5, 10, 15, 20 then stopped
     assert len(lock.extend_calls) == 4  # no further renewals after the budget
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_winner_cancels_refresh_and_renewal_then_releases_its_lease() -> None:
+    lock: Final = _FakeLock(acquired=LockAcquisition.ACQUIRED)
+    refresh_started: Final = asyncio.Event()
+    renewal_started: Final = asyncio.Event()
+    refresh_cancelled: Final = asyncio.Event()
+    renewal_cancelled: Final = asyncio.Event()
+
+    async def refresh() -> OAuthToken | None:
+        refresh_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            refresh_cancelled.set()
+        return None
+
+    async def sleep(_seconds: float) -> None:
+        renewal_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            renewal_cancelled.set()
+
+    async def reread() -> OAuthToken | None:
+        pytest.fail("A cancelled winner must not reread")
+
+    coord: Final = RedisRefreshCoordinator(lock, new_token=lambda: "owner", sleep=sleep, clock=lambda: 0.0)
+    task: Final = asyncio.create_task(coord.run("u", "s", refresh, reread))
+    await refresh_started.wait()
+    await renewal_started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert refresh_cancelled.is_set()
+    assert renewal_cancelled.is_set()
+    assert lock.extend_calls == []
+    assert lock.released == [(_KEY, "owner")]
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_waiter_does_not_release_another_workers_lease_or_reread() -> None:
+    lock: Final = _FakeLock(acquired=LockAcquisition.HELD, held_sequence=(True,))
+    waiting: Final = asyncio.Event()
+
+    async def sleep(_seconds: float) -> None:
+        waiting.set()
+        await asyncio.Event().wait()
+
+    async def refresh() -> OAuthToken | None:
+        pytest.fail("A waiting worker must not refresh")
+
+    async def reread() -> OAuthToken | None:
+        pytest.fail("A cancelled waiter must not reread")
+
+    coord: Final = RedisRefreshCoordinator(lock, sleep=sleep, clock=lambda: 0.0)
+    task: Final = asyncio.create_task(coord.run("u", "s", refresh, reread))
+    await waiting.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert lock.released == []
+    assert lock.extend_calls == []

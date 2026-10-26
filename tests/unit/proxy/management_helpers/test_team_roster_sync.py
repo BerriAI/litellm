@@ -5,14 +5,16 @@ import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import Final, Literal
+from typing import Final, Literal, cast
 from unittest.mock import patch
 
 import pytest
 from pydantic import BaseModel, ConfigDict, TypeAdapter
+from redis.asyncio import Redis
 
 import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
 from litellm.proxy.common_utils.user_api_key_cache import (
@@ -553,8 +555,15 @@ class _Pipeline:
         self._messages.append(message)
         return self
 
-    async def execute(self) -> None:
+    async def execute(self) -> tuple[int, ...]:
         await self._send(tuple(self._messages))
+        return tuple(1 for _ in self._messages)
+
+    async def __aenter__(self) -> "_Pipeline":
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        pass
 
 
 class _SlowPublishRedisClient:
@@ -576,14 +585,14 @@ class _SlowPublishRedisClient:
         return _Pipeline(self._send)
 
 
-class _PubSubRedisCache:
+class _PubSubRedisCache(RedisCache):
     namespace = None
 
     def __init__(self, client: "_SlowPublishRedisClient | _WedgedPublishRedisClient") -> None:
         self._client = client
 
-    def init_pubsub_client(self) -> "_SlowPublishRedisClient | _WedgedPublishRedisClient":
-        return self._client
+    def init_pubsub_client(self) -> "Redis[bytes]":
+        return cast("Redis[bytes]", self._client)
 
 
 async def _until_reached_or_done(signal: asyncio.Event, sync: "asyncio.Task[object]") -> None:

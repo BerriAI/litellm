@@ -63,6 +63,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
     mint_session_token,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.types.caching import KeyPresence
 
 MASTER_KEY = "sk-gateway-dcr-flow-tests"
 REDIRECT_URI = "https://claude.ai/api/mcp/auth_callback"
@@ -729,9 +730,7 @@ async def test_single_use_guard_fails_closed_when_redis_errors():
 
 @pytest.mark.asyncio
 async def test_single_use_guard_peek_fails_closed_when_redis_errors():
-    """The peek that gates a refresh on its chain's revocation marker must read the Redis client
-    itself: the cache wrapper's get swallows a fault into ``None``, which would make a revoked chain
-    look unclaimed for exactly as long as Redis is down."""
+    """An unavailable shared marker must not look unclaimed, even when the cache getter misses."""
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import _SingleUseGuard
@@ -739,47 +738,39 @@ async def test_single_use_guard_peek_fails_closed_when_redis_errors():
     cache = DualCache()
     cache.redis_cache = MagicMock()
     cache.redis_cache.async_get_cache = AsyncMock(return_value=None)
-    cache.redis_cache.check_and_fix_namespace = MagicMock(side_effect=lambda key: key)
-    cache.redis_cache.init_async_client.return_value.get = AsyncMock(side_effect=ConnectionError("redis down"))
+    cache.redis_cache.async_key_presence = AsyncMock(return_value="unavailable")
 
     guard = _SingleUseGuard(cache)
     assert await guard.peek("family-fault") == "unavailable"
 
-    cache.redis_cache.init_async_client.return_value.get = AsyncMock(return_value=b"1")
+    cache.redis_cache.async_key_presence = AsyncMock(return_value="present")
     assert await guard.peek("family-fault") == "claimed"
 
 
 @pytest.mark.asyncio
-async def test_single_use_guard_peek_reads_the_key_under_the_namespace_claim_wrote():
-    """A configured ``redis_namespace`` prefixes every key the cache wrapper writes, so the raw client
-    read behind peek must ask for the same prefixed key: a revocation written under ``ns:...`` and
-    peeked at the bare key would never be seen, and the revoked chain would keep renewing."""
+async def test_single_use_guard_peek_reads_the_same_marker_claim_wrote():
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import _SingleUseGuard
 
     stored: dict[str, int] = {}  # mutable-ok: the fake Redis store the test inspects
 
-    def namespaced(key: str) -> str:
-        return f"ns:{key}"
-
     async def increment(key: str, value: int, ttl: int) -> int:
-        stored[namespaced(key)] = stored.get(namespaced(key), 0) + value
-        return stored[namespaced(key)]
+        stored[key] = stored.get(key, 0) + value
+        return stored[key]
 
-    async def raw_get(key: str) -> bytes | None:
-        return None if key not in stored else str(stored[key]).encode()
+    async def key_presence(key: str) -> KeyPresence:
+        return "present" if key in stored else "missing"
 
     cache = DualCache()
     cache.redis_cache = MagicMock()
-    cache.redis_cache.check_and_fix_namespace = MagicMock(side_effect=namespaced)
     cache.redis_cache.async_increment = AsyncMock(side_effect=increment)
-    cache.redis_cache.init_async_client.return_value.get = AsyncMock(side_effect=raw_get)
+    cache.redis_cache.async_key_presence = AsyncMock(side_effect=key_presence)
 
     guard = _SingleUseGuard(cache)
     assert await guard.peek("family-ns") == "unclaimed"
     assert await guard.claim("family-ns", 60) == "first"
-    assert set(stored) == {"ns:family-ns"}
+    assert set(stored) == {"family-ns"}
     assert await guard.peek("family-ns") == "claimed"
 
 
@@ -2247,16 +2238,15 @@ async def test_revoke_burns_the_refresh_token_and_answers_200_for_dead_or_unknow
     assert garbage.status_code == 200
 
 
-def _redis_that(async_increment, get=None):
+def _redis_that(async_increment, presence: KeyPresence = "missing"):
     from unittest.mock import AsyncMock, MagicMock
 
     cache = DualCache()
     cache.redis_cache = MagicMock()
     cache.redis_cache.async_increment = async_increment
-    cache.redis_cache.check_and_fix_namespace = MagicMock(side_effect=lambda key: key)
-    cache.redis_cache.init_async_client.return_value.get = get or AsyncMock(return_value=None)
+    cache.redis_cache.async_key_presence = AsyncMock(return_value=presence)
     cache.redis_cache.async_get_cache = AsyncMock(
-        side_effect=AssertionError("peek must read the client, not the wrapper")
+        side_effect=AssertionError("peek must distinguish missing from unavailable")
     )
     cache.async_increment_cache = AsyncMock(side_effect=AssertionError("must not fall back to in-memory"))
     return cache
@@ -2307,17 +2297,11 @@ async def test_revoke_answers_503_while_the_shared_record_cannot_be_written_then
 
 class _RedisThatFaultsOnTheSecondWrite:
     """A shared Redis double whose first increment lands and whose second raises, the fault between
-    revoke's two writes; its raw client reads back exactly the keys that landed, and later writes land."""
+    revoke's two writes; it reads back exactly the keys that landed, and later writes land."""
 
     def __init__(self) -> None:
         self.landed: tuple[str, ...] = ()
         self.writes = 0
-
-    def check_and_fix_namespace(self, key: str) -> str:
-        return key
-
-    def init_async_client(self) -> "_RedisThatFaultsOnTheSecondWrite":
-        return self
 
     async def async_increment(self, key: str, value: int, **kwargs: object) -> int:
         self.writes += 1
@@ -2326,8 +2310,8 @@ class _RedisThatFaultsOnTheSecondWrite:
         self.landed = (*self.landed, key)
         return self.landed.count(key)
 
-    async def get(self, key: str) -> int | None:
-        return self.landed.count(key) or None
+    async def async_key_presence(self, key: str) -> KeyPresence:
+        return "present" if key in self.landed else "missing"
 
 
 @pytest.mark.asyncio
@@ -2421,7 +2405,7 @@ async def test_refresh_of_a_rotated_token_answers_503_before_minting_while_redis
     minter = _Minter()
     claim = AsyncMock(return_value=1)
     unreadable = await _refresh_native(
-        rotated, client_id, minter, _redis_that(claim, get=AsyncMock(side_effect=ConnectionError("redis down")))
+        rotated, client_id, minter, _redis_that(claim, presence="unavailable")
     )
     assert unreadable.status_code == 503
     assert json.loads(unreadable.body)["error"] == "temporarily_unavailable"
@@ -2728,7 +2712,7 @@ async def test_introspect_503s_while_the_single_use_record_cannot_be_read():
 
     keys, now, principal = _introspection_fixtures()
     minted = mint_session_refresh_token(principal, keys, now)
-    unreadable = _redis_that(AsyncMock(return_value=1), get=AsyncMock(side_effect=ConnectionError("redis down")))
+    unreadable = _redis_that(AsyncMock(return_value=1), presence="unavailable")
     status, body = await _introspect(minted.token.get_secret_value(), cache=unreadable)
     assert (status, body["error"]) == (503, "temporarily_unavailable")
 

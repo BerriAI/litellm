@@ -7,7 +7,7 @@ to login_utils.py for better reusability.
 
 import hashlib
 import os
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import ExitStack
 from typing import TYPE_CHECKING, Final
 from datetime import datetime, timedelta, timezone
@@ -16,6 +16,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
+from fakeredis import FakeRedis, FakeServer
+from fakeredis.aioredis import FakeConnection
+from redis.asyncio import BlockingConnectionPool
+
+from litellm.caching.redis_cache import RedisCache
 
 if TYPE_CHECKING:
     from litellm.proxy.auth.login_throttle import LoginThrottle
@@ -1354,35 +1359,40 @@ async def test_disabling_the_control_lets_every_attempt_through(monkeypatch):
     assert _local_count(throttle, throttle._keys("admin").pair_counter) == 0
 
 
+@pytest.fixture
+async def login_redis_backend() -> AsyncIterator[tuple[RedisCache, FakeServer]]:
+    server: Final = FakeServer()
+    sync_client: Final = FakeRedis(server=server)
+    pool: Final = BlockingConnectionPool(connection_class=FakeConnection, server=server)
+    try:
+        with (
+            patch("redis.Redis.from_url", return_value=sync_client),
+            patch("redis.asyncio.BlockingConnectionPool.from_url", return_value=pool),
+        ):
+            yield RedisCache(url="redis://login-throttle.example:6379/0", namespace="login-tests"), server
+    finally:
+        await pool.aclose()
+        sync_client.close()
+
+
 class _FakeRedis:
-    """Redis whose only writes are the throttle's two scripts, run atomically as one call each.
+    def __init__(self) -> None:
+        self.values: dict[str, int] = {}
+        self.ttls: dict[str, int] = {}
 
-    Mirrors the Lua: a blocked key returns its remaining block time and is not counted; a counter
-    is expired on first write; one over the limit installs the block; a blocked pair stops the
-    source from being counted. The real scripts are exercised against a live Redis in the PR's
-    proof, this fake only has to be faithful enough for the worker-sharing tests.
-    """
-
-    def __init__(self):
-        self.values: dict = {}
-        self.ttls: dict = {}
-        self.scripts: list[str] = []
-
-    def async_register_script(self, script: str):
-        from litellm.proxy.auth import login_throttle as lt
-
-        async def _run(keys, args):
-            self.scripts.append(script)
-            if script == lt._BLOCK_TTLS_LUA:
-                return [self._ttl(keys[1]), self._ttl(keys[3])]
-            assert script == lt._RECORD_FAILURE_LUA
+    def register_script(self, script: str) -> Callable[..., Awaitable[tuple[int, int]]]:
+        async def run(
+            keys: Sequence[str], args: Sequence[str | bytes | int | float], client: object = None
+        ) -> tuple[int, int]:
+            if not args:
+                return self._ttl(keys[1]), self._ttl(keys[3])
             user_limit, source_limit, window, block = (int(a) for a in args)
-            user_block = self._bump(keys[0], keys[1], user_limit, window, block)
+            user_block: Final = self._bump(keys[0], keys[1], user_limit, window, block)
             if source_limit > 0 and user_block == 0:
-                return [user_block, self._bump(keys[2], keys[3], source_limit, window, block)]
-            return [user_block, 0]
+                return user_block, self._bump(keys[2], keys[3], source_limit, window, block)
+            return user_block, 0
 
-        return _run
+        return run
 
     def _ttl(self, key: str) -> int:
         return self.ttls.get(key, -2) if key in self.values else -2
@@ -1398,57 +1408,50 @@ class _FakeRedis:
             return block
         return 0
 
-    async def async_delete_cache(self, key):
-        self.values.pop(key, None)
+    async def delete(self, key: str) -> int:
+        removed: Final = self.values.pop(key, None)
         self.ttls.pop(key, None)
-
-
-class _DownRedis(_FakeRedis):
-    """Redis whose every call fails, as during an outage or an open circuit breaker."""
-
-    def async_register_script(self, script: str):
-        async def _run(keys, args):
-            raise ConnectionError("redis is down")
-
-        return _run
-
-    async def async_delete_cache(self, key):
-        raise ConnectionError("redis is down")
+        return int(removed is not None)
 
 
 @pytest.mark.asyncio
-async def test_redis_is_the_only_counter_while_it_answers(monkeypatch):
-    """Every worker must spend the same budget, see the same block, and a success must clear the pair for all."""
+async def test_redis_is_the_only_counter_while_it_answers(
+    monkeypatch: pytest.MonkeyPatch, login_redis_backend: tuple[RedisCache, FakeServer]
+) -> None:
     from litellm.constants import LOGIN_THROTTLE_CACHE_KEY_PREFIX
 
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
     monkeypatch.setenv("DATABASE_URL", "postgresql://stub")
-    redis = _FakeRedis()
-    first_worker = _throttle(user_limit=2, stores=_stores(), redis_cache=redis)
-    second_worker = _throttle(user_limit=2, stores=_stores(), redis_cache=redis)
+    redis, _ = login_redis_backend
+    transport: Final = _FakeRedis()
+    first_worker: Final = _throttle(user_limit=2, stores=_stores(), redis_cache=redis)
+    second_worker: Final = _throttle(user_limit=2, stores=_stores(), redis_cache=redis)
+    with (
+        patch("redis.asyncio.client.Redis.register_script", side_effect=transport.register_script),
+        patch("redis.asyncio.client.Redis.delete", side_effect=transport.delete),
+    ):
+        assert [await _fail(first_worker, username="user@corp.com") for _ in range(3)] == ["401"] * 3
+        assert not [k for k in first_worker.counters.cache_dict if str(k).startswith(LOGIN_THROTTLE_CACHE_KEY_PREFIX)], (
+            "with Redis answering, no worker may keep a counter of its own"
+        )
+        assert not first_worker.blocks.cache_dict
+        assert await _fail(second_worker, username="user@corp.com") == "429", "the second worker sees the block"
+        block_keys: Final = tuple(k for k in transport.values if ":block:user:" in k)
+        assert block_keys, "the block lives in Redis, where every worker reads it"
+        for key in block_keys:
+            await redis.async_delete_cache(key)
+        await _db_login(second_worker, "user@corp.com", "right", correct=True)
 
-    assert [await _fail(first_worker, username="user@corp.com") for _ in range(3)] == ["401"] * 3
-    assert not [k for k in first_worker.counters.cache_dict if str(k).startswith(LOGIN_THROTTLE_CACHE_KEY_PREFIX)], (
-        "with Redis answering, no worker may keep a counter of its own"
-    )
-    assert not first_worker.blocks.cache_dict
-
-    assert await _fail(second_worker, username="user@corp.com") == "429", "the second worker sees the block"
-
-    block_keys = [k for k in redis.values if ":block:user:" in k]
-    assert block_keys, "the block lives in Redis, where every worker reads it"
-    for key in block_keys:
-        await redis.async_delete_cache(key)
-    await _db_login(second_worker, "user@corp.com", "right", correct=True)
-
-    assert not [k for k in redis.values if ":user:" in k and ":block:" not in k], (
+    assert not [k for k in transport.values if ":user:" in k and ":block:" not in k], (
         "success clears the shared pair counter"
     )
 
 
 @pytest.mark.asyncio
-async def test_a_redis_outage_falls_back_to_this_workers_own_counter(monkeypatch):
+async def test_a_redis_outage_falls_back_to_this_workers_own_counter(
+    monkeypatch: pytest.MonkeyPatch, login_redis_backend: tuple[RedisCache, FakeServer]
+) -> None:
     """With Redis raising, guesses are still counted and blocked per worker, with a warning, instead of unbounded."""
     import logging
 
@@ -1457,7 +1460,9 @@ async def test_a_redis_outage_falls_back_to_this_workers_own_counter(monkeypatch
 
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
-    throttle = _throttle(user_limit=2, block_seconds=300, redis_cache=_DownRedis())
+    redis, server = login_redis_backend
+    server.connected = False
+    throttle: Final = _throttle(user_limit=2, block_seconds=300, redis_cache=redis)
 
     records: list[logging.LogRecord] = []
     handler = logging.Handler()
@@ -1476,12 +1481,16 @@ async def test_a_redis_outage_falls_back_to_this_workers_own_counter(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_a_failed_redis_delete_still_clears_this_workers_counter(monkeypatch):
+async def test_a_failed_redis_delete_still_clears_this_workers_counter(
+    monkeypatch: pytest.MonkeyPatch, login_redis_backend: tuple[RedisCache, FakeServer]
+) -> None:
     """The fail-open tradeoff: when Redis cannot clear the pair, the worker clears what it holds and moves on."""
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
     monkeypatch.setenv("DATABASE_URL", "postgresql://stub")
-    throttle = _throttle(user_limit=5, redis_cache=_DownRedis())
+    redis, server = login_redis_backend
+    server.connected = False
+    throttle: Final = _throttle(user_limit=5, redis_cache=redis)
     key = throttle._keys("user@corp.com").pair_counter
 
     assert [await _fail(throttle, username="user@corp.com") for _ in range(2)] == ["401", "401"]
@@ -1489,6 +1498,51 @@ async def test_a_failed_redis_delete_still_clears_this_workers_counter(monkeypat
 
     await _db_login(throttle, "user@corp.com", "right", correct=True)
     assert _local_count(throttle, key) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ("attempt", "failure"))
+@pytest.mark.parametrize("reply", (None, (0,), (0, 0, 0), ("broken", 0)))
+async def test_invalid_shared_throttle_replies_do_not_allow_unchecked_logins(
+    login_redis_backend: tuple[RedisCache, FakeServer], phase: str, reply: object
+) -> None:
+    redis, _ = login_redis_backend
+    throttle: Final = _throttle(user_limit=1, redis_cache=redis)
+    with patch("redis.asyncio.client.Redis.register_script", return_value=AsyncMock(return_value=reply)):
+        with pytest.raises(ValueError):
+            if phase == "attempt":
+                await throttle.attempt("admin")
+            else:
+                await throttle.record_failure("admin")
+    assert not throttle.counters.cache_dict
+    assert not throttle.blocks.cache_dict
+
+
+@pytest.mark.asyncio
+async def test_shared_throttle_preserves_keys_thresholds_and_ttl_units(
+    login_redis_backend: tuple[RedisCache, FakeServer],
+) -> None:
+    redis, _ = login_redis_backend
+    throttle: Final = _throttle(source_limit=9, user_limit=4, window_seconds=23, block_seconds=71, redis_cache=redis)
+    username: Final = "Admin"
+    digest: Final = hashlib.sha256(username.casefold().encode("utf-8")).hexdigest()
+    expected_keys: Final = (
+        f"login-tests:login_fail:{{1.2.3.4}}:user:{digest}",
+        f"login-tests:login_fail:{{1.2.3.4}}:block:user:{digest}",
+        "login-tests:login_fail:{1.2.3.4}:source",
+        "login-tests:login_fail:{1.2.3.4}:block:source",
+    )
+    runner: Final = AsyncMock(return_value=(0, 71))
+    with patch("redis.asyncio.client.Redis.register_script", return_value=runner):
+        with pytest.warns(FutureWarning, match="async_record_throttle_failure is experimental and may change"):
+            assert await throttle.record_failure(username) == (0, 71)
+        with pytest.warns(FutureWarning, match="async_read_throttle_ttls is experimental and may change"):
+            with pytest.raises(ProxyException) as blocked:
+                await throttle.attempt(username)
+    assert blocked.value.code == "429"
+    assert blocked.value.headers == {"Retry-After": "71"}
+    assert runner.await_args_list[0].kwargs == {"keys": expected_keys, "args": (4, 9, 23, 71), "client": None}
+    assert runner.await_args_list[1].kwargs == {"keys": expected_keys, "args": (), "client": None}
 
 
 @pytest.mark.asyncio

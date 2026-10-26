@@ -21,6 +21,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.types.caching import CacheFailure
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
@@ -29,21 +30,6 @@ if TYPE_CHECKING:
 else:
     InternalUsageCache = Any
 
-
-# Redis Lua script for atomic increment with TTL.
-# Returns the new count after increment.
-# Only sets EXPIRE on first increment (when count becomes 1).
-MAX_ITERATIONS_INCREMENT_SCRIPT: Final = """
-local key = KEYS[1]
-local ttl = tonumber(ARGV[1])
-
-local current = redis.call('INCR', key)
-if current == 1 then
-    redis.call('EXPIRE', key, ttl)
-end
-
-return current
-"""
 
 # Default TTL for session iteration counters (1 hour)
 DEFAULT_MAX_ITERATIONS_TTL: Final = 3600
@@ -64,22 +50,15 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         {session_iterations:<session_id>}:count
 
     Multi-instance support:
-        Uses Redis Lua script for atomic increment (same pattern as
-        parallel_request_limiter_v3). Falls back to in-memory cache
-        when Redis is unavailable.
+        Uses the cache's atomic iteration increment and falls back to
+        in-memory counters when Redis is unavailable.
     """
 
     def __init__(self, internal_usage_cache: InternalUsageCache):
         self.internal_usage_cache = internal_usage_cache
         self.ttl = int(os.getenv("LITELLM_MAX_ITERATIONS_TTL", DEFAULT_MAX_ITERATIONS_TTL))
 
-        # Register Lua script with Redis if available (same pattern as v3 limiter)
-        if self.internal_usage_cache.dual_cache.redis_cache is not None:
-            self.increment_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
-                MAX_ITERATIONS_INCREMENT_SCRIPT
-            )
-        else:
-            self.increment_script = None
+        self._redis_cache = self.internal_usage_cache.dual_cache.redis_cache
 
     @with_service_target("session_iterations")
     async def async_pre_call_hook(
@@ -186,21 +165,16 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         """
         Atomically increment the session counter and return the new value.
 
-        Tries Redis first (via registered Lua script for atomicity across
-        instances), falls back to in-memory cache.
+        Tries the shared atomic counter first, then falls back to in-memory cache.
         """
-        if self.increment_script is not None:
-            try:
-                result: Final = await self.increment_script(
-                    keys=[cache_key],
-                    args=[self.ttl],
-                )
-                return int(result)
-            except Exception as e:
-                verbose_proxy_logger.warning(
-                    "MaxIterationsHandler: Redis failed, falling back to in-memory: %s",
-                    str(e),
-                )
+        if self._redis_cache is not None:
+            result: Final = await self._redis_cache.async_increment_iterations(key=cache_key, ttl_seconds=self.ttl)
+            if not isinstance(result, CacheFailure):
+                return result
+            verbose_proxy_logger.warning(
+                "MaxIterationsHandler: Redis failed, falling back to in-memory: %s",
+                result.message,
+            )
 
         # Fallback: in-memory cache
         return await self._in_memory_increment(cache_key)

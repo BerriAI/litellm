@@ -12,13 +12,15 @@ load_dotenv()
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest, litellm
 import httpx
 from fastapi import Request, status
 from prisma import Prisma
+from redis.asyncio import Redis
+from litellm.caching.redis_cache import RedisCache
 from litellm._service_logger import ServiceTypes
 from litellm.proxy._types import LiteLLM_OrganizationTable, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import get_org_object, get_user_object
@@ -2213,8 +2215,15 @@ class _Pipeline:
         self._messages.append(message)
         return self
 
-    async def execute(self) -> None:
+    async def execute(self) -> tuple[int, ...]:
         await self._send(tuple(self._messages))
+        return tuple(1 for _ in self._messages)
+
+    async def __aenter__(self) -> "_Pipeline":
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        pass
 
 
 class _SlowPublishRedisClient:
@@ -2248,14 +2257,14 @@ class _WedgedPublishRedisClient:
         return _Pipeline(self._send)
 
 
-class _PubSubRedisCache:
+class _PubSubRedisCache(RedisCache):
     namespace = None
 
     def __init__(self, client: _SlowPublishRedisClient | _WedgedPublishRedisClient) -> None:
         self._client = client
 
-    def init_pubsub_client(self) -> _SlowPublishRedisClient | _WedgedPublishRedisClient:
-        return self._client
+    def init_pubsub_client(self) -> "Redis[bytes]":
+        return cast("Redis[bytes]", self._client)
 
 
 async def _drain_publishes() -> None:

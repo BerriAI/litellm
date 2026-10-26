@@ -14,6 +14,8 @@ import pytest
 from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from redis.asyncio import Redis
+from litellm.caching.redis_cache import RedisCache
 
 from litellm._uuid import uuid
 from litellm.integrations.custom_logger import CustomLogger
@@ -10253,19 +10255,26 @@ class _BroadcastPipeline:
         self._messages.append(message)
         return self
 
-    async def execute(self) -> None:
+    async def execute(self) -> tuple[int, ...]:
         await self._redis.send(tuple(self._messages))
+        return tuple(1 for _ in self._messages)
+
+    async def __aenter__(self) -> "_BroadcastPipeline":
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        pass
 
 
-class _BroadcastRecordingRedis:
+class _BroadcastRecordingRedis(RedisCache):
     namespace = None
 
     def __init__(self, round_trip_seconds: float = 0.0) -> None:
         self.broadcast_keys: list[str] = []
         self._round_trip_seconds = round_trip_seconds
 
-    def init_pubsub_client(self) -> "_BroadcastRecordingRedis":
-        return self
+    def init_pubsub_client(self) -> "Redis[bytes]":
+        return cast("Redis[bytes]", self)
 
     async def send(self, messages: Sequence[str]) -> None:
         if self._round_trip_seconds:

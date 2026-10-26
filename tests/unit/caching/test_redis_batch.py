@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import warnings
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import timedelta
-from typing import Any
+from typing import Any, Final
 
 import pytest
 from redis.exceptions import NoScriptError
@@ -26,6 +27,7 @@ from litellm.caching.redis_cache import (
     _get_call_stack_info,  # pyright: ignore[reportPrivateUsage]  # the chain the service hook reports
 )
 from litellm.caching.redis_cluster_cache import RedisClusterCache
+from litellm.types.caching import CacheFailure
 
 SCRIPT = "return redis.call('GET', KEYS[1])"
 SHA = hashlib.sha1(SCRIPT.encode()).hexdigest()  # noqa: S324
@@ -508,3 +510,137 @@ async def test_failed_pipeline_reports_the_same_family_target_as_a_successful_on
     assert isinstance(event["error"], ConnectionError)
     assert (event["call_type"], event["target"]) == ("post_call_redis_batch", MIXED_PIPELINE_TARGET)
     assert event["event_metadata"] == {"op_count": 2, "families": "auth_objects,spend_counters"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("values", [(), (b"1", b"2", b"3")])
+async def test_mget_wrong_reply_length_fails_only_its_read_and_marks_no_misses(values: tuple[bytes, ...]) -> None:
+    def reply_for(command: tuple[object, ...]) -> object:
+        return values if command[0] == "MGET" else b"4.5"
+
+    cache: Final = FakeRedisCache(FakeClient(reply_for))
+    batch: Final = RedisBatch(cache)
+    read: Final = batch.mget(("one", "two"))
+    increment: Final = batch.increment("count", 1)
+
+    with pytest.raises(ValueError, match="MGET reply count"):
+        await read
+
+    assert await increment == 4.5
+    assert not batch.read_as_missing("one")
+    assert not batch.read_as_missing("two")
+
+
+@pytest.mark.asyncio
+async def test_expire_failure_does_not_replay_an_increment_that_may_have_succeeded() -> None:
+    def reply_for(command: tuple[object, ...]) -> object:
+        return NoScriptError("NOSCRIPT") if command[0] == "EXPIRE" else b"3.5"
+
+    cache: Final = FakeRedisCache(FakeClient(reply_for))
+    batch: Final = RedisBatch(cache)
+    failed: Final = batch.increment("count", 2, ttl=60)
+    sibling: Final = batch.increment("other", 1)
+
+    with pytest.raises(NoScriptError):
+        await failed
+
+    assert await sibling == 3.5
+    assert cache.store == {}
+    assert cache.alone == []
+
+
+class _IncompletePipeline(FakePipeline):
+    async def execute(self, raise_on_error: bool = True) -> list[object]:
+        return (await super().execute(raise_on_error=raise_on_error))[:-1]
+
+
+class _IncompleteClient(FakeClient):
+    def pipeline(self, transaction: bool = True) -> _IncompletePipeline:
+        assert transaction is False
+        return _IncompletePipeline(self.reply_for, self.fail)
+
+
+@pytest.mark.asyncio
+async def test_incomplete_pipeline_response_never_reports_a_write_as_successful() -> None:
+    cache: Final = FakeRedisCache(_IncompleteClient(replies))
+    batch: Final = RedisBatch(cache)
+    increment: Final = batch.increment("count", 1, ttl=60)
+    write: Final = batch.set("value", "stored")
+
+    with pytest.raises(ValueError, match="pipeline reply count"):
+        await increment
+    with pytest.raises(ValueError, match="pipeline reply count"):
+        await write
+
+    assert cache.alone == []
+
+
+@pytest.mark.asyncio
+async def test_legacy_batch_script_stays_callable_under_warnings_as_errors() -> None:
+    cache, _client = make()
+    batch: Final = RedisBatch(cache)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result: Final = await batch.script(SCRIPT, run_alone_script, ("key",), ())
+
+    assert result == [1, 2]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reply, kind", [(ConnectionError("ambiguous write"), "unavailable"), (["bad", "shape"], "invalid_response")]
+)
+async def test_typed_batch_failures_are_values_and_do_not_disturb_sibling_operations(reply: object, kind: str) -> None:
+    def reply_for(command: tuple[object, ...]) -> object:
+        return reply if command[0] == "EVALSHA" else b"3.5"
+
+    client: Final = FakeClient(reply_for)
+    cache: Final = FakeRedisCache(client)
+    cache.redis_kwargs = {"host": "typed-batch-failures"}
+    batch: Final = RedisBatch(cache)
+    with pytest.warns(FutureWarning, match="async_increment_iterations is experimental and may change"):
+        operation: Final = cache.async_increment_iterations(key="iteration", ttl_seconds=60, batch=batch)
+    sibling: Final = batch.increment("counter", 1, ttl=60)
+    settled: Final[asyncio.Future[int | CacheFailure]] = asyncio.get_running_loop().create_future()
+    with pytest.warns(FutureWarning, match="operation.on_settled is experimental and may change"):
+        operation.on_settled(lambda result: settled.set_result(result.result()))
+
+    result: Final = await operation
+
+    assert isinstance(result, CacheFailure)
+    assert result.kind == kind
+    assert await settled == result
+    assert await sibling == 3.5
+    assert len(client.pipelines) == 1
+    assert cache.alone == []
+
+
+class _CancelledPipeline(FakePipeline):
+    async def execute(self, raise_on_error: bool = True) -> list[object]:
+        raise asyncio.CancelledError
+
+
+class _CancelledClient(FakeClient):
+    def pipeline(self, transaction: bool = True) -> _CancelledPipeline:
+        assert transaction is False
+        return _CancelledPipeline(self.reply_for, self.fail)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_typed_batch_notifies_settled_hooks_without_translating_cancellation_to_failure() -> None:
+    cache: Final = FakeRedisCache(_CancelledClient(replies))
+    cache.redis_kwargs = {"host": "typed-batch-cancellation"}
+    batch: Final = RedisBatch(cache)
+    settled: Final[asyncio.Future[bool]] = asyncio.get_running_loop().create_future()
+    with pytest.warns(FutureWarning, match="async_increment_iterations is experimental and may change"):
+        operation: Final = cache.async_increment_iterations(key="iteration", ttl_seconds=60, batch=batch)
+    with pytest.warns(FutureWarning, match="operation.on_settled is experimental and may change"):
+        operation.on_settled(lambda result: settled.set_result(result.cancelled()))
+
+    with pytest.raises(asyncio.CancelledError):
+        await batch.flush()
+    with pytest.raises(asyncio.CancelledError):
+        await operation
+
+    assert settled.result() is True
+    assert cache.alone == []

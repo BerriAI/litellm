@@ -10517,11 +10517,11 @@ async def test_invalidate_team_member_spend_state_broadcasts_the_spend_counter_t
             published.append((channel, message))
             return 1
 
-    class _FakeRedisCache:
+    class _FakeRedisCache(RedisCache):
         def __init__(self) -> None:
             self.namespace = None
 
-        def init_pubsub_client(self) -> object:
+        def init_pubsub_client(self) -> "Redis[bytes]":
             return _RecordingRedisClient()
 
     local_spend_counter_cache = DualCache()
@@ -10591,11 +10591,11 @@ async def test_invalidate_team_member_spend_state_self_delivered_broadcast_does_
             published.append((channel, message))
             return 1
 
-    class _FakeRedisCache:
+    class _FakeRedisCache(RedisCache):
         def __init__(self) -> None:
             self.namespace = None
 
-        def init_pubsub_client(self) -> object:
+        def init_pubsub_client(self) -> "Redis[bytes]":
             return _RecordingRedisClient()
 
     local_spend_counter_cache = DualCache()

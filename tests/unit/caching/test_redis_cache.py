@@ -2,16 +2,20 @@ import asyncio
 import gc
 import time
 import types
+import warnings
 from collections.abc import Iterator
 from datetime import timedelta
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fakeredis import FakeRedis, FakeServer
+from fakeredis.aioredis import FakeRedis as FakeAsyncRedis
 
 import litellm
 from litellm._service_logger import ServiceLogging
 from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
+from litellm.types.caching import KeyPresence
 
 
 @pytest.fixture
@@ -32,6 +36,89 @@ def sync_batch_redis_cache(redis_no_ping):
         cache.redis_client.mget.side_effect = OSError("redis unavailable")
         get_client.assert_called_once()
         yield cache
+
+
+@pytest.fixture
+def key_presence_backend(redis_no_ping: None) -> Iterator[tuple[RedisCache, FakeServer]]:
+    server: Final = FakeServer()
+    with (
+        patch(  # test-quality-ok: constructor creates the Redis transport with no injection point
+            "litellm._redis.get_redis_client", return_value=FakeRedis(server=server)
+        ),
+        patch(  # test-quality-ok: factory supplies a Redis transport, no cache behavior is mocked
+            "litellm._redis.get_redis_async_client", return_value=FakeAsyncRedis(server=server)
+        ),
+    ):
+        yield RedisCache(host="127.0.0.1", port=6379, namespace="presence"), server
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ("marker", "presence:marker"))
+@pytest.mark.parametrize("value", (b"1", b"null", b"", b"0", b"\xff"))
+async def test_async_key_presence_reads_raw_values_without_decoding(
+    key_presence_backend: tuple[RedisCache, FakeServer], key: str, value: bytes
+) -> None:
+    cache, _ = key_presence_backend
+    await cache.init_async_client().set("presence:marker", value)
+
+    assert await cache.async_key_presence(key) == "present"
+
+
+@pytest.mark.asyncio
+async def test_async_key_presence_does_not_read_another_namespace(
+    key_presence_backend: tuple[RedisCache, FakeServer],
+) -> None:
+    cache, _ = key_presence_backend
+    await cache.init_async_client().set("marker", b"1")
+
+    assert await cache.async_key_presence("marker") == "missing"
+
+
+@pytest.mark.asyncio
+async def test_async_key_presence_wrong_type_is_unavailable(
+    key_presence_backend: tuple[RedisCache, FakeServer],
+) -> None:
+    cache, _ = key_presence_backend
+    await cache.init_async_client().rpush("presence:marker", b"1")
+
+    assert await cache.async_key_presence("marker") == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_async_key_presence_outage_is_not_a_miss(
+    key_presence_backend: tuple[RedisCache, FakeServer],
+) -> None:
+    cache, server = key_presence_backend
+    server.connected = False
+
+    assert await cache.async_key_presence("marker") == "unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value, expected", ((None, "missing"), (1, "present")))
+async def test_async_key_presence_observes_existing_cache_writes(
+    key_presence_backend: tuple[RedisCache, FakeServer], value: int | None, expected: KeyPresence
+) -> None:
+    cache, _ = key_presence_backend
+    if value is not None:
+        await cache.async_set_cache("marker", value, ttl=60)
+
+    assert await cache.async_key_presence("marker") == expected
+
+
+@pytest.mark.asyncio
+async def test_deprecated_client_accessors_still_reuse_a_working_client_without_runtime_warnings(
+    key_presence_backend: tuple[RedisCache, FakeServer],
+) -> None:
+    cache, _ = key_presence_backend
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        client: Final = cache.init_async_client()
+        assert cache.init_async_client() is client
+        assert cache.init_pubsub_client() is client
+        assert await client.ping() is True
+        await client.set("presence:marker", b"1")
+        assert await cache.async_key_presence("marker") == "present"
 
 
 @pytest.mark.parametrize(
@@ -1033,8 +1120,9 @@ def test_prometheus_services_logger_starts_from_the_breakers_already_built(monke
     monkeypatch.setattr(litellm, "service_callback", ["prometheus_system"])
     gc.collect()
     ServiceLogging()
-    assert REGISTRY.get_sample_value("litellm_redis_circuit_breaker_state", {"state": "closed"}) == (
-        redis_breaker_state_counts()["closed"]
+    assert (
+        REGISTRY.get_sample_value("litellm_redis_circuit_breaker_state", {"state": "closed"})
+        == (redis_breaker_state_counts()["closed"])
     )
 
 
@@ -1697,3 +1785,149 @@ async def test_async_set_cache_pipeline_does_not_format_cached_values_for_loggin
 
     assert _FormatCountingStr.format_calls == 0
     assert pipe.sets == [("k1", '"embedding"', timedelta(seconds=60))]
+
+
+@pytest.mark.asyncio
+async def test_typed_iteration_operation_warns_at_caller_and_runs_once(
+    key_presence_backend: tuple[RedisCache, FakeServer],
+) -> None:
+    cache, _ = key_presence_backend
+    runner: Final = AsyncMock(return_value=7)
+    with patch("redis.asyncio.client.Redis.register_script", return_value=runner):
+        with pytest.warns(FutureWarning, match="async_increment_iterations is experimental and may change") as seen:
+            operation: Final = cache.async_increment_iterations(key="counter", ttl_seconds=60)
+        assert seen[0].filename == __file__
+        assert await operation == 7
+        assert await operation == 7
+    runner.assert_awaited_once_with(keys=("presence:counter",), args=(60,), client=None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply", (None, "not-numeric", [1, 2], float("nan")))
+async def test_typed_operation_translates_malformed_replies(
+    key_presence_backend: tuple[RedisCache, FakeServer],
+    reply: object,
+) -> None:
+    from litellm.types.caching import CacheFailure
+
+    cache, _ = key_presence_backend
+    with patch("redis.asyncio.client.Redis.register_script", return_value=AsyncMock(return_value=reply)):
+        with pytest.warns(FutureWarning):
+            result: Final = await cache.async_increment_iterations(key="counter", ttl_seconds=60)
+    assert isinstance(result, CacheFailure)
+    assert result.kind == "invalid_response"
+
+
+@pytest.mark.asyncio
+async def test_typed_operations_translate_outages_and_leave_cancellation_visible(
+    key_presence_backend: tuple[RedisCache, FakeServer],
+) -> None:
+    from litellm.types.caching import CacheFailure
+
+    cache, _ = key_presence_backend
+    with patch("redis.asyncio.client.Redis.register_script", return_value=AsyncMock(side_effect=OSError("offline"))):
+        with pytest.warns(FutureWarning):
+            result: Final = await cache.async_increment_iterations(key="counter", ttl_seconds=60)
+    assert isinstance(result, CacheFailure)
+    assert result.kind == "unavailable"
+    with patch(
+        "redis.asyncio.client.Redis.register_script", return_value=AsyncMock(side_effect=asyncio.CancelledError)
+    ):
+        with pytest.warns(FutureWarning), pytest.raises(asyncio.CancelledError):
+            await cache.async_increment_spend(key="spend", amount=0.5, ttl_seconds=60)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timestamp", (b"123.50", "123.50"))
+async def test_typed_window_operations_preserve_fractional_window_identity(
+    key_presence_backend: tuple[RedisCache, FakeServer], timestamp: str | bytes,
+) -> None:
+    from litellm.types.caching import WindowCount, WindowCounter, WindowReservation
+
+    cache, _ = key_presence_backend
+    runner: Final = AsyncMock(side_effect=([timestamp, 1], [0, 2, timestamp]))
+    with patch("redis.asyncio.client.Redis.register_script", return_value=runner):
+        incremented: Final = await cache.async_increment_window_counters(
+            counters=(WindowCounter("window", "count"),), now=123.5, window_seconds=60,
+        )
+        reserved: Final = await cache.async_reserve_window_capacity(
+            reservations=(WindowReservation("window", "count", 5, 1, 60, 60),),
+        )
+    assert incremented == (WindowCount("123.50", 1),)
+    assert reserved == (WindowCount("123.50", 2),)
+
+
+@pytest.mark.asyncio
+async def test_typed_delete_preserves_namespace_and_distinguishes_outage(
+    key_presence_backend: tuple[RedisCache, FakeServer],
+) -> None:
+    from litellm.types.caching import CacheFailure
+
+    cache, server = key_presence_backend
+    await cache.async_set_cache("pair", 3, ttl=60)
+    with pytest.warns(FutureWarning, match="async_delete_record is experimental and may change") as seen:
+        assert await cache.async_delete_record(key="presence:pair") is True
+    assert seen[0].filename == __file__
+    assert await cache.async_get_cache("pair") is None
+    assert await cache.async_delete_record(key="pair") is False
+    server.connected = False
+    failure: Final = await cache.async_delete_record(key="pair")
+    assert isinstance(failure, CacheFailure)
+    assert failure.kind == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_typed_enqueue_keeps_order_and_validates_lengths(
+    key_presence_backend: tuple[RedisCache, FakeServer],
+) -> None:
+    from litellm.types.caching import CacheQueueUpdate
+
+    cache, _ = key_presence_backend
+    with pytest.warns(FutureWarning, match="async_enqueue_updates is experimental and may change"):
+        result: Final = await cache.async_enqueue_updates(updates=(
+            CacheQueueUpdate(key="queue", values=("one", "two")),
+            CacheQueueUpdate(key="presence:queue", values=("three",)),
+        ))
+    assert result == (2, 3)
+    assert await cache.async_lpop("queue", count=3) == ["one", "two", "three"]
+
+
+@pytest.mark.asyncio
+async def test_typed_pubsub_namespaces_messages_and_closes_the_subscription(
+    key_presence_backend: tuple[RedisCache, FakeServer],
+) -> None:
+    from litellm.types.caching import CacheFailure, CachePublish
+
+    cache, _ = key_presence_backend
+    with pytest.warns(FutureWarning, match="async_subscribe is experimental and may change"):
+        subscription: Final = await cache.async_subscribe(channel="updates")
+    assert not isinstance(subscription, CacheFailure)
+    with pytest.warns(FutureWarning):
+        assert await subscription.receive(timeout_seconds=0.0) is None
+    with pytest.warns(FutureWarning):
+        assert await cache.async_publish_many(messages=(CachePublish("presence:updates", "changed"),)) == (1,)
+    with pytest.warns(FutureWarning):
+        assert await subscription.receive(timeout_seconds=0.0) == b"changed"
+    with pytest.warns(FutureWarning):
+        assert await subscription.close() is None
+    with pytest.warns(FutureWarning):
+        assert await subscription.receive(timeout_seconds=0.0) == CacheFailure("unavailable", "Subscription is closed")
+
+
+@pytest.mark.asyncio
+async def test_typed_read_values_preserves_cache_decoding_and_distinguishes_outage(
+    key_presence_backend: tuple[RedisCache, FakeServer],
+) -> None:
+    from litellm.types.caching import CacheFailure
+
+    cache, server = key_presence_backend
+    await cache.init_async_client().set("presence:json", '{"enabled":true}')
+    await cache.init_async_client().set("presence:null", "null")
+    with pytest.warns(FutureWarning):
+        values: Final = await cache.async_read_values(keys=("json", "null", "missing"))
+    assert values == {"json": {"enabled": True}, "null": None, "missing": None}
+    server.connected = False
+    with pytest.warns(FutureWarning):
+        result: Final = await cache.async_read_values(keys=("json",))
+    assert isinstance(result, CacheFailure)
+    assert result.kind == "unavailable"

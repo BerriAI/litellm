@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypeVar
 
 from litellm._logging import verbose_logger
+from litellm.caching import _redis_capabilities as _cap
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import REDIS_CONNECTION_POOL_TIMEOUT
 
@@ -130,14 +131,13 @@ class RedisClusterCache(RedisCache):
         """
         Overrides `_run_redis_mget_operation` in redis_cache.py
         """
-        return self.redis_client.mget_nonatomic(keys=keys)
+        return _cap.cluster_values_sync(self, keys)
 
     async def _async_run_redis_mget_operation(self, keys: list[str]) -> Sequence[bytes | str | None]:
         """
         Overrides `_async_run_redis_mget_operation` in redis_cache.py
         """
-        async_redis_cluster_client: Final = self.init_async_client()
-        return await async_redis_cluster_client.mget_nonatomic(keys=keys)
+        return await _cap.cluster_values(self, keys)
 
     async def test_connection(self) -> dict:
         """

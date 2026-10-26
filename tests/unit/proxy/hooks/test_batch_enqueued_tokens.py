@@ -12,11 +12,12 @@ import uuid
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from litellm.caching.caching import DualCache
-from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 from litellm.constants import BATCH_ENQUEUED_TOKEN_TTL_SECONDS
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.batch_enqueued_tokens import (
@@ -127,7 +128,7 @@ async def test_zero_token_reserve_charges_nothing():
     assert isinstance(full, BatchEnqueuedTokenReservation)
 
 
-class _SingleKeyRedisFake:
+class _SingleKeyRedisFake(RedisCache):
     """Emulates the Redis script path one single-key call at a time, recording every call."""
 
     def __init__(
@@ -137,6 +138,11 @@ class _SingleKeyRedisFake:
         fail_save_keys: frozenset[str] = frozenset(),
         raise_after_landing_save_keys: frozenset[str] = frozenset(),
     ) -> None:
+        with (
+            patch("litellm._redis.get_redis_client", return_value=MagicMock()),
+            patch("asyncio.get_running_loop", side_effect=RuntimeError("no running event loop")),
+        ):
+            super().__init__(host=f"batch-test-{uuid.uuid4().hex}", port=6379)
         self.script_calls: tuple[tuple[str, tuple[str, ...]], ...] = ()
         self.save_ttls: tuple[int, ...] = ()
         self.counters: Mapping[str, int] = MappingProxyType({})
@@ -146,14 +152,17 @@ class _SingleKeyRedisFake:
         self.fail_save_keys = fail_save_keys
         self.raise_after_landing_save_keys = raise_after_landing_save_keys
 
-    def async_register_script(self, script: str):
+    def _get_async_client(self):
+        return self
+
+    def register_script(self, script: str):
         kind: Final = (
             "reserve"
             if "INCRBY" in script
             else "refund" if "DECRBY" in script else "pop" if "GET" in script else "save"
         )
 
-        async def run(keys: Sequence[str], args: Sequence[str | bytes | int | float]) -> object:
+        async def run(keys: Sequence[str], args: Sequence[str | bytes | int | float], client=None) -> object:
             self.script_calls = (*self.script_calls, (kind, tuple(keys)))
             return self._run(kind, tuple(keys), tuple(args))
 
@@ -401,9 +410,9 @@ def test_batch_response_view_accepts_batch_objects_only():
     assert batch_response_view("batch_1") is None
 
 
-class _OpenBreakerRedis:
-    def async_register_script(self, script: str):
-        async def refused(keys: Sequence[str], args: Sequence[str | bytes | int | float]) -> object:
+class _OpenBreakerRedis(_SingleKeyRedisFake):
+    def register_script(self, script: str):
+        async def refused(keys: Sequence[str], args: Sequence[str | bytes | int | float], client=None) -> object:
             raise RedisCircuitBreakerOpenError("Redis circuit breaker is open")
 
         return refused

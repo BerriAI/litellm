@@ -14,6 +14,8 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pytest_mock import MockerFixture
+from redis.asyncio import Redis
+from litellm.caching.redis_cache import RedisCache
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
@@ -49,7 +51,6 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
 client = TestClient(app)
 
 if TYPE_CHECKING:
-    from litellm.caching.redis_cache import RedisCache
     from litellm.proxy.utils import PrismaClient
 
 
@@ -2536,11 +2537,12 @@ async def test_user_update_reaches_cached_user_on_every_worker(
             published.append((channel, message))
             return 1
 
-    class _FakeRedisCache:
-        namespace: str | None = None
+    class _FakeRedisCache(RedisCache):
+        def __init__(self) -> None:
+            self.namespace = None
 
-        def init_pubsub_client(self) -> _RecordingRedisClient:
-            return _RecordingRedisClient()
+        def init_pubsub_client(self) -> "Redis[bytes]":
+            return cast("Redis[bytes]", _RecordingRedisClient())
 
     class _UserTableMocks:
         def __init__(
@@ -3200,7 +3202,7 @@ async def test_user_info_v2_redacts_scim_enterprise_metadata(mocker):
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UserInfoV2Response
+    from litellm.proxy._types import LiteLLM_TeamTable, UserInfoV2Response
     from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
 
     mock_prisma_client = mocker.MagicMock()
@@ -3556,7 +3558,7 @@ async def test_user_info_v2_team_admin_can_query_team_member(mocker):
     """
     from fastapi import Request
 
-    from litellm.proxy._types import LiteLLM_TeamTable, UserInfoV2Response
+    from litellm.proxy._types import UserInfoV2Response
     from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
 
     mock_prisma_client = mocker.MagicMock()

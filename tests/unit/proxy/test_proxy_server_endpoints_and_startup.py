@@ -11,7 +11,7 @@ import time
 import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, call, create_autospec, mock_open, patch
 
@@ -15340,14 +15340,14 @@ async def test_auth_cache_invalidation_subscriber_evicts_byok_credentials_cached
         def pubsub(self) -> _QueuePubSub:
             return self._scripted_pubsub
 
-    class _FakeRedisCache:
+    class _FakeRedisCache(RedisCache):
         namespace = None
 
         def __init__(self, client: object) -> None:
             self._client = client
 
-        def init_pubsub_client(self) -> object:
-            return self._client
+        def init_pubsub_client(self) -> "Redis[bytes]":
+            return cast("Redis[bytes]", self._client)
 
     byok_credential_cache.flush_cache()
     cache_byok_credential("mallory", "srv-byok", "sk-revoked-elsewhere")

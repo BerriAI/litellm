@@ -16,25 +16,30 @@ Redis.
 
 import asyncio
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any, Dict, Final
+from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 import pytest
 
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    _AUDIO_BYTES_PER_TOKEN,
     PROJECT_ITPM_DESCRIPTOR_KEY,
     PROJECT_OTPM_DESCRIPTOR_KEY,
     RateLimitedModel,
-    _AUDIO_BYTES_PER_TOKEN,
-    PROXY_MaxParallelRequestsHandler_v3 as RateLimitHandler,
-)
-from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _call_id_from_callback_kwargs,
     _request_stash,
     get_or_create_request_stash,
     get_request_stash,
+)
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    PROXY_MaxParallelRequestsHandler_v3 as RateLimitHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.types.llms.openai import (
@@ -701,13 +706,8 @@ async def test_contentless_request_reserves_minimum(rate_limiter):
 
 
 @pytest.mark.asyncio
-async def test_atomic_keys_share_hash_tag_per_descriptor(rate_limiter):
-    """
-    Cluster safety: every key in a single descriptor's Lua payload must
-    share a `{key:value}` hash tag so the call lands on a single Redis
-    Cluster slot. Otherwise the Lua script raises CROSSSLOT in cluster mode.
-    """
-    handler, _cache = rate_limiter
+async def test_atomic_keys_share_hash_tag_per_descriptor():
+    """Every atomic reservation groups one descriptor's keys on one cluster slot."""
 
     descriptors = [
         {
@@ -727,21 +727,17 @@ async def test_atomic_keys_share_hash_tag_per_descriptor(rate_limiter):
     ]
     increments = [{"requests": 1, "tokens": 10}, {"tokens": 10}]
 
-    for descriptor, inc in zip(descriptors, increments):
-        keys, _args, _meta = handler._build_descriptor_atomic_payload(
-            descriptor=descriptor,
-            increment_amounts=inc,
-        )
-        # All keys in a descriptor's payload must share the same {tag}
-        # — that's the prefix between the first '{' and '}'.
-        tags = {k[: k.index("}") + 1] for k in keys}
-        assert len(tags) == 1, (
-            f"Descriptor {descriptor['key']}:{descriptor['value']} produced "
-            f"keys spanning multiple hash tags: {tags}. Redis Cluster would "
-            f"reject this Lua call with CROSSSLOT."
-        )
-        expected_tag = f"{{{descriptor['key']}:{descriptor['value']}}}"
-        assert tags == {expected_tag}, f"Expected hash tag {expected_tag}, got {tags}"
+    executor: Final = AsyncMock(side_effect=[[0, 1, 10, 1234, 1234], [0, 10, 1234]])
+    with _redis_cache_for_executor(executor) as redis_cache:
+        handler: Final = RateLimitHandler(internal_usage_cache=InternalUsageCache(DualCache(redis_cache=redis_cache)))
+        response: Final = await handler.atomic_check_and_increment_by_n(descriptors, increments)
+
+    assert response["overall_code"] == "OK"
+    assert executor.await_count == len(descriptors)
+    for descriptor, call in zip(descriptors, executor.call_args_list):
+        assert {key[: key.index("}") + 1] for key in call.kwargs["keys"]} == {
+            f"{{{descriptor['key']}:{descriptor['value']}}}"
+        }
 
 
 @pytest.mark.asyncio
@@ -1671,89 +1667,70 @@ async def test_project_reconciliation_decrements_its_active_window(rate_limiter)
     assert float(await cache.async_get_cache(key=counter_key, local_only=True) or 0) == 10
 
 
+@contextmanager
+def _redis_cache_for_executor(executor: AsyncMock) -> Iterator[RedisCache]:
+    transport: Final = MagicMock()
+    transport.register_script.return_value = executor
+    with (
+        patch("litellm._redis.get_redis_client", return_value=MagicMock()),
+        patch("litellm._redis.get_redis_async_client", return_value=transport),
+    ):
+        with patch("asyncio.get_running_loop", side_effect=RuntimeError("no running event loop")):
+            cache: Final = RedisCache(host=f"tpm-concurrent-{uuid4().hex}")
+        yield cache
+
+
 @pytest.mark.asyncio
-async def test_redis_window_guard_uses_reservation_identity_and_never_falls_back_negative(
-    rate_limiter,
-):
-    handler, _cache = rate_limiter
-    calls = []
-
-    async def failing_guard(*, keys, args):
-        calls.append((keys, args))
-        raise RuntimeError("redis unavailable")
-
-    unguarded_calls = []
-
-    async def capture_unguarded(pipeline_operations, **_kwargs):
-        unguarded_calls.extend(pipeline_operations)
-
-    handler.window_guarded_token_increment_script = failing_guard
-    handler.async_increment_tokens_with_ttl_preservation = capture_unguarded
-    await handler.async_increment_reservation_aware_tokens(
-        pipeline_operations=[
-            {
-                "key": "{model_per_project_itpm:project:model}:tokens",
-                "increment_value": -90,
-                "ttl": 60,
-                "window_key": "{model_per_project_itpm:project:model}:window",
-                "expected_window_start": "1234",
-                "reservation_backend": "redis",
-            }
-        ]
-    )
-
-    assert calls == [
-        (
-            [
-                "{model_per_project_itpm:project:model}:window",
-                "{model_per_project_itpm:project:model}:tokens",
-            ],
-            ["1234", -90, 60],
+async def test_redis_window_guard_uses_reservation_identity_and_never_falls_back_negative():
+    executor: Final = AsyncMock(side_effect=ConnectionError("redis unavailable"))
+    with _redis_cache_for_executor(executor) as redis_cache:
+        cache: Final = DualCache(redis_cache=redis_cache)
+        cache.in_memory_cache.set_cache("{model_per_project_itpm:project:model}:tokens", 100)
+        handler: Final = RateLimitHandler(internal_usage_cache=InternalUsageCache(cache))
+        await handler.async_increment_reservation_aware_tokens(
+            pipeline_operations=[
+                {
+                    "key": "{model_per_project_itpm:project:model}:tokens",
+                    "increment_value": -90,
+                    "ttl": 60,
+                    "window_key": "{model_per_project_itpm:project:model}:window",
+                    "expected_window_start": "1234",
+                    "reservation_backend": "redis",
+                }
+            ]
         )
-    ]
-    assert unguarded_calls == []
+
+    assert tuple(executor.call_args.kwargs["keys"]) == (
+        "{model_per_project_itpm:project:model}:window",
+        "{model_per_project_itpm:project:model}:tokens",
+    )
+    assert tuple(executor.call_args.kwargs["args"]) == ("1234", -90, 60)
+    assert executor.await_count == 1
+    assert cache.in_memory_cache.get_cache("{model_per_project_itpm:project:model}:tokens") == 100
 
 
 @pytest.mark.asyncio
-async def test_atomic_lua_response_carries_redis_window_identity(rate_limiter):
-    handler, _cache = rate_limiter
-    counter_key = "{model_per_project_itpm:project:model}:tokens"
-    meta = [
-        {
-            "descriptor_key": PROJECT_ITPM_DESCRIPTOR_KEY,
-            "descriptor_value": "project:model",
-            "current_limit": 100,
-            "rate_limit_type": "tokens",
-            "counter_key": counter_key,
+async def test_atomic_reservation_response_carries_redis_window_identity():
+    counter_key: Final = "{model_per_project_itpm:project:model}:tokens"
+    with _redis_cache_for_executor(AsyncMock(return_value=[0, 25, 1234])) as redis_cache:
+        handler: Final = RateLimitHandler(internal_usage_cache=InternalUsageCache(DualCache(redis_cache=redis_cache)))
+        assert await handler.atomic_check_and_increment_by_n([], []) == {
+            "overall_code": "OK",
+            "statuses": [],
         }
-    ]
-
-    async def successful_reservation(*, keys, args):
-        return [0, 25, 1234]
-
-    handler.check_and_increment_by_n_script = successful_reservation
-    assert await handler._atomic_lua_per_descriptor([]) == {
-        "overall_code": "OK",
-        "statuses": [],
-    }
-
-    response = await handler._atomic_lua_per_descriptor(
-        descriptor_groups=[
-            (
-                [
-                    "{model_per_project_itpm:project:model}:window",
-                    counter_key,
-                ],
-                [100, 25, 60, 60],
-                meta,
-            )
-        ]
-    )
+        response: Final = await handler.atomic_check_and_increment_by_n(
+            descriptors=[
+                {
+                    "key": PROJECT_ITPM_DESCRIPTOR_KEY,
+                    "value": "project:model",
+                    "rate_limit": {"tokens_per_unit": 100, "window_size": 60},
+                }
+            ],
+            increments=[{"tokens": 25}],
+        )
 
     assert response["statuses"][0]["limit_remaining"] == 75
-    assert response["reservation_windows"] == frozenset(
-        {(counter_key, "1234", "redis")}
-    )
+    assert response["reservation_windows"] == frozenset({(counter_key, "1234", "redis")})
 
 
 @pytest.mark.asyncio
