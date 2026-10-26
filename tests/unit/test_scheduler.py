@@ -5,13 +5,18 @@ import asyncio
 import importlib
 import json
 import os
-from collections.abc import Sequence
-from typing import Final
+from collections.abc import Iterator, Sequence
+from typing import Final, Literal
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from pydantic import ValidationError
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 import litellm
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.caching.redis_cache import RedisCache
+from litellm.exceptions import Timeout
 from litellm.scheduler import FlowItem, Scheduler, SchedulerCacheKeys
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -330,6 +335,159 @@ async def test_wait_for_turn_finishes_removal_when_cancelled_again_during_cleanu
         await waiting
 
     assert await scheduler.get_queue("sched-model") == [(0, "head")]
+
+
+@pytest.fixture
+def scheduler_redis_replies() -> Iterator[tuple[RedisCache, AsyncMock, AsyncMock]]:
+    reads: Final = AsyncMock(return_value=None)
+    writes: Final = AsyncMock(return_value=1)
+
+    async def execute(
+        *, keys: Sequence[str], args: Sequence[str | bytes | int | float], client: object = None
+    ) -> object:
+        return await (writes if args else reads)(keys=keys, args=args, client=client)
+
+    with (
+        patch("redis.Redis.execute_command", return_value={"redis_version": "unit-fixture"}),
+        patch("redis.asyncio.Redis.execute_command", new_callable=AsyncMock, return_value=True),
+        patch("redis.commands.core.AsyncScript.__call__", side_effect=execute),
+    ):
+        cache: Final = RedisCache(host="scheduler-unit.invalid", port=6379)
+        yield cache, reads, writes
+        cache.redis_client.close()
+
+
+@pytest.mark.asyncio
+async def test_shared_scheduler_retries_conflicts_using_the_new_peer_snapshot(
+    scheduler_redis_replies: tuple[RedisCache, AsyncMock, AsyncMock],
+) -> None:
+    cache, reads, writes = scheduler_redis_replies
+    scheduler: Final = Scheduler(redis_cache=cache)
+    reads.side_effect = (None, b'[[0,"peer"]]', RedisConnectionError("offline"))
+    writes.side_effect = (0, 1)
+
+    await scheduler.add_request(FlowItem(priority=1, request_id="new", model_name="shared"))
+
+    assert await scheduler.get_queue("shared") == [(0, "peer"), (1, "new")]
+
+
+@pytest.mark.asyncio
+async def test_shared_scheduler_stops_after_conflicts_without_publishing_an_uncommitted_queue(
+    scheduler_redis_replies: tuple[RedisCache, AsyncMock, AsyncMock],
+) -> None:
+    cache, _reads, writes = scheduler_redis_replies
+    scheduler: Final = Scheduler(redis_cache=cache)
+    writes.return_value = 0
+
+    with patch("random.uniform", return_value=0), pytest.raises(Timeout, match="queue remained busy"):
+        await scheduler.add_request(FlowItem(priority=1, request_id="never-committed", model_name="shared"))
+
+    assert await scheduler.cache.async_get_cache("scheduler:queue:shared", local_only=True) is None
+
+
+@pytest.mark.parametrize("operation", ["enqueue", "read"])
+@pytest.mark.asyncio
+async def test_shared_scheduler_rejects_malformed_snapshots_without_replacing_local_history(
+    scheduler_redis_replies: tuple[RedisCache, AsyncMock, AsyncMock], operation: str
+) -> None:
+    cache, reads, _writes = scheduler_redis_replies
+    scheduler: Final = Scheduler(redis_cache=cache)
+    await scheduler.cache.async_set_cache("scheduler:queue:shared", [(0, "last-known")], local_only=True)
+    reads.side_effect = (b'{"invalid":"queue"}',)
+
+    call: Final = (
+        scheduler.add_request(FlowItem(priority=1, request_id="new", model_name="shared"))
+        if operation == "enqueue"
+        else scheduler.get_queue("shared")
+    )
+    with pytest.raises(ValidationError):
+        await call
+
+    assert await scheduler.cache.async_get_cache("scheduler:queue:shared", local_only=True) == [(0, "last-known")]
+
+
+@pytest.mark.parametrize("outcome", ["admitted", "failed", "cancelled"])
+@pytest.mark.asyncio
+async def test_shared_scheduler_cleanup_failure_preserves_the_request_outcome(
+    scheduler_redis_replies: tuple[RedisCache, AsyncMock, AsyncMock], outcome: Literal["admitted", "failed", "cancelled"]
+) -> None:
+    cache, reads, _writes = scheduler_redis_replies
+    scheduler: Final = Scheduler(redis_cache=cache)
+    original: Final = RuntimeError("health lookup failed")
+    reads.side_effect = (None, b'{"invalid":"queue"}')
+
+    async def health() -> Sequence[object]:
+        match outcome:
+            case "failed":
+                raise original
+            case "cancelled":
+                raise asyncio.CancelledError
+            case "admitted":
+                return ("healthy",)
+
+    async def wait() -> None:
+        await scheduler.wait_for_turn(
+            FlowItem(priority=1, request_id="waiting", model_name="shared"), timeout=5, get_healthy_deployments=health
+        )
+
+    match outcome:
+        case "admitted":
+            await wait()
+        case "failed":
+            with pytest.raises(RuntimeError) as caught:
+                await wait()
+            assert caught.value is original
+        case "cancelled":
+            with pytest.raises(asyncio.CancelledError):
+                await wait()
+    assert await scheduler.cache.async_get_cache("scheduler:queue:shared", local_only=True) == [(1, "waiting")]
+
+
+@pytest.mark.asyncio
+async def test_shared_scheduler_keeps_admission_and_removal_in_its_fallback_snapshot(
+    scheduler_redis_replies: tuple[RedisCache, AsyncMock, AsyncMock],
+) -> None:
+    cache, reads, _writes = scheduler_redis_replies
+    scheduler: Final = Scheduler(redis_cache=cache)
+    head: Final = FlowItem(priority=0, request_id="head", model_name="shared")
+    later: Final = FlowItem(priority=2, request_id="later", model_name="shared")
+    reads.side_effect = (
+        b'[[0,"head"],[2,"later"]]',
+        b'[[0,"head"],[2,"later"]]',
+        b'[[0,"head"],[2,"later"]]',
+        RedisConnectionError("offline after admission"),
+        b'[[2,"later"],[3,"peer"]]',
+        RedisConnectionError("offline after removal"),
+        b'[[3,"peer"]]',
+    )
+
+    await scheduler.add_request(head)
+    assert not await scheduler.poll(later, [])
+    assert await scheduler.poll(head, [])
+    assert await scheduler.get_queue("shared") == [(2, "later")]
+    await scheduler.remove_request("later", "shared")
+    assert await scheduler.get_queue("shared") == [(3, "peer")]
+    assert await scheduler.get_queue("shared") == [(3, "peer")]
+
+
+@pytest.mark.asyncio
+async def test_shared_scheduler_does_not_upload_outage_only_requests_when_redis_recovers(
+    scheduler_redis_replies: tuple[RedisCache, AsyncMock, AsyncMock],
+) -> None:
+    cache, reads, writes = scheduler_redis_replies
+    scheduler: Final = Scheduler(redis_cache=cache)
+    reads.side_effect = (
+        RedisConnectionError("offline during enqueue"),
+        RedisConnectionError("still offline"),
+        b'[[0,"peer"]]',
+        RedisConnectionError("offline after recovery"),
+    )
+
+    await scheduler.add_request(FlowItem(priority=1, request_id="local-only", model_name="shared"))
+    assert await scheduler.get_queue("shared") == [(1, "local-only")]
+    await scheduler.add_request(FlowItem(priority=2, request_id="new", model_name="shared"))
+    assert await scheduler.get_queue("shared") == [(0, "peer"), (2, "new")]
+    assert json.loads(writes.call_args.kwargs["args"][2]) == [[0, "peer"], [2, "new"]]
 
 
 @pytest.fixture(autouse=True)
