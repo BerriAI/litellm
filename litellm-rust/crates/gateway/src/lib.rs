@@ -68,8 +68,7 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
         secrets,
         ModelRouter::from_model_list(&config.model_list),
     )?;
-    #[cfg(feature = "switchyard")]
-    let gateway = gateway.with_switchyard_models(&config.model_list)?;
+    let gateway = gateway.with_auto_routing_models(&config.model_list)?;
     Ok(Arc::new(gateway))
 }
 

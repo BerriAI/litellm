@@ -1,5 +1,10 @@
+use super::{ApiFormat, AutoRoutingStrategy, StrategyRequest};
+use litellm_inference_chat::types::ChatCompletionsRequest;
+use litellm_inference_messages::{MessagesCall, messages_body};
+use litellm_inference_responses::types::ResponsesCall;
+use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap},
     convert::Infallible,
     sync::Arc,
 };
@@ -18,7 +23,7 @@ use litellm_cache_response::{CacheOptions, CachePolicy, ScopedCache};
 use litellm_config::Model;
 use litellm_host::call::CallOutput;
 use litellm_http::transport::Error as TransportError;
-use litellm_inference::RouteError;
+use litellm_inference::Error as InferenceError;
 use litellm_inference_chat::ChatCompletionsRoute;
 use litellm_inference_messages::MessagesRoute;
 use litellm_inference_responses::ResponsesRoute;
@@ -37,70 +42,41 @@ use switchyard_translation::{
 };
 
 use crate::{
-    Deployment, Error, Gateway, ModelRouter, SwitchyardConfigError, caching::CacheHeaders,
-    chat_completions, messages, responses,
+    AutoRoutingConfigError, Deployment, Error, Gateway, ModelRouter, caching::CacheHeaders,
 };
 
 const SWITCHYARD_MODEL: &str = "switchyard/algorithm";
 
-#[derive(Default)]
-pub(crate) struct Routes(HashMap<String, Route>);
-
-impl Routes {
-    pub(crate) fn from_models(
-        model_list: &[Model],
-        deployments: &ModelRouter,
-    ) -> Result<Self, SwitchyardConfigError> {
-        let mut routes = HashMap::new();
-        let mut seen = HashSet::new();
-        // ModelRouter uses the final entry when public model names repeat.
-        for model in model_list.iter().rev() {
-            if !seen.insert(model.model_name.as_str())
-                || model.litellm_params.model != SWITCHYARD_MODEL
-            {
-                continue;
-            }
-            if deployments
-                .get(&model.model_name)
-                .is_none_or(|deployment| deployment.model != SWITCHYARD_MODEL)
-            {
-                return Err(invalid(model, "model is not a Switchyard route"));
-            }
-            let config = model
-                .litellm_params
-                .extra
-                .get("switchyard_config")
-                .ok_or_else(|| invalid(model, "switchyard_config is required"))?;
-            let config = AlgorithmSpec::deserialize(config)
-                .map_err(|error| invalid(model, error.to_string()))?;
-            let targets = targets(model, &config, model_list, deployments)?;
-            let (algorithm, runtime_models) = config
-                .build_with_runtime_models(&model.model_name, &targets.models)
-                .map_err(|error| invalid(model, error.to_string()))?;
-            routes.insert(
-                model.model_name.clone(),
-                Route {
-                    algorithm,
-                    runtime_models: Arc::new(runtime_models),
-                    targets: Arc::new(targets.by_model),
-                },
-            );
-        }
-        Ok(Self(routes))
-    }
-
-    pub(crate) fn get(&self, model: &str) -> Option<&Route> {
-        self.0.get(model)
-    }
-}
-
-pub(crate) struct Route {
+pub(super) struct SwitchyardStrategy {
     algorithm: Arc<dyn Algorithm>,
     runtime_models: Arc<RuntimeModels>,
     targets: Arc<HashMap<ModelId, Target>>,
 }
 
-impl Route {
+impl SwitchyardStrategy {
+    pub(super) fn from_model(
+        model: &Model,
+        model_list: &[Model],
+        deployments: &ModelRouter,
+    ) -> Result<Self, AutoRoutingConfigError> {
+        let config = model
+            .litellm_params
+            .extra
+            .get("switchyard_config")
+            .ok_or_else(|| invalid(model, "switchyard_config is required"))?;
+        let config = AlgorithmSpec::deserialize(config)
+            .map_err(|error| invalid(model, error.to_string()))?;
+        let targets = targets(model, &config, model_list, deployments)?;
+        let (algorithm, runtime_models) = config
+            .build_with_runtime_models(&model.model_name, &targets.models)
+            .map_err(|error| invalid(model, error.to_string()))?;
+        Ok(Self {
+            algorithm,
+            runtime_models: Arc::new(runtime_models),
+            targets: Arc::new(targets.by_model),
+        })
+    }
+
     pub(crate) async fn execute(
         &self,
         gateway: &Gateway,
@@ -230,7 +206,7 @@ impl RoutedLlmClient for LiteLlmClient {
                     .routes
                     .chat
                     .execute(
-                        chat_completions::provider_request(&target.deployment, body),
+                        chat_request(&target.deployment, body),
                         &cache_headers,
                         self.cache_policy,
                     )
@@ -243,7 +219,7 @@ impl RoutedLlmClient for LiteLlmClient {
                     .routes
                     .responses
                     .execute(
-                        responses::provider_request(&target.deployment, body),
+                        responses_request(&target.deployment, body),
                         &cache_headers,
                         self.cache_policy,
                     )
@@ -257,8 +233,8 @@ impl RoutedLlmClient for LiteLlmClient {
                     .as_ref()
                     .and_then(|metadata| metadata.http_headers.as_ref())
                     .unwrap_or(&empty_headers);
-                let call = messages::provider_request(&target.deployment, body, headers)
-                    .map_err(map_route_error)?;
+                let call =
+                    messages_request(&target.deployment, body, headers).map_err(map_route_error)?;
                 let response = self
                     .routes
                     .messages
@@ -290,7 +266,7 @@ fn decode_complete(
 }
 
 fn decode_output<T, H>(
-    response: CallOutput<T, H, bytes::Bytes, RouteError>,
+    response: CallOutput<T, H, bytes::Bytes, InferenceError>,
     wire_format: WireFormat,
 ) -> Result<LlmResponse, LlmClientError>
 where
@@ -360,7 +336,7 @@ fn targets(
     config: &AlgorithmSpec,
     model_list: &[Model],
     deployments: &ModelRouter,
-) -> Result<Targets, SwitchyardConfigError> {
+) -> Result<Targets, AutoRoutingConfigError> {
     let mut models = BTreeMap::new();
     let mut by_model = HashMap::new();
     for target in config.callable_target_names() {
@@ -392,7 +368,7 @@ fn targets(
 }
 
 // Caller format and target execution format are independent, so each target declares its own.
-fn target_wire_format(route: &Model, target: &Model) -> Result<WireFormat, SwitchyardConfigError> {
+fn target_wire_format(route: &Model, target: &Model) -> Result<WireFormat, AutoRoutingConfigError> {
     let value = target
         .litellm_params
         .extra
@@ -417,16 +393,16 @@ fn target_wire_format(route: &Model, target: &Model) -> Result<WireFormat, Switc
     })
 }
 
-fn invalid(model: &Model, message: impl Into<String>) -> SwitchyardConfigError {
-    SwitchyardConfigError {
+fn invalid(model: &Model, message: impl Into<String>) -> AutoRoutingConfigError {
+    AutoRoutingConfigError {
         model: model.model_name.clone(),
         reason: message.into(),
     }
 }
 
-fn map_route_error(error: RouteError) -> LlmClientError {
+fn map_route_error(error: InferenceError) -> LlmClientError {
     match error {
-        RouteError::Transport(TransportError::Http { status, body }) => {
+        InferenceError::Transport(TransportError::Http { status, body }) => {
             match axum::http::StatusCode::from_u16(status) {
                 Ok(status) => LlmClientError::UpstreamHttp { status, body },
                 Err(source) => LlmClientError::InvalidResponse {
@@ -435,10 +411,12 @@ fn map_route_error(error: RouteError) -> LlmClientError {
             }
         }
         // Only Connect is known to precede dispatch, so only it is safe to fall back from.
-        error @ RouteError::Transport(TransportError::Connect(_)) => LlmClientError::Transport {
-            source: Box::new(error),
-        },
-        error @ RouteError::InvalidResponse(_) => LlmClientError::InvalidResponse {
+        error @ InferenceError::Transport(TransportError::Connect(_)) => {
+            LlmClientError::Transport {
+                source: Box::new(error),
+            }
+        }
+        error @ InferenceError::InvalidResponse(_) => LlmClientError::InvalidResponse {
             source: Box::new(error),
         },
         error => LlmClientError::Host {
@@ -458,10 +436,10 @@ fn map_client_error(error: LlmClientError) -> Error {
     match error {
         LlmClientError::InvalidRequest { message }
         | LlmClientError::RequestTranslation(message) => {
-            Error::Route(RouteError::InvalidRequest(message.into()))
+            Error::Route(InferenceError::InvalidRequest(message.into()))
         }
         LlmClientError::UpstreamHttp { status, body } => {
-            Error::Route(RouteError::Transport(TransportError::Http {
+            Error::Route(InferenceError::Transport(TransportError::Http {
                 status: status.as_u16(),
                 body,
             }))
@@ -472,19 +450,131 @@ fn map_client_error(error: LlmClientError) -> Error {
         | LlmClientError::Host { source }
         | LlmClientError::Ffi { source } => map_source(source),
         LlmClientError::ContextWindowExceeded { message, .. } => {
-            Error::Route(RouteError::InvalidRequest(message.into()))
+            Error::Route(InferenceError::InvalidRequest(message.into()))
         }
         LlmClientError::ResponseTranslation(message) => {
-            Error::Route(RouteError::InvalidResponse(message.into()))
+            Error::Route(InferenceError::InvalidResponse(message.into()))
         }
         error => Error::Internal(error.to_string()),
     }
 }
 
 fn map_source(source: BoxError) -> Error {
-    match source.downcast::<RouteError>() {
+    match source.downcast::<InferenceError>() {
         Ok(error) => Error::Route(*error),
         Err(source) => Error::Internal(source.to_string()),
+    }
+}
+
+const ANTHROPIC_API_HEADERS: [&str; 2] = ["anthropic-version", "anthropic-beta"];
+const OPENROUTER_API_HEADERS: [&str; 2] = [
+    "x-openrouter-metadata",
+    "x-openrouter-experimental-metadata",
+];
+const ANTHROPIC_API_HEADER_PROVIDERS: &str =
+    "anthropic,bedrock,bedrock_mantle,vertex_ai,openrouter,deepseek";
+
+fn chat_request(
+    deployment: &Deployment,
+    mut body: Map<String, Value>,
+) -> ChatCompletionsRequest<'_> {
+    let messages = body.remove("messages").unwrap_or_default();
+    body.remove("model");
+    ChatCompletionsRequest {
+        model: &deployment.model,
+        messages,
+        optional_params: body,
+        api_key: deployment.api_key.as_deref(),
+        api_base: deployment.api_base.as_deref(),
+        custom_llm_provider: deployment.custom_llm_provider.as_deref(),
+        extra_headers: None,
+        timeout: deployment.timeout,
+    }
+}
+
+fn responses_request(deployment: &Deployment, mut body: Map<String, Value>) -> ResponsesCall {
+    let input = body.remove("input").unwrap_or_default();
+    body.remove("model");
+    ResponsesCall {
+        model: deployment.model.clone(),
+        input,
+        optional_params: body,
+        api_key: deployment.api_key.clone(),
+        api_base: deployment.api_base.clone(),
+        custom_llm_provider: deployment.custom_llm_provider.clone(),
+        extra_headers: None,
+        timeout: deployment.timeout,
+    }
+}
+
+fn messages_request(
+    deployment: &Deployment,
+    mut body: Map<String, Value>,
+    headers: &HeaderMap,
+) -> Result<MessagesCall, InferenceError> {
+    if let Some(model) = body.get_mut("model") {
+        *model = Value::from(deployment.model.as_str());
+    }
+    Ok(MessagesCall {
+        body: messages_body(body)?,
+        api_key: deployment.api_key.clone(),
+        api_base: deployment.api_base.clone(),
+        custom_llm_provider: deployment.custom_llm_provider.clone(),
+        litellm_params: deployment.litellm_params.clone(),
+        extra_headers: None,
+        provider_specific_header: anthropic_api_headers(headers),
+        timeout: deployment.timeout,
+        shaping: deployment.shaping.clone(),
+    })
+}
+
+fn anthropic_api_headers(headers: &HeaderMap) -> Option<ProviderSpecificHeaders> {
+    let scopes = [
+        (
+            ANTHROPIC_API_HEADER_PROVIDERS,
+            ANTHROPIC_API_HEADERS.as_slice(),
+        ),
+        ("openrouter", OPENROUTER_API_HEADERS.as_slice()),
+    ];
+    let forwarded: Vec<ProviderSpecificHeader> = scopes
+        .into_iter()
+        .filter_map(|(provider, names)| {
+            let extra_headers: Map<String, Value> = names
+                .iter()
+                .filter_map(|name| {
+                    let value = headers.get(*name)?.to_str().ok()?;
+                    Some(((*name).to_owned(), Value::from(value)))
+                })
+                .collect();
+            (!extra_headers.is_empty()).then(|| ProviderSpecificHeader {
+                custom_llm_provider: provider.into(),
+                extra_headers,
+            })
+        })
+        .collect();
+    (!forwarded.is_empty()).then_some(ProviderSpecificHeaders::Many(forwarded))
+}
+
+impl AutoRoutingStrategy for SwitchyardStrategy {
+    fn execute<'a>(
+        &'a self,
+        gateway: &'a Gateway,
+        request: StrategyRequest,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<HttpResponse, Error>> + Send + 'a>>
+    {
+        let format = match request.format {
+            ApiFormat::Chat => WireFormat::OpenAiChat,
+            ApiFormat::Responses => WireFormat::OpenAiResponses,
+            ApiFormat::Messages => WireFormat::AnthropicMessages,
+        };
+        Box::pin(SwitchyardStrategy::execute(
+            self,
+            gateway,
+            request.cache_options,
+            format,
+            request.body,
+            request.headers,
+        ))
     }
 }
 
@@ -497,14 +587,14 @@ mod tests {
 
     #[rstest]
     fn host_errors_keep_their_gateway_classification() {
-        let error = RouteError::Auth(litellm_auth::Error::MissingApiKey {
+        let error = InferenceError::Auth(litellm_auth::Error::MissingApiKey {
             provider: "OpenAI",
             environment_variable: "OPENAI_API_KEY",
         });
 
         assert!(matches!(
             map_client_error(map_route_error(error)),
-            Error::Route(RouteError::Auth(_))
+            Error::Route(InferenceError::Auth(_))
         ));
     }
 

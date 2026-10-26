@@ -390,16 +390,93 @@ async fn streaming_responses_upstream() -> (String, tokio::task::JoinHandle<()>)
 }
 
 fn switchyard_app(config: &Config, permissions: Permissions) -> axum::Router {
+    support::authenticated_app(switchyard_gateway(config), permissions, None)
+}
+
+fn switchyard_gateway(config: &Config) -> Gateway {
     let resources = CoreResources::new(Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver))));
     let http = Resolution::from(&HttpSettings::default()).config;
-    let gateway = Gateway::new(
+    Gateway::new(
         resources,
         http,
         Arc::new(support::NoSecrets),
         ModelRouter::from_model_list(&config.model_list),
     )
     .expect("gateway")
-    .with_switchyard_models(&config.model_list)
-    .expect("Switchyard routes");
-    support::authenticated_app(gateway, permissions, None)
+    .with_auto_routing_models(&config.model_list)
+    .expect("Switchyard routes")
+}
+
+#[rstest]
+#[tokio::test]
+async fn routed_answers_preserve_cache_hits_and_caller_isolation() {
+    use litellm_cache_memory::InMemoryCache;
+    use litellm_cache_response::ResponseCache;
+    use litellm_gateway_auth::{Principal, PrincipalKind};
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "model":"answer", "choices":[{"message":{"role":"assistant","content":"cached answer"}}]
+        })))
+        .expect(2)
+        .mount(&upstream)
+        .await;
+    let config = Config::from_yaml(&format!(
+        r#"
+model_list:
+  - model_name: answer
+    litellm_params:
+      model: answer
+      custom_llm_provider: openai_like
+      api_base: {}/v1
+      api_key: test-key
+      switchyard_wire_format: openai_chat
+  - model_name: virtual
+    litellm_params:
+      model: switchyard/algorithm
+      switchyard_config: {{type: passthrough, target: answer}}
+"#,
+        upstream.uri()
+    ))
+    .unwrap();
+    let cache = Arc::new(ResponseCache::new(Arc::new(InMemoryCache::new(
+        Some(100),
+        Some(Duration::from_secs(60)),
+    ))));
+    let first_app = support::authenticated_app(
+        switchyard_gateway(&config).with_cache(cache.clone()),
+        Permissions::All,
+        Some(Principal::new(
+            "issuer".into(),
+            "first".into(),
+            PrincipalKind::Service,
+        )),
+    );
+    let second_app = support::authenticated_app(
+        switchyard_gateway(&config).with_cache(cache),
+        Permissions::All,
+        Some(Principal::new(
+            "issuer".into(),
+            "second".into(),
+            PrincipalKind::Service,
+        )),
+    );
+    let request = json!({"model":"virtual", "messages":[{"role":"user", "content":"hello"}]});
+    let first = support::post(first_app.clone(), "/v1/chat/completions", request.clone()).await;
+    assert_eq!(first.status(), 200);
+    assert!(!first.headers().contains_key("x-litellm-cache-key"));
+    let first_body = support::json(first).await;
+    let hit = support::post(first_app, "/v1/chat/completions", request.clone()).await;
+    assert_eq!(hit.status(), 200);
+    let first_key = hit.headers().get("x-litellm-cache-key").unwrap().clone();
+    assert_eq!(support::json(hit).await, first_body);
+    let second = support::post(second_app.clone(), "/v1/chat/completions", request.clone()).await;
+    assert_eq!(second.status(), 200);
+    assert!(!second.headers().contains_key("x-litellm-cache-key"));
+    let hit = support::post(second_app, "/v1/chat/completions", request).await;
+    assert_eq!(hit.status(), 200);
+    assert_ne!(hit.headers().get("x-litellm-cache-key").unwrap(), first_key);
+    upstream.verify().await;
 }

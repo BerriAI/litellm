@@ -3882,6 +3882,7 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "strum",
  "switchyard-libsy",
  "switchyard-llm-client",
  "switchyard-protocol",

@@ -9,7 +9,6 @@ repository.workspace = true
 switchyard = [
     "dep:async-trait",
     "dep:futures-util",
-    "dep:litellm-config",
     "dep:switchyard-libsy",
     "dep:switchyard-llm-client",
     "dep:switchyard-protocol",
@@ -32,7 +31,7 @@ litellm-inference-responses.workspace = true
 litellm-inference-messages.workspace = true
 litellm-inference-chat.workspace = true
 litellm-inference-ocr.workspace = true
-litellm-config = { workspace = true, optional = true }
+litellm-config.workspace = true
 litellm-host-http.workspace = true
 litellm-host.workspace = true
 litellm-http.workspace = true
@@ -47,6 +46,7 @@ switchyard-llm-client = { git = "https://github.com/NVIDIA-NeMo/Switchyard.git",
 switchyard-protocol = { git = "https://github.com/NVIDIA-NeMo/Switchyard.git", rev = "4bdf5719ce1c43902df92ef64407b858d1f99394", optional = true }
 switchyard-runner = { git = "https://github.com/NVIDIA-NeMo/Switchyard.git", rev = "4bdf5719ce1c43902df92ef64407b858d1f99394", optional = true }
 switchyard-translation = { git = "https://github.com/NVIDIA-NeMo/Switchyard.git", rev = "4bdf5719ce1c43902df92ef64407b858d1f99394", optional = true }
+strum.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

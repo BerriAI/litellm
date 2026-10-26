@@ -10,7 +10,6 @@ pub enum Error {
     Mcp(#[from] litellm_gateway_mcp::ConnectError),
     #[error("MCP requires a configured master key")]
     Auth(#[from] litellm_gateway_auth::Error),
-    #[cfg(feature = "switchyard")]
     #[error(transparent)]
-    Switchyard(#[from] litellm_gateway_inference::SwitchyardConfigError),
+    AutoRouting(#[from] litellm_gateway_inference::AutoRoutingConfigError),
 }

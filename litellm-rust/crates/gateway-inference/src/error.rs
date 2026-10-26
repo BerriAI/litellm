@@ -8,11 +8,9 @@ use litellm_inference::Error as InferenceError;
 use litellm_llms::base_llm::ocr::error::Error as OcrError;
 use serde_json::{Map, Value, json};
 
-/// Invalid configuration for a Switchyard virtual model.
-#[cfg(feature = "switchyard")]
 #[derive(Debug, thiserror::Error)]
-#[error("invalid Switchyard model {model}: {reason}")]
-pub struct SwitchyardConfigError {
+#[error("invalid auto-routing model {model}: {reason}")]
+pub struct AutoRoutingConfigError {
     pub(crate) model: String,
     pub(crate) reason: String,
 }
