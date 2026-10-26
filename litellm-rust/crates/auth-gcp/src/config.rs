@@ -7,7 +7,8 @@ use base64::{
 use litellm_auth_types::{Error, ErrorDetail, InputSource, SecretValue, Sourced};
 use serde_json::{Map, Value};
 
-use litellm_auth_types::VertexParams;
+use litellm_auth_types::{VertexKeys, VertexKeysPartial, VertexParams};
+use litellm_layered::merge;
 
 use crate::constants::GOOGLE_APPLICATION_CREDENTIALS_ENV;
 
@@ -36,9 +37,9 @@ impl VertexConfig {
         sources: &BTreeMap<String, InputSource>,
     ) -> Result<Self, Error> {
         Ok(Self::new(
-            optional_credentials(params, sources, VertexParams::CREDENTIALS.wire)?,
-            optional_string(params, VertexParams::PROJECT.wire)?,
-            optional_string(params, VertexParams::LOCATION.wire)?,
+            optional_credentials(params, sources, VertexKeys::CREDENTIALS.litellm_params)?,
+            optional_string(params, VertexKeys::PROJECT.litellm_params)?,
+            optional_string(params, VertexKeys::LOCATION.litellm_params)?,
         ))
     }
 
@@ -61,16 +62,28 @@ impl VertexConfig {
     pub fn location(&self) -> Option<&str> {
         self.location.as_deref()
     }
+
+    fn keys(&self) -> VertexKeysPartial {
+        VertexKeysPartial {
+            credentials: self
+                .credentials
+                .as_ref()
+                .map(|credentials| credentials.value().expose().to_string()),
+            project: self.project_id.clone(),
+            location: self.location.clone(),
+        }
+    }
+
+    fn resolved(&self, env_lookup: &dyn Fn(&str) -> Option<String>) -> VertexKeysPartial {
+        merge([self.keys(), env_keys(env_lookup)])
+    }
 }
 
 pub fn get_vertex_ai_project(
     config: &VertexConfig,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
-    config
-        .project_id()
-        .map(str::to_string)
-        .or_else(|| VertexParams::PROJECT.resolve(&|_| None, env_lookup))
+    config.resolved(env_lookup).project
 }
 
 /// The project a request is billed to when nothing names it: the `project_id` inside the
@@ -104,10 +117,11 @@ pub fn get_vertex_ai_location(
     config: &VertexConfig,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
-    config
-        .location()
-        .map(str::to_string)
-        .or_else(|| VertexParams::LOCATION.resolve(&|_| None, env_lookup))
+    config.resolved(env_lookup).location
+}
+
+fn env_keys(env_lookup: &dyn Fn(&str) -> Option<String>) -> VertexKeysPartial {
+    VertexKeysPartial::from_env(&env_lookup).unwrap_or_default()
 }
 
 const INLINE_JSON_LEADING_NOISE: [char; 7] = [' ', '\t', '\r', '\n', '\u{feff}', '"', '\''];
@@ -156,7 +170,7 @@ pub(crate) fn credential_source(
             }
         };
     }
-    if let Some(configured) = VertexParams::CREDENTIALS.resolve(&|_| None, env_lookup) {
+    if let Some(configured) = config.resolved(env_lookup).credentials {
         return CredentialSource::Trusted(SecretValue::new(configured));
     }
     non_empty_env(env_lookup, GOOGLE_APPLICATION_CREDENTIALS_ENV)

@@ -1,5 +1,5 @@
 use litellm_auth::SecretValue;
-use litellm_auth::VertexParams;
+use litellm_auth::{Sources, VertexKeys};
 use litellm_host_python::{from_py, present};
 use litellm_inference_ocr::{
     types::{LiteLLMOcrRequest, OcrDocumentInput},
@@ -11,10 +11,9 @@ use serde_json::{Map, Value};
 
 use super::{document::FileDocumentInput, errors::to_pyerr as ocr_error_to_pyerr};
 use crate::{
-    coercion::FieldSpec,
     credentials::{self, CallerTokenProvider},
     marshal::{project_optional_fields, python_timeout_seconds, request_input_sources},
-    python_settings::{PythonSettings, Snapshot},
+    routes::credential_globals,
 };
 
 /// What the host keeps after projection: the caller's token callable that answers the
@@ -126,16 +125,9 @@ pub(super) fn project_request(
     let names = specs.iter().map(|spec| spec.name).collect::<Vec<_>>();
     let optional_params =
         project_optional_fields(names.iter().copied(), |name| present(kwargs, bound, name))?;
-    let globals = module_globals_to_read(&optional_params, &names);
-    let defaults = if globals.is_empty() {
-        None
-    } else {
-        PythonSettings::ProviderDefaults.read_or_unset(bound.py())?
-    };
-    let optional_params = match defaults {
-        Some(defaults) => fold_module_globals(bound.py(), optional_params, &globals, &defaults)?,
-        None => optional_params,
-    };
+    let unset = unset_vertex_settings(&optional_params, &names);
+    let optional_params = credential_globals::fold(bound.py(), optional_params, &unset)
+        .map_err(|error| settings_error(bound.py(), error))?;
     let input_sources = request_input_sources(
         kwargs,
         names
@@ -169,48 +161,21 @@ pub(super) fn project_request(
     ))
 }
 
-/// Python's `VertexBase.get_vertex_ai_project` and `get_vertex_ai_location` fall back to a
-/// `litellm.<name>` module global when a call names neither spelling: the globals of the
-/// specs this route consumes whose wire names the call left out.
-fn module_globals_to_read(
+/// The Vertex settings this route consumes that the call leaves unset, whose `litellm.*`
+/// globals `VertexBase.get_vertex_ai_project` and `get_vertex_ai_location` fall back to.
+fn unset_vertex_settings(
     optional_params: &Map<String, Value>,
     consumed: &[&str],
-) -> Vec<&'static str> {
-    VertexParams::SPECS
-        .iter()
-        .filter(|spec| spec.wire.iter().all(|name| consumed.contains(name)))
-        .filter(|spec| {
-            !spec
-                .wire
+) -> Vec<&'static Sources> {
+    credential_globals::unset(
+        optional_params,
+        VertexKeys::SOURCES.iter().filter(|sources| {
+            sources
+                .litellm_params
                 .iter()
-                .any(|name| optional_params.contains_key(*name))
-        })
-        .filter_map(|spec| spec.module_global)
-        .collect()
-}
-
-/// Folds each module global in under the name its spec declares, skipping falsy values the
-/// way Python's `or` chain does.
-fn fold_module_globals(
-    py: Python<'_>,
-    optional_params: Map<String, Value>,
-    globals: &[&'static str],
-    defaults: &Snapshot<'_>,
-) -> PyResult<Map<String, Value>> {
-    let read = globals
-        .iter()
-        .map(|name| {
-            let spec = FieldSpec::new(name, |field| field.falsy_optional_string());
-            Ok(defaults
-                .read(&spec)
-                .map_err(|error| settings_error(py, error.into()))?
-                .map(|value| (name.to_string(), Value::String(value))))
-        })
-        .collect::<PyResult<Vec<_>>>()?;
-    Ok(optional_params
-        .into_iter()
-        .chain(read.into_iter().flatten())
-        .collect())
+                .all(|name| consumed.contains(name))
+        }),
+    )
 }
 
 /// A misconfigured litellm setting is the operator's error, not the request's or the
@@ -228,6 +193,7 @@ mod tests {
     use pyo3::exceptions::PyValueError;
 
     use super::*;
+    use crate::python_settings::PythonSettings;
 
     #[rstest::rstest]
     #[case::global_fills_a_missing_project(
@@ -263,11 +229,10 @@ mod tests {
                 )
                 .unwrap();
             let snapshot = PythonSettings::ProviderDefaults.snapshot(namespace);
-            let consumed = VertexParams::fields().collect::<Vec<_>>();
             let params = params.as_object().cloned().unwrap();
-            let globals = module_globals_to_read(&params, &consumed);
+            let unset = unset_vertex_settings(&params, VertexKeys::LITELLM_PARAMS);
 
-            let folded = fold_module_globals(py, params, &globals, &snapshot).unwrap();
+            let folded = credential_globals::fold_from(params, &unset, &snapshot).unwrap();
 
             assert_eq!(Value::Object(folded), expected);
         });
@@ -286,8 +251,11 @@ mod tests {
                 .unwrap();
             let snapshot = PythonSettings::ProviderDefaults.snapshot(namespace);
 
-            let error =
-                fold_module_globals(py, Map::new(), &["vertex_project"], &snapshot).unwrap_err();
+            let error = settings_error(
+                py,
+                credential_globals::fold_from(Map::new(), &[VertexKeys::PROJECT], &snapshot)
+                    .unwrap_err(),
+            );
 
             assert!(error.is_instance_of::<PyValueError>(py));
             assert!(
@@ -323,7 +291,10 @@ mod tests {
         #[case] expected: &[&str],
     ) {
         assert_eq!(
-            module_globals_to_read(params.as_object().unwrap(), consumed),
+            unset_vertex_settings(params.as_object().unwrap(), consumed)
+                .iter()
+                .filter_map(|sources| sources.litellm_setting)
+                .collect::<Vec<_>>(),
             expected
         );
     }
