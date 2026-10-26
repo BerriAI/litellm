@@ -363,7 +363,7 @@ def test_sync_bridged_follow_up_is_rejected_instead_of_dropping_the_history():
     client: Final = HTTPHandler()
     client.client = httpx.Client(transport=httpx.MockTransport(provider))
 
-    with pytest.raises(litellm.BadRequestError, match="only supported by litellm.aresponses"):
+    with pytest.raises(litellm.BadRequestError, match=r"only supported by litellm\.aresponses\(\)"):
         litellm.responses(
             model="azure_ai/claude-sonnet-4-6",
             api_base="https://fake-foundry-resource.services.ai.azure.com",
