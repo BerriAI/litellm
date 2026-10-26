@@ -142,9 +142,9 @@ async def test_proxy_shutdown_drains_active_admin_tool_before_closing_connector(
     started: Final = asyncio.Event()
     release: Final = asyncio.Event()
 
-    @admin_mcp_proxy.get("/user/info")
+    @admin_mcp_proxy.get("/v2/user/info")
     async def user_info() -> dict[str, object]:
-        return {"user_id": "admin", "user_info": {"user_id": "admin", "user_role": "proxy_admin"}}
+        return {"user_id": "admin", "user_role": "proxy_admin"}
 
     @admin_mcp_proxy.get("/team/list", operation_id="list_team_team_list_get")
     async def list_teams() -> dict[str, object]:

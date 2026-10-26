@@ -1,38 +1,59 @@
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from functools import reduce
 from typing import Final
 
 from pydantic import JsonValue
 
 from ._types import JSON_ARRAY, JsonObject, object_value, string_value
 
+_SINGLE_SCHEMAS: Final = frozenset(
+    {
+        "additionalProperties",
+        "unevaluatedProperties",
+        "items",
+        "contains",
+        "propertyNames",
+        "not",
+        "if",
+        "then",
+        "else",
+        "unevaluatedItems",
+        "additionalItems",
+        "contentSchema",
+    }
+)
+_SCHEMA_MAPS: Final = frozenset({"properties", "patternProperties", "$defs", "definitions", "dependentSchemas"})
+_SCHEMA_ARRAYS: Final = frozenset({"allOf", "anyOf", "oneOf", "prefixItems"})
+
 
 class SchemaError(ValueError):
     pass
 
 
-def _reference_target(spec: JsonObject, reference: str) -> JsonObject:
-    def descend(value: JsonObject, parts: tuple[str, ...]) -> JsonObject:
-        if not parts:
-            return value
-        return descend(object_value(value[parts[0].replace("~1", "/").replace("~0", "~")]), parts[1:])
+def _pointer_step(value: JsonObject, part: str) -> JsonObject:
+    return object_value(value[part.replace("~1", "/").replace("~0", "~")])
 
+
+def _reference_target(spec: JsonObject, reference: str) -> JsonObject:
     try:
-        return descend(spec, tuple(reference[2:].split("/")))
+        return reduce(_pointer_step, reference[2:].split("/"), spec)
     except (KeyError, ValueError, TypeError):
         raise SchemaError("Missing or invalid OpenAPI reference") from None
 
 
-def resolve(spec: JsonObject, value: JsonObject, seen: frozenset[str] = frozenset()) -> JsonObject:
-    if "$ref" not in value:
-        return value
-    reference: Final = value["$ref"]
-    if not isinstance(reference, str) or not reference.startswith("#/components/") or reference in seen:
-        raise SchemaError("Unsupported OpenAPI reference")
-    target: Final = _reference_target(spec, reference)
-    return resolve(
-        spec, {**target, **{key: child for key, child in value.items() if key != "$ref"}}, seen | {reference}
-    )
+def resolve(spec: JsonObject, value: JsonObject) -> JsonObject:
+    current: JsonObject = value  # rebind-ok: iterative reference resolution avoids Python stack growth
+    seen: Final[set[str]] = set()  # mutable-ok: local visited set bounds reference-chain traversal
+    while "$ref" in current:
+        reference = current["$ref"]
+        if not isinstance(reference, str) or not reference.startswith("#/components/") or reference in seen:
+            raise SchemaError("Unsupported OpenAPI reference")
+        seen.add(reference)
+        target = _reference_target(spec, reference)
+        current = {**target, **{key: child for key, child in current.items() if key != "$ref"}}
+    return current
 
 
 def _parameters(spec: JsonObject, path_item: JsonObject, operation: JsonObject) -> Mapping[tuple[str, str], JsonObject]:
@@ -71,70 +92,114 @@ def _body_schema(spec: JsonObject, operation: JsonObject) -> tuple[JsonValue, bo
     return object_value(media).get("schema", {"type": "object"}), bool(body.get("required"))
 
 
+def _schema_children(value: JsonValue) -> Iterable[JsonValue]:
+    if not isinstance(value, dict):
+        return
+    for key, child in value.items():
+        if key in _SINGLE_SCHEMAS:
+            yield child
+        elif key in _SCHEMA_MAPS and isinstance(child, dict):
+            yield from child.values()
+        elif key in _SCHEMA_ARRAYS and isinstance(child, list):
+            yield from child
+
+
+def _rewritten_keyword(key: str, value: JsonValue, rewritten: Mapping[int, JsonValue]) -> JsonValue:
+    if key in _SINGLE_SCHEMAS:
+        return rewritten[id(value)]
+    if key in _SCHEMA_MAPS and isinstance(value, dict):
+        return {name: rewritten[id(child)] for name, child in value.items()}
+    if key in _SCHEMA_ARRAYS and isinstance(value, list):
+        return [rewritten[id(child)] for child in value]
+    return value
+
+
+def _schema_reference(value: JsonObject) -> str | None:
+    if any(key in value for key in ("$dynamicRef", "$recursiveRef", "$id")):
+        raise SchemaError("Schema reference scopes and dynamic references are unsupported")
+    if "$ref" not in value:
+        return None
+    reference: Final = value["$ref"]
+    if not isinstance(reference, str) or not reference.startswith("#/components/schemas/"):
+        raise SchemaError("Only local schema references are supported")
+    pointer: Final = reference.removeprefix("#/components/schemas/")
+    if "/" in pointer or re.search(r"~(?![01])", pointer):
+        raise SchemaError("Only component schema references are supported")
+    return pointer
+
+
 @dataclass(frozen=True, slots=True)
 class Rewritten:
     value: JsonValue
-    references: frozenset[str] = frozenset()
+    references: frozenset[str]
 
 
 def _rewrite(value: JsonValue) -> Rewritten:
-    if isinstance(value, list):
-        children: Final = tuple(_rewrite(child) for child in value)
-        return Rewritten([child.value for child in children], frozenset[str]().union(*(c.references for c in children)))
-    if not isinstance(value, dict):
-        return Rewritten(value)
-    if "$ref" in value and (
-        not isinstance(value["$ref"], str) or not value["$ref"].startswith("#/components/schemas/")
-    ):
-        raise SchemaError("Only local schema references are supported")
-    reference: Final = string_value(value["$ref"]).removeprefix("#/components/schemas/") if "$ref" in value else None
-    children_by_key: Final = {key: _rewrite(child) for key, child in value.items() if key not in {"$ref", "nullable"}}
-    result: Final = {
-        **{key: child.value for key, child in children_by_key.items()},
-        **({"$ref": "#/$defs/" + reference} if reference is not None else {}),
-    }
-    references: Final = frozenset[str]().union(*(child.references for child in children_by_key.values()))
-    return Rewritten(
-        {"anyOf": [result, {"type": "null"}]} if value.get("nullable") else result,
-        references | ({reference} if reference is not None else frozenset[str]()),
-    )
+    pending: Final[list[tuple[JsonValue, bool]]] = [(value, False)]  # mutable-ok: iterative postorder
+    rewritten: Final[dict[int, JsonValue]] = {}  # mutable-ok: local results let each schema node be assembled once
+    references: Final[set[str]] = set()  # mutable-ok: local reference collection avoids copying a set per node
+    while pending:
+        node, ready = pending.pop()
+        if id(node) in rewritten:
+            continue
+        if not isinstance(node, dict):
+            rewritten[id(node)] = node
+            continue
+        if not ready:
+            pending.append((node, True))
+            pending.extend((child, False) for child in _schema_children(node))
+            continue
+        reference = _schema_reference(node)
+        if reference is not None:
+            references.add(reference)
+        result = {
+            **{
+                key: _rewritten_keyword(key, child, rewritten)
+                for key, child in node.items()
+                if key not in {"$ref", "nullable"}
+            },
+            **({"$ref": "#/$defs/" + reference} if reference is not None else {}),
+        }
+        rewritten[id(node)] = {"anyOf": [result, {"type": "null"}]} if node.get("nullable") else result
+    return Rewritten(rewritten[id(value)], frozenset(references))
 
 
-def _definitions(spec: JsonObject, references: frozenset[str], known: JsonObject) -> JsonObject:
-    missing: Final = references - known.keys()
-    if not missing:
-        return known
-    rewritten: Final = {
-        pointer: _rewrite(dict(_reference_target(spec, "#/components/schemas/" + pointer))) for pointer in missing
-    }
-    definitions: Final = {
-        **known,
-        **{pointer.replace("~1", "/").replace("~0", "~"): item.value for pointer, item in rewritten.items()},
-    }
-    next_refs: Final = frozenset[str]().union(*(item.references for item in rewritten.values()))
-    encoded_known: Final = {name.replace("~", "~0").replace("/", "~1"): value for name, value in definitions.items()}
-    unresolved: Final = next_refs - encoded_known.keys()
-    return _definitions(spec, unresolved, definitions) if unresolved else definitions
+def _definitions(spec: JsonObject, references: frozenset[str]) -> JsonObject:
+    pending: Final[list[str]] = list(references)  # mutable-ok: worklist resolves each referenced definition once
+    definitions: Final[dict[str, JsonValue]] = {}  # mutable-ok: visited definitions terminate cyclic schema graphs
+    while pending:
+        pointer = pending.pop()
+        name = pointer.replace("~1", "/").replace("~0", "~")
+        if name in definitions:
+            continue
+        item = _rewrite(dict(_reference_target(spec, "#/components/schemas/" + pointer)))
+        definitions[name] = item.value
+        pending.extend(item.references)
+    return definitions
 
 
 def _references(value: JsonValue) -> Iterable[str]:
-    if isinstance(value, list):
-        for child in value:
-            yield from _references(child)
-    elif isinstance(value, dict):
-        reference: Final = value.get("$ref")
+    pending: Final[list[JsonValue]] = [value]  # mutable-ok: iterative schema walk
+    while pending:
+        node = pending.pop()
+        if not isinstance(node, dict):
+            continue
+        reference = node.get("$ref")
         if isinstance(reference, str) and reference.startswith("#/$defs/"):
             yield reference.removeprefix("#/$defs/").replace("~1", "/").replace("~0", "~")
-        for child in value.values():
-            yield from _references(child)
+        pending.extend(_schema_children(node))
 
 
-def _reachable(value: JsonValue, definitions: JsonObject, seen: frozenset[str] = frozenset()) -> frozenset[str]:
-    names: Final = frozenset(_references(value)) - seen
-    if not names:
-        return seen
-    children: Final = [definitions[name] for name in names]
-    return _reachable(children, definitions, seen | names)
+def _reachable(value: JsonValue, definitions: JsonObject) -> frozenset[str]:
+    pending: Final[list[str]] = list(_references(value))  # mutable-ok: worklist visits the reachable definition graph
+    seen: Final[set[str]] = set()  # mutable-ok: local visited set terminates cycles without recursive calls
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        pending.extend(_references(definitions[name]))
+    return frozenset(seen)
 
 
 def tool_schema(spec: JsonObject, path_item: JsonObject, operation: JsonObject) -> JsonObject:
@@ -155,7 +220,7 @@ def tool_schema(spec: JsonObject, path_item: JsonObject, operation: JsonObject) 
             **({"required": required_groups} if required_groups else {}),
         }
     )
-    definitions: Final = _definitions(spec, root.references, {})
+    definitions: Final = _definitions(spec, root.references)
     result: Final = object_value(root.value)
     properties: Final = object_value(result["properties"])
     body_value: Final = properties.get("body", {})

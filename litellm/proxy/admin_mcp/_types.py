@@ -11,8 +11,10 @@ STRING: Final = TypeAdapter(str)
 INTEGER: Final = TypeAdapter(int)
 
 
-def object_value(value: object) -> JsonObject:
-    return JSON_OBJECT.validate_python(value, strict=True)
+def object_value(value: JsonValue | JsonObject) -> JsonObject:
+    if isinstance(value, Mapping):
+        return value
+    raise ValueError("Expected a JSON object")
 
 
 def string_value(value: object) -> str:

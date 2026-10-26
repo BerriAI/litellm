@@ -4,10 +4,11 @@ import json
 import re
 import secrets
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from functools import reduce
-from typing import Final
+from itertools import islice
+from typing import Final, TypeAlias
 
 from pydantic import JsonValue
 
@@ -17,6 +18,7 @@ PAGE_BYTES: Final = 16_000
 ITEM_BYTES: Final = PAGE_BYTES - 1000
 PREVIEW_BYTES: Final = 6_000
 MAX_RESULT_BYTES: Final = 16_000_000
+CredentialNode: TypeAlias = tuple[tuple[str | int, ...], JsonValue]
 SECRET_RESULTS: Final = frozenset(
     {"create_key", "create_service_account_key", "regenerate_key", "regenerate_key_by_id"}
 )
@@ -34,14 +36,12 @@ def pointer(parent: str, key: str | int) -> str:
     return parent + "/" + str(key).replace("~", "~0").replace("/", "~1")
 
 
-def _select(value: JsonValue, parts: tuple[str, ...]) -> JsonValue:
-    if not parts:
-        return value
-    part: Final = parts[0].replace("~1", "/").replace("~0", "~")
+def _select(value: JsonValue, segment: str) -> JsonValue:
+    part: Final = segment.replace("~1", "/").replace("~0", "~")
     if isinstance(value, list) and re.fullmatch(r"0|[1-9][0-9]*", part):
-        return _select(value[int(part)], parts[1:])
+        return value[int(part)]
     if isinstance(value, dict):
-        return _select(value[part], parts[1:])
+        return value[part]
     raise ValueError("Invalid JSON Pointer segment")
 
 
@@ -51,7 +51,7 @@ def select(value: JsonValue, path: str) -> JsonValue:
     if not path.startswith("/") or re.search(r"~(?![01])", path):
         raise ResultError("Use a JSON Pointer path returned by the result index.")
     try:
-        return _select(value, tuple(path[1:].split("/")))
+        return reduce(_select, path[1:].split("/"), value)
     except (KeyError, IndexError, ValueError):
         raise ResultError("The result does not contain that path; browse its parent first.") from None
 
@@ -101,23 +101,41 @@ def _credential_field(key: str, child: JsonValue, source: str, path: tuple[str |
     )
 
 
-def contains_credential(value: JsonValue, *, source: str = "", path: tuple[str | int, ...] = ()) -> bool:
+def _children(value: JsonValue, path: tuple[str | int, ...]) -> Iterator[CredentialNode]:
     if isinstance(value, dict):
-        return any(
-            _credential_field(key, child, source, path) or contains_credential(child, source=source, path=(*path, key))
-            for key, child in value.items()
-        )
-    if isinstance(value, list):
-        return any(contains_credential(child, source=source, path=(*path, i)) for i, child in enumerate(value))
-    if not isinstance(value, str):
-        return False
-    if re.search(r"\bsk-[A-Za-z0-9_+-]+", value):
-        return True
-    try:
-        nested: Final = JSON_VALUE.validate_json(value)
-    except ValueError:
-        return False
-    return contains_credential(nested, source=source, path=path) if isinstance(nested, (dict, list)) else False
+        for key, child in value.items():
+            yield (*path, key), child
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            yield (*path, index), child
+
+
+def contains_credential(value: JsonValue, *, source: str = "") -> bool:
+    pending: Final[list[Iterator[CredentialNode]]] = [iter((((), value),))]  # mutable-ok: depth-first iterator stack
+    while pending:
+        node = next(pending[-1], None)
+        if node is None:
+            pending.pop()
+            continue
+        path, child = node
+        if isinstance(child, dict) and any(_credential_field(key, item, source, path) for key, item in child.items()):
+            return True
+        if isinstance(child, (dict, list)):
+            pending.append(_children(child, path))
+            continue
+        if not isinstance(child, str):
+            continue
+        if re.search(r"\bsk-[A-Za-z0-9_+-]+", child):
+            return True
+        try:
+            nested = JSON_VALUE.validate_json(child)
+        except ValueError:
+            if child.lstrip().startswith(("{", "[")):
+                return True
+            continue
+        if isinstance(nested, (dict, list)):
+            pending.append(iter(((path, nested),)))
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,22 +252,20 @@ def _entry(key: str | int, child: JsonValue, path: str, token: str) -> JsonObjec
 
 
 def _entries(
-    children: tuple[tuple[str | int, JsonValue], ...],
+    children: Iterable[tuple[str | int, JsonValue]],
     path: str,
     token: str,
-    remaining: int = PAGE_BYTES,
-    first: bool = True,
-) -> tuple[JsonObject, ...]:
-    if not children:
-        return ()
-    key, child = children[0]
-    if not first and len(encode(child)) > ITEM_BYTES and remaining < PREVIEW_BYTES + 1000:
-        return ()
-    entry: Final = _entry(key, child, path, token)
-    cost: Final = len(encode(entry))
-    if not first and cost > remaining:
-        return ()
-    return (entry, *_entries(children[1:], path, token, remaining - cost, False))
+) -> Iterator[JsonObject]:
+    remaining: int = PAGE_BYTES  # rebind-ok: byte budget is consumed as the page generator advances
+    for index, (key, child) in enumerate(children):
+        if index and len(encode(child)) > ITEM_BYTES and remaining < PREVIEW_BYTES + 1000:
+            return
+        entry = _entry(key, child, path, token)
+        cost = len(encode(entry))
+        if index and cost > remaining:
+            return
+        remaining -= cost
+        yield entry
 
 
 def page(
@@ -309,8 +325,12 @@ def _page_contents(
             "complete": offset == 0 and end == len(value),
         }
     assert isinstance(value, (dict, list))
-    children: Final = tuple(value.items()) if isinstance(value, dict) else tuple(enumerate(value))
-    entries: Final = _entries(children[offset : offset + limit], path, token)
+    children: Final = (
+        islice(value.items(), offset, offset + limit)
+        if isinstance(value, dict)
+        else ((index, value[index]) for index in range(offset, min(offset + limit, len(value))))
+    )
+    entries: Final = tuple(_entries(children, path, token))
     last: Final = offset + len(entries)
     return last, {
         "entries": [dict(entry) for entry in entries],

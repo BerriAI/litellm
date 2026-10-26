@@ -1,6 +1,6 @@
 import ipaddress
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Final
 from urllib.parse import urlsplit
 
@@ -49,7 +49,6 @@ def env_bool(name: str) -> bool:
 @dataclass(frozen=True, slots=True)
 class Config:
     base_url: str
-    api_key: str = field(default="", repr=False)
     read_only: bool = False
     allowed_tools: frozenset[str] = frozenset()
     public_url: str = ""

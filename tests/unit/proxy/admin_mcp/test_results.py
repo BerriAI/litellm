@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from litellm.proxy.admin_mcp.results import ResultError, ResultStore, encode, page, select
+from litellm.proxy.admin_mcp.results import ResultError, ResultStore, contains_credential, encode, page, select
 
 
 def rebuild(item, token, path=""):
@@ -162,3 +162,24 @@ def test_empty_values_and_pagination_edges():
         assert rebuild(item, token) == value
         with pytest.raises(ResultError):
             page(item, token, offset=1)
+
+
+def test_deep_result_paths_and_credential_scan_do_not_use_python_call_stack():
+    value = {"password": "private-token"}
+    for _ in range(1200):
+        value = {"nested": value}
+    assert select(value, "/nested" * 1200 + "/password") == "private-token"
+    assert contains_credential(value)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "[" * 250 + '{"password":"provider-secret"}' + "]" * 250,
+        '  {"password":"provider-secret"',
+        '[{"password":"provider-secret"}',
+    ],
+)
+def test_unparseable_json_containers_are_never_retained(payload):
+    assert contains_credential({"metadata": payload})
+    assert ResultStore().put("get_user", {"metadata": payload}, "alice", "user-1") is None

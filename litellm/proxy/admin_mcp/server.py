@@ -1,7 +1,7 @@
 """Standard MCP transports; no agent, model inference or Slack dependency."""
 
 import json
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping
 from contextlib import asynccontextmanager
 from typing import Final
 
@@ -17,7 +17,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from litellm._version import version as __version__
 
-from ._types import object_value
+from ._types import JSON_OBJECT
 from .gateway import AdminError, Gateway, valid_credential
 
 
@@ -28,15 +28,7 @@ def bearer(headers: Mapping[str, str]) -> str:
     return valid_credential(value)
 
 
-def create_server(gateway: Gateway, *, http: bool = False) -> Server[None]:
-    def credential(context: ServerRequestContext[None]) -> str:
-        if http:
-            request: Final[object] = context.request
-            if not isinstance(request, Request):
-                raise AdminError("Caller authentication required.", 401)
-            return bearer(request.headers)
-        return valid_credential(gateway.config.api_key)
-
+def create_server(gateway: Gateway, credential: Callable[[ServerRequestContext[None]], str]) -> Server[None]:
     async def list_tools(
         context: ServerRequestContext[None], params: types.PaginatedRequestParams | None
     ) -> types.ListToolsResult:
@@ -50,7 +42,8 @@ def create_server(gateway: Gateway, *, http: bool = False) -> Server[None]:
         context: ServerRequestContext[None], params: types.CallToolRequestParams
     ) -> types.CallToolResult:
         try:
-            result: Final = await gateway.call(params.name, object_value(params.arguments or {}), credential(context))
+            arguments: Final = JSON_OBJECT.validate_python(params.arguments or {}, strict=True)
+            result: Final = await gateway.call(params.name, arguments, credential(context))
             return types.CallToolResult(
                 content=[
                     types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False, separators=(",", ":")))
@@ -113,10 +106,11 @@ class RequireAdmin:
 
 
 def create_http_app(gateway: Gateway) -> Starlette:
-    if gateway.config.api_key:
-        raise ValueError(
-            "Do not set LITELLM_API_KEY on an HTTP server; each client must send its own bearer credential."
-        )
+    def credential(context: ServerRequestContext[None]) -> str:
+        request: Final[object] = context.request
+        if not isinstance(request, Request):
+            raise AdminError("Caller authentication required.", 401)
+        return bearer(request.headers)
 
     async def health(request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "version": __version__})
@@ -127,7 +121,7 @@ def create_http_app(gateway: Gateway) -> Starlette:
         allowed_hosts=["localhost:*", "127.0.0.1:*", "[::1]:*", *([public.split("://", 1)[1]] if public else [])],
         allowed_origins=["http://localhost:*", "http://127.0.0.1:*", "http://[::1]:*", *([public] if public else [])],
     )
-    app: Final = create_server(gateway, http=True).streamable_http_app(
+    app: Final = create_server(gateway, credential).streamable_http_app(
         stateless_http=True,
         json_response=True,
         max_request_body_size=256_000,

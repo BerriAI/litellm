@@ -100,15 +100,15 @@ class StubGateway:
     def handle(self, request):
         self.requests.append(request)
         token = request.headers.get("authorization", "").removeprefix("Bearer ")
-        if request.url.path == "/user/info" and token == "team-key":
-            return httpx2.Response(404, json={"error": {"message": "User None not found"}})
-        if request.url.path == "/user/info":
+        if request.url.path == "/v2/user/info" and token == "team-key":
+            return httpx2.Response(400, json={"error": {"message": "A user-bound key is required"}})
+        if request.url.path == "/v2/user/info":
             role = (
                 "proxy_admin"
                 if token in {"alice-admin", "bob-admin"} and token not in self.revoked
                 else "internal_user"
             )
-            return httpx2.Response(200, json={"user_id": token, "user_info": {"user_id": token, "user_role": role}})
+            return httpx2.Response(200, json={"user_id": token, "user_role": role})
         if request.url.path == "/openapi.json":
             return httpx2.Response(200, json=self.spec)
         assert token in {"alice-admin", "bob-admin"}
@@ -158,8 +158,8 @@ def stub():
 
 
 @asynccontextmanager
-async def connected(gateway):
-    server = create_server(gateway)
+async def connected(gateway, api_key="alice-admin"):
+    server = create_server(gateway, lambda context: api_key)
     async with create_client_server_memory_streams() as (client_streams, server_streams):
         async with anyio.create_task_group() as group:
             group.start_soon(server.run, *server_streams, server.create_initialization_options())
@@ -170,10 +170,10 @@ async def connected(gateway):
 
 
 @asynccontextmanager
-async def session_for(stub, **overrides):
-    config = Config("https://gateway.example.com", **{"api_key": "alice-admin", **overrides})
+async def session_for(stub, api_key="alice-admin", **overrides):
+    config = Config("https://gateway.example.com", **overrides)
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(stub.handle)) as client:
-        async with connected(Gateway(config, client)) as session:
+        async with connected(Gateway(config, client), api_key) as session:
             yield session
 
 

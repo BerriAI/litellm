@@ -13,7 +13,7 @@ import jsonschema
 from mcp import types
 from pydantic import JsonValue
 
-from ._types import INTEGER, JSON_VALUE, JsonObject, object_value, string_value
+from ._types import INTEGER, JSON_OBJECT, JSON_VALUE, JsonObject, object_value, string_value
 from .catalog import BY_NAME, OPERATIONS, Operation
 from .config import Config
 from .results import (
@@ -38,6 +38,7 @@ DESCRIBE_SCHEMA: Final[JsonObject] = {
         "response": dict(RESPONSE_SCHEMA),
     },
 }
+MAX_REDACTION_DEPTH: Final = 64
 HELPERS: Final = {
     "describe_admin_tool": (
         DESCRIBE_SCHEMA,
@@ -78,10 +79,12 @@ def _model_params(item: JsonValue) -> JsonObject:
     return {}
 
 
-def _safe_field(key: str, item: JsonValue, credential: str) -> JsonValue:
+def _safe_field(key: str, item: JsonValue, credential: str, depth: int) -> JsonValue:
     if key.lower() == "litellm_params":
         parsed: Final = _model_params(item)
-        return safe_result({k: v for k, v in parsed.items() if k in {"model", "litellm_credential_name"}}, credential)
+        return safe_result(
+            {k: v for k, v in parsed.items() if k in {"model", "litellm_credential_name"}}, credential, depth=depth
+        )
     if key.lower() in {
         "api_key",
         "token",
@@ -95,22 +98,28 @@ def _safe_field(key: str, item: JsonValue, credential: str) -> JsonValue:
         "credential_values",
     } and not (key.lower() in {"api_key", "token"} and isinstance(item, str) and re.fullmatch(r"[a-f0-9]{64}", item)):
         return "[redacted]"
-    return safe_result(item, credential)
+    return safe_result(item, credential, depth=depth)
 
 
-def safe_result(value: JsonValue, credential: str) -> JsonValue:
+def safe_result(value: JsonValue, credential: str, *, depth: int = 0) -> JsonValue:
+    if depth > MAX_REDACTION_DEPTH:
+        raise AdminError("Response nesting exceeds the safety limit. Inspect gateway state before retrying a change.")
     if isinstance(value, dict):
-        return {key: _safe_field(key, item, credential) for key, item in value.items()}
+        return {key: _safe_field(key, item, credential, depth + 1) for key, item in value.items()}
     if isinstance(value, list):
-        return [safe_result(item, credential) for item in value]
+        return [safe_result(item, credential, depth=depth + 1) for item in value]
     if not isinstance(value, str):
         return value
     try:
         decoded: Final = JSON_VALUE.validate_json(value)
     except ValueError:
+        if value.lstrip().startswith(("{", "[")):
+            raise AdminError(
+                "Response contains unreadable JSON. Inspect gateway state before retrying a change."
+            ) from None
         return value.replace(credential, "[credential redacted]")
     if isinstance(decoded, (dict, list)):
-        return json.dumps(safe_result(decoded, credential))
+        return json.dumps(safe_result(decoded, credential, depth=depth + 1))
     return value.replace(credential, "[credential redacted]")
 
 
@@ -136,18 +145,15 @@ def _response_view(arguments: JsonObject, default: str) -> str:
 
 
 class Gateway:
-    def __init__(self, config: Config, client: httpx2.AsyncClient | None = None) -> None:
+    def __init__(self, config: Config, client: httpx2.AsyncClient, *, results: ResultStore | None = None) -> None:
         self.config = config
         self.client = client
-        self._owns_client = client is None
         self._tools: Mapping[str, types.Tool] | None = None
         self._loaded_at = 0.0
         self._schema_lock = asyncio.Lock()
-        self.results = ResultStore()
+        self.results = results if results is not None else ResultStore()
 
     async def __aenter__(self) -> "Gateway":
-        if self.client is None:
-            self.client = httpx2.AsyncClient(timeout=httpx2.Timeout(30, read=120), follow_redirects=False)
         return self
 
     async def __aexit__(
@@ -157,9 +163,6 @@ class Gateway:
         traceback: TracebackType | None,
     ) -> None:
         self.results.clear()
-        if self._owns_client and self.client is not None:
-            await self.client.aclose()
-            self.client = None
 
     async def _request(
         self,
@@ -173,7 +176,6 @@ class Gateway:
         params: tuple[tuple[str, str], ...] = (),
         content: bytes | None = None,
     ) -> JsonValue:
-        assert self.client is not None
         write: Final = method != "GET" if read_only is None else not read_only
         uncertain: Final = " Check gateway state before retrying this change." if write else ""
         chunks: Final = BytesIO()
@@ -203,25 +205,19 @@ class Gateway:
 
     async def authorize(self, credential: str) -> str:
         try:
-            data: Final = await self._request("GET", "/user/info", credential)
+            data: Final = await self._request("GET", "/v2/user/info", credential)
         except AdminError as exc:
-            if exc.status != 404:
+            if exc.status not in {400, 404}:
                 raise
             raise AdminError("Only current LiteLLM proxy admins may use these tools.", 403) from None
-        user: Final = data.get("user_info") if isinstance(data, dict) else None
         if (
             not isinstance(data, dict)
-            or not isinstance(user, dict)
-            or user.get("user_role") != "proxy_admin"
-            or not isinstance(user.get("user_id"), str)
-            or not user["user_id"]
-            or data.get("user_id") != user["user_id"]
-            or user.get("blocked")
-            or user.get("deleted")
-            or user.get("is_active") is False
+            or data.get("user_role") != "proxy_admin"
+            or not isinstance(data.get("user_id"), str)
+            or not data["user_id"]
         ):
             raise AdminError("Only current LiteLLM proxy admins may use these tools.", 403)
-        return string_value(user["user_id"])
+        return string_value(data["user_id"])
 
     async def tools(self, credential: str) -> Mapping[str, types.Tool]:
         await self.authorize(credential)
@@ -230,7 +226,7 @@ class Gateway:
             **{
                 name: tool.model_copy(
                     update={
-                        "input_schema": dict(discovery_schema(object_value(tool.input_schema), name)),
+                        "input_schema": dict(discovery_schema(JSON_OBJECT.validate_python(tool.input_schema), name)),
                         "description": (tool.description or "")
                         + " Call describe_admin_tool for the complete argument schema before use.",
                     }
@@ -312,7 +308,9 @@ class Gateway:
         if name not in available and name not in HELPERS:
             raise AdminError("This tool is not enabled for this connector.", 403)
         try:
-            schema: Final = HELPERS[name][0] if name in HELPERS else object_value(available[name].input_schema)
+            schema: Final = (
+                HELPERS[name][0] if name in HELPERS else JSON_OBJECT.validate_python(available[name].input_schema)
+            )
             validation_error: Final = next(jsonschema.Draft202012Validator(schema).iter_errors(arguments), None)
             if validation_error is not None:
                 raise validation_error

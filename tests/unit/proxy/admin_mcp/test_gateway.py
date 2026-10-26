@@ -8,7 +8,7 @@ import pytest
 from tests.unit.proxy.admin_mcp.conftest import SPEC, data, session_for
 from litellm.proxy.admin_mcp.catalog import OPERATIONS
 from litellm.proxy.admin_mcp.config import Config
-from litellm.proxy.admin_mcp.gateway import Gateway, HELPERS
+from litellm.proxy.admin_mcp.gateway import AdminError, Gateway, HELPERS, MAX_REDACTION_DEPTH, safe_result
 from litellm.proxy.admin_mcp.schema import tool_schema
 from litellm.proxy.admin_mcp.server import create_http_app
 
@@ -61,7 +61,7 @@ async def test_unverified_user_cannot_discover_or_call(stub):
         with pytest.raises(MCPError):
             await session.list_tools()
         assert (await session.call_tool("create_key", {"body": {"key_alias": "forbidden"}})).is_error
-    assert all(r.url.path == "/user/info" for r in stub.requests)
+    assert all(r.url.path == "/v2/user/info" for r in stub.requests)
 
 
 @pytest.mark.parametrize(
@@ -129,9 +129,25 @@ def test_gateway_must_be_a_fixed_trusted_origin(url):
         Config(url)
 
 
-def test_http_server_refuses_shared_process_credential():
-    with pytest.raises(ValueError, match="Do not set"):
-        create_http_app(Gateway(Config("https://gateway.example.com", api_key="shared")))
+async def test_http_server_requires_each_request_credential(stub, monkeypatch):
+    monkeypatch.setenv("LITELLM_API_KEY", "alice-admin")
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(stub.handle)) as client:
+        app = create_http_app(Gateway(Config("https://gateway.example.com"), client))
+        async with app.router.lifespan_context(app):
+            async with httpx2.AsyncClient(
+                transport=httpx2.ASGITransport(app=app), base_url="http://localhost:4000"
+            ) as caller:
+                payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+                headers = {"Accept": "application/json, text/event-stream"}
+                assert (await caller.post("/mcp", json=payload, headers=headers)).status_code == 401
+                for credential in ("alice-admin", "bob-admin"):
+                    response = await caller.post(
+                        "/mcp", json=payload, headers={**headers, "Authorization": "Bearer " + credential}
+                    )
+                    assert response.status_code == 200
+                    assert not response.json().get("error")
+                assert (await caller.post("/mcp", json=payload, headers=headers)).status_code == 401
+    assert {request.headers["authorization"] for request in stub.requests} == {"Bearer alice-admin", "Bearer bob-admin"}
 
 
 def test_recursive_refs_and_overridden_parameters_have_valid_schema():
@@ -194,3 +210,34 @@ async def test_shared_http_client_never_replays_another_callers_gateway_cookie(s
         for key in ("alice-admin", "bob-admin"):
             await gateway.call("create_key", {"body": {"key_alias": key}}, key)
     assert len(stub.writes) == 2
+
+
+@pytest.mark.parametrize("container", ["object", "array", "encoded"])
+def test_response_redaction_fails_closed_for_excessive_nesting(container):
+    value = {"echo": "personal-admin-credential", "password": "provider-secret"}
+    for _ in range(MAX_REDACTION_DEPTH):
+        value = [value] if container == "array" else {"metadata": value}
+    payload = json.dumps(value) if container == "encoded" else value
+    with pytest.raises(AdminError, match="Inspect gateway state before retrying"):
+        safe_result(payload, "personal-admin-credential")
+
+
+def test_response_redaction_handles_encoded_secrets_and_preserves_other_values():
+    credential = "personal-admin-credential"
+    value = {"metadata": json.dumps({"nested": [{"echo": credential, "password": "provider-secret", "count": 7}]})}
+    assert safe_result(value, credential) == {
+        "metadata": json.dumps({"nested": [{"echo": "[credential redacted]", "password": "[redacted]", "count": 7}]})
+    }
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "[" * 250 + '{"password":"provider-secret"}' + "]" * 250,
+        '  {"password":"provider-secret"',
+        '[{"password":"provider-secret"}',
+    ],
+)
+def test_response_redaction_rejects_unparseable_json_containers(payload):
+    with pytest.raises(AdminError, match="Inspect gateway state before retrying"):
+        safe_result({"metadata": payload}, "personal-admin-credential")

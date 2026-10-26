@@ -144,8 +144,8 @@ async def admin_mcp_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
     except ImportError as exc:
         raise RuntimeError(
-            "Admin MCP requires Python 3.12+ and the admin-mcp dependency group. "
-            "Use a LiteLLM image that bundles it, or run uv sync --extra proxy --group admin-mcp."
+            "Admin MCP requires Python 3.12+ and the proxy dependencies. "
+            "Use a LiteLLM image that bundles them, or run uv sync --extra proxy."
         ) from exc
 
     configured_url: Final = os.environ.get("LITELLM_MCP_PUBLIC_URL") or os.environ.get("PROXY_BASE_URL", "")

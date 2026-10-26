@@ -2,6 +2,7 @@ import ast
 import os
 
 IGNORE_FUNCTIONS = [
+    "safe_result",  # Admin MCP redaction fails closed at MAX_REDACTION_DEPTH, including JSON embedded in strings.
     "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
     "_format_type",
     "remove_additional_properties",

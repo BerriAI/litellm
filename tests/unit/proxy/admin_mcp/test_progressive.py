@@ -203,7 +203,7 @@ async def test_large_new_key_response_is_delivered_inline_and_never_cached(stub)
         return response
 
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(handle)) as client:
-        gateway = Gateway(Config("https://gateway.example.com", api_key="alice-admin", response_view="compact"), client)
+        gateway = Gateway(Config("https://gateway.example.com", response_view="compact"), client)
         async with connected(gateway) as session:
             result = data(await session.call_tool("create_key", {"body": {"key_alias": "new"}}))
             assert result["key"].startswith("sk-created")
@@ -227,17 +227,19 @@ async def test_result_reads_require_same_credential_principal_and_current_role(s
 
 async def test_revocation_during_result_read_suppresses_snapshot(stub):
     stub.keys = [{"data": "private" * 4000}]
-    async with httpx2.AsyncClient(transport=httpx2.MockTransport(stub.handle)) as client:
-        gateway = Gateway(Config("https://gateway.example.com", response_view="compact"), client)
-        result = await gateway.call("list_keys", {}, "alice-admin")
-        original_get = gateway.results.get
+    revoke = False
 
-        def get(*args):
-            item = original_get(*args)
+    def clock():
+        if revoke:
             stub.revoked.add("alice-admin")
-            return item
+        return 0.0
 
-        gateway.results.get = get
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(stub.handle)) as client:
+        gateway = Gateway(
+            Config("https://gateway.example.com", response_view="compact"), client, results=ResultStore(clock=clock)
+        )
+        result = await gateway.call("list_keys", {}, "alice-admin")
+        revoke = True
         with pytest.raises(AdminError, match="proxy admins"):
             await gateway.call("read_admin_result", result["full_read"], "alice-admin")
 
@@ -256,7 +258,7 @@ async def test_warm_call_retains_pre_post_checks_without_discovery_auth(stub):
         await session.list_tools()
         stub.requests.clear()
         await session.call_tool("list_keys", {})
-        assert [r.url.path for r in stub.requests] == ["/user/info", "/key/list", "/user/info"]
+        assert [r.url.path for r in stub.requests] == ["/v2/user/info", "/key/list", "/v2/user/info"]
 
 
 async def test_identity_change_during_cold_discovery_prevents_write(stub):
@@ -268,10 +270,10 @@ async def test_identity_change_during_cold_discovery_prevents_write(stub):
         result = original(request)
         if request.url.path == "/openapi.json":
             changed = True
-        elif request.url.path == "/user/info" and changed:
+        elif request.url.path == "/v2/user/info" and changed:
             return httpx2.Response(
                 200,
-                json={"user_id": "new-identity", "user_info": {"user_id": "new-identity", "user_role": "proxy_admin"}},
+                json={"user_id": "new-identity", "user_role": "proxy_admin"},
             )
         return result
 
@@ -291,8 +293,9 @@ async def test_capacity_falls_back_to_full_write_response_without_retry(stub):
         return httpx2.Response(200, json=payload) if request.url.path.endswith("/reset_spend") else result
 
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(handle)) as client:
-        gateway = Gateway(Config("https://gateway.example.com", response_view="compact"), client)
-        gateway.results = ResultStore(max_bytes=1)
+        gateway = Gateway(
+            Config("https://gateway.example.com", response_view="compact"), client, results=ResultStore(max_bytes=1)
+        )
         assert await gateway.call("reset_key_spend", {"path": {"key": "fixture"}}, "alice-admin") == payload
     assert len(stub.writes) == 1
 
@@ -382,16 +385,16 @@ async def test_every_reviewed_operation_retains_mapping_advanced_inputs_and_resu
     def handle(request):
         if request.url.path == "/openapi.json":
             return httpx2.Response(200, json=spec)
-        if request.url.path == "/user/info" and "litellm-changed-by" not in request.headers:
+        if request.url.path == "/v2/user/info" and "litellm-changed-by" not in request.headers:
             return httpx2.Response(
-                200, json={"user_id": "admin", "user_info": {"user_id": "admin", "user_role": "proxy_admin"}}
+                200, json={"user_id": "admin", "user_role": "proxy_admin"}
             )
         calls.append(request)
         return httpx2.Response(200, json=result)
 
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(handle)) as client:
-        gateway = Gateway(Config("https://gateway.example.com", api_key="admin", schema_mode=mode), client)
-        async with connected(gateway) as session:
+        gateway = Gateway(Config("https://gateway.example.com", schema_mode=mode), client)
+        async with connected(gateway, "admin") as session:
             listed = {t.name: t for t in (await session.list_tools()).tools}
             assert set(listed) - HELPERS.keys() == {op.name for op in OPERATIONS}
             for op in OPERATIONS:

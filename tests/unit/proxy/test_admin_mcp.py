@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sys
+from collections.abc import Mapping
 from typing import Final
 
 import httpx2
@@ -57,7 +58,7 @@ def management_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
         monkeypatch.delenv(name, raising=False)
     app: Final = FastAPI(lifespan=admin_mcp_lifespan)
 
-    @app.get("/user/info")
+    @app.get("/v2/user/info")
     async def user_info(request: Request) -> dict[str, object]:
         await asyncio.sleep(0)
         credential: Final = _native_credential(request)
@@ -68,10 +69,7 @@ def management_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
         user_id: Final = "admin-b" if credential == "admin-b-limited" else credential
         return {
             "user_id": user_id,
-            "user_info": {
-                "user_id": user_id,
-                "user_role": {"member": "internal_user", "viewer": "proxy_admin_viewer"}.get(user_id, "proxy_admin"),
-            },
+            "user_role": {"member": "internal_user", "viewer": "proxy_admin_viewer"}.get(user_id, "proxy_admin"),
         }
 
     @app.get("/key/list", operation_id="list_keys_key_list_get")
@@ -140,7 +138,7 @@ def test_enabled_without_mcp_dependencies_explains_installation(monkeypatch: pyt
     monkeypatch.setattr(proxy_server, "premium_user", True)
     monkeypatch.setenv("LITELLM_ENABLE_ADMIN_MCP", "true")
     monkeypatch.setitem(sys.modules, "httpx2", None)
-    with pytest.raises(RuntimeError, match="admin-mcp dependency group"):
+    with pytest.raises(RuntimeError, match="proxy dependencies"):
         with TestClient(FastAPI(lifespan=admin_mcp_lifespan)):
             pytest.fail("Enabling the connector without its dependency must fail startup")
 
@@ -500,35 +498,34 @@ def test_oversized_mcp_body_is_rejected_before_a_write(
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
-@pytest.mark.parametrize("peer,mapped_user,bearer,status", [
-    ("10.0.0.8", "admin-a", "member", 200),
-    ("10.0.0.8", "member", "admin-a", 403),
-    ("203.0.113.8", "admin-a", "admin-a", 401),
+@pytest.mark.parametrize("peer,mapped_user,bearer,database_role,status", [
+    ("10.0.0.8", "admin-a", "member", "proxy_admin", 200),
+    ("10.0.0.8", "member", "admin-a", "internal_user", 403),
+    ("203.0.113.8", "admin-a", "admin-a", "proxy_admin", 401),
+    ("10.0.0.8", "admin-a", "admin-a", "internal_user", 403),
+    ("10.0.0.8", "admin-a", "admin-a", None, 403),
 ])
 async def test_oauth2_proxy_auth_preserves_native_identity_and_peer_trust(
     management_app: FastAPI, monkeypatch: pytest.MonkeyPatch,
-    peer: str, mapped_user: str, bearer: str, status: int,
+    peer: str, mapped_user: str, bearer: str, database_role: str | None, status: int,
 ) -> None:
     users: Final = {
         user_id: LiteLLM_UserTable(user_id=user_id, user_role=role, teams=[])
         for user_id, role in (("admin-a", "proxy_admin"), ("member", "internal_user"))
     }
 
-    class EmptyTable:
-        async def find_many(self, **_: object) -> list[object]:
-            return []
+    class UserTable:
+        async def find_unique(self, *, where: Mapping[str, object], **_: object) -> LiteLLM_UserTable | None:
+            user_id: Final = where.get("user_id")
+            if user_id != mapped_user or database_role is None:
+                return None
+            return LiteLLM_UserTable(user_id=mapped_user, user_role=database_role, teams=[])
 
     class DatabaseTables:
-        litellm_teamtable: Final = EmptyTable()
-        litellm_teammembership: Final = EmptyTable()
+        litellm_usertable: Final = UserTable()
 
     class UserInfoDatabase:
         db: Final = DatabaseTables()
-
-        async def get_data(
-            self, *, user_id: str | None = None, table_name: str | None = None, **_: object
-        ) -> LiteLLM_UserTable | list[object] | None:
-            return users.get(user_id) if user_id is not None and table_name is None else []
 
     cache: Final = UserApiKeyCache()
     for user_id, user in users.items():
@@ -542,9 +539,9 @@ async def test_oauth2_proxy_auth_preserves_native_identity_and_peer_trust(
     })
     management_app.router.routes[:] = [
         route for route in management_app.router.routes
-        if not (isinstance(route, APIRoute) and route.path == "/user/info")
+        if not (isinstance(route, APIRoute) and route.path == "/v2/user/info")
     ]
-    management_app.add_api_route("/user/info", internal_user_endpoints.user_info, methods=["GET"])
+    management_app.add_api_route("/v2/user/info", internal_user_endpoints.user_info_v2, methods=["GET"])
     management_app.add_exception_handler(ProxyException, proxy_server.openai_exception_handler)
 
     async with management_app.router.lifespan_context(management_app):
