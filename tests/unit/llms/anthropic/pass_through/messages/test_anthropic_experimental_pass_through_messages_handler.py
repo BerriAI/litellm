@@ -427,6 +427,25 @@ class TestThinkingParameterTransformation:
 class TestThinkingSummaryPreservation:
     """Tests for thinking.summary preservation and reasoning_auto_summary flag."""
 
+    @pytest.mark.parametrize("use_chat_completions_url", [True, False])
+    def test_thinking_respects_chat_completions_url_override(
+        self, monkeypatch: pytest.MonkeyPatch, use_chat_completions_url: bool
+    ) -> None:
+        from litellm.llms.anthropic.pass_through.adapters.handler import (
+            LiteLLMMessagesToCompletionTransformationHandler,
+        )
+
+        monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", use_chat_completions_url)
+        completion_kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+            model="openai/gpt-5.6",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "Reply with OK"}],
+            thinking={"type": "enabled", "budget_tokens": 5000},
+        )
+
+        expected_model: Final = "openai/gpt-5.6" if use_chat_completions_url else "openai/responses/gpt-5.6"
+        assert completion_kwargs["model"] == expected_model
+
     def test_thinking_summary_concise_preserved_for_openai(self):
         """User-provided summary='concise' should not be replaced with 'detailed'."""
         from litellm.llms.anthropic.pass_through.adapters.handler import (
