@@ -10,7 +10,7 @@ from pydantic import JsonValue
 
 import litellm
 from litellm.rust_bridge import _native as native
-from litellm.utils import _resolve_builtin_model_cost_entry
+from litellm.utils import _fallback_registration, _resolve_builtin_model_cost_entry, _without_overridden_price_variants
 
 
 class RegistrationTargetTests(unittest.TestCase):
@@ -80,6 +80,58 @@ class RegistrationTargetTests(unittest.TestCase):
         self.assertEqual(None if legacy is None else legacy.key, expected)
         target: Final = native.registration_target(rows, key, provider=provider)
         self.assertEqual((target.write, target.inherit_from), (key, expected))
+        self.assertIs(target.names_the_row, False if legacy is None else legacy.names_the_row)
+
+    def test_repeated_prefix_names_row_and_preserves_fallback_price_variants(self) -> None:
+        self._assert_fallback_price_variants("us.anthropic.model", "bedrock/bedrock/bedrock/us.anthropic.model", True)
+
+    def test_region_only_alias_does_not_name_row_and_suppresses_fallback_price_variants(self) -> None:
+        self._assert_fallback_price_variants("anthropic.model", "bedrock/ap-northeast-1.anthropic.model", False)
+
+    def test_region_candidate_also_in_suffix_names_preserves_fallback_price_variants(self) -> None:
+        self._assert_fallback_price_variants(
+            "anthropic.model-2026-01-01", "bedrock/converse/us.anthropic.model-2026-01-01", True
+        )
+
+    def _assert_fallback_price_variants(self, source: str, key: str, names_the_row: bool) -> None:
+        row: Final = {
+            "litellm_provider": "bedrock_converse",
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+            "input_cost_per_token_above_128k_tokens": 0.01,
+            "tiered_pricing": [
+                {"input_cost_per_token": 0.003, "output_cost_per_token": 0.004, "range": [0, 256_000]},
+                {"input_cost_per_token": 0.005, "output_cost_per_token": 0.006, "range": [256_000, 1_000_000]},
+            ],
+        }
+        rows: Final[dict[str, object]] = {source: row}
+        override: Final = {"input_cost_per_token": 0.007}
+        before: Final = json.dumps(rows)
+        with patch.object(litellm, "model_cost", rows):
+            legacy: Final = _resolve_builtin_model_cost_entry(key, "bedrock")
+            self.assertIsNotNone(legacy)
+            if legacy is None:
+                self.fail("synthetic source must match the M2 reference")
+            self.assertEqual((legacy.key, legacy.names_the_row), (source, names_the_row))
+            fallback: Final = _fallback_registration(key, "bedrock", override)
+            self.assertTrue(fallback.matched_builtin)
+            self.assertEqual("input_cost_per_token_above_128k_tokens" in fallback.entry, names_the_row)
+            target: Final = native.registration_target(rows, key, provider="bedrock")
+            self.assertEqual((target.write, target.inherit_from, target.names_the_row), (key, source, names_the_row))
+            inherited: Final = row if target.names_the_row else _without_overridden_price_variants(row, override)
+            self.assertEqual(
+                fallback.entry, {name: value for name, value in inherited.items() if name != "litellm_provider"}
+            )
+        self.assertEqual(json.dumps(rows), before)
+
+    def test_row_name_metadata_is_read_only_and_false_without_inheritance(self) -> None:
+        rows: Final[dict[str, object]] = {"same": {"litellm_provider": "openai"}}
+        target: Final = native.registration_target(rows, "same")
+        self.assertIs(target.names_the_row, True)
+        self.assertRaises(AttributeError, setattr, target, "names_the_row", False)
+        self.assertIs(target.names_the_row, True)
+        self.assertIs(native.registration_target(rows, "absent").names_the_row, False)
+        self.assertIs(native.registration_target(rows, "same", provider="azure").names_the_row, False)
 
     def test_repeated_prefix_inherits_prices_without_expanding_read_resolution(self) -> None:
         self._assert_inherits_live_prices("us.anthropic.model", "bedrock/bedrock/bedrock/us.anthropic.model")
@@ -120,6 +172,8 @@ class RegistrationTargetTests(unittest.TestCase):
         explicit: Final = native.registration_target(rows, "same", provider=None)
         self.assertEqual((old.write, old.inherit_from), ("same", "same"))
         self.assertEqual((explicit.write, explicit.inherit_from), (old.write, old.inherit_from))
+        self.assertIs(old.names_the_row, True)
+        self.assertIs(explicit.names_the_row, True)
         provider: Final = inspect.signature(native.registration_target).parameters["provider"]
         self.assertEqual(provider.kind, inspect.Parameter.KEYWORD_ONLY)
         self.assertIsNone(provider.default)

@@ -164,6 +164,7 @@ pub(crate) struct ModelNotFound {
 pub(crate) struct RegistrationTarget {
     write: String,
     inherit_from: Option<String>,
+    names_the_row: bool,
 }
 
 #[derive(IntoPyObject)]
@@ -232,6 +233,7 @@ pub(crate) fn registration_target(
     Ok(RegistrationTarget {
         write: target.write,
         inherit_from: target.inherit_from,
+        names_the_row: target.names_the_row,
     })
 }
 

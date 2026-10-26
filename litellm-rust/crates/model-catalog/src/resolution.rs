@@ -37,6 +37,7 @@ pub enum Resolved {
 pub struct RegistrationTarget {
     pub write: String,
     pub inherit_from: Option<String>,
+    pub names_the_row: bool,
 }
 
 pub fn resolve(keys: &impl Keys, query: &Query<'_>) -> Resolved {
@@ -74,7 +75,7 @@ pub fn registration_target_with_provider_names(
             via: Via::Exact | Via::ProviderPrefix,
         } => Some(key),
         resolved => {
-            registration_alias(keys, caller_key, provider, is_provider).or(match resolved {
+            registration_alias(keys, caller_key, provider, &is_provider).or(match resolved {
                 Resolved::Found { key, .. } => Some(key),
                 Resolved::NotFound { .. } => None,
             })
@@ -82,7 +83,73 @@ pub fn registration_target_with_provider_names(
     };
     RegistrationTarget {
         write: caller_key.to_owned(),
+        names_the_row: inherit_from.as_deref().is_some_and(|inherited| {
+            registration_names_the_row(caller_key, provider, &is_provider, inherited)
+        }),
         inherit_from,
+    }
+}
+
+fn registration_provider<'a>(
+    model: &'a str,
+    provider: Option<&'a str>,
+    is_provider: &impl Fn(&str) -> bool,
+) -> Option<&'a str> {
+    provider
+        .filter(|provider| !provider.is_empty())
+        .or_else(|| {
+            model
+                .split_once('/')
+                .map(|(prefix, _)| prefix)
+                .filter(|prefix| is_provider(prefix))
+        })
+}
+
+fn registration_names_the_row(
+    model: &str,
+    provider: Option<&str>,
+    is_provider: &impl Fn(&str) -> bool,
+    inherited: &str,
+) -> bool {
+    if inherited == model {
+        return true;
+    }
+    let provider = registration_provider(model, provider, is_provider);
+    let mut base = model;
+    while let Some((prefix, tail)) = base.split_once('/') {
+        if !is_provider(prefix) {
+            break;
+        }
+        base = tail;
+        if inherited == base {
+            return true;
+        }
+    }
+    if matches!(provider, Some("bedrock" | "bedrock_converse")) {
+        base = strip_bedrock_nova_route(strip_bedrock_route(base));
+    }
+    inherited == base || provider.is_some() && inherited == registration_stripped(base, provider)
+}
+
+fn registration_stripped<'a>(model: &'a str, provider: Option<&str>) -> &'a str {
+    if !matches!(provider, Some("bedrock" | "bedrock_converse")) {
+        return strip_suffix(model, provider);
+    }
+    let custom = model
+        .strip_prefix("bedrock/converse/")
+        .or_else(|| model.strip_prefix("bedrock/"))
+        .or_else(|| model.strip_prefix("converse/"))
+        .unwrap_or(model);
+    if custom.starts_with("nova-2/") || custom.starts_with("nova/") {
+        return strip_suffix(custom, provider);
+    }
+    let model = bedrock_arn_model(strip_bedrock_nova_route(strip_bedrock_route(model)));
+    let model = strip_bedrock_throughput(model);
+    let geo_free = strip_bedrock_geo(model);
+    if geo_free != model {
+        geo_free
+    } else {
+        strip_region(model, provider, None)
     }
 }
 
@@ -92,14 +159,7 @@ fn registration_alias(
     provider: Option<&str>,
     is_provider: impl Fn(&str) -> bool,
 ) -> Option<String> {
-    let provider = provider
-        .filter(|provider| !provider.is_empty())
-        .or_else(|| {
-            model
-                .split_once('/')
-                .map(|(prefix, _)| prefix)
-                .filter(|prefix| is_provider(prefix))
-        });
+    let provider = registration_provider(model, provider, &is_provider);
     let mut lookup = Lookup {
         keys,
         provider,
@@ -119,9 +179,7 @@ fn registration_alias(
         }
     }
     if matches!(provider, Some("bedrock" | "bedrock_converse")) {
-        base = bedrock_routing_model(base);
-        base = base.strip_prefix("nova-2/").unwrap_or(base);
-        base = base.strip_prefix("nova/").unwrap_or(base);
+        base = strip_bedrock_nova_route(bedrock_routing_model(base));
         if let Some(key) = lookup.registration_candidate(base, Via::ProviderStripped) {
             return Some(key);
         }
@@ -337,7 +395,7 @@ fn is_aws_region(region: &str) -> bool {
         && number.bytes().all(|c| c.is_ascii_digit())
 }
 
-fn bedrock_routing_model(mut model: &str) -> &str {
+fn strip_bedrock_route(mut model: &str) -> &str {
     for prefix in [
         "bedrock/",
         "chat_completions/",
@@ -348,6 +406,19 @@ fn bedrock_routing_model(mut model: &str) -> &str {
     ] {
         model = model.strip_prefix(prefix).unwrap_or(model);
     }
+    model
+}
+
+fn bedrock_routing_model(model: &str) -> &str {
+    bedrock_arn_model(strip_bedrock_route(model))
+}
+
+fn strip_bedrock_nova_route(model: &str) -> &str {
+    let model = model.strip_prefix("nova-2/").unwrap_or(model);
+    model.strip_prefix("nova/").unwrap_or(model)
+}
+
+fn bedrock_arn_model(model: &str) -> &str {
     let region_free = strip_region(model, Some("bedrock"), None);
     if region_free.starts_with("arn:") {
         return region_free.rsplit('/').next().unwrap_or(region_free);
@@ -621,11 +692,8 @@ mod tests {
             |prefix| ["bedrock", "openai", "azure_ai", "hosted_vllm"].contains(&prefix),
         );
         assert_eq!(
-            target,
-            RegistrationTarget {
-                write: key.into(),
-                inherit_from: inherited.map(str::to_owned)
-            }
+            (target.write.as_str(), target.inherit_from.as_deref()),
+            (key, inherited)
         );
     }
 
@@ -653,7 +721,8 @@ mod tests {
             ),
             RegistrationTarget {
                 write: key,
-                inherit_from: Some("anthropic.model-2026-01-01".into())
+                inherit_from: Some("anthropic.model-2026-01-01".into()),
+                names_the_row: region != "ap-northeast-1",
             }
         );
     }
@@ -669,6 +738,168 @@ mod tests {
             resolve(&registration_models, &query(key, Some("bedrock"))),
             Resolved::NotFound { .. }
         ));
+    }
+
+    #[rstest]
+    #[case::exact("anthropic.model", Some("bedrock"), "anthropic.model", true)]
+    #[case::repeated(
+        "bedrock/bedrock/bedrock/us.anthropic.model",
+        Some("bedrock"),
+        "us.anthropic.model",
+        true
+    )]
+    #[case::inferred(
+        "bedrock/bedrock/bedrock/us.anthropic.model",
+        None,
+        "us.anthropic.model",
+        true
+    )]
+    #[case::empty_scope(
+        "bedrock/bedrock/bedrock/us.anthropic.model",
+        Some(""),
+        "us.anthropic.model",
+        true
+    )]
+    #[case::intermediate(
+        "bedrock/bedrock/bedrock/us.anthropic.model",
+        Some("bedrock"),
+        "bedrock/us.anthropic.model",
+        true
+    )]
+    #[case::routing_base(
+        "bedrock/converse/ap-northeast-1.anthropic.model",
+        Some("bedrock"),
+        "ap-northeast-1.anthropic.model",
+        true
+    )]
+    #[case::region_only(
+        "bedrock/ap-northeast-1.anthropic.model",
+        Some("bedrock"),
+        "anthropic.model",
+        false
+    )]
+    #[case::region_suffix_overlap(
+        "bedrock/us.anthropic.model",
+        Some("bedrock"),
+        "anthropic.model",
+        true
+    )]
+    #[case::dated_overlap(
+        "bedrock/converse/us.anthropic.model-2026-01-01",
+        Some("bedrock"),
+        "anthropic.model-2026-01-01",
+        true
+    )]
+    #[case::dated_region_only(
+        "bedrock/converse/ap-northeast-1.anthropic.model-2026-01-01",
+        Some("bedrock"),
+        "anthropic.model-2026-01-01",
+        false
+    )]
+    #[case::throughput(
+        "bedrock/us.anthropic.model:0:51k",
+        Some("bedrock"),
+        "anthropic.model:0",
+        true
+    )]
+    #[case::context_window(
+        "bedrock/us.anthropic.model[1m]",
+        Some("bedrock"),
+        "anthropic.model",
+        true
+    )]
+    #[case::slash_region(
+        "bedrock/us-east-1/anthropic.model",
+        Some("bedrock"),
+        "anthropic.model",
+        true
+    )]
+    #[case::resource(
+        "bedrock/arn:aws:bedrock:us-east-1:000000000000:inference-profile/us.anthropic.model",
+        Some("bedrock"),
+        "anthropic.model",
+        true
+    )]
+    #[case::native_date_removal(
+        "bedrock/anthropic.model-20260101",
+        Some("bedrock"),
+        "anthropic.model",
+        false
+    )]
+    #[case::selected_qualified_row(
+        "anthropic.model",
+        Some("bedrock"),
+        "bedrock/anthropic.model",
+        false
+    )]
+    fn registration_classifies_selected_row_names(
+        #[case] key: &str,
+        #[case] provider: Option<&str>,
+        #[case] row: &str,
+        #[case] names_the_row: bool,
+    ) {
+        let models = catalog(json!({row: {
+            "litellm_provider": "bedrock",
+            "input_cost_per_token": 0.001,
+            "input_cost_per_token_above_128k_tokens": 0.002
+        }}));
+        assert_eq!(
+            registration_target_with_provider_names(&models, key, provider, |prefix| prefix
+                == "bedrock"),
+            RegistrationTarget {
+                write: key.into(),
+                inherit_from: Some(row.into()),
+                names_the_row,
+            }
+        );
+    }
+
+    #[rstest]
+    #[case::missing("bedrock/missing", Some("bedrock"))]
+    #[case::wrong_scope("bedrock/ap-northeast-1.anthropic.model", Some("openai"))]
+    #[case::case_variant("bedrock/ap-northeast-1.anthropic.MODEL", Some("bedrock"))]
+    #[case::unknown_prefix("bedrock/unknown/anthropic.model", Some("bedrock"))]
+    fn registration_without_inheritance_does_not_name_a_row(
+        registration_models: Catalog,
+        #[case] key: &str,
+        #[case] provider: Option<&str>,
+    ) {
+        assert_eq!(
+            registration_target_with_provider_names(
+                &registration_models,
+                key,
+                provider,
+                |prefix| prefix == "bedrock"
+            ),
+            RegistrationTarget {
+                write: key.into(),
+                inherit_from: None,
+                names_the_row: false,
+            }
+        );
+    }
+
+    #[rstest]
+    #[case::dated("openai/model-2026-01-01", "openai", "model")]
+    #[case::finetuned("openai/ft:model:org:custom:id", "openai", "ft:model")]
+    #[case::vertex("vertex_ai/model-123", "vertex_ai", "model")]
+    #[case::gemini("gemini/model-123", "gemini", "model")]
+    #[case::databricks("databricks/model-123", "databricks", "model")]
+    fn registration_suffixes_name_the_selected_row(
+        #[case] key: &str,
+        #[case] provider: &str,
+        #[case] row: &str,
+    ) {
+        let models = catalog(json!({row: {"litellm_provider": provider}}));
+        assert_eq!(
+            registration_target_with_provider_names(&models, key, Some(provider), |prefix| prefix
+                == provider),
+            RegistrationTarget {
+                write: key.into(),
+                inherit_from: Some(row.into()),
+                names_the_row: true,
+            }
+        );
     }
 
     #[fixture]
@@ -812,12 +1043,10 @@ mod tests {
             "bedrock/anthropic.claude-sonnet-4-6": {"litellm_provider":"bedrock"},
             "hosted_vllm/Acme-Model": {"litellm_provider":"hosted_vllm"}
         }));
+        let target = registration_target(&models, caller);
         assert_eq!(
-            registration_target(&models, caller),
-            RegistrationTarget {
-                write: caller.into(),
-                inherit_from: inherit_from.map(str::to_owned),
-            }
+            (target.write.as_str(), target.inherit_from.as_deref()),
+            (caller, inherit_from)
         );
         assert_eq!(models.model_count(), 5);
     }
@@ -829,6 +1058,7 @@ mod tests {
             RegistrationTarget {
                 write: "openai/o3-pro".into(),
                 inherit_from: Some("openai/o3-pro".into()),
+                names_the_row: true,
             }
         );
     }
@@ -1209,7 +1439,8 @@ mod tests {
             registration_target_with_provider(&counted, "MODEL", provider),
             RegistrationTarget {
                 write: "MODEL".into(),
-                inherit_from: None
+                inherit_from: None,
+                names_the_row: false,
             }
         );
         assert_eq!(counted.lowercase_calls.get(), 0);
@@ -1247,12 +1478,10 @@ mod tests {
             "case": {"litellm_provider": "openai"},
             "databricks/version": {"litellm_provider": "databricks"}
         }));
+        let target = registration_target_with_provider(&models, key, provider);
         assert_eq!(
-            registration_target_with_provider(&models, key, provider),
-            RegistrationTarget {
-                write: key.into(),
-                inherit_from: inherited.map(str::to_owned),
-            }
+            (target.write.as_str(), target.inherit_from.as_deref()),
+            (key, inherited)
         );
     }
 
