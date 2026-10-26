@@ -9856,6 +9856,16 @@ def _restamp_streaming_chunk_model(
     return chunk, model_mismatch_logged
 
 
+_OPENAI_CHUNK_CHOICE_FIELDS: Final = frozenset({"index", "delta", "finish_reason", "logprobs", "enhancements"})
+
+
+def _streaming_choice_carries_provider_extras(choice: object) -> bool:
+    extra: Final = getattr(choice, "__pydantic_extra__", None)
+    if not isinstance(extra, dict):
+        return False
+    return any(key not in _OPENAI_CHUNK_CHOICE_FIELDS for key in extra)
+
+
 def _fast_serialize_simple_model_response_stream(
     chunk: ModelResponseStream,
 ) -> bytes | None:
@@ -9877,6 +9887,8 @@ def _fast_serialize_simple_model_response_stream(
 
     choice: Final = choices[0]
     if getattr(choice, "logprobs", None) is not None or getattr(choice, "enhancements", None) is not None:
+        return None
+    if _streaming_choice_carries_provider_extras(choice):
         return None
 
     delta: Final[object] = getattr(choice, "delta", None)

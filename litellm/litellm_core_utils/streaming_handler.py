@@ -297,6 +297,9 @@ class CustomStreamWrapper:
         self.messages = getattr(logging_obj, "messages", None)
         self.sent_stream_usage = False
         self.send_stream_usage = True if self.check_send_stream_usage(self.stream_options) else False
+        self._continuous_usage_stats = (
+            isinstance(self.stream_options, dict) and self.stream_options.get("continuous_usage_stats") is True
+        )
         self.tool_call = False
         self.chunks: list = []  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
         self._repeated_messages_count = 1
@@ -1873,7 +1876,7 @@ class CustomStreamWrapper:
                     # ModelResponseStream declares `usage` as a field, so
                     # hasattr(response, "usage") is always True — must check
                     # `is not None` to avoid running this path on every chunk.
-                    if getattr(response, "usage", None) is not None:
+                    if getattr(response, "usage", None) is not None and not self._continuous_usage_stats:
                         usage_to_preserve = response.usage
                         if usage_to_preserve:
                             response_hidden_params_for_usage = cast(  # cast-ok: preserve dynamic mapping behavior
@@ -2088,7 +2091,7 @@ class CustomStreamWrapper:
                         hasattr(processed_chunk, "usage") and getattr(processed_chunk, "usage", None) is not None
                     )
 
-                    if _has_usage:
+                    if _has_usage and not self._continuous_usage_stats:
                         # Store a copy ONLY when usage stripping below will mutate
                         # the chunk. For non-usage chunks (vast majority), store
                         # directly to avoid expensive model_copy() per chunk.

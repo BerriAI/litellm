@@ -790,6 +790,7 @@ def convert_to_model_response_object(
                     logprobs=logprobs,
                     enhancements=enhancements,
                     provider_specific_fields=provider_specific_fields,
+                    **{f: v for f, v in provider_specific_fields.items() if f not in _CHOICES_FIELDS},
                 )
                 if provider_sent_logprobs and logprobs is None:
                     choice.logprobs = None

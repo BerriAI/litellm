@@ -552,7 +552,16 @@ def stream_usage_tracking_updates(
         return scrub
     if not supports_stream_options():
         return scrub
-    merged_stream_options: Final = {**stream_options} if isinstance(stream_options, dict) else {}
+    # The proxy injects include_usage for its own cost tracking, so
+    # caller-supplied continuous_usage_stats must not ride along and leak
+    # per-chunk usage to a caller who never asked for usage. A caller that
+    # wants cumulative usage sends include_usage too and takes the early return
+    # above, keeping both flags intact for the backend.
+    merged_stream_options: Final = (
+        {k: v for k, v in stream_options.items() if k != "continuous_usage_stats"}
+        if isinstance(stream_options, dict)
+        else {}
+    )
     return {
         "stream_options": {**merged_stream_options, "include_usage": True},
         "_litellm_strip_stream_usage": True,
