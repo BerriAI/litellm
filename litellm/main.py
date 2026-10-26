@@ -9148,6 +9148,7 @@ async def ahealth_check(
             custom_llm_provider=custom_llm_provider_from_params,
             api_base=api_base_from_params,
             api_key=api_key_from_params,
+            litellm_params=GenericLiteLLMParams(**model_params),
         )
 
         model_params["cache"] = {"no-cache": True}  # don't used cached responses for making health check calls

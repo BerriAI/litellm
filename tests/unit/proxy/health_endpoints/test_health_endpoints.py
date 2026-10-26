@@ -5447,6 +5447,7 @@ async def test_unsaved_chatgpt_account_probe_requires_proxy_admin(
     from starlette.requests import Request
     from litellm.proxy import proxy_server
 
+    monkeypatch.setenv("CHATGPT_AUTH_FILE", str(tmp_path / "missing-default-auth.json"))
     auth_file: Final = tmp_path / "auth.json"
     auth_file.write_text(
         json.dumps({"access_token": "token-probe", "account_id": "acct-probe", "expires_at": 4102444800})
