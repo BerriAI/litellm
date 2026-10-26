@@ -11466,6 +11466,17 @@
         "mode": "audio_speech",
         "source": "https://azure.microsoft.com/en-us/pricing/calculator/"
     },
+    "azure/speech/MAI-Transcribe-2": {
+        "audio_transcription_config": "azure_speech",
+        "input_cost_per_second": 0.00015,
+        "litellm_provider": "azure",
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
     "azure/speech/azure-stt": {
         "audio_transcription_config": "azure_speech",
         "input_cost_per_second": 0.0002777778,
