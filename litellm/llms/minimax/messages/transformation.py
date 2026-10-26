@@ -2,8 +2,6 @@
 MiniMax Anthropic transformation config - extends AnthropicConfig for MiniMax's Anthropic-compatible API
 """
 
-from typing import Any  # noqa: TID251  # override below must mirror the legacy base signature
-
 import litellm
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.anthropic.pass_through.messages.transformation import (
@@ -54,7 +52,7 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict,  # mutable-ok: mirrors the legacy base override signature
         model: str,
-        messages: list[Any],  # mutable-ok: mirrors the legacy base override signature
+        messages: list[object],  # mutable-ok: mirrors the legacy base override signature
         optional_params: dict,  # mutable-ok: mirrors the legacy base override signature
         litellm_params: dict,  # mutable-ok: mirrors the legacy base override signature
         api_key: str | None = None,

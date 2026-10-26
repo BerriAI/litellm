@@ -130,7 +130,8 @@ class _EnvWithoutBareExcludedServices(PydanticBaseSettingsSource):
         return self._env_settings.get_field_value(field, field_name)
 
     def __call__(self) -> dict[str, object]:
-        return {key: value for key, value in self._env_settings().items() if key != "excluded_services"}
+        settings: Final = self._env_settings()
+        return {key: settings[key] for key in settings if key != "excluded_services"}
 
 
 class OpenTelemetryV2Config(BaseSettings):

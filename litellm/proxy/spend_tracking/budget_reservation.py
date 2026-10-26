@@ -728,7 +728,9 @@ async def _get_team_member_budget_counter(
     membership_cache_key: Final = team_membership_reservation_cache_key(
         user_id=valid_token.user_id, team_id=team_object.team_id
     )
-    cached_team_membership: Final = await user_api_key_cache.async_get_cache(key=membership_cache_key)
+    cached_team_membership: Final = _CACHED_VALUE.validate_python(
+        await user_api_key_cache.async_get_cache(key=membership_cache_key)
+    )
     team_membership: LiteLLM_TeamMembership | None = None
     if isinstance(cached_team_membership, LiteLLM_TeamMembership):
         team_membership = cached_team_membership

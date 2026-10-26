@@ -6,6 +6,7 @@ external callers only see servers with available_on_public_internet=True.
 """
 
 import logging
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -175,6 +176,19 @@ class TestMCPClientIPExtraction:
         )
 
         assert result == "203.0.113.5"
+
+    def test_non_boolean_use_x_forwarded_for_never_trusts_xff(self):
+        request: Final = _make_request("10.0.0.5", "203.0.113.9, 10.0.0.5")
+
+        result: Final = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={
+                "use_x_forwarded_for": "false",
+                "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+            },
+        )
+
+        assert result == "10.0.0.5"
 
 
 def _make_request(client_host, xff):

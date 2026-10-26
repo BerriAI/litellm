@@ -139,8 +139,7 @@ export const getBudgetTableColumns = ({
     accessorKey: "budget_duration",
     filterFn: serverFilter,
     meta: { title: "Reset" },
-    // "7d"/"30d" sort lexicographically, not chronologically, so the route does not offer it.
-    enableSorting: false,
+    sortDescFirst: false,
     header: ({ column }) => <DataTableSortHeader column={column} title="Reset" />,
     size: 110,
     cell: ({ row }) => <BudgetDurationCell value={row.original.budget_duration} />,
