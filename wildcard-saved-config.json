@@ -1,0 +1,30 @@
+[
+  {
+    "model_name": "auto-router",
+    "complexity_router_config": {
+      "tiers": {
+        "MEDIUM": [
+          "openai/gpt-6-luna"
+        ],
+        "SIMPLE": [
+          "openai/gpt-6-luna"
+        ],
+        "COMPLEX": [
+          "openai/gpt-6-astra"
+        ],
+        "REASONING": [
+          "openai/gpt-6-astra"
+        ]
+      },
+      "classifier_type": "heuristic",
+      "modality_routing": false,
+      "session_affinity": false,
+      "classification_mode": "every_request",
+      "deployment_affinity": true,
+      "escalation_keywords": [
+        "LITELLM ESCALATE"
+      ],
+      "modality_pin_override": false
+    }
+  }
+]

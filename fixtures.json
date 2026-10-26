@@ -106,5 +106,14 @@
     "model_info": {
       "mode": "chat"
     }
+  },
+  {
+    "model_name": "openai/*",
+    "litellm_params": {
+      "model": "openai/*"
+    },
+    "model_info": {
+      "mode": "chat"
+    }
   }
 ]

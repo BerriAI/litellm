@@ -1,33 +1,25 @@
 # Auto Router setup QA
 
-Real dashboard and proxy with an isolated local database and synthetic deployment records. No upstream inference requests were made
+Real dashboard and proxy with an isolated local database and synthetic deployment records. No upstream inference requests were made.
 
-Before is main `f96200bcea3`. After is `41cad716471`. Both comparison screenshots use the same URL, viewport, and deployed models. Red outlines only mark the form for comparison and are not part of the change
-
-## Screenshots
+Before is main `b7a2226f438`. After is `6585496b7c5`. Comparison captures use the same URL, viewport, and solver fixtures. The after capture also has the newly saved router, so the generated name advances to `auto-router-2`. Red outlines mark the form for comparison only.
 
 | State | Evidence |
 | --- | --- |
 | Original setup | [Before](before-default.png) |
 | Goal-first setup | [After](after-default.png) |
-| Polished layout | [Default](polished-default.png) |
-| Newer Sol on Bedrock preferred over older native Sol | [OpenAI Best quality](openai-bedrock.png) |
-| One model from each of two families | [Cross-family fallback](mixed-family-fallback.png) |
-| Only one supported model available | [Creation blocked with Advanced recovery](one-model.png) |
-| Existing router consumes the Heuristic v2 allowance | [Exhausted option disabled, standard available](license-exhausted.png) |
-| Narrow viewport | [Stacked models](mobile.png) |
-| Real save and list refresh | [Created routers](saved-router.png) |
+| Unannotated default | [Default](after-review.png) |
+| Only openai/* enabled | [Concrete Luna + Astra recommendations](wildcard-openai.png) |
+| UI save and list refresh | [Created wildcard-backed router](wildcard-saved.png) |
 
-## Verification
+[Saved wildcard configuration](wildcard-saved-config.json) was read back from the real API after UI creation: SIMPLE/MEDIUM use openai/gpt-6-luna; COMPLEX/REASONING use openai/gpt-6-astra; classifier_type is heuristic (v1).
 
-Catalog-driven regression coverage recognizes all 108 standard chat Opus entries, including all 19 Opus 5.5 provider variants. Special fast and thinking variants remain in Advanced
+[Deployment fixtures](fixtures.json) contain model identities only. For the wildcard case, all 12 explicit fixtures were temporarily blocked, leaving only openai/* enabled. Wildcard expansion may use the LiteLLM catalog; it does not verify upstream account entitlements.
 
-129 resolver tests and 104 form integration tests passed, plus `make check` and `npm run build`
+## Validation
 
-The focused tests cover all three goals, four model families, provider aliases and base-model metadata, numeric releases and dated snapshots, unavailable and blocked models, non-chat models, mixed-version groups, recursive routers, same-family substitutions, cross-family fallback, no valid pair, manual overrides, error/retry, team scope, and advanced configuration
+241 focused tests passed (133 resolver, 108 form integration), plus make check and the production build including TypeScript. Following a lint-only predicate extraction, the affected team-selection regression was rerun and passed. New alias and team-selection regressions failed before their fixes. Earlier review fixes cover Terra, equal-rank cross-family fallback, cached inventory after refetch errors, and Gemini/Grok recognition.
 
-Standalone typecheck with development-generated routes reports the same existing `AgentControlPlaneView` export error on base and branch. The production build and its TypeScript phase pass
+Catalog-driven coverage recognizes all 108 standard chat Opus entries, including all 19 Opus 5.5 variants. Latest selection compares numeric releases and prefers undated aliases within a release. Saved configurations remain explicit; there is no background model upgrade.
 
-[Deployment fixtures](fixtures.json) contain model identities only. [Saved configurations](saved-configs.json) were read back from the real API after UI creation
-
-The newest recognized version is resolved when creating a router. Saved configurations remain explicit. Unknown naming conventions remain available in Advanced. Goals select model pairs within families, not measured global cost or quality optima
+[Earlier edge-case gallery at 41cad716471](https://github.com/BerriAI/litellm/blob/46d1641c167a5a73e8a6d83f0c1b270299887bb8/README.md) covers Bedrock provider detection, cross-family fallback, one-model recovery, exhausted Heuristic v2 allowance, and narrow layouts. Those captures are historical, not recaptures of the final review fixes.
