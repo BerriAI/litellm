@@ -9,8 +9,8 @@ from unittest.mock import patch
 from pydantic import JsonValue
 
 import litellm
+from litellm._catalog import _install
 from litellm.rust_bridge import _native as native
-from litellm.utils import _fallback_registration, _resolve_builtin_model_cost_entry, _without_overridden_price_variants
 
 
 class RegistrationTargetTests(unittest.TestCase):
@@ -32,55 +32,70 @@ class RegistrationTargetTests(unittest.TestCase):
             "anthropic.null": {"litellm_provider": None},
             "anthropic.absent": {},
         }
-        cases: Final[tuple[tuple[str, str | None, str | None], ...]] = (
-            ("bedrock/bedrock/bedrock/us.anthropic.model", "bedrock", "us.anthropic.model"),
-            ("bedrock/bedrock/bedrock/us.anthropic.model", None, "us.anthropic.model"),
-            ("bedrock/bedrock/bedrock/us.anthropic.model", "", "us.anthropic.model"),
-            ("bedrock/bedrock/bedrock/bedrock/converse/us.anthropic.model", "bedrock", "us.anthropic.model"),
-            ("bedrock/bedrock/bedrock/us.anthropic.priority", "bedrock", "bedrock/bedrock/us.anthropic.priority"),
-            ("bedrock/ap-northeast-1.anthropic.model", "bedrock", "anthropic.model"),
-            ("bedrock/converse/ap-northeast-1.anthropic.model", "bedrock", "anthropic.model"),
-            ("bedrock/invoke/ap-northeast-1.anthropic.model", "bedrock", "anthropic.model"),
-            ("bedrock/chat_completions/ap-northeast-1.anthropic.model", "bedrock", "anthropic.model"),
-            ("bedrock/openai/ap-northeast-1.anthropic.model", "bedrock", "anthropic.model"),
-            ("bedrock/mantle/ap-northeast-1.anthropic.model", "bedrock", "anthropic.model"),
-            ("bedrock/nova/ap-northeast-1.anthropic.model", "bedrock", "anthropic.model"),
-            ("bedrock/nova-2/ap-northeast-1.anthropic.model", "bedrock", "anthropic.model"),
-            ("bedrock/converse/ap-northeast-1.anthropic.priority", "bedrock", "ap-northeast-1.anthropic.priority"),
-            ("bedrock/converse/us.anthropic.model", "bedrock", "us.anthropic.model"),
-            ("bedrock/converse/au.anthropic.dated-2026-01-01", "bedrock", "anthropic.dated-2026-01-01"),
-            ("hosted_vllm/hosted_vllm/hosted_vllm/hosted", "hosted_vllm", "hosted"),
-            ("openai/azure_ai/openai/model", "openai", "openai/model"),
-            ("openai/openai/bedrock/us.anthropic.model", "bedrock", "us.anthropic.model"),
-            ("openai/openai/bedrock/us.anthropic.model", None, None),
-            ("bedrock/bedrock/bedrock/us.anthropic.model", "azure_ai", None),
-            ("bedrock/unknown/bedrock/us.anthropic.model", "bedrock", None),
-            ("bedrock/Bedrock/bedrock/us.anthropic.model", "bedrock", None),
-            ("bedrock/AP-NORTHEAST-1.anthropic.model", "bedrock", None),
-            ("bedrock/ap-northeast-1.anthropic.MODEL", "bedrock", None),
-            ("bedrock/ap-northeast-1.anthropic.Model", "bedrock", "anthropic.Model"),
-            ("bedrock/bedrock/bedrock/unmatched", "bedrock", None),
-            ("bedrock/ap-northeast-2.anthropic.model", "bedrock", None),
-            ("bedrock/bedrock/bedrock/us.anthropic.dated-2026-01-01", "bedrock", "anthropic.dated-2026-01-01"),
-            ("azure_ai/model", None, "model"),
-            ("bedrock/ap-northeast-1.anthropic.null", "bedrock", None),
-            ("bedrock/bedrock/bedrock/anthropic.absent", "bedrock", None),
+        cases: Final[tuple[tuple[str, str | None, str | None, bool], ...]] = (
+            ("bedrock/bedrock/bedrock/us.anthropic.model", "bedrock", "us.anthropic.model", True),
+            ("bedrock/bedrock/bedrock/us.anthropic.model", None, "us.anthropic.model", True),
+            ("bedrock/bedrock/bedrock/us.anthropic.model", "", "us.anthropic.model", True),
+            ("bedrock/bedrock/bedrock/bedrock/converse/us.anthropic.model", "bedrock", "us.anthropic.model", True),
+            ("bedrock/bedrock/bedrock/us.anthropic.priority", "bedrock", "bedrock/bedrock/us.anthropic.priority", True),
+            ("bedrock/ap-northeast-1.anthropic.model", "bedrock", "anthropic.model", False),
+            ("bedrock/converse/ap-northeast-1.anthropic.model", "bedrock", "anthropic.model", False),
+            ("bedrock/invoke/ap-northeast-1.anthropic.model", "bedrock", "anthropic.model", False),
+            ("bedrock/chat_completions/ap-northeast-1.anthropic.model", "bedrock", "anthropic.model", False),
+            ("bedrock/openai/ap-northeast-1.anthropic.model", "bedrock", "anthropic.model", False),
+            ("bedrock/mantle/ap-northeast-1.anthropic.model", "bedrock", "anthropic.model", False),
+            ("bedrock/nova/ap-northeast-1.anthropic.model", "bedrock", "anthropic.model", False),
+            ("bedrock/nova-2/ap-northeast-1.anthropic.model", "bedrock", "anthropic.model", False),
+            (
+                "bedrock/converse/ap-northeast-1.anthropic.priority",
+                "bedrock",
+                "ap-northeast-1.anthropic.priority",
+                True,
+            ),
+            ("bedrock/converse/us.anthropic.model", "bedrock", "us.anthropic.model", True),
+            ("bedrock/converse/au.anthropic.dated-2026-01-01", "bedrock", "anthropic.dated-2026-01-01", True),
+            ("hosted_vllm/hosted_vllm/hosted_vllm/hosted", "hosted_vllm", "hosted", True),
+            ("openai/azure_ai/openai/model", "openai", "openai/model", True),
+            ("openai/openai/bedrock/us.anthropic.model", "bedrock", "us.anthropic.model", True),
+            ("openai/openai/bedrock/us.anthropic.model", None, None, False),
+            ("bedrock/bedrock/bedrock/us.anthropic.model", "azure_ai", None, False),
+            ("bedrock/unknown/bedrock/us.anthropic.model", "bedrock", None, False),
+            ("bedrock/Bedrock/bedrock/us.anthropic.model", "bedrock", None, False),
+            ("bedrock/AP-NORTHEAST-1.anthropic.model", "bedrock", None, False),
+            ("bedrock/ap-northeast-1.anthropic.MODEL", "bedrock", None, False),
+            ("bedrock/ap-northeast-1.anthropic.Model", "bedrock", "anthropic.Model", False),
+            ("bedrock/bedrock/bedrock/unmatched", "bedrock", None, False),
+            ("bedrock/ap-northeast-2.anthropic.model", "bedrock", None, False),
+            ("bedrock/bedrock/bedrock/us.anthropic.dated-2026-01-01", "bedrock", "anthropic.dated-2026-01-01", True),
+            ("azure_ai/model", None, "model", True),
+            ("bedrock/ap-northeast-1.anthropic.null", "bedrock", None, False),
+            ("bedrock/bedrock/bedrock/anthropic.absent", "bedrock", None, False),
         )
         before: Final = json.dumps(rows)
         with patch.object(litellm, "model_cost", rows):
-            for key, provider, expected in cases:
+            for key, provider, expected, names_the_row in cases:
                 with self.subTest(key=key, provider=provider):
-                    self._assert_legacy_candidate(rows, key, provider, expected)
+                    self._assert_registration_candidate(rows, key, provider, expected, names_the_row)
         self.assertEqual(json.dumps(rows), before)
 
-    def _assert_legacy_candidate(
-        self, rows: dict[str, object], key: str, provider: str | None, expected: str | None
+    def _assert_registration_candidate(
+        self, rows: dict[str, object], key: str, provider: str | None, expected: str | None, names_the_row: bool
     ) -> None:
-        legacy: Final = _resolve_builtin_model_cost_entry(key, provider or "")
-        self.assertEqual(None if legacy is None else legacy.key, expected)
         target: Final = native.registration_target(rows, key, provider=provider)
         self.assertEqual((target.write, target.inherit_from), (key, expected))
-        self.assertIs(target.names_the_row, False if legacy is None else legacy.names_the_row)
+        self.assertIs(target.names_the_row, names_the_row)
+        live: Final = {name: {**row, "catalog_marker": name} for name, row in rows.items()}
+        before: Final = json.dumps(live)
+        with (
+            patch.object(litellm, "model_cost", live),
+            patch.object(_install, "STATE", _install._Installed()),
+            patch.object(_install, "LAYERS", native.ModelCostLayers()),
+        ):
+            litellm.register_model({key: {"max_tokens": 4096}}, custom_llm_provider=provider)
+            self.assertEqual(live[key].get("catalog_marker"), expected)
+            self.assertEqual(live[key]["max_tokens"], 4096)
+            self.assertEqual(_install.LAYERS.registrations()[0][:2], (key, expected))
+            self.assertEqual(json.dumps({name: row for name, row in live.items() if name != key}), before)
 
     def test_repeated_prefix_names_row_and_preserves_fallback_price_variants(self) -> None:
         self._assert_fallback_price_variants("us.anthropic.model", "bedrock/bedrock/bedrock/us.anthropic.model", True)
@@ -88,12 +103,17 @@ class RegistrationTargetTests(unittest.TestCase):
     def test_region_only_alias_does_not_name_row_and_suppresses_fallback_price_variants(self) -> None:
         self._assert_fallback_price_variants("anthropic.model", "bedrock/ap-northeast-1.anthropic.model", False)
 
-    def test_region_candidate_also_in_suffix_names_preserves_fallback_price_variants(self) -> None:
+    def test_region_candidate_also_in_suffix_names_preserves_primary_provider_and_price_variants(self) -> None:
         self._assert_fallback_price_variants(
-            "anthropic.model-2026-01-01", "bedrock/converse/us.anthropic.model-2026-01-01", True
+            "anthropic.model-2026-01-01",
+            "bedrock/converse/us.anthropic.model-2026-01-01",
+            True,
+            expected_provider="bedrock_converse",
         )
 
-    def _assert_fallback_price_variants(self, source: str, key: str, names_the_row: bool) -> None:
+    def _assert_fallback_price_variants(
+        self, source: str, key: str, names_the_row: bool, *, expected_provider: str | None = None
+    ) -> None:
         row: Final = {
             "litellm_provider": "bedrock_converse",
             "input_cost_per_token": 0.001,
@@ -107,21 +127,30 @@ class RegistrationTargetTests(unittest.TestCase):
         rows: Final[dict[str, object]] = {source: row}
         override: Final = {"input_cost_per_token": 0.007}
         before: Final = json.dumps(rows)
-        with patch.object(litellm, "model_cost", rows):
-            legacy: Final = _resolve_builtin_model_cost_entry(key, "bedrock")
-            self.assertIsNotNone(legacy)
-            if legacy is None:
-                self.fail("synthetic source must match the M2 reference")
-            self.assertEqual((legacy.key, legacy.names_the_row), (source, names_the_row))
-            fallback: Final = _fallback_registration(key, "bedrock", override)
-            self.assertTrue(fallback.matched_builtin)
-            self.assertEqual("input_cost_per_token_above_128k_tokens" in fallback.entry, names_the_row)
+        live: Final = dict(rows)
+        with (
+            patch.object(litellm, "model_cost", live),
+            patch.object(_install, "STATE", _install._Installed()),
+            patch.object(_install, "LAYERS", native.ModelCostLayers()),
+        ):
             target: Final = native.registration_target(rows, key, provider="bedrock")
             self.assertEqual((target.write, target.inherit_from, target.names_the_row), (key, source, names_the_row))
-            inherited: Final = row if target.names_the_row else _without_overridden_price_variants(row, override)
-            self.assertEqual(
-                fallback.entry, {name: value for name, value in inherited.items() if name != "litellm_provider"}
-            )
+            litellm.register_model({key: override}, custom_llm_provider="bedrock")
+            expected: Final = {
+                **({"litellm_provider": expected_provider} if expected_provider is not None else {}),
+                "input_cost_per_token": 0.007,
+                "output_cost_per_token": 0.002,
+                **({"input_cost_per_token_above_128k_tokens": 0.01} if names_the_row else {}),
+                "tiered_pricing": row["tiered_pricing"]
+                if names_the_row
+                else [
+                    {"input_cost_per_token": 0.007, "output_cost_per_token": 0.004, "range": [0, 256_000]},
+                    {"input_cost_per_token": 0.007, "output_cost_per_token": 0.006, "range": [256_000, 1_000_000]},
+                ],
+            }
+            self.assertEqual(live[key], expected)
+            self.assertEqual(_install.LAYERS.registrations()[0][:2], (key, source))
+            self.assertEqual(json.dumps({source: live[source]}), before)
         self.assertEqual(json.dumps(rows), before)
 
     def test_row_name_metadata_is_read_only_and_false_without_inheritance(self) -> None:

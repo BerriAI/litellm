@@ -73,6 +73,7 @@ def _register_entry(
     persist: bool,
     custom_llm_provider: str | None,
     warning_display_name: str | None,
+    add_to_provider_model_sets: bool,
 ) -> bool:
     from litellm import utils
 
@@ -105,6 +106,7 @@ def _register_entry(
         persist=persist,
         inherits_from=target.inherit_from if target.inherit_from != target.write else None,
         generation=generation,
+        add_to_provider_model_sets=add_to_provider_model_sets,
     ):
         return False
     if target.inherit_from is None and (
@@ -128,6 +130,7 @@ def register(
     persist: bool,
     custom_llm_provider: str | None,
     warning_display_name: str | None,
+    add_to_provider_model_sets: bool = True,
 ) -> None:
     for key, value in entries.items():
         with _install.LOCK:
@@ -137,6 +140,7 @@ def register(
                 persist=persist,
                 custom_llm_provider=custom_llm_provider,
                 warning_display_name=warning_display_name,
+                add_to_provider_model_sets=add_to_provider_model_sets,
             ):
                 pass
 

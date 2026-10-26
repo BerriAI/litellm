@@ -446,7 +446,24 @@ def test_completion_cost_orders_candidates_without_extra_huggingface_config_requ
         )
 
         assert len(huggingface.calls) == 1
+        second_cost: Final = completion_cost(
+            completion_response=response,
+            model=f"huggingface/{model}",
+            custom_llm_provider="huggingface",
+        )
+        assert len(huggingface.calls) == 2
+        assert second_cost == 0.0
     assert cost == 0.0
+
+
+def test_consecutive_cost_calls_observe_live_per_second_rates(monkeypatch: pytest.MonkeyPatch) -> None:
+    model: Final = "openai/live-second-pricing"
+    row: Final = {"litellm_provider": "openai", "mode": "chat", "cost_per_second": 0.25}
+    monkeypatch.setitem(litellm.model_cost, model, row)
+
+    assert cost_per_token(model, custom_llm_provider="openai", response_time_ms=2000) == pytest.approx((0.5, 0.0))
+    row["cost_per_second"] = 0.5
+    assert cost_per_token(model, custom_llm_provider="openai", response_time_ms=2000) == pytest.approx((1.0, 0.0))
 
 
 def test_completion_cost_skips_huggingface_config_request_with_custom_pricing(

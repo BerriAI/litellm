@@ -376,7 +376,7 @@ def test_get_model_info_prefers_exact_dated_key_over_stripped(
 
 
 def test_get_model_info_internal_failure_is_not_reported_as_unmapped() -> None:
-    with patch("litellm.utils.get_potential_model_names", side_effect=RuntimeError("malformed metadata")):
+    with patch("litellm._catalog._read._native.resolve_model", side_effect=RuntimeError("malformed metadata")):
         with pytest.raises(Exception, match="This model isn't mapped yet") as exc_info:
             litellm.utils.get_model_info_helper(model="gpt-4o", custom_llm_provider="openai")
     assert not isinstance(exc_info.value, litellm.ModelNotMappedError)
@@ -2709,7 +2709,10 @@ def test_registered_chat_model_lists_under_its_provider_wildcard(
 
 
 def test_priced_router_deployment_id_stays_out_of_wildcard_model_listing():
+    from litellm._catalog import _install
+    from litellm._catalog._load import LoadedCatalog
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.rust_bridge._native import ModelRegistry
 
     deployment_id: Final = "priced-deployment-id-regression"
     router: Final = litellm.Router(
@@ -2733,6 +2736,13 @@ def test_priced_router_deployment_id_stays_out_of_wildcard_model_listing():
 
     assert "gemini/gemini-2.5-flash" in listed
     assert f"gemini/{deployment_id}" not in listed
+    assert deployment_id not in litellm.models_by_provider["gemini"]
+    assert litellm.model_cost[deployment_id]["input_cost_per_token"] == 0.000001
+
+    _install.install(LoadedCatalog(ModelRegistry.bundled()), provenance=_install.Provenance(source="bundled"))
+    replayed_listing: Final = get_known_models_from_wildcard("gemini/*")
+    assert "gemini/gemini-2.5-flash" in replayed_listing
+    assert f"gemini/{deployment_id}" not in replayed_listing
     assert deployment_id not in litellm.models_by_provider["gemini"]
     assert litellm.model_cost[deployment_id]["input_cost_per_token"] == 0.000001
 
@@ -5186,7 +5196,7 @@ def test_install_drops_request_scoped_registrations(monkeypatch):
 
 
 def test_model_cost_walks_survive_a_registration_landing_mid_walk(monkeypatch: pytest.MonkeyPatch) -> None:
-    from litellm.utils import _invalidate_model_cost_lowercase_map, _rebuild_model_cost_lowercase_map
+    from litellm.utils import _invalidate_model_cost_lowercase_map, get_model_cost_key
 
     class _KeyRegisteredMidWalk(str):
         def lower(self) -> str:
@@ -5201,9 +5211,9 @@ def test_model_cost_walks_survive_a_registration_landing_mid_walk(monkeypatch: p
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
     litellm.model_cost[_KeyRegisteredMidWalk("LIT-5853-WALKED-LAST")] = _EntryRegisteredMidWalk(mode="chat")
     try:
-        assert _rebuild_model_cost_lowercase_map()["lit-5853-walked-last"] == "LIT-5853-WALKED-LAST"
+        assert get_model_cost_key("lit-5853-walked-last") == "LIT-5853-WALKED-LAST"
         litellm.add_known_models(model_cost_map=litellm.model_cost)
-        assert "lit-5853-registered-during-the-rebuild" in litellm.model_cost
+        assert "lit-5853-registered-during-the-rebuild" not in litellm.model_cost
         assert "lit-5853-registered-during-add-known-models" in litellm.model_cost
     finally:
         _invalidate_model_cost_lowercase_map()
@@ -5255,7 +5265,7 @@ class _EntryReadDuringARegistration(dict[str, object]):
         return super().__contains__(key)
 
 
-@pytest.mark.parametrize("walk", ["fal_ai", "fireworks_ai", "ollama", "gpt-5", "case-insensitive scan"])
+@pytest.mark.parametrize("walk", ["fal_ai", "fireworks_ai", "ollama", "gpt-5"])
 def test_request_path_cost_map_walks_survive_a_registration_mid_walk(
     monkeypatch: pytest.MonkeyPatch, walk: str
 ) -> None:
@@ -5263,14 +5273,13 @@ def test_request_path_cost_map_walks_survive_a_registration_mid_walk(
     from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
     from litellm.llms.ollama.common_utils import OllamaModelInfo
     from litellm.llms.openai.chat.gpt_5_transformation import _catalogue_declares_default_effort
-    from litellm.utils import _handle_new_key_with_scan, _invalidate_model_cost_lowercase_map
+    from litellm.utils import _invalidate_model_cost_lowercase_map
 
     walks: Final[Mapping[str, Callable[[], object]]] = {
         "fal_ai": lambda: _keyed_rows("lit-5853-model", "standard"),
         "fireworks_ai": FireworksAIConfig._get_fireworks_index,
         "ollama": lambda: OllamaModelInfo._is_static_ollama_model("ollama/lit-5853-model"),
         "gpt-5": _catalogue_declares_default_effort,
-        "case-insensitive scan": lambda: _handle_new_key_with_scan("lit-5853-model"),
     }
     monkeypatch.setattr(
         litellm,

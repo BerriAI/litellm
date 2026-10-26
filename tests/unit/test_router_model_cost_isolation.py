@@ -575,33 +575,48 @@ def test_should_not_pollute_shared_key_with_custom_nonzero_pricing():
     )
 
 
-@pytest.mark.parametrize("flag", ["supports_regex_lookaround", "supports_assistant_prefill", "supports_sampling_params"])
-def test_capability_flag_stays_on_the_deployment_that_set_it(flag: str) -> None:
+@pytest.mark.parametrize(
+    "flag", ["supports_regex_lookaround", "supports_assistant_prefill", "supports_sampling_params", "supports_output_config"]
+)
+@pytest.mark.parametrize("override", [False, True])
+def test_capability_flag_stays_on_the_deployment_that_set_it(
+    monkeypatch: pytest.MonkeyPatch, flag: str, override: bool
+) -> None:
     """A deployment's capability override must not land on the shared
     ``{provider}/{model}`` key, or every sibling deployment of that model would inherit it."""
-    backend_model = "bedrock/us.xai.grok-4.6"
-    deploy_id = "grok-deploy-keep-regex"
+    backend_model: Final = "bedrock/us.xai.grok-4.6"
+    source: Final = litellm.get_model_info(backend_model)["key"]
+    builtin: Final = {**litellm.model_cost[source], flag: not override}
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, source: dict(builtin), backend_model: dict(builtin)})
+    deploy_id: Final = "capability-overridden-deployment"
+    sibling_id: Final = "capability-default-deployment"
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "capability-overridden",
+                "litellm_params": {"model": backend_model},
+                "model_info": {"id": deploy_id, flag: override},
+            },
+            {
+                "model_name": "capability-default",
+                "litellm_params": {"model": backend_model},
+                "model_info": {"id": sibling_id},
+            },
+        ],
+    )
+    assert litellm.model_cost[deploy_id][flag] is override
+    assert litellm.get_model_info(deploy_id).get(flag) is override
+    assert litellm.model_cost[backend_model][flag] is (not override)
+    assert litellm.get_model_info(backend_model).get(flag) is (not override)
+    assert litellm.model_cost[source] == builtin
+    sibling: Final = router.get_deployment_model_info(model_id=sibling_id, model_name=backend_model)
+    assert sibling is not None
+    assert sibling.get(flag) is (not override)
 
-    builtin_flag = litellm.get_model_info(model=backend_model).get(flag)
-    model_keys = {
-        deploy_id: litellm.model_cost.get(deploy_id),
-        backend_model: copy.deepcopy(litellm.model_cost.get(backend_model)),
-    }
-    try:
-        Router(
-            model_list=[
-                {
-                    "model_name": "grok-keep-regex",
-                    "litellm_params": {"model": backend_model},
-                    "model_info": {"id": deploy_id, flag: not builtin_flag},
-                }
-            ],
-        )
-
-        assert litellm.model_cost[deploy_id][flag] is (not builtin_flag)
-        assert litellm.get_model_info(model=backend_model).get(flag) is builtin_flag
-    finally:
-        _restore_model_cost_entries(model_keys)
+    litellm.register_model({backend_model: {flag: override}})
+    assert litellm.get_model_info(backend_model).get(flag) is override
+    litellm.model_cost[backend_model][flag] = not override
+    assert litellm.get_model_info(backend_model).get(flag) is (not override)
 
 
 def test_token_count_settings_stay_on_the_deployment_that_set_them() -> None:

@@ -93,7 +93,7 @@ class ModelInfoResolutionTests(unittest.TestCase):
             model: {"litellm_provider": 1, "mode": "chat"},
             "invalid-model": {"litellm_provider": provider, "mode": "chat"},
         }
-        with patch.object(litellm, "model_cost", rows), patch.object(utils, "_model_cost_lowercase_map", None):
+        with patch.object(litellm, "model_cost", rows):
             result: Final = native.resolve_model(
                 rows, model, provider=explicit, inferred=("invalid-model", provider), info_read=True
             )
@@ -149,7 +149,7 @@ class ModelInfoResolutionTests(unittest.TestCase):
             "probe-model": {"litellm_provider": "bedrock", "mode": "chat", "supports_function_calling": True},
             "bedrock/probe-model": {"litellm_provider": "bedrock", "mode": "chat", "supports_function_calling": False},
         }
-        with patch.object(litellm, "model_cost", rows), patch.object(utils, "_model_cost_lowercase_map", None):
+        with patch.object(litellm, "model_cost", rows):
             result: Final = native.resolve_model(
                 rows, model, provider="bedrock", inferred=("ignored", "openai"), info_read=True
             )
@@ -212,8 +212,7 @@ class ModelInfoResolutionTests(unittest.TestCase):
         }
         with (
             patch.object(litellm, "model_cost", rows),
-            patch.object(litellm, "open_ai_chat_completion_models", [model]),
-            patch.object(utils, "_model_cost_lowercase_map", None),
+            patch.object(litellm, "open_ai_chat_completion_models", {model}),
         ):
             native.invalidate_model_cost_index()
             routed_model, routed_provider, _, _ = litellm.get_llm_provider(model)
@@ -241,8 +240,7 @@ class ModelInfoResolutionTests(unittest.TestCase):
         rows: Final[dict[str, object]] = {"command-r-plus": {"litellm_provider": "openai", "mode": "chat"}}
         with (
             patch.object(litellm, "model_cost", rows),
-            patch.object(litellm, "cohere_chat_models", ["command-r-plus"]),
-            patch.object(utils, "_model_cost_lowercase_map", None),
+            patch.object(litellm, "cohere_chat_models", {"command-r-plus"}),
         ):
             normalized, provider, _, _ = litellm.get_llm_provider(model)
             self.assertEqual((normalized, provider), (model, "openai"))
@@ -259,8 +257,7 @@ class ModelInfoResolutionTests(unittest.TestCase):
         rows: Final[dict[str, object]] = {"j2-light": {"litellm_provider": "ai21", "mode": "chat"}}
         with (
             patch.object(litellm, "model_cost", rows),
-            patch.object(litellm, "ai21_chat_models", ["j2-light"]),
-            patch.object(utils, "_model_cost_lowercase_map", None),
+            patch.object(litellm, "ai21_chat_models", {"j2-light"}),
         ):
             normalized, provider, _, _ = litellm.get_llm_provider("j2-light")
             self.assertEqual(provider, "ai21_chat")

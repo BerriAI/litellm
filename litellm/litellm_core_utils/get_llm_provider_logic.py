@@ -545,7 +545,9 @@ def get_llm_provider(
             custom_llm_provider = match_routing_generalization(model)
 
         if not custom_llm_provider:
-            if litellm.suppress_debug_info is False:
+            from litellm._catalog._read import QUIET
+
+            if litellm.suppress_debug_info is False and not QUIET.get():
                 print()  # noqa: T201
                 print(  # noqa: T201
                     "\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m"

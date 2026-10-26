@@ -762,8 +762,52 @@ def _is_past_deprecation_date(value: Mapping[str, object]) -> bool:
         return False
 
 
+from pydantic import InstanceOf, TypeAdapter
+from itertools import chain
+
+_PROVIDER_MODEL_SET_NAMES: Final = tuple(
+    name for name, values in tuple(globals().items()) if name.endswith("_models") and isinstance(values, set)
+)
+_PROVIDER_MODEL_SET: Final = TypeAdapter(InstanceOf[set[str]])
+_PROVIDER_MODEL_SET_DEFAULTS: Final = tuple(
+    (name, frozenset(_PROVIDER_MODEL_SET.validate_python(globals()[name]))) for name in _PROVIDER_MODEL_SET_NAMES
+)
+
+
+def _provider_membership_names(key: str, name: str) -> frozenset[str]:
+    if name.startswith("vertex_"):
+        return frozenset((key, key.replace("vertex_ai/", "")))
+    if name == "openrouter_models":
+        return frozenset((key, key.split("/", 1)[-1]))
+    return frozenset((key,))
+
+
+def _provider_memberships_for_set(key: str, name: str) -> tuple[tuple[str, str], ...]:
+    models: Final = _PROVIDER_MODEL_SET.validate_python(globals()[name])
+    return tuple((name, member) for member in _provider_membership_names(key, name) if member in models)
+
+
+def provider_model_set_memberships(key: str) -> tuple[tuple[str, str], ...]:
+    return tuple(chain.from_iterable(_provider_memberships_for_set(key, name) for name in _PROVIDER_MODEL_SET_NAMES))
+
+
+def _restore_provider_memberships(key: str, value: Mapping[str, object]) -> bool:
+    from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
+
+    if not isinstance(value, AliasedCostEntry):
+        return False
+    override: Final = next((item for item in value.provider_model_set_overrides if item.key == key), None)
+    if override is None:
+        return False
+    for name, member in override.memberships:
+        _PROVIDER_MODEL_SET.validate_python(globals()[name]).add(member)
+    return True
+
+
 def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
     for key, value in tuple(model_cost_map.items()):
+        if _restore_provider_memberships(key, value):
+            continue
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(key):
             open_ai_chat_completion_models.add(key)
         elif value.get("litellm_provider") == "text-completion-openai":
@@ -1031,6 +1075,18 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             reducto_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
             bedrock_mantle_models.add(key)
+
+
+def _restore_provider_model_set(name: str, defaults: frozenset[str]) -> None:
+    values: Final = _PROVIDER_MODEL_SET.validate_python(globals()[name])
+    values.clear()
+    values.update(defaults)
+
+
+def _rebuild_provider_model_sets() -> None:
+    for name, defaults in _PROVIDER_MODEL_SET_DEFAULTS:
+        _restore_provider_model_set(name, defaults)
+    add_known_models()
 
 
 def add_known_models(model_cost_map: Optional[Dict] = None):

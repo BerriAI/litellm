@@ -332,15 +332,26 @@ def get_model_cost_map_loaded_at() -> "datetime | None":
     return _cost_map_source_info.loaded_at
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderModelSetOverride:
+    key: str
+    memberships: tuple[tuple[str, str], ...]
+
+
 class AliasedCostEntry(dict[str, object]):
-    __slots__ = ("names", "registered_fields")
+    __slots__ = ("names", "provider_model_set_overrides", "registered_fields")
 
     def __init__(
-        self, entry: Mapping[str, object], names: tuple[str, ...], registered_fields: frozenset[str] = frozenset()
+        self,
+        entry: Mapping[str, object],
+        names: tuple[str, ...],
+        registered_fields: frozenset[str] = frozenset(),
+        provider_model_set_overrides: tuple[ProviderModelSetOverride, ...] = (),
     ) -> None:
         super().__init__(entry)
         self.names: tuple[str, ...] = names
         self.registered_fields: frozenset[str] = registered_fields
+        self.provider_model_set_overrides: tuple[ProviderModelSetOverride, ...] = provider_model_set_overrides
 
 
 def _alias_groups(alias_owners: Mapping[str, str]) -> Mapping[str, tuple[str, ...]]:

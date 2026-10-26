@@ -52,6 +52,7 @@ import litellm.litellm_core_utils
 
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
+from litellm._catalog import _read as catalog_read
 from litellm._internal_context import is_internal_call
 from litellm._lazy_imports import (
     _get_modified_max_tokens,
@@ -97,6 +98,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
 from litellm.litellm_core_utils.tool_fields import MalformedField, resolve_deployment_tool_fields
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
+from litellm.rust_bridge._native import InvalidProvider, ModelNotFound, ResolvedModel
 from litellm.rust_bridge.catalog import decision
 from litellm.rust_bridge.configuration import Decision
 
@@ -2949,6 +2951,7 @@ def supports_url_context(model: str, custom_llm_provider: str | None = None) -> 
     )
 
 
+@catalog_read.quiet
 def supports_native_streaming(model: str, custom_llm_provider: str | None) -> bool:
     """
     Check if the given model supports native streaming and return a boolean value.
@@ -2983,6 +2986,7 @@ def supports_native_streaming(model: str, custom_llm_provider: str | None) -> bo
         return False
 
 
+@catalog_read.quiet
 def supports_response_schema(model: str, custom_llm_provider: str | None = None) -> bool:
     """
     Check if the given model + provider supports 'response_schema' as a param.
@@ -3078,6 +3082,7 @@ def _supports_provider_info_factory(model: str, custom_llm_provider: str | None,
     return None
 
 
+@catalog_read.quiet
 def supports_factory(model: str, custom_llm_provider: str | None, key: str) -> bool:
     """
     Check if the given model supports function calling and return a boolean value.
@@ -3106,17 +3111,18 @@ def supports_factory(model: str, custom_llm_provider: str | None, key: str) -> b
 
         model_info: Final = get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
 
-        if model_info.get(key, False) is True:
+        supported: Final = catalog_read.supports(model_info, key)
+        if supported is True:
             return True
-        elif model_info.get(key) is None:  # don't check if 'False' explicitly set
+        elif supported is None:
             # Fallback: when the provider-prefixed entry (e.g.
             # "deepseek/deepseek-chat") exists but is missing a capability
             # field, check the bare model-name entry (e.g. "deepseek-chat")
             # which may carry the complete metadata.  See #20885.
             bare_model_key: Final = get_model_cost_key(model)
             if bare_model_key is not None:
-                bare_entry: Final = litellm.model_cost.get(bare_model_key) or {}
-                if bare_entry.get(key, False) is True:
+                bare_entry: Final = catalog_read.model_info(bare_model_key)
+                if catalog_read.supports(bare_entry, key) is True:
                     return True
 
             supported_by_provider = _supports_provider_info_factory(model, custom_llm_provider, key)
@@ -3737,6 +3743,7 @@ def register_model(
         persist=persist_across_reloads,
         custom_llm_provider=custom_llm_provider,
         warning_display_name=warning_display_name,
+        add_to_provider_model_sets=add_to_provider_model_sets,
     )
     _invalidate_model_cost_lowercase_map()
     for key, value in entries.items():
@@ -5905,13 +5912,6 @@ def _strip_model_name(model: str, custom_llm_provider: str | None) -> str:
         return _strip_dated_snapshot_suffix(model_name=model)
 
 
-# Global case-insensitive lookup map for model_cost (built eagerly at module import)
-_model_cost_lowercase_map: dict[str, str] | None = None
-
-# Monotonic counter bumped on every model_cost mutation. Consumers that
-# memoize derived state (e.g. provider-specific indices) can include this
-# value in their cache key so they invalidate even when key add+remove or
-# in-place value replacement leaves len/id unchanged.
 _model_cost_mutation_generation: int = 0
 
 
@@ -5920,114 +5920,21 @@ def get_model_cost_mutation_generation() -> int:
 
 
 def _invalidate_model_cost_lowercase_map() -> None:
-    """Invalidate the case-insensitive lookup map for model_cost.
-
-    Call this whenever litellm.model_cost is modified to ensure the map is rebuilt.
-    Also clears related LRU caches that depend on model_cost data.
-    """
-    global _model_cost_lowercase_map, _model_cost_mutation_generation
-    _model_cost_lowercase_map = None
+    """Rebuild native lookup and provider indexes after same-length catalog mutations."""
+    global _model_cost_mutation_generation
     _model_cost_mutation_generation += 1
-
-    # Clear LRU caches that depend on model_cost data
-    _cached_get_model_info.cache_clear()
-    cached_get_model_info_helper.cache_clear()
-
-
-def _rebuild_model_cost_lowercase_map() -> dict[str, str]:
-    """Rebuild the case-insensitive lookup map from the current model_cost.
-
-    Returns:
-        The rebuilt map (guaranteed to be not None).
-    """
-    global _model_cost_lowercase_map
-    _model_cost_lowercase_map = {k.lower(): k for k in tuple(litellm.model_cost)}
-    return _model_cost_lowercase_map
-
-
-def _handle_stale_map_entry_rebuild(
-    potential_key_lower: str,
-) -> str | None:
-    """
-    Handle stale _model_cost_lowercase_map entry (key was popped).
-
-    Rebuilds the map and retries the lookup.
-
-    Returns:
-        The matched key if found after rebuild, None otherwise.
-    """
-    matched_key: Final = _rebuild_model_cost_lowercase_map().get(potential_key_lower)
-    if matched_key is not None and matched_key in litellm.model_cost:
-        return matched_key
-    return None
-
-
-def _handle_new_key_with_scan(
-    potential_key_lower: str,
-) -> str | None:
-    """
-    Handle new key added to model_cost without invalidating _model_cost_lowercase_map.
-
-    Scans model_cost for case-insensitive match and rebuilds the map if found.
-
-    Returns:
-        The matched key if found, None otherwise.
-    """
-    global _model_cost_lowercase_map
-    for key in tuple(_builtin_cost_map()):
-        if key.lower() == potential_key_lower:
-            _model_cost_lowercase_map = _rebuild_model_cost_lowercase_map()
-            return key
-    return None
+    catalog_read.invalidate()
 
 
 def get_model_cost_key(potential_key: str) -> str | None:
-    """
-    Get the actual key from model_cost, with case-insensitive fallback.
-
-    WARNING: Only O(1) lookup operations are acceptable. O(n) lookups will cause severe
-    CPU overhead. This function is called frequently during router operations.
-
-    ALLOWED HELPER FUNCTIONS (conditionally called, O(n) operations are acceptable):
-    - _rebuild_model_cost_lowercase_map: Rebuilds the lookup map (only when map is None)
-    - _handle_stale_map_entry_rebuild: Rebuilds map when stale entry detected (rare case)
-
-    If you need to add a new helper function with O(n) operations that is conditionally
-    called and confirmed not to cause performance issues, add it to the allowed_helpers
-    list in: tests/code_coverage_tests/check_get_model_cost_key_performance.py
-    """
-    # Exact match (O(1))
-    if potential_key in litellm.model_cost:
-        return potential_key
-
-    # Case-insensitive lookup via map (O(1)); bound locally because another thread's
-    # registration can invalidate the module-level map at any point
-    cached_lowercase_map: Final = _model_cost_lowercase_map
-    lowercase_map: Final = (
-        cached_lowercase_map if cached_lowercase_map is not None else _rebuild_model_cost_lowercase_map()
-    )
-
-    potential_key_lower: Final = potential_key.lower()
-    matched_key = lowercase_map.get(potential_key_lower)
-
-    # Verify key exists (O(1) - handles model_cost.pop() case)
-    if matched_key is not None and matched_key in litellm.model_cost:
-        return matched_key
-
-    # Rebuild map if stale entry detected (O(n) rebuild, but only when stale entry found)
-    if matched_key is not None:
-        matched_key = _handle_stale_map_entry_rebuild(potential_key_lower)
-        if matched_key is not None:
-            return matched_key
-
+    """Look up one spelling, without opting legacy callers into alias resolution."""
+    resolved: Final = catalog_read.resolve(potential_key)
+    if isinstance(resolved, ResolvedModel) and resolved.key.lower() == potential_key.lower():
+        return resolved.key
     return None
 
 
 _get_model_cost_key = get_model_cost_key
-
-
-def _get_model_info_from_model_cost(key: str) -> dict[str, object]:
-    return litellm.model_cost[key]
 
 
 def _check_provider_match(model_info: dict, custom_llm_provider: str | None) -> bool:
@@ -6096,23 +6003,10 @@ class PotentialModelNamesAndCustomLLMProvider(TypedDict):
     custom_llm_provider: str
 
 
-def _first_registered_match(
-    candidates: Sequence[str], custom_llm_provider: str | None
-) -> tuple[str | None, dict[str, Any] | None]:
-    registered_keys: Final = (key for key in map(get_model_cost_key, candidates) if key is not None)
-    entries: Final = ((key, _get_model_info_from_model_cost(key=key)) for key in registered_keys)
-    matches: Final = (
-        (key, info)
-        for key, info in entries
-        if _check_provider_match(model_info=info, custom_llm_provider=custom_llm_provider)
-    )
-    return next(matches, (None, None))
-
-
 def _get_model_info_from_generalization(
     model: str,
-    potential_model_names: PotentialModelNamesAndCustomLLMProvider,
     custom_llm_provider: str | None,
+    miss: ModelNotFound | None = None,
 ) -> tuple[str, dict] | None:
     """Resolve an unmapped model via the declarative capability generalization rules.
 
@@ -6127,15 +6021,23 @@ def _get_model_info_from_generalization(
     still had a priced exact name to try. O(number of rules); only call after the
     exact lookups have missed.
     """
-    candidates: Final = (
-        potential_model_names["combined_model_name"],
-        model,
-        potential_model_names["region_free_combined_model_name"],
-        potential_model_names["split_model"],
-        potential_model_names["combined_stripped_model_name"],
-        potential_model_names["stripped_model_name"],
-        potential_model_names["provider_prefixed_model_name"],
+    resolution: Final = (
+        miss
+        if miss is not None
+        else catalog_read.resolve(
+            model,
+            custom_llm_provider,
+            inferred=None if custom_llm_provider else catalog_read.infer(model),
+            info_read=True,
+        )
     )
+    if isinstance(resolution, InvalidProvider):
+        raise Exception(  # noqa: TRY002, TRY004  # preserve the public invalid-provider exception type
+            _model_not_mapped_message(model, custom_llm_provider)
+        )
+    if isinstance(resolution, ResolvedModel):
+        return None
+    candidates: Final = resolution.tried
     if any(get_model_cost_key(candidate) is not None for candidate in candidates):
         return None
     for candidate in candidates:
@@ -6151,7 +6053,6 @@ def _get_model_info_from_generalization(
 def unmapped_model_generalization(model: str, custom_llm_provider: str | None) -> Mapping[str, object] | None:
     generalization: Final = _get_model_info_from_generalization(
         model=model,
-        potential_model_names=get_potential_model_names(model, custom_llm_provider),
         custom_llm_provider=custom_llm_provider,
     )
     return generalization[1] if generalization is not None else None
@@ -6264,17 +6165,12 @@ def _get_max_position_embeddings(model_name: str) -> int | None:
         return None
 
 
-@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
 def cached_get_model_info_helper(
     model: str,
     custom_llm_provider: str | None,
     api_base: str | None = None,
 ) -> ModelInfoBase:
-    """
-    _get_model_info_helper wrapped with lru_cache
-
-    Speed Optimization to hit high RPS
-    """
+    """Compatibility entry point; model rows are always read live."""
     return get_model_info_helper(
         model=model,
         custom_llm_provider=custom_llm_provider,
@@ -6283,6 +6179,7 @@ def cached_get_model_info_helper(
 
 
 _cached_get_model_info_helper = cached_get_model_info_helper
+cached_get_model_info_helper.cache_clear = catalog_read.clear_cache
 
 
 def get_provider_info(model: str, custom_llm_provider: str | None) -> ProviderSpecificModelInfo | None:
@@ -6305,18 +6202,6 @@ def get_provider_info(model: str, custom_llm_provider: str | None) -> ProviderSp
     return json_provider.provider_info if json_provider is not None and json_provider.provider_info else None
 
 
-def _is_potential_model_name_in_model_cost(
-    potential_model_names: PotentialModelNamesAndCustomLLMProvider,
-) -> bool:
-    """
-    Check if the potential model name is in the model cost (case-insensitive).
-    """
-    return any(
-        get_model_cost_key(str(potential_model_name)) is not None
-        for potential_model_name in potential_model_names.values()
-    )
-
-
 _ABOVE_THRESHOLD_COST_KEY: Final = ABOVE_THRESHOLD_COST_KEY_PATTERN
 
 
@@ -6327,6 +6212,7 @@ def _model_not_mapped_message(model: str, custom_llm_provider: str | None) -> st
     )
 
 
+@catalog_read.quiet
 def get_model_info_helper(
     model: str,
     custom_llm_provider: str | None = None,
@@ -6339,6 +6225,7 @@ def get_model_info_helper(
     from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 
     try:
+        catalog_read.refresh_provider_sets()
         azure_llms: Final = {**litellm.azure_llms, **litellm.azure_embedding_models}
         if model in azure_llms:
             model = azure_llms[model]
@@ -6352,19 +6239,9 @@ def get_model_info_helper(
             ):
                 model = model + "@latest"
         ##########################
-        potential_model_names: Final = get_potential_model_names(
-            model=model, custom_llm_provider=custom_llm_provider or declared_authenticating_provider(model)
-        )
-
-        verbose_logger.debug("checking potential_model_names in litellm.model_cost: %s", potential_model_names)
-
-        combined_model_name: Final = potential_model_names["combined_model_name"]
-        stripped_model_name: Final = potential_model_names["stripped_model_name"]
-        combined_stripped_model_name: Final = potential_model_names["combined_stripped_model_name"]
-        provider_prefixed_model_name: Final = potential_model_names["provider_prefixed_model_name"]
-        split_model: Final = potential_model_names["split_model"]
-        custom_llm_provider = potential_model_names["custom_llm_provider"]
-        model_cost_custom_llm_provider: Final = custom_llm_provider
+        resolution_provider: Final = custom_llm_provider or declared_authenticating_provider(model)
+        inferred: Final = None if resolution_provider else catalog_read.infer(model)
+        custom_llm_provider = resolution_provider if inferred is None else inferred[1]
         #########################
         provider_config: BaseLLMModelInfo | None = None
         if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
@@ -6414,33 +6291,17 @@ def get_model_info_helper(
                 supports_pdf_input=None,
             )
         else:
-            """
-            Check if: (in order of specificity)
-            1. 'custom_llm_provider/model' in litellm.model_cost. Checks "groq/llama3-8b-8192" if model="llama3-8b-8192" and custom_llm_provider="groq"
-            2. 'model' in litellm.model_cost. Checks "gemini-1.5-pro-002" in  litellm.model_cost if model="gemini-1.5-pro-002" and custom_llm_provider=None
-            3. 'region_free_combined_model_name' in litellm.model_cost. Checks "bedrock_mantle/anthropic.claude-opus-5-5" if
-               model="bedrock_mantle/us-east-1/anthropic.claude-opus-5-5", before 4 reaches the bare Bedrock row. Same as 1 for every other provider.
-            4. 'split_model' in litellm.model_cost. Checks "au.anthropic.claude-opus-4-8" in litellm.model_cost if model="bedrock/au.anthropic.claude-opus-4-8"
-            5. 'combined_stripped_model_name' in litellm.model_cost. Checks if 'gemini/gemini-1.5-flash' in model map, if 'gemini/gemini-1.5-flash-001' given.
-            6. 'stripped_model_name' in litellm.model_cost. Checks if 'ft:gpt-3.5-turbo' in model map, if 'ft:gpt-3.5-turbo:my-org:custom_suffix:id' given.
-            7. 'provider_prefixed_model_name' in litellm.model_cost, for providers whose own model ids repeat the
-               litellm provider name. Checks "perplexity/perplexity/glm-5.2" if model="perplexity/glm-5.2" and
-               custom_llm_provider="perplexity", where 1-6 all read the leading "perplexity/" as the litellm prefix
-               and strip it. Tried last so no model that already resolves through 1-6 can change.
-            """
-
-            lookup_order: Final = (
-                combined_model_name,
-                model,
-                potential_model_names["region_free_combined_model_name"],
-                split_model,
-                combined_stripped_model_name,
-                stripped_model_name,
-                provider_prefixed_model_name,
+            resolution: Final = catalog_read.resolve(model, resolution_provider, inferred=inferred, info_read=True)
+            if isinstance(resolution, InvalidProvider):
+                raise Exception(  # noqa: TRY002  # preserve the public invalid-provider exception type
+                    _model_not_mapped_message(model, custom_llm_provider)
+                )
+            key: str | None = resolution.key if isinstance(resolution, ResolvedModel) else None
+            _model_info: dict[str, Any] | None = (
+                cast("dict[str, Any]", catalog_read.model_info(key))  # cast-ok: legacy public fields accept raw values
+                if key is not None
+                else None
             )
-            lookup: Final = _first_registered_match(lookup_order, model_cost_custom_llm_provider)
-            key: str | None = lookup[0]
-            _model_info: dict[str, Any] | None = lookup[1]
 
             if _model_info is not None and key is not None and _model_info.get("mode", "chat") in _BACKFILL_MODES:
                 fill_missing: Final = match_fill_missing_generalizations(key, _model_info.get("litellm_provider", ""))
@@ -6453,8 +6314,8 @@ def get_model_info_helper(
             if _model_info is None:
                 generalization: Final = _get_model_info_from_generalization(
                     model=model,
-                    potential_model_names=potential_model_names,
                     custom_llm_provider=custom_llm_provider,
+                    miss=resolution if isinstance(resolution, ModelNotFound) else None,
                 )
                 if generalization is not None:
                     key, _model_info = generalization
@@ -6772,7 +6633,10 @@ def get_model_info_helper(
                 vertex_ai_audio_api=_model_info.get("vertex_ai_audio_api", None),
             )
             for cost_key, cost_value in _model_info.items():
-                if cost_key not in returned_model_info and _ABOVE_THRESHOLD_COST_KEY.search(cost_key) is not None:
+                if cost_key not in returned_model_info and (
+                    _ABOVE_THRESHOLD_COST_KEY.search(cost_key) is not None
+                    or cost_key in ("supports_sampling_params", "supports_output_config")
+                ):
                     returned_model_info[cost_key] = cost_value
             return returned_model_info
     except ModelNotMappedError:
@@ -6785,6 +6649,7 @@ def get_model_info_helper(
 _get_model_info_helper = get_model_info_helper
 
 
+@catalog_read.quiet
 def _build_model_info(
     model: str,
     custom_llm_provider: str | None = None,
@@ -6810,15 +6675,6 @@ def _build_model_info(
     # verbose_logger.debug(f"model_info: {_model_info}")
 
     return ModelInfo(**_model_info, supported_openai_params=supported_openai_params)
-
-
-@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
-def _cached_get_model_info(
-    model: str,
-    custom_llm_provider: str | None = None,
-    api_base: str | None = None,
-) -> ModelInfo:
-    return _build_model_info(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)
 
 
 def get_model_info(
@@ -6900,15 +6756,10 @@ def get_model_info(
             "supported_openai_params": ["temperature", "max_tokens", "top_p", "frequency_penalty", "presence_penalty"]
         }
     """
-    # api_key is a per-caller credential, not part of the model identity, so it is
-    # kept out of the cache key; explicit keys are resolved without the cache.
-    if api_key is not None:
-        return _build_model_info(model, custom_llm_provider, api_base, api_key)
-    return _cached_get_model_info(model, custom_llm_provider, api_base)
+    return _build_model_info(model, custom_llm_provider, api_base, api_key)
 
 
-get_model_info.cache_clear = _cached_get_model_info.cache_clear
-get_model_info.cache_info = _cached_get_model_info.cache_info
+get_model_info.cache_clear = catalog_read.clear_cache
 
 
 def json_schema_type(python_type_name: str):

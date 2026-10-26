@@ -369,16 +369,19 @@ def _bills_wall_clock_seconds(model_info: ModelInfoBase) -> bool:
     return mode is None or mode in _WALL_CLOCK_PRICED_MODES
 
 
+def _model_info_for_pricing(model: str, custom_llm_provider: str | None) -> ModelInfoBase | None:
+    try:
+        return cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:  # noqa: BLE001  # the lookup raises plain Exception for an unmapped model
+        return None
+
+
 def _per_second_pricing_cost(
     model: str,
-    custom_llm_provider: str | None,
+    model_info: ModelInfoBase,
     response_time_ms: float | None,
     audio_seconds: float = 0.0,
 ) -> tuple[float, float] | None:
-    try:
-        model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
-    except Exception:  # noqa: BLE001  # the lookup raises plain Exception for an unmapped model
-        return None
     if _has_token_or_tiered_pricing(model_info) or not _bills_wall_clock_seconds(model_info):
         return None
     cost_per_second: Final = model_info.get("cost_per_second")
@@ -710,10 +713,10 @@ def cost_per_token(
             number_of_queries=number_of_queries or 1,
             optional_params=(getattr(response, "_hidden_params", None) if response else None),
         )
-    elif (
+    elif (pricing_model_info := _model_info_for_pricing(model, custom_llm_provider)) is not None and (
         per_second_cost := _per_second_pricing_cost(
             model=model,
-            custom_llm_provider=custom_llm_provider,
+            model_info=pricing_model_info,
             response_time_ms=response_time_ms,
             audio_seconds=audio_transcription_file_duration,
         )
@@ -801,7 +804,11 @@ def cost_per_token(
             service_tier=service_tier,
         )
     else:
-        model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        model_info: Final = (
+            pricing_model_info
+            if pricing_model_info is not None
+            else cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        )
         if _has_token_or_tiered_pricing(model_info):
             return generic_cost_per_token(
                 model=model,

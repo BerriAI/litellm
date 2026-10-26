@@ -108,7 +108,9 @@ def registration_write(
     persist: bool,
     inherits_from: str | None,
     generation: int,
+    add_to_provider_model_sets: bool = True,
 ) -> bool:
+    from litellm._catalog import _read
     from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
 
     with LOCK:
@@ -134,6 +136,7 @@ def registration_write(
             {name: _decoded_value(value) for name, value in entry.items()},
             tuple(keys),
             previous_fields | frozenset(fields),
+            _read.registration_provider_overrides(key, current, add_to_provider_model_sets),
         )
         snapshot: Final = copy.deepcopy(dict(published))
         if generation != STATE.generation:
@@ -161,6 +164,7 @@ def accepted_catalog(catalog: LoadedCatalog) -> LoadedCatalog | None:
 
 
 def _composed_rows(registry: ModelRegistry) -> dict[str, object]:  # mutable-ok: atomic publication payload
+    from litellm._catalog import _read
     from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
 
     composed: Final = LAYERS.compose(registry)
@@ -171,6 +175,7 @@ def _composed_rows(registry: ModelRegistry) -> dict[str, object]:  # mutable-ok:
             {name: _decoded_value(value) for name, value in rows[0][1].items()},
             tuple(row[0] for row in rows),
             rows[0][2],
+            _read.provider_overrides_for_keys(tuple(row[0] for row in rows)),
         )
         for identity, rows in grouped.items()
     }
@@ -179,6 +184,7 @@ def _composed_rows(registry: ModelRegistry) -> dict[str, object]:  # mutable-ok:
 
 def install(catalog: LoadedCatalog, *, provenance: Provenance) -> int:
     import litellm
+    from litellm._catalog import _read
     from litellm.litellm_core_utils import get_model_cost_map as loader
     from litellm.litellm_core_utils.fallback_generalizations import (
         set_fallback_generalizations,  # pyright: ignore[reportUnknownVariableType]  # legacy rule installer accepts the validated registry payload
@@ -191,7 +197,12 @@ def install(catalog: LoadedCatalog, *, provenance: Provenance) -> int:
         record_pending_writes()
         rows: Final = _composed_rows(accepted.registry)
         target: Final = _live_rows()
-        changed: Final = {key: row for key, row in rows.items() if dict[str, object].get(target, key) != row}
+        changed: Final = {
+            key: row
+            for key, row in rows.items()
+            if dict[str, object].get(target, key) != row
+            or _read.provider_overrides(target.get(key)) != _read.provider_overrides(row)
+        }
         removed: Final = [key for key in dict[str, object].keys(target) if key not in rows]
         write_rows(target, changed, removed)
         STATE.rows = copy.deepcopy(_ROWS.validate_python(dict[str, object].copy(target)))
