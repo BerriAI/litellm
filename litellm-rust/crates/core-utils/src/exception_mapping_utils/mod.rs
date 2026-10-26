@@ -51,7 +51,7 @@ mod rules;
 mod status;
 mod vertex_ai;
 
-pub use original::{ExceptionFamily, OriginalException};
+pub use original::{ExceptionFamily, OriginalException, TimeoutPhase};
 pub use public::{MappedFailure, PublicError, UpstreamResponse};
 
 use rules::{Rule, contains_any, first_match};
@@ -67,7 +67,6 @@ const TIMEOUT_MARKERS: &[&str] = &[
 pub struct ExceptionContext {
     pub model: String,
     pub custom_llm_provider: String,
-    pub asynchronous: bool,
     pub vertex_project: Option<String>,
     pub vertex_location: Option<String>,
     pub model_group: Option<String>,
@@ -105,11 +104,12 @@ pub fn exception_type(
             (None, message.clone(), None)
         }
         OriginalException::Timeout {
+            phase,
             timeout_seconds,
             elapsed_seconds,
         } => (
             None,
-            timeout_message(context.asynchronous, *timeout_seconds, *elapsed_seconds),
+            timeout_message(*phase, *timeout_seconds, *elapsed_seconds),
             None,
         ),
     };
@@ -161,21 +161,16 @@ fn family_rules(family: ExceptionFamily) -> &'static [Rule] {
     }
 }
 
-/// The text the Python HTTP handler's timeout carries: the sync and async handlers word it
-/// differently.
-fn timeout_message(
-    asynchronous: bool,
+/// The text the Python HTTP handler's timeout carries: the phase that expired and the limit
+/// httpx enforced for it, both rendered as Python would print them.
+pub fn timeout_message(
+    phase: TimeoutPhase,
     timeout_seconds: Option<f64>,
     elapsed_seconds: Option<f64>,
 ) -> String {
     let timeout = python_float(timeout_seconds);
-    if asynchronous {
-        let elapsed =
-            python_float(elapsed_seconds.map(|seconds| (seconds * 1000.0).round() / 1000.0));
-        format!("Connection timed out. Timeout passed={timeout}, time taken={elapsed} seconds")
-    } else {
-        format!("Connection timed out after {timeout} seconds.")
-    }
+    let elapsed = python_float(elapsed_seconds.map(|seconds| (seconds * 1000.0).round() / 1000.0));
+    format!("{phase} timed out. Timeout passed={timeout}, time taken={elapsed} seconds")
 }
 
 fn python_float(value: Option<f64>) -> String {
@@ -356,6 +351,7 @@ mod tests {
     #[test]
     fn a_handler_timeout_is_a_408_without_a_response() {
         let original = OriginalException::Timeout {
+            phase: TimeoutPhase::Read,
             timeout_seconds: Some(0.5),
             elapsed_seconds: Some(0.5031),
         };
@@ -363,7 +359,7 @@ mod tests {
             mapped("mistral", &original),
             MappedFailure {
                 error: PublicError::Timeout { status: 408 },
-                message: "MistralException - Connection timed out after 0.5 seconds.".into(),
+                message: "MistralException - Read timed out. Timeout passed=0.5, time taken=0.503 seconds".into(),
                 upstream: None,
                 debug_info: DEBUG.into(),
             }
@@ -440,39 +436,44 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::sync(
-        false,
+    #[case::connect(TimeoutPhase::Connect, "Connection timed out.")]
+    #[case::read(TimeoutPhase::Read, "Read timed out.")]
+    #[case::write(TimeoutPhase::Write, "Write timed out.")]
+    #[case::pool(TimeoutPhase::Pool, "Connection pool timed out.")]
+    fn timeout_text_names_the_phase_that_expired(
+        #[case] phase: TimeoutPhase,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(
+            timeout_message(phase, Some(0.5), Some(0.5031)),
+            format!("{expected} Timeout passed=0.5, time taken=0.503 seconds")
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::rounds_the_elapsed_time(
         Some(0.5),
         Some(0.5031),
-        "Connection timed out after 0.5 seconds."
-    )]
-    #[case::async_rounds_the_elapsed_time(
-        true,
-        Some(0.5),
-        Some(0.5031),
-        "Connection timed out. Timeout passed=0.5, time taken=0.503 seconds"
+        "Timeout passed=0.5, time taken=0.503 seconds"
     )]
     #[case::whole_seconds_keep_a_decimal(
-        true,
         Some(600.0),
         Some(2.0),
-        "Connection timed out. Timeout passed=600.0, time taken=2.0 seconds"
+        "Timeout passed=600.0, time taken=2.0 seconds"
     )]
     #[case::unknown_values_render_as_none(
-        true,
         None,
         None,
-        "Connection timed out. Timeout passed=None, time taken=None seconds"
+        "Timeout passed=None, time taken=None seconds"
     )]
-    fn timeout_text_follows_the_delivery_mode(
-        #[case] asynchronous: bool,
+    fn timeout_text_renders_durations_as_python_floats(
         #[case] timeout_seconds: Option<f64>,
         #[case] elapsed_seconds: Option<f64>,
         #[case] expected: &str,
     ) {
         assert_eq!(
-            timeout_message(asynchronous, timeout_seconds, elapsed_seconds),
-            expected
+            timeout_message(TimeoutPhase::Read, timeout_seconds, elapsed_seconds),
+            format!("Read timed out. {expected}")
         );
     }
 
