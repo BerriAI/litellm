@@ -3316,6 +3316,34 @@
     "default_model_placeholder": "reka/reka-flash"
   },
   {
+    "provider": "RAPIDROUTER",
+    "provider_display_name": "Rapid Router",
+    "litellm_provider": "rapidrouter",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://rapidrouter.ai/api/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "rapidrouter/anthropic/claude-sonnet-5"
+  },
+  {
     "provider": "Sail",
     "provider_display_name": "Sail",
     "litellm_provider": "sail",
