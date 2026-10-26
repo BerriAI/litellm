@@ -213,12 +213,12 @@ class DatabricksAppOAuthTokenCache(InMemoryCache):
 
     def __init__(self) -> None:
         super().__init__(default_ttl=_DEFAULT_TTL_SECONDS)
-        self._locks: dict[str, asyncio.Lock] = {}
+        self._locks: dict[object, asyncio.Lock] = {}
 
     def _get_lock(self, cache_key: str) -> asyncio.Lock:
         return self._locks.setdefault(cache_key, asyncio.Lock())
 
-    def _remove_key(self, key: str) -> None:
+    def _remove_key(self, key: object) -> None:
         # Drop the per-key lock alongside the cached token so ``_locks`` stays
         # bounded by the live key set rather than growing for every key ever seen.
         super()._remove_key(key)
