@@ -2,6 +2,7 @@
 This file contains common utils for anthropic calls.
 """
 
+import base64
 import copy
 import json
 import re
@@ -1904,6 +1905,77 @@ def normalize_anthropic_tool_use_id(raw_id: str) -> str:
     return sanitized or "tool_use_id"
 
 
+def encode_thought_signature_for_anthropic_tool_id(signature: str) -> str:
+    """
+    Encode an opaque Gemini thought signature so it may be embedded in an
+    Anthropic ``tool_use.id``.
+
+    Anthropic requires ``^[a-zA-Z0-9_-]+$``. Raw Base64 signatures contain
+    ``+``, ``/``, and ``=``, which clients and ``normalize_anthropic_tool_use_id``
+    would strip or corrupt. URL-safe Base64 of the signature *bytes* (no
+    padding) stays inside that charset and is reversible.
+    """
+    return base64.urlsafe_b64encode(signature.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def decode_thought_signature_from_anthropic_tool_id(encoded: str) -> str:
+    """Inverse of ``encode_thought_signature_for_anthropic_tool_id``."""
+    pad: Final[int] = (-len(encoded)) % 4
+    return base64.urlsafe_b64decode(encoded + ("=" * pad)).decode("utf-8")
+
+
+def format_anthropic_tool_use_id_with_signature(raw_id: str, thought_signature: str | None) -> str:
+    """
+    Build an Anthropic-safe ``tool_use.id`` that still carries a Gemini
+    ``thought_signature`` for clients that drop non-standard fields.
+
+    Spec-compliant Anthropic clients (Claude Code, typed SDKs) echo ``id`` but
+    discard ``provider_specific_fields``. Embedding a URL-safe encoding of the
+    signature after ``__thought__`` lets those clients round-trip the real
+    signature the same way OpenAI-compatible clients do via ``tool_calls[].id``.
+    """
+    base_id: Final[str] = normalize_anthropic_tool_use_id(raw_id)
+    if not thought_signature:
+        return base_id
+    return f"{base_id}{THOUGHT_SIGNATURE_SEPARATOR}{encode_thought_signature_for_anthropic_tool_id(thought_signature)}"
+
+
+def split_anthropic_tool_use_id_signature(tool_use_id: str) -> tuple[str, str | None]:
+    """
+    Split an Anthropic ``tool_use.id`` / ``tool_result.tool_use_id`` into the
+    sanitized base id and, when present, the decoded Gemini thought signature.
+    """
+    if THOUGHT_SIGNATURE_SEPARATOR not in tool_use_id:
+        return tool_use_id, None
+    base_id, encoded = tool_use_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
+    if not encoded:
+        return base_id, None
+    try:
+        return base_id, decode_thought_signature_from_anthropic_tool_id(encoded)
+    except (ValueError, UnicodeDecodeError):
+        # Legacy / non-encoded suffixes: pass through so callers can still try.
+        return base_id, encoded
+
+
+def _preserve_thought_suffix_on_sanitize(raw_id: str) -> str:
+    """
+    Sanitize a ``tool_use`` / ``tool_result`` id while keeping a valid
+    ``__thought__<urlsafe>`` Gemini signature suffix intact.
+
+    ``normalize_anthropic_tool_use_id`` intentionally strips thought suffixes
+    (for places that need the base id only). The ``/v1/messages`` request path
+    must preserve them so ``translate_anthropic_messages_to_openai`` can still
+    recover the signature after ``sanitize_tool_use_ids_in_anthropic_messages``.
+    """
+    if THOUGHT_SIGNATURE_SEPARATOR not in raw_id:
+        return normalize_anthropic_tool_use_id(raw_id)
+    base_id, sig_part = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
+    sanitized_base: Final[str] = normalize_anthropic_tool_use_id(base_id)
+    if sig_part and all(c.isalnum() or c in "-_" for c in sig_part):
+        return f"{sanitized_base}{THOUGHT_SIGNATURE_SEPARATOR}{sig_part}"
+    return sanitized_base
+
+
 def _sanitize_tool_use_id_content_block(block: object) -> object:
     if not isinstance(block, dict):
         return block
@@ -1911,13 +1983,13 @@ def _sanitize_tool_use_id_content_block(block: object) -> object:
     if block_type in ("tool_use", "server_tool_use"):
         raw_id = block.get("id")
         if isinstance(raw_id, str):
-            normalized = normalize_anthropic_tool_use_id(raw_id)
+            normalized = _preserve_thought_suffix_on_sanitize(raw_id)
             if normalized != raw_id:
                 return {**block, "id": normalized}
     elif block_type == "tool_result":
         raw_id = block.get("tool_use_id")
         if isinstance(raw_id, str):
-            normalized = normalize_anthropic_tool_use_id(raw_id)
+            normalized = _preserve_thought_suffix_on_sanitize(raw_id)
             if normalized != raw_id:
                 return {**block, "tool_use_id": normalized}
     return block
@@ -1933,6 +2005,10 @@ def sanitize_tool_use_ids_in_anthropic_messages(messages: Sequence[object]) -> l
     conversation history containing ids like ``functions.Bash:0`` with ``.``
     and ``:`` — valid on the upstream provider but rejected by Anthropic when
     the session is switched to a native Anthropic deployment.
+
+    Valid Gemini ``__thought__<urlsafe>`` suffixes embedded by
+    ``format_anthropic_tool_use_id_with_signature`` are preserved so the
+    ``/v1/messages`` adapter can still recover the signature on later turns.
     """
     return [_sanitize_tool_use_ids_in_message(message) for message in messages]
 
