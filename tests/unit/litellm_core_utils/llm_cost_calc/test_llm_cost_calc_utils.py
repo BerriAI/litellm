@@ -1,4 +1,3 @@
-import json
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Final, cast
@@ -10,21 +9,10 @@ from litellm._internal_context import pinned_billing_time
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     BilledTokenRates,
     CostCalculatorUtils,
-    PromptTokensDetailsResult,
-    TokenRates,
-    _calculate_input_cost,
-    _get_token_base_cost,
-    _is_off_peak,
-    _is_within_off_peak_window,
-    apply_off_peak_pricing,
-    apply_provider_cache_read_default,
-    calculate_cache_writing_cost,
+    calculate_prompt_caching_savings,
     generic_cost_per_token,
     get_billed_token_rates,
     get_token_type_cost_breakdown,
-)
-from litellm.llms.gemini.image_generation.cost_calculator import (
-    cost_calculator as gemini_image_generation_cost_calculator,
 )
 from litellm.llms.vertex_ai.image_generation.cost_calculator import (
     cost_calculator as vertex_image_generation_cost_calculator,
@@ -40,6 +28,70 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
+
+
+def _projected_rates(
+    model_info: ModelInfo,
+    usage: Usage,
+    service_tier: str | None = None,
+    current_time: datetime | None = None,
+) -> BilledTokenRates:
+    rates: Final = get_billed_token_rates(
+        model="projection-fixture",
+        custom_llm_provider="custom",
+        usage=usage,
+        model_info=model_info,
+        service_tier=service_tier,
+        current_time=current_time,
+    )
+    assert rates is not None
+    return rates
+
+
+def _off_peak_cost(off_peak: Mapping[str, object], current_time: datetime) -> float:
+    prompt, _ = generic_cost_per_token(
+        "off-peak-fixture",
+        Usage(prompt_tokens=1),
+        "custom",
+        model_info={
+            "input_cost_per_token": 10.0,
+            "output_cost_per_token": 0.0,
+            "off_peak_pricing": {**off_peak, "input_cost_per_token": 1.0},
+        },
+        current_time=current_time,
+    )
+    return prompt
+
+
+def _window_cost(window: str | list[str], current_time: datetime) -> float:
+    return _off_peak_cost({"hours_utc": window}, current_time)
+
+
+def _cache_write_cost(
+    cache_creation_tokens: int,
+    cache_creation_token_details: CacheCreationTokenDetails | None,
+    cache_creation_cost: float | None,
+    cache_creation_cost_by_ttl: Mapping[str, float | None],
+) -> float:
+    prompt, _ = generic_cost_per_token(
+        "cache-write-fixture",
+        Usage(
+            prompt_tokens=cache_creation_tokens,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cache_creation_tokens=cache_creation_tokens,
+                cache_creation_token_details=cache_creation_token_details,
+            ),
+        ),
+        "custom",
+        model_info={
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+            "cache_creation_input_token_cost": cache_creation_cost,
+            "cache_creation_input_token_cost_above_1hr": cache_creation_cost_by_ttl.get("1hr"),
+            "cache_creation_input_token_cost_above_12hr": cache_creation_cost_by_ttl.get("12hr"),
+        },
+    )
+    return prompt
 
 
 @pytest.fixture
@@ -61,12 +113,16 @@ def test_missing_cache_read_rate_resolves_to_input_rate(prompt_tokens, read_rate
         "cache_read_input_token_cost": read_rate,
     }
     usage = Usage(prompt_tokens=prompt_tokens, prompt_tokens_details={"cached_tokens": 100})
-    billed = _get_token_base_cost(info, usage, service_tier=service_tier)
+    billed = _projected_rates(info, usage, service_tier=service_tier)
     prompt_cost, _ = generic_cost_per_token(
         "policy-fixture", usage, "openai", service_tier=service_tier, model_info=info
     )
-    assert billed.cache_read_rate == pytest.approx(read_rate if read_rate is not None else billed.input_rate)
-    assert prompt_cost == pytest.approx((prompt_tokens - 100) * billed.input_rate + 100 * billed.cache_read_rate)
+    assert billed.cache_read_input_token_cost == pytest.approx(
+        read_rate if read_rate is not None else billed.input_cost_per_token
+    )
+    assert prompt_cost == pytest.approx(
+        (prompt_tokens - 100) * billed.input_cost_per_token + 100 * billed.cache_read_input_token_cost
+    )
 
 
 def test_generic_cost_per_token_bills_cache_reads_at_input_rate_when_no_cache_read_rate() -> None:
@@ -124,17 +180,12 @@ def test_generic_cost_per_token_bills_a_character_counted_prompt_under_one_unit(
     assert (prompt_cost, completion_cost) == (pytest.approx(expected_prompt_cost), 0.0)
 
 
-def test_apply_provider_cache_read_default_only_derives_a_rate_for_fireworks() -> None:
-    openai_info: ModelInfo = {"input_cost_per_token": 2e-6}
-    fireworks_info: ModelInfo = {"input_cost_per_token": 2e-6}
-
-    assert apply_provider_cache_read_default(openai_info, "openai") is openai_info
-    assert apply_provider_cache_read_default(openai_info, None) is openai_info
-
-    processed_fireworks_info = apply_provider_cache_read_default(fireworks_info, "fireworks_ai")
-
-    assert processed_fireworks_info is not fireworks_info
-    assert processed_fireworks_info["cache_read_input_token_cost"] == pytest.approx(2e-6 * 0.5)
+@pytest.mark.parametrize(("provider", "expected"), (("openai", 0.0002), ("fireworks_ai", 0.0001)))
+def test_only_fireworks_receives_a_default_cache_read_discount(provider: str, expected: float) -> None:
+    row: Final = {"input_cost_per_token": 2e-6}
+    usage: Final = Usage(prompt_tokens=100, completion_tokens=0, prompt_tokens_details={"cached_tokens": 100})
+    assert generic_cost_per_token("cache-default", usage, provider, model_info=row) == pytest.approx((expected, 0))
+    assert row == {"input_cost_per_token": 2e-6}
 
 
 def test_generic_cost_per_token_prefers_audio_per_second_rate() -> None:
@@ -247,8 +298,8 @@ def test_missing_cache_read_uses_off_peak_input_rate():
         "off_peak_pricing": {"hours_utc": "00:00-23:59", "input_cost_per_token": 5e-6},
     }
     when = datetime(2026, 9, 7, 12, tzinfo=timezone.utc)
-    billed = _get_token_base_cost(info, Usage(prompt_tokens=100), current_time=when)
-    assert billed.input_rate == billed.cache_read_rate == 5e-6
+    billed = _projected_rates(info, Usage(prompt_tokens=100), current_time=when)
+    assert billed.input_cost_per_token == billed.cache_read_input_token_cost == 5e-6
 
 
 def test_reasoning_tokens_no_price_set(_local_model_cost_map):
@@ -561,7 +612,7 @@ def test_generic_cost_per_token_above_200k_tokens(_local_model_cost_map):
     )
 
 
-def test_get_token_base_cost_picks_highest_crossed_tier():
+def test_billed_token_rates_picks_highest_crossed_tier():
     """Regression test for #30345.
 
     With graduated tiers at 90k and 128k whose keys have different digit lengths, a request
@@ -576,33 +627,33 @@ def test_get_token_base_cost_picks_highest_crossed_tier():
     }
     usage = Usage(prompt_tokens=150_000, completion_tokens=10, total_tokens=150_010)
 
-    prompt_base_cost = _get_token_base_cost(model_info, usage).input_rate
+    prompt_base_cost = _projected_rates(model_info, usage).input_cost_per_token
 
     assert prompt_base_cost == 9e-6
 
 
-def test_is_within_off_peak_window_same_day():
+def test_window_cost_same_day():
     from datetime import datetime, timezone
 
     window = "09:00-17:00"
-    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)) is True
-    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 8, 59, tzinfo=timezone.utc)) is False
-    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)) is True
-    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 17, 0, tzinfo=timezone.utc)) is False
+    assert _window_cost(window, datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)) == 1.0
+    assert _window_cost(window, datetime(2026, 1, 1, 8, 59, tzinfo=timezone.utc)) == 10.0
+    assert _window_cost(window, datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)) == 1.0
+    assert _window_cost(window, datetime(2026, 1, 1, 17, 0, tzinfo=timezone.utc)) == 10.0
 
 
-def test_is_within_off_peak_window_wraps_midnight():
+def test_window_cost_wraps_midnight():
     from datetime import datetime, timezone
 
     window = "16:30-00:30"
-    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc)) is True
-    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 0, 15, tzinfo=timezone.utc)) is True
-    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 16, 30, tzinfo=timezone.utc)) is True
-    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 0, 30, tzinfo=timezone.utc)) is False
-    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)) is False
+    assert _window_cost(window, datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc)) == 1.0
+    assert _window_cost(window, datetime(2026, 1, 1, 0, 15, tzinfo=timezone.utc)) == 1.0
+    assert _window_cost(window, datetime(2026, 1, 1, 16, 30, tzinfo=timezone.utc)) == 1.0
+    assert _window_cost(window, datetime(2026, 1, 1, 0, 30, tzinfo=timezone.utc)) == 10.0
+    assert _window_cost(window, datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)) == 10.0
 
 
-def test_is_within_off_peak_window_equal_start_and_end_covers_whole_day():
+def test_window_cost_equal_start_and_end_covers_whole_day():
     """An equal start and end is the natural way to spell off-peak all day. It used to take the
     non-wrap branch, where start <= now < end can never hold, so it matched nothing and billed at
     standard rates around the clock without raising or logging anything."""
@@ -610,47 +661,45 @@ def test_is_within_off_peak_window_equal_start_and_end_covers_whole_day():
 
     for window in ("00:00-00:00", "10:00-10:00"):
         for hour in range(24):
-            assert _is_within_off_peak_window(window, datetime(2026, 1, 1, hour, 0, tzinfo=timezone.utc)) is True, (
+            assert _window_cost(window, datetime(2026, 1, 1, hour, 0, tzinfo=timezone.utc)) == 1.0, (
                 f"{window} should cover {hour:02d}:00"
             )
 
 
-def test_is_within_off_peak_window_multiple_windows():
+def test_window_cost_multiple_windows():
     from datetime import datetime, timezone
 
     # Providers like DeepSeek V4 have more than one daily peak/off-peak window.
     windows = ["01:00-05:00", "13:00-16:00"]
-    assert _is_within_off_peak_window(windows, datetime(2026, 1, 1, 3, 0, tzinfo=timezone.utc)) is True
-    assert _is_within_off_peak_window(windows, datetime(2026, 1, 1, 14, 30, tzinfo=timezone.utc)) is True
-    assert _is_within_off_peak_window(windows, datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)) is False
-    # a malformed entry in the list is ignored, valid entries still match
-    assert _is_within_off_peak_window(["bad", "13:00-16:00"], datetime(2026, 1, 1, 14, 0, tzinfo=timezone.utc)) is True
-    assert _is_within_off_peak_window([], datetime(2026, 1, 1, 14, 0, tzinfo=timezone.utc)) is False
+    assert _window_cost(windows, datetime(2026, 1, 1, 3, 0, tzinfo=timezone.utc)) == 1.0
+    assert _window_cost(windows, datetime(2026, 1, 1, 14, 30, tzinfo=timezone.utc)) == 1.0
+    assert _window_cost(windows, datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)) == 10.0
+    with pytest.raises(litellm.ModelNotMappedError, match="off_peak_pricing"):
+        _window_cost(["bad", "13:00-16:00"], datetime(2026, 1, 1, 14, 0, tzinfo=timezone.utc))
+    with pytest.raises(litellm.ModelNotMappedError, match="off_peak_pricing"):
+        _window_cost([], datetime(2026, 1, 1, 14, 0, tzinfo=timezone.utc))
 
 
-def test_is_within_off_peak_window_normalizes_timezone_aware_input():
+def test_window_cost_normalizes_timezone_aware_input():
     from datetime import datetime, timedelta, timezone
 
     # A caller may pass a non-UTC aware datetime; the window is UTC and must be
     # evaluated in UTC, not against the caller's wall-clock. 09:00 at UTC+8 is
     # 01:00 UTC, inside the 01:00-05:00 window.
     tz_plus_8 = timezone(timedelta(hours=8))
-    assert _is_within_off_peak_window("01:00-05:00", datetime(2026, 1, 1, 9, 0, tzinfo=tz_plus_8)) is True
-    assert _is_within_off_peak_window("01:00-05:00", datetime(2026, 1, 1, 12, 0, tzinfo=tz_plus_8)) is True
+    assert _window_cost("01:00-05:00", datetime(2026, 1, 1, 9, 0, tzinfo=tz_plus_8)) == 1.0
+    assert _window_cost("01:00-05:00", datetime(2026, 1, 1, 12, 0, tzinfo=tz_plus_8)) == 1.0
     # 06:00 at UTC+8 is 22:00 UTC the previous day, outside the window
-    assert _is_within_off_peak_window("01:00-05:00", datetime(2026, 1, 1, 6, 0, tzinfo=tz_plus_8)) is False
+    assert _window_cost("01:00-05:00", datetime(2026, 1, 1, 6, 0, tzinfo=tz_plus_8)) == 10.0
 
 
-def test_is_within_off_peak_window_malformed_returns_false():
-    from datetime import datetime, timezone
-
-    now = datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc)
-    assert _is_within_off_peak_window("not-a-window", now) is False
-    assert _is_within_off_peak_window("16:30", now) is False
-    assert _is_within_off_peak_window("25:00-26:00", now) is False
+@pytest.mark.parametrize("window", ("not-a-window", "16:30", "25:00-26:00"))
+def test_malformed_window_is_unknown_pricing(window: str) -> None:
+    with pytest.raises(litellm.ModelNotMappedError, match="off_peak_pricing"):
+        _window_cost(window, datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc))
 
 
-def test_is_off_peak_weekday_qualified_windows_deepseek_schedule():
+def test_off_peak_cost_weekday_qualified_windows_deepseek_schedule():
     """DeepSeek since 2026-08-23: peak is 01:00-04:00 and 06:00-10:00 UTC on weekdays only, with
     weekends off-peak around the clock. The weekday axis is not a filter on one window set; on
     two days of seven the off-peak window becomes the whole day, so the schedule needs two
@@ -678,12 +727,12 @@ def test_is_off_peak_weekday_qualified_windows_deepseek_schedule():
         datetime(2026, 8, 24, 0, 30, tzinfo=timezone.utc),
     ]
     for when in peak_instants:
-        assert _is_off_peak(deepseek, when) is False, f"{when.isoformat()} should bill peak"
+        assert _off_peak_cost(deepseek, when) == 10.0, f"{when.isoformat()} should bill peak"
     for when in off_peak_instants:
-        assert _is_off_peak(deepseek, when) is True, f"{when.isoformat()} should bill off-peak"
+        assert _off_peak_cost(deepseek, when) == 1.0, f"{when.isoformat()} should bill off-peak"
 
 
-def test_is_off_peak_weekday_timezone_reads_vendor_calendar():
+def test_off_peak_cost_weekday_timezone_reads_vendor_calendar():
     """The UTC and Asia/Shanghai calendars only disagree about the date over 16:00-24:00 UTC, so
     a window in that stretch is the one place a vendor-local weekday differs from a UTC one:
     2026-08-28T16:30Z is Friday in UTC but already Saturday in Beijing."""
@@ -693,65 +742,69 @@ def test_is_off_peak_weekday_timezone_reads_vendor_calendar():
         "weekday_timezone": "Asia/Shanghai",
         "windows": [{"hours_utc": "16:00-17:00", "weekdays": [6]}],
     }
-    assert _is_off_peak(shanghai_saturday, datetime(2026, 8, 28, 16, 30, tzinfo=timezone.utc)) is True
-    assert _is_off_peak(shanghai_saturday, datetime(2026, 8, 29, 16, 30, tzinfo=timezone.utc)) is False
+    assert _off_peak_cost(shanghai_saturday, datetime(2026, 8, 28, 16, 30, tzinfo=timezone.utc)) == 1.0
+    assert _off_peak_cost(shanghai_saturday, datetime(2026, 8, 29, 16, 30, tzinfo=timezone.utc)) == 10.0
 
 
-def test_is_off_peak_weekdays_default_utc_calendar_and_accept_names():
+def test_off_peak_cost_weekdays_default_utc_calendar_and_accept_names():
     from datetime import datetime, timezone
 
     named_weekend = {"windows": [{"hours_utc": "00:00-00:00", "weekdays": ["Sat", "sunday"]}]}
-    assert _is_off_peak(named_weekend, datetime(2026, 8, 29, 12, 0, tzinfo=timezone.utc)) is True
-    assert _is_off_peak(named_weekend, datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)) is False
+    assert _off_peak_cost(named_weekend, datetime(2026, 8, 29, 12, 0, tzinfo=timezone.utc)) == 1.0
+    assert _off_peak_cost(named_weekend, datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)) == 10.0
 
     utc_friday = {"windows": [{"hours_utc": "16:00-17:00", "weekdays": [5]}]}
-    assert _is_off_peak(utc_friday, datetime(2026, 8, 28, 16, 30, tzinfo=timezone.utc)) is True
-    assert _is_off_peak(utc_friday, datetime(2026, 8, 29, 16, 30, tzinfo=timezone.utc)) is False
+    assert _off_peak_cost(utc_friday, datetime(2026, 8, 28, 16, 30, tzinfo=timezone.utc)) == 1.0
+    assert _off_peak_cost(utc_friday, datetime(2026, 8, 29, 16, 30, tzinfo=timezone.utc)) == 10.0
 
 
-def test_is_off_peak_naive_current_time_read_as_utc():
+def test_off_peak_cost_naive_current_time_read_as_utc():
     from datetime import datetime
 
     block = {"windows": [{"hours_utc": "16:00-17:00", "weekdays": [5]}]}
-    assert _is_off_peak(block, datetime(2026, 8, 28, 16, 30)) is True
-    assert _is_off_peak(block, datetime(2026, 8, 29, 16, 30)) is False
+    assert _off_peak_cost(block, datetime(2026, 8, 28, 16, 30)) == 1.0
+    assert _off_peak_cost(block, datetime(2026, 8, 29, 16, 30)) == 10.0
 
 
-def test_is_off_peak_invalid_weekday_timezone_falls_back_to_utc():
+def test_off_peak_cost_invalid_weekday_timezone_falls_back_to_utc():
     from datetime import datetime, timezone
 
     block = {"weekday_timezone": "Not/AZone", "windows": [{"hours_utc": "16:00-17:00", "weekdays": [5]}]}
-    assert _is_off_peak(block, datetime(2026, 8, 28, 16, 30, tzinfo=timezone.utc)) is True
-    assert _is_off_peak(block, datetime(2026, 8, 29, 16, 30, tzinfo=timezone.utc)) is False
+    assert _off_peak_cost(block, datetime(2026, 8, 28, 16, 30, tzinfo=timezone.utc)) == 1.0
+    assert _off_peak_cost(block, datetime(2026, 8, 29, 16, 30, tzinfo=timezone.utc)) == 10.0
 
 
-def test_is_off_peak_ignores_malformed_weekday_rules():
-    from datetime import datetime, timezone
+@pytest.mark.parametrize(
+    "block",
+    (
+        {"windows": [{"hours_utc": "00:00-00:00", "weekdays": []}]},
+        {"windows": [{"hours_utc": "00:00-00:00", "weekdays": [0, 8, "noday", True]}]},
+        {"windows": [{"weekdays": [6]}]},
+        {"windows": [{"hours_utc": 1630}]},
+        {"windows": ["00:00-00:00"]},
+        {"windows": "00:00-00:00"},
+        {"hours_utc": 1630},
+        {},
+    ),
+)
+def test_malformed_weekday_rules_are_unknown_pricing(block: Mapping[str, object]) -> None:
+    with pytest.raises(litellm.ModelNotMappedError, match="off_peak_pricing"):
+        _off_peak_cost(block, datetime(2026, 8, 29, 12, 0, tzinfo=timezone.utc))
 
-    when = datetime(2026, 8, 29, 12, 0, tzinfo=timezone.utc)
-    assert _is_off_peak({"windows": [{"hours_utc": "00:00-00:00", "weekdays": []}]}, when) is False
-    assert _is_off_peak({"windows": [{"hours_utc": "00:00-00:00", "weekdays": [0, 8, "noday", True]}]}, when) is False
-    assert _is_off_peak({"windows": [{"weekdays": [6]}]}, when) is False
-    assert _is_off_peak({"windows": [{"hours_utc": 1630}]}, when) is False
-    assert _is_off_peak({"windows": ["00:00-00:00"]}, when) is False
-    assert _is_off_peak({"windows": "00:00-00:00"}, when) is False
-    assert _is_off_peak({"hours_utc": 1630}, when) is False
-    assert _is_off_peak({}, when) is False
 
-
-def test_is_off_peak_flat_hours_and_windows_are_a_union():
+def test_off_peak_cost_flat_hours_and_windows_are_a_union():
     from datetime import datetime, timezone
 
     block = {
         "hours_utc": "04:00-06:00",
         "windows": [{"hours_utc": "00:00-00:00", "weekdays": [7]}],
     }
-    assert _is_off_peak(block, datetime(2026, 8, 28, 5, 0, tzinfo=timezone.utc)) is True
-    assert _is_off_peak(block, datetime(2026, 8, 30, 20, 0, tzinfo=timezone.utc)) is True
-    assert _is_off_peak(block, datetime(2026, 8, 28, 20, 0, tzinfo=timezone.utc)) is False
+    assert _off_peak_cost(block, datetime(2026, 8, 28, 5, 0, tzinfo=timezone.utc)) == 1.0
+    assert _off_peak_cost(block, datetime(2026, 8, 30, 20, 0, tzinfo=timezone.utc)) == 1.0
+    assert _off_peak_cost(block, datetime(2026, 8, 28, 20, 0, tzinfo=timezone.utc)) == 10.0
 
 
-def test_get_token_base_cost_weekend_only_off_peak_rate():
+def test_billed_token_rates_weekend_only_off_peak_rate():
     from datetime import datetime, timezone
     from typing import cast
 
@@ -774,18 +827,18 @@ def test_get_token_base_cost_weekend_only_off_peak_rate():
     )
     usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
 
-    saturday_peak_hours = _get_token_base_cost(
+    saturday_peak_hours = _projected_rates(
         model_info, usage, current_time=datetime(2026, 8, 29, 2, 0, tzinfo=timezone.utc)
     )
-    assert (saturday_peak_hours.input_rate, saturday_peak_hours.output_rate) == (5e-7, 1e-6)
+    assert (saturday_peak_hours.input_cost_per_token, saturday_peak_hours.output_cost_per_token) == (5e-7, 1e-6)
 
-    monday_same_hours = _get_token_base_cost(
+    monday_same_hours = _projected_rates(
         model_info, usage, current_time=datetime(2026, 8, 24, 2, 0, tzinfo=timezone.utc)
     )
-    assert (monday_same_hours.input_rate, monday_same_hours.output_rate) == (1e-6, 2e-6)
+    assert (monday_same_hours.input_cost_per_token, monday_same_hours.output_cost_per_token) == (1e-6, 2e-6)
 
 
-def test_get_token_base_cost_applies_off_peak_pricing():
+def test_billed_token_rates_applies_off_peak_pricing():
     from datetime import datetime, timezone
     from typing import cast
 
@@ -807,22 +860,18 @@ def test_get_token_base_cost_applies_off_peak_pricing():
     )
     usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
 
-    off_peak = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc))
-    assert off_peak.input_rate == 5e-7
-    assert off_peak.output_rate == 1e-6
-    assert off_peak.cache_read_rate == 5e-8
+    off_peak = _projected_rates(model_info, usage, current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc))
+    assert off_peak.input_cost_per_token == 5e-7
+    assert off_peak.output_cost_per_token == 1e-6
+    assert off_peak.cache_read_input_token_cost == 5e-8
 
-    peak = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
-    assert peak.input_rate == 1e-6
-    assert peak.output_rate == 2e-6
-    assert peak.cache_read_rate == 1e-7
+    peak = _projected_rates(model_info, usage, current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
+    assert peak.input_cost_per_token == 1e-6
+    assert peak.output_cost_per_token == 2e-6
+    assert peak.cache_read_input_token_cost == 1e-7
 
 
-def test_get_token_base_cost_non_mapping_off_peak_block_bills_standard_rates():
-    """A truthy non-mapping off_peak_pricing value (a bare string or a list in
-    YAML) must bill standard rates rather than raising, matching how every
-    other malformed piece of the block behaves.
-    """
+def test_billed_token_rates_non_mapping_off_peak_block_is_unknown():
     from datetime import datetime, timezone
     from typing import cast
 
@@ -840,12 +889,21 @@ def test_get_token_base_cost_non_mapping_off_peak_block_bills_standard_rates():
                 "off_peak_pricing": malformed_block,
             },
         )
-        result = _get_token_base_cost(model_info, usage, current_time=when)
-        assert result.input_rate == 1e-6
-        assert result.output_rate == 2e-6
+        assert (
+            get_billed_token_rates(
+                model="invalid-off-peak",
+                custom_llm_provider="custom",
+                usage=usage,
+                model_info=model_info,
+                current_time=when,
+            )
+            is None
+        )
+        with pytest.raises(litellm.ModelNotMappedError, match="off_peak_pricing"):
+            generic_cost_per_token("invalid-off-peak", usage, "custom", model_info=model_info, current_time=when)
 
 
-def test_get_token_base_cost_off_peak_falls_back_to_standard_when_unset():
+def test_billed_token_rates_off_peak_falls_back_to_standard_when_unset():
     from datetime import datetime, timezone
     from typing import cast
 
@@ -861,12 +919,12 @@ def test_get_token_base_cost_off_peak_falls_back_to_standard_when_unset():
     )
     usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
 
-    result = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc))
-    assert result.input_rate == 5e-7
-    assert result.output_rate == 2e-6
+    result = _projected_rates(model_info, usage, current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc))
+    assert result.input_cost_per_token == 5e-7
+    assert result.output_cost_per_token == 2e-6
 
 
-def test_get_token_base_cost_off_peak_wins_over_threshold():
+def test_billed_token_rates_off_peak_wins_over_threshold():
     from datetime import datetime, timezone
     from typing import cast
 
@@ -888,13 +946,13 @@ def test_get_token_base_cost_off_peak_wins_over_threshold():
     )
     usage = Usage(prompt_tokens=250000, completion_tokens=250000, total_tokens=500000)
 
-    off_peak = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc))
-    assert off_peak.input_rate == 5e-7
-    assert off_peak.output_rate == 1e-6
+    off_peak = _projected_rates(model_info, usage, current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc))
+    assert off_peak.input_cost_per_token == 5e-7
+    assert off_peak.output_cost_per_token == 1e-6
 
-    peak = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
-    assert peak.input_rate == 3e-6
-    assert peak.output_rate == 4e-6
+    peak = _projected_rates(model_info, usage, current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
+    assert peak.input_cost_per_token == 3e-6
+    assert peak.output_cost_per_token == 4e-6
 
 
 def test_get_model_info_propagates_off_peak_fields():
@@ -920,7 +978,7 @@ def test_get_model_info_propagates_off_peak_fields():
     assert info["off_peak_pricing"] == off_peak_pricing
 
 
-def test_get_token_base_cost_off_peak_wins_over_tiered_pricing():
+def test_billed_token_rates_off_peak_wins_over_tiered_pricing():
     """Tiered pricing resolves base rates on its own path and returns early, so off-peak has to
     be applied there too or a model carrying both would silently bill the tier rate all day."""
     from datetime import datetime, timezone
@@ -945,11 +1003,11 @@ def test_get_token_base_cost_off_peak_wins_over_tiered_pricing():
     info = litellm.get_model_info(model=model_name)
     usage = Usage(prompt_tokens=1_000, completion_tokens=100, total_tokens=1_100)
 
-    inside = _get_token_base_cost(info, usage, current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc))
-    assert (inside.input_rate, inside.output_rate) == (5e-7, 1e-6)
+    inside = _projected_rates(info, usage, current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc))
+    assert (inside.input_cost_per_token, inside.output_cost_per_token) == (5e-7, 1e-6)
 
-    outside = _get_token_base_cost(info, usage, current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
-    assert (outside.input_rate, outside.output_rate) == (3e-6, 6e-6)
+    outside = _projected_rates(info, usage, current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
+    assert (outside.input_cost_per_token, outside.output_cost_per_token) == (3e-6, 6e-6)
 
 
 def _register_off_peak_reasoning_model(
@@ -1106,32 +1164,29 @@ def test_generic_cost_per_token_off_peak_reasoning_rate_wins_over_the_service_ti
     assert outside == pytest.approx(50 * 3e-6 + 30 * 6e-6)
 
 
-def test_apply_off_peak_pricing_treats_bool_as_unset_and_parses_strings():
-    from datetime import datetime, timezone
+def test_boolean_off_peak_price_is_unknown_instead_of_unset() -> None:
+    with pytest.raises(litellm.ModelNotMappedError, match="cache_creation_input_token_cost"):
+        _off_peak_cost(
+            {"hours_utc": "16:30-00:30", "cache_creation_input_token_cost": True},
+            datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc),
+        )
 
-    model_name = "litellm-test-off-peak-odd-values"
-    _register_off_peak_reasoning_model(
-        model_name,
+
+def test_off_peak_reasoning_price_accepts_numeric_strings() -> None:
+    rates: Final = _projected_rates(
         {
-            "hours_utc": "16:30-00:30",
-            "cache_creation_input_token_cost": True,
-            "output_cost_per_reasoning_token": "5e-7",
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "output_cost_per_reasoning_token": 4e-6,
+            "off_peak_pricing": {"hours_utc": "16:30-00:30", "output_cost_per_reasoning_token": "5e-7"},
         },
+        Usage(prompt_tokens=100, completion_tokens=50),
+        current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc),
     )
-    standard = TokenRates(
-        input_rate=1e-6, output_rate=2e-6, cache_read_rate=1e-7, cache_creation_rate=1.25e-6, reasoning_rate=4e-6
-    )
-
-    rates = apply_off_peak_pricing(
-        litellm.get_model_info(model_name, custom_llm_provider="openai"),
-        datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc),
-        standard,
-    )
-    assert rates.cache_creation_rate == 1.25e-6
-    assert rates.reasoning_rate == 5e-7
+    assert rates.output_cost_per_reasoning_token == 5e-7
 
 
-def test_get_token_base_cost_off_peak_cache_creation_rate():
+def test_billed_token_rates_off_peak_cache_creation_rate():
     from datetime import datetime, timezone
     from typing import cast
 
@@ -1150,18 +1205,18 @@ def test_get_token_base_cost_off_peak_cache_creation_rate():
     usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
     inside_window = datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc)
 
-    inside = _get_token_base_cost(model_info, usage, current_time=inside_window)
-    assert inside.cache_creation_rate == 5e-7
-    assert inside.cache_creation_rates_by_ttl["1hr"] == 2e-6
+    inside = _projected_rates(model_info, usage, current_time=inside_window)
+    assert inside.cache_creation_input_token_cost == 5e-7
+    assert inside.cache_creation_input_token_cost_by_ttl["1hr"] == 2e-6
 
-    outside = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
-    assert outside.cache_creation_rate == 1.25e-6
+    outside = _projected_rates(model_info, usage, current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
+    assert outside.cache_creation_input_token_cost == 1.25e-6
 
     without_key = cast(
         ModelInfo,
         {**model_info, "off_peak_pricing": {"hours_utc": "16:30-00:30", "input_cost_per_token": 5e-7}},
     )
-    assert _get_token_base_cost(without_key, usage, current_time=inside_window).cache_creation_rate == 1.25e-6
+    assert _projected_rates(without_key, usage, current_time=inside_window).cache_creation_input_token_cost == 1.25e-6
 
 
 def test_get_token_type_cost_breakdown_reflects_off_peak_reasoning_and_cache_creation_rates():
@@ -1918,10 +1973,8 @@ def test_calculate_cost_component_with_string_values():
     assert cost == 0.0
 
 
-def test_string_cost_values_edge_cases():
+def test_invalid_string_token_rate_is_unknown_instead_of_free():
     """Test edge cases for string cost value handling."""
-    from unittest.mock import patch
-
     # Test with mixed string and float cost values
     mock_model_info = {
         "input_cost_per_token": "1e-6",  # String
@@ -1946,22 +1999,10 @@ def test_string_cost_values_edge_cases():
         ),
     )
 
-    with patch(
-        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
-        return_value=mock_model_info,
-    ):
-        prompt_cost, completion_cost = generic_cost_per_token(
-            model="test-model", usage=usage, custom_llm_provider="test-provider"
+    with pytest.raises(litellm.ModelNotMappedError, match="input_cost_per_audio_token"):
+        generic_cost_per_token(
+            model="test-model", usage=usage, custom_llm_provider="test-provider", model_info=mock_model_info
         )
-
-    # Expected costs:
-    # Prompt: 1000 * 1e-6 + 100 * 0 (invalid string becomes 0)
-    # Completion: 500 * 2e-6 + 50 * 2e-6 (audio tokens fall back to base cost when output_cost_per_audio_token is None)
-    expected_prompt_cost = 1000 * 1e-6
-    expected_completion_cost = 500 * 2e-6 + 50 * 2e-6
-
-    assert round(prompt_cost, 12) == round(expected_prompt_cost, 12)
-    assert round(completion_cost, 12) == round(expected_completion_cost, 12)
 
 
 def test_string_cost_values_with_threshold():
@@ -1999,7 +2040,7 @@ def test_string_cost_values_with_threshold():
     assert round(completion_cost, 12) == round(expected_completion_cost, 12)
 
 
-def test_calculate_cache_writing_cost():
+def test__cache_write_cost():
     """Test the calculate_cache_writing_cost function with detailed cache creation token breakdown."""
 
     # Test case 1: With cache creation token details (matching the provided input)
@@ -2010,7 +2051,7 @@ def test_calculate_cache_writing_cost():
     cache_creation_cost_above_1hr = 6e-06
     cache_creation_cost = 3.75e-06
 
-    result = calculate_cache_writing_cost(
+    result = _cache_write_cost(
         cache_creation_tokens=cache_creation_tokens,
         cache_creation_token_details=cache_creation_token_details,
         cache_creation_cost=cache_creation_cost,
@@ -2031,7 +2072,7 @@ def test_calculate_cache_writing_cost():
     cache_creation_token_details_none = None
     cache_creation_cost_fallback = 5e-06
 
-    result_no_details = calculate_cache_writing_cost(
+    result_no_details = _cache_write_cost(
         cache_creation_tokens=cache_creation_tokens_no_details,
         cache_creation_token_details=cache_creation_token_details_none,
         cache_creation_cost=cache_creation_cost_fallback,
@@ -2049,7 +2090,7 @@ def test_calculate_cache_writing_cost():
         ephemeral_5m_input_tokens=None, ephemeral_1h_input_tokens=100
     )
 
-    result_partial = calculate_cache_writing_cost(
+    result_partial = _cache_write_cost(
         cache_creation_tokens=500,
         cache_creation_token_details=cache_creation_token_details_partial,
         cache_creation_cost=3e-06,
@@ -2061,7 +2102,7 @@ def test_calculate_cache_writing_cost():
     assert round(result_partial, 6) == round(expected_cost_partial, 6)
 
     # Test case 4: Zero costs
-    result_zero = calculate_cache_writing_cost(
+    result_zero = _cache_write_cost(
         cache_creation_tokens=1000,
         cache_creation_token_details=CacheCreationTokenDetails(
             ephemeral_5m_input_tokens=50, ephemeral_1h_input_tokens=950
@@ -2075,7 +2116,7 @@ def test_calculate_cache_writing_cost():
 
 @pytest.mark.parametrize("field", CacheCreationTokenDetails.model_fields)
 def test_calculate_cache_writing_cost_bills_every_reported_lifetime(field: str) -> None:
-    cost = calculate_cache_writing_cost(
+    cost = _cache_write_cost(
         cache_creation_tokens=10,
         cache_creation_token_details=CacheCreationTokenDetails(**{field: 10}),
         cache_creation_cost=2.0,
@@ -2085,7 +2126,7 @@ def test_calculate_cache_writing_cost_bills_every_reported_lifetime(field: str) 
 
 
 def test_calculate_cache_writing_cost_bills_writes_of_an_unknown_lifetime_at_the_base_rate() -> None:
-    cost = calculate_cache_writing_cost(
+    cost = _cache_write_cost(
         cache_creation_tokens=10,
         cache_creation_token_details=CacheCreationTokenDetails(
             ephemeral_30m_input_tokens=2, ephemeral_12h_input_tokens=3
@@ -2222,49 +2263,16 @@ def test_generic_cost_per_token_prices_ultrafast_12h_cache_writes_at_the_ultrafa
 
 
 def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
-    """
-    Regression test: when cache_creation_tokens is 0 but cache_creation_token_details
-    has non-zero ephemeral tokens, the cost must still be calculated.
-    This ensures the guard in _calculate_input_cost doesn't skip
-    calculate_cache_writing_cost when only ephemeral token details are present.
-    """
-    cache_creation_cost = 3.75e-06
-    cache_creation_cost_above_1hr = 6e-06
-
-    prompt_tokens_details: PromptTokensDetailsResult = {
-        "cache_hit_tokens": 0,
-        "cache_hit_audio_tokens": 0,
-        "cache_creation_tokens": 0,
-        "cache_creation_token_details": CacheCreationTokenDetails(
+    result: Final = _cache_write_cost(
+        cache_creation_tokens=0,
+        cache_creation_token_details=CacheCreationTokenDetails(
             ephemeral_5m_input_tokens=100,
             ephemeral_1h_input_tokens=200,
         ),
-        "text_tokens": 0,
-        "audio_tokens": 0,
-        "image_tokens": 0,
-        "video_tokens": 0,
-        "character_count": 0,
-        "image_count": 0,
-        "video_length_seconds": 0.0,
-        "audio_length_seconds": 0.0,
-        "query_count": 0,
-    }
-
-    model_info: ModelInfo = {}
-
-    result = _calculate_input_cost(
-        prompt_tokens_details=prompt_tokens_details,
-        model_info=model_info,
-        prompt_base_cost=0.0,
-        cache_read_cost=0.0,
-        cache_creation_cost=cache_creation_cost,
-        cache_creation_cost_by_ttl={"1hr": cache_creation_cost_above_1hr, "12hr": cache_creation_cost_above_1hr},
+        cache_creation_cost=3.75e-6,
+        cache_creation_cost_by_ttl={"1hr": 6e-6, "12hr": 6e-6},
     )
-
-    # Expected: (100 * 3.75e-06) + (200 * 6e-06) = 0.000375 + 0.0012 = 0.001575
-    expected = (100 * cache_creation_cost) + (200 * cache_creation_cost_above_1hr)
-    assert result > 0, "Cost should not be zero when ephemeral token details are present"
-    assert round(result, 6) == round(expected, 6)
+    assert result == pytest.approx(100 * 3.75e-6 + 200 * 6e-6)
 
 
 def test_service_tier_ultrafast_pricing():
@@ -2686,7 +2694,6 @@ def test_get_cost_per_unit_falls_back_from_service_tier_key_to_base():
 )
 def test_flat_input_price_keeps_other_token_thresholds(field: str) -> None:
     from typing import Final, cast
-    from litellm.litellm_core_utils.llm_cost_calc.utils import _get_token_base_cost
 
     info: Final = cast(
         ModelInfo,
@@ -2698,21 +2705,20 @@ def test_flat_input_price_keeps_other_token_thresholds(field: str) -> None:
             f"{field}_above_300k_tokens": 0.005,
         },
     )
-    rates: Final = _get_token_base_cost(
+    rates: Final = _projected_rates(
         model_info=info,
         usage=Usage(prompt_tokens=300_001, completion_tokens=3, total_tokens=300_004),
     )
-    assert rates.input_rate == 0.001
-    assert rates.output_rate == (0.005 if field == "output_cost_per_token" else 0.002)
-    assert rates.cache_creation_rate == (0.005 if field == "cache_creation_input_token_cost" else 0.004)
-    assert rates.cache_read_rate == (0.005 if field == "cache_read_input_token_cost" else 0.003)
+    assert rates.input_cost_per_token == 0.001
+    assert rates.output_cost_per_token == (0.005 if field == "output_cost_per_token" else 0.002)
+    assert rates.cache_creation_input_token_cost == (0.005 if field == "cache_creation_input_token_cost" else 0.004)
+    assert rates.cache_read_input_token_cost == (0.005 if field == "cache_read_input_token_cost" else 0.003)
 
 
 @pytest.mark.parametrize("prompt_tokens", (200_000, 200_001, 512_000, 512_001))
 @pytest.mark.parametrize("higher_rate", (0.0, 0.009))
 def test_mixed_token_thresholds_preserve_each_crossed_rate(prompt_tokens: int, higher_rate: float) -> None:
     from typing import Final, cast
-    from litellm.litellm_core_utils.llm_cost_calc.utils import _get_token_base_cost
 
     info: Final = cast(
         ModelInfo,
@@ -2728,22 +2734,21 @@ def test_mixed_token_thresholds_preserve_each_crossed_rate(prompt_tokens: int, h
             "output_cost_per_token_above_512k_tokens": higher_rate,
         },
     )
-    rates: Final = _get_token_base_cost(
+    rates: Final = _projected_rates(
         model_info=info,
         usage=Usage(prompt_tokens=prompt_tokens, completion_tokens=3, total_tokens=prompt_tokens + 3),
     )
-    assert rates.input_rate == (0.005 if prompt_tokens > 200_000 else 0.001)
-    assert rates.output_rate == (
+    assert rates.input_cost_per_token == (0.005 if prompt_tokens > 200_000 else 0.001)
+    assert rates.output_cost_per_token == (
         higher_rate if prompt_tokens > 512_000 else 0.006 if prompt_tokens > 200_000 else 0.002
     )
-    assert rates.cache_creation_rate == (0.007 if prompt_tokens > 200_000 else 0.004)
-    assert rates.cache_read_rate == (higher_rate if prompt_tokens > 512_000 else 0.003)
+    assert rates.cache_creation_input_token_cost == (0.007 if prompt_tokens > 200_000 else 0.004)
+    assert rates.cache_read_input_token_cost == (higher_rate if prompt_tokens > 512_000 else 0.003)
 
 
 def test_threshold_keys_exclude_service_tier_variants():
     from typing import cast
 
-    from litellm.litellm_core_utils.llm_cost_calc.utils import _get_token_base_cost
     from litellm.types.utils import ModelInfo, Usage
 
     # The service-tier-suffixed above-threshold key must be excluded from
@@ -2761,7 +2766,7 @@ def test_threshold_keys_exclude_service_tier_variants():
         },
     )
     usage = Usage(prompt_tokens=350_000, completion_tokens=1_000, total_tokens=351_000)
-    assert _get_token_base_cost(model_info=model_info, usage=usage).input_rate == 3e-6
+    assert _projected_rates(model_info=model_info, usage=usage).input_cost_per_token == 3e-6
 
 
 @pytest.mark.parametrize(
@@ -3866,7 +3871,7 @@ def test_generic_cost_per_token_bills_cache_creation_at_the_input_rate_without_a
         ),
     ),
 )
-def test_get_token_base_cost_resolves_missing_cache_write_rates_like_the_tiered_path(
+def test_billed_token_rates_resolves_missing_cache_write_rates_like_the_tiered_path(
     cache_rates: Mapping[str, float | Mapping[str, float | str]],
     current_time: datetime | None,
     expected_creation: float,
@@ -3875,16 +3880,16 @@ def test_get_token_base_cost_resolves_missing_cache_write_rates_like_the_tiered_
     model_info = {"input_cost_per_token": 2e-7, "output_cost_per_token": 1.25e-6, **cache_rates}
     usage = Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11)
 
-    rates = _get_token_base_cost(model_info, usage, current_time=current_time)
+    rates = _projected_rates(model_info, usage, current_time=current_time)
 
-    assert rates.cache_creation_rate == pytest.approx(expected_creation)
-    assert calculate_cache_writing_cost(
+    assert rates.cache_creation_input_token_cost == pytest.approx(expected_creation)
+    assert _cache_write_cost(
         cache_creation_tokens=3,
         cache_creation_token_details=CacheCreationTokenDetails(
             ephemeral_1h_input_tokens=1, ephemeral_12h_input_tokens=2
         ),
-        cache_creation_cost=rates.cache_creation_rate,
-        cache_creation_cost_by_ttl=rates.cache_creation_rates_by_ttl,
+        cache_creation_cost=rates.cache_creation_input_token_cost,
+        cache_creation_cost_by_ttl=rates.cache_creation_input_token_cost_by_ttl,
     ) == pytest.approx(3 * expected_creation_1h)
 
 
@@ -3977,14 +3982,33 @@ def test_route_image_generation_cost_bills_deployment_image_price_when_unlisted_
     assert cost == pytest.approx(0.10)
 
 
+def _batch_projected_rates(model_info: ModelInfo, usage: Usage, provider: str) -> Mapping[str, float | None]:
+    from litellm._cost import billing_context, evaluate, token_usage
+    from litellm.rust_bridge import _native
+
+    result: Final = evaluate(
+        {"litellm_provider": provider, **model_info},
+        token_usage(usage, model_info, batch=True),
+        billing_context(datetime(2026, 1, 1, tzinfo=timezone.utc), channel="batch"),
+        project=(
+            "input_cost_per_token",
+            "output_cost_per_token",
+            "cache_read_input_token_cost",
+            "cache_creation_input_token_cost",
+            "cache_creation_input_token_cost_above_1hr",
+            "cache_creation_input_token_cost_above_12hr",
+        ),
+    )
+    assert not isinstance(result, _native.RowErrors), result
+    return {rate.requested_meter: rate.unit_price for rate in result.rates}
+
+
 def _batch_rates_model_info(**rates: object) -> ModelInfo:
     return cast(ModelInfo, dict(rates))
 
 
-def test_get_batch_cost_rates_parses_string_rates():
-    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
-
-    rates = get_batch_cost_rates(
+def test_batch_projected_rates_parses_string_rates():
+    rates = _batch_projected_rates(
         _batch_rates_model_info(
             input_cost_per_token_batches="1e-06",
             output_cost_per_token_batches="4e-06",
@@ -3997,34 +4021,37 @@ def test_get_batch_cost_rates_parses_string_rates():
         "openai",
     )
 
-    assert (rates.input, rates.output, rates.cache_read) == (2e-6, 6e-6, 2e-7)
-
-
-def test_get_batch_cost_rates_falls_back_to_the_flat_rates_when_tier_rates_are_unparsable():
-    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
-
-    rates = get_batch_cost_rates(
-        _batch_rates_model_info(
-            input_cost_per_token_batches=1e-6,
-            output_cost_per_token_batches=4e-6,
-            cache_read_input_token_cost_batches=1e-7,
-            input_cost_per_token_above_272k_tokens_batches="two",
-            output_cost_per_token_above_272k_tokens_batches="six",
-            cache_read_input_token_cost_above_272k_tokens_batches="none",
-            cache_creation_input_token_cost_batches=1.25e-7,
-            cache_creation_input_token_cost_above_272k_tokens_batches="nope",
-        ),
-        Usage(prompt_tokens=300_000, completion_tokens=1, total_tokens=300_001),
-        "openai",
+    assert (rates["input_cost_per_token"], rates["output_cost_per_token"], rates["cache_read_input_token_cost"]) == (
+        2e-6,
+        6e-6,
+        2e-7,
     )
 
-    assert (rates.input, rates.output, rates.cache_read, rates.cache_creation) == (1e-6, 4e-6, 1e-7, 1.25e-7)
+
+def test_batch_pricing_rejects_unparsable_threshold_rates() -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+
+    info: Final = _batch_rates_model_info(
+        input_cost_per_token_batches=1e-6,
+        output_cost_per_token_batches=4e-6,
+        cache_read_input_token_cost_batches=1e-7,
+        input_cost_per_token_above_272k_tokens_batches="two",
+        output_cost_per_token_above_272k_tokens_batches="six",
+        cache_read_input_token_cost_above_272k_tokens_batches="none",
+        cache_creation_input_token_cost_batches=1.25e-7,
+        cache_creation_input_token_cost_above_272k_tokens_batches="nope",
+    )
+    with pytest.raises(litellm.ModelNotMappedError, match="above_272k"):
+        batch_cost_calculator(
+            Usage(prompt_tokens=300_000, completion_tokens=1),
+            "openai/batch-rate-validation",
+            "openai",
+            model_info=info,
+        )
 
 
-def test_get_batch_cost_rates_has_no_cached_rate_without_a_cached_batch_key():
-    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
-
-    rates = get_batch_cost_rates(
+def test_batch_projected_rates_cache_reads_fall_back_to_explicit_batch_input():
+    rates = _batch_projected_rates(
         _batch_rates_model_info(
             input_cost_per_token_batches=1e-6,
             output_cost_per_token_batches=4e-6,
@@ -4035,14 +4062,16 @@ def test_get_batch_cost_rates_has_no_cached_rate_without_a_cached_batch_key():
         "openai",
     )
 
-    assert (rates.input, rates.output, rates.cache_read) == (2e-6, 4e-6, None)
+    assert (rates["input_cost_per_token"], rates["output_cost_per_token"], rates["cache_read_input_token_cost"]) == (
+        2e-6,
+        4e-6,
+        2e-6,
+    )
 
 
 @pytest.mark.parametrize(("prompt_tokens", "expected"), [(1_000, 1.25e-7), (272_000, 1.25e-7), (300_000, 2.5e-7)])
-def test_get_batch_cost_rates_reads_the_batch_cache_write_rate_for_the_crossed_tier(prompt_tokens, expected):
-    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
-
-    rates = get_batch_cost_rates(
+def test_batch_projected_rates_reads_the_batch_cache_write_rate_for_the_crossed_tier(prompt_tokens, expected):
+    rates = _batch_projected_rates(
         _batch_rates_model_info(
             input_cost_per_token_batches=1e-7,
             input_cost_per_token_above_272k_tokens_batches=2e-7,
@@ -4053,21 +4082,19 @@ def test_get_batch_cost_rates_reads_the_batch_cache_write_rate_for_the_crossed_t
         "openai",
     )
 
-    assert rates.cache_creation == expected
+    assert rates["cache_creation_input_token_cost"] == expected
 
 
 @pytest.mark.parametrize(
     ("tier_key", "attribute"),
     [
-        ("output_cost_per_token_above_272k_tokens_batches", "output"),
-        ("cache_read_input_token_cost_above_272k_tokens_batches", "cache_read"),
-        ("cache_creation_input_token_cost_above_272k_tokens_batches", "cache_creation"),
+        ("output_cost_per_token_above_272k_tokens_batches", "output_cost_per_token"),
+        ("cache_read_input_token_cost_above_272k_tokens_batches", "cache_read_input_token_cost"),
+        ("cache_creation_input_token_cost_above_272k_tokens_batches", "cache_creation_input_token_cost"),
     ],
 )
-def test_get_batch_cost_rates_crosses_a_tier_declared_without_an_input_tier_key(tier_key, attribute):
-    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
-
-    rates = get_batch_cost_rates(
+def test_batch_projected_rates_crosses_a_tier_declared_without_an_input_tier_key(tier_key, attribute):
+    rates = _batch_projected_rates(
         _batch_rates_model_info(
             input_cost_per_token_batches=1e-6,
             output_cost_per_token_batches=4e-6,
@@ -4079,18 +4106,16 @@ def test_get_batch_cost_rates_crosses_a_tier_declared_without_an_input_tier_key(
         "openai",
     )
 
-    assert getattr(rates, attribute) == 9e-6
-    assert rates.input == 1e-6
+    assert rates[attribute] == 9e-6
+    assert rates["input_cost_per_token"] == 1e-6
 
 
 @pytest.mark.parametrize(
     ("prompt_tokens", "expected_input", "expected_output"),
     [(200_000, 1e-6, 4e-6), (250_000, 1e-6, 5e-6), (300_000, 2e-6, 5e-6)],
 )
-def test_get_batch_cost_rates_crosses_each_components_own_tier(prompt_tokens, expected_input, expected_output):
-    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
-
-    rates = get_batch_cost_rates(
+def test_batch_projected_rates_crosses_each_components_own_tier(prompt_tokens, expected_input, expected_output):
+    rates = _batch_projected_rates(
         _batch_rates_model_info(
             input_cost_per_token_batches=1e-6,
             input_cost_per_token_above_272k_tokens_batches=2e-6,
@@ -4101,13 +4126,11 @@ def test_get_batch_cost_rates_crosses_each_components_own_tier(prompt_tokens, ex
         "openai",
     )
 
-    assert (rates.input, rates.output) == (expected_input, expected_output)
+    assert (rates["input_cost_per_token"], rates["output_cost_per_token"]) == (expected_input, expected_output)
 
 
-def test_get_batch_cost_rates_has_no_cache_write_rate_without_a_cache_write_batch_key():
-    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
-
-    rates = get_batch_cost_rates(
+def test_batch_projected_rates_cache_writes_fall_back_to_explicit_batch_input():
+    rates = _batch_projected_rates(
         _batch_rates_model_info(
             input_cost_per_token_batches=1e-7,
             input_cost_per_token_above_272k_tokens_batches=2e-7,
@@ -4118,16 +4141,40 @@ def test_get_batch_cost_rates_has_no_cache_write_rate_without_a_cache_write_batc
         "openai",
     )
 
-    assert rates.cache_creation is None
+    assert rates["cache_creation_input_token_cost"] == 2e-7
+
+
+@pytest.mark.parametrize(
+    ("meter", "details"),
+    (
+        ("cache_read_input_token_cost", PromptTokensDetailsWrapper(cached_tokens=300_000)),
+        ("cache_creation_input_token_cost", PromptTokensDetailsWrapper(cache_creation_tokens=300_000)),
+    ),
+)
+def test_batch_cache_projection_agrees_with_billing_at_the_explicit_input_fallback(
+    meter: str, details: PromptTokensDetailsWrapper
+) -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+
+    info: Final = _batch_rates_model_info(
+        input_cost_per_token_batches=1e-6,
+        input_cost_per_token_above_272k_tokens_batches=2e-6,
+        output_cost_per_token_batches=4e-6,
+        **{meter: 1e-7, f"{meter}_above_272k_tokens": 2e-7},
+    )
+    usage: Final = Usage(prompt_tokens=300_000, completion_tokens=1, prompt_tokens_details=details)
+    rates: Final = _batch_projected_rates(info, usage, "openai")
+    assert rates[meter] == 2e-6
+    assert batch_cost_calculator(usage, "openai/batch-cache-fallback", "openai", model_info=info) == pytest.approx(
+        (0.6, 4e-6)
+    )
 
 
 @pytest.mark.parametrize(("prompt_tokens", "expected"), [(1_000, 2.5e-7), (272_000, 2.5e-7), (300_000, 5e-7)])
-def test_get_batch_cost_rates_reads_the_12h_batch_cache_write_rate_for_the_crossed_tier(
+def test_batch_projected_rates_reads_the_12h_batch_cache_write_rate_for_the_crossed_tier(
     prompt_tokens: int, expected: float
 ) -> None:
-    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
-
-    rates: Final = get_batch_cost_rates(
+    rates: Final = _batch_projected_rates(
         _batch_rates_model_info(
             input_cost_per_token_batches=1e-7,
             cache_creation_input_token_cost_batches=1.25e-7,
@@ -4138,14 +4185,12 @@ def test_get_batch_cost_rates_reads_the_12h_batch_cache_write_rate_for_the_cross
         "openai",
     )
 
-    assert rates.cache_creation == 1.25e-7
-    assert rates.cache_creation_rates_by_ttl == {"12hr": expected}
+    assert rates["cache_creation_input_token_cost"] == 1.25e-7
+    assert rates["cache_creation_input_token_cost_above_12hr"] == expected
 
 
-def test_get_batch_cost_rates_has_no_12h_cache_write_rate_without_a_12h_batch_key() -> None:
-    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
-
-    rates: Final = get_batch_cost_rates(
+def test_batch_projected_rates_has_no_12h_cache_write_rate_without_a_12h_batch_key() -> None:
+    rates: Final = _batch_projected_rates(
         _batch_rates_model_info(
             input_cost_per_token_batches=1e-7,
             cache_creation_input_token_cost_batches=1.25e-7,
@@ -4156,7 +4201,7 @@ def test_get_batch_cost_rates_has_no_12h_cache_write_rate_without_a_12h_batch_ke
         "openai",
     )
 
-    assert rates.cache_creation_rates_by_ttl == {}
+    assert rates["cache_creation_input_token_cost_above_12hr"] == 1.25e-7
 
 
 @pytest.mark.parametrize("model_base", ["gpt-6-sol", "gpt-6-luna"])
@@ -4317,21 +4362,24 @@ def test_batch_cost_calculator_claude_haiku_5_5_prompt_length_tiers(
         (100_001, (2.5e-07, 1.25e-06, 2.5e-08, 3.125e-07)),
     ],
 )
-def test_get_batch_cost_rates_claude_haiku_5_5_prompt_length_tiers(
+def test_batch_projected_rates_claude_haiku_5_5_prompt_length_tiers(
     _local_model_cost_map: None,
     prompt_tokens: int,
     expected: tuple[float, float, float, float],
 ) -> None:
     """Cache write and cache read batch rates are 50% of the standard rates; Anthropic's batch table omits them."""
-    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
-
-    rates: Final = get_batch_cost_rates(
+    rates: Final = _batch_projected_rates(
         litellm.get_model_info(model="claude-haiku-5-5", custom_llm_provider="anthropic"),
         Usage(prompt_tokens=prompt_tokens, completion_tokens=1, total_tokens=prompt_tokens + 1),
         "anthropic",
     )
 
-    assert (rates.input, rates.output, rates.cache_read, rates.cache_creation) == expected
+    assert (
+        rates["input_cost_per_token"],
+        rates["output_cost_per_token"],
+        rates["cache_read_input_token_cost"],
+        rates["cache_creation_input_token_cost"],
+    ) == expected
 
 
 @pytest.mark.parametrize(("speed", "multiplier"), (("fast", 6.0), ("standard", 1.0), (None, 1.0)))
@@ -4425,3 +4473,137 @@ def test_token_breakdown_uses_supplied_pricing_without_catalog_lookup(rate: floa
         10 * breakdown.rates.input_cost_per_token + breakdown.cache_read_cost + breakdown.cache_creation_cost
     )
     assert output_cost == pytest.approx(3 * breakdown.rates.output_cost_per_token)
+
+
+@pytest.mark.parametrize(("hour", "input_rate", "read_rate"), ((1, 1.0, 0.1), (12, 2.0, 0.25)))
+@pytest.mark.parametrize("uplift", (1.0, 1.1))
+def test_all_cache_usage_reports_unused_input_rate_and_savings_at_pinned_time(
+    monkeypatch: pytest.MonkeyPatch, hour: int, input_rate: float, read_rate: float, uplift: float
+) -> None:
+    model: Final = "openai/m5-all-cache-projection"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 2.0,
+            "output_cost_per_token": 4.0,
+            "cache_read_input_token_cost": 0.25,
+            "regional_processing_uplift_multiplier_eu": uplift,
+            "off_peak_pricing": {
+                "hours_utc": "00:00-06:00",
+                "input_cost_per_token": 1.0,
+                "cache_read_input_token_cost": 0.1,
+            },
+        },
+    )
+    usage: Final = Usage(
+        prompt_tokens=100, completion_tokens=0, prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=100)
+    )
+    when: Final = datetime(2026, 1, 1, hour, tzinfo=timezone.utc)
+    with pinned_billing_time(when):
+        charged: Final = litellm.cost_per_token(
+            model=model,
+            custom_llm_provider="openai",
+            prompt_tokens=100,
+            completion_tokens=0,
+            usage_object=usage,
+            data_residency="eu",
+        )
+        breakdown: Final = get_token_type_cost_breakdown(model, "openai", usage, data_residency="eu")
+        savings: Final = calculate_prompt_caching_savings(
+            litellm.get_model_info(model, custom_llm_provider="openai"),
+            usage,
+            "openai",
+            data_residency="eu",
+            billed_at=when,
+        )
+    assert charged == pytest.approx((100 * read_rate * uplift, 0.0))
+    assert breakdown.rates is not None
+    assert breakdown.rates.input_cost_per_token == pytest.approx(input_rate * uplift)
+    assert breakdown.rates.output_cost_per_token == pytest.approx(4.0 * uplift)
+    assert breakdown.cache_read_cost == pytest.approx(charged[0])
+    assert savings == pytest.approx(100 * (input_rate - read_rate) * uplift)
+
+
+@pytest.mark.parametrize(
+    ("write_rate", "ttl_rate", "expected"),
+    ((None, None, 9.0), (0.0, 0.0, 19.0), (0.0, 2.0, -1.0), (0.5, 0.5, 19.0), (1.5, 2.0, -6.0)),
+)
+def test_cache_savings_preserve_base_and_ttl_write_premiums(
+    write_rate: float | None, ttl_rate: float | None, expected: float
+) -> None:
+    info: Final = {
+        "input_cost_per_token": 1.0,
+        "cache_read_input_token_cost": 0.1,
+        "cache_creation_input_token_cost": write_rate,
+        "cache_creation_input_token_cost_above_1hr": ttl_rate,
+    }
+    usage: Final = Usage(
+        prompt_tokens=100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=10,
+            cache_creation_tokens=20,
+            cache_creation_token_details=CacheCreationTokenDetails(ephemeral_1h_input_tokens=10),
+        ),
+    )
+    assert calculate_prompt_caching_savings(info, usage, "custom") == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("explicit_rate", (None, 0.0, 0.25, 2.0))
+def test_explicit_cache_savings_use_the_billed_read_meter(explicit_rate: float | None) -> None:
+    info: Final = {
+        "input_cost_per_token": 1.0,
+        "cache_read_input_token_cost": 0.1,
+        "explicit_cache_read_input_token_cost": explicit_rate,
+    }
+    usage: Final = Usage(
+        prompt_tokens=100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=100, cache_type="ephemeral"),
+    )
+    charged, _ = generic_cost_per_token("explicit-cache", usage, "custom", model_info=info)
+    savings: Final = calculate_prompt_caching_savings(info, usage, "custom")
+    assert savings == pytest.approx(max(100.0 - charged, 0.0))
+
+
+def test_cache_savings_bill_ttl_writes_even_without_the_aggregate_count() -> None:
+    info: Final = {"input_cost_per_token": 1.0, "cache_creation_input_token_cost_above_1hr": 1.5}
+    usage: Final = Usage(
+        prompt_tokens=0,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cache_creation_tokens=0,
+            cache_creation_token_details=CacheCreationTokenDetails(ephemeral_1h_input_tokens=20),
+        ),
+    )
+    assert calculate_prompt_caching_savings(info, usage, "custom") == pytest.approx(-10.0)
+
+
+@pytest.mark.parametrize("output_fields", ({}, {"output_cost_per_token": None}, {"output_cost_per_token": 0.0}))
+def test_unused_missing_output_rate_is_not_reported_as_free(
+    monkeypatch: pytest.MonkeyPatch, output_fields: Mapping[str, float | None]
+) -> None:
+    model: Final = "openai/m5-input-only-projection"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 1.0,
+            **output_fields,
+        },
+    )
+    usage: Final = Usage(prompt_tokens=10, completion_tokens=0)
+    charged: Final = litellm.cost_per_token(
+        model=model,
+        custom_llm_provider="openai",
+        prompt_tokens=10,
+        completion_tokens=0,
+        usage_object=usage,
+    )
+    rates: Final = get_billed_token_rates(model, "openai", usage)
+    assert charged == (10.0, 0.0)
+    assert rates is not None
+    assert rates.input_cost_per_token == 1.0
+    assert rates.output_cost_per_token == output_fields.get("output_cost_per_token")

@@ -7,7 +7,7 @@ from functools import wraps
 from itertools import chain
 from typing import TYPE_CHECKING, Final, Literal, ParamSpec, TypeVar, overload
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._catalog import _install
 from litellm.rust_bridge import _native
@@ -152,6 +152,27 @@ def model_info(key: str) -> dict[str, object]:
     if isinstance(result, _native.RowErrors):
         return raw
     return {name: raw[name] for name in result.fields}
+
+
+def is_priced(model: str, provider: str | None = None) -> bool:
+    resolved: Final = resolve(model, provider)
+    if not isinstance(resolved, _native.ResolvedModel):
+        return False
+    try:
+        row: Final = _ROW.validate_python(
+            dict[str, object].get(
+                _install._live_rows(),  # pyright: ignore[reportPrivateUsage]  # presence uses the selected live row
+                resolved.key,
+            )
+        )
+    except ValidationError:
+        return False
+    contextual_row: Final = row if "litellm_provider" in row else {"litellm_provider": provider or "custom", **row}
+    match _native.has_token_prices(contextual_row, policy="sdk_tokens"):
+        case bool() as present:
+            return present
+        case _native.RowErrors():
+            return False
 
 
 def supports(fields: Mapping[str, object], capability: str) -> bool | None:

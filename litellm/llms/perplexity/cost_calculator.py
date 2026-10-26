@@ -6,7 +6,9 @@ Helper util for handling perplexity-specific cost calculation
 from datetime import datetime
 from typing import Final
 
-from litellm.litellm_core_utils.llm_cost_calc.utils import TokenRates, apply_off_peak_pricing
+from litellm._cost import billing_context, price, require_priced
+from litellm._internal_context import current_billing_time
+from litellm.rust_bridge import _native
 from litellm.types.utils import Usage
 from litellm.utils import get_model_info
 
@@ -52,22 +54,31 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
         except (ValueError, TypeError):
             return default
 
-    rates: Final = apply_off_peak_pricing(
-        model_info,
-        current_time,
-        TokenRates(
-            input_rate=_safe_float_cast(model_info.get("input_cost_per_token")),
-            output_rate=_safe_float_cast(model_info.get("output_cost_per_token")),
-            cache_read_rate=0.0,
-            cache_creation_rate=0.0,
-            reasoning_rate=None,
-        ),
+    top_reasoning: Final[object] = getattr(usage, "reasoning_tokens", None)
+    reasoning_tokens: Final = (
+        top_reasoning
+        if isinstance(top_reasoning, int) and top_reasoning > 0
+        else (usage.completion_tokens_details.reasoning_tokens or 0)
+        if usage.completion_tokens_details is not None
+        else 0
     )
-    input_cost_per_token: Final = rates.input_rate
-    output_cost_per_token: Final = rates.output_rate
-
-    ## CALCULATE INPUT COST
-    prompt_cost: float = (usage.prompt_tokens or 0) * input_cost_per_token
+    priced: Final = require_priced(
+        price(
+            {"litellm_provider": "perplexity", **model_info},
+            _native.UsageInput(
+                {
+                    "input_cost_per_token": usage.prompt_tokens,
+                    "output_cost_per_token": max(usage.completion_tokens - reasoning_tokens, 0),
+                    "output_cost_per_reasoning_token": reasoning_tokens,
+                },
+                prompt_tokens=usage.prompt_tokens,
+            ),
+            billing_context(current_time if current_time is not None else current_billing_time()),
+        ),
+        model,
+    )
+    prompt_cost: float = priced.input
+    completion_cost: float = priced.output
 
     ## ADD CITATION TOKENS COST (if present)
     citation_tokens: Final = getattr(usage, "citation_tokens", 0) or 0
@@ -75,24 +86,6 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
     if citation_tokens > 0 and citation_cost_value is not None:
         citation_cost_per_token: Final = _safe_float_cast(citation_cost_value)
         prompt_cost += citation_tokens * citation_cost_per_token
-
-    ## CALCULATE OUTPUT COST
-    reasoning_tokens = getattr(usage, "reasoning_tokens", 0) or 0
-    if reasoning_tokens == 0 and hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details:
-        reasoning_tokens = getattr(usage.completion_tokens_details, "reasoning_tokens", 0) or 0
-
-    reasoning_cost_value: Final = model_info.get("output_cost_per_reasoning_token")
-
-    # `completion_tokens` includes `reasoning_tokens` per the OpenAI/Perplexity usage
-    # convention (codified for the central path in PR #18607). When a reasoning rate is
-    # configured we subtract before the output-rate multiplication so the reasoning
-    # tokens are not billed twice.
-    if reasoning_tokens > 0 and reasoning_cost_value is not None:
-        non_reasoning_completion_tokens: Final = max(0, (usage.completion_tokens or 0) - reasoning_tokens)
-        completion_cost: float = non_reasoning_completion_tokens * output_cost_per_token
-        completion_cost += reasoning_tokens * _safe_float_cast(reasoning_cost_value)
-    else:
-        completion_cost = (usage.completion_tokens or 0) * output_cost_per_token
 
     ## ADD SEARCH QUERIES COST (if present)
     num_search_queries = 0

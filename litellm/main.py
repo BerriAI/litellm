@@ -155,7 +155,6 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     BaseUrlRoutingHint,
-    CustomPricingLiteLLMParams,
     ModelResponseStream,
     ProviderRoutingHints,
     RawRequestTypedDict,
@@ -1115,7 +1114,6 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
 )
 from litellm.responses.bridge_check import (
     bridge_reasoning_effort,
-    keep_registered_mode,
     str_keyed_mapping,
 )
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
@@ -1230,93 +1228,6 @@ def _provider_config_items(config: Mapping[str, object]) -> Iterable[tuple[str, 
 
 def _locals_snapshot(values: Mapping[str, object]) -> Mapping[str, object]:
     return values
-
-
-def _build_custom_pricing_entry(
-    custom_llm_provider: str,
-    kwargs: dict,
-    model_info: dict | None = None,
-) -> dict:
-    """Build a complete model cost entry from kwargs and model_info.
-
-    Collects all CustomPricingLiteLLMParams fields present in kwargs and
-    merges metadata from model_info (mode, supports_prompt_caching, max_tokens)
-    so that register_model() receives the full pricing configuration.
-    """
-    entry: Final[dict] = {"litellm_provider": custom_llm_provider}
-
-    for field_name in CustomPricingLiteLLMParams.model_fields:
-        value = kwargs.get(field_name)
-        if value is not None:
-            entry[field_name] = value
-
-    if model_info and isinstance(model_info, dict):
-        for key in ("mode", "supports_prompt_caching", "max_tokens"):
-            if key in model_info and model_info[key] is not None:
-                entry.setdefault(key, model_info[key])
-
-    return entry
-
-
-def _get_router_deployment_id(kwargs: dict) -> str | None:
-    for metadata_key in ("litellm_metadata", "metadata"):
-        metadata = kwargs.get(metadata_key) or {}
-        if not isinstance(metadata, dict):
-            continue
-        deployment_model_info = metadata.get("model_info") or {}
-        if not isinstance(deployment_model_info, dict):
-            continue
-        deployment_id = deployment_model_info.get("id")
-        if deployment_id is not None:
-            return str(deployment_id)
-    return None
-
-
-def _register_custom_pricing_for_request(
-    model: str,
-    custom_llm_provider: str,
-    kwargs: dict,
-    model_info: dict | None,
-) -> None:
-    """Register per-request custom pricing in litellm.model_cost.
-
-    Router-originated requests (identified by the deployment id the router puts
-    in metadata) get their full pricing registered under that unique id only;
-    the shared ``{provider}/{model}`` key receives the entry with pricing fields
-    stripped, mirroring Router._create_deployment. This keeps one deployment's
-    pricing overrides (e.g. a zero-cost wildcard) from clobbering built-in
-    pricing used by sibling deployments of the same backend model. Direct SDK
-    calls keep the legacy behavior of registering the shared key with pricing.
-    Either way the shared key's ``mode`` follows ``keep_registered_mode``, as on
-    deployment registration, since a call routes by its own ``model_info``.
-    """
-    entry: Final = _build_custom_pricing_entry(
-        custom_llm_provider=custom_llm_provider,
-        kwargs=kwargs,
-        model_info=model_info,
-    )
-    shared_key: Final = f"{custom_llm_provider}/{model}"
-    deployment_id: Final = _get_router_deployment_id(kwargs)
-    if deployment_id is None:
-        litellm.register_model({shared_key: keep_registered_mode(shared_key, entry)}, persist_across_reloads=False)
-        return
-    shared_entry: Final = keep_registered_mode(
-        shared_key, CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry)
-    )
-    litellm.register_model(
-        {deployment_id: entry},
-        persist_across_reloads=False,
-        warning_display_name=shared_key,
-        custom_llm_provider=custom_llm_provider,
-        add_to_provider_model_sets=False,
-    )
-    litellm.register_model(
-        {shared_key: shared_entry},
-        persist_across_reloads=False,
-        warning_display_name=shared_key,
-        custom_llm_provider=custom_llm_provider,
-        add_to_provider_model_sets=False,
-    )
 
 
 def _dispatch_metadata(ctx: CompletionDispatchContext) -> Mapping[str, object] | None:
@@ -5750,19 +5661,6 @@ def completion(
                 "aws_region_name", None
             )  # support region-based pricing for bedrock
 
-        ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
-        if (
-            (input_cost_per_token is not None and output_cost_per_token is not None)
-            or input_cost_per_second is not None
-            or output_cost_per_second is not None
-            or cost_per_second is not None
-        ):
-            _register_custom_pricing_for_request(
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                kwargs=kwargs,
-                model_info=model_info,
-            )
         ### BUILD CUSTOM PROMPT TEMPLATE -- IF GIVEN ###
         custom_prompt_dict = {}
         if initial_prompt_value or roles or final_prompt_value or bos_token or eos_token:
@@ -6705,12 +6603,6 @@ def embedding(
             headers.update(proxy_headers)
         except Exception as e:
             verbose_logger.warning("Failed to get proxy auth headers: %s", e)
-    ### CUSTOM MODEL COST ###
-    input_cost_per_token: Final = kwargs.get("input_cost_per_token", None)
-    output_cost_per_token: Final = kwargs.get("output_cost_per_token", None)
-    cost_per_second: Final = kwargs.get("cost_per_second", None)
-    input_cost_per_second: Final = kwargs.get("input_cost_per_second", None)
-    output_cost_per_second: Final = kwargs.get("output_cost_per_second", None)
     openai_params: Final = [
         "user",
         "dimensions",
@@ -6756,20 +6648,6 @@ def embedding(
         allowed_openai_params=allowed_openai_params,
         **non_default_params,
     )
-
-    ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
-    if (
-        (input_cost_per_token is not None and output_cost_per_token is not None)
-        or input_cost_per_second is not None
-        or output_cost_per_second is not None
-        or cost_per_second is not None
-    ):
-        _register_custom_pricing_for_request(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            kwargs=kwargs,
-            model_info=kwargs.get("model_info"),
-        )
 
     logging: Final[LiteLLMLoggingObj] = litellm_logging_obj
     logging.update_environment_variables(

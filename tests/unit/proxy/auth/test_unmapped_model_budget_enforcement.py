@@ -8,15 +8,75 @@ See: https://github.com/BerriAI/litellm/issues/24770
 """
 
 import copy
+from collections.abc import Mapping
+from typing import Final
 
 import pytest
 
 import litellm
-from litellm.proxy.auth.auth_checks import is_model_cost_zero
+from litellm._catalog import is_priced
+from litellm.proxy.auth.auth_checks import is_model_cost_zero, model_has_no_cost_mapping
 from litellm.router import Router
 
-
 UNPRICED_ZERO_COST_MODEL = "ollama/unpriced-zero-cost-target"
+
+
+@pytest.mark.parametrize(
+    ("prices", "present", "free"),
+    (
+        ({}, False, False),
+        ({"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}, True, True),
+        ({"input_cost_per_token": 1.0, "output_cost_per_token": 2.0}, True, False),
+        ({"input_cost_per_token": 0.0}, True, False),
+        ({"output_cost_per_token": 2.0}, True, False),
+        ({"cache_read_input_token_cost": 0.0}, True, False),
+        (
+            {
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+                "ptu_count": 10,
+                "cost_per_ptu_per_hour": 1.0,
+            },
+            True,
+            False,
+        ),
+        (
+            {
+                "input_cost_per_token": 1.0,
+                "output_cost_per_token": 2.0,
+                "tiered_pricing": [{"range": [0, 100], "input_cost_per_token": 3.0, "output_cost_per_token": 4.0}],
+            },
+            True,
+            False,
+        ),
+    ),
+    ids=(
+        "metadata-only",
+        "explicit-free",
+        "paid",
+        "input-only-zero",
+        "output-only-positive",
+        "cache-only-zero",
+        "ptu",
+        "flat-plus-tier",
+    ),
+)
+def test_native_price_presence_does_not_replace_free_budget_policy(
+    monkeypatch: pytest.MonkeyPatch, prices: Mapping[str, object], present: bool, free: bool
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "m5-budget-group",
+                "litellm_params": {"model": "openai/m5-budget-backend", "api_key": "fake-key"},
+                "model_info": {"id": "m5-budget-deployment", **prices},
+            }
+        ]
+    )
+    assert is_priced("m5-budget-deployment") is present
+    assert model_has_no_cost_mapping("m5-budget-group", router) is not present
+    assert is_model_cost_zero("m5-budget-group", router) is free
 
 
 def _explicitly_free(name: str, model: str = "gpt-3.5-turbo", **model_info: float) -> dict:

@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import Final, Literal
 
 import pytest
@@ -135,6 +137,81 @@ def test_compression_savings_priced_at_input_rate():
     assert result.compression == pytest.approx(4389 * input_cost)
     assert result.compression > 0
     assert result.prompt_caching == 0.0
+
+
+@pytest.mark.parametrize(
+    ("prices", "saved_tokens", "expected"),
+    (
+        ({}, 10, 0.0),
+        ({"input_cost_per_token": None}, 10, 0.0),
+        ({"input_cost_per_token": 0.0}, 10, 0.0),
+        ({"input_cost_per_token": 2.0}, -10, 0.0),
+        ({"input_cost_per_token": 2.0}, 10, 20.0),
+    ),
+)
+def test_compression_keeps_the_flat_reporting_estimate_instead_of_token_selection(
+    monkeypatch: pytest.MonkeyPatch, prices: Mapping[str, float | None], saved_tokens: int, expected: float
+) -> None:
+    model: Final = "openai/compression-policy-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            **prices,
+            "output_cost_per_token": 1.0,
+            "tiered_pricing": [{"range": [0, 2000], "input_cost_per_token": 0.1, "output_cost_per_token": 0.1}],
+            "input_cost_per_token_priority": 0.01,
+            "off_peak_pricing": {"hours_utc": "00:00-00:00", "input_cost_per_token": 0.001},
+        },
+    )
+    result: Final = compute_savings_spend(
+        model,
+        "openai",
+        saved_tokens,
+        False,
+        usage_object={"prompt_tokens": 1000, "completion_tokens": 0},
+        cost_breakdown={"service_tier": "priority"},
+        billed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    assert result.compression == expected
+    assert result.prompt_caching == 0.0
+
+
+def test_compression_reporting_does_not_leak_deployment_prices(monkeypatch: pytest.MonkeyPatch) -> None:
+    model: Final = "openai/compression-policy-test"
+    row: Final = {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": 1.0,
+        "output_cost_per_token": 1.0,
+    }
+    monkeypatch.setitem(litellm.model_cost, model, dict(row))
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "compression-a",
+                "litellm_params": {"model": model, "input_cost_per_token": 2.0},
+                "model_info": {"id": "compression-a"},
+            },
+            {
+                "model_name": "compression-b",
+                "litellm_params": {"model": model, "input_cost_per_token": 3.0},
+                "model_info": {"id": "compression-b"},
+            },
+        ]
+    )
+
+    def estimate(model_id: str) -> float:
+        return compute_savings_spend(
+            model, "openai", 10, False, model_id=model_id, llm_router=lambda: router
+        ).compression
+
+    assert estimate("compression-a") == 20.0
+    assert estimate("compression-b") == 30.0
+    assert estimate("compression-a") == 20.0
+    assert litellm.model_cost[model] == row
 
 
 def test_prompt_caching_savings_priced_at_input_minus_cache_read():
@@ -633,8 +710,6 @@ def test_equal_modeled_usage_is_zero_under_equivalent_model_names() -> None:
     usage: Final = _usage(3, 500, 12304, 500)
     assert _savings("anthropic/claude-opus-5", "claude-opus-5", usage, usage) == 0.0
     assert _savings("claude-opus-5", "anthropic/claude-opus-5", usage, usage) == 0.0
-
-
 
 
 def test_unresolvable_baseline_remains_unknown():

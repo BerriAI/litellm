@@ -203,7 +203,7 @@ from litellm.types.utils import (
     is_server_derived_pricing_key,
     pricing_override_fields,
 )
-from litellm.utils import cost_map_omits_token_price, load_credentials_from_list, with_named_credential
+from litellm.utils import load_credentials_from_list, with_named_credential
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -15996,7 +15996,11 @@ def _enrich_model_info_with_litellm_data(
     discovered_model_info: Final = (
         llm_router.get_discovered_model_info(model_info.get("id")) if llm_router is not None else MappingProxyType({})
     )
-    unpriced: Final = cost_map_omits_token_price(model_info.get("id"), litellm_model_info.get("key"))
+    from litellm._catalog import is_priced
+
+    unpriced: Final = not any(
+        is_priced(key) for key in (model_info.get("id"), litellm_model_info.get("key")) if isinstance(key, str)
+    )
     stamped_model_info: Final = MappingProxyType(
         {**model_info, **_pricing_override_stamps(model_info, model.get("litellm_params") or MappingProxyType({}))}
     )

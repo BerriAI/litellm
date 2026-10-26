@@ -3660,22 +3660,6 @@ def set_live_deployment_replay(replay: Callable[[], None]) -> None:
     _LiveDeploymentReplay.callbacks = (replay,)
 
 
-def cost_map_omits_token_price(*keys: object) -> bool:
-    """Whether the raw ``litellm.model_cost`` entries under ``keys`` exist but none carries a per-token price.
-
-    ``get_model_info`` substitutes 0 for a missing price, which reads exactly like a declared
-    zero. Surfaces that report pricing use this to keep an unpriced deployment at ``None``.
-    """
-    entries: Final = tuple(
-        entry
-        for entry in (litellm.model_cost.get(key) for key in keys if isinstance(key, str))
-        if isinstance(entry, dict)
-    )
-    return len(entries) > 0 and not any(
-        "input_cost_per_token" in entry or "output_cost_per_token" in entry for entry in entries
-    )
-
-
 def register_model(
     model_cost: str | dict,
     *,
@@ -6322,25 +6306,8 @@ def get_model_info_helper(
 
             if _model_info is None or key is None:
                 raise ModelNotMappedError(_model_not_mapped_message(model, custom_llm_provider))
-            _input_cost_per_token: float | None = _model_info.get("input_cost_per_token")
-            if _input_cost_per_token is None:
-                # default value to 0, be noisy about this
-                verbose_logger.debug(
-                    "model=%s, custom_llm_provider=%s has no input_cost_per_token in model_cost_map. Defaulting to 0.",
-                    model,
-                    custom_llm_provider,
-                )
-                _input_cost_per_token = 0
-
-            _output_cost_per_token: float | None = _model_info.get("output_cost_per_token")
-            if _output_cost_per_token is None:
-                # default value to 0, be noisy about this
-                verbose_logger.debug(
-                    "model=%s, custom_llm_provider=%s has no output_cost_per_token in model_cost_map. Defaulting to 0.",
-                    model,
-                    custom_llm_provider,
-                )
-                _output_cost_per_token = 0
+            _input_cost_per_token: Final = _model_info.get("input_cost_per_token")
+            _output_cost_per_token: Final = _model_info.get("output_cost_per_token")
 
             returned_model_info: Final = ModelInfoBase(
                 key=key,

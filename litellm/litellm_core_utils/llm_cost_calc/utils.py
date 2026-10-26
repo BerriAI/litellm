@@ -3,22 +3,19 @@
 
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone, tzinfo
+from dataclasses import dataclass
+from datetime import datetime
+from math import prod
 from types import MappingProxyType
 from typing import Final, Literal, TypedDict, cast
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from typing_extensions import ReadOnly
 
 import litellm
 from litellm._internal_context import current_billing_time
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import (
-    select_tier_for_input,
-    tier_rate,
-)
-from litellm.llms.fireworks_ai.cache_pricing import with_default_cache_read_rate
+from litellm.constants import FIREWORKS_AI_DEFAULT_CACHE_READ_RATE_RATIO
+from litellm.rust_bridge import _native
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CallTypes,
@@ -97,26 +94,14 @@ SERVICE_TIER_COST_KEY_SUFFIXES: Final[tuple[str, ...]] = tuple(
 )
 
 _INCLUSIVE_THRESHOLD_PROVIDERS: Final = frozenset({"xai"})
-_BATCH_KEY_SUFFIX: Final = "_batches"
-_BATCH_RATE_PREFIXES: Final = (
-    "input_cost_per_token",
-    "output_cost_per_token",
-    "cache_read_input_token_cost",
-    "cache_creation_input_token_cost",
-)
-_BATCH_TIER_PREFIXES: Final = (*_BATCH_RATE_PREFIXES, *_TTL_PRICED_CACHE_WRITE_RATE_KEYS.values())
-_BATCH_TIER_KEY: Final = re.compile(rf"^({'|'.join(_BATCH_TIER_PREFIXES)})_above_(\d+k?)_tokens{_BATCH_KEY_SUFFIX}$")
-_NON_STANDARD_THRESHOLD_SUFFIXES: Final = (*_SERVICE_TIER_SUFFIXES, _BATCH_KEY_SUFFIX)
 
 
-def _uses_inclusive_token_thresholds(custom_llm_provider: str | None) -> bool:
+def uses_inclusive_token_thresholds(custom_llm_provider: str | None) -> bool:
     return custom_llm_provider in _INCLUSIVE_THRESHOLD_PROVIDERS
 
 
-def apply_provider_cache_read_default(model_info: ModelInfo, custom_llm_provider: str | None) -> ModelInfo:
-    if custom_llm_provider == "fireworks_ai":
-        return with_default_cache_read_rate(model_info)
-    return model_info
+def cache_read_default_ratio(custom_llm_provider: str | None) -> float | None:
+    return FIREWORKS_AI_DEFAULT_CACHE_READ_RATE_RATIO if custom_llm_provider == "fireworks_ai" else None
 
 
 def _get_token_detail_value(details: object, key: str) -> int | None:
@@ -297,601 +282,6 @@ def get_service_tier_cost_key(base_key: str, service_tier: str | None) -> str:
 _get_service_tier_cost_key = get_service_tier_cost_key
 
 
-def _parse_token_threshold(threshold: str) -> float:
-    return float(threshold.replace("k", "")) * (1000 if "k" in threshold else 1)
-
-
-def _parse_above_token_threshold(key: str) -> float:
-    return _parse_token_threshold(key.rsplit("_above_", 1)[1].split("_tokens")[0])
-
-
-def _prompt_exceeds_threshold(prompt_tokens: int, threshold: float, inclusive: bool) -> bool:
-    return prompt_tokens > threshold or (inclusive and prompt_tokens == threshold)
-
-
-@dataclass(frozen=True, slots=True)
-class BatchCostRates:
-    input: float | None
-    output: float | None
-    cache_read: float | None
-    cache_creation: float | None
-    cache_creation_rates_by_ttl: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
-
-
-def _batch_rate(model_info: ModelInfo, key: str) -> float | None:
-    value: Final = model_info.get(key)
-    if isinstance(value, (int, float)):
-        return float(value)
-    if not isinstance(value, str):
-        return None
-    try:
-        return float(value)
-    except ValueError:
-        return None
-
-
-def _batch_tier_rate(model_info: ModelInfo, tier_key: str, flat_key: str) -> float | None:
-    tier_rate: Final = _batch_rate(model_info, tier_key)
-    return _batch_rate(model_info, flat_key) if tier_rate is None else tier_rate
-
-
-def _batch_tier_thresholds(model_info: ModelInfo, prefix: str) -> frozenset[str]:
-    return frozenset(
-        tier.group(2)
-        for key, value in model_info.items()
-        if value is not None and (tier := _BATCH_TIER_KEY.match(key)) is not None and tier.group(1) == prefix
-    )
-
-
-def _crossed_batch_tier(model_info: ModelInfo, prefix: str, usage: Usage, inclusive: bool) -> str | None:
-    return next(
-        (
-            threshold
-            for threshold in sorted(
-                _batch_tier_thresholds(model_info, prefix), key=_parse_token_threshold, reverse=True
-            )
-            if _prompt_exceeds_threshold(usage.prompt_tokens, _parse_token_threshold(threshold), inclusive)
-        ),
-        None,
-    )
-
-
-def _batch_rate_for_prefix(model_info: ModelInfo, prefix: str, usage: Usage, inclusive: bool) -> float | None:
-    flat_key: Final = f"{prefix}{_BATCH_KEY_SUFFIX}"
-    threshold: Final = _crossed_batch_tier(model_info, prefix, usage, inclusive)
-    if threshold is None:
-        return _batch_rate(model_info, flat_key)
-    return _batch_tier_rate(model_info, f"{prefix}_above_{threshold}_tokens{_BATCH_KEY_SUFFIX}", flat_key)
-
-
-def get_batch_cost_rates(model_info: ModelInfo, usage: Usage, custom_llm_provider: str | None) -> BatchCostRates:
-    inclusive: Final = _uses_inclusive_token_thresholds(custom_llm_provider)
-    return BatchCostRates(
-        input=_batch_rate_for_prefix(model_info, "input_cost_per_token", usage, inclusive),
-        output=_batch_rate_for_prefix(model_info, "output_cost_per_token", usage, inclusive),
-        cache_read=_batch_rate_for_prefix(model_info, "cache_read_input_token_cost", usage, inclusive),
-        cache_creation=_batch_rate_for_prefix(model_info, "cache_creation_input_token_cost", usage, inclusive),
-        cache_creation_rates_by_ttl=MappingProxyType(
-            {
-                ttl: rate
-                for ttl, key in _TTL_PRICED_CACHE_WRITE_RATE_KEYS.items()
-                if (rate := _batch_rate_for_prefix(model_info, key, usage, inclusive)) is not None
-            }
-        ),
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class TokenRates:
-    input_rate: float
-    output_rate: float
-    cache_read_rate: float
-    cache_creation_rate: float
-    reasoning_rate: float | None
-    cache_creation_rates_by_ttl: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
-
-    @property
-    def billed_reasoning_rate(self) -> float:
-        return self.output_rate if self.reasoning_rate is None else self.reasoning_rate
-
-
-def _select_priced_tier(model_info: ModelInfo, usage: Usage) -> Mapping[str, object] | None:
-    tiered_pricing: Final = model_info.get("tiered_pricing")
-    if not isinstance(tiered_pricing, list) or not tiered_pricing:
-        return None
-
-    tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=usage.prompt_tokens)
-    if tier is None or "input_cost_per_token" not in tier:
-        return None
-    return tier
-
-
-def _get_tiered_reasoning_rate(model_info: ModelInfo, usage: Usage) -> float | None:
-    tier: Final = _select_priced_tier(model_info=model_info, usage=usage)
-    if tier is None:
-        return None
-    if "output_cost_per_reasoning_token" not in tier and "output_cost_per_token" not in tier:
-        return None
-    return tier_rate(tier, "output_cost_per_reasoning_token", "output_cost_per_token")
-
-
-def _get_tiered_base_costs(model_info: ModelInfo, usage: Usage) -> tuple[TokenRates, Mapping[str, object]] | None:
-    """
-    Resolve the base rates from a model's ``tiered_pricing`` table, if it has one.
-
-    Tiered pricing is all-or-nothing: one tier is picked from the request's input tokens
-    and every token of the request is billed at that tier's rate. Rates the tier does not
-    declare fall back to the tier's input rate, so a request never mixes tiers.
-
-    An output rate is the exception: a tier table that spells out only input rates would
-    otherwise serve every completion for free, so the model's own output rate stands in.
-    """
-    tier: Final = _select_priced_tier(model_info=model_info, usage=usage)
-    if tier is None:
-        return None
-
-    completion_cost: Final = (
-        tier_rate(tier, "output_cost_per_token")
-        if "output_cost_per_token" in tier
-        else get_cost_per_unit(model_info, "output_cost_per_token") or 0.0
-    )
-    cache_creation_rate: Final = tier_rate(tier, "cache_creation_input_token_cost", "input_cost_per_token")
-    rates: Final = TokenRates(
-        input_rate=tier_rate(tier, "input_cost_per_token"),
-        output_rate=completion_cost,
-        cache_read_rate=tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token"),
-        cache_creation_rate=cache_creation_rate,
-        reasoning_rate=None,
-    )
-    return rates, tier
-
-
-def _is_within_off_peak_window(off_peak_hours_utc: str | Sequence[str], current_time: datetime | None = None) -> bool:
-    """Return True if current_time (UTC, defaulting to now) falls inside any off-peak window.
-
-    off_peak_hours_utc is a "HH:MM-HH:MM" string in UTC, or a list of such strings for providers
-    with multiple daily windows (e.g. ["16:30-00:30", "04:00-06:00"]). A window may wrap past
-    midnight, and a window whose start equals its end covers the whole day. The start is
-    inclusive and the end is exclusive; malformed windows are ignored.
-
-    An aware current_time is converted to UTC. A naive one is taken to already be UTC rather
-    than being localised, so callers must pass datetime.now(timezone.utc), never datetime.now(),
-    or every window shifts by the host's offset.
-    """
-    reference: Final = current_time if current_time is not None else current_billing_time()
-    now: Final = (reference.astimezone(timezone.utc) if reference.tzinfo is not None else reference).time()
-    windows: Final = (off_peak_hours_utc,) if isinstance(off_peak_hours_utc, str) else off_peak_hours_utc
-    for window in windows:
-        try:
-            start_str, end_str = window.split("-")
-            start = datetime.strptime(start_str.strip(), "%H:%M").replace(tzinfo=timezone.utc).time()
-            end = datetime.strptime(end_str.strip(), "%H:%M").replace(tzinfo=timezone.utc).time()
-        except (ValueError, AttributeError):
-            continue
-        if start < end:
-            if start <= now < end:
-                return True
-        elif now >= start or now < end:
-            return True
-    return False
-
-
-_WEEKDAY_NUMBERS: Final = MappingProxyType(
-    {
-        "mon": 1,
-        "monday": 1,
-        "tue": 2,
-        "tues": 2,
-        "tuesday": 2,
-        "wed": 3,
-        "wednesday": 3,
-        "thu": 4,
-        "thur": 4,
-        "thurs": 4,
-        "thursday": 4,
-        "fri": 5,
-        "friday": 5,
-        "sat": 6,
-        "saturday": 6,
-        "sun": 7,
-        "sunday": 7,
-    }
-)
-
-
-def _normalize_weekday(value: object) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value if 1 <= value <= 7 else None
-    if isinstance(value, str):
-        return _WEEKDAY_NUMBERS.get(value.strip().lower())
-    return None
-
-
-def _weekday_calendar(weekday_timezone: object) -> tzinfo:
-    if isinstance(weekday_timezone, str) and weekday_timezone.strip():
-        try:
-            return ZoneInfo(weekday_timezone.strip())
-        except (ValueError, ZoneInfoNotFoundError):
-            return timezone.utc
-    return timezone.utc
-
-
-def _matches_weekdays(reference_utc: datetime, weekdays: object, weekday_timezone: object) -> bool:
-    """Return True when reference_utc falls on one of the rule's weekdays, read on the calendar
-    named by weekday_timezone (default UTC). An absent weekdays means every day. The calendar
-    matters even when UTC and vendor-local weekdays agree at every currently priced hour: a
-    window past 16:00 UTC is where an Asia/Shanghai weekday diverges from the UTC one.
-    """
-    if weekdays is None:
-        return True
-    if isinstance(weekdays, str) or not isinstance(weekdays, Sequence):
-        return False
-    allowed: Final = frozenset(day for day in map(_normalize_weekday, weekdays) if day is not None)
-    return reference_utc.astimezone(_weekday_calendar(weekday_timezone)).isoweekday() in allowed
-
-
-def _as_window_strings(value: object) -> tuple[str, ...]:
-    if isinstance(value, str):
-        return (value,)
-    if isinstance(value, Sequence):
-        return tuple(entry for entry in value if isinstance(entry, str))
-    return ()
-
-
-def _is_off_peak(off_peak: Mapping[str, object], current_time: datetime | None = None) -> bool:
-    """Return True when current_time (UTC, defaulting to now) is off-peak under the block's
-    rules: the flat hours_utc windows, which apply every day, or any entry in windows, whose
-    hours apply only on its weekdays.
-    """
-    reference: Final = current_time if current_time is not None else current_billing_time()
-    reference_utc: Final = (
-        reference.astimezone(timezone.utc) if reference.tzinfo is not None else reference.replace(tzinfo=timezone.utc)
-    )
-    flat_windows: Final = _as_window_strings(off_peak.get("hours_utc"))
-    if flat_windows and _is_within_off_peak_window(flat_windows, reference_utc):
-        return True
-    windows: Final = off_peak.get("windows")
-    if isinstance(windows, str) or not isinstance(windows, Sequence):
-        return False
-    weekday_timezone: Final = off_peak.get("weekday_timezone")
-    for rule in windows:
-        if not isinstance(rule, Mapping):
-            continue
-        rule_windows = _as_window_strings(rule.get("hours_utc"))
-        if not rule_windows:
-            continue
-        if not _matches_weekdays(reference_utc, rule.get("weekdays"), weekday_timezone):
-            continue
-        if _is_within_off_peak_window(rule_windows, reference_utc):
-            return True
-    return False
-
-
-def resolve_explicit_cache_read_cost_rate(
-    model_info: ModelInfo,
-    usage: Usage,
-    current_time: datetime | None,
-    service_tier: str | None = None,
-) -> float | None:
-    cache_read_cost_key: Final = "explicit_cache_read_input_token_cost"
-    service_cache_read_cost_key: Final = _get_service_tier_cost_key(cache_read_cost_key, service_tier)
-    if (
-        model_info.get(service_cache_read_cost_key) is None
-        and model_info.get(cache_read_cost_key) is None
-        and model_info.get("tiered_pricing") is None
-        and model_info.get("off_peak_pricing") is None
-    ):
-        return None
-
-    prompt_tokens_details: Final = usage.prompt_tokens_details
-    cache_type: Final = (
-        getattr(prompt_tokens_details, "cache_type", None) if prompt_tokens_details is not None else None
-    )
-    if parse_prompt_tokens_details(usage)["cache_hit_tokens"] <= 0 or cache_type != "ephemeral":
-        return None
-
-    tier: Final = _select_priced_tier(model_info=model_info, usage=usage)
-    off_peak: Final = _open_off_peak_block(model_info, current_time)
-    model_cache_read_cost_rate: Final = _get_cost_per_unit(
-        model_info,
-        service_cache_read_cost_key,
-        default_value=None,
-    )
-    tier_has_explicit_rate: Final = tier is not None and cache_read_cost_key in tier
-    off_peak_has_explicit_rate: Final = (
-        off_peak is not None and _parse_off_peak_rate(off_peak.get(cache_read_cost_key)) is not None
-    )
-    if model_cache_read_cost_rate is None and not tier_has_explicit_rate and not off_peak_has_explicit_rate:
-        return None
-
-    cache_read_cost_rate: Final = (
-        tier_rate(tier, cache_read_cost_key)
-        if tier is not None and tier_has_explicit_rate
-        else tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token")
-        if tier is not None
-        else model_cache_read_cost_rate
-        if model_cache_read_cost_rate is not None
-        else _get_cost_per_unit(
-            model_info,
-            _get_service_tier_cost_key("cache_read_input_token_cost", service_tier),
-            default_value=_get_cost_per_unit(model_info, "input_cost_per_token") or 0.0,
-        )
-        or 0.0
-    )
-
-    if off_peak is None:
-        return cache_read_cost_rate
-    mode_specific_off_peak_rate: Final = _parse_off_peak_rate(off_peak.get(cache_read_cost_key))
-    generic_off_peak_rate: Final = _parse_off_peak_rate(off_peak.get("cache_read_input_token_cost"))
-    return (
-        mode_specific_off_peak_rate
-        if mode_specific_off_peak_rate is not None
-        else generic_off_peak_rate
-        if generic_off_peak_rate is not None
-        else cache_read_cost_rate
-    )
-
-
-def _parse_off_peak_rate(value: object) -> float | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        try:
-            return float(value)
-        except ValueError:
-            return None
-    return None
-
-
-def _off_peak_rate(off_peak: Mapping[str, object], key: str, standard_rate: float) -> float:
-    parsed: Final = _parse_off_peak_rate(off_peak.get(key))
-    return standard_rate if parsed is None else parsed
-
-
-def _open_off_peak_block(model_info: ModelInfo, current_time: datetime | None) -> Mapping[str, object] | None:
-    off_peak: Final = model_info.get("off_peak_pricing")
-    if not isinstance(off_peak, Mapping) or not _is_off_peak(off_peak, current_time):
-        return None
-    return off_peak
-
-
-def apply_off_peak_pricing(model_info: ModelInfo, current_time: datetime | None, rates: TokenRates) -> TokenRates:
-    """Swap in off-peak per-token rates when the current UTC time is inside one of the model's
-    off_peak_pricing rules, the every-day hours_utc windows or a day-of-week-qualified entry in
-    windows. An off-peak rate replaces the rate that would otherwise apply rather than
-    discounting it, so a model that also has tiered or above-threshold pricing bills the flat
-    off-peak rate for the whole request while the window is open. Any rate left unset in
-    off_peak_pricing falls back to the standard rate, so a block without
-    output_cost_per_reasoning_token keeps the model's own reasoning rate, or its off-peak output
-    rate when reasoning has no dedicated rate at all.
-    """
-    off_peak: Final = _open_off_peak_block(model_info, current_time)
-    if off_peak is None:
-        return rates
-    off_peak_reasoning_rate: Final = _parse_off_peak_rate(off_peak.get("output_cost_per_reasoning_token"))
-    return replace(
-        rates,
-        input_rate=_off_peak_rate(off_peak, "input_cost_per_token", rates.input_rate),
-        output_rate=_off_peak_rate(off_peak, "output_cost_per_token", rates.output_rate),
-        cache_read_rate=_off_peak_rate(off_peak, "cache_read_input_token_cost", rates.cache_read_rate),
-        cache_creation_rate=_off_peak_rate(off_peak, "cache_creation_input_token_cost", rates.cache_creation_rate),
-        reasoning_rate=rates.reasoning_rate if off_peak_reasoning_rate is None else off_peak_reasoning_rate,
-    )
-
-
-def _apply_off_peak_to_base_costs(
-    model_info: ModelInfo,
-    current_time: datetime | None,
-    base_rates: TokenRates,
-    tier: Mapping[str, object],
-) -> TokenRates:
-    """Apply off-peak rates to the base costs resolved from a pricing tier. off_peak_pricing has no
-    field for the long-TTL cache-creation rates, so a tier that declares one keeps it, and a tier
-    that does not bills that TTL at the off-peak-adjusted write rate. Reasoning is left to
-    _resolve_billed_reasoning_rate.
-    """
-    rates: Final = apply_off_peak_pricing(model_info, current_time, base_rates)
-    return replace(
-        rates,
-        cache_creation_rates_by_ttl=MappingProxyType(
-            {
-                ttl: rates.cache_creation_rate if tier.get(key) is None else tier_rate(tier, key)
-                for ttl, key in _TTL_PRICED_CACHE_WRITE_RATE_KEYS.items()
-            }
-        ),
-    )
-
-
-def _first_present_key(model_info: ModelInfo, preferred_key: str, fallback_key: str) -> str:
-    return preferred_key if model_info.get(preferred_key) is not None else fallback_key
-
-
-def _get_token_base_cost(
-    model_info: ModelInfo,
-    usage: Usage,
-    service_tier: str | None = None,
-    current_time: datetime | None = None,
-    *,
-    threshold_is_inclusive: bool = False,
-) -> TokenRates:
-    """
-    Return prompt cost, completion cost, and cache costs for a given model and usage.
-
-    If input_tokens > threshold and `input_cost_per_token_above_[x]k_tokens` or `input_cost_per_token_above_[x]_tokens` is set,
-    then we use the corresponding threshold cost for all token types.
-
-    `threshold_is_inclusive` switches that comparison to >=, for providers such as xAI
-    that bill the higher tier once the prompt reaches the threshold.
-
-    An absent cache-creation or cache-read rate always resolves to the resolved input
-    rate, the way the tiered table and custom deployment pricing already do, since a
-    provider that publishes no cache price bills cached tokens as ordinary input. An
-    absent long-TTL write rate resolves to the cache-creation rate, off-peak included. An
-    explicit 0.0 stays a real price for all of them.
-    """
-    tiered_base_costs: Final = _get_tiered_base_costs(model_info=model_info, usage=usage)
-    if tiered_base_costs is not None:
-        return _apply_off_peak_to_base_costs(model_info, current_time, *tiered_base_costs)
-
-    # Get service tier aware cost keys
-    input_cost_key: Final = get_service_tier_cost_key("input_cost_per_token", service_tier)
-    output_cost_key: Final = get_service_tier_cost_key("output_cost_per_token", service_tier)
-    cache_creation_cost_key: Final = get_service_tier_cost_key("cache_creation_input_token_cost", service_tier)
-    cache_read_cost_key: Final = get_service_tier_cost_key("cache_read_input_token_cost", service_tier)
-
-    prompt_base_cost = cast(  # cast-ok: model pricing data is external
-        float, get_cost_per_unit(model_info, input_cost_key)
-    )
-    completion_base_cost = cast(  # cast-ok: model pricing data is external
-        float, get_cost_per_unit(model_info, output_cost_key)
-    )
-
-    # For image generation models that don't have output_cost_per_token,
-    # use output_cost_per_image_token as the base cost (all output tokens are image tokens)
-    if completion_base_cost == 0.0:
-        output_image_cost: Final = get_cost_per_unit(model_info, "output_cost_per_image_token", None)
-        if output_image_cost is not None:
-            completion_base_cost = output_image_cost
-    cache_creation_cost = get_cost_per_unit(model_info, cache_creation_cost_key, default_value=None)
-    cache_creation_keys_by_ttl: Mapping[str, str] = MappingProxyType(
-        {ttl: get_service_tier_cost_key(key, service_tier) for ttl, key in _TTL_PRICED_CACHE_WRITE_RATE_KEYS.items()}
-    )
-    cache_read_cost = get_cost_per_unit(model_info, cache_read_cost_key, default_value=None)
-
-    ## CHECK IF ABOVE THRESHOLD
-    # Optimization: collect threshold keys first to avoid sorting all model_info keys.
-    # Standard thresholds and thresholds suffixed for this request's service tier both count.
-    tier_key_suffix: Final = get_service_tier_cost_key("", service_tier)
-    threshold_prefixes: Final = tuple(f"{prefix}_above_" for prefix in _BATCH_RATE_PREFIXES)
-    threshold_keys: Final = [
-        k
-        for k in model_info
-        if k.startswith(threshold_prefixes)
-        and "_tokens" in k
-        and (
-            not k.endswith(_NON_STANDARD_THRESHOLD_SUFFIXES) or (tier_key_suffix != "" and k.endswith(tier_key_suffix))
-        )
-    ]
-
-    # Only sort the threshold keys (typically 1-2 keys instead of 66+)
-    threshold: float | None = None
-    for key in sorted(threshold_keys, key=_parse_above_token_threshold):
-        value = model_info.get(key)
-        if value is not None:
-            try:
-                # Handle both formats: _above_128k_tokens and _above_128_tokens
-                threshold_str = key.rsplit("_above_", 1)[1].split("_tokens")[0]
-                threshold = _parse_above_token_threshold(key)
-                if _prompt_exceeds_threshold(usage.prompt_tokens, threshold, threshold_is_inclusive):
-                    # Prefer a service_tier-specific above-threshold key when available,
-                    # e.g. input_cost_per_token_priority_above_200k_tokens for Gemini
-                    # ON_DEMAND_PRIORITY.  Falls back to the standard key automatically
-                    # via _get_cost_per_unit's service_tier fallback logic.
-                    tiered_input_key = (
-                        get_service_tier_cost_key(
-                            f"input_cost_per_token_above_{threshold_str}_tokens",
-                            service_tier,
-                        )
-                        if service_tier
-                        else f"input_cost_per_token_above_{threshold_str}_tokens"
-                    )
-                    prompt_base_cost = cast(
-                        float,
-                        get_cost_per_unit(model_info, tiered_input_key, prompt_base_cost),
-                    )
-                    tiered_output_key = (
-                        get_service_tier_cost_key(
-                            f"output_cost_per_token_above_{threshold_str}_tokens",
-                            service_tier,
-                        )
-                        if service_tier
-                        else f"output_cost_per_token_above_{threshold_str}_tokens"
-                    )
-                    completion_base_cost = cast(
-                        float,
-                        get_cost_per_unit(
-                            model_info,
-                            tiered_output_key,
-                            completion_base_cost,
-                        ),
-                    )
-
-                    # Apply tiered pricing to cache costs
-                    cache_creation_tiered_key = (
-                        get_service_tier_cost_key(
-                            f"cache_creation_input_token_cost_above_{threshold_str}_tokens",
-                            service_tier,
-                        )
-                        if service_tier
-                        else f"cache_creation_input_token_cost_above_{threshold_str}_tokens"
-                    )
-                    cache_read_tiered_key = (
-                        get_service_tier_cost_key(
-                            f"cache_read_input_token_cost_above_{threshold_str}_tokens",
-                            service_tier,
-                        )
-                        if service_tier
-                        else f"cache_read_input_token_cost_above_{threshold_str}_tokens"
-                    )
-
-                    cache_creation_cost = get_cost_per_unit(model_info, cache_creation_tiered_key, cache_creation_cost)
-
-                    cache_creation_keys_by_ttl = MappingProxyType(
-                        {
-                            ttl: _first_present_key(
-                                model_info,
-                                get_service_tier_cost_key(
-                                    f"{_TTL_PRICED_CACHE_WRITE_RATE_KEYS[ttl]}_above_{threshold_str}_tokens",
-                                    service_tier,
-                                ),
-                                key,
-                            )
-                            for ttl, key in cache_creation_keys_by_ttl.items()
-                        }
-                    )
-                    cache_read_cost = get_cost_per_unit(model_info, cache_read_tiered_key, cache_read_cost)
-            except (IndexError, ValueError):
-                continue
-            except Exception:
-                continue
-
-    input_rate_for_missing_cache_rates: Final = _off_peak_rate(
-        _open_off_peak_block(model_info, current_time) or MappingProxyType({}),
-        "input_cost_per_token",
-        prompt_base_cost,
-    )
-    resolved_cache_read_cost: Final = input_rate_for_missing_cache_rates if cache_read_cost is None else cache_read_cost
-    resolved_cache_creation_cost: Final = (
-        input_rate_for_missing_cache_rates if cache_creation_cost is None else cache_creation_cost
-    )
-    base_rates: Final = apply_off_peak_pricing(
-        model_info,
-        current_time,
-        TokenRates(
-            input_rate=prompt_base_cost,
-            output_rate=completion_base_cost,
-            cache_read_rate=resolved_cache_read_cost,
-            cache_creation_rate=resolved_cache_creation_cost,
-            reasoning_rate=None,
-        ),
-    )
-    return replace(
-        base_rates,
-        cache_creation_rates_by_ttl=MappingProxyType(
-            {
-                ttl: base_rates.cache_creation_rate
-                if (rate := get_cost_per_unit(model_info, key, default_value=None)) is None
-                else rate
-                for ttl, key in cache_creation_keys_by_ttl.items()
-            }
-        ),
-    )
-
-
 def calculate_cost_component(model_info: ModelInfo, cost_key: str, usage_value: float | None) -> float:
     """
     Generic cost calculator for any usage component
@@ -999,33 +389,6 @@ def resolve_image_model_info(model: str, custom_llm_provider: str, model_info: M
         return model_info
     resolved: Final[ModelInfo] = {**shared_model_info, **model_info}
     return resolved
-
-
-def calculate_cache_writing_cost(
-    cache_creation_tokens: int,
-    cache_creation_token_details: CacheCreationTokenDetails | None,
-    cache_creation_cost: float,
-    cache_creation_cost_by_ttl: Mapping[str, float],
-) -> float:
-    """
-    Bill cache writes per lifetime: Anthropic reports 5m and 1h counts, OpenAI reports 30m and 12h counts.
-    Writes no lifetime count covers, such as a lifetime a provider adds later, bill at the base write rate.
-    """
-    if cache_creation_token_details is None:
-        return cache_creation_tokens * cache_creation_cost
-    tokens_by_ttl: Final[Mapping[str, int | None]] = MappingProxyType(
-        {
-            "5m": cache_creation_token_details.ephemeral_5m_input_tokens,
-            "30m": cache_creation_token_details.ephemeral_30m_input_tokens,
-            "1hr": cache_creation_token_details.ephemeral_1h_input_tokens,
-            "12hr": cache_creation_token_details.ephemeral_12h_input_tokens,
-        }
-    )
-    unattributed_tokens: Final = max(cache_creation_tokens - sum(t or 0 for t in tokens_by_ttl.values()), 0)
-    return unattributed_tokens * cache_creation_cost + sum(
-        (tokens or 0) * cache_creation_cost_by_ttl.get(ttl, cache_creation_cost)
-        for ttl, tokens in tokens_by_ttl.items()
-    )
 
 
 class PromptTokensDetailsResult(TypedDict):
@@ -1185,143 +548,6 @@ def parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResu
     )
 
 
-def _modality_token_cost(
-    model_info: ModelInfo,
-    modality_cost_key: str,
-    tokens: int,
-    prompt_base_cost: float,
-    service_tier: str | None,
-) -> float:
-    """
-    Audio, image and video prompt tokens bill at their modality rate when the model has one.
-    Without one they are ordinary prompt tokens, so they bill at `prompt_base_cost`, which
-    `_get_token_base_cost` has already resolved for the service tier and long-context tier.
-    """
-    tiered_key: Final = get_service_tier_cost_key(modality_cost_key, service_tier)
-    cost_key: Final = tiered_key if model_info.get(tiered_key) is not None else modality_cost_key
-    if model_info.get(cost_key) is None:
-        return float(tokens) * prompt_base_cost
-    return calculate_cost_component(model_info, cost_key, tokens)
-
-
-def _calculate_input_cost(
-    prompt_tokens_details: PromptTokensDetailsResult,
-    model_info: ModelInfo,
-    prompt_base_cost: float,
-    cache_read_cost: float,
-    cache_creation_cost: float,
-    cache_creation_cost_by_ttl: Mapping[str, float],
-    service_tier: str | None = None,
-) -> float:
-    """
-    Calculates the input cost for a given model, prompt tokens, and completion tokens.
-
-    A model priced per character (`input_cost_per_character`) bills the reported character count
-    in place of its text tokens, so the same prompt is never charged under both units.
-    """
-    bills_characters: Final = (
-        prompt_tokens_details["character_count"] > 0 and model_info.get("input_cost_per_character") is not None
-    )
-    prompt_cost = 0.0 if bills_characters else float(prompt_tokens_details["text_tokens"]) * prompt_base_cost
-
-    ### CACHE READ COST - Now uses tiered pricing
-    cache_hit_audio_tokens: Final = prompt_tokens_details["cache_hit_audio_tokens"]
-    audio_cache_read_rate: Final = get_cost_per_unit(
-        model_info,
-        get_service_tier_cost_key("cache_read_input_audio_token_cost", service_tier),
-        None,
-    )
-    prompt_cost += float(prompt_tokens_details["cache_hit_tokens"] - cache_hit_audio_tokens) * cache_read_cost
-    prompt_cost += float(cache_hit_audio_tokens) * (
-        audio_cache_read_rate if audio_cache_read_rate is not None else cache_read_cost
-    )
-
-    ### AUDIO COST
-    if prompt_tokens_details["audio_tokens"] and not (
-        prompt_tokens_details["audio_length_seconds"] and model_info.get("input_cost_per_audio_per_second") is not None
-    ):
-        prompt_cost += _modality_token_cost(
-            model_info,
-            "input_cost_per_audio_token",
-            prompt_tokens_details["audio_tokens"],
-            prompt_base_cost,
-            service_tier,
-        )
-
-    ### IMAGE TOKEN COST
-    if prompt_tokens_details["image_tokens"] and not (
-        prompt_tokens_details["image_count"] and model_info.get("input_cost_per_image") is not None
-    ):
-        prompt_cost += _modality_token_cost(
-            model_info,
-            "input_cost_per_image_token",
-            prompt_tokens_details["image_tokens"],
-            prompt_base_cost,
-            service_tier,
-        )
-
-    ### VIDEO TOKEN COST
-    if prompt_tokens_details["video_tokens"] and not (
-        prompt_tokens_details["video_length_seconds"] and model_info.get("input_cost_per_video_per_second") is not None
-    ):
-        prompt_cost += _modality_token_cost(
-            model_info,
-            "input_cost_per_video_token",
-            prompt_tokens_details["video_tokens"],
-            prompt_base_cost,
-            service_tier,
-        )
-
-    ### CACHE WRITING COST - Now uses tiered pricing
-    if (
-        prompt_tokens_details["cache_creation_tokens"]
-        or prompt_tokens_details["cache_creation_token_details"] is not None
-    ):
-        prompt_cost += calculate_cache_writing_cost(
-            cache_creation_tokens=prompt_tokens_details["cache_creation_tokens"],
-            cache_creation_token_details=prompt_tokens_details["cache_creation_token_details"],
-            cache_creation_cost=cache_creation_cost,
-            cache_creation_cost_by_ttl=cache_creation_cost_by_ttl,
-        )
-
-    ### CHARACTER COST
-    if prompt_tokens_details["character_count"]:
-        prompt_cost += calculate_cost_component(
-            model_info,
-            "input_cost_per_character",
-            prompt_tokens_details["character_count"],
-        )
-
-    ### IMAGE COUNT COST
-    if prompt_tokens_details["image_count"]:
-        prompt_cost += calculate_cost_component(
-            model_info, "input_cost_per_image", prompt_tokens_details["image_count"]
-        )
-
-    ### VIDEO LENGTH COST
-    if prompt_tokens_details["video_length_seconds"]:
-        prompt_cost += calculate_cost_component(
-            model_info,
-            "input_cost_per_video_per_second",
-            prompt_tokens_details["video_length_seconds"],
-        )
-
-    ### AUDIO LENGTH COST
-    if prompt_tokens_details["audio_length_seconds"]:
-        prompt_cost += calculate_cost_component(
-            model_info,
-            "input_cost_per_audio_per_second",
-            prompt_tokens_details["audio_length_seconds"],
-        )
-
-    if prompt_tokens_details["query_count"]:
-        prompt_cost += calculate_cost_component(
-            model_info, "input_cost_per_query", prompt_tokens_details["query_count"]
-        )
-
-    return prompt_cost
-
-
 def get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str | None) -> float:
     """
     Resolve the per-model regional-processing uplift multiplier for a given
@@ -1407,46 +633,6 @@ def get_provider_specific_speed_multiplier(model_info: ModelInfo, usage: Usage) 
     return float(provider_specific_entry.get("fast", 1.0))
 
 
-def _resolve_reasoning_token_cost(
-    model_info: ModelInfo,
-    service_tier: str | None,
-    completion_base_cost: float,
-) -> float:
-    tier_reasoning_key: Final = get_service_tier_cost_key("output_cost_per_reasoning_token", service_tier)
-    if model_info.get(tier_reasoning_key) is not None:
-        tier_reasoning_cost: Final = get_cost_per_unit(model_info, tier_reasoning_key, None)
-        if tier_reasoning_cost is not None:
-            return tier_reasoning_cost
-    tier_output_key: Final = get_service_tier_cost_key("output_cost_per_token", service_tier)
-    if tier_output_key != "output_cost_per_token" and model_info.get(tier_output_key) is not None:
-        return completion_base_cost
-    standard_reasoning_cost: Final = get_cost_per_unit(model_info, "output_cost_per_reasoning_token", None)
-    return standard_reasoning_cost if standard_reasoning_cost is not None else completion_base_cost
-
-
-def _resolve_billed_reasoning_rate(
-    model_info: ModelInfo,
-    usage: Usage,
-    service_tier: str | None,
-    completion_base_cost: float,
-    current_time: datetime | None,
-) -> float:
-    off_peak: Final = _open_off_peak_block(model_info, current_time)
-    off_peak_reasoning_rate: Final = (
-        None if off_peak is None else _parse_off_peak_rate(off_peak.get("output_cost_per_reasoning_token"))
-    )
-    if off_peak_reasoning_rate is not None:
-        return off_peak_reasoning_rate
-    tiered_reasoning_rate: Final = _get_tiered_reasoning_rate(model_info=model_info, usage=usage)
-    if tiered_reasoning_rate is not None:
-        return tiered_reasoning_rate
-    return _resolve_reasoning_token_cost(
-        model_info=model_info,
-        service_tier=service_tier,
-        completion_base_cost=completion_base_cost,
-    )
-
-
 def generic_cost_per_token(
     model: str,
     usage: Usage,
@@ -1481,178 +667,76 @@ def generic_cost_per_token(
     # rather than handing back a name for this to re-resolve. A name cannot express a
     # per-deployment override: those are registered under the deployment id and kept off
     # the shared model-name key, so resolving from the name here reads the public rate.
-    resolved_model_info: Final = apply_provider_cache_read_default(
-        get_model_info(model=model, custom_llm_provider=custom_llm_provider) if model_info is None else model_info,
-        custom_llm_provider,
+    resolved_model_info: Final = (
+        get_model_info(model=model, custom_llm_provider=custom_llm_provider) if model_info is None else model_info
     )
 
-    ## CALCULATE INPUT COST
-    ### Cost of processing (non-cache hit + cache hit) + Cost of cache-writing (cache writing)
-    prompt_cost = 0.0
-    ### PROCESSING COST
-    prompt_tokens_details = PromptTokensDetailsResult(
-        cache_hit_tokens=0,
-        cache_hit_audio_tokens=0,
-        cache_creation_tokens=0,
-        cache_creation_token_details=None,
-        text_tokens=usage.prompt_tokens,
-        audio_tokens=0,
-        image_tokens=0,
-        video_tokens=0,
-        character_count=0,
-        image_count=0,
-        video_length_seconds=0.0,
-        audio_length_seconds=0.0,
-        query_count=0,
+    factors: Final = token_pricing_factors(
+        resolved_model_info, usage, custom_llm_provider, data_residency, vertex_location
     )
-    if usage.prompt_tokens_details:
-        prompt_tokens_details = parse_prompt_tokens_details(usage)
+    return price_token_usage(
+        model, usage, custom_llm_provider, resolved_model_info, service_tier, current_time, factors
+    )
 
-    ## EDGE CASE - text tokens not set or includes cached tokens (double-counting)
-    ## Some providers (like xAI) report text_tokens = prompt_tokens (including cached)
-    ## We detect this when: text_tokens + cached_tokens + other > prompt_tokens
-    ## Ref: https://github.com/BerriAI/litellm/issues/19680, #14874, #14875
 
-    cache_hit: Final = prompt_tokens_details["cache_hit_tokens"]
-    text_tokens = prompt_tokens_details["text_tokens"]
-    audio_tokens = prompt_tokens_details["audio_tokens"]
-    cache_creation: Final = prompt_tokens_details["cache_creation_tokens"]
-    image_tokens = prompt_tokens_details["image_tokens"]
-    video_tokens = prompt_tokens_details["video_tokens"]
-
-    # Check for double-counting: sum of details > prompt_tokens means overlap
-    total_details: Final = text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens + video_tokens
-    has_double_counting: Final = (cache_hit > 0 or cache_creation > 0) and total_details > usage.prompt_tokens
-
-    if has_double_counting:
-        # cached and per-modality counts are both subsets of prompt_tokens and may overlap, so a
-        # modality can only bill what the cache did not already cover or the overlap is billed twice
-        uncached_budget: Final = max(usage.prompt_tokens - cache_hit - cache_creation, 0)
-        billable_audio: Final = min(audio_tokens, uncached_budget)
-        billable_image: Final = min(image_tokens, uncached_budget - billable_audio)
-        billable_video: Final = min(video_tokens, uncached_budget - billable_audio - billable_image)
-        prompt_tokens_details["audio_tokens"] = billable_audio
-        prompt_tokens_details["image_tokens"] = billable_image
-        prompt_tokens_details["video_tokens"] = billable_video
-        prompt_tokens_details["text_tokens"] = uncached_budget - billable_audio - billable_image - billable_video
-    elif text_tokens == 0 and prompt_tokens_details["image_count"] == 0:
-        # Clamp to zero: inconsistent streaming usage
-        prompt_tokens_details["text_tokens"] = max(
-            usage.prompt_tokens - cache_hit - audio_tokens - cache_creation - image_tokens - video_tokens, 0
-        )
+def price_token_usage(
+    model: str,
+    usage: Usage,
+    custom_llm_provider: str,
+    resolved_model_info: ModelInfo,
+    service_tier: str | None,
+    current_time: datetime | None,
+    factors: Sequence[float],
+) -> tuple[float, float]:
+    from litellm._cost import billing_context, price, require_priced, token_usage
 
     billing_time: Final = current_time if current_time is not None else current_billing_time()
-    base_costs: Final = _get_token_base_cost(
-        model_info=resolved_model_info,
-        usage=usage,
-        service_tier=service_tier,
-        current_time=billing_time,
-        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+    priced: Final = require_priced(
+        price(
+            {"litellm_provider": custom_llm_provider, **resolved_model_info},
+            token_usage(
+                usage,
+                resolved_model_info,
+                inclusive_threshold=uses_inclusive_token_thresholds(custom_llm_provider),
+            ),
+            billing_context(billing_time, service_tier),
+            factors=factors,
+            cache_read_default_ratio=cache_read_default_ratio(custom_llm_provider),
+        ),
+        model,
     )
-    completion_base_cost: Final = base_costs.output_rate
-    resolved_cache_read_cost: Final = resolve_explicit_cache_read_cost_rate(
-        model_info=resolved_model_info,
-        usage=usage,
-        current_time=billing_time,
-        service_tier=service_tier,
+    details: Final = parse_prompt_tokens_details(usage)
+    non_token_input: Final = sum(
+        calculate_cost_component(resolved_model_info, key, quantity)
+        for key, quantity in (
+            ("input_cost_per_character", details["character_count"]),
+            ("input_cost_per_image", details["image_count"]),
+            ("input_cost_per_video_per_second", details["video_length_seconds"]),
+            ("input_cost_per_audio_per_second", details["audio_length_seconds"]),
+            ("input_cost_per_query", details["query_count"]),
+        )
     )
-    effective_cache_read_cost: Final = (
-        base_costs.cache_read_rate if resolved_cache_read_cost is None else resolved_cache_read_cost
+    return priced.input + non_token_input * prod(factors), priced.output
+
+
+def token_pricing_factors(
+    model_info: ModelInfo,
+    usage: Usage,
+    custom_llm_provider: str | None,
+    data_residency: str | None,
+    vertex_location: str | None,
+) -> tuple[float, ...]:
+    regional: Final = (
+        get_regional_uplift_multiplier(model_info, data_residency),
+        get_vertex_regional_endpoint_uplift(model_info, vertex_location),
     )
-
-    prompt_cost = _calculate_input_cost(
-        prompt_tokens_details=prompt_tokens_details,
-        model_info=resolved_model_info,
-        prompt_base_cost=base_costs.input_rate,
-        cache_read_cost=effective_cache_read_cost,
-        cache_creation_cost=base_costs.cache_creation_rate,
-        cache_creation_cost_by_ttl=base_costs.cache_creation_rates_by_ttl,
-        service_tier=service_tier,
+    if custom_llm_provider != "anthropic":
+        return regional
+    return (
+        *regional,
+        get_provider_specific_speed_multiplier(model_info, usage),
+        get_provider_specific_geo_multiplier(model_info, usage),
     )
-
-    ## CALCULATE OUTPUT COST
-    text_tokens = 0
-    audio_tokens = 0
-    reasoning_tokens = 0
-    image_tokens = 0
-    video_tokens = 0
-    is_text_tokens_total = False
-    if usage.completion_tokens_details is not None:
-        completion_tokens_details: Final = parse_completion_tokens_details(usage)
-        audio_tokens = completion_tokens_details["audio_tokens"]
-        text_tokens = completion_tokens_details["text_tokens"]
-        reasoning_tokens = completion_tokens_details["reasoning_tokens"]
-        image_tokens = completion_tokens_details["image_tokens"]
-        video_tokens = completion_tokens_details["video_tokens"]
-
-    # Handle text_tokens calculation:
-    # 1. If text_tokens is explicitly provided and > 0, use it
-    # 2. If there's a breakdown (reasoning/audio/image/video tokens), calculate text_tokens as the remainder
-    # 3. If no breakdown at all, assume all completion_tokens are text_tokens
-    has_token_breakdown: Final = image_tokens > 0 or audio_tokens > 0 or reasoning_tokens > 0 or video_tokens > 0
-    if text_tokens == 0:
-        if has_token_breakdown:
-            # Calculate text tokens as remainder when we have a breakdown
-            # This handles cases like OpenAI's reasoning models where text_tokens isn't provided
-            text_tokens = max(
-                0,
-                usage.completion_tokens - reasoning_tokens - audio_tokens - image_tokens - video_tokens,
-            )
-        else:
-            # No breakdown at all, all tokens are text tokens
-            text_tokens = usage.completion_tokens
-            is_text_tokens_total = True
-    ## TEXT COST
-    completion_cost = float(text_tokens) * completion_base_cost
-
-    ## AUDIO COST
-    if not is_text_tokens_total and audio_tokens is not None and audio_tokens > 0:
-        _output_cost_per_audio_token = get_cost_per_unit(resolved_model_info, "output_cost_per_audio_token", None)
-        _output_cost_per_audio_token = (
-            _output_cost_per_audio_token if _output_cost_per_audio_token is not None else completion_base_cost
-        )
-        completion_cost += float(audio_tokens) * _output_cost_per_audio_token
-
-    ## REASONING COST
-    if not is_text_tokens_total and reasoning_tokens and reasoning_tokens > 0:
-        completion_cost += float(reasoning_tokens) * _resolve_billed_reasoning_rate(
-            model_info=resolved_model_info,
-            usage=usage,
-            service_tier=service_tier,
-            completion_base_cost=completion_base_cost,
-            current_time=billing_time,
-        )
-
-    ## IMAGE COST
-    if not is_text_tokens_total and image_tokens and image_tokens > 0:
-        _output_cost_per_image_token = get_cost_per_unit(resolved_model_info, "output_cost_per_image_token", None)
-        _output_cost_per_image_token = (
-            _output_cost_per_image_token if _output_cost_per_image_token is not None else completion_base_cost
-        )
-        completion_cost += float(image_tokens) * _output_cost_per_image_token
-
-    ## VIDEO COST
-    if not is_text_tokens_total and video_tokens and video_tokens > 0:
-        _output_cost_per_video_token = get_cost_per_unit(resolved_model_info, "output_cost_per_video_token", None)
-        _output_cost_per_video_token = (
-            _output_cost_per_video_token if _output_cost_per_video_token is not None else completion_base_cost
-        )
-        completion_cost += float(video_tokens) * _output_cost_per_video_token
-
-    ## REGIONAL DATA-RESIDENCY UPLIFT
-    # Applied as a flat multiplier across all token costs for the request
-    # when the upstream is a regionalized OpenAI host (eu./us.api.openai.com).
-    uplift: Final = get_regional_uplift_multiplier(resolved_model_info, data_residency)
-    if uplift != 1.0:
-        prompt_cost *= uplift
-        completion_cost *= uplift
-
-    vertex_uplift: Final = get_vertex_regional_endpoint_uplift(resolved_model_info, vertex_location)
-    if vertex_uplift != 1.0:
-        prompt_cost *= vertex_uplift
-        completion_cost *= vertex_uplift
-
-    return prompt_cost, completion_cost
 
 
 def _coerce_token_count(value: object) -> int:
@@ -1661,31 +745,13 @@ def _coerce_token_count(value: object) -> int:
 
 @dataclass(frozen=True, slots=True)
 class BilledTokenRates:
-    """Per-token rates one request's usage bills at, after token tiers, off-peak windows and the
-    regional multipliers the totals apply, so each cost line equals its token count times its rate."""
-
-    input_cost_per_token: float
-    output_cost_per_token: float
-    cache_read_input_token_cost: float
-    cache_read_input_audio_token_cost: float
-    cache_creation_input_token_cost: float
-    cache_creation_input_token_cost_by_ttl: Mapping[str, float]
-    output_cost_per_reasoning_token: float
-
-    def scaled(self, multiplier: float) -> "BilledTokenRates":
-        if multiplier == 1.0:
-            return self
-        return BilledTokenRates(
-            input_cost_per_token=self.input_cost_per_token * multiplier,
-            output_cost_per_token=self.output_cost_per_token * multiplier,
-            cache_read_input_token_cost=self.cache_read_input_token_cost * multiplier,
-            cache_read_input_audio_token_cost=self.cache_read_input_audio_token_cost * multiplier,
-            cache_creation_input_token_cost=self.cache_creation_input_token_cost * multiplier,
-            cache_creation_input_token_cost_by_ttl=MappingProxyType(
-                {ttl: rate * multiplier for ttl, rate in self.cache_creation_input_token_cost_by_ttl.items()}
-            ),
-            output_cost_per_reasoning_token=self.output_cost_per_reasoning_token * multiplier,
-        )
+    input_cost_per_token: float | None
+    output_cost_per_token: float | None
+    cache_read_input_token_cost: float | None
+    cache_read_input_audio_token_cost: float | None
+    cache_creation_input_token_cost: float | None
+    cache_creation_input_token_cost_by_ttl: Mapping[str, float | None]
+    output_cost_per_reasoning_token: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1698,102 +764,83 @@ class TokenTypeCostBreakdown:
     differently-argued way. None when the model's pricing could not be resolved."""
 
 
-def _reasoning_token_count(usage: Usage) -> int:
-    parsed: Final = (
-        parse_completion_tokens_details(usage)["reasoning_tokens"] if usage.completion_tokens_details is not None else 0
-    )
-    return parsed or _coerce_token_count(getattr(usage, "reasoning_tokens", 0))
+_BILLED_TOKEN_METERS: Final = (
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "cache_read_input_token_cost",
+    "explicit_cache_read_input_token_cost",
+    "cache_read_input_audio_token_cost",
+    "cache_creation_input_token_cost",
+    "cache_creation_input_token_cost_above_1hr",
+    "cache_creation_input_token_cost_above_12hr",
+    "output_cost_per_reasoning_token",
+)
 
 
-def _cache_token_counts(usage: Usage) -> tuple[int, int, int, CacheCreationTokenDetails | None]:
-    """(cache read tokens, cached audio tokens, cache creation tokens, cache creation details): read from
-    prompt_tokens_details first, then the private top-level counters the Usage constructor mirrors cache
-    tokens onto for providers/callers that bypass the details."""
-    parsed: Final = parse_prompt_tokens_details(usage) if usage.prompt_tokens_details is not None else None
-    parsed_read: Final = parsed["cache_hit_tokens"] if parsed is not None else 0
-    parsed_creation: Final = parsed["cache_creation_tokens"] if parsed is not None else 0
-    return (
-        parsed_read or _coerce_token_count(getattr(usage, "_cache_read_input_tokens", 0)),
-        parsed["cache_hit_audio_tokens"] if parsed is not None else 0,
-        parsed_creation or _coerce_token_count(getattr(usage, "_cache_creation_input_tokens", 0)),
-        parsed["cache_creation_token_details"] if parsed is not None else None,
-    )
-
-
-def _custom_pricing_rates(custom_cost_per_token: CostPerToken) -> BilledTokenRates:
-    """Flat custom pricing has no tiers, uplifts or reasoning rate: cache tokens bill at the configured
-    cache rates (else the input rate) and reasoning at the output rate, as _cost_per_token_custom_pricing_helper does."""
-    input_rate: Final = custom_cost_per_token["input_cost_per_token"]
-    output_rate: Final = custom_cost_per_token["output_cost_per_token"]
-    cache_read_rate: Final = custom_cost_per_token.get("cache_read_input_token_cost", input_rate)
-    cache_creation_rate: Final = custom_cost_per_token.get("cache_creation_input_token_cost", input_rate)
-    return BilledTokenRates(
-        input_cost_per_token=input_rate,
-        output_cost_per_token=output_rate,
-        cache_read_input_token_cost=cache_read_rate,
-        cache_read_input_audio_token_cost=cache_read_rate,
-        cache_creation_input_token_cost=cache_creation_rate,
-        cache_creation_input_token_cost_by_ttl=MappingProxyType({}),
-        output_cost_per_reasoning_token=output_rate,
-    )
-
-
-def _cost_map_billed_rates(
-    model_info: ModelInfo,
-    usage: Usage,
+def _reported_token_evaluation(
+    model: str,
     custom_llm_provider: str | None,
+    usage: Usage,
     service_tier: str | None,
     data_residency: str | None,
     vertex_location: str | None,
     current_time: datetime | None,
-) -> BilledTokenRates:
-    billing_time: Final = current_time if current_time is not None else current_billing_time()
-    base_costs: Final = _get_token_base_cost(
-        model_info=model_info,
-        usage=usage,
-        service_tier=service_tier,
-        current_time=billing_time,
-        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+    custom_cost_per_token: CostPerToken | None,
+    model_info: ModelInfo | None,
+) -> _native.PriceEvaluation | _native.RowErrors | None:
+    from litellm._cost import billing_context, evaluate, token_usage
+
+    if custom_cost_per_token is not None:
+        custom_row: Final = {"litellm_provider": "custom", **custom_cost_per_token}
+        return evaluate(
+            custom_row,
+            token_usage(usage, custom_row),
+            billing_context(current_time if current_time is not None else current_billing_time()),
+            project=_BILLED_TOKEN_METERS,
+        )
+    try:
+        resolved_model_info: Final = (
+            model_info
+            if model_info is not None
+            else get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        )
+    except Exception:  # noqa: BLE001  # preserve the public unknown-model reporting contract
+        return None
+    pricing_row: Final[Mapping[str, object]] = (
+        resolved_model_info
+        if "litellm_provider" in resolved_model_info
+        else dict(resolved_model_info, litellm_provider=custom_llm_provider or "custom")
     )
-    provider_cache_read_cost_rate: Final = resolve_explicit_cache_read_cost_rate(
-        model_info=model_info,
-        usage=usage,
-        current_time=billing_time,
-        service_tier=service_tier,
-    )
-    effective_cache_read_cost_rate: Final = (
-        base_costs.cache_read_rate if provider_cache_read_cost_rate is None else provider_cache_read_cost_rate
+    return evaluate(
+        pricing_row,
+        token_usage(usage, pricing_row, inclusive_threshold=uses_inclusive_token_thresholds(custom_llm_provider)),
+        billing_context(current_time if current_time is not None else current_billing_time(), service_tier),
+        project=_BILLED_TOKEN_METERS,
+        factors=token_pricing_factors(resolved_model_info, usage, custom_llm_provider, data_residency, vertex_location),
+        cache_read_default_ratio=cache_read_default_ratio(custom_llm_provider),
     )
 
-    reasoning_rate: Final = _resolve_billed_reasoning_rate(
-        model_info=model_info,
-        usage=usage,
-        service_tier=service_tier,
-        completion_base_cost=base_costs.output_rate,
-        current_time=billing_time,
-    )
-    audio_cache_read_rate: Final = get_cost_per_unit(
-        model_info,
-        get_service_tier_cost_key("cache_read_input_audio_token_cost", service_tier),
-        None,
-    )
-    multiplier: Final = (
-        get_regional_uplift_multiplier(model_info, data_residency)
-        * get_vertex_regional_endpoint_uplift(model_info, vertex_location)
-        * get_provider_specific_geo_multiplier(model_info=model_info, usage=usage)
-        * get_provider_specific_speed_multiplier(model_info=model_info, usage=usage)
-    )
+
+def _billed_rates(evaluation: _native.PriceEvaluation, usage: Usage, *, flat_custom: bool = False) -> BilledTokenRates:
+    from litellm._cost import cache_read_meter
+
+    rates: Final = {rate.requested_meter: rate.unit_price for rate in evaluation.rates}
     return BilledTokenRates(
-        input_cost_per_token=base_costs.input_rate,
-        output_cost_per_token=base_costs.output_rate,
-        cache_read_input_token_cost=effective_cache_read_cost_rate,
-        cache_read_input_audio_token_cost=(
-            audio_cache_read_rate if audio_cache_read_rate is not None else effective_cache_read_cost_rate
+        input_cost_per_token=rates["input_cost_per_token"],
+        output_cost_per_token=rates["output_cost_per_token"],
+        cache_read_input_token_cost=rates[cache_read_meter(usage)],
+        cache_read_input_audio_token_cost=rates["cache_read_input_audio_token_cost"],
+        cache_creation_input_token_cost=rates["cache_creation_input_token_cost"],
+        cache_creation_input_token_cost_by_ttl=MappingProxyType(
+            {}
+            if flat_custom
+            else {
+                "1hr": rates["cache_creation_input_token_cost_above_1hr"],
+                "12hr": rates["cache_creation_input_token_cost_above_12hr"],
+            }
         ),
-        cache_creation_input_token_cost=base_costs.cache_creation_rate,
-        cache_creation_input_token_cost_by_ttl=base_costs.cache_creation_rates_by_ttl,
-        output_cost_per_reasoning_token=reasoning_rate,
-    ).scaled(multiplier)
+        output_cost_per_reasoning_token=rates["output_cost_per_reasoning_token"],
+    )
 
 
 def get_billed_token_rates(
@@ -1807,28 +854,20 @@ def get_billed_token_rates(
     custom_cost_per_token: CostPerToken | None = None,
     model_info: ModelInfo | None = None,
 ) -> BilledTokenRates | None:
-    """Rates the cost calculator bills ``usage`` at, resolved exactly as the totals and the token-type
-    breakdown resolve them. None when the model's pricing cannot be resolved."""
-    if custom_cost_per_token is not None:
-        return _custom_pricing_rates(custom_cost_per_token)
-    try:
-        resolved_model_info: Final = apply_provider_cache_read_default(
-            model_info
-            if model_info is not None
-            else get_model_info(model=model, custom_llm_provider=custom_llm_provider),
-            custom_llm_provider,
-        )
-    except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model: no rates
-        return None
-    return _cost_map_billed_rates(
-        model_info=resolved_model_info,
-        usage=usage,
-        custom_llm_provider=custom_llm_provider,
-        service_tier=service_tier,
-        data_residency=data_residency,
-        vertex_location=vertex_location,
-        current_time=current_time,
+    evaluation: Final = _reported_token_evaluation(
+        model,
+        custom_llm_provider,
+        usage,
+        service_tier,
+        data_residency,
+        vertex_location,
+        current_time,
+        custom_cost_per_token,
+        model_info,
     )
+    if not isinstance(evaluation, _native.PriceEvaluation):
+        return None
+    return _billed_rates(evaluation, usage, flat_custom=custom_cost_per_token is not None)
 
 
 def get_token_type_cost_breakdown(
@@ -1842,55 +881,45 @@ def get_token_type_cost_breakdown(
     custom_cost_per_token: CostPerToken | None = None,
     model_info: ModelInfo | None = None,
 ) -> TokenTypeCostBreakdown:
-    """
-    Provider-agnostic cost of reasoning and cache tokens, derived from the usage
-    object and model pricing alone.
-
-    This works for every provider, including Perplexity/Cerebras/Dashscope whose
-    cost calculators bypass ``generic_cost_per_token``, because cache tokens always
-    land on ``prompt_tokens_details`` (via the Usage constructor and provider
-    transformations) and reasoning tokens on ``completion_tokens_details``. It reuses
-    the same rate resolution as the total-cost path (``get_billed_token_rates``) so the
-    breakdown can never drift from the totals. A deployment billed by
-    ``custom_cost_per_token`` is priced from those flat rates instead of the cost map and,
-    like its totals, bills cache writes flat rather than by their 5m/1h split.
-    Returns zeros (never raises) when the model or its pricing cannot be resolved.
-    """
-    rates: Final = get_billed_token_rates(
-        model=model,
-        custom_llm_provider=custom_llm_provider,
-        usage=usage,
-        service_tier=service_tier,
-        data_residency=data_residency,
-        vertex_location=vertex_location,
-        current_time=current_time,
-        custom_cost_per_token=custom_cost_per_token,
-        model_info=model_info,
+    evaluation: Final = _reported_token_evaluation(
+        model,
+        custom_llm_provider,
+        usage,
+        service_tier,
+        data_residency,
+        vertex_location,
+        current_time,
+        custom_cost_per_token,
+        model_info,
     )
-    if rates is None:
+    if not isinstance(evaluation, _native.PriceEvaluation) or not isinstance(evaluation.pricing, _native.Priced):
         return TokenTypeCostBreakdown(0.0, 0.0, 0.0)
-
-    cache_read_tokens, cached_audio_tokens, cache_creation_tokens, cache_creation_token_details = _cache_token_counts(
-        usage
-    )
-    cache_creation_cost: Final = (
-        float(cache_creation_tokens) * rates.cache_creation_input_token_cost
-        if custom_cost_per_token is not None
-        else calculate_cache_writing_cost(
-            cache_creation_tokens=cache_creation_tokens,
-            cache_creation_token_details=cache_creation_token_details,
-            cache_creation_cost=rates.cache_creation_input_token_cost,
-            cache_creation_cost_by_ttl=rates.cache_creation_input_token_cost_by_ttl,
-        )
-    )
+    lines: Final = evaluation.pricing.lines
     return TokenTypeCostBreakdown(
-        reasoning_cost=float(_reasoning_token_count(usage)) * rates.output_cost_per_reasoning_token,
-        cache_read_cost=(
-            float(cache_read_tokens - cached_audio_tokens) * rates.cache_read_input_token_cost
-            + float(cached_audio_tokens) * rates.cache_read_input_audio_token_cost
+        reasoning_cost=sum(
+            line.amount for line in lines if (line.fallback_from or line.meter) == "output_cost_per_reasoning_token"
         ),
-        cache_creation_cost=cache_creation_cost,
-        rates=rates,
+        cache_read_cost=sum(
+            line.amount
+            for line in lines
+            if (line.fallback_from or line.meter)
+            in (
+                "cache_read_input_token_cost",
+                "explicit_cache_read_input_token_cost",
+                "cache_read_input_audio_token_cost",
+            )
+        ),
+        cache_creation_cost=sum(
+            line.amount
+            for line in lines
+            if (line.fallback_from or line.meter)
+            in (
+                "cache_creation_input_token_cost",
+                "cache_creation_input_token_cost_above_1hr",
+                "cache_creation_input_token_cost_above_12hr",
+            )
+        ),
+        rates=_billed_rates(evaluation, usage, flat_custom=custom_cost_per_token is not None),
     )
 
 
@@ -1910,52 +939,60 @@ def calculate_prompt_caching_savings(
     ``billed_at`` is the request's completion time, so off-peak windows resolve as the
     biller saw them rather than at the later spend write.
     """
-    model_info_with_cache_read_default: Final = apply_provider_cache_read_default(model_info, custom_llm_provider)
-    base_costs: Final = _get_token_base_cost(
-        model_info=model_info_with_cache_read_default,
-        usage=usage,
-        service_tier=service_tier,
-        current_time=billed_at,
-        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+    from litellm._cost import billing_context, cache_read_meter, cache_write_quantities, price
+
+    row: Final = {"litellm_provider": custom_llm_provider or "custom", **model_info}
+    when: Final = billing_context(billed_at if billed_at is not None else current_billing_time(), service_tier)
+    factors: Final = (
+        get_regional_uplift_multiplier(model_info, data_residency),
+        get_vertex_regional_endpoint_uplift(model_info, vertex_location),
     )
-    provider_cache_read_cost: Final = resolve_explicit_cache_read_cost_rate(
-        model_info=model_info,
-        usage=usage,
-        current_time=billed_at,
-        service_tier=service_tier,
-    )
-    prompt_base_cost: Final = base_costs.input_rate
-    effective_cache_read_cost: Final = (
-        base_costs.cache_read_rate if provider_cache_read_cost is None else provider_cache_read_cost
-    )
-    write_rate: Final = base_costs.cache_creation_rate or prompt_base_cost
-    prompt_tokens_details: Final = parse_prompt_tokens_details(usage)
-    cache_read_tokens: Final = max(prompt_tokens_details["cache_hit_tokens"], 0)
-    cache_creation_tokens: Final = max(prompt_tokens_details["cache_creation_tokens"], 0)
-    details: Final = prompt_tokens_details["cache_creation_token_details"]
-    cache_creation_details: Final = (
-        CacheCreationTokenDetails(
-            ephemeral_5m_input_tokens=max(details.ephemeral_5m_input_tokens or 0, 0),
-            ephemeral_30m_input_tokens=max(details.ephemeral_30m_input_tokens or 0, 0),
-            ephemeral_1h_input_tokens=max(details.ephemeral_1h_input_tokens or 0, 0),
-            ephemeral_12h_input_tokens=max(details.ephemeral_12h_input_tokens or 0, 0),
+
+    def cache_cost(quantities: Mapping[str, int]) -> _native.Priced | None:
+        result: Final = price(
+            row,
+            _native.UsageInput(
+                dict(quantities),
+                prompt_tokens=usage.prompt_tokens,
+                inclusive_threshold=uses_inclusive_token_thresholds(custom_llm_provider),
+            ),
+            when,
+            factors=factors,
+            cache_read_default_ratio=cache_read_default_ratio(custom_llm_provider),
         )
-        if details is not None
-        else None
+        return result if isinstance(result, _native.Priced) else None
+
+    details: Final = parse_prompt_tokens_details(usage)
+    reads: Final = max(details["cache_hit_tokens"], 0)
+    ttl: Final = details["cache_creation_token_details"]
+    writes: Final = cache_write_quantities(
+        max(details["cache_creation_tokens"], 0),
+        CacheCreationTokenDetails(
+            ephemeral_5m_input_tokens=max(ttl.ephemeral_5m_input_tokens or 0, 0),
+            ephemeral_30m_input_tokens=max(ttl.ephemeral_30m_input_tokens or 0, 0),
+            ephemeral_1h_input_tokens=max(ttl.ephemeral_1h_input_tokens or 0, 0),
+            ephemeral_12h_input_tokens=max(ttl.ephemeral_12h_input_tokens or 0, 0),
+        )
+        if ttl is not None
+        else None,
     )
-    read_discount: Final = cache_read_tokens * max(prompt_base_cost - effective_cache_read_cost, 0.0)
-    write_premium: Final = calculate_cache_writing_cost(
-        cache_creation_tokens=cache_creation_tokens,
-        cache_creation_token_details=cache_creation_details,
-        cache_creation_cost=write_rate - prompt_base_cost,
-        cache_creation_cost_by_ttl=MappingProxyType(
-            {ttl: rate - prompt_base_cost for ttl, rate in base_costs.cache_creation_rates_by_ttl.items()}
-        ),
+    read_meter: Final = cache_read_meter(usage)
+    actual: Final = cache_cost({read_meter: reads, **writes})
+    if actual is None:
+        return 0.0
+    priced_writes: Final = tuple(
+        line
+        for line in actual.lines
+        if (line.fallback_from or line.meter) in writes
+        and ((line.fallback_from or line.meter) != "cache_creation_input_token_cost" or line.unit_price > 0)
     )
-    uplift: Final = get_regional_uplift_multiplier(model_info, data_residency) * get_vertex_regional_endpoint_uplift(
-        model_info, vertex_location
-    )
-    return (read_discount - write_premium) * uplift
+    read_baseline: Final = cache_cost({"input_cost_per_token": reads})
+    write_baseline: Final = cache_cost({"input_cost_per_token": sum(line.quantity for line in priced_writes)})
+    if read_baseline is None or write_baseline is None:
+        return 0.0
+    read_cost: Final = sum(line.amount for line in actual.lines if (line.fallback_from or line.meter) == read_meter)
+    write_cost: Final = sum(line.amount for line in priced_writes)
+    return max(read_baseline.input - read_cost, 0.0) - (write_cost - write_baseline.input)
 
 
 def calculate_image_response_cost_from_usage(

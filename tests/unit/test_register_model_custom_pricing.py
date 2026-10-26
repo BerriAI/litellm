@@ -1,31 +1,365 @@
-"""
-Test that register_model() in completion() and embedding() passes all
-custom pricing fields from kwargs and model_info, not just the base
-input/output costs.
-
-Previously, only input_cost_per_token, output_cost_per_token, and
-litellm_provider were forwarded. Fields like cache_read_input_token_cost,
-mode, and supports_prompt_caching were dropped, causing incorrect cost
-calculations for DB-sourced models with prompt caching pricing.
-"""
-
 import copy
 import itertools
 import os
 from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
+from queue import Queue
 from typing import Final, NoReturn
 
 import pytest
 
-
 import litellm
+from litellm._internal_context import pinned_billing_time
 from litellm.litellm_core_utils.get_model_cost_map import _expand_model_aliases, adopt_model_cost_map
-from litellm.main import _build_custom_pricing_entry
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
 
 def _snapshot_model_cost_entries(keys):
     return {key: copy.deepcopy(litellm.model_cost.get(key)) for key in keys}
+
+
+@pytest.mark.parametrize("stream", (False, True))
+def test_sdk_custom_prices_do_not_leak_between_tenants_or_into_deployments(
+    monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    model: Final = "openai/m5-tenant-backend"
+    deployment_id: Final = "m5-tenant-deployment"
+    catalog_row: Final = {"litellm_provider": "openai", "input_cost_per_token": 5.0, "output_cost_per_token": 6.0}
+    owned_row: Final = {"litellm_provider": "openai", "input_cost_per_token": 7.0, "output_cost_per_token": 8.0}
+    monkeypatch.setitem(litellm.model_cost, model, catalog_row.copy())
+    monkeypatch.setitem(litellm.model_cost, deployment_id, owned_row.copy())
+    events: Final[Queue[tuple[object, object]]] = Queue()
+
+    def on_success(kwargs: Mapping[str, object], response: object, start_time: datetime, end_time: datetime) -> None:
+        if kwargs.get("stream") and kwargs.get("complete_streaming_response") is None:
+            return
+        events.put((kwargs.get("response_cost"), kwargs.get("complete_streaming_response") or response))
+
+    monkeypatch.setattr(litellm, "success_callback", [on_success])
+    for input_rate, output_rate, per_call in (
+        (5.0, 6.0, {}),
+        (
+            1.0,
+            4.0,
+            {
+                "input_cost_per_token": 1.0,
+                "output_cost_per_token": 4.0,
+                "metadata": {"model_info": {"id": deployment_id}},
+            },
+        ),
+        (5.0, 6.0, {}),
+    ):
+        result: Final = litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="fake-key",
+            mock_response="Hello back",
+            stream=stream,
+            **per_call,
+        )
+        if isinstance(result, CustomStreamWrapper):
+            assert tuple(result)
+        cost, response = events.get(timeout=10)
+        assert isinstance(response, litellm.ModelResponse)
+        assert isinstance(response.usage, litellm.Usage)
+        expected: Final = response.usage.prompt_tokens * input_rate + response.usage.completion_tokens * output_rate
+        assert cost == pytest.approx(expected)
+        if not stream:
+            assert response._hidden_params["response_cost"] == pytest.approx(expected)
+        assert litellm.model_cost[model] == catalog_row
+        assert litellm.model_cost[deployment_id] == owned_row
+    assert litellm.cost_per_token(deployment_id, 10, 20, custom_llm_provider="openai") == pytest.approx((70.0, 160.0))
+
+
+@pytest.mark.parametrize(
+    ("prices", "usage", "service_tier", "expected"),
+    (
+        (
+            {"output_cost_per_reasoning_token": 3.0},
+            litellm.Usage(prompt_tokens=10, completion_tokens=10, completion_tokens_details={"reasoning_tokens": 5}),
+            "default",
+            35.0,
+        ),
+        (
+            {"input_cost_per_audio_token": 3.0, "output_cost_per_audio_token": 4.0},
+            litellm.Usage(
+                prompt_tokens=10,
+                completion_tokens=10,
+                prompt_tokens_details={"text_tokens": 6, "audio_tokens": 4},
+                completion_tokens_details={"text_tokens": 6, "audio_tokens": 4},
+            ),
+            "default",
+            46.0,
+        ),
+        (
+            {"input_cost_per_token_priority": 3.0, "output_cost_per_token_priority": 4.0},
+            litellm.Usage(prompt_tokens=10, completion_tokens=10),
+            "priority",
+            70.0,
+        ),
+    ),
+    ids=("reasoning", "audio", "priority"),
+)
+def test_sdk_request_prices_preserve_non_base_token_fields_without_catalog_writes(
+    monkeypatch: pytest.MonkeyPatch,
+    prices: Mapping[str, float],
+    usage: litellm.Usage,
+    service_tier: str,
+    expected: float,
+) -> None:
+    model: Final = "openai/m5-request-token-fields"
+    row: Final = {"litellm_provider": "openai", "input_cost_per_token": 5.0, "output_cost_per_token": 6.0}
+    monkeypatch.setitem(litellm.model_cost, model, row.copy())
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="fake-key",
+        input_cost_per_token=1.0,
+        output_cost_per_token=2.0,
+        mock_response=litellm.ModelResponse(model=model, usage=usage, service_tier=service_tier),
+        **prices,
+    )
+    assert response._hidden_params["response_cost"] == pytest.approx(expected)
+    assert litellm.model_cost[model] == row
+    assert litellm.cost_per_token(model, 10, 10, custom_llm_provider="openai") == pytest.approx((50.0, 60.0))
+
+
+@pytest.mark.parametrize("stream", (False, True))
+def test_router_request_prices_override_only_the_current_call(monkeypatch: pytest.MonkeyPatch, stream: bool) -> None:
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    model: Final = "openai/m5-routed-request"
+    deployment_id: Final = "m5-routed-request-deployment"
+    catalog: Final = {"litellm_provider": "openai", "input_cost_per_token": 5.0, "output_cost_per_token": 6.0}
+    monkeypatch.setitem(litellm.model_cost, model, catalog.copy())
+    events: Final = Queue[tuple[object, object]]()
+
+    class Costs(CustomLogger):
+        def log_success_event(
+            self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            events.put((kwargs.get("response_cost"), kwargs.get("complete_streaming_response", response_obj)))
+
+    monkeypatch.setattr(litellm, "callbacks", [Costs()])
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "m5-request-group",
+                "litellm_params": {"model": model, "api_key": "fake-key"},
+                "model_info": {
+                    "id": deployment_id,
+                    "input_cost_per_token": 7.0,
+                    "output_cost_per_token": 8.0,
+                },
+            }
+        ],
+        num_retries=0,
+    )
+    owned: Final = copy.deepcopy(litellm.model_cost[deployment_id])
+    try:
+        for input_rate, output_rate, per_call in (
+            (7.0, 8.0, {}),
+            (1.0, 2.0, {"input_cost_per_token": 1.0, "output_cost_per_token": 2.0}),
+            (0.0, 0.0, {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}),
+            (7.0, 8.0, {}),
+        ):
+            result: Final = router.completion(
+                model="m5-request-group",
+                messages=[{"role": "user", "content": "hello"}],
+                mock_response="Hello back",
+                stream=stream,
+                **per_call,
+            )
+            if isinstance(result, CustomStreamWrapper):
+                assert tuple(result)
+            cost, response = events.get(timeout=10)
+            assert isinstance(response, litellm.ModelResponse)
+            assert isinstance(response.usage, litellm.Usage)
+            assert cost == pytest.approx(
+                response.usage.prompt_tokens * input_rate + response.usage.completion_tokens * output_rate
+            )
+            assert litellm.model_cost[deployment_id] == owned
+            assert litellm.model_cost[model] == catalog
+    finally:
+        router.discard()
+
+
+def test_request_prices_reach_callback_cache_and_reasoning_breakdown_without_registration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.integrations.custom_logger import CustomLogger
+
+    model: Final = "openai/m5-request-breakdown"
+    row: Final = {"litellm_provider": "openai", "input_cost_per_token": 5.0, "output_cost_per_token": 6.0}
+    monkeypatch.setitem(litellm.model_cost, model, row.copy())
+    events: Final = Queue[object]()
+
+    class Costs(CustomLogger):
+        def log_success_event(
+            self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            events.put(kwargs.get("standard_logging_object"))
+
+    monkeypatch.setattr(litellm, "callbacks", [Costs()])
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="fake-key",
+        input_cost_per_token=1.0,
+        output_cost_per_token=2.0,
+        cache_read_input_token_cost=0.1,
+        cache_creation_input_token_cost=1.25,
+        output_cost_per_reasoning_token=3.0,
+        model_info={"mode": "chat", "supports_prompt_caching": True, "max_tokens": 8192},
+        mock_response=litellm.ModelResponse(
+            model=model,
+            usage=litellm.Usage(
+                prompt_tokens=100,
+                completion_tokens=10,
+                prompt_tokens_details={"cached_tokens": 60, "cache_creation_tokens": 20},
+                completion_tokens_details={"reasoning_tokens": 5},
+            ),
+        ),
+    )
+    payload: Final = events.get(timeout=10)
+    assert isinstance(payload, dict)
+    assert payload["response_cost"] == pytest.approx(76.0)
+    assert payload["cost_breakdown"] == pytest.approx(
+        {
+            "input_cost": 51.0,
+            "output_cost": 25.0,
+            "total_cost": 76.0,
+            "tool_usage_cost": 0.0,
+            "service_tier": None,
+            "data_residency": None,
+            "vertex_location": None,
+            "cache_read_cost": 6.0,
+            "cache_creation_cost": 25.0,
+            "reasoning_cost": 15.0,
+            "original_cost": 76.0,
+            "discount_percent": 0.0,
+            "discount_amount": 0.0,
+            "margin_percent": 0.0,
+            "margin_fixed_amount": 0.0,
+            "margin_total_amount": 0.0,
+        }
+    )
+    assert response._hidden_params["response_cost"] == pytest.approx(76.0)
+    assert litellm.model_cost[model] == row
+
+
+@pytest.mark.parametrize(("cache_price", "expected"), ((None, 0.5), (0.0, 0.0), (0.25, 0.25)))
+def test_request_all_cache_usage_retains_unused_rates_and_zero_overrides(
+    monkeypatch: pytest.MonkeyPatch, cache_price: float | None, expected: float
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    model: Final = "openai/m5-request-all-cache"
+    row: Final = {
+        "litellm_provider": "openai",
+        "input_cost_per_token": 5.0,
+        "output_cost_per_token": 6.0,
+        "cache_read_input_token_cost": 0.5,
+    }
+    monkeypatch.setitem(litellm.model_cost, model, row.copy())
+    when: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    logging_obj: Final = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=when,
+        litellm_call_id="m5-request-all-cache",
+        function_id="f",
+        kwargs={
+            "input_cost_per_token": 1.0,
+            "output_cost_per_token": 2.0,
+            "cache_read_input_token_cost": cache_price,
+        },
+    )
+    with pinned_billing_time(when):
+        total: Final = litellm.completion_cost(
+            model=model,
+            custom_llm_provider="openai",
+            custom_pricing=True,
+            litellm_logging_obj=logging_obj,
+            completion_response=litellm.ModelResponse(
+                model=model,
+                usage=litellm.Usage(
+                    prompt_tokens=100, completion_tokens=0, prompt_tokens_details={"cached_tokens": 100}
+                ),
+            ),
+        )
+    assert total == pytest.approx(100 * expected)
+    assert logging_obj.billed_token_rates is not None
+    assert logging_obj.billed_token_rates.input_cost_per_token == 1.0
+    assert logging_obj.billed_token_rates.output_cost_per_token == 2.0
+    assert logging_obj.billed_token_rates.cache_read_input_token_cost == expected
+    assert litellm.model_cost[model] == row
+
+
+@pytest.mark.parametrize(("speed", "geo", "factor"), (("standard", "global", 1.0), ("fast", "us", 6.6)))
+def test_ephemeral_request_prices_keep_provider_selected_adjustments(
+    monkeypatch: pytest.MonkeyPatch, speed: str, geo: str, factor: float
+) -> None:
+    model: Final = "anthropic/m5-request-adjustments"
+    row: Final = {
+        "litellm_provider": "anthropic",
+        "mode": "chat",
+        "input_cost_per_token": 5.0,
+        "output_cost_per_token": 6.0,
+        "provider_specific_entry": {"fast": 6.0, "us": 1.1},
+    }
+    monkeypatch.setitem(litellm.model_cost, model, copy.deepcopy(row))
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="fake-key",
+        input_cost_per_token=1.0,
+        output_cost_per_token=2.0,
+        mock_response=litellm.ModelResponse(
+            model=model,
+            usage=litellm.Usage(prompt_tokens=10, completion_tokens=10, speed=speed, inference_geo=geo),
+        ),
+    )
+    assert response._hidden_params["response_cost"] == pytest.approx(30.0 * factor)
+    assert litellm.model_cost[model] == row
+
+
+@pytest.mark.parametrize("field", ("input_cost_per_second", "output_cost_per_second", "cost_per_second"))
+@pytest.mark.parametrize("rate", (0.0, 0.02))
+def test_request_duration_prices_keep_python_time_billing_without_registration(field: str, rate: float) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    model: Final = "openai/m5-request-duration"
+    logging_obj: Final = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="m5-request-duration",
+        function_id="f",
+        kwargs={field: rate},
+    )
+    total: Final = litellm.completion_cost(
+        model=model,
+        custom_llm_provider="openai",
+        custom_pricing=True,
+        litellm_logging_obj=logging_obj,
+        total_time=1500.0,
+        completion_response=litellm.ModelResponse(
+            model=model, usage=litellm.Usage(prompt_tokens=10, completion_tokens=10)
+        ),
+    )
+    assert total == pytest.approx(rate * 1.5)
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown["input_cost"] == pytest.approx(rate * 1.5)
+    assert logging_obj.cost_breakdown["output_cost"] == 0.0
+    assert model not in litellm.model_cost
 
 
 def _restore_model_cost_entries(original_entries):
@@ -35,131 +369,6 @@ def _restore_model_cost_entries(original_entries):
         else:
             litellm.model_cost[key] = value
     _invalidate_model_cost_lowercase_map()
-
-
-def test_build_custom_pricing_entry_includes_all_kwargs_fields():
-    """All CustomPricingLiteLLMParams fields present in kwargs should be
-    included in the resulting entry dict."""
-    kwargs = {
-        "input_cost_per_token": 0.001,
-        "output_cost_per_token": 0.002,
-        "cache_read_input_token_cost": 0.00025,
-        "cache_creation_input_token_cost": 0.005,
-        "output_cost_per_reasoning_token": 0.01,
-        "input_cost_per_audio_token": 0.003,
-        "unrelated_kwarg": "should_be_ignored",
-    }
-
-    entry = _build_custom_pricing_entry(
-        custom_llm_provider="openai",
-        kwargs=kwargs,
-    )
-
-    assert entry["litellm_provider"] == "openai"
-    assert entry["input_cost_per_token"] == 0.001
-    assert entry["output_cost_per_token"] == 0.002
-    assert entry["cache_read_input_token_cost"] == 0.00025
-    assert entry["cache_creation_input_token_cost"] == 0.005
-    assert entry["output_cost_per_reasoning_token"] == 0.01
-    assert entry["input_cost_per_audio_token"] == 0.003
-    assert "unrelated_kwarg" not in entry
-
-
-def test_build_custom_pricing_entry_merges_model_info_metadata():
-    """Fields from model_info (mode, supports_prompt_caching, max_tokens)
-    should be merged into the entry when present."""
-    kwargs = {
-        "input_cost_per_token": 0.001,
-        "output_cost_per_token": 0.002,
-    }
-    model_info = {
-        "id": "deployment-123",
-        "mode": "chat",
-        "supports_prompt_caching": True,
-        "max_tokens": 128000,
-    }
-
-    entry = _build_custom_pricing_entry(
-        custom_llm_provider="openai",
-        kwargs=kwargs,
-        model_info=model_info,
-    )
-
-    assert entry["mode"] == "chat"
-    assert entry["supports_prompt_caching"] is True
-    assert entry["max_tokens"] == 128000
-
-
-def test_build_custom_pricing_entry_setdefault_does_not_override_existing():
-    """model_info uses setdefault, so it should not override a key that is
-    already present in the entry dict. Currently CustomPricingLiteLLMParams
-    and the model_info keys (mode, supports_prompt_caching, max_tokens) do
-    not overlap, but if they ever do, setdefault ensures the kwargs-sourced
-    value wins."""
-    kwargs = {
-        "input_cost_per_token": 0.001,
-        "output_cost_per_token": 0.002,
-    }
-    model_info = {
-        "mode": "chat",
-        "supports_prompt_caching": True,
-        "max_tokens": 128000,
-    }
-
-    entry = _build_custom_pricing_entry(
-        custom_llm_provider="openai",
-        kwargs=kwargs,
-        model_info=model_info,
-    )
-
-    assert entry["mode"] == "chat"
-    assert entry["supports_prompt_caching"] is True
-    assert entry["max_tokens"] == 128000
-
-    # Verify setdefault behavior: if a model_info key already exists in
-    # the entry (e.g. from a future CustomPricingLiteLLMParams addition),
-    # setdefault must not overwrite it.
-    entry["mode"] = "embedding"  # simulate pre-existing value
-    # Re-apply setdefault the same way _build_custom_pricing_entry does
-    entry.setdefault("mode", model_info["mode"])
-    assert entry["mode"] == "embedding"  # must NOT revert to "chat"
-
-
-def test_build_custom_pricing_entry_skips_none_values():
-    """Fields with None values in kwargs should not be included."""
-    kwargs = {
-        "input_cost_per_token": 0.001,
-        "output_cost_per_token": None,  # explicitly None
-        "cache_read_input_token_cost": None,
-    }
-
-    entry = _build_custom_pricing_entry(
-        custom_llm_provider="openai",
-        kwargs=kwargs,
-    )
-
-    assert entry["input_cost_per_token"] == 0.001
-    assert "output_cost_per_token" not in entry
-    assert "cache_read_input_token_cost" not in entry
-
-
-def test_build_custom_pricing_entry_handles_no_model_info():
-    """Should work correctly when model_info is None."""
-    kwargs = {
-        "input_cost_per_token": 0.001,
-        "output_cost_per_token": 0.002,
-    }
-
-    entry = _build_custom_pricing_entry(
-        custom_llm_provider="openai",
-        kwargs=kwargs,
-        model_info=None,
-    )
-
-    assert entry["litellm_provider"] == "openai"
-    assert entry["input_cost_per_token"] == 0.001
-    assert entry["output_cost_per_token"] == 0.002
-    assert "mode" not in entry
 
 
 def test_register_model_receives_cache_pricing_fields():
@@ -190,23 +399,6 @@ def test_register_model_receives_cache_pricing_fields():
 
     # Cleanup
     litellm.model_cost.pop(model_key, None)
-
-
-def test_build_custom_pricing_entry_time_based():
-    """Time-based pricing fields should be included correctly."""
-    kwargs = {
-        "input_cost_per_second": 0.01,
-        "output_cost_per_second": 0.02,
-    }
-
-    entry = _build_custom_pricing_entry(
-        custom_llm_provider="openai",
-        kwargs=kwargs,
-    )
-
-    assert entry["litellm_provider"] == "openai"
-    assert entry["input_cost_per_second"] == 0.01
-    assert entry["output_cost_per_second"] == 0.02
 
 
 def test_register_model_strips_none_litellm_provider():
@@ -598,6 +790,16 @@ def test_embedding_router_zero_pricing_does_not_clobber_builtin_pricing():
     assert builtin_input_cost > 0
 
     try:
+        litellm.register_model(
+            {
+                deployment_id: {
+                    "litellm_provider": "openai",
+                    "mode": "embedding",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                }
+            }
+        )
         litellm.embedding(
             model=shared_key,
             input=["hello"],
@@ -640,6 +842,16 @@ def test_embedding_router_custom_pricing_costs_request_via_deployment_id():
     assert builtin_input_cost != override_input_cost
 
     try:
+        litellm.register_model(
+            {
+                deployment_id: {
+                    "litellm_provider": "openai",
+                    "mode": "embedding",
+                    "input_cost_per_token": override_input_cost,
+                    "output_cost_per_token": override_input_cost * 2,
+                }
+            }
+        )
         response = litellm.embedding(
             model=shared_key,
             input=["hello"],
@@ -674,6 +886,16 @@ def test_completion_router_zero_pricing_does_not_clobber_builtin_pricing():
     assert builtin_input_cost > 0
 
     try:
+        litellm.register_model(
+            {
+                deployment_id: {
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                }
+            }
+        )
         litellm.completion(
             model=shared_key,
             messages=[{"role": "user", "content": "hello"}],
@@ -693,11 +915,7 @@ def test_completion_router_zero_pricing_does_not_clobber_builtin_pricing():
         _restore_model_cost_entries(snapshot)
 
 
-def test_embedding_direct_sdk_custom_pricing_still_registers_shared_key():
-    """Direct SDK calls (no router deployment id in metadata) keep the legacy
-    behavior: custom pricing is registered under ``{provider}/{model}`` and the
-    request is costed with it.
-    """
+def test_embedding_direct_sdk_custom_pricing_does_not_register_shared_key():
     model_key = "openai/lit3991-direct-sdk-embed-model"
     override_input_cost = 3e-05
     try:
@@ -710,13 +928,18 @@ def test_embedding_direct_sdk_custom_pricing_still_registers_shared_key():
             mock_response=[0.1, 0.2],
         )
 
-        assert litellm.model_cost[model_key]["input_cost_per_token"] == override_input_cost
+        assert model_key not in litellm.model_cost
+        assert response._hidden_params["response_cost"] == pytest.approx(10 * override_input_cost)
         cost = litellm.completion_cost(
             completion_response=response,
             model=model_key,
             custom_llm_provider="openai",
             call_type="embedding",
             custom_pricing=True,
+            custom_cost_per_token={
+                "input_cost_per_token": override_input_cost,
+                "output_cost_per_token": override_input_cost * 2,
+            },
         )
         assert cost == pytest.approx(10 * override_input_cost)
     finally:
@@ -1417,9 +1640,9 @@ def test_update_dictionary_merges_nested_dicts_without_aliasing():
     object stays untouched, and the caller's incoming nested dict is never
     inserted by reference into the merged result.
     """
-    from litellm.utils import update_dictionary
-
     from typing import cast
+
+    from litellm.utils import update_dictionary
 
     existing_nested = cast(dict[str, object], {"hours_utc": "01:00-02:00", 1: "existing"})
     existing = {"off_peak_pricing": existing_nested}
@@ -1619,12 +1842,12 @@ def test_completion_cost_applies_off_peak_only_deployment_pricing():
         del router
 
 
-def test_completion_registers_cost_per_second_pricing():
+def test_completion_uses_ephemeral_cost_per_second_pricing():
     model_key: Final = "openai/test-cost-per-second-registration"
     original_entries: Final = _snapshot_model_cost_entries([model_key])
 
     try:
-        litellm.completion(
+        response: Final = litellm.completion(
             model=model_key,
             messages=[{"role": "user", "content": "hello"}],
             api_key="fake-key",
@@ -1632,7 +1855,14 @@ def test_completion_registers_cost_per_second_pricing():
             mock_response="hello back",
         )
 
-        assert litellm.model_cost[model_key]["cost_per_second"] == 0.02
+        assert model_key not in litellm.model_cost
+        assert response._hidden_params["response_cost"] is not None
+        assert litellm.completion_cost(
+            litellm.ModelResponse(model=model_key),
+            model=model_key,
+            custom_cost_per_second=0.02,
+            total_time=2000,
+        ) == pytest.approx(0.04)
     finally:
         _restore_model_cost_entries(original_entries)
 
@@ -1686,9 +1916,7 @@ def test_register_model_scopes_builtin_match_to_the_given_provider():
         _restore_model_cost_entries(model_cost_entries)
 
 
-def test_per_request_custom_pricing_scopes_a_colliding_deployment_id_to_its_provider():
-    from litellm.main import _register_custom_pricing_for_request
-
+def test_per_request_custom_pricing_does_not_write_a_colliding_deployment_id():
     deployment_id: Final = "baseten/zai-org/glm-5.2"
     builtin_key: Final = "baseten/zai-org/GLM-5.2"
     shared_key: Final = "openai/zai-org/GLM-5.2"
@@ -1696,20 +1924,20 @@ def test_per_request_custom_pricing_scopes_a_colliding_deployment_id_to_its_prov
     builtin_row_before: Final = copy.deepcopy(litellm.model_cost[builtin_key])
     openai_models_before: Final = frozenset(litellm.open_ai_chat_completion_models)
     try:
-        _register_custom_pricing_for_request(
-            model="zai-org/GLM-5.2",
-            custom_llm_provider="openai",
-            kwargs={
-                "input_cost_per_token": 0.00000096,
-                "output_cost_per_token": 0.00000302,
-                "metadata": {"model_info": {"id": deployment_id}},
-            },
-            model_info={"mode": "chat"},
+        response: Final = litellm.completion(
+            model=shared_key,
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="fake-key",
+            input_cost_per_token=0.00000096,
+            output_cost_per_token=0.00000302,
+            metadata={"model_info": {"id": deployment_id}},
+            mock_response=litellm.ModelResponse(
+                model=shared_key, usage=litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+            ),
         )
 
-        entry: Final = litellm.model_cost[deployment_id]
-        assert entry["input_cost_per_token"] == 0.00000096
-        assert entry["output_cost_per_token"] == 0.00000302
+        assert response._hidden_params["response_cost"] == pytest.approx(10 * 0.00000096 + 20 * 0.00000302)
+        assert litellm.model_cost.get(deployment_id) == model_cost_entries[deployment_id]
         assert litellm.model_cost[builtin_key] == builtin_row_before
     finally:
         _restore_model_cost_entries(model_cost_entries)

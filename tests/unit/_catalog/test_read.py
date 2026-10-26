@@ -13,6 +13,90 @@ from litellm.rust_bridge._native import ModelNotFound, ResolvedModel
 from litellm.utils import ModelNotMappedError, _invalidate_model_cost_lowercase_map, get_model_cost_key
 
 
+@pytest.mark.parametrize(
+    ("prices", "expected"),
+    (
+        ({}, False),
+        ({"input_cost_per_token": None, "output_cost_per_token": None}, False),
+        ({"input_cost_per_token": 0, "output_cost_per_token": 0}, True),
+        ({"input_cost_per_token": 0.25}, True),
+        ({"output_cost_per_token": 0.5}, True),
+        ({"input_cost_per_token": -1}, False),
+        ({"input_cost_per_token": "invalid-price"}, False),
+        ({"input_cost_per_second": 1.0}, False),
+        ({"cache_read_input_token_cost": 0.0}, True),
+        ({"cache_creation_input_token_cost_above_1hr": 0.0}, True),
+        ({"output_cost_per_reasoning_token": 0.5}, True),
+        ({"input_cost_per_audio_token": 0.5}, True),
+        ({"output_cost_per_image_token": 0.5}, True),
+        ({"input_cost_per_token_priority": 0.5}, True),
+        ({"input_cost_per_token_batches": 0.5}, True),
+        ({"input_cost_per_token_above_128k_tokens": 0.5}, True),
+        ({"tiered_pricing": [{"range": [0, 200], "input_cost_per_token": 0.5}]}, True),
+        ({"tiered_pricing": [{"range": [100, 200], "input_cost_per_token": 0.5}]}, False),
+        ({"off_peak_pricing": {"hours_utc": "01:00-02:00", "input_cost_per_token": 0.5}}, True),
+        (
+            {
+                "input_cost_per_token": 1.0,
+                "tiered_pricing": [{"range": [0, 100], "input_cost_per_token": 2.0}],
+            },
+            True,
+        ),
+    ),
+)
+def test_is_priced_distinguishes_explicit_token_rates(
+    monkeypatch: pytest.MonkeyPatch, prices: dict[str, object], expected: bool
+) -> None:
+    from litellm._catalog import is_priced
+
+    monkeypatch.setattr(litellm, "model_cost", {"openai/price-probe": {"litellm_provider": "openai", **prices}})
+    assert is_priced("price-probe", "openai") is expected
+    assert is_priced("unmapped-price-probe", "openai") is False
+
+
+def test_is_priced_tracks_selected_live_row_and_tombstones(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm._catalog import is_priced
+
+    rows: Final[dict[str, dict[str, object]]] = {
+        "price-probe": {"litellm_provider": "openai", "input_cost_per_token": 1},
+        "openai/price-probe": {"litellm_provider": "openai"},
+    }
+    monkeypatch.setattr(litellm, "model_cost", rows)
+    assert is_priced("price-probe", "openai") is False
+    rows["openai/price-probe"]["input_cost_per_token"] = 0
+    assert is_priced("price-probe", "openai") is True
+    rows["openai/price-probe"] = {"litellm_provider": "openai"}
+    assert is_priced("price-probe", "openai") is False
+    del rows["openai/price-probe"]
+    assert is_priced("price-probe", "openai") is True
+    del rows["price-probe"]
+    assert is_priced("price-probe", "openai") is False
+
+
+def test_providerless_deployment_prices_without_writing_provider_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm._catalog import is_priced
+
+    row: Final = {"input_cost_per_token": 1.0, "output_cost_per_token": 2.0}
+    monkeypatch.setitem(litellm.model_cost, "providerless-priced-deployment", row)
+    assert is_priced("providerless-priced-deployment", "openai") is True
+    assert litellm.cost_per_token(
+        "providerless-priced-deployment", 10, 20, custom_llm_provider="openai"
+    ) == pytest.approx((10.0, 40.0))
+    assert row == {"input_cost_per_token": 1.0, "output_cost_per_token": 2.0}
+
+
+@pytest.mark.parametrize("provider", (None, "", 123))
+def test_presence_does_not_repair_an_explicit_invalid_provider(
+    monkeypatch: pytest.MonkeyPatch, provider: object
+) -> None:
+    from litellm._catalog import is_priced
+
+    row: Final = {"litellm_provider": provider, "input_cost_per_token": 1.0, "output_cost_per_token": 2.0}
+    monkeypatch.setitem(litellm.model_cost, "openai/invalid-provider-price-probe", row)
+    assert is_priced("invalid-provider-price-probe", "openai") is False
+    assert row == {"litellm_provider": provider, "input_cost_per_token": 1.0, "output_cost_per_token": 2.0}
+
+
 def test_model_info_preserves_every_bundled_row() -> None:
     for key, row in litellm.model_cost.items():
         result: Final = _read.resolve(key)

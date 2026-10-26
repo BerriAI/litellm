@@ -13,8 +13,11 @@ from openai.types.completion_usage import CompletionUsage
 from pydantic import BaseModel
 
 import litellm
+from litellm.exceptions import ModelNotMappedError
 from litellm import TranscriptionResponse, model_cost
 from litellm.constants import REALTIME_METERED_USAGE_KEY
+
+
 from litellm.cost_calculator import BaseTokenUsageProcessor, RealtimeAPITokenUsageProcessor, ResponsesWebSocketTokenUsageProcessor, batch_cost_calculator, completion_cost, cost_per_token, handle_realtime_stream_cost_calculation, response_cost_calculator
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.integrations.custom_logger import CustomLogger
@@ -41,6 +44,30 @@ from litellm.utils import supports_prompt_caching
 import os
 import threading
 from unittest.mock import MagicMock, patch
+
+
+@pytest.mark.parametrize("provider", (None, "", 123, {}))
+def test_registered_bedrock_pricing_does_not_replace_a_declared_provider(
+    monkeypatch: pytest.MonkeyPatch, provider: object
+) -> None:
+    model: Final = "bedrock-invalid-provider-context"
+    litellm.register_model(
+        {model: {"input_cost_per_token": 1.0, "output_cost_per_token": 2.0}},
+        custom_llm_provider="bedrock",
+        persist_across_reloads=False,
+    )
+    monkeypatch.setitem(litellm.model_cost[model], "litellm_provider", provider)
+    if provider == "":
+        assert litellm.cost_per_token(model, 10, 20, custom_llm_provider="bedrock") == (10.0, 40.0)
+        assert litellm.get_model_info(model=model)["litellm_provider"] == ""
+    else:
+        with pytest.raises(ModelNotMappedError, match="litellm_provider"):
+            litellm.cost_per_token(model, 10, 20, custom_llm_provider="bedrock")
+    assert litellm.model_cost[model] == {
+        "input_cost_per_token": 1.0,
+        "output_cost_per_token": 2.0,
+        "litellm_provider": provider,
+    }
 
 
 class ResponseCostCapture(CustomLogger):
@@ -493,7 +520,7 @@ def test_completion_cost_skips_huggingface_config_request_with_custom_pricing(
     assert cost == pytest.approx(usage.prompt_tokens * 0.001 + usage.completion_tokens * 0.002)
 
 
-def test_completion_cost_returns_zero_for_capability_only_generalization(
+def test_completion_cost_rejects_unknown_pricing_for_capability_only_generalization(
     _local_model_cost_map: None,
     _claude_family_generalization: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -506,13 +533,8 @@ def test_completion_cost_returns_zero_for_capability_only_generalization(
         usage=Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26),
     )
 
-    cost: Final = completion_cost(
-        completion_response=response,
-        model=model,
-        custom_llm_provider="bedrock",
-    )
-
-    assert cost == 0.0
+    with pytest.raises(ModelNotMappedError, match="input_cost_per_token"):
+        completion_cost(completion_response=response, model=model, custom_llm_provider="bedrock")
 
 
 @pytest.mark.parametrize("custom_llm_provider", ["openai", "hosted_vllm"])
@@ -1842,7 +1864,15 @@ def test_cost_calculator_with_cache_creation():
             }
         ),
     )
-    model = "claude-sonnet-4@20250514"
+    model: Final = "claude-cache-creation-contract"
+    litellm.register_model({f"vertex_ai/{model}": {
+        "litellm_provider": "vertex_ai",
+        "mode": "chat",
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000003,
+        "cache_read_input_token_cost": 0.0000001,
+        "cache_creation_input_token_cost": 0.000004,
+    }})
 
     assert litellm_model_response.usage.prompt_tokens_details.cached_tokens == 28491
 
@@ -1852,7 +1882,7 @@ def test_cost_calculator_with_cache_creation():
         custom_llm_provider="vertex_ai",
     )
 
-    print(result)
+    assert result == pytest.approx(13 * 0.000003 + 28491 * 0.0000001 + 15 * 0.000004)
 
 
 def test_bedrock_cost_calculator_comparison_with_without_cache():
@@ -7348,6 +7378,45 @@ def test_vertex_ai_medlm_completion_cost():
     messages = [{"role": "user", "content": "Test MedLM completion cost."}]
     predictive_cost = completion_cost(model=model, messages=messages)
     assert predictive_cost > 0
+
+
+@pytest.mark.parametrize(
+    ("direction", "threshold_field", "prompt_tokens", "completion_tokens", "expected"),
+    [
+        ("output", None, 200001, 10, (20.0, 30.0)),
+        ("output", "output_cost_per_token_above_200k_tokens", 200001, 10, (20.0, 50.0)),
+        ("output", "output_cost_per_token_above_128k_tokens", 200001, 10, (20.0, 30.0)),
+        ("output", "output_cost_per_token_above_128k_tokens", 10, 128001, (20.0, 640005.0)),
+        ("input", None, 10, 200001, (30.0, 20.0)),
+        ("input", "input_cost_per_token_above_200k_tokens", 200001, 10, (1000005.0, 20.0)),
+        ("input", "input_cost_per_token_above_128k_tokens", 200001, 10, (1000005.0, 20.0)),
+    ],
+)
+def test_vertex_mixed_character_pricing_only_prices_the_used_token_direction(
+    direction: Literal["input", "output"],
+    threshold_field: str | None,
+    prompt_tokens: int,
+    completion_tokens: int,
+    expected: tuple[float, float],
+) -> None:
+    model: Final = "vertex_ai/mixed-character-contract"
+    character_direction: Final = "input" if direction == "output" else "output"
+    litellm.register_model({model: {
+        "litellm_provider": "vertex_ai",
+        "mode": "chat",
+        f"{character_direction}_cost_per_character": 2.0,
+        f"{direction}_cost_per_token": 3.0,
+        **({threshold_field: 5.0} if threshold_field is not None else {}),
+    }})
+
+    assert cost_per_token(
+        model=model,
+        custom_llm_provider="vertex_ai",
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        prompt_characters=10 if character_direction == "input" else None,
+        completion_characters=10 if character_direction == "output" else None,
+    ) == expected
 
 
 def test_vertex_ai_embedding_completion_cost(caplog):

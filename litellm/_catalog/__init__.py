@@ -15,6 +15,12 @@ class Reloaded:
     models_count: int
 
 
+def is_priced(model: str, provider: str | None = None) -> bool:
+    from litellm._catalog import _read
+
+    return _read.is_priced(model, provider)
+
+
 def reload_source(url: str) -> Source:
     if not url or is_offline_mode() or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
         return Bundled()

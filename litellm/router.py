@@ -52,6 +52,7 @@ from typing_extensions import assert_never, overload
 import litellm
 import litellm.litellm_core_utils.exception_mapping_utils
 from litellm import get_secret_str
+from litellm._catalog import is_priced
 from litellm._internal_context import service_target, with_service_target
 from litellm._logging import verbose_router_logger
 from litellm._uuid import uuid
@@ -11548,7 +11549,7 @@ class Router:
 
         A strategy-router alias is never the deployment actually called or
         billed, so custom pricing configured on it must not become a cost-map
-        price: an explicit zero would let ``_is_cost_explicitly_configured``
+        price: an explicit zero would let the free-model budget policy
         treat the alias as a genuinely free model and waive budget checks for
         requests that route to (and bill as) a real deployment.
         """
@@ -12321,7 +12322,7 @@ class Router:
         2. If not, check if litellm model name is in model info
         3. If not, return None
         """
-        from litellm.utils import cost_map_omits_token_price, update_dictionary
+        from litellm.utils import update_dictionary
 
         model_info: ModelInfo | None = None
         custom_model_info: dict | None = None
@@ -12386,7 +12387,7 @@ class Router:
         builtin_key: Final = (
             litellm_model_name_model_info.get("key") if litellm_model_name_model_info is not None else None
         )
-        if cost_map_omits_token_price(model_id, builtin_key, base_model_key):
+        if not any(is_priced(key) for key in (model_id, builtin_key, base_model_key) if isinstance(key, str)):
             return cast(  # cast-ok: TypedDict spread with overridden keys loses its type
                 ModelInfo, {**model_info, "input_cost_per_token": None, "output_cost_per_token": None}
             )

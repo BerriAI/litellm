@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
@@ -25,6 +26,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
     _get_team_member_budget_counter,
+    estimate_request_input_cost,
     estimate_request_max_cost,
     get_budget_window_start,
     release_unbound_budget_reservation,
@@ -195,6 +197,68 @@ def _tiered_deployment(input_cost_per_token: float) -> Deployment:
 
 
 TIERED_BODY: Final = {"model": "tiered-group", "messages": [{"role": "user", "content": "hello"}], "max_tokens": 10}
+
+
+@pytest.mark.parametrize(
+    ("prices", "expected_input", "expected_max"),
+    (
+        ({}, None, None),
+        ({"input_cost_per_token": None, "output_cost_per_token": None}, None, None),
+        ({"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}, 0.0, 0.0),
+        ({"input_cost_per_token": 2.0}, 20.0, None),
+    ),
+    ids=("missing", "null", "explicit-zero", "input-only"),
+)
+def test_reservation_reader_preserves_unknown_token_prices(
+    monkeypatch: pytest.MonkeyPatch,
+    prices: Mapping[str, float | None],
+    expected_input: float | None,
+    expected_max: float | None,
+) -> None:
+    model: Final = "openai/m5-reservation-reader"
+    monkeypatch.setitem(litellm.model_cost, model, {"litellm_provider": "openai", "mode": "chat", **prices})
+    request: Final = {"model": model, "messages": [{"role": "user", "content": "hello"}], "max_tokens": 5}
+    assert estimate_request_input_cost(request, "/chat/completions", None, {model: 10}) == expected_input
+    assert estimate_request_max_cost(request, "/chat/completions", None, {model: 10}) == expected_max
+
+
+@pytest.mark.parametrize("tiered", (False, True))
+def test_reservation_keeps_the_reasoning_max_and_output_multiplier_without_discounts(
+    monkeypatch: pytest.MonkeyPatch, tiered: bool
+) -> None:
+    model: Final = "openai/m5-conservative-reservation"
+    prices: Final = {
+        "input_cost_per_token": 1.0,
+        "output_cost_per_token": 2.0,
+        "output_cost_per_reasoning_token": 5.0,
+    }
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            **({"tiered_pricing": [{"range": [0, 100], **prices}]} if tiered else prices),
+            "input_cost_per_token_flex": 0.1,
+            "output_cost_per_token_flex": 0.2,
+            "off_peak_pricing": {
+                "hours_utc": "00:00-00:00",
+                "input_cost_per_token": 0.01,
+                "output_cost_per_token": 0.02,
+                "output_cost_per_reasoning_token": 0.05,
+            },
+        },
+    )
+    request: Final = {
+        "model": model,
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 5,
+        "service_tier": "flex",
+        "n": 2,
+        "best_of": 3,
+    }
+    assert estimate_request_input_cost(request, "/chat/completions", None, {model: 10}) == 10.0
+    assert estimate_request_max_cost(request, "/chat/completions", None, {model: 10}) == 85.0
 
 
 def test_repeated_estimates_reuse_cached_model_cost_info() -> None:

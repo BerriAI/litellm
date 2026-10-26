@@ -323,10 +323,8 @@ def test_an_entry_without_an_input_rate_gets_no_cache_read_fallback():
     }
     usage: Final = _usage(prompt_tokens=1000, cached_tokens=300, completion_tokens=200)
 
-    prompt_cost, completion_cost = cost_per_token(model="accounts/fireworks/models/no-input-rate-test", usage=usage)
-
-    assert prompt_cost == 0
-    assert completion_cost == 200 * 2e-06
+    with pytest.raises(litellm.ModelNotMappedError, match="input_cost_per_token"):
+        cost_per_token(model="accounts/fireworks/models/no-input-rate-test", usage=usage)
 
 
 ROUTED_MODEL: Final = next(

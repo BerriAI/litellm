@@ -26,6 +26,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, Unpack
 
 import litellm
+from litellm._catalog import is_priced
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache, LimitedSizeOrderedDict
@@ -605,7 +606,7 @@ def is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None)
             # See: https://github.com/BerriAI/litellm/issues/24770
             safe_name = str(model_name).replace("\n", "").replace("\r", "")
             served_deployments = _deployments_served_for(model_name, llm_router)
-            if not _is_cost_explicitly_configured(served_deployments):
+            if not (deployment_prices := tuple(_priced_deployment_infos(served_deployments))):
                 verbose_proxy_logger.debug(
                     "Model %s has zero cost but no explicit cost "
                     "configuration in model_cost entry — treating as unknown "
@@ -616,7 +617,11 @@ def is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None)
                     zero_cost_cache[model_name] = False
                 return False
 
-            if _has_explicit_positive_cost(served_deployments):
+            if any(
+                _is_positive_cost(info.get("input_cost_per_token"))
+                or _is_positive_cost(info.get("output_cost_per_token"))
+                for info in deployment_prices
+            ):
                 verbose_proxy_logger.debug(
                     "Model %s routes to a deployment with an explicit positive per-token price (enforce budget)",
                     safe_name,
@@ -696,47 +701,12 @@ def _has_ptu_flat_cost(deployments: Sequence[DeploymentTypedDict]) -> bool:
     return False
 
 
-def _is_cost_explicitly_configured(deployments: Sequence[DeploymentTypedDict]) -> bool:
-    """
-    Check if any of the deployments has cost fields explicitly set in its
-    litellm.model_cost entry.
-
-    When Router._create_deployment() registers a model not in the global
-    cost map, it creates a sparse entry like {"id": "<hash>"} with no cost
-    fields. _get_model_info_helper() then defaults missing costs to 0.
-    This function detects that scenario by checking the raw model_cost entry.
-
-    It also reaches a deployment that prices itself through its ``model_info`` block, whose entry
-    lands in the cost map under the deployment id.
-    """
+def _priced_deployment_infos(deployments: Sequence[DeploymentTypedDict]) -> Iterator[Mapping[str, object]]:
     for deployment in deployments:
-        model_id = (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id")
-        if model_id is None:
-            continue
-        raw_entry = litellm.model_cost.get(model_id, _EMPTY_COST_ENTRY)
-        if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
-            return True
-    return False
-
-
-def _has_explicit_positive_cost(deployments: Sequence[DeploymentTypedDict]) -> bool:
-    """Whether any of the deployments carries an explicit positive per-token price.
-
-    The group's price is read from the deployments named after the routed group and from
-    that group's own alias target, while an alias chain is served from the deployments named
-    after its routed group or from a wildcard route; a priced route among those serves the
-    request at its own rate whatever the group's price reads.
-    """
-    for deployment in deployments:
-        model_id = (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id")
-        if model_id is None:
-            continue
-        raw_entry = litellm.model_cost.get(model_id, _EMPTY_COST_ENTRY)
-        if _is_positive_cost(raw_entry.get("input_cost_per_token")) or _is_positive_cost(
-            raw_entry.get("output_cost_per_token")
+        if isinstance(model_id := (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id"), str) and is_priced(
+            model_id
         ):
-            return True
-    return False
+            yield litellm.get_model_info(model=model_id)
 
 
 _EMPTY_COST_ENTRY: Final[Mapping[str, object]] = MappingProxyType({})
@@ -798,7 +768,7 @@ def model_has_no_cost_mapping(model: str | None, llm_router: Router | None) -> b
     if _model_group_has_pricing(model=model, llm_router=llm_router):
         return False
 
-    return not _is_cost_explicitly_configured(llm_router.get_model_list(model_name=model) or ())
+    return not any(_priced_deployment_infos(llm_router.get_model_list(model_name=model) or ()))
 
 
 def _unpriced_models_in_request(model: str | list[str] | None, llm_router: Router | None) -> tuple[str, ...]:

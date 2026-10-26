@@ -626,6 +626,7 @@ class Logging(LiteLLMLoggingBaseClass):
         slack_app
     custom_pricing: bool = False
     custom_cost_per_token: CostPerToken | None = None
+    request_pricing: Mapping[str, object] | None = None
     custom_cost_per_second: float | None = None
     replaced_global_callback_keys: frozenset[str] = frozenset()
     stream_options = None
@@ -803,6 +804,11 @@ class Logging(LiteLLMLoggingBaseClass):
             litellm_params = scrub_sensitive_keys_in_metadata(litellm_params)
 
         self.litellm_params = litellm_params
+
+        if kwargs is not None:
+            from litellm._cost import request_prices
+
+            self.request_pricing = request_prices(kwargs)
 
         # Initialize cost breakdown field
         self.cost_breakdown: CostBreakdown | None = None

@@ -7,8 +7,12 @@ per the MCP spec.
 """
 
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import patch
 
+import pytest
+
+import litellm
 from litellm.proxy._experimental.mcp_server.sampling_handler import (
     _has_priorities,
     _resolve_model_from_preferences,
@@ -28,6 +32,14 @@ def _prefs(*, hints=None, cost=None, speed=None, intelligence=None):
         speedPriority=speed,
         intelligencePriority=intelligence,
     )
+
+
+def test_priority_reader_tolerates_missing_token_prices(monkeypatch: pytest.MonkeyPatch) -> None:
+    model: Final = "openai/m5-sampling-reader"
+    monkeypatch.setitem(litellm.model_cost, model, {"litellm_provider": "openai", "mode": "chat"})
+    info: Final = litellm.get_model_info(model)
+    assert (info["input_cost_per_token"], info["output_cost_per_token"]) == (None, None)
+    assert _select_model_by_priority([model], _prefs(cost=1.0)) == model
 
 
 # Model info stubs keyed by model name

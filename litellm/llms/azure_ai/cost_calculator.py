@@ -5,8 +5,11 @@ Handles Azure AI Foundry Model Router flat cost and other Azure AI specific pric
 
 from typing import Final
 
+from litellm._cost import billing_context, price, require_priced
+from litellm._internal_context import current_billing_time
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.rust_bridge import _native
 from litellm.types.utils import Usage
 from litellm.utils import get_model_info
 
@@ -57,10 +60,14 @@ def calculate_azure_model_router_flat_cost(model: str, prompt_tokens: int) -> fl
     if not is_azure_model_router(model):
         return 0.0
     model_info: Final = get_model_info(model=_router_fee_entry_name(model), custom_llm_provider="azure_ai")
-    router_flat_cost_per_token: Final = model_info.get("input_cost_per_token", 0)
-    if router_flat_cost_per_token and router_flat_cost_per_token > 0:
-        return prompt_tokens * router_flat_cost_per_token
-    return 0.0
+    return require_priced(
+        price(
+            model_info,
+            _native.UsageInput({"input_cost_per_token": prompt_tokens}, prompt_tokens=prompt_tokens),
+            billing_context(current_billing_time()),
+        ),
+        model,
+    ).input
 
 
 def _response_model_cost(model: str, usage: Usage, service_tier: str | None) -> tuple[float, float]:
