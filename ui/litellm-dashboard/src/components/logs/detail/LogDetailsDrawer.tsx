@@ -13,7 +13,7 @@ import { useKeyboardNavigation } from "./useKeyboardNavigation";
 import { LogDetailContent, GuardrailJumpLink } from "./LogDetailContent";
 import { sessionSpendLogsCall } from "../../networking";
 import { useQuery } from "@tanstack/react-query";
-import { getSpendString } from "@/utils/dataUtils";
+import { copyToClipboard, getSpendString } from "@/utils/dataUtils";
 import { normalizeGuardrailEntries, sortSessionLogs, SessionLogSortMode } from "./utils";
 import { DRAWER_WIDTH } from "./constants";
 import { useLogDetails } from "@/app/(dashboard)/hooks/logDetails/useLogDetails";
@@ -288,14 +288,9 @@ export function LogDetailsDrawer({
   const leftPanelDisplayId = leftPanelId.length > 14 ? `${leftPanelId.slice(0, 11)}...` : leftPanelId;
 
   const handleCopyLeftPanelId = async () => {
-    if (!leftPanelId) return;
-    try {
-      await navigator.clipboard.writeText(leftPanelId);
-      setCopiedLeftPanelId(true);
-      setTimeout(() => setCopiedLeftPanelId(false), 1200);
-    } catch {
-      /* clipboard unavailable in non-secure contexts */
-    }
+    if (!(await copyToClipboard(leftPanelId))) return;
+    setCopiedLeftPanelId(true);
+    setTimeout(() => setCopiedLeftPanelId(false), 1200);
   };
 
   if (!currentLog || !enrichedLog) return null;

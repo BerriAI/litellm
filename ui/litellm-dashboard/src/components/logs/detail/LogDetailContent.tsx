@@ -9,7 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { LogEntry } from "../types";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { copyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils";
 import { PROMPT_CACHE_CREATION_TOOLTIP, PROMPT_CACHE_READ_TOOLTIP } from "@/utils/promptCacheUsage";
 import GuardrailViewer from "./sections/GuardrailViewer/GuardrailViewer";
 import EvalViewer from "./sections/EvalViewer/EvalViewer";
@@ -304,13 +304,9 @@ function CopyButton({
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(getText());
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    } catch {
-      /* clipboard unavailable in non-secure contexts */
-    }
+    if (!(await copyToClipboard(getText()))) return;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
   };
 
   return (

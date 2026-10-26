@@ -4,7 +4,7 @@
  */
 
 import { useState } from "react";
-import { toast } from "@/lib/toast";
+import { copyToClipboard } from "@/utils/dataUtils";
 import { COLOR_BORDER } from "./constants";
 import { ParsedMessage } from "./prettyMessagesTypes";
 import { SectionHeader } from "./SectionHeader";
@@ -19,12 +19,7 @@ interface OutputCardProps {
 export function OutputCard({ message, completionTokens, outputCost }: OutputCardProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
 
-  const handleCopy = () => {
-    if (!message) return;
-
-    navigator.clipboard.writeText(message.content || "");
-    toast.success("Output copied");
-  };
+  const handleCopy = () => copyToClipboard(message?.content, "Output copied");
 
   return (
     <div className="overflow-hidden rounded-md" style={{ border: `1px solid ${COLOR_BORDER}` }}>

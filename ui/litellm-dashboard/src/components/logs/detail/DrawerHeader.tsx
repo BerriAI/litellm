@@ -9,6 +9,7 @@ import { AutoRouterTag } from "@/components/shared/table_cells";
 import { ClassifyTag } from "./ClassifyTag";
 import { SidebarToggle } from "./SidebarToggle";
 import { getProviderLogoAndName } from "../../provider_info_helpers";
+import { copyToClipboard } from "@/utils/dataUtils";
 import {
   DRAWER_HEADER_PADDING,
   COLOR_BORDER,
@@ -183,13 +184,9 @@ function CopyableId({
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    } catch {
-      /* clipboard unavailable in non-secure contexts */
-    }
+    if (!(await copyToClipboard(value))) return;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
   };
 
   return (

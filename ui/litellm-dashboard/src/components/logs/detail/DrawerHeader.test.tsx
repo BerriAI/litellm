@@ -1,7 +1,7 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { render } from "../../../../tests/test-utils";
 import type { LogEntry } from "../types";
@@ -116,5 +116,26 @@ describe("DrawerHeader back link", () => {
   it("shows no back link when opened from the logs page", () => {
     renderWithBack();
     expect(screen.queryByRole("button", { name: /^Back to/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("DrawerHeader copy", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    Reflect.deleteProperty(navigator, "clipboard");
+    Reflect.deleteProperty(document, "execCommand");
+  });
+
+  it("copies the request id when the browser has no clipboard API, as on a plain HTTP origin", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    Object.defineProperty(document, "execCommand", { value: () => true, configurable: true });
+    const select = vi.spyOn(HTMLTextAreaElement.prototype, "select");
+    renderHeader(logEntry({}), false);
+
+    await user.click(screen.getByRole("button", { name: "Copy Request ID" }));
+
+    expect(select.mock.contexts.map((textArea) => textArea.value)).toEqual(["170d64ea-69f0-431a-be72-332f8f78c18a"]);
+    expect(await screen.findByRole("button", { name: "Copied!" })).toBeInTheDocument();
   });
 });
