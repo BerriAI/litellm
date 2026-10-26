@@ -2964,12 +2964,14 @@ def supports_native_streaming(model: str, custom_llm_provider: str | None) -> bo
     Raises:
     Exception: If the given model is not found in model_prices_and_context_window.json.
     """
+    from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
+
     try:
-        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+        resolved_model, resolved_provider = resolve_model_and_provider_for_metadata(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-        model_info: Final = get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        model_info: Final = get_model_info_helper(model=resolved_model, custom_llm_provider=resolved_provider)
         supports_native_streaming = model_info.get("supports_native_streaming", True)
         if supports_native_streaming is None:
             supports_native_streaming = True

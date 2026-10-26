@@ -6206,6 +6206,8 @@
             "text",
             "audio"
         ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
         "supports_function_calling": true,
         "supports_native_streaming": true,
         "supports_parallel_function_calling": true,
@@ -6270,6 +6272,8 @@
             "text",
             "audio"
         ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
         "supports_function_calling": true,
         "supports_native_streaming": true,
         "supports_parallel_function_calling": true,
@@ -33698,7 +33702,7 @@
         "input_cost_per_token": 1e-05,
         "input_cost_per_token_above_272k_tokens": 2e-05,
         "litellm_provider": "github_copilot",
-        "max_input_tokens": 272000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "responses",
@@ -33722,7 +33726,7 @@
         "input_cost_per_token": 1e-07,
         "input_cost_per_token_above_272k_tokens": 2e-07,
         "litellm_provider": "github_copilot",
-        "max_input_tokens": 272000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "responses",
@@ -33746,7 +33750,7 @@
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_272k_tokens": 4e-06,
         "litellm_provider": "github_copilot",
-        "max_input_tokens": 272000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "responses",
@@ -33770,7 +33774,7 @@
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_272k_tokens": 4e-06,
         "litellm_provider": "github_copilot",
-        "max_input_tokens": 272000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "responses",
@@ -78851,5 +78855,47 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true
+    },
+    "baseten/decision-models/baseten-elephant-9b-latest": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "baseten",
+        "max_input_tokens": 16384,
+        "mode": "decisions",
+        "output_cost_per_token": 0.0,
+        "source": "https://inference.baseten.co/v1/models",
+        "supports_vision": true
+    },
+    "baseten/decision-models/baseten-mammoth-27b-latest": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "baseten",
+        "max_input_tokens": 16384,
+        "mode": "decisions",
+        "output_cost_per_token": 0.0,
+        "source": "https://inference.baseten.co/v1/models",
+        "supports_vision": true
+    },
+    "github_copilot/gpt-6.1-terra": {
+        "cache_creation_input_token_cost": 1.25e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.5e-06,
+        "cache_read_input_token_cost": 5e-08,
+        "cache_read_input_token_cost_above_272k_tokens": 1e-07,
+        "input_cost_per_token": 1e-06,
+        "input_cost_per_token_above_272k_tokens": 2e-06,
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "output_cost_per_token": 5e-06,
+        "output_cost_per_token_above_272k_tokens": 7.5e-06,
+        "source": "https://github.blog/changelog/2026-10-26-gpt-6-1-terra-in-github-copilot",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
     }
 }

@@ -8933,7 +8933,14 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
             mock_prisma.db.litellm_proxymodeltable.update.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_patch_model_non_admin_cannot_set_wif_field(self):
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("anthropic_keycloak_token_url", "https://identity.example.com/token"),
+            ("chatgpt_auth_file", "/tokens/account-b/auth.json"),
+        ],
+    )
+    async def test_patch_model_non_admin_cannot_set_wif_field(self, field: str, value: str) -> None:
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             patch_model,
         )
@@ -8979,13 +8986,13 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
                     model_id="m1",
                     patch_data=updateDeployment(
                         litellm_params=updateLiteLLMParams(
-                            anthropic_keycloak_token_url="https://attacker.example/token",
+                            **{field: value},
                         )
                     ),
                     user_api_key_dict=non_admin,
                 )
             err = exc_info.value
-            assert getattr(err, "param", "") == "anthropic_keycloak_token_url"
+            assert getattr(err, "param", "") == field
             mock_prisma.db.litellm_proxymodeltable.update.assert_not_called()
 
     @pytest.mark.asyncio
@@ -9044,7 +9051,14 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
             mock_prisma.db.litellm_proxymodeltable.update.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_patch_model_admin_can_set_wif_field(self):
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("anthropic_keycloak_token_url", "https://identity.example.com/token"),
+            ("chatgpt_auth_file", "/tokens/account-b/auth.json"),
+        ],
+    )
+    async def test_patch_model_admin_can_set_wif_field(self, field: str, value: str) -> None:
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             patch_model,
         )
@@ -9095,7 +9109,7 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
                 model_id="m1",
                 patch_data=updateDeployment(
                     litellm_params=updateLiteLLMParams(
-                        anthropic_keycloak_token_url="https://keycloak.internal/token",
+                        **{field: value},
                     )
                 ),
                 user_api_key_dict=admin,

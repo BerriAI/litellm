@@ -5,6 +5,7 @@ import functools
 import gc
 import itertools
 import json
+import linecache
 import logging
 import os
 import sys
@@ -13,8 +14,8 @@ import warnings
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from types import MappingProxyType, SimpleNamespace
-from typing import TYPE_CHECKING, Final, Literal, cast
+from types import CodeType, FrameType, MappingProxyType, SimpleNamespace
+from typing import TYPE_CHECKING, Final, Literal, TypeVar, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
@@ -60,7 +61,10 @@ from litellm.router import (
     _without_line_breaks,
     Span,
 )
+from litellm.proxy.response_polling.polling_handler import should_use_polling_for_request
 from litellm.router_strategy import simple_shuffle
+from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
+from litellm.router_strategy.savings_baseline import Baseline, _models_in
 from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
 from litellm.router_utils.cooldown_handlers import (
     _async_get_cooldown_deployments,
@@ -277,6 +281,15 @@ def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
 
     # 3) metadata lands under "metadata"
     assert kwargs["litellm_metadata"] == {"baz": 123}
+
+
+def test_router_model_group_llm_provider_resolves_chatgpt_without_login(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    params: Final = LiteLLM_Params(model="chatgpt/gpt-5.4")
+
+    assert Router._model_group_llm_provider(params) == ("gpt-5.4", "chatgpt")
+    assert Router._model_group_llm_provider(LiteLLM_Params(model="no-such-provider-model-xyz")) == ("", "")
+    assert not any(tmp_path.iterdir())
 
 
 def test_router_with_model_info_and_model_group():
@@ -30004,6 +30017,319 @@ async def test_responses_fallback_wrapper_disconnect_billing_keeps_the_primary_s
     assert wrapped.partial_response_on_disconnect().response.usage.output_tokens == primary_tokens + fallback_tokens
 
 
+_SYNC_SECONDS: Final = 10
+_ROUTER_FILE: Final = Router.__init__.__code__.co_filename
+_INDEX_LOCK_LINES: Final = frozenset(
+    number
+    for number, line in enumerate(linecache.getlines(_ROUTER_FILE), start=1)
+    if "with self._deployment_index_lock" in line
+)
+
+_Read = TypeVar("_Read")
+
+
+def _concurrent_delete_deployment(index: int) -> dict[str, object]:
+    return {
+        "model_name": f"model-{index}",
+        "litellm_params": {"model": f"openai/gpt-{index}", "api_key": "k"},
+        "model_info": {
+            "id": f"deployment-{index}",
+            "team_id": "team-1",
+            "team_public_model_name": "public-shared" if index >= 2 else f"public-{index}",
+        },
+    }
+
+
+def _concurrent_delete_router() -> Router:
+    return Router(model_list=[_concurrent_delete_deployment(index) for index in range(4)])
+
+
+def _read_during_held_write(
+    read: Callable[[], _Read],
+    write: Callable[[], object],
+    event: Literal["call", "c_call"] = "call",
+    write_after: CodeType | None = None,
+) -> _Read:
+    """Run `read` on its own thread while `write` waits at its first `event` in the re-index, after the list shrank and
+    before the maps caught up. With `write_after`, the write starts when `read` returns from that function. The write
+    resumes once `read` returns or reaches the router's index lock, so a read that skips the lock meets the half-updated
+    list and a read that takes the lock waits for the write"""
+    reindex: Final = Router._update_deployment_indices_after_removal.__code__
+    held: Final = threading.Event()
+    release: Final = threading.Event()
+    settled: Final = threading.Event()
+    released_in_time: Final[list[bool]] = []
+    outcome: Final[list[_Read]] = []
+    failure: Final[list[BaseException]] = []
+
+    def hold_in_reindex(frame: FrameType, observed: str, _arg: object) -> None:
+        if observed == event and frame.f_code is reindex and not held.is_set():
+            held.set()
+            released_in_time.append(release.wait(timeout=_SYNC_SECONDS))
+
+    def run_write() -> None:
+        previous: Final = sys.getprofile()
+        sys.setprofile(hold_in_reindex)
+        try:
+            write()
+        finally:
+            sys.setprofile(previous)
+
+    writer: Final = threading.Thread(target=run_write)
+
+    def start_write() -> None:
+        writer.start()
+        assert held.wait(timeout=_SYNC_SECONDS), "the write never reached re-indexing"
+
+    def watch_read(frame: FrameType, observed: str, _arg: object) -> Callable[..., object] | None:
+        if frame.f_code.co_filename != _ROUTER_FILE:
+            return None
+        if observed == "return" and frame.f_code is write_after and writer.ident is None:
+            start_write()
+        elif observed == "line" and held.is_set() and frame.f_lineno in _INDEX_LOCK_LINES:
+            settled.set()
+        return watch_read
+
+    def run_read() -> None:
+        previous: Final = sys.gettrace()
+        sys.settrace(watch_read)
+        try:
+            outcome.append(read())
+        except BaseException as error:
+            failure.append(error)
+        finally:
+            sys.settrace(previous)
+            settled.set()
+
+    reader: Final = threading.Thread(target=run_read)
+    try:
+        if write_after is None:
+            start_write()
+        reader.start()
+        assert settled.wait(timeout=_SYNC_SECONDS), "the read neither returned nor reached the index lock"
+    finally:
+        release.set()
+        if reader.ident is not None:
+            reader.join()
+        if writer.ident is not None:
+            writer.join()
+    assert released_in_time == [True], "the write was not held for the whole read"
+    if failure:
+        raise failure[0]
+    return outcome[0]
+
+
+def _deployment_ids(deployments: list[DeploymentTypedDict]) -> tuple[str, ...]:
+    return tuple(deployment["model_info"]["id"] for deployment in deployments)
+
+
+@pytest.mark.parametrize(
+    ("read", "expected"),
+    [
+        pytest.param(
+            lambda router: router.get_deployment("deployment-3").model_info.id, "deployment-3", id="get_deployment"
+        ),
+        pytest.param(
+            lambda router: router.get_model_info("deployment-3")["model_info"]["id"],
+            "deployment-3",
+            id="get_model_info",
+        ),
+        pytest.param(
+            lambda router: _deployment_ids(router.get_all_deployments("model-3")),
+            ("deployment-3",),
+            id="get_all_deployments",
+        ),
+        pytest.param(
+            lambda router: _deployment_ids(router.get_all_deployments("public-shared", team_id="team-1")),
+            ("deployment-2", "deployment-3"),
+            id="get_all_deployments-team",
+        ),
+        pytest.param(
+            lambda router: router.map_team_model("public-shared", "team-1"), "public-shared", id="map_team_model"
+        ),
+        pytest.param(lambda router: router.get_model_ids("model-3"), ["deployment-3"], id="get_model_ids-by-name"),
+        pytest.param(
+            lambda router: router.get_model_ids(), ["deployment-1", "deployment-2", "deployment-3"], id="get_model_ids"
+        ),
+        pytest.param(
+            lambda router: router.get_deployment_by_model_group_name("model-3").model_info.id,
+            "deployment-3",
+            id="get_deployment_by_model_group_name",
+        ),
+        pytest.param(
+            lambda router: router.get_model_listing_info("model-3").cost_map_keys,
+            ("openai/gpt-3",),
+            id="get_model_listing_info",
+        ),
+        pytest.param(
+            lambda router: router.team_model_has_alternatives("deployment-3"), True, id="team_model_has_alternatives"
+        ),
+        pytest.param(
+            lambda router: (
+                router._get_model_group_deployment_usable_by_team(
+                    model_group_name="model-3", team_id="team-1"
+                ).model_info.id
+            ),
+            "deployment-3",
+            id="model_group_deployment_usable_by_team",
+        ),
+        pytest.param(
+            lambda router: (
+                router._get_team_public_name_deployment(model_id="public-shared", team_id="team-1").model_info.id
+            ),
+            "deployment-2",
+            id="team_public_name_deployment",
+        ),
+        pytest.param(
+            lambda router: _deployment_ids(router._team_deployments_across_teams("public-shared")),
+            ("deployment-2", "deployment-3"),
+            id="team_deployments_across_teams",
+        ),
+        pytest.param(
+            lambda router: _deployment_ids(list(router.deployments_named("model-3") or ())),
+            ("deployment-3",),
+            id="deployments_named",
+        ),
+        pytest.param(
+            lambda router: should_use_polling_for_request(
+                background_mode=True,
+                polling_via_cache_enabled=["openai"],
+                redis_cache=MagicMock(),
+                model="model-3",
+                llm_router=router,
+            ),
+            True,
+            id="response_polling_provider_lookup",
+        ),
+        pytest.param(
+            lambda router: _models_in(router, "model-3"),
+            (Baseline("openai/gpt-3", "deployment-3"),),
+            id="savings_baseline_candidates",
+        ),
+    ],
+)
+def test_lookup_during_a_concurrent_delete_returns_the_requested_deployment(
+    read: Callable[[Router], object], expected: object
+) -> None:
+    router: Final = _concurrent_delete_router()
+
+    observed: Final = _read_during_held_write(lambda: read(router), lambda: router.delete_deployment("deployment-0"))
+
+    assert observed == expected
+
+
+def test_lookup_during_an_upsert_returns_the_requested_deployment() -> None:
+    router: Final = _concurrent_delete_router()
+    rotated: Final = Deployment(
+        **{**_concurrent_delete_deployment(0), "litellm_params": {"model": "openai/gpt-0", "api_key": "rotated"}}
+    )
+
+    observed: Final = _read_during_held_write(
+        lambda: router.get_deployment("deployment-3").model_info.id, lambda: router.upsert_deployment(rotated)
+    )
+
+    assert observed == "deployment-3"
+
+
+def test_add_during_a_concurrent_delete_indexes_the_added_deployment() -> None:
+    router: Final = _concurrent_delete_router()
+
+    _read_during_held_write(
+        lambda: router.add_deployment(Deployment(**_concurrent_delete_deployment(4))),
+        lambda: router.delete_deployment("deployment-0"),
+    )
+
+    assert [router.get_deployment(f"deployment-{index}").model_info.id for index in range(1, 5)] == [
+        f"deployment-{index}" for index in range(1, 5)
+    ]
+
+
+def test_set_model_list_during_a_concurrent_delete_indexes_the_new_list() -> None:
+    router: Final = _concurrent_delete_router()
+
+    _read_during_held_write(
+        lambda: router.set_model_list([_concurrent_delete_deployment(index) for index in range(10, 14)]),
+        lambda: router.delete_deployment("deployment-0"),
+        event="c_call",
+    )
+
+    assert router.get_model_ids() == [f"deployment-{index}" for index in range(10, 14)]
+
+
+def test_team_model_has_alternatives_when_a_delete_starts_after_its_deployment_lookup() -> None:
+    router: Final = _concurrent_delete_router()
+
+    has_alternatives: Final = _read_during_held_write(
+        lambda: router.team_model_has_alternatives("deployment-3"),
+        lambda: router.delete_deployment("deployment-0"),
+        write_after=Router.get_deployment.__code__,
+    )
+
+    assert has_alternatives is True
+
+
+def test_init_adaptive_router_deployment_during_a_concurrent_delete_prices_the_listed_model() -> None:
+    priced: Final = {
+        **_concurrent_delete_deployment(3),
+        "litellm_params": {"model": "openai/gpt-3", "api_key": "k", "input_cost_per_token": 3e-06},
+    }
+    router: Final = Router(model_list=[*(_concurrent_delete_deployment(index) for index in range(3)), priced])
+    adaptive: Final = Deployment(
+        model_name="adaptive",
+        litellm_params=LiteLLM_Params(
+            model="auto_router/adaptive_router", adaptive_router_config={"available_models": ["model-3"]}
+        ),
+        model_info=ModelInfo(id="adaptive"),
+    )
+
+    _read_during_held_write(
+        lambda: router.init_adaptive_router_deployment(deployment=adaptive),
+        lambda: router.delete_deployment("deployment-0"),
+    )
+
+    assert router.adaptive_routers["adaptive"][0].strategy.model_to_cost == {"model-3": 3e-06}
+
+
+def test_complexity_router_adaptive_pool_during_a_concurrent_delete_prices_the_listed_model() -> None:
+    priced: Final = {
+        **_concurrent_delete_deployment(3),
+        "litellm_params": {"model": "openai/gpt-3", "api_key": "k", "input_cost_per_token": 3e-06},
+    }
+    router: Final = Router(model_list=[*(_concurrent_delete_deployment(index) for index in range(3)), priced])
+    complexity: Final = ComplexityRouter(
+        model_name="hybrid",
+        litellm_router_instance=router,
+        complexity_router_config={"adaptive": True, "tiers": {"SIMPLE": ["model-3"]}},
+    )
+
+    adaptive: Final = _read_during_held_write(
+        complexity._ensure_adaptive_router, lambda: router.delete_deployment("deployment-0")
+    )
+
+    assert adaptive is not None
+    assert adaptive.model_to_cost == {"model-3": 3e-06}
+
+
+def test_delete_of_an_unknown_deployment_returns_none_and_keeps_the_list() -> None:
+    router: Final = _concurrent_delete_router()
+
+    assert router.delete_deployment("deployment-9") is None
+    assert router.get_model_ids() == [f"deployment-{index}" for index in range(4)]
+
+
+def test_get_model_ids_by_name_skips_team_deployments_only_when_asked() -> None:
+    shared: Final = {"model_name": "shared", "litellm_params": {"model": "openai/gpt-shared", "api_key": "k"}}
+    router: Final = Router(
+        model_list=[
+            {**shared, "model_info": {"id": "global"}},
+            {**shared, "model_info": {"id": "team", "team_id": "team-1", "team_public_model_name": "public"}},
+        ]
+    )
+
+    assert router.get_model_ids("shared", exclude_team_models=True) == ["global"]
+    assert router.get_model_ids("shared") == ["global", "team"]
+
+
 _IMAGE_PART = {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}}
 _IMAGE_CHAT = [{"role": "user", "content": [{"type": "text", "text": "What is in this image?"}, _IMAGE_PART]}]
 _IMAGE_RESPONSES_INPUT = [
@@ -30153,7 +30479,7 @@ def test_request_carries_image_sees_chat_parts_and_responses_input_items():
 
 @pytest.mark.parametrize(
     ("model", "expected_provider"),
-    [("cloudflare/@cf/cloudflare/clef-flash", "cloudflare"), ("dotprompt/clef", None)],
+    [("cloudflare/@cf/cloudflare/clef-flash", "cloudflare"), ("dotprompt/clef", None), ("chatgpt/gpt-5.4", "chatgpt")],
 )
 def test_resolve_deployment_provider_accepts_what_the_router_loads(model: str, expected_provider: str | None):
     resolved: Final = Router.resolve_deployment_provider(LiteLLM_Params(model=model))
