@@ -30149,3 +30149,24 @@ def test_request_carries_image_sees_chat_parts_and_responses_input_items():
     assert litellm.Router._request_carries_image(None, {"input": _IMAGE_RESPONSES_INPUT}) is True
     assert litellm.Router._request_carries_image([{"role": "user", "content": "Say hi"}], {}) is False
     assert litellm.Router._request_carries_image(None, {"input": "Say hi"}) is False
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_provider"),
+    [("cloudflare/@cf/cloudflare/clef-flash", "cloudflare"), ("dotprompt/clef", None)],
+)
+def test_resolve_deployment_provider_accepts_what_the_router_loads(model: str, expected_provider: str | None):
+    resolved: Final = Router.resolve_deployment_provider(LiteLLM_Params(model=model))
+    assert resolved[1] == expected_provider, resolved
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        LiteLLM_Params(model="@cf/cloudflare/clef-flash"),
+        LiteLLM_Params(model="my-model", custom_llm_provider="not-a-provider"),
+    ],
+)
+def test_resolve_deployment_provider_rejects_what_the_router_drops(params: LiteLLM_Params):
+    with pytest.raises(Exception, match=r"LLM Provider NOT provided|Unsupported provider"):
+        Router.resolve_deployment_provider(params)
