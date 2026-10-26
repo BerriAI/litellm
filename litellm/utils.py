@@ -8449,9 +8449,9 @@ def validate_and_fix_openai_messages(
         )
         cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
         new_messages.append(
-            cast(
+            cast(  # cast-ok: cleanup_none_field_in_message return satisfies AllMessageValues
                 AllMessageValues, cleaned_message
-            )  # cast-ok: cleanup_none_field_in_message return satisfies AllMessageValues
+            )
         )
     return validate_chat_completion_user_messages(messages=new_messages)
 
