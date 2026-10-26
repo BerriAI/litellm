@@ -1761,10 +1761,17 @@ class PrometheusLogger(CustomLogger):
         )
 
         # set team rpm/tpm metrics for the requested model
+        # The isinstance(dict) narrowing above erases this payload's field types, so the
+        # three values it supplies come back as Unknown and are restored here.
+        team_for_gauges: Final = cast("str | None", user_api_team)  # cast-ok: narrowed TypedDict loses the field type
+        team_alias_for_gauges: Final = cast("str | None", user_api_team_alias)  # cast-ok: same narrowed payload
+        model_group_for_gauges: Final = cast(  # cast-ok: the payload declares model_group as str
+            "str | None", standard_logging_payload["model_group"]
+        )
         self._set_team_rate_limit_metrics(
-            user_api_team=cast("str | None", user_api_team),
-            user_api_team_alias=cast("str | None", user_api_team_alias),
-            model_group=cast("str | None", standard_logging_payload["model_group"]),
+            user_api_team=team_for_gauges,
+            user_api_team_alias=team_alias_for_gauges,
+            model_group=model_group_for_gauges,
             standard_logging_payload=standard_logging_payload,  # pyright: ignore[reportArgumentType]  # isinstance(dict) above narrows the TypedDict to dict[Unknown, Unknown]
         )
 
@@ -2622,20 +2629,21 @@ class PrometheusLogger(CustomLogger):
         if user_api_team is None:
             return
 
+        payload_as_dict: Final = cast("dict[str, object] | None", standard_logging_payload)  # cast-ok: dict at runtime
         enum_values: Final = UserAPIKeyLabelValues(
             team=user_api_team,
             team_alias=user_api_team_alias,
             model=model_group,
             custom_metadata_labels=get_custom_labels_from_metadata(
                 metadata=_get_combined_custom_metadata_from_standard_logging_payload(
-                    standard_logging_payload=cast("dict[str, object] | None", standard_logging_payload)
+                    standard_logging_payload=payload_as_dict
                 )
             ),
         )
         label_context: Final = PrometheusLabelFactoryContext(enum_values)
 
         for metric_name, value_type, rate_limit_type in _TEAM_RATE_LIMIT_GAUGE_SPECS:
-            gauge: _LabeledGauge = cast("_LabeledGauge", getattr(self, metric_name))
+            gauge: _LabeledGauge = cast("_LabeledGauge", getattr(self, metric_name))  # cast-ok: specs name built gauges
             self._sync_team_rate_limit_gauge(
                 gauge=gauge,
                 metric_name=metric_name,
@@ -2689,13 +2697,15 @@ class PrometheusLogger(CustomLogger):
             # request wrote it last.
             return
 
-        labels: Final[dict[str, str]] = cast(
-            "dict[str, str]",
-            prometheus_label_factory(
-                supported_enum_labels=labelnames,
-                enum_values=enum_values,
-                label_context=label_context,
-            ),
+        labels: Final[dict[str, str]] = (  # mutable-ok: built by the factory and only read here
+            cast(  # cast-ok: the factory is annotated to return a bare dict
+                "dict[str, str]",
+                prometheus_label_factory(
+                    supported_enum_labels=labelnames,
+                    enum_values=enum_values,
+                    label_context=label_context,
+                ),
+            )
         )
         label_values: Final[tuple[str, ...]] = tuple(labels.get(name, "") for name in labelnames)
         can_retire: Final = _series_retirement_supported()
