@@ -69,6 +69,17 @@ def create_config_class(provider: SimpleProviderConfig):
             # Resolve API key
             resolved_key: Final = api_key or get_secret_str(provider.api_key_env)
 
+            if provider.special_handling.get("require_api_key") and not resolved_key:
+                # Fail closed: without this the caller's OPENAI_API_KEY would be used as a fallback
+                # further down the dispatch path and sent to this provider.
+                from litellm.exceptions import AuthenticationError
+
+                raise AuthenticationError(
+                    message=f"{provider.slug}: no API key. Pass api_key or set {provider.api_key_env}.",
+                    llm_provider=provider.slug,
+                    model="",
+                )
+
             return resolved_base, resolved_key
 
         def get_openai_compatible_provider_info(

@@ -38,7 +38,7 @@ class TestSaggProviderConfig:
             model="sagg/deepseek-ai/DeepSeek-V4-Flash-0731",
             custom_llm_provider=None,
             api_base=None,
-            api_key=None,
+            api_key="test-key",
         )
 
         assert model == "deepseek-ai/DeepSeek-V4-Flash-0731"
@@ -84,3 +84,25 @@ class TestSaggProviderConfig:
         assert result["max_tokens"] == 100
         assert "max_completion_tokens" not in result
         assert result["temperature"] == 0.7
+
+
+class TestSaggRequiresItsOwnKey:
+    def _config(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        return create_config_class(JSONProviderRegistry.get("sagg"))()
+
+    def test_missing_key_fails_closed_even_with_openai_key_set(self, monkeypatch):
+        import pytest
+
+        monkeypatch.delenv("SAGG_API_KEY", raising=False)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-not-for-sagg")
+        with pytest.raises(litellm.AuthenticationError):
+            self._config()._get_openai_compatible_provider_info(None, None)
+
+    def test_explicit_key_and_env_key_still_work(self, monkeypatch):
+        monkeypatch.delenv("SAGG_API_KEY", raising=False)
+        assert self._config()._get_openai_compatible_provider_info(None, "k1")[1] == "k1"
+        monkeypatch.setenv("SAGG_API_KEY", "k2")
+        assert self._config()._get_openai_compatible_provider_info(None, None)[1] == "k2"
