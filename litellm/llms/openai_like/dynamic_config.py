@@ -3,18 +3,22 @@ Dynamic configuration class generator for JSON-based providers.
 """
 
 from collections.abc import Coroutine
-from typing import Any, Final, Literal, overload
+from typing import TYPE_CHECKING, Final, Literal, overload
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
+from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
 from .json_loader import SimpleProviderConfig
+
+if TYPE_CHECKING:
+    from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
 
 
 def create_config_class(provider: SimpleProviderConfig):
@@ -27,7 +31,7 @@ def create_config_class(provider: SimpleProviderConfig):
         @overload
         def _transform_messages(
             self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-        ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+        ) -> Coroutine[object, object, list[AllMessageValues]]: ...
 
         @overload
         def _transform_messages(
@@ -39,7 +43,7 @@ def create_config_class(provider: SimpleProviderConfig):
 
         def _transform_messages(
             self, messages: list[AllMessageValues], model: str, is_async: bool = False
-        ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+        ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
             """Transform messages based on special_handling config"""
 
             # Handle content list to string conversion if configured
@@ -68,6 +72,13 @@ def create_config_class(provider: SimpleProviderConfig):
 
             return resolved_base, resolved_key
 
+        def get_openai_compatible_provider_info(
+            self,
+            api_base: str | None,
+            api_key: str | None,
+        ) -> tuple[str | None, str | None]:
+            return self._get_openai_compatible_provider_info(api_base, api_key)
+
         def get_complete_url(
             self,
             api_base: str | None,
@@ -81,13 +92,9 @@ def create_config_class(provider: SimpleProviderConfig):
             if not api_base:
                 api_base = provider.base_url
 
-            if api_base is None:
-                raise ValueError(f"api_base is required for provider {provider.slug}")
-
-            if not api_base.endswith("/chat/completions"):
-                api_base = f"{api_base}/chat/completions"
-
-            return api_base
+            if isinstance(api_base, str):
+                return ensure_api_route(api_base, "chat/completions")
+            raise ValueError(f"api_base is required for provider {provider.slug}")
 
         def get_supported_openai_params(self, model: str) -> list:
             """Get supported OpenAI params, excluding tool-related params for models
@@ -173,7 +180,7 @@ def create_config_class(provider: SimpleProviderConfig):
 _responses_config_cache: Final[dict] = {}
 
 
-def create_responses_config_class(provider: SimpleProviderConfig):
+def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenAILikeResponsesConfig]":
     """Generate a Responses API config class dynamically from JSON configuration.
 
     Parallel to create_config_class() but for /v1/responses endpoints.
@@ -216,11 +223,9 @@ def create_responses_config_class(provider: SimpleProviderConfig):
                 if not api_base:
                     api_base = provider.base_url
 
-            if api_base is None:
-                raise ValueError(f"api_base is required for provider {provider.slug}")
-
-            api_base = api_base.rstrip("/")
-            return f"{api_base}/responses"
+            if isinstance(api_base, str):
+                return join_api_base(api_base, "responses")
+            raise ValueError(f"api_base is required for provider {provider.slug}")
 
         def transform_responses_api_request(
             self,

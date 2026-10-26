@@ -4,15 +4,24 @@ import { Suspense, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
-import Navbar from "@/components/navbar";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { ChatShellProvider } from "@/contexts/ChatShellContext";
+import { PluginModeProvider } from "@/contexts/PluginModeContext";
 import ChatShell from "@/components/chat/ChatShell";
-import { migratedHref } from "@/utils/migratedPages";
+import { uiHref } from "@/utils/uiHref";
+import "@/components/chat/moyai/moyai-chat.css";
 
-// ChatShellProvider uses useSearchParams(), which requires a Suspense boundary for static export.
+// The nuqs Next adapter uses useSearchParams, so keep the chat tree behind Suspense.
 function ChatLayoutContent({ children }: { children: React.ReactNode }) {
-  const { accessToken, userRole, userId, userEmail, premiumUser } = useAuthorized();
+  const {
+    accessToken,
+    userRole,
+    userId,
+    userEmail,
+    premiumUser,
+    isLoading: isIdentityLoading,
+    isAuthorized,
+  } = useAuthorized();
   const { data: uiSettings, isLoading: isUISettingsLoading } = useUISettings();
   const router = useRouter();
 
@@ -20,15 +29,20 @@ function ChatLayoutContent({ children }: { children: React.ReactNode }) {
   const blocked = !isUISettingsLoading && !chatEnabled;
 
   useEffect(() => {
-    if (blocked) router.replace(migratedHref(""));
+    if (blocked) router.replace(uiHref(""));
   }, [blocked, router]);
 
-  if (isUISettingsLoading || blocked) return null;
+  const identityReady = !isIdentityLoading && isAuthorized;
+  const chatReady = identityReady && !isUISettingsLoading && chatEnabled;
+
+  if (!chatReady) return null;
 
   return (
     <ThemeProvider accessToken={accessToken}>
-      <div className="flex h-screen flex-col">
-        <Navbar accessToken={accessToken} isPublicPage={false} />
+      <link rel="preconnect" href="https://api.fontshare.com" />
+      <link rel="preconnect" href="https://cdn.fontshare.com" crossOrigin="anonymous" />
+      <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=general-sans@1&display=swap" />
+      <div className="flex h-dvh flex-col">
         <div className="min-h-0 flex-1">
           <ChatShellProvider
             accessToken={accessToken ?? ""}
@@ -37,7 +51,9 @@ function ChatLayoutContent({ children }: { children: React.ReactNode }) {
             userRole={userRole ?? ""}
             premiumUser={premiumUser ?? false}
           >
-            <ChatShell>{children}</ChatShell>
+            <PluginModeProvider accessToken={accessToken}>
+              <ChatShell>{children}</ChatShell>
+            </PluginModeProvider>
           </ChatShellProvider>
         </div>
       </div>

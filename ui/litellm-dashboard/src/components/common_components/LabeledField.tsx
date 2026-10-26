@@ -2,6 +2,7 @@ import React from "react";
 import CopyButton from "@/components/shared/CopyButton";
 import { EntityLink } from "@/components/shared/EntityLink";
 import { cx } from "@/lib/cva.config";
+import { DEFAULT_PROXY_ADMIN_USER_ID } from "@/utils/sentinels";
 import DefaultProxyAdminTag from "./DefaultProxyAdminTag";
 
 interface LabeledFieldProps {
@@ -24,7 +25,7 @@ export default function LabeledField({
   defaultUserIdCheck = false,
 }: LabeledFieldProps) {
   const isEmpty = !value;
-  const isDefaultUser = defaultUserIdCheck && value === "default_user_id";
+  const isDefaultUser = defaultUserIdCheck && value === DEFAULT_PROXY_ADMIN_USER_ID;
   const displayValue = isEmpty ? "-" : value;
   const isCopyable = copyable && !isEmpty && !isDefaultUser;
   const isLink = href != null && !isEmpty && !isDefaultUser;

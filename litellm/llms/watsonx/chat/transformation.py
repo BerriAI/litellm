@@ -7,13 +7,14 @@ Docs: https://cloud.ibm.com/apidocs/watsonx-ai#text-chat
 from typing import Final
 
 from litellm import verbose_logger
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.watsonx import (
     WatsonXAIEndpoint,
     WatsonXModelPattern,
 )
 
-from ....utils import _remove_additional_properties, _remove_strict_from_schema
+from ....utils import remove_additional_properties, remove_strict_from_schema
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import IBMWatsonXMixin
 
@@ -56,9 +57,9 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
         _tools = non_default_params.pop("tools", None)
         if _tools is not None:
             # remove 'additionalProperties' from tools
-            _tools = _remove_additional_properties(_tools)
+            _tools = remove_additional_properties(_tools)
             # remove 'strict' from tools
-            _tools = _remove_strict_from_schema(_tools)
+            _tools = remove_strict_from_schema(_tools)
         if _tools is not None:
             non_default_params["tools"] = _tools
 
@@ -96,7 +97,7 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
             endpoint = endpoint.format(deployment_id=deployment_id)
         else:
             endpoint = WatsonXAIEndpoint.CHAT_STREAM.value if stream else WatsonXAIEndpoint.CHAT.value
-        url = url.rstrip("/") + endpoint
+        url = join_api_base(url, endpoint)
 
         ## add api version
         url = self._add_api_version_to_url(url=url, api_version=optional_params.pop("api_version", None))
@@ -157,11 +158,9 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
     @staticmethod
     async def aapply_prompt_template(model: str, messages: list[dict[str, str]]) -> str | None:
         """Apply prompt template (async version)"""
-        import litellm
         from litellm.litellm_core_utils.prompt_templates.factory import (
             ahf_chat_template,
             custom_prompt,
-            hf_chat_template,
             ibm_granite_pt,
             mistral_instruct_pt,
         )
@@ -179,11 +178,7 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
             else:
                 hf_model = model
             try:
-                # Use sync if cached, async if not
-                if hf_model in litellm.known_tokenizer_config:
-                    result = hf_chat_template(model=hf_model, messages=messages)
-                else:
-                    result = await ahf_chat_template(model=hf_model, messages=messages)
+                result = await ahf_chat_template(model=hf_model, messages=messages)
                 # Return result if it's truthy (not None and not empty string)
                 # The caller (_aconvert_watsonx_messages_core) will handle None/empty by falling back to default
                 if result:

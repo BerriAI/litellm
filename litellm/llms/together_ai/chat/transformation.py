@@ -9,7 +9,6 @@ from types import MappingProxyType
 from typing import (
     Final,
     Literal,
-    cast,  # noqa: TID251  # rebuilding a TypedDict minus keys has no checked spelling
     overload,
 )
 
@@ -18,13 +17,14 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.prompt_templates.common_utils import strip_litellm_response_only_fields
+from litellm.router_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import supports_function_calling, supports_reasoning, supports_response_schema
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 TOOL_CALLING_PARAMS: Final = ("tools", "tool_choice", "function_call")
-LITELLM_INTERNAL_ASSISTANT_FIELDS: Final = frozenset({"thinking_blocks", "provider_specific_fields"})
 FUNCTION_CALLING_DOCS_URL: Final = "https://docs.together.ai/docs/function-calling"
 STRUCTURED_OUTPUTS_DOCS_URL: Final = "https://docs.together.ai/docs/inference/chat/structured-outputs"
 
@@ -139,6 +139,8 @@ def _reasoning_effort_payload(effort: str, model: str) -> Mapping[str, object]:
     if effort == "none":
         disable_reasoning: Final[TogetherReasoningToggle] = {"enabled": False}
         return MappingProxyType({"reasoning": disable_reasoning})
+    if effort in (declared_reasoning_efforts_for_model(model, "together_ai") or ()):
+        return MappingProxyType({"reasoning_effort": effort})
     if model.startswith(HIGH_MAX_EFFORT_MODEL_PREFIX):
         return MappingProxyType({"reasoning_effort": HIGH_MAX_EFFORT_TRANSLATION.get(effort, effort)})
     return MappingProxyType({"reasoning_effort": EFFORT_TRANSLATION.get(effort, effort)})
@@ -171,14 +173,9 @@ def _drop_response_format(passed_params: Container[str], model: str, drop_params
 
 
 def _without_litellm_internal_fields(message: AllMessageValues) -> AllMessageValues:
-    if message["role"] != "assistant" or LITELLM_INTERNAL_ASSISTANT_FIELDS.isdisjoint(message):
+    if message["role"] != "assistant":
         return message
-    return cast(  # cast-ok: rebuilding the same TypedDict minus internal keys loses the narrowed type
-        "AllMessageValues",
-        {  # mutable-ok: TypedDict rebuild minus internal keys
-            key: value for key, value in message.items() if key not in LITELLM_INTERNAL_ASSISTANT_FIELDS
-        },
-    )
+    return strip_litellm_response_only_fields(message)
 
 
 class TogetherAIChatConfig(OpenAIGPTConfig):
@@ -207,9 +204,7 @@ class TogetherAIChatConfig(OpenAIGPTConfig):
         """Together consumes replayed assistant `reasoning_content` (preserved thinking via
         `chat_template_kwargs: {"clear_thinking": false}`), so it must stay in the payload;
         only litellm-internal fields are stripped before sending."""
-        stripped: Final = [  # mutable-ok: super() requires a list
-            _without_litellm_internal_fields(message) for message in messages
-        ]
+        stripped: Final = [_without_litellm_internal_fields(message) for message in messages]
         if is_async:
             return super()._transform_messages(stripped, model, is_async=True)
         return super()._transform_messages(stripped, model, is_async=False)
@@ -218,7 +213,7 @@ class TogetherAIChatConfig(OpenAIGPTConfig):
         supported_params: Final = super().get_supported_openai_params(model)
         if not _supports_together_reasoning(model):
             return supported_params
-        return [  # mutable-ok: the inherited contract returns a plain list; building fresh avoids mutating the base class's value
+        return [
             *supported_params,
             "reasoning_effort",
         ]

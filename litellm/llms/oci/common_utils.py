@@ -1,16 +1,23 @@
 import base64
 import hashlib
+import importlib
 import json
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from email.utils import formatdate
-from typing import Any, Final, Protocol
+from pathlib import Path
+from types import MappingProxyType
+from typing import Final, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, field_validator
 
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.llms.base import LiteLLMBaseModel
 
 try:
     from cryptography.hazmat.primitives import hashes, serialization
@@ -64,7 +71,7 @@ class OCISignerProtocol(Protocol):
     See: https://docs.oracle.com/en-us/iaas/tools/python/latest/api/signing.html
     """
 
-    def do_request_sign(self, request: Any, *, enforce_content_headers: bool = False) -> None:
+    def do_request_sign(self, request: "OCIRequestWrapper", *, enforce_content_headers: bool = False) -> None:
         pass
 
 
@@ -113,7 +120,7 @@ def build_signature_string(method: str, path: str, headers: dict, signed_headers
     return "\n".join(lines)
 
 
-def load_private_key_from_str(key_str: str) -> Any:
+def load_private_key_from_str(key_str: str) -> "rsa.RSAPrivateKey":
     _require_cryptography()
     key: Final = serialization.load_pem_private_key(
         key_str.encode("utf-8"),
@@ -124,7 +131,7 @@ def load_private_key_from_str(key_str: str) -> Any:
     return key
 
 
-def load_private_key_from_file(file_path: str) -> Any:
+def load_private_key_from_file(file_path: str) -> "rsa.RSAPrivateKey":
     """Loads a private key from a file path."""
     try:
         with open(file_path, "r", encoding="utf-8") as f:
@@ -153,7 +160,7 @@ _OCI_KEY_ENV: Final = "OCI_KEY"
 _OCI_COMPARTMENT_ID_ENV: Final = "OCI_COMPARTMENT_ID"
 
 
-def resolve_oci_credentials(optional_params: dict) -> dict:
+def resolve_oci_credentials(optional_params: Mapping[str, object]) -> dict:
     """
     Merge OCI credentials from optional_params (explicit, always wins) and
     environment variables (fallback).
@@ -173,11 +180,140 @@ def resolve_oci_credentials(optional_params: dict) -> dict:
     }
 
 
-_OCI_REGION_RE: Final = re.compile(r"^[a-z][a-z0-9-]{0,30}[a-z0-9]$")
+_OCI_REGION_PATTERN: Final = r"^[a-z][a-z0-9-]{0,30}[a-z0-9]$"
+_OCI_REALM_DOMAIN_PATTERN: Final = r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$"
+_OCI_REGION_RE: Final = re.compile(_OCI_REGION_PATTERN)
 _OCI_ACTION_PATH_RE: Final = re.compile(rf"/{OCI_API_VERSION}/actions/[^/?#]+/?$")
+_OCI_COMMERCIAL_REALM_DOMAIN: Final = "oraclecloud.com"
+_OCI_INFERENCE_ENDPOINT_TEMPLATE: Final = "https://inference.generativeai.{region}.oci.{secondLevelDomain}"
+_OCI_REGION_METADATA_ENV: Final = "OCI_REGION_METADATA"
+_OCI_REGIONS_CONFIG_FILE: Final = "~/.oci/regions-config.json"
+_OCID_REALM_RE: Final = re.compile(r"^ocid1\.[a-z0-9]+\.([a-z0-9]+)\.", re.IGNORECASE)
+_OCI_REALM_DOMAINS: Final = MappingProxyType(
+    {
+        "oc1": "oraclecloud.com",
+        "oc2": "oraclegovcloud.com",
+        "oc3": "oraclegovcloud.com",
+        "oc4": "oraclegovcloud.uk",
+        "oc8": "oraclecloud8.com",
+        "oc9": "oraclecloud9.com",
+        "oc10": "oraclecloud10.com",
+        "oc14": "oraclecloud14.com",
+        "oc15": "oraclecloud15.com",
+        "oc19": "oraclecloud.eu",
+        "oc20": "oraclecloud20.com",
+        "oc21": "oraclecloud21.com",
+        "oc23": "oraclecloud23.com",
+        "oc24": "oraclecloud24.com",
+        "oc26": "oraclecloud26.com",
+        "oc29": "oraclecloud29.com",
+        "oc35": "oraclecloud35.com",
+        "oc42": "oraclecloud42.com",
+        "oc51": "oraclecloud51.com",
+        "oc52": "oraclecloud52.com",
+    }
+)
 
 
-def get_oci_base_url(optional_params: dict, api_base: str | None = None) -> str:
+class OCIRegionMetadata(LiteLLMBaseModel):
+    """One entry of the OCI SDK's region metadata schema, as found in
+    ``~/.oci/regions-config.json`` (a JSON array) or ``OCI_REGION_METADATA`` (one object).
+    Values are lowercased before validation, as the SDK does."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    region_identifier: str = Field(alias="regionIdentifier", pattern=_OCI_REGION_PATTERN)
+    realm_domain_component: str = Field(alias="realmDomainComponent", pattern=_OCI_REALM_DOMAIN_PATTERN)
+
+    @field_validator("region_identifier", "realm_domain_component", mode="before")
+    @classmethod
+    def _lowercase(cls, value: object) -> object:
+        return value.lower() if isinstance(value, str) else value
+
+
+_JSON_ARRAY: Final = TypeAdapter(tuple[JsonValue, ...])
+
+
+def _validated_region_metadata(raw: JsonValue, source: str) -> OCIRegionMetadata | None:
+    try:
+        return OCIRegionMetadata.model_validate(raw)
+    except ValidationError as e:
+        verbose_logger.warning("Ignoring OCI region metadata entry in %s: %s", source, e)
+        return None
+
+
+def _region_metadata_from_file() -> tuple[OCIRegionMetadata, ...]:
+    path: Final = Path(os.path.expanduser(_OCI_REGIONS_CONFIG_FILE))
+    if not path.is_file():
+        return ()
+    try:
+        raw_entries: Final = _JSON_ARRAY.validate_json(path.read_bytes())
+    except (OSError, ValidationError) as e:
+        verbose_logger.warning("Ignoring OCI region metadata in %s: %s", path, e)
+        return ()
+    candidates: Final = (_validated_region_metadata(raw, str(path)) for raw in raw_entries)
+    return tuple(entry for entry in candidates if entry is not None)
+
+
+def _region_metadata_from_env() -> tuple[OCIRegionMetadata, ...]:
+    raw: Final = os.environ.get(_OCI_REGION_METADATA_ENV)
+    if not raw:
+        return ()
+    try:
+        return (OCIRegionMetadata.model_validate_json(raw),)
+    except ValidationError as e:
+        verbose_logger.warning("Ignoring OCI region metadata in %s: %s", _OCI_REGION_METADATA_ENV, e)
+        return ()
+
+
+def _realm_domain_from_ocid(ocid: str | None) -> str | None:
+    match: Final = _OCID_REALM_RE.match(ocid) if ocid else None
+    return _OCI_REALM_DOMAINS.get(match.group(1).lower()) if match else None
+
+
+def _realm_domain_from_metadata(region: str) -> str | None:
+    entries: Final = (*_region_metadata_from_file(), *_region_metadata_from_env())
+    return next((entry.realm_domain_component for entry in entries if entry.region_identifier == region), None)
+
+
+@runtime_checkable
+class _OCIRegionRegistry(Protocol):
+    def endpoint_for(self, service: str, region: str, service_endpoint_template: str) -> str: ...
+
+
+def _load_oci_region_registry() -> _OCIRegionRegistry | None:
+    try:
+        registry: Final = importlib.import_module("oci.regions")
+    except ImportError:
+        return None
+    return registry if isinstance(registry, _OCIRegionRegistry) else None
+
+
+def resolve_oci_inference_endpoint(region: str, compartment_id: str | None = None) -> str:
+    """Return the GenAI inference endpoint for ``region`` in whichever OCI realm hosts it.
+
+    The realm's second-level domain comes first from the realm key inside ``compartment_id``
+    (``ocid1.compartment.oc2..`` is the Government realm), then from the OCI SDK's region
+    registry when the SDK is installed, then from the per-region metadata sources the SDK
+    reads, ``~/.oci/regions-config.json`` and ``OCI_REGION_METADATA``, and otherwise defaults
+    to the commercial realm. Realm domains per ``oci/regions_definitions.py`` in oci 2.187.0.
+    A region that is not described anywhere therefore keeps its commercial endpoint, so one
+    government deployment never redirects the others.
+    """
+    realm_domain: Final = _realm_domain_from_ocid(compartment_id)
+    if realm_domain is not None:
+        return _OCI_INFERENCE_ENDPOINT_TEMPLATE.format(region=region, secondLevelDomain=realm_domain)
+    registry: Final = _load_oci_region_registry()
+    if registry is not None:
+        return registry.endpoint_for(
+            "generative_ai_inference", region=region, service_endpoint_template=_OCI_INFERENCE_ENDPOINT_TEMPLATE
+        )
+    return _OCI_INFERENCE_ENDPOINT_TEMPLATE.format(
+        region=region, secondLevelDomain=_realm_domain_from_metadata(region) or _OCI_COMMERCIAL_REALM_DOMAIN
+    )
+
+
+def get_oci_base_url(optional_params: Mapping[str, object], api_base: str | None = None) -> str:
     """Return the OCI inference base URL, respecting any explicit api_base override.
 
     If ``api_base`` already ends with a fully-formed OCI action path
@@ -195,7 +331,8 @@ def get_oci_base_url(optional_params: dict, api_base: str | None = None) -> str:
                 f"Invalid OCI region {region!r}: must match ^[a-z][a-z0-9-]{{0,30}}[a-z0-9]$ (e.g. 'us-ashburn-1')."
             ),
         )
-    return f"https://inference.generativeai.{region}.oci.oraclecloud.com"
+    compartment_id: Final = creds["oci_compartment_id"]
+    return resolve_oci_inference_endpoint(region, compartment_id if isinstance(compartment_id, str) else None)
 
 
 # ---------------------------------------------------------------------------
@@ -421,16 +558,17 @@ OCI_JSON_TO_PYTHON_TYPES: Final[dict[str, str]] = {
 }
 
 
-def resolve_oci_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
+def resolve_oci_schema_refs(schema: JsonValue) -> JsonValue:
     """Inline all ``$ref``/``$defs`` references — OCI does not support JSON Schema ``$ref``."""
-    defs: Final = schema.get("$defs", {})
-    resolving_stack: Final[set] = set()
+    raw_defs: Final = schema.get("$defs") if isinstance(schema, dict) else None
+    defs: Final[dict[str, JsonValue]] = raw_defs if isinstance(raw_defs, dict) else {}
+    resolving_stack: Final[set[str]] = set()
 
-    def _resolve(obj: Any) -> Any:
+    def _resolve(obj: JsonValue) -> JsonValue:
         if isinstance(obj, dict):
-            if "$ref" in obj:
-                ref: Final = obj["$ref"]
-                if ref.startswith("#/$defs/"):
+            ref: Final = obj.get("$ref")
+            if ref is not None:
+                if isinstance(ref, str) and ref.startswith("#/$defs/"):
                     key: Final = ref.split("/")[-1]
                     if key in resolving_stack:
                         return {"type": "object"}  # break cycles
@@ -451,7 +589,7 @@ def resolve_oci_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
     return resolved
 
 
-def resolve_oci_schema_anyof(obj: Any) -> Any:
+def resolve_oci_schema_anyof(obj: JsonValue) -> JsonValue:
     """Resolve Pydantic v2 ``Optional[T]`` → ``anyOf`` patterns.
 
     Pydantic v2 emits ``{"anyOf": [{"type": "T"}, {"type": "null"}]}`` for
@@ -459,10 +597,13 @@ def resolve_oci_schema_anyof(obj: Any) -> Any:
     first non-null branch and merge top-level metadata into it.
     """
     if isinstance(obj, dict):
-        if "anyOf" in obj and "type" not in obj:
-            non_null: Final = [t for t in obj["anyOf"] if not (isinstance(t, dict) and t.get("type") == "null")]
+        raw_any_of: Final = obj.get("anyOf")
+        if raw_any_of is not None and "type" not in obj:
+            branches: Final = raw_any_of if isinstance(raw_any_of, list) else []
+            non_null: Final = [t for t in branches if not (isinstance(t, dict) and t.get("type") == "null")]
             if non_null:
-                resolved: Final = {**obj, **non_null[0]}
+                first: Final = non_null[0]
+                resolved: Final[dict[str, JsonValue]] = {**obj, **first} if isinstance(first, dict) else {**obj}
                 resolved.pop("anyOf", None)
                 return resolve_oci_schema_anyof(resolved)
         return {k: resolve_oci_schema_anyof(v) for k, v in obj.items()}
@@ -471,7 +612,7 @@ def resolve_oci_schema_anyof(obj: Any) -> Any:
     return obj
 
 
-def sanitize_oci_schema(schema: Any) -> Any:
+def sanitize_oci_schema(schema: JsonValue) -> JsonValue:
     """Recursively remove OCI-incompatible fields from a JSON schema.
 
     Strips ``title`` keys, removes ``None``-valued ``default`` entries,
@@ -483,7 +624,7 @@ def sanitize_oci_schema(schema: Any) -> Any:
     if not isinstance(schema, dict):
         return schema
 
-    sanitized: Final[dict[str, Any]] = {}
+    sanitized: Final[dict[str, JsonValue]] = {}
     for key, value in schema.items():
         if key == "title":
             continue
@@ -513,7 +654,7 @@ def sanitize_oci_schema(schema: Any) -> Any:
     return sanitized
 
 
-def enrich_cohere_param_description(description: str, param_schema: dict[str, Any]) -> str:
+def enrich_cohere_param_description(description: str, param_schema: dict[str, JsonValue]) -> str:
     """Embed schema constraints into a Cohere parameter description.
 
     ``CohereParameterDefinition`` only has ``type``, ``description``, and

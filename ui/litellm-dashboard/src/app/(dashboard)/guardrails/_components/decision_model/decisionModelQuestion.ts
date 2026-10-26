@@ -1,0 +1,175 @@
+import type { StatusTone } from "@/components/shared/table_cells";
+import { isDecisionMode } from "@/lib/decisionModels";
+
+import { trimDecisionChecks, type DecisionModelCheckDraft } from "./buildDecisionModelParams";
+
+export interface DecisionModelGroup {
+  model_group: string;
+  providers?: string[] | null;
+  mode?: string | null;
+}
+
+export function parseDecisionModelGroups(data: unknown): DecisionModelGroup[] {
+  if (!Array.isArray(data)) return [];
+  return data.flatMap((entry: unknown) => {
+    if (typeof entry !== "object" || entry === null) return [];
+    const { model_group, providers, mode } = entry as Record<string, unknown>;
+    if (typeof model_group !== "string") return [];
+    return [
+      {
+        model_group,
+        providers: Array.isArray(providers) ? providers.filter((p): p is string => typeof p === "string") : [],
+        mode: typeof mode === "string" ? mode : null,
+      },
+    ];
+  });
+}
+
+export interface DecisionModelOption {
+  model: string;
+  provider: string;
+}
+
+export function decisionModelOptions(
+  allowedProviders: readonly string[],
+  groups: readonly DecisionModelGroup[],
+  onlyProvider: string | null,
+): DecisionModelOption[] {
+  const providers = onlyProvider ? allowedProviders.filter((provider) => provider === onlyProvider) : allowedProviders;
+  return groups
+    .filter((group) => isDecisionMode(group.mode))
+    .flatMap((group) => {
+      const provider = (group.providers ?? []).find((candidate) => providers.includes(candidate));
+      return provider ? [{ model: group.model_group, provider }] : [];
+    })
+    .toSorted((a, b) => a.model.localeCompare(b.model));
+}
+
+export interface DecisionTestBody {
+  model: string;
+  input: string;
+  questions: Array<{ type: "predicate"; name: string; instructions: string }>;
+}
+
+export function runnableDecisionQuestions(checks: readonly DecisionModelCheckDraft[]): DecisionModelCheckDraft[] {
+  return trimDecisionChecks(checks).filter((check) => check.name && check.instructions);
+}
+
+export function buildDecisionTestBody(
+  model: string,
+  input: string,
+  checks: readonly DecisionModelCheckDraft[],
+): DecisionTestBody {
+  return {
+    model,
+    input,
+    questions: runnableDecisionQuestions(checks).map((check) => ({
+      type: "predicate" as const,
+      name: check.name,
+      instructions: check.instructions,
+    })),
+  };
+}
+
+export type DecisionTestResult =
+  | { kind: "probability"; probability: number }
+  | { kind: "refused" }
+  | { kind: "missing" };
+
+export type DecisionTestResults = Record<string, DecisionTestResult>;
+
+export interface DecisionTestScores {
+  model: string;
+  asked: Record<string, string>;
+  results: DecisionTestResults;
+}
+
+export type DecisionTestRun =
+  | ({ id: number; input: string } & DecisionTestScores)
+  | { id: number; input: string; error: string };
+
+interface DecisionsApiAnswer {
+  type?: string;
+  name?: string | null;
+  probability?: number;
+}
+
+export function parseDecisionTestResponse(body: unknown, questionNames: readonly string[]): DecisionTestResults {
+  const answers =
+    typeof body === "object" && body !== null ? (body as { answers?: DecisionsApiAnswer[] }).answers ?? [] : [];
+  const byName = new Map(answers.filter((answer) => answer.name != null).map((answer) => [answer.name, answer]));
+  const results: DecisionTestResults = {};
+  for (const name of questionNames) {
+    const answer = byName.get(name);
+    if (!answer) {
+      results[name] = { kind: "missing" };
+    } else if (answer.type === "refusal") {
+      results[name] = { kind: "refused" };
+    } else if (typeof answer.probability === "number") {
+      results[name] = { kind: "probability", probability: answer.probability };
+    } else {
+      results[name] = { kind: "missing" };
+    }
+  }
+  return results;
+}
+
+export type DecisionTestChip = "block" | "pass" | "logged" | "no_answer";
+
+export const DECISION_TEST_CHIP_TONE: Readonly<Record<DecisionTestChip, StatusTone>> = {
+  block: "error",
+  pass: "success",
+  logged: "warning",
+  no_answer: "neutral",
+};
+
+export function decisionTestChip(result: DecisionTestResult, check: DecisionModelCheckDraft): DecisionTestChip {
+  if (result.kind !== "probability") return check.action === "block" ? "block" : "no_answer";
+  if (result.probability >= check.threshold) return check.action === "block" ? "block" : "logged";
+  return "pass";
+}
+
+export interface VisibleTestResult {
+  check: DecisionModelCheckDraft;
+  result: DecisionTestResult;
+}
+
+export function decisionTestOverall(visible: readonly VisibleTestResult[]): "block" | "pass" {
+  return visible.some(({ check, result }) => decisionTestChip(result, check) === "block") ? "block" : "pass";
+}
+
+export function visibleTestResults(
+  scores: DecisionTestScores,
+  checks: readonly DecisionModelCheckDraft[],
+  model: string,
+): VisibleTestResult[] {
+  if (scores.model !== model) return [];
+  return trimDecisionChecks(checks).flatMap((check) => {
+    const result = scores.results[check.name];
+    return result && scores.asked[check.name] === check.instructions ? [{ check, result }] : [];
+  });
+}
+
+export function runTestShortcutLabel(platform?: string): string {
+  const hint = platform ?? (typeof navigator === "undefined" ? "" : `${navigator.platform} ${navigator.userAgent}`);
+  return /mac/i.test(hint) ? "⌘+Enter" : "Ctrl+Enter";
+}
+
+export const DEFAULT_DECISION_THRESHOLD = 0.7;
+
+export function newDecisionCheckDraft(existing: readonly DecisionModelCheckDraft[]): DecisionModelCheckDraft {
+  const lastId = Math.max(0, ...existing.map((check) => Number(check.id) || 0));
+  return {
+    id: String(lastId + 1),
+    name: "",
+    instructions: "",
+    action: "block",
+    threshold: DEFAULT_DECISION_THRESHOLD,
+  };
+}
+
+export const DECISION_TEST_HISTORY_CAP = 20;
+
+export function prependTestRun(runs: readonly DecisionTestRun[], run: DecisionTestRun): DecisionTestRun[] {
+  return [run, ...runs].slice(0, DECISION_TEST_HISTORY_CAP);
+}

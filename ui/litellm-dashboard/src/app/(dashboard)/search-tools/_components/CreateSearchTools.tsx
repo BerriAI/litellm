@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { CircleHelp } from "lucide-react";
 import React, { useCallback, useMemo, useState } from "react";
 import { useWatch } from "react-hook-form";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { toast } from "@/lib/toast";
 import { createSearchTool, fetchAvailableSearchProviders } from "@/components/networking";
@@ -65,16 +65,20 @@ const createSearchToolShape = {
     .string()
     .min(1, "Please enter a search tool name")
     .regex(/^[a-zA-Z0-9_-]+$/, "Name can only contain letters, numbers, hyphens, and underscores"),
-  search_provider: z.string().min(1, "Please select a search provider"),
+  search_provider: z
+    .string()
+    .nullable()
+    .pipe(z.string({ error: "Please select a search provider" }).min(1, "Please select a search provider")),
   api_key: z.string().optional(),
   description: z.string().optional(),
+  input_cost_per_query: z.number().nonnegative("Cost per query cannot be negative").optional(),
 };
 
 const createSearchToolSchema = z.object(createSearchToolShape);
 
 type CreateSearchToolFormValues = z.infer<typeof createSearchToolSchema>;
 
-const EMPTY_VALUES: CreateSearchToolFormValues = { search_tool_name: "", search_provider: "" };
+const EMPTY_VALUES: z.input<typeof createSearchToolSchema> = { search_tool_name: "", search_provider: null };
 
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
   <>
@@ -216,8 +220,8 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
                     <Combobox
                       items={providerNames}
                       itemToStringLabel={providerLabel}
-                      value={value === "" ? null : value}
-                      onValueChange={(provider: string | null) => onChange(provider ?? "")}
+                      value={value}
+                      onValueChange={onChange}
                     >
                       <ComboboxInput
                         id={id}
@@ -226,7 +230,7 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
                         placeholder="Select a search provider"
                         className="h-10 w-full rounded-lg"
                         disabled={isLoadingProviders}
-                        showClear={value !== ""}
+                        showClear={value != null && value !== ""}
                       />
                       <ComboboxContent>
                         <ComboboxEmpty>No matching search providers</ComboboxEmpty>
@@ -260,6 +264,28 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
                       value={value ?? ""}
                       placeholder="Enter your API key"
                       groupClassName="h-10 rounded-lg"
+                    />
+                  )}
+                </FormField>
+
+                <FormField
+                  control={form.control}
+                  name="input_cost_per_query"
+                  label={labelWithHint(
+                    "Cost per Query (USD, Optional)",
+                    "Your negotiated price per search query. It overrides the LiteLLM cost map price for this tool in the response cost header and spend logs. Leave blank to use the provider's default price.",
+                  )}
+                >
+                  {({ ref, value, onChange, ...field }) => (
+                    <Input
+                      {...field}
+                      ref={ref}
+                      type="number"
+                      step="any"
+                      value={value ?? ""}
+                      onChange={(event) => onChange(event.target.value === "" ? undefined : event.target.valueAsNumber)}
+                      placeholder="e.g., 0.007"
+                      className="rounded-lg"
                     />
                   )}
                 </FormField>
@@ -326,7 +352,7 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
               <SearchConnectionTest
                 key={connectionTestId}
                 litellmParams={{
-                  search_provider: watchedProvider,
+                  search_provider: watchedProvider ?? undefined,
                   api_key: watchedApiKey,
                   api_base: undefined,
                 }}
@@ -345,7 +371,6 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
               >
                 Close
               </Button>
-              , ]
             </DialogFooter>
           </DialogContent>
         </Dialog>
