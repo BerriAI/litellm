@@ -5297,9 +5297,49 @@ def test_test_model_connection_accepts_image_edit_mode(monkeypatch):
     assert response.json()["status"] == "success"
 
 
-@pytest.mark.parametrize("mode", ("decisions", "evaluation"), ids=("decisions", "legacy-evaluation"))
-def test_test_model_connection_accepts_decision_modes(
-    monkeypatch, mode: Literal["evaluation", "decisions"]
+_TYPESAFE_TEST_CONNECTION: Final = (
+    {"model": "typesafe/jev-latest", "api_key": "sk-test"},
+    "https://api.typesafe.ai/v1/systemone",
+    {
+        "model": "jev-latest",
+        "answers": {"reachable": {"type": "noul", "noul": 1.0}},
+        "usage": {"input_tokens": 12, "output_tokens": 1},
+    },
+)
+_CLAIRIC_TEST_CONNECTION: Final = (
+    {
+        "model": "cloudflare/clairic",
+        "api_key": "sk-test",
+        "api_base": "https://api.cloudflare.com/client/v4/accounts/acct/ai/run",
+    },
+    "https://api.cloudflare.com/client/v4/accounts/acct/ai/run/@cf/cloudflare/clairic",
+    {
+        "result": {
+            "model": "clairic",
+            "answers": {"status": {"type": "text", "value": "ok"}},
+            "truncated": False,
+            "usage": {"input_tokens": 9, "output_tokens": 0},
+        },
+        "success": True,
+    },
+)
+
+
+@pytest.mark.parametrize(
+    ("mode", "litellm_params", "upstream_url", "upstream_json"),
+    (
+        ("decisions", *_TYPESAFE_TEST_CONNECTION),
+        ("evaluation", *_TYPESAFE_TEST_CONNECTION),
+        ("extraction", *_CLAIRIC_TEST_CONNECTION),
+    ),
+    ids=("decisions", "legacy-evaluation", "extraction"),
+)
+def test_test_model_connection_accepts_decision_and_extraction_modes(
+    monkeypatch,
+    mode: Literal["evaluation", "decisions", "extraction"],
+    litellm_params: Mapping[str, str],
+    upstream_url: str,
+    upstream_json: Mapping[str, object],
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
@@ -5315,20 +5355,8 @@ def test_test_model_connection_accepts_decision_modes(
         ),
         respx.mock(assert_all_called=True) as respx_mock,
     ):
-        upstream = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(
-            json={
-                "model": "jev-latest",
-                "answers": {"reachable": {"type": "noul", "noul": 1.0}},
-                "usage": {"input_tokens": 12, "output_tokens": 1},
-            }
-        )
-        response = client.post(
-            "/health/test_connection",
-            json={
-                "mode": mode,
-                "litellm_params": {"model": "typesafe/jev-latest", "api_key": "sk-test"},
-            },
-        )
+        upstream = respx_mock.post(upstream_url).respond(json=upstream_json)
+        response = client.post("/health/test_connection", json={"mode": mode, "litellm_params": litellm_params})
 
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "success"

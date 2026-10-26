@@ -5333,6 +5333,39 @@ export interface paths {
         patch: operations["assemblyai_proxy_route_eu_assemblyai__endpoint__patch"];
         trace?: never;
     };
+    "/extraction": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Extract typed fields from a state
+         * @description Read a `state` text and up to 4 images and get one typed answer per named field in `fields`.
+         *
+         *     Field types are `text`, `number`, `date`, `time`, `datetime`, `duration`, `list` (set `items`), `estimate`
+         *     (set `min` and `max`) and `forecast` (set `min`, `max` and `horizon`). Each answer carries its `value`, which is
+         *     null when the input does not determine it, plus `confidence`, `p_null`, text `span`s into the state and, for
+         *     estimates, `mean`, `median`, `p10` and `p90`. Images are data URLs or `{content_type, base64}` objects, remote
+         *     URLs are not accepted. An unknown field type, a field name that is not 1 to 64 letters, digits, `_`, `.` or `-`
+         *     starting with a letter or `_`, a remote image URL or more than 4 images is rejected with a 400 before any
+         *     provider is called. Any other top-level key, `stream: true` and OpenAI generation settings such as `temperature`
+         *     included, is rejected with a 400 naming it unless `drop_params` or the deployment's `additional_drop_params`
+         *     drops it. Settings inside `fields` and `options` go to the provider as sent, so a field missing a setting its
+         *     type needs or an empty `state` with no images comes back with the provider's own error. `model` is any
+         *     extraction model in the proxy model list, such as Cloudflare Clairic. The request and the answers keep the
+         *     provider's format.
+         */
+        post: operations["extraction_extraction_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/fal_ai/{endpoint}": {
         parameters: {
             query?: never;
@@ -5832,9 +5865,10 @@ export interface paths {
         };
         /**
          * Latest Release Info
-         * @description Latest stable LiteLLM GitHub release with the PR count of its whole minor line (e.g. v1.105.0 + v1.105.1)
-         *     split into new features, bug fixes and other updates.
-         *     Returns null when GitHub can't be reached so the dashboard upgrade banner simply doesn't render.
+         * @description Newest stable release on the LiteLLM changelog, linked to its changelog page, with the PR count of its whole
+         *     minor line (e.g. v1.105.0 + v1.105.1) from GitHub split into new features, bug fixes and other updates.
+         *     Returns null when the changelog or GitHub can't be reached so the dashboard upgrade banner simply doesn't render.
+         *     Set LITELLM_DISABLE_LATEST_RELEASE_CHECK=true to return null without making any outbound request.
          */
         get: operations["latest_release_info_get_latest_release_info_get"];
         put?: never;
@@ -9246,8 +9280,9 @@ export interface paths {
          *     way to page, sort or filter it.
          *
          *     `sort` takes a comma-separated list of `budget_id`, `max_budget`, `tpm_limit`,
-         *     `rpm_limit`, `tpd_limit` or `created_at`, each optionally prefixed with `-` for descending,
-         *     and defaults to `-created_at`. `budget_id` is appended to every sort as the
+         *     `rpm_limit`, `tpd_limit`, `created_at` or `budget_duration`, each optionally prefixed with `-` for descending,
+         *     and defaults to `-created_at`. Reset periods sort by elapsed time, with calendar months
+         *     measured from the current UTC date and unset periods last. `budget_id` is appended to every sort as the
          *     tiebreaker. `q` is a case-insensitive substring match on `budget_id`.
          *     `page_size` defaults to 50 and is capped at 100. Filters are
          *     `filter[budget_duration][in|is_null]`, `filter[max_budget][gte|lte|is_null]`
@@ -10451,6 +10486,9 @@ export interface paths {
          *     This is just for compatibility with openai projects like aider.
          *
          *     Query Parameters:
+         *     - return_wildcard_routes: When true, also list wildcard routes such as `openai/*`.
+         *                     Defaults to `general_settings.return_wildcard_routes`, and an explicit
+         *                     value on the request wins over it
          *     - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
          *                     provider's model catalog. When present, the response is Codex's own
          *                     catalog shape (`{"models": [...]}`) built from the same listing, with
@@ -15989,7 +16027,7 @@ export interface paths {
         put?: never;
         /**
          * Ask named questions about a state (System One format)
-         * @description Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.
+         * @description Judge a `state` against one or more named `questions` and get one calibrated answer per question name.
          *
          *     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
          *     `confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,
@@ -18265,27 +18303,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/usage/ai/chat": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Usage Ai Chat
-         * @description AI chat about usage data. Streams SSE events with the AI response.
-         *     The AI agent has access to tools that query aggregated daily activity data.
-         */
-        post: operations["usage_ai_chat_usage_ai_chat_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/user/available_roles": {
         parameters: {
             query?: never;
@@ -20204,6 +20221,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/extraction": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Extract typed fields from a state
+         * @description Read a `state` text and up to 4 images and get one typed answer per named field in `fields`.
+         *
+         *     Field types are `text`, `number`, `date`, `time`, `datetime`, `duration`, `list` (set `items`), `estimate`
+         *     (set `min` and `max`) and `forecast` (set `min`, `max` and `horizon`). Each answer carries its `value`, which is
+         *     null when the input does not determine it, plus `confidence`, `p_null`, text `span`s into the state and, for
+         *     estimates, `mean`, `median`, `p10` and `p90`. Images are data URLs or `{content_type, base64}` objects, remote
+         *     URLs are not accepted. An unknown field type, a field name that is not 1 to 64 letters, digits, `_`, `.` or `-`
+         *     starting with a letter or `_`, a remote image URL or more than 4 images is rejected with a 400 before any
+         *     provider is called. Any other top-level key, `stream: true` and OpenAI generation settings such as `temperature`
+         *     included, is rejected with a 400 naming it unless `drop_params` or the deployment's `additional_drop_params`
+         *     drops it. Settings inside `fields` and `options` go to the provider as sent, so a field missing a setting its
+         *     type needs or an empty `state` with no images comes back with the provider's own error. `model` is any
+         *     extraction model in the proxy model list, such as Cloudflare Clairic. The request and the answers keep the
+         *     provider's format.
+         */
+        post: operations["extraction_v1_extraction_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/files": {
         parameters: {
             query?: never;
@@ -21347,6 +21397,9 @@ export interface paths {
          *     This is just for compatibility with openai projects like aider.
          *
          *     Query Parameters:
+         *     - return_wildcard_routes: When true, also list wildcard routes such as `openai/*`.
+         *                     Defaults to `general_settings.return_wildcard_routes`, and an explicit
+         *                     value on the request wins over it
          *     - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
          *                     provider's model catalog. When present, the response is Codex's own
          *                     catalog shape (`{"models": [...]}`) built from the same listing, with
@@ -22274,7 +22327,7 @@ export interface paths {
         put?: never;
         /**
          * Ask named questions about a state (System One format)
-         * @description Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.
+         * @description Judge a `state` against one or more named `questions` and get one calibrated answer per question name.
          *
          *     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
          *     `confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,
@@ -27515,7 +27568,7 @@ export interface components {
              * Mode
              * @description The mode to test the model with. If not provided, resolved the way /health does: the deployment's model_info.mode (only while the request tests the deployment's own model), then the mode the provider requires for that model, then the model cost map.
              */
-            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "anthropic_messages" | "ocr" | "evaluation" | "decisions") | null;
+            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "anthropic_messages" | "ocr" | "evaluation" | "decisions" | "extraction") | null;
             /**
              * Model Info
              * @description Model info for the health check
@@ -28386,6 +28439,15 @@ export interface components {
              */
             uncached_input_tokens: number;
         };
+        /** CacheWriteTokensDetails */
+        CacheWriteTokensDetails: {
+            /** Ttl 12H Tokens */
+            ttl_12h_tokens: number;
+            /** Ttl 30M Tokens */
+            ttl_30m_tokens: number;
+        } & {
+            [key: string]: unknown;
+        };
         /** CachedTokensDetails */
         CachedTokensDetails: {
             /** Audio Tokens */
@@ -28399,7 +28461,7 @@ export interface components {
          * CallTypes
          * @enum {string}
          */
-        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "decisions" | "adecisions" | "systemone" | "asystemone" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
+        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "decisions" | "adecisions" | "systemone" | "asystemone" | "extraction" | "aextraction" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
         /** CallbackDelete */
         CallbackDelete: {
             /** Callback Name */
@@ -29015,16 +29077,6 @@ export interface components {
             detail?: string;
             /** Url */
             url: string;
-        };
-        /** ChatMessage */
-        ChatMessage: {
-            /** Content */
-            content: string;
-            /**
-             * Role
-             * @enum {string}
-             */
-            role: "user" | "assistant";
         };
         /** ChoiceAnswer */
         ChoiceAnswer: {
@@ -30225,6 +30277,11 @@ export interface components {
              * @default 3600
              */
             responses_websocket_session_limit_seconds: number;
+            /**
+             * Return Wildcard Routes
+             * @description When true, `/v1/models` lists wildcard routes like `openai/*` unless the request passes `return_wildcard_routes=false`.
+             */
+            return_wildcard_routes?: boolean | null;
             /** @description Spreads the proxy's scheduled background jobs (spend flushes, budget resets, config reloads, exports) across a window instead of firing them together on every replica. On by default; set to tune the window, pin a job, or turn it off. */
             scheduled_job_stagger?: components["schemas"]["ScheduledJobStaggerSettings"] | null;
             /**
@@ -32203,6 +32260,69 @@ export interface components {
          * @enum {string}
          */
         ExportType: "daily" | "daily_with_keys" | "daily_with_models" | "daily_with_users";
+        /** ExtractionAnswer */
+        ExtractionAnswer: {
+            /** Confidence */
+            confidence?: number | null;
+            guess?: components["schemas"]["JsonValue"];
+            mean?: components["schemas"]["JsonValue"];
+            median?: components["schemas"]["JsonValue"];
+            p10?: components["schemas"]["JsonValue"];
+            p90?: components["schemas"]["JsonValue"];
+            /** P Above */
+            p_above?: number | null;
+            /** P Below */
+            p_below?: number | null;
+            /** P Null */
+            p_null?: number | null;
+            /** Quantiles */
+            quantiles?: components["schemas"]["JsonValue"][] | null;
+            /** Span */
+            span?: number[] | null;
+            /** Spans */
+            spans?: number[][] | null;
+            /** Steps */
+            steps?: components["schemas"]["JsonValue"][] | null;
+            /** Type */
+            type: string;
+            /** @description The answer, null when the input does not determine it */
+            value: components["schemas"]["JsonValue"];
+        } & {
+            [key: string]: unknown;
+        };
+        /** ExtractionResponse */
+        ExtractionResponse: {
+            /** Answers */
+            answers: {
+                [key: string]: components["schemas"]["ExtractionAnswer"];
+            };
+            /** Model */
+            model: string;
+            /** State Text */
+            state_text?: string | null;
+            /** Truncated */
+            truncated: boolean;
+            usage: components["schemas"]["ExtractionUsage"];
+        } & {
+            [key: string]: unknown;
+        };
+        /** ExtractionUsage */
+        ExtractionUsage: {
+            /** Image Tokens */
+            image_tokens?: number | null;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Passes */
+            passes?: number | null;
+            /** Schema Tokens */
+            schema_tokens?: number | null;
+            /** State Tokens */
+            state_tokens?: number | null;
+        } & {
+            [key: string]: unknown;
+        };
         /**
          * FacetListResponse
          * @description The distinct values one column takes over a filtered query. `data` holds bare values, not entity rows.
@@ -33478,6 +33598,9 @@ export interface components {
         InputTokensDetails: {
             /** Audio Tokens */
             audio_tokens?: number | null;
+            /** Cache Write Tokens */
+            cache_write_tokens?: number | null;
+            cache_write_tokens_details?: components["schemas"]["CacheWriteTokensDetails"] | null;
             /**
              * Cached Tokens
              * @default 0
@@ -35096,6 +35219,26 @@ export interface components {
             cache_creation_input_token_cost_above_100k_tokens?: number | null;
             /** Cache Creation Input Token Cost Above 100K Tokens Batches */
             cache_creation_input_token_cost_above_100k_tokens_batches?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr */
+            cache_creation_input_token_cost_above_12hr?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Batches */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Flex */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Priority */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Ultrafast */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Batches */
+            cache_creation_input_token_cost_above_12hr_batches?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Flex */
+            cache_creation_input_token_cost_above_12hr_flex?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Priority */
+            cache_creation_input_token_cost_above_12hr_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Ultrafast */
+            cache_creation_input_token_cost_above_12hr_ultrafast?: number | null;
             /** Cache Creation Input Token Cost Above 1Hr */
             cache_creation_input_token_cost_above_1hr?: number | null;
             /** Cache Creation Input Token Cost Above 1Hr Above 100K Tokens */
@@ -35124,6 +35267,12 @@ export interface components {
             cache_creation_input_token_cost_ultrafast?: number | null;
             /** Cache Read Input Audio Token Cost */
             cache_read_input_audio_token_cost?: number | null;
+            /** Cache Read Input Audio Token Cost Batches */
+            cache_read_input_audio_token_cost_batches?: number | null;
+            /** Cache Read Input Audio Token Cost Flex */
+            cache_read_input_audio_token_cost_flex?: number | null;
+            /** Cache Read Input Audio Token Cost Priority */
+            cache_read_input_audio_token_cost_priority?: number | null;
             /** Cache Read Input Image Token Cost */
             cache_read_input_image_token_cost?: number | null;
             /** Cache Read Input Token Cost */
@@ -35203,6 +35352,10 @@ export interface components {
             input_cost_per_audio_token?: number | null;
             /** Input Cost Per Audio Token Batches */
             input_cost_per_audio_token_batches?: number | null;
+            /** Input Cost Per Audio Token Flex */
+            input_cost_per_audio_token_flex?: number | null;
+            /** Input Cost Per Audio Token Priority */
+            input_cost_per_audio_token_priority?: number | null;
             /** Input Cost Per Character */
             input_cost_per_character?: number | null;
             /** Input Cost Per Character Above 128K Tokens */
@@ -38245,6 +38398,12 @@ export interface components {
         ModelGroupInfoProxy: {
             /** Configurable Clientside Auth Params */
             configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth-Output"])[] | null;
+            /** Custom Metadata */
+            custom_metadata?: {
+                [key: string]: string | number | boolean;
+            } | null;
+            /** Custom Tags */
+            custom_tags?: string[] | null;
             /** Description */
             description?: string | null;
             /** Health Checked At */
@@ -41389,9 +41548,9 @@ export interface components {
             mode?: "implicit" | "explicit";
             /**
              * Ttl
-             * @constant
+             * @enum {string}
              */
-            ttl?: "30m";
+            ttl?: "30m" | "12h";
         };
         /** PromptCachingRequest */
         PromptCachingRequest: {
@@ -44144,7 +44303,7 @@ export interface components {
             /** Output */
             output: (components["schemas"]["ResponseOutputMessage"] | components["schemas"]["ResponseFileSearchToolCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionToolCallOutputItem"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["ResponseComputerToolCall"] | components["schemas"]["ResponseComputerToolCallOutputItem"] | components["schemas"]["ResponseReasoningItem"] | components["schemas"]["ResponseToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItem"] | components["schemas"]["ResponseCompactionItem"] | components["schemas"]["ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCall"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ResponseFunctionShellToolCall"] | components["schemas"]["ResponseFunctionShellToolCallOutput"] | components["schemas"]["ResponseApplyPatchToolCall"] | components["schemas"]["ResponseApplyPatchToolCallOutput"] | components["schemas"]["McpCall"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["McpApprovalResponse"] | components["schemas"]["ResponseCustomToolCall"] | components["schemas"]["ResponseCustomToolCallOutputItem"] | {
                 [key: string]: unknown;
-            })[] | (components["schemas"]["GenericResponseOutputItem"] | components["schemas"]["OutputCodeInterpreterCall"] | components["schemas"]["OutputFunctionToolCall"] | components["schemas"]["OutputImageGenerationCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["CustomToolCallOutputItem"] | components["schemas"]["OutputToolSearchCall"])[];
+            })[] | (components["schemas"]["GenericResponseOutputItem"] | components["schemas"]["OutputCodeInterpreterCall"] | components["schemas"]["OutputFunctionToolCall"] | components["schemas"]["OutputImageGenerationCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["CustomToolCallOutputItem"] | components["schemas"]["OutputToolSearchCall"] | components["schemas"]["ResponseCompactionItem"])[];
             /** Parallel Tool Calls */
             parallel_tool_calls?: boolean | null;
             /** Previous Response Id */
@@ -46169,6 +46328,21 @@ export interface components {
             team_id: string;
         };
         /**
+         * TeamListCallerMembership
+         * @description The calling user's own spend and effective member budget in a team.
+         */
+        TeamListCallerMembership: {
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+        };
+        /**
          * TeamListItem
          * @description A team item in the paginated list response, enriched with computed fields.
          */
@@ -46204,6 +46378,7 @@ export interface components {
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
+            caller_membership?: components["schemas"]["TeamListCallerMembership"] | null;
             /** Created At */
             created_at?: string | null;
             /** Default Team Member Models */
@@ -48866,19 +49041,6 @@ export interface components {
             /** User Role */
             user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
         };
-        /** UsageAIChatRequest */
-        UsageAIChatRequest: {
-            /**
-             * Messages
-             * @description Chat messages (user/assistant history)
-             */
-            messages: components["schemas"]["ChatMessage"][];
-            /**
-             * Model
-             * @description Model to use for AI chat
-             */
-            model?: string | null;
-        };
         /** UsageChartPoint */
         UsageChartPoint: {
             /** Blocked */
@@ -50095,6 +50257,26 @@ export interface components {
             blocked?: boolean | null;
             /** Cache Creation Input Token Cost */
             cache_creation_input_token_cost?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr */
+            cache_creation_input_token_cost_above_12hr?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Batches */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Flex */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Priority */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Ultrafast */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Batches */
+            cache_creation_input_token_cost_above_12hr_batches?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Flex */
+            cache_creation_input_token_cost_above_12hr_flex?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Priority */
+            cache_creation_input_token_cost_above_12hr_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Ultrafast */
+            cache_creation_input_token_cost_above_12hr_ultrafast?: number | null;
             /** Cache Creation Input Token Cost Above 1Hr */
             cache_creation_input_token_cost_above_1hr?: number | null;
             /** Cache Read Input Token Cost */
@@ -50135,6 +50317,8 @@ export interface components {
             output_cost_per_character?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
+            /** Pricing Provider */
+            pricing_provider?: string | null;
             /** Ptu Count */
             ptu_count?: number | null;
             /** Ptu Effective From */
@@ -50386,6 +50570,26 @@ export interface components {
             cache_creation_input_token_cost_above_100k_tokens?: number | null;
             /** Cache Creation Input Token Cost Above 100K Tokens Batches */
             cache_creation_input_token_cost_above_100k_tokens_batches?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr */
+            cache_creation_input_token_cost_above_12hr?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Batches */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Flex */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Priority */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Ultrafast */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Batches */
+            cache_creation_input_token_cost_above_12hr_batches?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Flex */
+            cache_creation_input_token_cost_above_12hr_flex?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Priority */
+            cache_creation_input_token_cost_above_12hr_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Ultrafast */
+            cache_creation_input_token_cost_above_12hr_ultrafast?: number | null;
             /** Cache Creation Input Token Cost Above 1Hr */
             cache_creation_input_token_cost_above_1hr?: number | null;
             /** Cache Creation Input Token Cost Above 1Hr Above 100K Tokens */
@@ -50414,6 +50618,12 @@ export interface components {
             cache_creation_input_token_cost_ultrafast?: number | null;
             /** Cache Read Input Audio Token Cost */
             cache_read_input_audio_token_cost?: number | null;
+            /** Cache Read Input Audio Token Cost Batches */
+            cache_read_input_audio_token_cost_batches?: number | null;
+            /** Cache Read Input Audio Token Cost Flex */
+            cache_read_input_audio_token_cost_flex?: number | null;
+            /** Cache Read Input Audio Token Cost Priority */
+            cache_read_input_audio_token_cost_priority?: number | null;
             /** Cache Read Input Image Token Cost */
             cache_read_input_image_token_cost?: number | null;
             /** Cache Read Input Token Cost */
@@ -50493,6 +50703,10 @@ export interface components {
             input_cost_per_audio_token?: number | null;
             /** Input Cost Per Audio Token Batches */
             input_cost_per_audio_token_batches?: number | null;
+            /** Input Cost Per Audio Token Flex */
+            input_cost_per_audio_token_flex?: number | null;
+            /** Input Cost Per Audio Token Priority */
+            input_cost_per_audio_token_priority?: number | null;
             /** Input Cost Per Character */
             input_cost_per_character?: number | null;
             /** Input Cost Per Character Above 128K Tokens */
@@ -59005,6 +59219,180 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    extraction_extraction_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "fields": {
+                 *         "days_to_pay": {
+                 *           "max": 90,
+                 *           "min": 0,
+                 *           "type": "estimate"
+                 *         },
+                 *         "invoice_date": {
+                 *           "type": "date"
+                 *         },
+                 *         "items": {
+                 *           "instructions": "What was bought?",
+                 *           "items": "text",
+                 *           "type": "list"
+                 *         },
+                 *         "total": {
+                 *           "type": "number",
+                 *           "unit": "USD"
+                 *         },
+                 *         "vendor": {
+                 *           "instructions": "Who sent the invoice?",
+                 *           "type": "text"
+                 *         }
+                 *       },
+                 *       "model": "clairic",
+                 *       "state": "Invoice #4471 from Acme Tools, dated 2026-03-03. 12 hammers. Total $174. Payment due in 30 days."
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Fields
+                     * @description Field name to typed field spec. Each name becomes a key in the answers
+                     */
+                    fields: {
+                        [key: string]: {
+                            /**
+                             * Decimals
+                             * @description Numbers, durations and number lists only, 0 to 6
+                             */
+                            decimals?: number | null;
+                            /**
+                             * Horizon
+                             * @description Forecast only, number of steps
+                             */
+                            horizon?: number | null;
+                            /**
+                             * Instructions
+                             * @description What the field should contain
+                             */
+                            instructions?: string | null;
+                            /**
+                             * Integer
+                             * @description Numbers and durations only
+                             */
+                            integer?: boolean | null;
+                            /** Interval */
+                            interval?: ("step" | "minute" | "hour" | "day" | "week" | "month" | "quarter" | "year") | null;
+                            /**
+                             * Items
+                             * @description Item type, required for list fields
+                             */
+                            items?: ("text" | "number" | "date") | null;
+                            /**
+                             * Max
+                             * @description Estimate and forecast upper bound
+                             */
+                            max?: number | string | null;
+                            /**
+                             * Min
+                             * @description Estimate and forecast lower bound
+                             */
+                            min?: number | string | null;
+                            /**
+                             * Null Threshold
+                             * @description Probability of null above which the value is null
+                             */
+                            null_threshold?: number | null;
+                            /** Scale */
+                            scale?: ("linear" | "log") | null;
+                            /**
+                             * Step
+                             * @description Estimate grid step, or month or year
+                             */
+                            step?: number | string | null;
+                            /**
+                             * Type
+                             * @description The answer type for this field
+                             * @enum {string}
+                             */
+                            type: "text" | "number" | "date" | "time" | "datetime" | "duration" | "list" | "estimate" | "forecast";
+                            /**
+                             * Unit
+                             * @description Unit label. For durations, seconds through years
+                             */
+                            unit?: string | null;
+                        } & {
+                            [key: string]: unknown;
+                        };
+                    };
+                    /**
+                     * Images
+                     * @description Up to 4 images as data URLs or content_type plus base64, no remote URLs
+                     */
+                    images?: (string | ({
+                        /**
+                         * Base64
+                         * @description Base64-encoded image bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description The image media type, such as image/png
+                         */
+                        content_type: string;
+                    } & {
+                        [key: string]: unknown;
+                    }))[] | null;
+                    /**
+                     * Model
+                     * @description An extraction model from the proxy model_list
+                     */
+                    model: string;
+                    options?: ({
+                        /**
+                         * Include Quantiles
+                         * @description Add 99 percentiles to estimates
+                         */
+                        include_quantiles?: boolean | null;
+                        /**
+                         * Return State Text
+                         * @description Return the text that spans index into
+                         */
+                        return_state_text?: boolean | null;
+                    } & {
+                        [key: string]: unknown;
+                    }) | null;
+                    /**
+                     * Reference Date
+                     * @description ISO date that anchors dates written without a year
+                     */
+                    reference_date?: string | null;
+                    /**
+                     * State
+                     * @description The text to read. Must be non-empty unless images are sent. Text answers are spans of it
+                     * @default
+                     */
+                    state?: string;
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtractionResponse"];
                 };
             };
         };
@@ -75326,39 +75714,6 @@ export interface operations {
             };
         };
     };
-    usage_ai_chat_usage_ai_chat_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UsageAIChatRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     ui_get_available_role_user_available_roles_get: {
         parameters: {
             query?: never;
@@ -78330,6 +78685,180 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    extraction_v1_extraction_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "fields": {
+                 *         "days_to_pay": {
+                 *           "max": 90,
+                 *           "min": 0,
+                 *           "type": "estimate"
+                 *         },
+                 *         "invoice_date": {
+                 *           "type": "date"
+                 *         },
+                 *         "items": {
+                 *           "instructions": "What was bought?",
+                 *           "items": "text",
+                 *           "type": "list"
+                 *         },
+                 *         "total": {
+                 *           "type": "number",
+                 *           "unit": "USD"
+                 *         },
+                 *         "vendor": {
+                 *           "instructions": "Who sent the invoice?",
+                 *           "type": "text"
+                 *         }
+                 *       },
+                 *       "model": "clairic",
+                 *       "state": "Invoice #4471 from Acme Tools, dated 2026-03-03. 12 hammers. Total $174. Payment due in 30 days."
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Fields
+                     * @description Field name to typed field spec. Each name becomes a key in the answers
+                     */
+                    fields: {
+                        [key: string]: {
+                            /**
+                             * Decimals
+                             * @description Numbers, durations and number lists only, 0 to 6
+                             */
+                            decimals?: number | null;
+                            /**
+                             * Horizon
+                             * @description Forecast only, number of steps
+                             */
+                            horizon?: number | null;
+                            /**
+                             * Instructions
+                             * @description What the field should contain
+                             */
+                            instructions?: string | null;
+                            /**
+                             * Integer
+                             * @description Numbers and durations only
+                             */
+                            integer?: boolean | null;
+                            /** Interval */
+                            interval?: ("step" | "minute" | "hour" | "day" | "week" | "month" | "quarter" | "year") | null;
+                            /**
+                             * Items
+                             * @description Item type, required for list fields
+                             */
+                            items?: ("text" | "number" | "date") | null;
+                            /**
+                             * Max
+                             * @description Estimate and forecast upper bound
+                             */
+                            max?: number | string | null;
+                            /**
+                             * Min
+                             * @description Estimate and forecast lower bound
+                             */
+                            min?: number | string | null;
+                            /**
+                             * Null Threshold
+                             * @description Probability of null above which the value is null
+                             */
+                            null_threshold?: number | null;
+                            /** Scale */
+                            scale?: ("linear" | "log") | null;
+                            /**
+                             * Step
+                             * @description Estimate grid step, or month or year
+                             */
+                            step?: number | string | null;
+                            /**
+                             * Type
+                             * @description The answer type for this field
+                             * @enum {string}
+                             */
+                            type: "text" | "number" | "date" | "time" | "datetime" | "duration" | "list" | "estimate" | "forecast";
+                            /**
+                             * Unit
+                             * @description Unit label. For durations, seconds through years
+                             */
+                            unit?: string | null;
+                        } & {
+                            [key: string]: unknown;
+                        };
+                    };
+                    /**
+                     * Images
+                     * @description Up to 4 images as data URLs or content_type plus base64, no remote URLs
+                     */
+                    images?: (string | ({
+                        /**
+                         * Base64
+                         * @description Base64-encoded image bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description The image media type, such as image/png
+                         */
+                        content_type: string;
+                    } & {
+                        [key: string]: unknown;
+                    }))[] | null;
+                    /**
+                     * Model
+                     * @description An extraction model from the proxy model_list
+                     */
+                    model: string;
+                    options?: ({
+                        /**
+                         * Include Quantiles
+                         * @description Add 99 percentiles to estimates
+                         */
+                        include_quantiles?: boolean | null;
+                        /**
+                         * Return State Text
+                         * @description Return the text that spans index into
+                         */
+                        return_state_text?: boolean | null;
+                    } & {
+                        [key: string]: unknown;
+                    }) | null;
+                    /**
+                     * Reference Date
+                     * @description ISO date that anchors dates written without a year
+                     */
+                    reference_date?: string | null;
+                    /**
+                     * State
+                     * @description The text to read. Must be non-empty unless images are sent. Text answers are spans of it
+                     * @default
+                     */
+                    state?: string;
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtractionResponse"];
                 };
             };
         };

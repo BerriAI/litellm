@@ -7,15 +7,19 @@ Why separate file? Make it easy to see how transformation works
 import os
 import re
 from collections.abc import Callable, Mapping
+from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, PositiveInt, TypeAdapter, ValidationError
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_image_mime_type_from_url,
 )
@@ -64,6 +68,7 @@ from ..common_utils import (
     get_supports_response_schema,
     get_supports_system_message,
 )
+from .long_decode import with_default_output_budget
 
 # VertexBase is imported only for type checking to avoid introducing a
 # module-load-time cyclic import to vertex_llm_base. The instance is lazily
@@ -868,7 +873,7 @@ def gemini_convert_messages_with_history(
                 """
                 has_text_in_content = check_text_in_content(user_content)
                 if has_text_in_content is False:
-                    verbose_logger.warning(
+                    verbose_logger.debug(
                         "No text in user content. Adding a blank text to user content, to ensure Gemini doesn't fail the request. Relevant Issue - https://github.com/BerriAI/litellm/issues/5515"
                     )
                     user_content.append(
@@ -1189,7 +1194,18 @@ def transform_request_body(
         # labels: optional explicit param and/or metadata.requester_metadata (OpenAI metadata)
         labels: Final = pop_vertex_request_labels(optional_params, litellm_params)
 
-        filtered_params = {k: v for k, v in optional_params.items() if _get_equivalent_key(k, set(config_fields))}
+        from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+        drops_top_k: Final = "top_k" in optional_params and not VertexGeminiConfig.supports_sampling_params(model)
+        if drops_top_k:
+            request_params: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
+            VertexGeminiConfig.reject_unsupported_sampling_param(
+                model=model,
+                param="top_k",
+                drop_params=drops_unsupported_params(request_params.get("drop_params")),
+            )
+        config_keys: Final = set(config_fields) - {"top_k"} if drops_top_k else set(config_fields)
+        filtered_params = {k: v for k, v in optional_params.items() if _get_equivalent_key(k, config_keys)}
 
         generation_config: Final[GenerationConfig | None] = GenerationConfig(**filtered_params)
 
@@ -1292,13 +1308,75 @@ def sync_transform_request_body(
         vertex_auth_header=vertex_auth_header,
     )
 
-    return transform_request_body(
-        messages=messages,
-        model=model,
-        custom_llm_provider=custom_llm_provider,
-        litellm_params=litellm_params,
-        cached_content=cached_content,
-        optional_params=optional_params,
+    return _with_default_output_budget(
+        transform_request_body(
+            messages=messages,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            cached_content=cached_content,
+            optional_params=optional_params,
+        ),
+        model,
+        custom_llm_provider,
+        litellm_params.get("model_info"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # litellm_params is an untyped dict
+    )
+
+
+class _CostMapOutputModalities(TypedDict):
+    supported_output_modalities: NotRequired[ReadOnly[tuple[str, ...]]]
+
+
+_COST_MAP_OUTPUT_MODALITIES: Final = TypeAdapter(_CostMapOutputModalities)
+
+
+def _answers_text(cost_map_key: str) -> bool:
+    try:
+        row: Final = _COST_MAP_OUTPUT_MODALITIES.validate_python(litellm.model_cost.get(cost_map_key))  # pyright: ignore[reportUnknownMemberType]  # cost map rows are untyped JSON
+    except ValidationError:
+        return False
+    return "text" in row.get("supported_output_modalities", ("text",))
+
+
+class _OutputLimit(TypedDict):
+    max_output_tokens: NotRequired[ReadOnly[PositiveInt | None]]
+
+
+_OUTPUT_LIMIT: Final = TypeAdapter(_OutputLimit)
+
+
+def _output_limit(fields: object) -> int | None:
+    try:
+        return _OUTPUT_LIMIT.validate_python(fields).get("max_output_tokens")
+    except ValidationError:
+        return None
+
+
+def _catalog_capped_output_limit(cost_map_key: str, override: object) -> int | None:
+    limits: Final = (
+        _output_limit(GetModelCostMap.loaded_model_cost_map().get(cost_map_key)),
+        _output_limit(override),
+    )
+    return min((limit for limit in limits if limit is not None), default=None)
+
+
+def _text_chat_model_max_output_tokens(
+    model: str, custom_llm_provider: str, deployment_model_info: object
+) -> int | None:
+    info: Final = litellm.utils.lookup_model_info_for_registration(model, custom_llm_provider)
+    if isinstance(info, litellm.utils.ModelInfoLookupMiss) or info.get("mode") != "chat":
+        return None
+    if not _answers_text(info["key"]):
+        return None
+    return _catalog_capped_output_limit(info["key"], deployment_model_info or info)
+
+
+def _with_default_output_budget(
+    request_body: RequestBody, model: str, custom_llm_provider: str, deployment_model_info: object
+) -> RequestBody:
+    return with_default_output_budget(
+        request_body,
+        partial(_text_chat_model_max_output_tokens, model, custom_llm_provider, deployment_model_info),
     )
 
 
@@ -1368,27 +1446,29 @@ async def async_transform_request_body(
         messages, should_inline=should_inline_remote_media(custom_llm_provider)
     )
 
-    if _openai_messages_may_need_sync_gcs_metadata_fetch(inlined_messages):
-        # _transform_request_body may issue a sync httpx.get (up to 5s timeout)
-        # via _get_gcs_object_content_type to fetch GCS object metadata. Run the
-        # whole sync transformation on a worker thread so it does not block the
-        # async event loop.
-        return await asyncify(transform_request_body)(
-            messages=inlined_messages,
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            litellm_params=litellm_params,
-            cached_content=cached_content,
-            optional_params=optional_params,
-        )
-
-    return transform_request_body(
+    transform: Final = partial(
+        transform_request_body,
         messages=inlined_messages,
         model=model,
         custom_llm_provider=custom_llm_provider,
         litellm_params=litellm_params,
         cached_content=cached_content,
         optional_params=optional_params,
+    )
+    # _transform_request_body may issue a sync httpx.get (up to 5s timeout)
+    # via _get_gcs_object_content_type to fetch GCS object metadata. Run the
+    # whole sync transformation on a worker thread so it does not block the
+    # async event loop.
+    request_body: Final[RequestBody] = (
+        await asyncify(transform)()
+        if _openai_messages_may_need_sync_gcs_metadata_fetch(inlined_messages)
+        else transform()
+    )
+    return _with_default_output_budget(
+        request_body,
+        model,
+        custom_llm_provider,
+        litellm_params.get("model_info"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # litellm_params is an untyped dict
     )
 
 

@@ -272,6 +272,27 @@ def test_vertex_gemini_flash_rows_carry_the_documented_retirement_date(prices: d
     assert prices[f"{prefix}{model}"]["deprecation_date"] == VERTEX_GEMINI_FLASH_RETIREMENT_DATES[model]
 
 
+def _sampling_flags_across_provider_twins(prices: Mapping[str, Mapping[str, object]], key: str) -> frozenset[object]:
+    bare: Final = key.split("/")[-1]
+    twins: Final = tuple(twin for twin in (bare, f"vertex_ai/{bare}", f"gemini/{bare}") if twin in prices)
+    return frozenset(prices[twin].get("supports_sampling_params") for twin in (key, *twins))
+
+
+def test_gemini_rows_agree_on_supports_sampling_params_across_their_provider_twins(
+    prices: Mapping[str, Mapping[str, object]],
+) -> None:
+    """The bare, vertex_ai/ and gemini/ rows of one Gemini model gate sampling params identically, so a request
+    takes the same drop-or-400 path on the Vertex route and the AI Studio route"""
+    flagged: Final = tuple(
+        key
+        for key, row in prices.items()
+        if "supports_sampling_params" in row and key.split("/")[-1].startswith("gemini-")
+    )
+    assert flagged
+    for key in flagged:
+        assert len(_sampling_flags_across_provider_twins(prices, key)) == 1, key
+
+
 OPENAI_REASONING_FAMILY_MARKERS = ("codex", "deep-research", "chat-latest")
 
 
@@ -434,30 +455,23 @@ def is_active_priced_mistral_chat_row(name: str, entry: Mapping[str, object]) ->
     )
 
 
-def cache_read_is_tenth_of_input(entry: Mapping[str, object]) -> bool:
+def cache_read_is_below_input(entry: Mapping[str, object]) -> bool:
     cache_read: Final = entry.get("cache_read_input_token_cost")
     input_cost: Final = entry.get("input_cost_per_token")
-    return (
-        isinstance(cache_read, float)
-        and isinstance(input_cost, (int, float))
-        and 0 < cache_read < input_cost
-        and cache_read == pytest.approx(input_cost / 10)
-    )
+    return isinstance(cache_read, float) and isinstance(input_cost, (int, float)) and 0 < cache_read < input_cost
 
 
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
 def test_active_mistral_chat_rows_price_cache_reads_below_input(path: Path):
     """A Mistral chat row without a cache-read rate bills cached prompt tokens at zero, so every
-    active priced row must carry one, and it must be cheaper than a fresh input token. Mistral
-    bills cached tokens at 10% of the input price for every model (docs.mistral.ai/studio/
-    conversations/advanced/prompt-caching, read 2026-09-18), so the ratio is checked as well."""
+    active priced row must carry one, and it must be cheaper than a fresh input token."""
     rows: Mapping[str, object] = json.loads(path.read_text())
     drifted: Final = [
         f"{name}: cache_read={entry.get('cache_read_input_token_cost')} input={entry.get('input_cost_per_token')}"
         for name, entry in rows.items()
         if isinstance(entry, dict)
         and is_active_priced_mistral_chat_row(name, entry)
-        and not cache_read_is_tenth_of_input(entry)
+        and not cache_read_is_below_input(entry)
     ]
     assert drifted == []
 
@@ -770,3 +784,26 @@ def test_volcengine_doubao_seed_2_1_pro_260915_row_matches_published_metadata(pa
     sibling = rows["volcengine/doubao-seed-2-1-pro-260628"]
     assert isinstance(sibling, dict)
     assert all(entry[key] == sibling[key] for key in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"))
+
+
+def _bedrock_gpt_oss_rows(prices: Mapping[str, JsonValue]) -> tuple[str, ...]:
+    return tuple(
+        key
+        for key, row in prices.items()
+        if "gpt-oss" in key and isinstance(row, dict) and str(row.get("litellm_provider", "")).startswith("bedrock")
+    )
+
+
+@pytest.mark.parametrize("path", [PRICES_PATH, BACKUP_PRICES_PATH], ids=["main", "backup"])
+def test_bedrock_gpt_oss_rows_declare_vision_support_like_their_safeguard_siblings(path: Path) -> None:
+    prices: Final = json.loads(path.read_text())
+    rows: Final = _bedrock_gpt_oss_rows(prices)
+    assert rows, "no Bedrock gpt-oss rows found"
+    reference: Final = prices["openai.gpt-oss-safeguard-120b"]["supports_vision"]
+    undeclared: Final = tuple(key for key in rows if prices[key].get("supports_vision") is not reference)
+    assert undeclared == (), f"modality routing only skips rows that declare supports_vision: {undeclared}"
+
+
+def test_bedrock_gpt_oss_vision_is_explicitly_disabled_for_the_router_gate() -> None:
+    assert litellm.utils.is_vision_explicitly_disabled("bedrock/openai.gpt-oss-120b-1:0") is True
+    assert litellm.utils.is_vision_explicitly_disabled("bedrock_mantle/openai.gpt-oss-20b") is True

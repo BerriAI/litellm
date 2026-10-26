@@ -49,17 +49,20 @@ from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
     SUBTITLE_RESPONSE_FORMATS,
     synthesize_subtitle_document,
 )
-from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
+from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
+from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.litellm_core_utils.realtime_errors import (
     close_after_upstream_handshake_refusal,
     realtime_error_event,
     websocket_close_reason,
 )
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -76,6 +79,7 @@ from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
+from litellm.llms.base_llm.extraction.transformation import BaseExtractionConfig
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     BaseFileUploadStream,
@@ -128,6 +132,7 @@ from litellm.types.containers.main import (
     DeleteContainerResult,
 )
 from litellm.types.decisions import DecisionsIRRequest, DecisionsIRResponse
+from litellm.types.extraction import ExtractionResponse
 from litellm.types.files import StreamingMediaUploadConfig, TwoStepFileUploadConfig
 from litellm.types.integrations.custom_logger import (
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
@@ -407,6 +412,27 @@ def _has_pre_call_deployment_hook(logging_obj: LiteLLMLoggingObj) -> bool:
     return False
 
 
+def _run_responses_deployment_hook(
+    *,
+    model: str,
+    request_input: str | ResponseInputParam,
+    custom_llm_provider: str,
+    optional_params: Mapping[str, object],
+    litellm_params: GenericLiteLLMParams,
+) -> Mapping[str, object]:
+    return run_async_function(
+        async_pre_call_deployment_hook,
+        {
+            **dict(litellm_params),
+            **optional_params,
+            "model": model,
+            "input": request_input,
+            "custom_llm_provider": custom_llm_provider,
+        },
+        CallTypes.responses.value,
+    )
+
+
 def _mask_presigned_request_headers(transformed_request: bytes | str | dict) -> bytes | str | dict:
     """A pre-signed request carries its auth inside its own ``headers`` key, which
     logging treats as request body (only the top-level headers channel gets masked),
@@ -472,6 +498,7 @@ _DECODED_BODY_STALE_HEADERS: Final[frozenset[str]] = frozenset({"content-encodin
 _OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _JSON_OBJECTS: Final = TypeAdapter(list[dict[str, object]])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _decoded_body_headers(response: httpx.Response) -> httpx.Headers:
@@ -972,7 +999,7 @@ class BaseLLMHTTPHandler:
         original_data: dict,
         model: str,
         messages: list,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         litellm_params: dict,
         timeout: float | httpx.Timeout,
@@ -1026,6 +1053,7 @@ class BaseLLMHTTPHandler:
                 sync_stream=True,
                 json_mode=json_mode,
                 optional_params=_OPTIONAL_PARAMS.validate_python(optional_params),
+                logging_obj=logging_obj,
             )
             if isinstance(completion_stream, BaseModelResponseIterator):
                 completion_stream.http_response = response
@@ -1168,6 +1196,7 @@ class BaseLLMHTTPHandler:
                 sync_stream=False,
                 json_mode=json_mode,
                 optional_params=_OPTIONAL_PARAMS.validate_python(optional_params),
+                logging_obj=logging_obj,
             )
             if isinstance(completion_stream, BaseModelResponseIterator):
                 completion_stream.http_response = response
@@ -1698,6 +1727,115 @@ class BaseLLMHTTPHandler:
             raise self._handle_error(e=e, provider_config=provider_config)
         return provider_config.transform_decisions_response(
             model=model, custom_llm_provider=custom_llm_provider, raw_response=response, request=request
+        )
+
+    def _prepare_extraction_request(
+        self,
+        model: str,
+        logging_obj: LiteLLMLoggingObj | None,
+        provider_config: BaseExtractionConfig,
+        body: Mapping[str, object],
+        api_base: str,
+        api_key: str | None,
+        headers: Mapping[str, str],
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, Mapping[str, str]]:
+        outbound_headers: Final = provider_config.validate_environment(
+            headers=headers,
+            model=model,
+            api_key=api_key,
+            litellm_params=litellm_params,
+        )
+        url: Final = provider_config.get_complete_url(api_base=api_base, model=model)
+        if logging_obj is not None:
+            logging_obj.pre_call(  # pyright: ignore[reportUnknownMemberType]  # Logging.pre_call is untyped
+                input=dict(body),
+                api_key=api_key,
+                model=model,
+                additional_args={"api_base": url, "complete_input_dict": dict(body), "headers": outbound_headers},
+            )
+        return url, outbound_headers
+
+    def extraction(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj | None,
+        provider_config: BaseExtractionConfig,
+        body: Mapping[str, object],
+        api_base: str,
+        api_key: str | None,
+        headers: Mapping[str, str],
+        timeout: float | httpx.Timeout | None,
+        litellm_params: Mapping[str, object],
+        client: HTTPHandler | None = None,
+    ) -> ExtractionResponse:
+        url, outbound_headers = self._prepare_extraction_request(
+            model=model,
+            logging_obj=logging_obj,
+            provider_config=provider_config,
+            body=body,
+            api_base=api_base,
+            api_key=api_key,
+            headers=headers,
+            litellm_params=litellm_params,
+        )
+        sync_httpx_client: Final = client if client is not None else get_httpx_client()
+        try:
+            response: Final = sync_httpx_client.post(  # pyright: ignore[reportUnknownMemberType]  # untyped
+                url,
+                json=dict(body),
+                headers=dict(outbound_headers),
+                timeout=timeout,
+                logging_obj=logging_obj,
+            )
+        except httpx.HTTPError as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+        return provider_config.transform_extraction_response(
+            model=model, custom_llm_provider=custom_llm_provider, raw_response=response
+        )
+
+    async def aextraction(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj | None,
+        provider_config: BaseExtractionConfig,
+        body: Mapping[str, object],
+        api_base: str,
+        api_key: str | None,
+        headers: Mapping[str, str],
+        timeout: float | httpx.Timeout | None,
+        litellm_params: Mapping[str, object],
+        client: AsyncHTTPHandler | None = None,
+    ) -> ExtractionResponse:
+        url, outbound_headers = self._prepare_extraction_request(
+            model=model,
+            logging_obj=logging_obj,
+            provider_config=provider_config,
+            body=body,
+            api_base=api_base,
+            api_key=api_key,
+            headers=headers,
+            litellm_params=litellm_params,
+        )
+        async_httpx_client: Final = (
+            client
+            if client is not None
+            else get_async_httpx_client(llm_provider=litellm.LlmProviders(custom_llm_provider))
+        )
+        try:
+            response: Final = await async_httpx_client.post(  # pyright: ignore[reportUnknownMemberType]  # untyped
+                url,
+                json=dict(body),
+                headers=dict(outbound_headers),
+                timeout=timeout,
+                logging_obj=logging_obj,
+            )
+        except httpx.HTTPError as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+        return provider_config.transform_extraction_response(
+            model=model, custom_llm_provider=custom_llm_provider, raw_response=response
         )
 
     def _prepare_audio_transcription_request(
@@ -2324,13 +2462,13 @@ class BaseLLMHTTPHandler:
         # Also check for extra_headers in kwargs (from config or direct calls)
         extra_headers_from_kwargs: Final = kwargs.get("extra_headers", None)
         # Merge all header sources: forwarded < extra_headers < provider_specific
-        merged_headers: Final = {}
-        if forwarded_headers:
-            merged_headers.update(forwarded_headers)
-        if extra_headers_from_kwargs:
-            merged_headers.update(extra_headers_from_kwargs)
-        if provider_specific_headers:
-            merged_headers.update(provider_specific_headers)
+        merged_headers: Final[Mapping[str, object]] = MappingProxyType(
+            {
+                **(forwarded_headers or {}),
+                **(extra_headers_from_kwargs or {}),
+                **(provider_specific_headers or {}),
+            }
+        )
         request_params: Final = reduce(
             delete_nested_value,
             litellm_params.get("additional_drop_params") or (),
@@ -2341,11 +2479,19 @@ class BaseLLMHTTPHandler:
             and anthropic_messages_provider_config.should_filter_anthropic_beta_headers()
         ):
             await aload_beta_headers_config()
+        affinity_api_base: Final = (
+            AnthropicModelInfo.get_api_base(api_base) if custom_llm_provider == "anthropic" else api_base
+        )
+        default_affinity_header: Final = get_provider_affinity_header(affinity_api_base)
         (
             headers,
             api_base,
         ) = await anthropic_messages_provider_config.avalidate_anthropic_messages_environment(
-            headers=merged_headers or {},
+            headers=(
+                add_provider_affinity_header(merged_headers, litellm_params, default_affinity_header)
+                if default_affinity_header is not None
+                else dict(merged_headers)
+            ),
             model=model,
             messages=messages,
             optional_params=request_params,
@@ -2643,16 +2789,12 @@ class BaseLLMHTTPHandler:
                 litellm_params,
             )
 
-        modified_kwargs: Final = run_async_function(
-            async_pre_call_deployment_hook,
-            {
-                **dict(litellm_params),
-                **response_api_optional_request_params,
-                "model": model,
-                "input": input,
-                "custom_llm_provider": custom_llm_provider,
-            },
-            CallTypes.responses.value,
+        modified_kwargs: Final = _run_responses_deployment_hook(
+            model=model,
+            request_input=input,
+            custom_llm_provider=custom_llm_provider,
+            optional_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
         )
         if modified_kwargs is None:
             return (
@@ -3631,7 +3773,7 @@ class BaseLLMHTTPHandler:
         response: httpx.Response,
         upload_url_location: str,
         upload_url_key: str = "upload_url",
-    ) -> tuple[str | None, dict | None]:
+    ) -> tuple[object, Mapping[str, object] | None]:
         """
         Extract upload URL from initial file creation response.
 
@@ -3651,8 +3793,10 @@ class BaseLLMHTTPHandler:
         else:
             # Response body style (e.g., Manus, S3 presigned URLs)
             try:
-                response_data: Final = response.json()
-                upload_url = response_data.get(upload_url_key)
+                response_data: Final = as_str_mapping(_DECODED_JSON.validate_python(response.json()))
+                if response_data is None:
+                    return None, None
+                upload_url: Final = response_data.get(upload_url_key)
                 return upload_url, response_data if upload_url else None
             except Exception:
                 return None, None
@@ -3818,7 +3962,7 @@ class BaseLLMHTTPHandler:
         elif isinstance(transformed_request, dict) and "file" in transformed_request:
             # Handle multipart form-data uploads (e.g., Anthropic Files API)
             # The dict contains tuples suitable for httpx's `files` parameter
-            file_request: Final = cast(dict[str, Any], transformed_request)
+            file_request: Final = cast(dict[str, object], transformed_request)
             upload_response = sync_httpx_client.post(
                 url=api_base,
                 headers=headers,
@@ -6462,6 +6606,7 @@ class BaseLLMHTTPHandler:
         provider_config: Union[
             BaseConfig,
             BaseDecisionsConfig,
+            BaseExtractionConfig,
             BaseRerankConfig,
             BaseResponsesAPIConfig,
             BaseImageEditConfig,
@@ -6825,7 +6970,7 @@ class BaseLLMHTTPHandler:
                 headers={}, model=model or "", api_key=api_key
             )
         else:
-            url = f"{api_base.rstrip('/')}/v1/realtime/{endpoint}"
+            url = join_api_base(api_base, f"v1/realtime/{endpoint}")
             headers = {
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -6894,7 +7039,7 @@ class BaseLLMHTTPHandler:
             url = provider_config.get_realtime_calls_url(api_base=api_base, model=model or "", api_version=api_version)
             headers: dict[str, object] = provider_config.get_realtime_calls_headers(ephemeral_key=openai_ephemeral_key)
         else:
-            url = f"{api_base.rstrip('/')}/v1/realtime/calls"
+            url = join_api_base(api_base, "v1/realtime/calls")
             headers = {
                 "Authorization": f"Bearer {openai_ephemeral_key}",
             }
@@ -10746,7 +10891,7 @@ class BaseLLMHTTPHandler:
         )
 
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
-        url: Final = f"{api_base}/{encoded_vector_store_id}"
+        url: Final = vector_store_provider_config.get_vector_store_url(api_base, encoded_vector_store_id)
 
         logging_obj.pre_call(
             input="",
@@ -10811,7 +10956,7 @@ class BaseLLMHTTPHandler:
         )
 
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
-        url: Final = f"{api_base}/{encoded_vector_store_id}"
+        url: Final = vector_store_provider_config.get_vector_store_url(api_base, encoded_vector_store_id)
 
         logging_obj.pre_call(
             input="",
@@ -11014,7 +11159,7 @@ class BaseLLMHTTPHandler:
         )
 
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
-        url: Final = f"{api_base}/{encoded_vector_store_id}"
+        url: Final = vector_store_provider_config.get_vector_store_url(api_base, encoded_vector_store_id)
 
         request_body: Final[dict[str, object]] = dict(vector_store_update_optional_params)
         metadata: Final = vector_store_update_optional_params.get("metadata")
@@ -11093,7 +11238,7 @@ class BaseLLMHTTPHandler:
         )
 
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
-        url: Final = f"{api_base}/{encoded_vector_store_id}"
+        url: Final = vector_store_provider_config.get_vector_store_url(api_base, encoded_vector_store_id)
 
         request_body: Final[dict[str, object]] = dict(vector_store_update_optional_params)
         metadata: Final = vector_store_update_optional_params.get("metadata")
@@ -11161,7 +11306,7 @@ class BaseLLMHTTPHandler:
         )
 
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
-        url: Final = f"{api_base}/{encoded_vector_store_id}"
+        url: Final = vector_store_provider_config.get_vector_store_url(api_base, encoded_vector_store_id)
 
         logging_obj.pre_call(
             input="",
@@ -11223,7 +11368,7 @@ class BaseLLMHTTPHandler:
         )
 
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
-        url: Final = f"{api_base}/{encoded_vector_store_id}"
+        url: Final = vector_store_provider_config.get_vector_store_url(api_base, encoded_vector_store_id)
 
         logging_obj.pre_call(
             input="",

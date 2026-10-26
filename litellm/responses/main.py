@@ -6,10 +6,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias, cast
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NoReturn, Optional, TypeAlias, cast
 
 import httpx
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import (
     TypeIs,  # noqa: TID251  # narrows a client input item before its mark is read
     assert_never,
@@ -30,6 +30,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -39,9 +40,16 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.openai.common_utils import get_openai_credentials
 from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+from litellm.responses.litellm_completion_transformation.compaction_items import (
+    with_compaction_items_as_summaries,
+)
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
+)
+from litellm.responses.litellm_completion_transformation.transformation import (
+    with_compaction_items_as_params,
 )
 from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.responses.mcp.round_billing import (
@@ -79,7 +87,13 @@ from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.types.responses.main import *
 from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, CallTypes, all_litellm_params
+from litellm.types.utils import (
+    ADDRESSED_RESPONSE_ID_FIELD,
+    CallTypes,
+    CostPerToken,
+    CustomPricingLiteLLMParams,
+    all_litellm_params,
+)
 from litellm.utils import (
     ProviderConfigManager,
     client,
@@ -177,6 +191,7 @@ def mock_responses_api_response(
 
 
 _STR_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_FORWARDED_VALUE: Final = TypeAdapter(object)
 
 
 def _client_trace_id(request_kwargs: Mapping[str, object]) -> str | None:
@@ -538,6 +553,47 @@ async def aresponses_api_with_mcp(
     return response
 
 
+def _per_call_custom_pricing(litellm_params: GenericLiteLLMParams) -> Mapping[str, float]:
+    return MappingProxyType(
+        litellm_params.model_dump(include=set(CustomPricingLiteLLMParams.model_fields), exclude_none=True)
+    )
+
+
+class _DeploymentModelInfo(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    id: object = None
+
+
+_DEPLOYMENT_MODEL_INFO: Final[TypeAdapter[_DeploymentModelInfo | object]] = TypeAdapter(
+    Annotated[_DeploymentModelInfo | object, Field(union_mode="left_to_right")]
+)
+
+
+def _is_router_deployment(deployment_model_info: object) -> bool:
+    """A Router stamps the deployment's model_info (with its id) onto every call it routes."""
+    parsed: Final = _DEPLOYMENT_MODEL_INFO.validate_python(deployment_model_info)
+    return isinstance(parsed, _DeploymentModelInfo) and parsed.id is not None
+
+
+_COST_PER_TOKEN: Final = TypeAdapter(CostPerToken)
+
+
+def _per_call_cost_per_token(litellm_params: GenericLiteLLMParams) -> CostPerToken | None:
+    if litellm_params.input_cost_per_token is None or litellm_params.output_cost_per_token is None:
+        return None
+    return _COST_PER_TOKEN.validate_python(
+        litellm_params.model_dump(
+            include={
+                "input_cost_per_token",
+                "output_cost_per_token",
+                "cache_read_input_token_cost",
+                "cache_creation_input_token_cost",
+            },
+            exclude_none=True,
+        )
+    )
+
+
 def _bridges_to_chat_completions(
     responses_api_provider_config: BaseResponsesAPIConfig | None, use_chat_completions_api: bool
 ) -> bool:
@@ -811,7 +867,7 @@ async def aresponses(
     stream: bool | None = None,
     temperature: float | None = None,
     text: Optional["ResponseText"] = None,
-    text_format: type["BaseModel"] | dict | None = None,
+    text_format: type["BaseModel"] | dict[str, object] | None = None,
     tool_choice: ToolChoice | None = None,
     tools: Iterable[ToolParam] | None = None,
     top_p: float | None = None,
@@ -1300,7 +1356,7 @@ def _responses_try_dispatch_emulated_file_search(
     user: str | None,
     service_tier: str | None,
     safety_identifier: str | None,
-    text_format: type[BaseModel] | dict | None,
+    text_format: type[BaseModel] | dict[str, object] | None,
     allowed_openai_params: list[str] | None,
     extra_headers: dict[str, object] | None,
     extra_query: dict[str, object] | None,
@@ -1335,7 +1391,7 @@ def _responses_try_dispatch_emulated_file_search(
         "background": background,
         "stream": stream,
         "temperature": temperature,
-        "text": text,
+        "text": _FORWARDED_VALUE.validate_python(text),
         "tool_choice": tool_choice,
         "top_p": top_p,
         "truncation": truncation,
@@ -1380,7 +1436,7 @@ def responses(
     stream: bool | None = None,
     temperature: float | None = None,
     text: Optional["ResponseText"] = None,
-    text_format: type["BaseModel"] | dict | None = None,
+    text_format: type["BaseModel"] | dict[str, object] | None = None,
     tool_choice: ToolChoice | None = None,
     tools: Iterable[ToolParam] | None = None,
     top_p: float | None = None,
@@ -1460,6 +1516,12 @@ def responses(
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        affinity_api_base: Final = (
+            get_openai_credentials(api_base=litellm_params.api_base).api_base
+            if custom_llm_provider == "openai"
+            else litellm_params.api_base
+        )
+        default_affinity_header: Final = get_provider_affinity_header(affinity_api_base)
         try:
             effective_extra_headers: Final = (
                 add_provider_affinity_header(
@@ -1473,8 +1535,9 @@ def responses(
                             "litellm_metadata": kwargs.get("litellm_metadata"),
                         }
                     ),
+                    default_header=default_affinity_header,
                 )
-                if litellm_params.provider_affinity_header is not None
+                if litellm_params.provider_affinity_header is not None or default_affinity_header is not None
                 else extra_headers
             )
         except ValueError as affinity_error:
@@ -1658,6 +1721,7 @@ def responses(
             optional_params=dict(responses_api_request_params),
             litellm_params={
                 **responses_api_request_params,
+                **_per_call_custom_pricing(litellm_params),
                 "aresponses": _is_async,
                 "litellm_call_id": litellm_call_id,
                 "model_info": kwargs.get("model_info"),
@@ -1668,8 +1732,13 @@ def responses(
             custom_llm_provider=custom_llm_provider,
         )
 
+        if not _is_router_deployment(deployment_model_info):
+            litellm_logging_obj.custom_cost_per_token = _per_call_cost_per_token(litellm_params)
+            litellm_logging_obj.custom_cost_per_second = litellm_params.cost_per_second
         # Decode any litellm-encoded encrypted-content item IDs back to their original IDs
-        input = ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(input)
+        input = with_compaction_items_as_summaries(
+            with_compaction_items_as_params(ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(input))
+        )
 
         # Call the handler with _is_async flag instead of directly calling the async handler
         if custom_llm_provider is None:
@@ -2516,7 +2585,9 @@ def compact_responses(
 
         # Decode any litellm-encoded encrypted-content item IDs back to their original IDs
         # before forwarding to the upstream provider.
-        input = ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(input)
+        input = with_compaction_items_as_summaries(
+            with_compaction_items_as_params(ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(input))
+        )
 
         # Call the handler with _is_async flag instead of directly calling the async handler
         response = base_llm_http_handler.compact_response_api_handler(

@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -145,7 +145,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         self,
         headers: dict,
         model: str,
-        messages: list[object],
+        messages: Sequence[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
