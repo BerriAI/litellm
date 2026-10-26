@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, NonNegativeInt, field_validator, model_validator
 
 from litellm.models.user import LiteLLM_UserTable
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
@@ -16,6 +16,8 @@ class NewUserRequestTeam(LiteLLMPydanticObjectBase):
 
 
 class NewUserRequest(GenerateRequestBase):
+    tpm_limit: NonNegativeInt | None = None
+    rpm_limit: NonNegativeInt | None = None
     max_budget: float | None = None
     user_email: str | None = None
     user_alias: str | None = None
@@ -49,6 +51,8 @@ class NewUserRequest(GenerateRequestBase):
 class UpdateUserRequestNoUserIDorEmail(GenerateRequestBase):  # shared with BulkUpdateUserRequest
     # repr=False keeps the plaintext out of management-endpoint alerts, which str() the request model
     password: str | None = Field(default=None, repr=False)
+    tpm_limit: NonNegativeInt | None = None
+    rpm_limit: NonNegativeInt | None = None
     spend: float | None = None
     metadata: dict[object, object] | None = None
     user_alias: str | None = None

@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from typing import Final
 
 import pytest
@@ -6,21 +7,29 @@ from pydantic import ValidationError
 
 from litellm.proxy._types import (
     ROLES_WITHIN_ORG,
+    BudgetNewRequest,
     ChangePasswordRequest,
     GenerateKeyRequest,
+    GenerateKeyResponse,
     KeyRequest,
     LiteLLM_AuditLogs,
     LiteLLM_TeamMembership,
+    LiteLLM_TeamTable,
     LitellmUserRoles,
+    NewCustomerRequest,
     NewMCPServerRequest,
+    NewTeamRequest,
     NewUserRequest,
     OrganizationMemberUpdateRequest,
+    RegenerateKeyRequest,
     ResetSpendRequest,
     UpdateKeyRequest,
     UpdateMCPServerRequest,
+    UpdateTeamRequest,
     UpdateUserRequest,
     UserAPIKeyAuth,
 )
+from litellm.types.utils import LiteLLMPydanticObjectBase
 
 SERVER_ONLY_MARKERS = (
     "requires_fresh_policy",
@@ -520,3 +529,44 @@ def test_batch_file_caps_accept_only_positive_limits(setting):
         with pytest.raises(ValidationError):
             ConfigGeneralSettings.model_validate({setting: invalid})
     assert getattr(ConfigGeneralSettings.model_validate({setting: 3}), setting) == 3
+
+
+RATE_LIMITED_REQUESTS: Final[tuple[tuple[type[LiteLLMPydanticObjectBase], Mapping[str, str]], ...]] = (
+    (GenerateKeyRequest, {}),
+    (UpdateKeyRequest, {"key": "sk-1"}),
+    (RegenerateKeyRequest, {"key": "sk-1"}),
+    (NewUserRequest, {}),
+    (UpdateUserRequest, {"user_id": "user-1"}),
+    (NewTeamRequest, {}),
+    (UpdateTeamRequest, {"team_id": "team-1"}),
+    (BudgetNewRequest, {}),
+    (NewCustomerRequest, {"user_id": "customer-1"}),
+)
+
+
+@pytest.mark.parametrize("limit", ("rpm_limit", "tpm_limit"))
+@pytest.mark.parametrize(("request_model", "identity"), RATE_LIMITED_REQUESTS)
+def test_a_negative_rate_limit_is_refused_instead_of_locking_out_every_request(
+    request_model: type[LiteLLMPydanticObjectBase], identity: Mapping[str, str], limit: str
+) -> None:
+    with pytest.raises(ValidationError, match=limit):
+        request_model.model_validate({**identity, limit: -1})
+
+
+@pytest.mark.parametrize("sent", (0, 5))
+@pytest.mark.parametrize("limit", ("rpm_limit", "tpm_limit"))
+@pytest.mark.parametrize(("request_model", "identity"), RATE_LIMITED_REQUESTS)
+def test_a_zero_or_positive_rate_limit_is_kept(
+    request_model: type[LiteLLMPydanticObjectBase], identity: Mapping[str, str], limit: str, sent: int
+) -> None:
+    assert getattr(request_model.model_validate({**identity, limit: sent}), limit) == sent
+
+
+@pytest.mark.parametrize("limit", ("rpm_limit", "tpm_limit"))
+def test_a_negative_rate_limit_already_stored_still_loads(limit: str) -> None:
+    stored: Final = (
+        LiteLLM_TeamTable.model_validate({"team_id": "team-1", limit: -1}),
+        GenerateKeyResponse.model_validate({"key": "sk-1", limit: -1}),
+        UserAPIKeyAuth.model_validate({limit: -1}),
+    )
+    assert all(getattr(row, limit) == -1 for row in stored)

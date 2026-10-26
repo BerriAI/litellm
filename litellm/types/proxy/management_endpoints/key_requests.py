@@ -4,7 +4,7 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Any, Literal  # noqa: TID251  # allowed_routes and metadata stay Any for existing callers
 
-from pydantic import Field, PositiveInt, field_validator, model_validator
+from pydantic import Field, NonNegativeInt, PositiveInt, field_validator, model_validator
 from typing_extensions import TypeIs  # noqa: TID251  # narrows the raw payload a before-validator receives
 
 from litellm.types.proxy.management_endpoints.request_base import GenerateRequestBase
@@ -55,6 +55,8 @@ class LiteLLMKeyType(str, enum.Enum):
 
 
 class GenerateKeyRequest(KeyRequestBase):
+    tpm_limit: NonNegativeInt | None = None
+    rpm_limit: NonNegativeInt | None = None
     soft_budget: float | None = None
     send_invite_email: bool | None = None
     key_type: LiteLLMKeyType | None = Field(
@@ -87,6 +89,8 @@ class UpdateKeyRequest(KeyRequestBase):
     duration: str | None = None
     spend: float | None = None
     soft_budget: float | None = None
+    tpm_limit: NonNegativeInt | None = None
+    rpm_limit: NonNegativeInt | None = None
     metadata: dict[Any, Any] | None = None
     temp_budget_increase: float | None = None
     temp_budget_expiry: datetime | None = None
