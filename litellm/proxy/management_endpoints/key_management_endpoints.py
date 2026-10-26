@@ -211,6 +211,7 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
 
 _RepositoryModelT = TypeVar("_RepositoryModelT", bound=BaseModel)
+_RawRowT = TypeVar("_RawRowT")
 
 
 class _UserRowLike(Protocol):
@@ -232,6 +233,12 @@ class _UserRowLike(Protocol):
 
 class _TxTables(Protocol):
     litellm_proxymodeltable: TableActions[object]
+
+
+class _ModelReencryptTransaction(Protocol):
+    async def __aenter__(self) -> _TxTables: ...
+
+    async def __aexit__(self, *exc_info: object) -> None: ...
 
 
 class _ModelParamsUpdate(TypedDict):
@@ -332,6 +339,14 @@ def _credentials_table(prisma_client: PrismaClient) -> TableActions[CredentialIt
     return cast(  # cast-ok: the rotation loop reads and rewrites these rows through CredentialItem names only
         "TableActions[CredentialItem]", CredentialsRepository(prisma_client).table
     )
+
+
+async def _query_raw_rows(prisma_client: PrismaClient, query: str, *args: object) -> Sequence[_RawRowT]:
+    return await prisma_client.db.query_raw(query, *args)
+
+
+def _model_reencrypt_transaction(prisma_client: PrismaClient) -> _ModelReencryptTransaction:
+    return prisma_client.db.tx(timeout=timedelta(minutes=2))
 
 
 def _config_table(prisma_client: PrismaClient, *, use_writer: bool = False) -> _ConfigTableActions:
@@ -1313,11 +1328,6 @@ async def validate_team_id_used_in_service_account_request(
     return True
 
 
-_BUDGET_NUMERIC_KEYS = frozenset(
-    ["max_budget", "soft_budget", "max_parallel_requests", "tpm_limit", "rpm_limit", "tpd_limit"]
-)
-
-
 def _enforce_upperbound_key_params(
     data: GenerateKeyRequest | UpdateKeyRequest,
     fill_defaults: bool = True,
@@ -1332,13 +1342,20 @@ def _enforce_upperbound_key_params(
     # (GHSA-2rv4-xv66-fpjg): float('nan') passes every `< 0` check because
     # nan < 0 is False, and spend >= nan is always False, permanently disabling
     # budget enforcement for any key that carries it.
-    for elem in data:
-        key, value = elem
-        if key in _BUDGET_NUMERIC_KEYS and value is not None:
-            if not math.isfinite(value):
+    budget_numeric_fields: Final = (
+        ("max_budget", data.max_budget),
+        ("max_parallel_requests", data.max_parallel_requests),
+        ("tpm_limit", data.tpm_limit),
+        ("rpm_limit", data.rpm_limit),
+        ("tpd_limit", data.tpd_limit),
+        ("soft_budget", data.soft_budget),
+    )
+    for field_name, field_value in budget_numeric_fields:
+        if field_value is not None:
+            if not math.isfinite(field_value):
                 raise HTTPException(
                     status_code=400,
-                    detail={"error": f"{key} must be a finite number. Received: {value}"},
+                    detail={"error": f"{field_name} must be a finite number. Received: {field_value}"},
                 )
 
     if litellm.upperbound_key_generate_params is None:
@@ -5746,8 +5763,7 @@ async def rotate_master_key(
             ]
         )
         verbose_proxy_logger.debug("Re-encrypting litellm_params on %s model rows", len(reencrypted_models))
-        async with prisma_client.db.tx(timeout=timedelta(minutes=2)) as tx_ctx:
-            tx: Final[_TxTables] = tx_ctx
+        async with _model_reencrypt_transaction(prisma_client) as tx:
             for reencrypted_model in reencrypted_models:
                 await tx.litellm_proxymodeltable.update_many(
                     data=_ModelParamsUpdate(litellm_params=prisma.Json(reencrypted_model.litellm_params)),
@@ -7344,7 +7360,7 @@ async def key_aliases(
         where_sql: Final = " AND ".join(where_parts)
 
         count_sql: Final = f'SELECT COUNT(*) AS count FROM "LiteLLM_VerificationToken" WHERE {where_sql}'
-        count_rows: Final[Sequence[Mapping[str, int]]] = await prisma_client.db.query_raw(count_sql, *query_params)
+        count_rows: Final[Sequence[Mapping[str, int]]] = await _query_raw_rows(prisma_client, count_sql, *query_params)
         total_count: Final = int(count_rows[0]["count"]) if count_rows else 0
 
         aliases_params: Final = query_params + [size, (page - 1) * size]
@@ -7357,7 +7373,9 @@ async def key_aliases(
             f" ORDER BY key_alias ASC"
             f" LIMIT ${limit_idx} OFFSET ${offset_idx}"
         )
-        alias_rows: Final[Sequence[Mapping[str, str]]] = await prisma_client.db.query_raw(aliases_sql, *aliases_params)
+        alias_rows: Final[Sequence[Mapping[str, str]]] = await _query_raw_rows(
+            prisma_client, aliases_sql, *aliases_params
+        )
         aliases: Final[list[str]] = [row["key_alias"] for row in alias_rows if row.get("key_alias")]
 
         total_pages: Final = -(-total_count // size) if total_count > 0 else 0
@@ -7397,20 +7415,26 @@ async def key_aliases(
         )
 
 
-def _validate_sort_params(sort_by: str | None, sort_order: str) -> dict[str, str] | None:
-    order_by: Final[dict[str, str]] = {}
-
+def _validate_sort_params(
+    sort_by: str | None, sort_order: str
+) -> Mapping[str, object] | Sequence[Mapping[str, object]] | None:
     if sort_by is None:
         return None
     # Validate sort_by is a valid column
-    valid_columns: Final = [
+    valid_columns: Final = (
         "spend",
         "max_budget",
         "created_at",
         "updated_at",
         "token",
         "key_alias",
-    ]
+        "expires",
+        "last_active",
+        "budget_reset_at",
+        "total_spend",
+        "tpm_limit",
+        "rpm_limit",
+    )
     if sort_by not in valid_columns:
         raise HTTPException(
             status_code=400,
@@ -7424,9 +7448,14 @@ def _validate_sort_params(sort_by: str | None, sort_order: str) -> dict[str, str
             detail={"error": "Invalid sort order. Must be 'asc' or 'desc'"},
         )
 
-    order_by[sort_by] = sort_order.lower()
-
-    return order_by
+    direction: Final = sort_order.lower()
+    nullable_sort_columns: Final = ("expires", "last_active", "budget_reset_at", "tpm_limit", "rpm_limit")
+    if sort_by not in (*nullable_sort_columns, "total_spend"):
+        return {sort_by: direction}
+    return [
+        {sort_by: {"sort": direction, "nulls": "last"}} if sort_by in nullable_sort_columns else {sort_by: direction},
+        {"token": "asc"},
+    ]
 
 
 def _build_expires_where_clause(expires_filter: str, now: datetime) -> dict[str, object]:
@@ -7668,7 +7697,7 @@ async def list_key_helper(
 
     verbose_proxy_logger.debug("Pagination: skip=%s, take=%s", skip, size)
 
-    order_by: Final[dict[str, str] | None] = (
+    order_by: Final = (
         _validate_sort_params(sort_by, sort_order) if sort_by is not None and isinstance(sort_by, str) else None
     )
 

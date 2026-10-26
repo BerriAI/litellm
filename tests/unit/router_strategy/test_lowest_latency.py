@@ -176,6 +176,8 @@ def test_sync_chat_zero_completion_tokens_falls_back_to_seconds():
 MODEL_GROUP = "gpt-4o-mini"
 FAST_TTFT_ID = "fast-ttft-short-output"
 SLOW_TTFT_ID = "slow-ttft-long-output"
+FAST_API_BASE = "https://fast.example.test/v1"
+SLOW_API_BASE = "https://slow.example.test/v1"
 STREAMING_DEPLOYMENTS = [
     {"model_info": {"id": FAST_TTFT_ID}, "litellm_params": {}},
     {"model_info": {"id": SLOW_TTFT_ID}, "litellm_params": {}},
@@ -405,6 +407,69 @@ async def test_async_get_available_deployments_treats_missing_samples_as_zero_la
 
     assert picked is not None
     assert picked["model_info"]["id"] == DEPLOYMENT_ID
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("ttft_samples", "expected_latency"),
+    [([-602.0], 0.0), ([10.0, 10.0, -40.0], 10.0), ([float("nan"), 2.0], 2.0)],
+    ids=["negative", "negative_average", "nan"],
+)
+async def test_unusable_ttft_samples_do_not_leave_the_buffer_window_empty(
+    ttft_samples: list[float], expected_latency: float
+):
+    """``completion_start_time - start_time`` can be negative or NaN. With a non-zero
+    ``lowest_latency_buffer`` a negative average pushes ``lowest_latency + buffer``
+    below every candidate, so the group must still route instead of raising
+    IndexError from ``random.choice``, and the bad samples must not reach the ranking."""
+    cache: Final = DualCache()
+    handler: Final = LowestLatencyLoggingHandler(router_cache=cache, routing_args={"lowest_latency_buffer": 5})
+    cache.set_cache(
+        key=f"{MODEL_GROUP}_map",
+        value={FAST_TTFT_ID: {"time_to_first_token_seconds": ttft_samples}},
+    )
+    metadata: Final[dict[str, object]] = {}
+    request_kwargs: Final[dict[str, object]] = {"stream": True, "metadata": metadata}
+
+    picked = await handler.async_get_available_deployments(
+        model_group=MODEL_GROUP,
+        healthy_deployments=[{"model_info": {"id": FAST_TTFT_ID}, "litellm_params": {"api_base": FAST_API_BASE}}],
+        request_kwargs=request_kwargs,
+    )
+
+    assert picked is not None
+    assert picked["model_info"]["id"] == FAST_TTFT_ID
+    assert metadata["_latency_per_deployment"] == {FAST_API_BASE: expected_latency}
+
+
+@pytest.mark.asyncio
+async def test_unusable_ttft_samples_fall_back_to_recorded_latency():
+    """A deployment whose TTFT samples are all unusable is ranked by its recorded
+    latency, so dirty samples cannot make it look like the fastest deployment."""
+    cache: Final = DualCache()
+    handler: Final = LowestLatencyLoggingHandler(router_cache=cache, routing_args={"lowest_latency_buffer": 5})
+    cache.set_cache(
+        key=f"{MODEL_GROUP}_map",
+        value={
+            FAST_TTFT_ID: {"latency_normalized": [0.1], "time_to_first_token_seconds": [-600.0]},
+            SLOW_TTFT_ID: {"latency_normalized": [5.0], "time_to_first_token_seconds": [-300.0]},
+        },
+    )
+    metadata: Final[dict[str, object]] = {}
+    request_kwargs: Final[dict[str, object]] = {"stream": True, "metadata": metadata}
+
+    picked = await handler.async_get_available_deployments(
+        model_group=MODEL_GROUP,
+        healthy_deployments=[
+            {"model_info": {"id": FAST_TTFT_ID}, "litellm_params": {"api_base": FAST_API_BASE}},
+            {"model_info": {"id": SLOW_TTFT_ID}, "litellm_params": {"api_base": SLOW_API_BASE}},
+        ],
+        request_kwargs=request_kwargs,
+    )
+
+    assert picked is not None
+    assert picked["model_info"]["id"] == FAST_TTFT_ID
+    assert metadata["_latency_per_deployment"] == {FAST_API_BASE: 0.1, SLOW_API_BASE: 5.0}
 
 
 def _latency_router(routing_strategy_args: dict) -> Router:
