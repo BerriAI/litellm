@@ -249,5 +249,10 @@
       "/v1/responses",
       "/v1/messages"
     ]
+  },
+  "teamorouter": {
+    "base_url": "https://api.teamorouter.com/v1",
+    "api_key_env": "TEAMOROUTER_API_KEY",
+    "api_base_env": "TEAMOROUTER_API_BASE"
   }
 }
