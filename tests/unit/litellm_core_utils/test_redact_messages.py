@@ -29,6 +29,8 @@ from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.litellm_core_utils.redact_messages import (
     _redact_responses_api_output,
+    _redact_responses_api_output_dict,
+    _redact_streaming_response,
     _redacted_responses_api_response,
     perform_redaction,
     redacted_model_call_details_for_custom_logger,
@@ -176,7 +178,11 @@ def test_redaction_hides_a_compaction_summary_in_responses_api_output(shape: str
         object="response",
         status="completed",
         output=[
-            {"type": "compaction", "id": "cmp_1", "encrypted_content": json.dumps({"type": "compaction", "content": SECRET})}
+            {
+                "type": "compaction",
+                "id": "cmp_1",
+                "encrypted_content": json.dumps({"type": "compaction", "content": SECRET}),
+            }
         ],
     )
     result: Final = response if shape == "object" else response.model_dump()
@@ -919,6 +925,42 @@ class TestPerformRedaction:
 
         assert redacted.output[0].content[0].text == "redacted-by-litellm"
         assert response.output[0].content[0].text == "sensitive output"
+
+    def test_responses_api_redaction_handles_none_output(self):
+        # 1. _redact_responses_api_output(None) returns None without raising TypeError
+        assert _redact_responses_api_output(None) is None
+
+        # 2. _redact_responses_api_output_dict(None) returns None without raising TypeError
+        assert _redact_responses_api_output_dict(None) is None
+        assert _redact_responses_api_output_dict(None, "redacted-by-litellm") is None
+
+        # 3. Redacting a Responses API dictionary or object where output: None runs cleanly without exception
+        dict_response: Final = {
+            "id": "resp_none",
+            "model": "gpt-4o",
+            "output": None,
+            "instructions": "sensitive-instructions",
+        }
+        redacted_dict: Final = perform_redaction({}, dict_response)
+        assert redacted_dict["output"] is None
+        assert redacted_dict["instructions"] == "redacted-by-litellm"
+
+        redacted_raw: Final = _redacted_responses_api_response({"output": None})
+        assert redacted_raw["output"] is None
+
+        streaming_obj = SimpleNamespace(output=None)
+        assert _redact_streaming_response(streaming_obj).output is None
+
+        object_response = mock_responses_api_response("test output")
+        object_response.output = None
+        redacted_obj: Final = perform_redaction({}, object_response)
+        assert redacted_obj.output is None
+
+        # 4. Normal list outputs continue to redact sensitive fields as expected
+        normal_response: Final = mock_responses_api_response("sensitive output")
+        redacted_normal: Final = perform_redaction({}, normal_response)
+        assert redacted_normal.output is not None
+        assert redacted_normal.output[0].content[0].text == "redacted-by-litellm"
 
     def test_redacts_vertex_provider_metadata_in_standard_logging_response(self):
         details = {
