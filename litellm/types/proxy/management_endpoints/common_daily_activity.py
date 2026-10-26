@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
 
 from pydantic import ConfigDict, Field
@@ -78,7 +78,7 @@ class BreakdownMetrics(LiteLLMBaseModel):
 
 
 class DailySpendData(LiteLLMBaseModel):
-    date: date
+    date: date | datetime
     metrics: SpendMetrics
     breakdown: BreakdownMetrics = Field(default_factory=BreakdownMetrics)
 

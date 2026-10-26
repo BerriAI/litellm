@@ -793,6 +793,7 @@ class LiteLLMRoutes(enum.Enum):
             # their own keys in tag_management_endpoints.py.
             "/tag/daily/activity",
             "/tag/daily/activity/aggregated",
+            "/tag/activity/rollup",
             "/tag/daily/activity/aggregated/keys",
             "/tag/daily/activity/aggregated/search",
             "/tag/daily/activity/aggregated/model_top_keys",
@@ -822,6 +823,7 @@ class LiteLLMRoutes(enum.Enum):
             # their own keys in tag_management_endpoints.py.
             "/tag/daily/activity",
             "/tag/daily/activity/aggregated",
+            "/tag/activity/rollup",
             "/tag/daily/activity/aggregated/keys",
             "/tag/daily/activity/aggregated/search",
             "/tag/daily/activity/aggregated/model_top_keys",
@@ -979,6 +981,7 @@ class LiteLLMRoutes(enum.Enum):
             "/team/daily/activity/export",
             "/tag/daily/activity",
             "/tag/daily/activity/aggregated",
+            "/tag/activity/rollup",
             "/tag/daily/activity/aggregated/keys",
             "/tag/daily/activity/aggregated/search",
             "/tag/daily/activity/aggregated/model_top_keys",

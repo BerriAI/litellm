@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use litellm_http::ClientVariant;
-use litellm_spend_clickhouse::{Config, Error};
+use litellm_spend_clickhouse::{Config, Error, RollupRequest};
 use pyo3::{
     exceptions::{PyOverflowError, PyRuntimeError, PyValueError},
     prelude::*,
@@ -16,6 +16,7 @@ fn map_error(error: Error) -> PyErr {
         Error::InvalidRow
         | Error::InvalidLimit(_)
         | Error::InvalidSchema
+        | Error::InvalidRollup(_)
         | Error::Storage(
             StorageError::InvalidRow
             | StorageError::InvalidLimit(_)
@@ -92,6 +93,23 @@ impl NativeClickHouseSpendStorage {
             map_error,
         )
     }
+
+    fn fetch_rollup<'py>(
+        &self,
+        py: Python<'py>,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] request: RollupRequest,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+        let config = self.config.clone();
+        crate::execution::run_async(
+            py,
+            async move {
+                litellm_spend_clickhouse::fetch_rollup(&client, config.storage().reader(), &request)
+                    .await
+            },
+            map_error,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -109,6 +127,7 @@ mod tests {
         "ValueError"
     )]
     #[case::insert_budget(Error::InsertTooLarge, "OverflowError")]
+    #[case::rollup(Error::InvalidRollup("end_ms must be after start_ms"), "ValueError")]
     #[case::schema(
         Error::Storage(litellm_storage_clickhouse::Error::SchemaFailed(503)),
         "RuntimeError"

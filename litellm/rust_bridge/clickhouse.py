@@ -1,7 +1,9 @@
 import os
 from collections.abc import Awaitable, Mapping, Sequence
-from dataclasses import dataclass
-from typing import Final, Protocol, runtime_checkable
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Final, Literal, Protocol, runtime_checkable
 
 from pydantic import ConfigDict, TypeAdapter
 
@@ -16,6 +18,59 @@ class SpendStorageConfig:
     retention_days: int = DEFAULT_AGENT_TRACING_RETENTION_DAYS
 
 
+class RollupDimension(str, Enum):
+    """Columns of the ClickHouse `spend_logs` table the Rust rollup can group or filter by."""
+
+    TAG = "tag"
+    API_KEY = "api_key"
+    TEAM_ID = "team_id"
+    ORGANIZATION_ID = "organization_id"
+    USER = "user"
+    END_USER = "end_user"
+    MODEL = "model"
+    MODEL_GROUP = "model_group"
+    PROVIDER = "custom_llm_provider"
+    STATUS = "status"
+    CALL_TYPE = "call_type"
+
+
+RollupBucket = Literal["1m", "5m", "15m", "1h", "1d"]
+ROLLUP_BUCKETS: Final[tuple[RollupBucket, ...]] = ("1m", "5m", "15m", "1h", "1d")
+ROLLUP_ROW_LIMIT: Final = 1000
+
+
+def _no_filters() -> Mapping[RollupDimension, tuple[str, ...]]:
+    return {}
+
+
+@dataclass(frozen=True, slots=True)
+class SpendRollupRequest:
+    """One bounded GROUP BY over `spend_logs`; Rust owns the SQL, this only names the shape."""
+
+    start: datetime
+    end: datetime
+    bucket: RollupBucket | None
+    group_by: tuple[RollupDimension, ...] = ()
+    filters: Mapping[RollupDimension, tuple[str, ...]] = field(default_factory=_no_filters)
+    limit: int = ROLLUP_ROW_LIMIT
+
+    def native(self) -> dict[str, object]:
+        return {
+            "start_ms": _epoch_ms(self.start),
+            "end_ms": _epoch_ms(self.end),
+            "bucket": self.bucket,
+            "group_by": [dimension.value for dimension in self.group_by],
+            "filters": {dimension.value: list(values) for dimension, values in self.filters.items()},
+            "limit": self.limit,
+        }
+
+
+def _epoch_ms(value: datetime) -> int:
+    if value.tzinfo is None:
+        raise ValueError("rollup timestamps must be timezone-aware")
+    return int(value.timestamp() * 1000)
+
+
 class NativeSpendConfig(Protocol):
     def __init__(self, database: str, url: str, retention_days: int) -> None: ...
 
@@ -24,6 +79,7 @@ class NativeSpendStorage(Protocol):
     def __init__(self, config: NativeSpendConfig) -> None: ...
     def ensure_schema(self) -> Awaitable[None]: ...
     def insert_rows(self, rows: Sequence[Mapping[str, object]]) -> Awaitable[None]: ...
+    def fetch_rollup(self, request: Mapping[str, object]) -> Awaitable[list[dict[str, object]]]: ...
 
 
 @runtime_checkable
@@ -68,3 +124,6 @@ class ClickHouseSpendStorage:
         if table != "spend_logs":
             raise ValueError("The ClickHouse spend writer only accepts spend_logs")
         await self._native.insert_rows(rows)
+
+    async def fetch_rollup(self, request: SpendRollupRequest) -> tuple[Mapping[str, object], ...]:
+        return tuple(await self._native.fetch_rollup(request.native()))

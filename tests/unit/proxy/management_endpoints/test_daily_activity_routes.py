@@ -1621,3 +1621,141 @@ def test_export_content_disposition_is_ascii_and_built_from_canonical_dates(
     disposition: Final = response.headers["content-disposition"]
     assert disposition == 'attachment; filename="team-usage-2025-01-01-2025-01-02-daily.csv"'
     assert disposition.isascii()
+
+
+class _FakeRollupRepository:
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, bool, int]] = []
+
+    async def aggregated(self, scope: object, *, include_entity_breakdown: bool, api_key_limit: int) -> AggregatedRows:
+        self.calls.append((scope, include_entity_breakdown, api_key_limit))
+        metrics: Final = dict(
+            spend=1.5,
+            prompt_tokens=10,
+            completion_tokens=5,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+            compression_saved_tokens=None,
+            compression_savings_spend=None,
+            prompt_caching_savings_spend=None,
+            gateway_injected_caching_savings_spend=None,
+            autorouter_savings_spend=None,
+            api_requests=2,
+            successful_requests=2,
+            failed_requests=0,
+            total_response_time_ms=100,
+            timed_requests=2,
+        )
+        return AggregatedRows(
+            grouping_rows=(
+                GroupingSetsRow(
+                    date=None,
+                    api_key=None,
+                    model=None,
+                    model_group=None,
+                    custom_llm_provider=None,
+                    mcp_namespaced_tool_name=None,
+                    endpoint=None,
+                    group_level=127,
+                    distinct_api_keys=1,
+                    **metrics,  # pyright: ignore[reportArgumentType]
+                ),
+                GroupingSetsRow(
+                    date="2026-10-24T21:00:00",
+                    api_key=None,
+                    model=None,
+                    model_group=None,
+                    custom_llm_provider=None,
+                    mcp_namespaced_tool_name=None,
+                    endpoint=None,
+                    group_level=63,
+                    distinct_api_keys=None,
+                    **metrics,  # pyright: ignore[reportArgumentType]
+                ),
+            ),
+            entity_rows=(
+                EntityRollupRow(
+                    date="2026-10-24T21:00:00",
+                    api_key=None,
+                    entity_id="prod",
+                    api_key_rolled=1,
+                    distinct_api_keys=1,
+                    **metrics,  # pyright: ignore[reportArgumentType]
+                ),
+            ),
+            distinct_api_keys=1,
+        )
+
+    async def key_metadata(self, api_keys: frozenset[str], window: object) -> Mapping[str, KeyMetadataRow]:
+        return {}
+
+
+def _inject_rollup_repository(client: TestClient, repository: _FakeRollupRepository) -> None:
+    from litellm.proxy.management_endpoints.daily_activity_routes import get_spend_rollup_repository
+
+    app: Final = client.app
+    assert isinstance(app, FastAPI)
+    app.dependency_overrides[get_spend_rollup_repository] = lambda: repository
+
+
+_ROLLUP_PARAMS: Final = {"start": "2026-10-24T21:00:00Z", "end": "2026-10-24T22:00:00Z"}
+
+
+def test_rollup_route_reports_missing_clickhouse_as_unavailable(
+    daily_activity_client: tuple[TestClient, _FakeRepository], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _ = daily_activity_client
+    monkeypatch.delenv("CLICKHOUSE_URL", raising=False)
+    response: Final = client.get("/tag/activity/rollup", params={**_ROLLUP_PARAMS, "tags": "prod"})
+    assert response.status_code == 503, response.text
+    assert "CLICKHOUSE_URL" in response.json()["detail"]["error"]
+
+
+def test_rollup_route_returns_bucket_timestamps_and_scopes_internal_users_to_their_keys(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+) -> None:
+    from litellm.rust_bridge.clickhouse import RollupDimension
+    from litellm.types.repositories.spend_rollup import SpendRollupScope
+
+    client, _ = daily_activity_client
+    repository: Final = _FakeRollupRepository()
+    _inject_rollup_repository(client, repository)
+
+    response: Final = client.get(
+        "/tag/activity/rollup",
+        params={**_ROLLUP_PARAMS, "tags": "prod,staging", "bucket": "15m"},
+        headers={"x-user-role": LitellmUserRoles.INTERNAL_USER.value, "x-user-id": "user-a"},
+    )
+
+    assert response.status_code == 200, response.text
+    body: Final = response.json()
+    assert body["results"][0]["date"] == "2026-10-24T21:00:00"
+    assert body["results"][0]["breakdown"]["entities"]["prod"]["metrics"]["spend"] == 1.5
+    assert body["metadata"]["total_spend"] == 1.5
+    assert body["metadata"]["total_api_keys"] == 1
+    ((scope, include_entity_breakdown, api_key_limit),) = repository.calls
+    assert isinstance(scope, SpendRollupScope)
+    assert scope.dimension == RollupDimension.TAG
+    assert scope.entity_ids == ("prod", "staging")
+    assert scope.api_keys is not None and len(scope.api_keys) > 0
+    assert scope.window.bucket == "15m"
+    assert (include_entity_breakdown, api_key_limit) == (True, constants.USAGE_TOP_API_KEYS_DEFAULT)
+
+
+@pytest.mark.parametrize(
+    ("params", "reason"),
+    (
+        ({"start": "2026-10-24", "end": "soon"}, "start and end must be ISO 8601 timestamps"),
+        ({"start": "2026-10-24T22:00:00", "end": "2026-10-24T21:00:00"}, "end must be after start"),
+    ),
+)
+def test_rollup_route_rejects_bad_windows_before_touching_clickhouse(
+    daily_activity_client: tuple[TestClient, _FakeRepository], params: dict[str, str], reason: str
+) -> None:
+    client, _ = daily_activity_client
+    repository: Final = _FakeRollupRepository()
+    _inject_rollup_repository(client, repository)
+    response: Final = client.get("/tag/activity/rollup", params=params)
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"]["error"] == reason
+    assert repository.calls == []

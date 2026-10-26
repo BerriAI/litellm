@@ -2551,3 +2551,43 @@ async def test_get_daily_activity_rejects_non_canonical_dates_before_querying(st
     assert error.value.detail == {"error": "start_date and end_date must be valid YYYY-MM-DD dates"}
     mock_table.count.assert_not_awaited()
     mock_table.find_many.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "bucket", "expected_bucket"),
+    (
+        ("2026-10-24T21:00:00", "2026-10-24T21:10:00", None, "1m"),
+        ("2026-10-24T21:00:00Z", "2026-10-24T22:00:00Z", None, "1m"),
+        ("2026-10-24T18:00:00+00:00", "2026-10-24T23:00:00+00:00", None, "5m"),
+        ("2026-10-24T00:00:00", "2026-10-25T00:00:00", None, "15m"),
+        ("2026-10-20T00:00:00", "2026-10-27T00:00:00", None, "1h"),
+        ("2026-10-24T21:00:00", "2026-10-24T21:10:00", "1h", "1h"),
+    ),
+)
+def test_parse_rollup_window_picks_a_bucket_from_the_span_unless_given(
+    start: str, end: str, bucket: str | None, expected_bucket: str
+) -> None:
+    from datetime import timezone
+
+    from litellm.proxy.management_endpoints.common_daily_activity import parse_rollup_window
+    from litellm.types.repositories.spend_rollup import RollupWindow
+
+    window: Final = parse_rollup_window(start, end, bucket)  # pyright: ignore[reportArgumentType]
+    assert isinstance(window, RollupWindow)
+    assert window.bucket == expected_bucket
+    assert window.start.tzinfo is not None and window.start.utcoffset() == timezone.utc.utcoffset(None)
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "reason"),
+    (
+        (None, "2026-10-24T21:00:00", "start and end must be ISO 8601 timestamps"),
+        ("2026-10-24", "yesterday", "start and end must be ISO 8601 timestamps"),
+        ("2026-10-24T21:00:00", "2026-10-24T21:00:00", "end must be after start"),
+        ("2026-10-17T00:00:00", "2026-10-24T00:00:01", "start and end must be at most 7 days apart"),
+    ),
+)
+def test_parse_rollup_window_rejects_malformed_or_oversized_windows(start: str | None, end: str, reason: str) -> None:
+    from litellm.proxy.management_endpoints.common_daily_activity import parse_rollup_window
+
+    assert parse_rollup_window(start, end, None) == InvalidDateRange(reason=reason)

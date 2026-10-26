@@ -11,10 +11,12 @@ litellm-http.workspace = true
 litellm-storage-clickhouse.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_with.workspace = true
 sha2.workspace = true
 sqlx = { workspace = true, features = ["migrate", "macros"] }
+strum.workspace = true
 thiserror.workspace = true
-time = { workspace = true, features = ["formatting"] }
+time = { workspace = true, features = ["formatting", "macros"] }
 
 [dev-dependencies]
 litellm-http = { workspace = true, features = ["test-support"] }

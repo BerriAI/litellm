@@ -1,7 +1,9 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use litellm_http::Client;
-use litellm_spend_clickhouse::{Config, Error, ensure_schema, insert_rows};
+use litellm_spend_clickhouse::{
+    Bucket, Config, Dimension, Error, RollupRequest, ensure_schema, fetch_rollup, insert_rows,
+};
 use litellm_storage_clickhouse::{execute_read, execute_statement};
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
@@ -268,5 +270,174 @@ async fn unexpected_columns_are_rejected_without_writing_rows(#[future(awt)] dat
             .await["data"],
         json!([{"rows":0}])
     );
+    database.close().await;
+}
+
+#[rstest]
+#[tokio::test]
+async fn rollups_bucket_tagged_spend_by_dimension(#[future(awt)] database: Database) {
+    ensure_schema(&database.client, &database.config)
+        .await
+        .unwrap();
+    let storage = database.config.storage();
+    let now = OffsetDateTime::now_utc()
+        .replace_minute(0)
+        .unwrap()
+        .replace_second(0)
+        .unwrap()
+        .replace_nanosecond(0)
+        .unwrap();
+    let first_hour = now - time::Duration::hours(3);
+    let hour_ms = (first_hour.unix_timestamp_nanos() / 1_000_000) as i64;
+    let label = |hour: OffsetDateTime| {
+        hour.format(&time::macros::format_description!(
+            "[year]-[month]-[day]T[hour]:[minute]:[second]"
+        ))
+        .unwrap()
+    };
+    let row = |id: &str,
+               offset_ms: i64,
+               key: &str,
+               model: &str,
+               tags: Value,
+               spend: f64,
+               status: &str| {
+        BTreeMap::from([
+            ("request_id".into(), json!(id)),
+            ("team_id".into(), json!("team-1")),
+            ("api_key".into(), json!(key)),
+            ("model".into(), json!(model)),
+            ("start_time".into(), json!(hour_ms + offset_ms)),
+            ("end_time".into(), json!(hour_ms + offset_ms + 100)),
+            ("spend".into(), json!(spend)),
+            ("prompt_tokens".into(), json!(10)),
+            ("completion_tokens".into(), json!(5)),
+            ("status".into(), json!(status)),
+            ("request_tags".into(), tags),
+            ("EngineReceivedMs".into(), json!(0)),
+        ])
+    };
+    insert_rows(
+        &database.client,
+        storage.writer(),
+        storage.database(),
+        vec![
+            row(
+                "r1",
+                0,
+                "key-a",
+                "gpt-4o",
+                json!(["prod", "team-x"]),
+                0.5,
+                "success",
+            ),
+            row(
+                "r2",
+                60_000,
+                "key-b",
+                "gpt-4o",
+                json!(["prod"]),
+                0.25,
+                "failure",
+            ),
+            row(
+                "r3",
+                3_600_000,
+                "key-a",
+                "gpt-4o-mini",
+                json!(["prod"]),
+                1.0,
+                "success",
+            ),
+            row("r4", 120_000, "key-a", "gpt-4o", json!([]), 9.0, "success"),
+            row(
+                "r5",
+                7_200_000,
+                "key-a",
+                "gpt-4o",
+                json!(["prod"]),
+                9.0,
+                "success",
+            ),
+        ],
+    )
+    .await
+    .unwrap();
+    let request = RollupRequest {
+        start_ms: hour_ms,
+        end_ms: hour_ms + 7_200_000,
+        bucket: Some(Bucket::Hour),
+        group_by: vec![Dimension::Tag],
+        filters: BTreeMap::from([(Dimension::Tag, vec!["prod".to_owned()])]),
+        limit: 100,
+    };
+    let rows = fetch_rollup(&database.client, storage.reader(), &request)
+        .await
+        .unwrap();
+    let summary: Vec<_> = rows
+        .iter()
+        .map(|row| {
+            (
+                row.bucket.clone().unwrap(),
+                row.dimensions[&Dimension::Tag].clone(),
+                row.spend,
+                row.api_requests,
+                row.successful_requests,
+                row.failed_requests,
+                row.prompt_tokens,
+                row.total_response_time_ms,
+                row.distinct_api_keys,
+            )
+        })
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            (
+                label(first_hour),
+                "prod".to_owned(),
+                0.75,
+                2,
+                1,
+                1,
+                20,
+                200,
+                2
+            ),
+            (
+                label(first_hour + time::Duration::hours(1)),
+                "prod".to_owned(),
+                1.0,
+                1,
+                1,
+                0,
+                10,
+                100,
+                1
+            ),
+        ]
+    );
+    let totals = fetch_rollup(
+        &database.client,
+        storage.reader(),
+        &RollupRequest {
+            bucket: None,
+            group_by: vec![],
+            filters: BTreeMap::new(),
+            ..request
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(totals.len(), 1);
+    assert_eq!(
+        (
+            totals[0].spend,
+            totals[0].api_requests,
+            totals[0].distinct_api_keys
+        ),
+        (10.75, 4, 2)
+    );
+    assert!(totals[0].bucket.is_none());
     database.close().await;
 }

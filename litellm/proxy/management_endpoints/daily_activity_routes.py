@@ -20,6 +20,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     daily_activity_repository,
     get_daily_activity_aggregated,
     parse_canonical_date_range,
+    parse_rollup_window,
     raise_public,
     spend_logs_window,
 )
@@ -39,7 +40,9 @@ from litellm.proxy.management_endpoints.team_endpoints import aggregated_date_ra
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import PrismaClient, get_prisma_client_or_throw
 from litellm.repositories.daily_activity_repository import DailyActivityRepository
+from litellm.repositories.spend_rollup_repository import ClickHouseSpendRollupRepository
 from litellm.router import Router
+from litellm.rust_bridge.clickhouse import ClickHouseSpendStorage, RollupBucket, spend_storage_config
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     CacheLeakageKeysResponse,
     DailyActivityKeyPageResponse,
@@ -62,6 +65,7 @@ from litellm.types.repositories.daily_activity import (
     UserMetadataRow,
     UserSpendRow,
 )
+from litellm.types.repositories.spend_rollup import ENTITY_ROLLUP_DIMENSIONS, SpendRollupScope
 
 router = APIRouter()
 
@@ -72,6 +76,22 @@ def get_daily_activity_prisma_client() -> PrismaClient:
 
 def get_daily_activity_repository() -> DailyActivityRepository:
     return daily_activity_repository(get_daily_activity_prisma_client())
+
+
+def get_spend_rollup_repository(
+    prisma_client: Annotated[PrismaClient, Depends(get_daily_activity_prisma_client)],
+) -> ClickHouseSpendRollupRepository:
+    try:
+        storage: Final = ClickHouseSpendStorage(spend_storage_config())
+    except (RuntimeError, ValueError) as error:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "Sub-day usage is served from ClickHouse spend logs; set CLICKHOUSE_URL and enable the "
+                f"clickhouse callback ({error})"
+            },
+        )
+    return ClickHouseSpendRollupRepository(storage, key_reads=daily_activity_repository(prisma_client))
 
 
 def get_daily_activity_llm_router() -> Router | None:
@@ -350,6 +370,68 @@ def _register_aggregated_route(router: APIRouter, resolver: EntityScopeResolver,
             "Returns:\n"
             "    SpendAnalyticsPaginatedResponse: Response containing all daily activity data for the range."
         )
+
+
+def _register_rollup_route(router: APIRouter, resolver: EntityScopeResolver, prefix: str) -> None:
+    dimension: Final = ENTITY_ROLLUP_DIMENSIONS.get(resolver.table)
+    if dimension is None:
+        return
+
+    @management_endpoint_wrapper
+    async def rollup(
+        entity_query: Annotated[EntityQuery, Depends(resolver.query)],
+        user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+        repository: Annotated[ClickHouseSpendRollupRepository, Depends(get_spend_rollup_repository)],
+        prisma_client: Annotated[PrismaClient, Depends(get_daily_activity_prisma_client)],
+        start: Annotated[str, Query(description="Window start, ISO 8601 timestamp (naive means UTC)")],
+        end: Annotated[str, Query(description="Window end, ISO 8601 timestamp (naive means UTC)")],
+        bucket: Annotated[
+            RollupBucket | None, Query(description="Bucket width; picked from the window when omitted")
+        ] = None,
+        api_key_limit: Annotated[
+            int, Query(ge=1, le=constants.USAGE_TOP_API_KEYS_MAX)
+        ] = constants.USAGE_TOP_API_KEYS_DEFAULT,
+    ) -> SpendAnalyticsPaginatedResponse:
+        window: Final = parse_rollup_window(start, end, bucket)
+        if isinstance(window, InvalidDateRange):
+            raise_public(window)
+        resolved: Final = await resolver.resolve(user_api_key_dict, entity_query, prisma_client)
+        if isinstance(resolved, ScopeDenied):
+            raise_public(resolved)
+        if resolved.scope.exclude_entity_ids:
+            raise HTTPException(status_code=400, detail={"error": "exclusions are not supported for rollups"})
+        scope: Final = SpendRollupScope(
+            dimension=dimension,
+            entity_ids=resolved.scope.entity_ids,
+            api_keys=resolved.scope.api_keys,
+            model=resolved.scope.model,
+            window=window,
+        )
+        return await get_daily_activity_aggregated(
+            repository,
+            scope,
+            entity_metadata_field=resolved.entity_metadata,
+            include_entity_breakdown=resolver.include_entity_breakdown,
+            api_key_limit=api_key_limit,
+        )
+
+    rollup.__doc__ = (
+        f"Sub-day {resolver.entity} usage rolled up from ClickHouse spend logs.\n\n"
+        "Same response shape as `/daily/activity/aggregated`, but `results[].date` is a bucket timestamp "
+        "(1m, 5m, 15m, 1h or 1d wide) and only the metrics present in `spend_logs` are populated: "
+        "spend, tokens, cache tokens, request counts and latency. Savings, flat cost, MCP and endpoint "
+        "breakdowns stay zero. Responds 503 when ClickHouse spend logging is not configured."
+    )
+    router.add_api_route(
+        f"{prefix}/activity/rollup",
+        rollup,
+        methods=["GET"],
+        name=f"get_{resolver.entity}_activity_rollup",
+        tags=list(resolver.tags),
+        dependencies=(Depends(user_api_key_auth),),
+        response_model=SpendAnalyticsPaginatedResponse,
+        include_in_schema=prefix != "/end_user",
+    )
 
 
 def _register_key_page_route(router: APIRouter, resolver: EntityScopeResolver, prefix: str) -> None:
@@ -645,6 +727,7 @@ def _register_cache_leakage_route(router: APIRouter, resolver: EntityScopeResolv
 def register_daily_activity_routes(router: APIRouter, resolver: EntityScopeResolver) -> None:
     for prefix in resolver.route_prefixes:
         _register_aggregated_route(router, resolver, prefix)
+        _register_rollup_route(router, resolver, prefix)
         _register_key_page_route(router, resolver, prefix)
         _register_search_route(router, resolver, prefix)
         _register_model_top_keys_route(router, resolver, prefix)

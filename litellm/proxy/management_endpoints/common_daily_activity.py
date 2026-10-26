@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Final, Literal, NoReturn, Protocol
 
@@ -23,6 +23,7 @@ from litellm.proxy.spend_tracking.key_metadata_recovery import (
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.daily_activity_repository import DailyActivityRepository
+from litellm.rust_bridge.clickhouse import RollupBucket
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     BreakdownMetrics,
     DailySpendData,
@@ -35,14 +36,18 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendMetrics,
 )
 from litellm.types.repositories.daily_activity import (
+    AggregatedActivityReads,
     DailyActivityScope,
     DailyActivityTable,
     EntityRollupRow,
     GroupingSetsRow,
+    KeyMetadataReads,
     KeyMetadataRow,
     RollupMetricsRow,
+    ScopeT,
     SpendLogsWindow,
 )
+from litellm.types.repositories.spend_rollup import RollupWindow
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +86,42 @@ def parse_canonical_date(value: str) -> date | None:
     except ValueError:
         return None
     return parsed if parsed.isoformat() == value else None
+
+
+ROLLUP_MAX_WINDOW: Final = timedelta(days=7)
+_ROLLUP_BUCKET_BY_WINDOW: Final[tuple[tuple[timedelta, RollupBucket], ...]] = (
+    (timedelta(hours=1), "1m"),
+    (timedelta(hours=6), "5m"),
+    (timedelta(hours=24), "15m"),
+    (ROLLUP_MAX_WINDOW, "1h"),
+)
+
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed: Final = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
+def parse_rollup_window(
+    start: str | None, end: str | None, bucket: RollupBucket | None
+) -> RollupWindow | InvalidDateRange:
+    """Sub-day Usage windows: ISO 8601 timestamps (naive means UTC), at most ROLLUP_MAX_WINDOW wide."""
+    parsed_start: Final = _parse_timestamp(start)
+    parsed_end: Final = _parse_timestamp(end)
+    if parsed_start is None or parsed_end is None:
+        return InvalidDateRange(reason="start and end must be ISO 8601 timestamps")
+    if parsed_end <= parsed_start:
+        return InvalidDateRange(reason="end must be after start")
+    span: Final = parsed_end - parsed_start
+    if span > ROLLUP_MAX_WINDOW:
+        return InvalidDateRange(reason=f"start and end must be at most {ROLLUP_MAX_WINDOW.days} days apart")
+    chosen: RollupBucket = bucket or next(candidate for limit, candidate in _ROLLUP_BUCKET_BY_WINDOW if span <= limit)
+    return RollupWindow(start=parsed_start, end=parsed_end, bucket=chosen)
 
 
 def parse_canonical_date_range(start_date: str | None, end_date: str | None) -> CanonicalDateRange | InvalidDateRange:
@@ -709,6 +750,15 @@ _GROUP_DATE_ENDPOINT: Final = 62  # 0b0111110
 _GROUP_DATE_ENDPOINT_API_KEY: Final = 30  # 0b0011110
 
 
+def _parse_bucket(value: str) -> date | datetime:
+    """Daily rows carry `YYYY-MM-DD`; ClickHouse rollups carry an ISO timestamp for sub-day buckets."""
+    return date.fromisoformat(value) if len(value) == 10 else datetime.fromisoformat(value)
+
+
+def _bucket_key(value: date | datetime) -> str:
+    return value.isoformat() if isinstance(value, datetime) else value.strftime("%Y-%m-%d")
+
+
 def _record_to_spend_metrics(record: RollupMetricsRow) -> SpendMetrics:
     """Build a SpendMetrics directly from one already-aggregated rollup row.
 
@@ -853,7 +903,7 @@ def _aggregate_grouping_sets_records_sync(
 
     results: Final = [
         DailySpendData(
-            date=datetime.strptime(date_str, "%Y-%m-%d").date(),
+            date=_parse_bucket(date_str),
             metrics=data["metrics"],
             breakdown=data["breakdown"],
         )
@@ -866,7 +916,7 @@ def _aggregate_grouping_sets_records_sync(
 
 async def _aggregate_grouping_sets_records(
     *,
-    repository: DailyActivityRepository,
+    repository: KeyMetadataReads,
     records: Sequence[GroupingSetsRow],
 ) -> _AggregatedSpendData:
     """Async wrapper: fetch api_key_metadata, then dispatch on a worker thread."""
@@ -987,7 +1037,7 @@ def _fold_entity_rollups_sync(
     entity_metadata_field: Mapping[str, dict[str, object]] | None,  # mutable-ok: shared field shape
 ) -> None:
     """Write breakdown.entities onto the already-built per-day results."""
-    by_date: Final = {day.date.strftime("%Y-%m-%d"): day for day in results}
+    by_date: Final = {_bucket_key(day.date): day for day in results}
 
     for row in entity_rows:
         day = by_date.get(row.date)
@@ -1014,8 +1064,8 @@ def _fold_entity_rollups_sync(
 
 
 async def get_daily_activity_aggregated(
-    repository: DailyActivityRepository,
-    scope: DailyActivityScope,
+    repository: AggregatedActivityReads[ScopeT],
+    scope: ScopeT,
     *,
     entity_metadata_field: Mapping[str, dict[str, object]] | None = None,
     include_entity_breakdown: bool = False,

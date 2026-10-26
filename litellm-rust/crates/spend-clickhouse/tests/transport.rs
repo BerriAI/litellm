@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
 use litellm_http::Client;
-use litellm_spend_clickhouse::{Config, Error, ensure_schema, insert_rows};
+use litellm_spend_clickhouse::{
+    Bucket, Config, Dimension, Error, RollupRequest, ensure_schema, fetch_rollup, insert_rows,
+};
 use rstest::rstest;
 use serde_json::json;
 use wiremock::{
@@ -133,4 +135,58 @@ fn invalid_configuration_is_rejected(
     #[case] retention: u32,
 ) {
     assert!(Config::new(database.into(), url, retention).is_err());
+}
+
+#[rstest]
+#[tokio::test]
+async fn spend_rollup_reads_through_bounded_readonly_query() {
+    use wiremock::matchers::body_string_contains;
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(query_param("readonly", "1"))
+        .and(query_param("database", "spend_test"))
+        .and(query_param("max_result_rows", "1000"))
+        .and(query_param("param_start_ms", "1000"))
+        .and(query_param("param_end_ms", "61000"))
+        .and(query_param("param_limit", "50"))
+        .and(query_param("param_filter_tag", "['prod','a\\'b']"))
+        .and(body_string_contains("GROUP BY bucket, tag, model ORDER BY bucket, tag, model"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{"meta":[],"data":[{"bucket":"2026-10-24 21:00:00","tag":"prod","model":"m","spend":1.5,"prompt_tokens":"1","completion_tokens":"2","cache_read_input_tokens":"0","cache_creation_input_tokens":"0","api_requests":"1","successful_requests":"1","failed_requests":"0","total_response_time_ms":"5","timed_requests":"1","distinct_api_keys":"1"}],"rows":1}"#,
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let config = Config::new("spend_test".into(), &server.uri(), 7).unwrap();
+    let request = RollupRequest {
+        start_ms: 1_000,
+        end_ms: 61_000,
+        bucket: Some(Bucket::Hour),
+        group_by: vec![Dimension::Tag, Dimension::Model],
+        filters: BTreeMap::from([(Dimension::Tag, vec!["prod".to_owned(), "a'b".to_owned()])]),
+        limit: 50,
+    };
+    let rows = fetch_rollup(
+        &Client::no_redirect_for_test(),
+        config.storage().reader(),
+        &request,
+    )
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].dimensions[&Dimension::Model], "m");
+    assert_eq!(rows[0].spend, 1.5);
+
+    let invalid = fetch_rollup(
+        &Client::no_redirect_for_test(),
+        config.storage().reader(),
+        &RollupRequest {
+            end_ms: 0,
+            ..request
+        },
+    )
+    .await;
+    assert!(matches!(invalid, Err(Error::InvalidRollup(_))));
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
 }

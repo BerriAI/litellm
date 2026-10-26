@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import Protocol, TypeAlias
+from typing import Protocol, TypeAlias, TypeVar
 
 
 class DailyActivityTable(str, Enum):
@@ -176,6 +176,23 @@ class AggregatedRows:
 
 
 SpendLogsWindow: TypeAlias = tuple[datetime, datetime]
+
+
+class KeyMetadataReads(Protocol):
+    async def key_metadata(
+        self, api_keys: frozenset[str], window: SpendLogsWindow | None
+    ) -> Mapping[str, KeyMetadataRow]: ...
+
+
+ScopeT = TypeVar("ScopeT", contravariant=True)
+
+
+class AggregatedActivityReads(KeyMetadataReads, Protocol[ScopeT]):
+    """What `get_daily_activity_aggregated` needs from a backend: rollup rows plus key metadata."""
+
+    async def aggregated(
+        self, scope: ScopeT, *, include_entity_breakdown: bool, api_key_limit: int
+    ) -> AggregatedRows: ...
 
 
 class DailyActivityProxyReads(Protocol):

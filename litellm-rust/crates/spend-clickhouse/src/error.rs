@@ -8,6 +8,8 @@ pub enum Error {
     InvalidSchema,
     #[error("ClickHouse insert exceeds the encoded size limit")]
     InsertTooLarge,
+    #[error("invalid ClickHouse rollup request: {0}")]
+    InvalidRollup(&'static str),
     #[error(transparent)]
     Storage(#[from] litellm_storage_clickhouse::Error),
     #[error(transparent)]

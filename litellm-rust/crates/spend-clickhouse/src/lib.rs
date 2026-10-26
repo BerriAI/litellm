@@ -1,10 +1,14 @@
 mod error;
 mod insert;
+mod rollup;
 mod schema;
 
 pub use error::Error;
 pub use insert::{encode_rows, insert_rows};
 use litellm_storage_clickhouse::Storage;
+pub use rollup::{
+    Bucket, Dimension, RollupQuery, RollupRequest, RollupRow, decode_rollup_rows, fetch_rollup,
+};
 pub use schema::ensure_schema;
 
 #[derive(Clone)]
