@@ -1508,6 +1508,44 @@ async def test_gemini_messages_count_tokens_reads_the_opt_out_of_the_deployment_
 
 
 @pytest.mark.asyncio
+async def test_gemini_messages_count_tokens_reads_the_opt_out_through_a_key_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A key alias resolves before the context-management lookup, so the target's drop is read.
+
+    With the alias unresolved, `get_routable_deployments` sees no deployment and the request's
+    context management reaches the counter even though the deployment it routes to drops it.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+
+    router: Final = Router(
+        model_list=[_gemini_deployment("gemini-agent", {"additional_drop_params": ["context_management"]})]
+    )
+    sent_context_management: Final[list[object]] = []
+
+    async def record(**kwargs):
+        sent_context_management.append(kwargs["context_management"])
+        return TokenCountResponse(
+            total_tokens=41, request_model="flash-alias", model_used="gemini", tokenizer_type="gemini_tokenizer"
+        )
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    with patch.object(proxy_server, "_try_provider_token_count", record):
+        response: Final = await _count_through_the_anthropic_route(
+            {
+                "model": "flash-alias",
+                "messages": [{"role": "user", "content": "Hello!"}],
+                "context_management": _CLEAR_TOOL_USES,
+            },
+            UserAPIKeyAuth(aliases={"flash-alias": "gemini-agent"}),
+        )
+
+    assert response == {"input_tokens": 41}
+    assert sent_context_management == [None]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("requested_model", "completion_model", "expected_tool_outputs_sent"),
     (("gemini-agent", "gemini-dropping", 3), ("gemini-dropping", "gemini-agent", 1)),
@@ -2137,3 +2175,37 @@ async def test_anthropic_count_tokens_reads_a_sibling_replicas_model_through_bef
         )
 
     assert response == {"input_tokens": 7}
+
+
+_DELETABLE_ROUTER_MODEL_LIST: Final = [
+    {
+        "model_name": "claude-sonnet-4-5",
+        "litellm_params": {"model": "claude-sonnet-4-5", "api_key": "test-key"},
+        "model_info": {"id": "dep-deleted"},
+    },
+]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_rejects_a_model_whose_only_deployment_was_deleted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deleting the last deployment makes the name unserved, so the count route 404s.
+
+    When the public name equals the deployment's litellm model, `Router.deployment_names` keeps
+    the entry after `delete_deployment` rebuilds the other indices, so a served check that reads
+    that list answers 200 for a name `acompletion` no longer serves.
+    """
+    router: Final = Router(model_list=_DELETABLE_ROUTER_MODEL_LIST)
+    router.delete_deployment(id="dep-deleted")
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+
+    response: Final = await _count_through_the_anthropic_route(
+        {"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "Hello!"}]},
+        UserAPIKeyAuth(),
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 404
+    assert json.loads(bytes(response.body))["error"]["type"] == "not_found_error"

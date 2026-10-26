@@ -14409,7 +14409,7 @@ def _count_route_model_is_served(llm_router: Router, model: str, team_id: str | 
     return (
         llm_router.has_model_id(model)
         or model in llm_router.team_public_model_names
-        or model in cast(Collection[str], llm_router.deployment_names)  # cast-ok: Router.deployment_names is untyped
+        or bool(llm_router._get_deployment_by_litellm_model(model))  # pyright: ignore[reportPrivateUsage, reportUnknownArgumentType, reportUnknownMemberType]  # the router's live lookup of a deployment's litellm model; deployment_names is append-only and survives a delete
         or bool(llm_router.get_candidate_model_ids_for_route(model, team_id))
     )
 
@@ -14664,12 +14664,12 @@ async def count_request_tokens(
     deployment: dict[str, Any] | None = None
     litellm_model_name = None
     model_info: ModelMapInfo | None = None
+    resolution_model: Final = _resolve_count_route_model(request.model, user_api_key_dict)
     if llm_router is not None:
         # An unserved model on the Anthropic count route is a 404, not a local estimate from an
         # unrelated tokenizer. pass_through_all_models opts out, as on the completion routes.
         pass_through_all_models: Final = llm_router.router_general_settings.pass_through_all_models
         request_kwargs: Final = dict(_count_route_request_kwargs(user_api_key_dict))
-        resolution_model: Final = _resolve_count_route_model(request.model, user_api_key_dict)
         if require_deployment and not pass_through_all_models:
             await _raise_if_count_route_model_unserved(
                 llm_router, resolution_model, request.model, _count_route_team_id(user_api_key_dict)
@@ -14728,7 +14728,7 @@ async def count_request_tokens(
             system=system,
             messages_format=messages_format,
             output_format=output_format,
-            context_management=_count_context_management(context_management, request.model, request_litellm_params),
+            context_management=_count_context_management(context_management, resolution_model, request_litellm_params),
         )
         if result is not None:
             return result
