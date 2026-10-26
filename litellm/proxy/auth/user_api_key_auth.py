@@ -1202,8 +1202,14 @@ def _has_required_baggage_tag_mapping() -> bool:
 
 
 async def user_api_key_auth_websocket_for_model(
-    websocket: WebSocket, model: str | None, *, close_on_auth_error: bool = True
+    websocket: WebSocket,
+    model: str | None,
+    *,
+    close_on_auth_error: bool = True,
+    accepted_authorization_schemes: tuple[str, ...] = ("Bearer",),
 ) -> UserAPIKeyAuth:
+    """``accepted_authorization_schemes`` are the ``Authorization`` schemes that may carry the LiteLLM key. A route
+    adds one only when a provider's own SDK sends it to the same path"""
     ws_scope: Final = websocket.scope or {}
     scope_headers: Final = list(ws_scope.get("headers") or [])
     # ``get_request_route`` falls back to ``request.url.path`` when
@@ -1246,12 +1252,15 @@ async def user_api_key_auth_websocket_for_model(
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             raise HTTPException(status_code=403, detail="No API key provided")
     else:
-        # Extract the API key from the Bearer token
-        if not authorization.startswith("Bearer "):
+        scheme_prefix: Final = next(
+            (f"{scheme} " for scheme in accepted_authorization_schemes if authorization.startswith(f"{scheme} ")),
+            None,
+        )
+        if scheme_prefix is None:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             raise HTTPException(status_code=403, detail="Invalid Authorization header format")
 
-        api_key = authorization[len("Bearer ") :].strip()
+        api_key = authorization[len(scheme_prefix) :].strip()
 
     # Call user_api_key_auth with the extracted API key
     # Note: You'll need to modify this to work with WebSocket context if needed

@@ -472,3 +472,49 @@ def test_deepgram_listen_echoes_the_browser_subprotocol_that_carries_the_litellm
         MappingProxyType({"Authorization": "Token dg-provider-key"})
     ]
     assert [call.forward_headers for call in relay.calls] == [False]
+
+
+def test_deepgram_listen_accepts_the_litellm_key_in_a_deepgram_sdk_token_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deepgram SDKs send ``Authorization: Token <key>``, so pointing one at the proxy with a LiteLLM key as its API
+    key must authenticate through the real key auth path and still send only the server's key upstream"""
+    monkeypatch.delenv("DEEPGRAM_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "max_budget", 0.0)
+    cache: Final = asyncio.run(_cache_restricted_key("sk-deepgram-sdk", ["nova-3"]))
+    relay: Final = _FakeRelay()
+    client: Final = TestClient(_app_with_relay(relay))
+
+    with (
+        patch(GET_CREDENTIALS, return_value="dg-provider-key"),
+        patch.multiple(  # test-quality-ok: the real key auth path reads these proxy_server globals and has no injection seam
+            "litellm.proxy.proxy_server",
+            master_key="sk-master",
+            prisma_client=MagicMock(),
+            user_api_key_cache=cache,
+            llm_model_list=None,
+            llm_router=None,
+        ),
+    ):
+        with client.websocket_connect(
+            "/deepgram/listen?model=nova-3", headers={"Authorization": "Token sk-deepgram-sdk"}
+        ):
+            pass
+
+    assert [(call.target, call.custom_headers) for call in relay.calls] == [
+        ("wss://api.deepgram.com/v1/listen?model=nova-3", MappingProxyType({"Authorization": "Token dg-provider-key"}))
+    ]
+
+
+def test_a_non_deepgram_websocket_route_still_refuses_a_token_header() -> None:
+    relay: Final = _FakeRelay()
+    client: Final = TestClient(_app_with_relay(relay))
+
+    with pytest.raises(WebSocketDisconnect) as disconnect:
+        with client.websocket_connect(
+            "/openai/v1/realtime?model=gpt-4o-realtime-preview", headers={"Authorization": "Token sk-litellm"}
+        ):
+            pass
+
+    assert disconnect.value.code == 1008
+    assert relay.calls == []

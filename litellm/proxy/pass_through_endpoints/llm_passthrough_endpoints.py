@@ -3450,9 +3450,14 @@ _DEEPGRAM_WS_UNPRICED_REASON: Final = (
 )
 
 
+_DEEPGRAM_WS_AUTHORIZATION_SCHEMES: Final = ("Bearer", "Token")
+
+
 async def deepgram_listen_user_api_key_auth(websocket: WebSocket) -> UserAPIKeyAuth:
     return await user_api_key_auth_websocket_for_model(
-        websocket, model=deepgram_listen_requested_model(websocket.url.query)
+        websocket,
+        model=deepgram_listen_requested_model(websocket.url.query),
+        accepted_authorization_schemes=_DEEPGRAM_WS_AUTHORIZATION_SCHEMES,
     )
 
 
