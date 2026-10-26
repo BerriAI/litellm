@@ -815,6 +815,31 @@ def test_responses_usage_tool_usage_web_search_billed_without_output_item(local_
         assert cost == pytest.approx(num_requests * per_call)
 
 
+
+@pytest.mark.parametrize("model", ["azure/gpt-5-mini", "azure/gpt-5.6-luna"])
+def test_azure_responses_web_search_billed_per_bing_request(local_model_cost_map, model):
+    """Azure OpenAI web_search is Grounding with Bing: $0.014 per reported Bing request, including rows
+    whose OpenAI twin prices search but the Azure row used to bill it at $0."""
+    for num_requests in (1, 5):
+        response = _openai_responses_response(
+            model,
+            [dict(_ASSISTANT_MESSAGE_OUTPUT_ITEM)],
+            usage={
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+                "tool_usage": {"web_search": {"num_requests": num_requests}},
+            },
+        )
+        cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+            model=model,
+            response_object=response,
+            usage=None,
+            custom_llm_provider="azure",
+            standard_built_in_tools_params=None,
+        )
+        assert cost == pytest.approx(num_requests * 0.014)
+
 def _image_gen_token_usage(input_text, input_image, output_image, output_text):
     return {
         "input_tokens": 10,
