@@ -53,7 +53,7 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return LlmProviders.HOSTED_VLLM
 
     def get_supported_openai_params(self, model: str) -> list[str]:
-        params = super().get_supported_openai_params(model)
+        params: Final = super().get_supported_openai_params(model)
         params.extend(HOSTED_VLLM_RESPONSES_SUPPORTED_PARAMS)
         return params
 
