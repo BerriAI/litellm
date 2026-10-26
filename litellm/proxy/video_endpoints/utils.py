@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 
-def extract_model_from_target_model_names(target_model_names: Any) -> str | None:
+def extract_model_from_target_model_names(target_model_names: object) -> str | None:
     if isinstance(target_model_names, str):
         model_names: Final = [m.strip() for m in target_model_names.split(",") if m.strip()]
         return model_names[0] if model_names else None
