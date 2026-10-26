@@ -32,6 +32,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm import get_llm_provider
 from litellm._auth.credential import scheme_credential
+from litellm._auth.key import stored_api_key
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
@@ -2777,8 +2778,7 @@ def _is_authenticated_caller_secret(value: str, user_api_key_dict: UserAPIKeyAut
     authenticated_key: Final = user_api_key_dict.api_key
     if authenticated_key is None:
         return False
-    stored_representation: Final = UserAPIKeyAuth._safe_hash_litellm_api_key(normalized)  # pyright: ignore[reportPrivateUsage]  # the exact transform auth applied when it stored api_key
-    return hmac.compare_digest(stored_representation.encode(), authenticated_key.encode())
+    return hmac.compare_digest(stored_api_key(normalized).encode(), authenticated_key.encode())
 
 
 def _caller_headers_without_litellm_secrets(

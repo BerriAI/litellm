@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, runtime_checka
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 import litellm
+from litellm._auth.key import HASHED_JWT_PREFIX
 from litellm._auth.key import is_master_key as is_master_key  # noqa: PLC0414  # public re-export
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -120,7 +121,7 @@ def _get_max_string_length_prompt_in_db() -> int:
 _is_master_key: Final = is_master_key
 
 
-_HASHED_JWT_RE = re.compile(r"hashed-jwt-[a-fA-F0-9]{64}")
+_HASHED_JWT_RE: Final = re.compile(rf"{HASHED_JWT_PREFIX}[a-fA-F0-9]{{64}}")
 _NON_SECRET_KEY_ALIASES: Final = frozenset(
     {
         LITELLM_PROXY_MASTER_KEY_ALIAS,
