@@ -75,6 +75,7 @@ beforeAll(() => {
 
 // Mock the networking module
 vi.mock("@/components/networking", () => ({
+  activityRollupCall: vi.fn(),
   dailyActivityAggregatedCall: vi.fn(),
   dailyActivityKeyPageCall: vi.fn(),
   userDailyActivityUserPageCall: vi.fn(),
@@ -516,6 +517,7 @@ describe("UsagePage", () => {
   };
 
   beforeEach(() => {
+    vi.mocked(networking.activityRollupCall).mockImplementation((...args) => mockDailyActivityAggregatedCall(...args));
     mockClientUsagePanel.mockClear();
     vi.mocked(processActivityData).mockReset();
     vi.mocked(processActivityData).mockImplementation((_data, key) => ({

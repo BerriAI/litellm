@@ -1394,6 +1394,24 @@ export const dailyActivityAggregatedCall = (
     query: dailyActivityQuery(entity, req, req.apiKeyLimit === undefined ? {} : { api_key_limit: req.apiKeyLimit }),
   });
 
+/** Sub-day usage from ClickHouse spend-log rollups; same response shape, `results[].date` is a bucket timestamp. */
+export const activityRollupCall = (
+  entity: DailyActivityEntity,
+  req: DailyActivityRequest,
+): Promise<DailyActivityAggregatedResponse> => {
+  const {
+    start_date: _start,
+    end_date: _end,
+    timezone: _timezone,
+    include_current_utc_day: _utcDay,
+    ...query
+  } = dailyActivityQuery(entity, req, req.apiKeyLimit === undefined ? {} : { api_key_limit: req.apiKeyLimit });
+  return apiClient.get<DailyActivityAggregatedResponse>(`/${entity}/activity/rollup`, {
+    accessToken: req.accessToken,
+    query: { ...query, start: req.startTime.toISOString(), end: req.endTime.toISOString() },
+  });
+};
+
 export const dailyActivityKeyPageCall = (
   entity: DailyActivityEntity,
   req: DailyActivityRequest,

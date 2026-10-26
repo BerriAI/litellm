@@ -7,7 +7,26 @@ export interface RelativeTimeOption {
   getValue: () => { from: Date; to: Date };
 }
 
+/** Widest window the sub-day (ClickHouse rollup) usage path serves; longer ranges use the daily tables. */
+export const SUB_DAY_MAX_RANGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * A range that does not start at a local midnight is a sub-day investigation window
+ * (Last 1h, 14:05 to 14:35): it is served from spend-log rollups and never snapped to day edges.
+ */
+export const isSubDayRange = (from: Date, to: Date): boolean =>
+  !moment(from).isSame(moment(from).startOf("day")) && to.getTime() - from.getTime() <= SUB_DAY_MAX_RANGE_MS;
+
+const lastMinutes = (minutes: number) => () => ({
+  from: moment().subtract(minutes, "minutes").toDate(),
+  to: moment().toDate(),
+});
+
 export const relativeTimeOptions: readonly RelativeTimeOption[] = [
+  { label: "Last 15 minutes", shortLabel: "15m", settingValue: "last_15_minutes", getValue: lastMinutes(15) },
+  { label: "Last hour", shortLabel: "1h", settingValue: "last_1_hour", getValue: lastMinutes(60) },
+  { label: "Last 6 hours", shortLabel: "6h", settingValue: "last_6_hours", getValue: lastMinutes(6 * 60) },
+  { label: "Last 24 hours", shortLabel: "24h", settingValue: "last_24_hours", getValue: lastMinutes(24 * 60) },
   {
     label: "Today",
     shortLabel: "today",

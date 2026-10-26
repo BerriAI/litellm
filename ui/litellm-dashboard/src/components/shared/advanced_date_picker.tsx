@@ -5,8 +5,10 @@ import type { DateRangePickerValue } from "./date_picker_types";
 import moment from "moment";
 import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 
-import { relativeTimeOptions, type RelativeTimeOption } from "./date_range_presets";
+import { relativeTimeOptions, type RelativeTimeOption, isSubDayRange } from "./date_range_presets";
 export { relativeTimeOptions, type RelativeTimeOption } from "./date_range_presets";
+
+const INPUT_FORMAT = "YYYY-MM-DDTHH:mm";
 
 interface AdvancedDatePickerProps {
   value: DateRangePickerValue;
@@ -70,8 +72,8 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
       return { isValid: true, error: "" };
     }
 
-    const start = moment(startDate, "YYYY-MM-DD");
-    const end = moment(endDate, "YYYY-MM-DD");
+    const start = moment(startDate, INPUT_FORMAT);
+    const end = moment(endDate, INPUT_FORMAT);
 
     if (!start.isValid() || !end.isValid()) {
       return { isValid: false, error: "Invalid date format" };
@@ -89,10 +91,10 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   // Initialize form inputs when component mounts or value changes
   useEffect(() => {
     if (value.from) {
-      setStartDate(moment(value.from).format("YYYY-MM-DD"));
+      setStartDate(moment(value.from).format(INPUT_FORMAT));
     }
     if (value.to) {
-      setEndDate(moment(value.to).format("YYYY-MM-DD"));
+      setEndDate(moment(value.to).format(INPUT_FORMAT));
     }
     setTempValue(value);
     setPickedPreset(presetShortLabel ?? null);
@@ -128,6 +130,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   // CRITICAL: Apply the same date adjustment logic as the original component
   const adjustDateRange = useCallback((newValue: DateRangePickerValue): DateRangePickerValue => {
     if (!newValue.from) return newValue;
+    if (isSubDayRange(newValue.from, newValue.to ?? newValue.from)) return newValue;
 
     const adjustedValue = { ...newValue };
     const adjustedStartTime = new Date(newValue.from);
@@ -165,8 +168,8 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
     setPickedPreset(option.shortLabel);
 
     // Update the form inputs to reflect the selection
-    setStartDate(moment(from).format("YYYY-MM-DD"));
-    setEndDate(moment(to).format("YYYY-MM-DD"));
+    setStartDate(moment(from).format(INPUT_FORMAT));
+    setEndDate(moment(to).format(INPUT_FORMAT));
 
     // Don't close the dropdown - let user click Apply to confirm
   };
@@ -175,11 +178,11 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
     try {
       if (startDate && endDate && validation.isValid) {
         // Set times to start and end of day
-        const from = moment(startDate, "YYYY-MM-DD").startOf("day");
-        const to = moment(endDate, "YYYY-MM-DD").endOf("day");
+        const from = moment(startDate, INPUT_FORMAT);
+        const to = moment(endDate, INPUT_FORMAT);
 
         if (from.isValid() && to.isValid()) {
-          const newValue = { from: from.toDate(), to: to.toDate() };
+          const newValue = adjustDateRange({ from: from.toDate(), to: to.toDate() });
           setTempValue(newValue);
 
           // Check if this matches any preset option
@@ -190,7 +193,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
     } catch (error) {
       console.warn("Invalid date format:", error);
     }
-  }, [startDate, endDate, validation.isValid, getMatchingOption, pickedPreset]);
+  }, [startDate, endDate, validation.isValid, getMatchingOption, pickedPreset, adjustDateRange]);
 
   // Update tempValue when inputs change
   useEffect(() => {
@@ -221,10 +224,10 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
 
     // Reset form inputs
     if (value.from) {
-      setStartDate(moment(value.from).format("YYYY-MM-DD"));
+      setStartDate(moment(value.from).format(INPUT_FORMAT));
     }
     if (value.to) {
-      setEndDate(moment(value.to).format("YYYY-MM-DD"));
+      setEndDate(moment(value.to).format(INPUT_FORMAT));
     }
 
     // Reset selected option
@@ -336,7 +339,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                     </label>
                     <input
                       id={`${inputId}-start`}
-                      type="date"
+                      type="datetime-local"
                       value={startDate}
                       onChange={(e) => {
                         setPickedPreset(null);
@@ -359,7 +362,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                     </label>
                     <input
                       id={`${inputId}-end`}
-                      type="date"
+                      type="datetime-local"
                       value={endDate}
                       onChange={(e) => {
                         setPickedPreset(null);

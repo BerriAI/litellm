@@ -64,6 +64,7 @@ beforeAll(() => {
 
 // Mock the networking module
 vi.mock("@/components/networking", () => ({
+  activityRollupCall: vi.fn(),
   dailyActivityAggregatedCall: vi.fn(),
   dailyActivityKeyPageCall: vi.fn(),
   dailyActivityKeySearchCall: vi.fn(),

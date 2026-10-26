@@ -17,6 +17,7 @@ vi.mock("@/app/(dashboard)/usage/_components/hooks/useAggregatedDailyActivity", 
 }));
 
 vi.mock("@/components/networking", () => ({
+  activityRollupCall: vi.fn(),
   dailyActivityAggregatedCall: vi.fn().mockResolvedValue({ results: [], metadata: {} }),
 }));
 

@@ -76,9 +76,20 @@ export interface Series {
 
 const seriesKey = (index: number) => `s${index}`;
 
+/** Daily rows carry `YYYY-MM-DD`; sub-day rollup buckets carry a UTC `YYYY-MM-DDTHH:mm:ss` timestamp. */
 const formatDayLabel = (date: string): string => {
-  const parsed = new Date(`${date}T00:00:00`);
+  const subDay = date.includes("T");
+  const parsed = new Date(subDay ? `${date}Z` : `${date}T00:00:00`);
   if (Number.isNaN(parsed.getTime())) return date;
+  if (subDay) {
+    return parsed.toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+  }
   return parsed.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 };
 

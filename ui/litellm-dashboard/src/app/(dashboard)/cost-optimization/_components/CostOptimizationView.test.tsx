@@ -11,6 +11,7 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 
 vi.mock("@/components/networking", () => ({
   organizationListCall: vi.fn().mockResolvedValue([]),
+  activityRollupCall: vi.fn(),
   dailyActivityAggregatedCall: vi.fn().mockResolvedValue({ results: [], metadata: {} }),
 }));
 

@@ -1,4 +1,5 @@
 import {
+  activityRollupCall,
   dailyActivityAggregatedCall,
   dailyActivityExportCall,
   dailyActivityKeyPageCall,
@@ -6,6 +7,7 @@ import {
   dailyActivityModelTopKeysCall,
 } from "@/components/networking";
 import type { EntityType } from "@/components/EntityUsageExport/types";
+import { isSubDayRange } from "@/components/shared/date_range_presets";
 import type {
   DailyActivityAggregatedResponse,
   DailyActivityEntity,
@@ -34,7 +36,10 @@ const entityApi = (
   entity: DailyActivityEntity,
   defaults?: Pick<DailyActivityRequest, "excludeEntityIds">,
 ): EntityApi => ({
-  aggregated: (req) => dailyActivityAggregatedCall(entity, { ...defaults, ...req }),
+  aggregated: (req) =>
+    entity !== "agent" && isSubDayRange(req.startTime, req.endTime)
+      ? activityRollupCall(entity, { ...defaults, ...req })
+      : dailyActivityAggregatedCall(entity, { ...defaults, ...req }),
   keyPage: (req, offset, limit) => dailyActivityKeyPageCall(entity, { ...defaults, ...req }, offset, limit),
   searchKeys: (req, search, limit) => dailyActivityKeySearchCall(entity, { ...defaults, ...req }, search, limit),
   modelTopKeys: (req, model, byModelGroup, limit) =>

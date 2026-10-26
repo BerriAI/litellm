@@ -141,8 +141,8 @@ describe("AdvancedDatePicker", () => {
 
     openDropdown(container);
 
-    const startDateInput = screen.getByDisplayValue("2025-01-01");
-    const endDateInput = screen.getByDisplayValue("2025-01-31");
+    const startDateInput = screen.getByDisplayValue("2025-01-01T12:00");
+    const endDateInput = screen.getByDisplayValue("2025-01-31T12:00");
 
     expect(startDateInput).toBeInTheDocument();
     expect(endDateInput).toBeInTheDocument();
@@ -153,10 +153,10 @@ describe("AdvancedDatePicker", () => {
 
     openDropdown(container);
 
-    const startDateInput = screen.getByDisplayValue("2025-01-01") as HTMLInputElement;
-    fireEvent.change(startDateInput, { target: { value: "2025-02-01" } });
+    const startDateInput = screen.getByDisplayValue("2025-01-01T12:00") as HTMLInputElement;
+    fireEvent.change(startDateInput, { target: { value: "2025-02-01T12:00" } });
 
-    expect(startDateInput.value).toBe("2025-02-01");
+    expect(startDateInput.value).toBe("2025-02-01T12:00");
   });
 
   it("should show Apply and Cancel buttons", () => {
@@ -211,8 +211,8 @@ describe("AdvancedDatePicker", () => {
     const today = moment().format("YYYY-MM-DD");
 
     openDropdown(container);
-    fireEvent.change(screen.getByDisplayValue("2025-01-01"), { target: { value: today } });
-    fireEvent.change(screen.getByDisplayValue("2025-01-31"), { target: { value: today } });
+    fireEvent.change(screen.getByDisplayValue("2025-01-01T12:00"), { target: { value: `${today}T00:00` } });
+    fireEvent.change(screen.getByDisplayValue("2025-01-31T12:00"), { target: { value: `${today}T23:59` } });
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
 
     expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), null);
@@ -289,7 +289,7 @@ describe("AdvancedDatePicker", () => {
     await user.keyboard("{Enter}");
 
     const presets = Array.from(container.querySelectorAll('[data-slot="advanced-date-picker-preset"]'));
-    expect(presets).toHaveLength(5);
+    expect(presets).toHaveLength(9);
 
     await user.tab();
     expect(presets[0]).toHaveFocus();
@@ -300,7 +300,7 @@ describe("AdvancedDatePicker", () => {
 
     await user.keyboard("{Enter}");
     expect(presets[1]).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByText("Last 7 days").closest("button")).toHaveClass("bg-info/10");
+    expect(screen.getByText("Last hour").closest("button")).toHaveClass("bg-info/10");
   });
 
   it("should show validation error for invalid date range", async () => {
@@ -308,12 +308,12 @@ describe("AdvancedDatePicker", () => {
 
     openDropdown(container);
 
-    const startDateInput = screen.getByDisplayValue("2025-01-01");
-    const endDateInput = screen.getByDisplayValue("2025-01-31");
+    const startDateInput = screen.getByDisplayValue("2025-01-01T12:00");
+    const endDateInput = screen.getByDisplayValue("2025-01-31T12:00");
 
     // Set end date before start date
-    fireEvent.change(startDateInput, { target: { value: "2025-12-01" } });
-    fireEvent.change(endDateInput, { target: { value: "2025-01-01" } });
+    fireEvent.change(startDateInput, { target: { value: "2025-12-01T12:00" } });
+    fireEvent.change(endDateInput, { target: { value: "2025-01-01T12:00" } });
 
     await waitFor(() => {
       expect(screen.getByText("End date cannot be before start date")).toBeInTheDocument();
@@ -325,12 +325,12 @@ describe("AdvancedDatePicker", () => {
 
     openDropdown(container);
 
-    const startDateInput = screen.getByDisplayValue("2025-01-01");
-    const endDateInput = screen.getByDisplayValue("2025-01-31");
+    const startDateInput = screen.getByDisplayValue("2025-01-01T12:00");
+    const endDateInput = screen.getByDisplayValue("2025-01-31T12:00");
 
     // Set end date before start date
-    fireEvent.change(startDateInput, { target: { value: "2025-12-01" } });
-    fireEvent.change(endDateInput, { target: { value: "2025-01-01" } });
+    fireEvent.change(startDateInput, { target: { value: "2025-12-01T12:00" } });
+    fireEvent.change(endDateInput, { target: { value: "2025-01-01T12:00" } });
 
     await waitFor(() => {
       // Find the button element (the Apply button's actual button element)
@@ -346,15 +346,15 @@ describe("AdvancedDatePicker", () => {
     await user.click(screen.getByRole("button", { expanded: false }));
     const start = screen.getByLabelText("Start date");
     const end = screen.getByLabelText("End date");
-    expect(start).toHaveValue("2025-01-01");
-    expect(end).toHaveValue("2025-01-31");
+    expect(start).toHaveValue("2025-01-01T12:00");
+    expect(end).toHaveValue("2025-01-31T12:00");
 
-    act(() => fireEvent.change(start, { target: { value: "2025-02-01" } }));
+    act(() => fireEvent.change(start, { target: { value: "2025-02-01T00:00" } }));
     expect(screen.getByText("End date cannot be before start date")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled();
     expect(mockOnValueChange).not.toHaveBeenCalled();
 
-    act(() => fireEvent.change(end, { target: { value: "2025-02-05" } }));
+    act(() => fireEvent.change(end, { target: { value: "2025-02-05T00:00" } }));
     expect(screen.queryByText("End date cannot be before start date")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Apply" })).toBeEnabled();
     expect(mockOnValueChange).not.toHaveBeenCalled();
