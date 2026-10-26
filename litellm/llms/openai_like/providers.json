@@ -249,5 +249,10 @@
       "/v1/responses",
       "/v1/messages"
     ]
+  },
+  "synthorai": {
+    "base_url": "https://synthorai.io/v1",
+    "api_key_env": "SYNTHORAI_API_KEY",
+    "api_base_env": "SYNTHORAI_API_BASE"
   }
 }
