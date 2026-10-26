@@ -47,6 +47,20 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uvx --python python3.13 --from maturin==1.15.0 --with puccinialin==0.1.14 \
         python -c "import maturin; maturin.build_wheel('/wheels')"
 
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/root/.cargo/git \
+    --mount=type=cache,target=/app/litellm-rust/target \
+    CARGO_BIN="$(find /root/.cache /root/.cargo /root/.rustup /usr/local \( -type f -o -type l \) -name cargo -print -quit)" && \
+    test -x "$CARGO_BIN" || { echo "Rust cargo executable was not found" >&2; exit 1; } && \
+    cd litellm-rust && \
+    PATH="$(dirname "$CARGO_BIN"):${PATH}" "$CARGO_BIN" build --locked --release -p litellm-gateway --bin litellm-gateway && \
+    mkdir -p /rust-gateway && \
+    cp target/release/litellm-gateway /rust-gateway/litellm-gateway && \
+    readelf -l /rust-gateway/litellm-gateway > /tmp/litellm-gateway-linkage && \
+    grep -q "Requesting program interpreter:" /tmp/litellm-gateway-linkage && \
+    readelf -d /rust-gateway/litellm-gateway >> /tmp/litellm-gateway-linkage && \
+    grep -q "(NEEDED)" /tmp/litellm-gateway-linkage
+
 # ---------- Builder ----------
 FROM $LITELLM_BUILD_IMAGE AS builder
 
@@ -148,12 +162,13 @@ COPY --from=builder --chown=nonroot:nonroot /app/docker/component_entrypoint.sh 
 COPY --from=builder --chown=nonroot:nonroot /app/schema.prisma /app/schema.prisma
 COPY --from=builder /opt/prisma /opt/prisma
 COPY --from=pgbouncer-builder /usr/local/bin/pgbouncer /usr/local/bin/pgbouncer
+COPY --from=rust-native /rust-gateway/litellm-gateway /usr/local/bin/litellm-gateway
 
-RUN find /app/.venv -type f -path "*/tornado/test/*" -delete && \
-    find /app/.venv -type d -path "*/tornado/test" -delete && \
+RUN find /app/.venv -type d -path "*/tornado/test" -prune -exec rm -r {} \; && \
     chmod -R a+rX /opt/prisma && \
     python -c "from prisma.client import BINARY_PATHS; paths = list(BINARY_PATHS.query_engine.values()); assert paths and all(p.startswith('/opt/prisma/') for p in paths), paths" && \
-    python -c "import litellm; from litellm.rust_bridge.loader import native_bridge_available; assert litellm.__file__ == '/app/litellm/__init__.py', litellm.__file__; assert native_bridge_available()"
+    python -c "import litellm; from litellm.rust_bridge.loader import native_bridge_available; assert litellm.__file__ == '/app/litellm/__init__.py', litellm.__file__; assert native_bridge_available()" && \
+    if LITELLM_RUST_GATEWAY=true /usr/local/bin/litellm-gateway 2>&1 | grep -Fq "Error: PythonUpstreamConfig"; then :; else exit 1; fi
 
 USER nonroot
 

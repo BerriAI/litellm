@@ -1,4 +1,16 @@
 {{- if .Values.gateway.enabled }}
+{{- $rustGatewayEnabled := eq (include "litellm.gateway.rustGatewayEnabled" . | trim) "true" }}
+{{- $pythonPort := 4002 }}
+{{- $configuredGrace := .Values.gateway.terminationGracePeriodSeconds }}
+{{- $gracePeriod := 30 }}
+{{- if not (or (kindIs "invalid" $configuredGrace) (eq (printf "%v" $configuredGrace) "")) }}
+{{- $gracePeriod = int $configuredGrace }}
+{{- end }}
+{{- range .Values.gateway.extraEnv }}
+{{- if and (eq .name "LITELLM_RUST_GATEWAY_PYTHON_PORT") .value }}
+{{- $pythonPort = int .value }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -79,9 +91,16 @@ spec:
             {{- if eq (int .Values.gateway.metricsServer.port) 4000 }}
             {{- fail "gateway.metricsServer.port must differ from the gateway port 4000" }}
             {{- end }}
+            {{- if and $rustGatewayEnabled (eq (int .Values.gateway.metricsServer.port) $pythonPort) }}
+            {{- fail "gateway.metricsServer.port must differ from the private Python gateway port" }}
+            {{- end }}
             - name: PROMETHEUS_MULTIPROC_DIR
               value: {{ include "litellm.gateway.prometheusMultiprocDir" . }}
+            - name: LITELLM_GATEWAY_METRICS_PORT
+              value: {{ .Values.gateway.metricsServer.port | quote }}
             {{- end }}
+            - name: LITELLM_RUST_GATEWAY_TERMINATION_GRACE_SECONDS
+              value: {{ $gracePeriod | quote }}
             {{- if .Values.gateway.collector.enabled }}
             {{- include "litellm.gateway.collectorEnv" . | nindent 12 }}
             {{- end }}
@@ -245,8 +264,5 @@ spec:
       topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- $gracePeriod := .Values.gateway.terminationGracePeriodSeconds }}
-      {{- if not (or (kindIs "invalid" $gracePeriod) (eq (printf "%v" $gracePeriod) "")) }}
       terminationGracePeriodSeconds: {{ $gracePeriod }}
-      {{- end }}
 {{- end }}

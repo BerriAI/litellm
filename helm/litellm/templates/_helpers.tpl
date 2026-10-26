@@ -599,6 +599,14 @@ ImplementationSpecific
 
 {{- define "litellm.gateway.prometheusMultiprocDir" -}}/tmp/litellm_prometheus_multiproc{{- end -}}
 
+{{- define "litellm.gateway.rustGatewayEnabled" -}}
+{{- range .Values.gateway.extraEnv -}}
+{{- if and (eq .name "LITELLM_RUST_GATEWAY") (eq (toString .value) "true") -}}
+true
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/*
 Directory of the collector's unix socket, shared by the gateway and
 collector containers through an emptyDir. Empty when the sidecar is off

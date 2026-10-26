@@ -12,6 +12,7 @@ envy = "0.4.2"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["http1"] }
 hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] }
+ipnet = "2.12"
 litellm-core-utils.workspace = true
 litellm-inference.workspace = true
 litellm-gateway-inference.workspace = true

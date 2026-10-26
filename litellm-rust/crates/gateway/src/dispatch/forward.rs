@@ -53,6 +53,7 @@ pub struct InvalidUpstream {
 pub struct Forward {
     client: Arc<Client<HttpConnector, Body>>,
     authority: Authority,
+    trusted_proxies: Option<crate::proxy_headers::TrustedProxies>,
 }
 
 impl Forward {
@@ -72,7 +73,13 @@ impl Forward {
         Ok(Self {
             client: Arc::new(Client::builder(TokioExecutor::new()).build(HttpConnector::new())),
             authority,
+            trusted_proxies: None,
         })
+    }
+
+    pub fn with_trusted_proxies(mut self, proxies: &str) -> Result<Self, crate::Error> {
+        self.trusted_proxies = Some(crate::proxy_headers::TrustedProxies::parse(proxies)?);
+        Ok(self)
     }
 
     pub(super) async fn send(&self, mut request: Request, decline: Decline) -> Response {
@@ -126,8 +133,14 @@ impl Forward {
         if websocket.is_some() {
             websocket_headers(&mut parts.headers);
         }
-        if let Some(ConnectInfo(client)) = parts.extensions.get::<ConnectInfo<SocketAddr>>() {
-            append_forwarded_for(&mut parts.headers, *client);
+        let peer = parts
+            .extensions
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|info| info.0);
+        if let Some(policy) = &self.trusted_proxies {
+            policy.apply(&mut parts.headers, peer);
+        } else if let Some(client) = peer {
+            append_forwarded_for(&mut parts.headers, client);
         }
         parts
             .headers
