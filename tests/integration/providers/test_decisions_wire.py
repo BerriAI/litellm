@@ -660,3 +660,22 @@ def test_a_deployment_whose_provider_has_no_decisions_support_is_refused_naming_
         for provider in _PROVIDERS:
             assert provider.name in response.text, response.text
         assert _upstream_calls(gateway, handle) == []
+
+
+def test_typesafe_gateway_preserves_missing_usage(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        body = {"model": "jev-1.13.0", "answers": {"exp": {"type": "noul", "noul": 0.8}}}
+        handle = _register(scenario, body)
+        model = _deployment(scenario, handle, _PROVIDERS[1])
+        response = gateway.request(
+            "POST",
+            "/v1/systemone",
+            {
+                "model": model,
+                "state": {"finding": "x"},
+                "questions": {"exp": {"type": "noul", "instructions": "Is it exploitable?"}},
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["usage"] is None
+        assert response.json()["answers"] == body["answers"]

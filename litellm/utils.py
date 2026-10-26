@@ -6842,6 +6842,18 @@ def get_model_info_helper(
                 cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority=_model_info.get(
                     "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority", None
                 ),
+                cache_creation_input_token_cost_above_12hr_batches=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_batches", None
+                ),
+                cache_creation_input_token_cost_above_12hr_ultrafast=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_ultrafast", None
+                ),
+                cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches", None
+                ),
+                cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast", None
+                ),
                 off_peak_pricing=_model_info.get("off_peak_pricing", None),
                 input_cost_per_character=_model_info.get("input_cost_per_character", None),
                 input_cost_per_token_above_128k_tokens=_model_info.get("input_cost_per_token_above_128k_tokens", None),
