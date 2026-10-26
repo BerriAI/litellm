@@ -334,19 +334,19 @@ class ResponsesAPIRequestUtils:
         """
         from litellm.utils import PreProcessNonDefaultParams
 
-        valid_keys: Final[set[str]] = set(get_type_hints(ResponsesAPIOptionalRequestParams).keys())
+        valid_keys: Final[frozenset[str]] = frozenset(get_type_hints(ResponsesAPIOptionalRequestParams).keys())
         custom_llm_provider: Final = params.pop("custom_llm_provider", None)
         special_params: Final[dict[str, object]] = params.pop("kwargs", {})
 
         allowed_openai_params: Final[object] = params.get("allowed_openai_params") or special_params.get(
             "allowed_openai_params"
         )
-        allowed_set: Final[set[str]] = (  # mutable-ok: set accumulator
-            {str(p) for p in allowed_openai_params if isinstance(p, str)}
-            if isinstance(allowed_openai_params, (list, tuple, set))
-            else set()
+        allowed_set: Final[frozenset[str]] = (
+            frozenset(p for p in allowed_openai_params if isinstance(p, str))  # pyright: ignore[reportUnknownVariableType]  # element type is dynamic
+            if isinstance(allowed_openai_params, (list, tuple, set, frozenset))
+            else frozenset()
         )
-        default_keys: Final[set[str]] = valid_keys | allowed_set
+        default_keys: Final[frozenset[str]] = valid_keys | allowed_set
 
         additional_drop_params: Final[list[str] | None] = params.pop("additional_drop_params", None)
         non_default_params: Final = _apply_nested_drop_params(
