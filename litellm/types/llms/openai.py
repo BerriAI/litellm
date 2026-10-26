@@ -1803,7 +1803,7 @@ class ContentPartDonePartOutputText(BaseLiteLLMOpenAIResponseObject):
     type: Literal["output_text"]
     text: str
     annotations: list[BaseLiteLLMOpenAIResponseObject]
-    logprobs: list[OpenAIChatCompletionLogprobsContent] | None
+    logprobs: list[OpenAIChatCompletionLogprobsContent] | None = None
 
 
 class ContentPartDonePartRefusal(BaseLiteLLMOpenAIResponseObject):
