@@ -5748,8 +5748,8 @@ class Router:
             )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
-            data: Final = deployment["litellm_params"].copy()
-            model_name = data["model"]  # rebind-ok: assigned inside try so except can attribute the failure
+            data: Final = deployment["litellm_params"]  # not mutated; the call below merges into a new dict
+            model_name = cast(str, data["model"])  # rebind-ok: assigned inside try so except can attribute the failure
             self.total_calls[model_name] += 1
 
             ### DEPLOYMENT-SPECIFIC PRE-CALL CHECKS ### (e.g. update rpm pre-call. Raise error, if deployment over limit)
