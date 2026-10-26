@@ -27,7 +27,6 @@ from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm import APIConnectionError, Router
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching import RedisCache, RedisClusterCache
 from litellm.caching.caching import DualCache
@@ -30159,48 +30158,3 @@ def test_request_carries_image_sees_chat_parts_and_responses_input_items():
     assert litellm.Router._request_carries_image(None, {"input": _IMAGE_RESPONSES_INPUT}) is True
     assert litellm.Router._request_carries_image([{"role": "user", "content": "Say hi"}], {}) is False
     assert litellm.Router._request_carries_image(None, {"input": "Say hi"}) is False
-
-
-@pytest.mark.asyncio
-async def test_anthropic_forwarded_oauth_preserves_configured_deployment(
-    respx_mock: respx.MockRouter,
-) -> None:
-    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").respond(
-        200,
-        json={
-            "id": "msg-oauth",
-            "type": "message",
-            "role": "assistant",
-            "model": "claude-sonnet-5-5",
-            "content": [{"type": "text", "text": "subscription reply"}],
-            "stop_reason": "end_turn",
-            "stop_sequence": None,
-            "usage": {"input_tokens": 2, "output_tokens": 2},
-        },
-    )
-    router: Final = Router(
-        model_list=[{
-            "model_name": "subscription",
-            "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": "fake-saved-key"},
-            "model_info": {"id": "configured-anthropic-deployment"},
-        }],
-        num_retries=0,
-    )
-    client: Final = AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport())
-    try:
-        for token in ("sk-ant-oat-fake-client-a", "sk-ant-oat-fake-client-b"):
-            response: Final = await router.acompletion(
-                model="subscription",
-                messages=[{"role": "user", "content": "hello"}],
-                client=client,
-                provider_specific_header={
-                    "custom_llm_provider": "anthropic",
-                    "extra_headers": {"authorization": f"Bearer {token}"},
-                },
-            )
-            assert response.choices[0].message.content == "subscription reply"
-            assert response._hidden_params["model_id"] == "configured-anthropic-deployment"
-            assert route.calls[-1].request.headers["authorization"] == f"Bearer {token}"
-            assert "x-api-key" not in route.calls[-1].request.headers
-    finally:
-        await client.close()

@@ -563,6 +563,7 @@ _ALIAS_PARAMS_NEVER_FORWARDED: Final = frozenset(
     {"model", "api_base", "api_key", "api_version", "responses_api_version"}
 )
 _ALIAS_MARKER_FORWARDED_PARAMS_KWARG: Final = "_alias_marker_forwarded_params"
+_FORWARDED_CREDENTIAL_ISOLATION_PROVIDERS: Final = frozenset({"chatgpt"})
 _CLAUDE_CODE_SESSION_ID_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
 _CLAUDE_CODE_SESSION_ROUTER_TTL_SECONDS: Final = 3600
 CLAUDE_CODE_SESSION_ROUTER_BINDING_TARGET: Final = "claude_code_session_router_binding"
@@ -4822,7 +4823,7 @@ class Router:
             ProviderSpecificHeaderUtils.forwarded_authorization(
                 request_context.get("provider_specific_header"), deployment_provider
             )
-            if deployment_provider == "chatgpt"
+            if deployment_provider in _FORWARDED_CREDENTIAL_ISOLATION_PROVIDERS
             else None
         )
         if is_clientside_credential(request_kwargs=kwargs) or forwarded_authorization is not None:
