@@ -25,6 +25,7 @@ from litellm_proxy_extras._logging import logger
 
 if TYPE_CHECKING:
     import psycopg
+    from psycopg import sql
 
 BTREE_MAX_ENTRY_BYTES: Final = 2704
 DB_PREFLIGHT_TIMEOUT_ENV_VAR: Final = "LITELLM_DB_PREFLIGHT_TIMEOUT"
@@ -284,7 +285,7 @@ def column_type_lookup(connection: "psycopg.Connection[tuple[object, ...]]", sch
         ).fetchone()
         if row is None:
             return None
-        return ColumnType(str(row[0]), int(row[1]) if row[1] is not None else None)
+        return ColumnType(str(row[0]), row[1] if isinstance(row[1], int) else None)
 
     return lookup
 
@@ -305,7 +306,7 @@ def _index_is_valid(connection: "psycopg.Connection[tuple[object, ...]]", schema
     return row is not None and bool(row[0])
 
 
-def _count_query(check: Check, schema: str) -> "psycopg.sql.Composed":
+def _count_query(check: Check, schema: str) -> "sql.Composed":
     from psycopg import sql
 
     table: Final = sql.Identifier(schema, check.table)
@@ -342,7 +343,8 @@ def _count_query(check: Check, schema: str) -> "psycopg.sql.Composed":
             ).format(t=table, present=present, ref=sql.Identifier(schema, check.referenced_table or ""), pairs=pairs)
         case "check_violations":
             return sql.SQL("SELECT count(*) FROM {t} WHERE NOT ({expr})").format(
-                t=table, expr=sql.SQL(check.expression or "true")
+                t=table,
+                expr=sql.SQL(check.expression or "true"),  # pyright: ignore[reportArgumentType]  # copied from our own migration file
             )
 
 
@@ -376,12 +378,13 @@ def _run_check(
         row: Final = connection.execute(_count_query(check, schema)).fetchone()
     except psycopg.errors.QueryCanceled:
         return CouldNotVerify(check, timeout_seconds)
-    if row is None or int(row[0]) == 0:  # pyright: ignore[reportArgumentType]  # count(*) is an int
+    rows: Final = row[0] if row is not None and isinstance(row[0], int) else 0
+    longest: Final = row[1] if row is not None and len(row) > 1 else None
+    if rows == 0:
         return None
-    rows: Final = int(row[0])  # pyright: ignore[reportArgumentType]  # count(*) is an int
     match check.kind:
         case "too_long":
-            return BlockedChange(check, rows, f"longer than {BTREE_MAX_ENTRY_BYTES} bytes, longest {row[1]} bytes")
+            return BlockedChange(check, rows, f"longer than {BTREE_MAX_ENTRY_BYTES} bytes, longest {longest} bytes")
         case "duplicates":
             return BlockedChange(check, rows, "duplicated value groups")
         case "nulls":
