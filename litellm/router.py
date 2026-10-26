@@ -98,7 +98,9 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, r
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     declared_authenticating_provider,
+    inferred_provider,
     is_registered_custom_provider,
+    resolve_model_and_provider_for_metadata,
 )
 from litellm.litellm_core_utils.hidden_params import (
     HIDDEN_PARAMS_ATTR as _HIDDEN_PARAMS_ATTR,
@@ -561,6 +563,7 @@ _ALIAS_PARAMS_NEVER_FORWARDED: Final = frozenset(
     {"model", "api_base", "api_key", "api_version", "responses_api_version"}
 )
 _ALIAS_MARKER_FORWARDED_PARAMS_KWARG: Final = "_alias_marker_forwarded_params"
+_FORWARDED_CREDENTIAL_ISOLATION_PROVIDERS: Final = frozenset({"chatgpt"})
 _CLAUDE_CODE_SESSION_ID_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
 _CLAUDE_CODE_SESSION_ROUTER_TTL_SECONDS: Final = 3600
 CLAUDE_CODE_SESSION_ROUTER_BINDING_TARGET: Final = "claude_code_session_router_binding"
@@ -4801,9 +4804,39 @@ class Router:
         deployment_litellm_model_name = deployment["litellm_params"]["model"]
         deployment_api_base = deployment["litellm_params"].get("api_base")
         deployment_model_name: Final = deployment["model_name"]
-        if is_clientside_credential(request_kwargs=kwargs):
+        from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
+
+        request_context: Final = cast(  # cast-ok: the router's legacy request dict has string keys
+            Mapping[str, object], kwargs
+        )
+        raw_deployment_params: Final[object] = deployment["litellm_params"]
+        deployment_context: Final = _LITELLM_PARAMS_ADAPTER.validate_python(
+            raw_deployment_params.model_dump(exclude_none=True)
+            if isinstance(raw_deployment_params, LiteLLM_Params)
+            else raw_deployment_params
+        )
+        declared_provider: Final = deployment_context.get("custom_llm_provider")
+        declared_model: Final = deployment_context.get("model")
+        deployment_provider: Final = (
+            declared_provider
+            if isinstance(declared_provider, str)
+            else inferred_provider(declared_model if isinstance(declared_model, str) else None)
+        )
+        forwarded_authorization: Final = (
+            ProviderSpecificHeaderUtils.forwarded_authorization(
+                request_context.get("provider_specific_header"), deployment_provider
+            )
+            if deployment_provider in _FORWARDED_CREDENTIAL_ISOLATION_PROVIDERS
+            else None
+        )
+        if is_clientside_credential(request_kwargs=kwargs) or forwarded_authorization is not None:
             deployment_pydantic_obj: Final = self._handle_clientside_credential(
-                deployment=deployment, kwargs=kwargs, function_name=function_name
+                deployment=deployment,
+                kwargs={
+                    **kwargs,
+                    **({"api_key": forwarded_authorization} if forwarded_authorization is not None else {}),
+                },
+                function_name=function_name,
             )
             model_info = deployment_pydantic_obj.model_info.model_dump()
             deployment_litellm_model_name = deployment_pydantic_obj.litellm_params.model
@@ -11048,6 +11081,10 @@ class Router:
             custom_llm_provider = None
             dynamic_api_key = None
             api_base = None
+        elif declared_authenticating_provider(litellm_model, deployment.litellm_params.custom_llm_provider) is not None:
+            _model, custom_llm_provider = (  # rebind-ok: each branch resolves the deployment provider
+                self._model_group_llm_provider(deployment.litellm_params)
+            )
         else:
             # check if model provider in supported providers
             (
@@ -12401,6 +12438,17 @@ class Router:
             )
         return model_info
 
+    @staticmethod
+    def _model_group_llm_provider(litellm_params: LiteLLM_Params) -> tuple[str, str]:
+        try:
+            return resolve_model_and_provider_for_metadata(
+                model=litellm_params.model,
+                custom_llm_provider=litellm_params.custom_llm_provider,
+            )
+        except litellm.exceptions.BadRequestError as e:
+            verbose_router_logger.error("litellm.router.py::get_model_group_info() - %s", e)
+            return "", ""
+
     def _set_model_group_info(
         self, model_group: str, user_facing_model_group_name: str, team_id: str | None = None
     ) -> ModelGroupInfo | None:
@@ -12489,15 +12537,7 @@ class Router:
             deployment_is_mapped = deployment_is_catalog_mapped(model_info, model_info_dict)
 
             # get llm provider
-            litellm_model, llm_provider = "", ""
-            try:
-                litellm_model, llm_provider, _, _ = litellm.get_llm_provider(
-                    model=litellm_params.model,
-                    custom_llm_provider=litellm_params.custom_llm_provider,
-                    litellm_params=litellm_params,
-                )
-            except litellm.exceptions.BadRequestError as e:
-                verbose_router_logger.error("litellm.router.py::get_model_group_info() - %s", e)
+            litellm_model, llm_provider = self._model_group_llm_provider(litellm_params)
 
             if model_info is None:
                 supported_openai_params = litellm.get_supported_openai_params(

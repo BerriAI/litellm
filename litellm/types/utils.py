@@ -4360,6 +4360,7 @@ server_owned_wif_litellm_params: Final = (
     + openai_wif_litellm_params
     + oauth_token_exchange_litellm_params
     + github_copilot_oauth_litellm_params
+    + ("chatgpt_auth_file",)
 )
 secret_bearing_wif_litellm_params: Final = tuple(sorted(WIF_SECRET_BEARING_KEYS))
 

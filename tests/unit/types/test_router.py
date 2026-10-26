@@ -16,8 +16,8 @@ from litellm.types.router import (
     holds_secret_pointer,
     reject_server_owned_wif_params,
     server_owned_wif_fields_named,
-    server_owned_wif_fields_written,
     server_owned_wif_fields_present,
+    server_owned_wif_fields_written,
 )
 from litellm.types.utils import (
     CustomPricingLiteLLMParams,
@@ -367,6 +367,7 @@ def test_server_owned_registry_includes_anthropic_openai_and_oauth_token_exchang
         + openai_wif_litellm_params
         + oauth_token_exchange_litellm_params
         + github_copilot_oauth_litellm_params
+        + ("chatgpt_auth_file",)
     )
     assert set(openai_wif_litellm_params) == {
         "openai_identity_provider_id",
