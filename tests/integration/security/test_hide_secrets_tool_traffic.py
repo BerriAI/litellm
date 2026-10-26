@@ -14,6 +14,7 @@ from typing import Final
 import httpx
 import pytest
 import yaml
+from integration._support.budget import case_timeout_seconds
 from integration._support.client import Gateway
 from integration._support.database import scratch_database
 from integration._support.process import OwnedProxy, owned_proxy_process
@@ -172,6 +173,7 @@ def tool_rig(
                 child_environment,
                 config=config,
                 workers=workers,
+                client_timeout=case_timeout_seconds(),
             ) as owned:
                 yield Rig(owned.gateway, wire, database, owned, child_environment)
 

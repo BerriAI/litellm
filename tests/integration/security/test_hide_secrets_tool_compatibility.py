@@ -14,7 +14,8 @@ import anthropic
 import httpx
 import openai
 import pytest
-from integration._support.client import eventually
+from integration._support.budget import case_timeout_seconds
+from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request
 from integration.security.test_hide_secrets_tool_traffic import (
@@ -491,9 +492,12 @@ def test_surviving_worker_redacts_mixed_burst_and_replacement_recovers(isolated_
         index, marker = item
         provider: Final = "anthropic" if index % 2 else "openai"
         path: Final = "/v1/messages" if provider == "anthropic" else "/v1/chat/completions"
-        response: Final = caller.rig.proxy.request(
-            "POST", path, _body(provider, marker, stream=index % 3 == 0), key=caller.key
-        )
+        proxy: Final = caller.rig.proxy
+        # a new connection per call: a pooled keep-alive socket to the killed worker can outlive the kill
+        with httpx.Client(base_url=proxy.client.base_url, timeout=case_timeout_seconds(), trust_env=False) as client:
+            response: Final = Gateway(client, proxy.key, proxy.upstream_url).request(
+                "POST", path, _body(provider, marker, stream=index % 3 == 0), key=caller.key
+            )
         assert response.status_code == 200 and "accepted" in response.text, response.text
         return marker, f"{'msg' if provider == 'anthropic' else 'chatcmpl'}_{marker}"
 
