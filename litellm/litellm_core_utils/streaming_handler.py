@@ -2010,6 +2010,8 @@ class CustomStreamWrapper:
                 if self.stream_options is None:  # add usage as hidden param
                     usage = calculate_total_usage(chunks=self.chunks)
                     processed_chunk.hidden_params["usage"] = usage
+                elif self._continuous_usage_stats:
+                    processed_chunk.usage = calculate_total_usage(chunks=self.chunks)
                 ## LOGGING
                 executor.submit(
                     self.run_success_logging_and_cache_storage,
@@ -2289,6 +2291,8 @@ class CustomStreamWrapper:
                     dict[str, object], getattr(processed_chunk, HIDDEN_PARAMS_ATTR)
                 )
                 processed_chunk_hidden_params["usage"] = usage
+            elif self._continuous_usage_stats:
+                processed_chunk.usage = calculate_total_usage(chunks=self.chunks)
             # see sync __next__'s sibling branch: deliberately do NOT restore
             # here - this chunk is still this call's own data, and restoring
             # before returning it would corrupt the caller's own log

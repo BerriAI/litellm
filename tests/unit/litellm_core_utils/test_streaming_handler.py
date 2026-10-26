@@ -6774,7 +6774,10 @@ async def test_continuous_usage_stats_finishes_before_the_final_usage_chunk(sync
     assert finish_indexes[0] < len(emitted) - 1
     terminal_chunk: Final = emitted[-1]
     assert not (terminal_chunk.choices and terminal_chunk.choices[0].finish_reason)
-    assert terminal_chunk.usage.total_tokens == final_usage["total_tokens"]
+    assert [chunk.usage.total_tokens for chunk in emitted] == [
+        content_usage["total_tokens"],
+        *[final_usage["total_tokens"]] * 3,
+    ]
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
