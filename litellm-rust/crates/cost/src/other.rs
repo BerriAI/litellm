@@ -361,7 +361,11 @@ impl OtherContext {
                     charge.source_id = self.sources.first().map(|source| source.id.clone());
                     charge
                 })
-                .or_else(|| self.flat(prices, meter, when.channel));
+                .or_else(|| {
+                    (1..self.sources.len())
+                        .find_map(|row| self.row_rate(prices, row, meter, when.channel, Band::Base))
+                })
+                .or_else(|| self.default(prices, meter));
         }
         match &self.selection {
             OtherSelection::SearchTiers
@@ -982,6 +986,60 @@ mod tests {
         };
         assert_eq!(pricing.total.get(), 22.0);
         assert_eq!(pricing.lines[0].source_id, result.rates[0].source_id);
+    }
+
+    #[rstest]
+    #[case::input(INPUT)]
+    #[case::output(OUTPUT)]
+    fn token_context_preserves_selected_null(
+        context: OtherContext,
+        when: When,
+        #[case] meter: Meter,
+        #[values(OtherSelection::Additive, OtherSelection::PromptUnits)] selection: OtherSelection,
+        #[values(0, 10)] count: u64,
+        #[values(0.0, 1.1)] factor: f64,
+    ) {
+        let prices = prices([(meter.clone(), Channel::Online, 2.0)]);
+        let tokens = TokenPriceSources {
+            tiers: vec![crate::TokenTier {
+                range: [0, 100],
+                meters: [INPUT, OUTPUT].into(),
+            }],
+            ..Default::default()
+        };
+        let context = OtherContext {
+            selection,
+            ..context
+        };
+        let usage = Usage {
+            quantities: [(meter.clone(), count.into())].into(),
+            prompt_tokens: 10,
+            ..Default::default()
+        };
+        let result = calculate_with_rates(
+            &prices,
+            &usage,
+            &when,
+            SelectionPolicy::SdkOther {
+                tokens: &tokens,
+                context: &context,
+            },
+            std::slice::from_ref(&meter),
+            &[ScaleFactor::new(factor).unwrap()],
+        )
+        .unwrap();
+        assert!(result.rates[0].resolved.is_none());
+        match result.pricing {
+            Priced::Known(pricing) => {
+                assert_eq!(count, 0);
+                assert_eq!(pricing.total.get(), 0.0);
+            }
+            Priced::Unpriced { missing, partial } => {
+                assert_eq!(count, 10);
+                assert_eq!(missing, [meter]);
+                assert_eq!(partial.total.get(), 0.0);
+            }
+        }
     }
 
     #[rstest]

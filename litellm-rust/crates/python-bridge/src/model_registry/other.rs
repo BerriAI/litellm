@@ -11,8 +11,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBool, PyDict, PyMapping};
 
-use super::live::{RowErrors, parse_meter, row_fields};
-use super::row_error;
+use super::live::{RowErrors, parse_meter, row_errors, row_fields};
 
 #[derive(Clone, Copy)]
 pub(super) struct LegacyCount {
@@ -338,11 +337,9 @@ impl OtherMeterInput {
         row: &Bound<'_, PyAny>,
     ) -> Result<(Model, OtherContext), RowErrors> {
         let fields = row_fields("", row)?;
-        let errors = |errors: Vec<litellm_model_catalog::Located>| RowErrors {
-            errors: errors.iter().map(row_error).collect(),
-        };
         let (mut model, primary) =
-            Model::from_fields_with_other_source(&fields, "primary".to_owned()).map_err(errors)?;
+            Model::from_fields_with_other_source(&fields, "primary".to_owned())
+                .map_err(|errors| row_errors("", errors))?;
         let mut context = OtherContext {
             selection: self.selection.clone(),
             sources: vec![primary],
@@ -352,7 +349,7 @@ impl OtherMeterInput {
         for source in &self.sources {
             let (fallback, metadata) =
                 Model::from_fields_with_other_source(&source.fields, source.source_id.clone())
-                    .map_err(errors)?;
+                    .map_err(|errors| row_errors(&source.source_id, errors))?;
             model
                 .prices
                 .append_source(context.sources.len(), fallback.prices);

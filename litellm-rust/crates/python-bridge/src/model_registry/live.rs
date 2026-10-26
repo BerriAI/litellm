@@ -339,7 +339,13 @@ pub(super) fn lower_row_with_policy(
     policy: litellm_model_catalog::PriceLowering,
 ) -> Result<(Fields, Model), RowErrors> {
     let fields = row_fields(key, row)?;
-    let model = Model::from_fields_with_policy(&fields, policy).map_err(|errors| RowErrors {
+    let model = Model::from_fields_with_policy(&fields, policy)
+        .map_err(|errors| row_errors(key, errors))?;
+    Ok((fields, model))
+}
+
+pub(super) fn row_errors(key: &str, errors: Vec<Located>) -> RowErrors {
+    RowErrors {
         errors: errors
             .into_iter()
             .map(|error| {
@@ -349,8 +355,7 @@ pub(super) fn lower_row_with_policy(
                 ))
             })
             .collect(),
-    })?;
-    Ok((fields, model))
+    }
 }
 
 pub(super) fn row_fields(key: &str, row: &Bound<'_, PyAny>) -> Result<Fields, RowErrors> {
@@ -1776,6 +1781,251 @@ assert n.model_info(models, "Model").input_cost_per_token == 2
                 panic!("presence must retain validation errors")
             };
             assert_eq!(errors.errors[0].kind, kind);
+        });
+    }
+
+    #[rstest]
+    #[case::input_null(
+        "input_cost_per_token",
+        "{'input_cost_per_token': None, 'output_cost_per_token': 4}",
+        None
+    )]
+    #[case::input_zero(
+        "input_cost_per_token",
+        "{'input_cost_per_token': 0, 'output_cost_per_token': 4}",
+        Some(0.0)
+    )]
+    #[case::input_absent("input_cost_per_token", "{'output_cost_per_token': 4}", Some(1.0))]
+    #[case::output_null(
+        "output_cost_per_token",
+        "{'input_cost_per_token': 3, 'output_cost_per_token': None}",
+        None
+    )]
+    #[case::output_zero(
+        "output_cost_per_token",
+        "{'input_cost_per_token': 3, 'output_cost_per_token': 0}",
+        Some(0.0)
+    )]
+    #[case::output_absent("output_cost_per_token", "{'input_cost_per_token': 3}", Some(2.0))]
+    #[case::read_null_input(
+        "cache_read_input_token_cost",
+        "{'input_cost_per_token': None, 'cache_read_input_token_cost': None}",
+        None
+    )]
+    #[case::read_zero(
+        "cache_read_input_token_cost",
+        "{'input_cost_per_token': None, 'cache_read_input_token_cost': 0}",
+        Some(0.0)
+    )]
+    #[case::read_null_fallback(
+        "cache_read_input_token_cost",
+        "{'input_cost_per_token': 3, 'cache_read_input_token_cost': None}",
+        Some(3.0)
+    )]
+    #[case::read_absent(
+        "cache_read_input_token_cost",
+        "{'input_cost_per_token': 3}",
+        Some(3.0)
+    )]
+    #[case::write_null_input(
+        "cache_creation_input_token_cost",
+        "{'input_cost_per_token': None, 'cache_creation_input_token_cost': None}",
+        None
+    )]
+    #[case::write_zero(
+        "cache_creation_input_token_cost",
+        "{'input_cost_per_token': 3, 'cache_creation_input_token_cost': 0}",
+        Some(0.0)
+    )]
+    #[case::reasoning_null_output(
+        "output_cost_per_reasoning_token",
+        "{'input_cost_per_token': 3, 'output_cost_per_token': None}",
+        None
+    )]
+    fn other_token_tier_composition(
+        #[from(interpreter)] _interpreter: (),
+        #[case] meter: &str,
+        #[case] tier: &str,
+        #[case] expected: Option<f64>,
+        #[values("Additive", "PromptUnits")] selection: &str,
+        #[values("price", "price_with_rates")] method: &str,
+        #[values(0, 10)] count: u64,
+    ) {
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("n", crate::native_module(py)).unwrap();
+            locals.set_item("meter", meter).unwrap();
+            locals
+                .set_item(
+                    "tier",
+                    py.eval(&CString::new(tier).unwrap(), None, None).unwrap(),
+                )
+                .unwrap();
+            locals.set_item("expected", expected).unwrap();
+            locals.set_item("selection", selection).unwrap();
+            locals.set_item("method", method).unwrap();
+            locals.set_item("count", count).unwrap();
+            py.run(pyo3::ffi::c_str!(r#"
+row = {'litellm_provider': 'openai', 'input_cost_per_token': 1., 'output_cost_per_token': 2., 'input_cost_per_image': 3., 'cache_read_input_token_cost': .5, 'cache_creation_input_token_cost': .6, 'tiered_pricing': [{'range': [0, 100], **tier}]}
+usage = n.UsageInput({meter: count, 'input_cost_per_image': 1}, prompt_tokens=10)
+kwargs = {'project': [meter]} if method == 'price_with_rates' else {}
+control = getattr(n, method)(row, usage, n.WhenInput(0), policy='sdk_tokens', **kwargs)
+result = getattr(n, method)(row, usage, n.WhenInput(0), policy='sdk_tokens', other_meters=n.OtherMeterInput(getattr(n, selection)()), **kwargs)
+control_pricing = control.pricing if method == 'price_with_rates' else control
+pricing = result.pricing if method == 'price_with_rates' else result
+assert type(pricing) is type(control_pricing)
+if expected is None and count:
+    assert isinstance(pricing, n.Unpriced)
+    assert pricing.missing == control_pricing.missing == [meter]
+    assert pricing.partial.total == control_pricing.partial.total == 3.
+else:
+    assert isinstance(pricing, n.Priced)
+    assert pricing.total == control_pricing.total == 3. + count * (expected or 0.)
+if method == 'price_with_rates':
+    assert result.rates[0].unit_price == control.rates[0].unit_price == expected
+    assert result.rates[0].source_meter == control.rates[0].source_meter
+"#), Some(&locals), None).unwrap();
+        });
+    }
+
+    #[rstest]
+    #[case::absent_default("{}", "()", "absent", (Some(5.0), None, true))]
+    #[case::null_absent_default(
+        "{'input_cost_per_token': None}",
+        "()",
+        "absent",
+        (None, None, false)
+    )]
+    #[case::null_eligible_default(
+        "{'input_cost_per_token': None}",
+        "()",
+        "absent_or_null",
+        (Some(5.0), None, true)
+    )]
+    #[case::zero_not_overwritten(
+        "{'input_cost_per_token': 0}",
+        "()",
+        "absent_or_null",
+        (Some(0.0), Some("primary"), false)
+    )]
+    #[case::absent_source(
+        "{}",
+        "(n.PriceRowInput('published', {'litellm_provider': 'openai', 'input_cost_per_token': 7}),)",
+        "absent",
+        (Some(7.0), Some("published"), false)
+    )]
+    #[case::null_source(
+        "{'input_cost_per_token': None}",
+        "(n.PriceRowInput('published', {'litellm_provider': 'openai', 'input_cost_per_token': 0}),)",
+        "absent_or_null",
+        (Some(0.0), Some("published"), false)
+    )]
+    #[case::tier_barrier_with_base(
+        "{'input_cost_per_token': 1, 'tiered_pricing': [{'range': [0, 100], 'input_cost_per_token': None}]}",
+        "()",
+        "absent_or_null",
+        (None, None, false)
+    )]
+    #[case::tier_explicit_fallback(
+        "{'input_cost_per_token': 1, 'tiered_pricing': [{'range': [0, 100], 'input_cost_per_token': None}]}",
+        "(n.PriceRowInput('published', {'litellm_provider': 'openai', 'input_cost_per_token': 7}),)",
+        "absent",
+        (Some(7.0), Some("published"), false)
+    )]
+    fn other_token_fallback_and_default_eligibility(
+        #[from(interpreter)] _interpreter: (),
+        #[case] row: &str,
+        #[case] sources: &str,
+        #[case] eligibility: &str,
+        #[case] expected: (Option<f64>, Option<&str>, bool),
+        #[values("Additive", "PromptUnits")] selection: &str,
+    ) {
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("n", crate::native_module(py)).unwrap();
+            locals
+                .set_item(
+                    "row",
+                    py.eval(&CString::new(row).unwrap(), Some(&locals), None)
+                        .unwrap(),
+                )
+                .unwrap();
+            locals
+                .set_item(
+                    "sources",
+                    py.eval(&CString::new(sources).unwrap(), Some(&locals), None)
+                        .unwrap(),
+                )
+                .unwrap();
+            locals.set_item("eligibility", eligibility).unwrap();
+            locals.set_item("expected", expected.0).unwrap();
+            locals.set_item("source", expected.1).unwrap();
+            locals.set_item("default", expected.2).unwrap();
+            locals.set_item("selection", selection).unwrap();
+            py.run(pyo3::ffi::c_str!(r#"
+meter = 'input_cost_per_token'
+context = n.OtherMeterInput(getattr(n, selection)(), fallback_sources=sources, defaults=[n.DefaultRateInput(meter, 5., apply_when=eligibility)])
+result = n.price_with_rates({'litellm_provider': 'openai', **row}, n.UsageInput({meter: 10}, prompt_tokens=10), n.WhenInput(0), policy='sdk_tokens', other_meters=context, project=[meter], factors=[2.])
+assert result.rates[0].unit_price == (None if expected is None else expected * 2)
+assert result.rates[0].source_id == source
+assert result.rates[0].caller_default == default
+if expected is None:
+    assert isinstance(result.pricing, n.Unpriced)
+    assert result.pricing.missing == [meter]
+    assert result.pricing.partial.total == 0.
+else:
+    assert isinstance(result.pricing, n.Priced)
+    assert result.pricing.total == 20 * expected
+    assert result.pricing.lines[0].source_id == source
+    assert result.pricing.lines[0].caller_default == default
+"#), Some(&locals), None).unwrap();
+        });
+    }
+
+    #[rstest]
+    #[case::scalar(
+        "{'input_cost_per_audio_token': 'invalid'}",
+        "input_cost_per_audio_token"
+    )]
+    #[case::schedule("{'off_peak_pricing': '16:00-19:00'}", "off_peak_pricing")]
+    #[case::nested(
+        "{'off_peak_pricing': {'hours_utc': [], 'input_cost_per_token': .5}}",
+        "off_peak_pricing/hours_utc"
+    )]
+    fn other_row_error_paths(
+        #[from(interpreter)] _interpreter: (),
+        #[case] invalid: &str,
+        #[case] field: &str,
+        #[values(false, true)] fallback: bool,
+        #[values("Additive", "PromptUnits")] selection: &str,
+        #[values("price", "price_with_rates")] method: &str,
+    ) {
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("n", crate::native_module(py)).unwrap();
+            locals
+                .set_item(
+                    "invalid",
+                    py.eval(&CString::new(invalid).unwrap(), None, None)
+                        .unwrap(),
+                )
+                .unwrap();
+            locals.set_item("field", field).unwrap();
+            locals.set_item("fallback", fallback).unwrap();
+            locals.set_item("selection", selection).unwrap();
+            locals.set_item("method", method).unwrap();
+            py.run(pyo3::ffi::c_str!(r#"
+row = {'litellm_provider': 'openai', 'input_cost_per_token': 1., **invalid}
+usage = n.UsageInput({'input_cost_per_token': 10}, prompt_tokens=10)
+control = getattr(n, method)(row, usage, n.WhenInput(0), policy='sdk_tokens')
+assert isinstance(control, n.RowErrors)
+assert control.errors[0].field == field
+context = n.OtherMeterInput(getattr(n, selection)(), fallback_sources=[n.PriceRowInput('published/~rates', row)] if fallback else [])
+result = getattr(n, method)({'litellm_provider': 'openai'} if fallback else row, usage, n.WhenInput(0), policy='sdk_tokens', other_meters=context)
+assert isinstance(result, n.RowErrors)
+assert [(e.field, e.message, e.kind, e.rejects) for e in result.errors] == [(e.field, e.message, e.kind, e.rejects) for e in control.errors]
+assert result.errors[0].key == ('published/~rates' if fallback else '')
+"#), Some(&locals), None).unwrap();
         });
     }
 
