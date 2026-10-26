@@ -8,7 +8,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
-from litellm.llms.databricks.agent.transformation import _env_oauth_m2m_token
+from litellm.llms.databricks.agent.transformation import env_oauth_m2m_token
 from litellm.types.decisions import DecisionsIRRequest, UnsupportedDecisionsRequest
 
 DATABRICKS_AI_DECIDE_MODEL: Final = "ai_decide"
@@ -87,7 +87,7 @@ class DatabricksDecisionsConfig(BaseDecisionsConfig):
     def resolve_credential(
         self, api_key: str | None, api_base: str, litellm_params: Mapping[str, object]
     ) -> str | None:
-        return api_key or _env_oauth_m2m_token(api_base)
+        return api_key or env_oauth_m2m_token(api_base)
 
     def get_complete_url(self, api_base: str, model: str) -> str:
         if is_ai_decide_model(model):
