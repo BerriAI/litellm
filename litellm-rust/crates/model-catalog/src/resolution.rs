@@ -52,20 +52,95 @@ pub fn registration_target_with_provider(
     caller_key: &str,
     provider: Option<&str>,
 ) -> RegistrationTarget {
+    registration_target_with_provider_names(keys, caller_key, provider, |_| false)
+}
+
+pub fn registration_target_with_provider_names(
+    keys: &impl Keys,
+    caller_key: &str,
+    provider: Option<&str>,
+    is_provider: impl Fn(&str) -> bool,
+) -> RegistrationTarget {
     let query = Query {
         model: caller_key,
         provider,
         base_model: None,
         region: None,
     };
-    let inherit_from = match resolve_inner(keys, &query, false) {
-        Resolved::Found { key, .. } => Some(key),
-        Resolved::NotFound { .. } => None,
+    let resolved = resolve_inner(keys, &query, false);
+    let inherit_from = match resolved {
+        Resolved::Found {
+            key,
+            via: Via::Exact | Via::ProviderPrefix,
+        } => Some(key),
+        resolved => {
+            registration_alias(keys, caller_key, provider, is_provider).or(match resolved {
+                Resolved::Found { key, .. } => Some(key),
+                Resolved::NotFound { .. } => None,
+            })
+        }
     };
     RegistrationTarget {
         write: caller_key.to_owned(),
         inherit_from,
     }
+}
+
+fn registration_alias(
+    keys: &impl Keys,
+    model: &str,
+    provider: Option<&str>,
+    is_provider: impl Fn(&str) -> bool,
+) -> Option<String> {
+    let provider = provider
+        .filter(|provider| !provider.is_empty())
+        .or_else(|| {
+            model
+                .split_once('/')
+                .map(|(prefix, _)| prefix)
+                .filter(|prefix| is_provider(prefix))
+        });
+    let mut lookup = Lookup {
+        keys,
+        provider,
+        case_insensitive: false,
+        tried: Vec::new(),
+    };
+    let mut base = model;
+    let mut prefixes = 0;
+    while let Some((prefix, tail)) = base.split_once('/') {
+        if !is_provider(prefix) {
+            break;
+        }
+        base = tail;
+        prefixes += 1;
+        if let Some(key) = lookup.registration_candidate(base, Via::ProviderStripped) {
+            return Some(key);
+        }
+    }
+    if matches!(provider, Some("bedrock" | "bedrock_converse")) {
+        base = bedrock_routing_model(base);
+        base = base.strip_prefix("nova-2/").unwrap_or(base);
+        base = base.strip_prefix("nova/").unwrap_or(base);
+        if let Some(key) = lookup.registration_candidate(base, Via::ProviderStripped) {
+            return Some(key);
+        }
+        let region_free = base
+            .strip_prefix("ap-northeast-1.")
+            .unwrap_or_else(|| strip_bedrock_geo(base));
+        if region_free != base
+            && let Some(key) = lookup.registration_candidate(region_free, Via::RegionStripped)
+        {
+            return Some(key);
+        }
+    }
+    if prefixes > 1
+        && let Some(key) =
+            lookup.registration_candidate(strip_suffix(base, provider), Via::SuffixStripped)
+    {
+        return Some(key);
+    }
+    None
 }
 
 struct Lookup<'a, K> {
@@ -76,6 +151,14 @@ struct Lookup<'a, K> {
 }
 
 impl<K: Keys> Lookup<'_, K> {
+    fn registration_candidate(&mut self, candidate: &str, via: Via) -> Option<String> {
+        self.keys.provider_of(candidate)?;
+        match self.candidate(candidate, via)? {
+            Resolved::Found { key, .. } => Some(key),
+            Resolved::NotFound { .. } => None,
+        }
+    }
+
     fn candidate(&mut self, candidate: &str, via: Via) -> Option<Resolved> {
         if self.tried.iter().any(|key| key == candidate) {
             return None;
@@ -281,10 +364,7 @@ fn strip_suffix<'a>(model: &'a str, provider: Option<&str>) -> &'a str {
             if model.starts_with("nova/") {
                 return "amazon.nova-custom";
             }
-            let model = match model.split_once('.') {
-                Some(("global" | "us" | "eu" | "apac" | "jp" | "au" | "us-gov", tail)) => tail,
-                _ => model,
-            };
+            let model = strip_bedrock_geo(model);
             let model = strip_bedrock_throughput(model);
             let model = model
                 .rsplit_once('-')
@@ -298,6 +378,13 @@ fn strip_suffix<'a>(model: &'a str, provider: Option<&str>) -> &'a str {
             .map_or(model, |(base, _)| base),
         _ if model.contains("ft:") => model.rsplitn(4, ':').nth(3).unwrap_or(model),
         _ => strip_date(model),
+    }
+}
+
+fn strip_bedrock_geo(model: &str) -> &str {
+    match model.split_once('.') {
+        Some(("global" | "us" | "eu" | "apac" | "jp" | "au" | "us-gov", tail)) => tail,
+        _ => model,
     }
 }
 
@@ -386,6 +473,202 @@ mod tests {
             base_model: None,
             region: None,
         }
+    }
+
+    #[fixture]
+    fn registration_models() -> Catalog {
+        catalog(json!({
+            "us.anthropic.model": {"litellm_provider": "bedrock", "input_cost_per_token": 0.001},
+            "anthropic.model": {"litellm_provider": "bedrock_converse", "input_cost_per_token": 0.002},
+            "anthropic.Model": {"litellm_provider": "bedrock_converse", "input_cost_per_token": 0.003},
+            "bedrock/bedrock/us.anthropic.priority": {"litellm_provider": "bedrock"},
+            "bedrock/us.anthropic.priority": {"litellm_provider": "bedrock"},
+            "us.anthropic.priority": {"litellm_provider": "bedrock"},
+            "anthropic.priority": {"litellm_provider": "bedrock"},
+            "ap-northeast-1.anthropic.priority": {"litellm_provider": "bedrock"},
+            "anthropic.dated-2026-01-01": {"litellm_provider": "bedrock"},
+            "bedrock/anthropic.dated": {"litellm_provider": "bedrock"},
+            "model": {"litellm_provider": "openai"},
+            "openai/model": {"litellm_provider": "openai"},
+            "hosted": {"litellm_provider": "hosted_vllm"},
+            "anthropic.null": {"litellm_provider": null},
+            "anthropic.absent": {}
+        }))
+    }
+
+    #[rstest]
+    #[case::repeated(
+        "bedrock/bedrock/bedrock/us.anthropic.model",
+        Some("bedrock"),
+        Some("us.anthropic.model")
+    )]
+    #[case::repeated_inferred(
+        "bedrock/bedrock/bedrock/us.anthropic.model",
+        None,
+        Some("us.anthropic.model")
+    )]
+    #[case::repeated_empty_scope(
+        "bedrock/bedrock/bedrock/us.anthropic.model",
+        Some(""),
+        Some("us.anthropic.model")
+    )]
+    #[case::deep(
+        "bedrock/bedrock/bedrock/bedrock/converse/us.anthropic.model",
+        Some("bedrock"),
+        Some("us.anthropic.model")
+    )]
+    #[case::prefix_order(
+        "bedrock/bedrock/bedrock/us.anthropic.priority",
+        Some("bedrock"),
+        Some("bedrock/bedrock/us.anthropic.priority")
+    )]
+    #[case::region_alias(
+        "bedrock/ap-northeast-1.anthropic.model",
+        Some("bedrock"),
+        Some("anthropic.model")
+    )]
+    #[case::region_converse(
+        "bedrock/converse/ap-northeast-1.anthropic.model",
+        Some("bedrock"),
+        Some("anthropic.model")
+    )]
+    #[case::region_invoke(
+        "bedrock/invoke/ap-northeast-1.anthropic.model",
+        Some("bedrock"),
+        Some("anthropic.model")
+    )]
+    #[case::region_chat(
+        "bedrock/chat_completions/ap-northeast-1.anthropic.model",
+        Some("bedrock"),
+        Some("anthropic.model")
+    )]
+    #[case::region_openai(
+        "bedrock/openai/ap-northeast-1.anthropic.model",
+        Some("bedrock"),
+        Some("anthropic.model")
+    )]
+    #[case::region_mantle(
+        "bedrock/mantle/ap-northeast-1.anthropic.model",
+        Some("bedrock"),
+        Some("anthropic.model")
+    )]
+    #[case::region_nova(
+        "bedrock/nova/ap-northeast-1.anthropic.model",
+        Some("bedrock"),
+        Some("anthropic.model")
+    )]
+    #[case::region_nova2(
+        "bedrock/nova-2/ap-northeast-1.anthropic.model",
+        Some("bedrock"),
+        Some("anthropic.model")
+    )]
+    #[case::regional_precedence(
+        "bedrock/converse/ap-northeast-1.anthropic.priority",
+        Some("bedrock"),
+        Some("ap-northeast-1.anthropic.priority")
+    )]
+    #[case::geo_precedence(
+        "bedrock/converse/us.anthropic.model",
+        Some("bedrock"),
+        Some("us.anthropic.model")
+    )]
+    #[case::region_before_suffix(
+        "bedrock/converse/au.anthropic.dated-2026-01-01",
+        Some("bedrock"),
+        Some("anthropic.dated-2026-01-01")
+    )]
+    #[case::other_provider(
+        "hosted_vllm/hosted_vllm/hosted_vllm/hosted",
+        Some("hosted_vllm"),
+        Some("hosted")
+    )]
+    #[case::mixed_prefixes("openai/azure_ai/openai/model", Some("openai"), Some("openai/model"))]
+    #[case::explicit_scope(
+        "openai/openai/bedrock/us.anthropic.model",
+        Some("bedrock"),
+        Some("us.anthropic.model")
+    )]
+    #[case::inferred_scope_rejects("openai/openai/bedrock/us.anthropic.model", None, None)]
+    #[case::wrong_scope("bedrock/bedrock/bedrock/us.anthropic.model", Some("azure_ai"), None)]
+    #[case::unknown_prefix("bedrock/unknown/bedrock/us.anthropic.model", Some("bedrock"), None)]
+    #[case::case_prefix("bedrock/Bedrock/bedrock/us.anthropic.model", Some("bedrock"), None)]
+    #[case::case_region("bedrock/AP-NORTHEAST-1.anthropic.model", Some("bedrock"), None)]
+    #[case::case_model("bedrock/ap-northeast-1.anthropic.MODEL", Some("bedrock"), None)]
+    #[case::independent_case(
+        "bedrock/ap-northeast-1.anthropic.Model",
+        Some("bedrock"),
+        Some("anthropic.Model")
+    )]
+    #[case::unmatched("bedrock/bedrock/bedrock/unmatched", Some("bedrock"), None)]
+    #[case::unrecognized_region("bedrock/ap-northeast-2.anthropic.model", Some("bedrock"), None)]
+    #[case::null_provider("bedrock/ap-northeast-1.anthropic.null", Some("bedrock"), None)]
+    #[case::absent_provider("bedrock/bedrock/bedrock/anthropic.absent", Some("bedrock"), None)]
+    #[case::repeated_suffix(
+        "bedrock/bedrock/bedrock/us.anthropic.dated-2026-01-01",
+        Some("bedrock"),
+        Some("anthropic.dated-2026-01-01")
+    )]
+    fn registration_aliases_preserve_scope_and_candidate_order(
+        registration_models: Catalog,
+        #[case] key: &str,
+        #[case] provider: Option<&str>,
+        #[case] inherited: Option<&str>,
+    ) {
+        let target = registration_target_with_provider_names(
+            &registration_models,
+            key,
+            provider,
+            |prefix| ["bedrock", "openai", "azure_ai", "hosted_vllm"].contains(&prefix),
+        );
+        assert_eq!(
+            target,
+            RegistrationTarget {
+                write: key.into(),
+                inherit_from: inherited.map(str::to_owned)
+            }
+        );
+    }
+
+    #[rstest]
+    #[case::us("us")]
+    #[case::eu("eu")]
+    #[case::apac("apac")]
+    #[case::jp("jp")]
+    #[case::au("au")]
+    #[case::us_gov("us-gov")]
+    #[case::global("global")]
+    #[case::regional("ap-northeast-1")]
+    fn registration_region_aliases_keep_the_dated_row(#[case] region: &str) {
+        let models = catalog(json!({
+            "anthropic.model-2026-01-01": {"litellm_provider": "bedrock_converse"},
+            "bedrock/anthropic.model": {"litellm_provider": "bedrock"}
+        }));
+        let key = format!("bedrock/converse/{region}.anthropic.model-2026-01-01");
+        assert_eq!(
+            registration_target_with_provider_names(
+                &models,
+                &key,
+                Some("bedrock"),
+                |prefix| prefix == "bedrock"
+            ),
+            RegistrationTarget {
+                write: key,
+                inherit_from: Some("anthropic.model-2026-01-01".into())
+            }
+        );
+    }
+
+    #[rstest]
+    #[case::repeated("bedrock/bedrock/bedrock/us.anthropic.model")]
+    #[case::regional("bedrock/ap-northeast-1.anthropic.model")]
+    fn registration_aliases_do_not_expand_read_resolution(
+        registration_models: Catalog,
+        #[case] key: &str,
+    ) {
+        assert!(matches!(
+            resolve(&registration_models, &query(key, Some("bedrock"))),
+            Resolved::NotFound { .. }
+        ));
     }
 
     #[fixture]

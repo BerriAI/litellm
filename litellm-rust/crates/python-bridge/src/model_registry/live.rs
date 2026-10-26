@@ -11,7 +11,7 @@ use litellm_model_catalog::{Error, Located, Model};
 use pyo3::class::gc::{PyTraverseError, PyVisit};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyModule};
+use pyo3::types::{PyAny, PyDict, PyModule, PySet};
 use time::OffsetDateTime;
 
 use super::{RowError, escape_pointer_segment, fields_to_dict, nonfinite_errors, row_error};
@@ -221,7 +221,13 @@ pub(crate) fn registration_target(
         index: &index,
         error: RefCell::default(),
     };
-    let target = resolution::registration_target_with_provider(&view, key, provider);
+    let providers = PyModule::import(model_cost.py(), "litellm.types.utils")?
+        .getattr("LlmProvidersSet")?
+        .cast_into::<PySet>()?;
+    let target =
+        resolution::registration_target_with_provider_names(&view, key, provider, |prefix| {
+            view.read(providers.contains(prefix))
+        });
     view.finish()?;
     Ok(RegistrationTarget {
         write: target.write,
