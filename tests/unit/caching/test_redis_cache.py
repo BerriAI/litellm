@@ -1092,6 +1092,86 @@ def test_recovery_probe_still_closes_the_breaker():
     assert breaker.is_open() is False
 
 
+def _open_the_breaker(cache) -> None:
+    cache._circuit_breaker.failure_threshold = 3
+    for _ in range(3):
+        cache._circuit_breaker.record_failure()
+    assert cache._circuit_breaker._state == cache._circuit_breaker.OPEN
+    cache._circuit_breaker._opened_at = time.time() - 9999
+
+
+def test_background_probe_closes_an_open_breaker_on_an_idle_cache(sync_batch_redis_cache):
+    from litellm.caching.redis_cache import _probe_open_breaker
+
+    sync_batch_redis_cache.redis_client.ping = MagicMock(return_value=True)
+    _open_the_breaker(sync_batch_redis_cache)
+
+    assert _probe_open_breaker(sync_batch_redis_cache) is True
+
+    assert sync_batch_redis_cache.redis_client.ping.call_count == 1
+    assert sync_batch_redis_cache._circuit_breaker._state == sync_batch_redis_cache._circuit_breaker.CLOSED
+    assert sync_batch_redis_cache._circuit_breaker.is_open() is False
+
+
+def test_background_probe_failure_reopens_the_breaker_and_restarts_the_timer(sync_batch_redis_cache):
+    from litellm.caching.redis_cache import _probe_open_breaker
+
+    sync_batch_redis_cache.redis_client.ping = MagicMock(side_effect=OSError("redis still down"))
+    _open_the_breaker(sync_batch_redis_cache)
+    aged_opened_at: Final = sync_batch_redis_cache._circuit_breaker._opened_at
+
+    assert _probe_open_breaker(sync_batch_redis_cache) is True
+
+    breaker: Final = sync_batch_redis_cache._circuit_breaker
+    assert breaker._state == breaker.OPEN
+    assert breaker._opened_at is not None and aged_opened_at is not None and breaker._opened_at > aged_opened_at
+    assert _probe_open_breaker(sync_batch_redis_cache) is False
+    assert sync_batch_redis_cache.redis_client.ping.call_count == 1
+
+
+def test_background_probe_waits_for_the_recovery_timeout(sync_batch_redis_cache):
+    from litellm.caching.redis_cache import _probe_open_breaker
+
+    sync_batch_redis_cache.redis_client.ping = MagicMock(return_value=True)
+    sync_batch_redis_cache._circuit_breaker.failure_threshold = 3
+    for _ in range(3):
+        sync_batch_redis_cache._circuit_breaker.record_failure()
+    assert sync_batch_redis_cache._circuit_breaker._state == sync_batch_redis_cache._circuit_breaker.OPEN
+
+    assert _probe_open_breaker(sync_batch_redis_cache) is False
+
+    assert sync_batch_redis_cache.redis_client.ping.call_count == 0
+    assert sync_batch_redis_cache._circuit_breaker._state == sync_batch_redis_cache._circuit_breaker.OPEN
+
+
+def test_background_probe_yields_the_probe_slot_to_a_real_call(sync_batch_redis_cache):
+    from litellm.caching.redis_cache import _probe_open_breaker
+
+    sync_batch_redis_cache.redis_client.ping = MagicMock(return_value=True)
+    _open_the_breaker(sync_batch_redis_cache)
+    breaker: Final = sync_batch_redis_cache._circuit_breaker
+    assert breaker.is_open() is False
+    assert breaker._state == breaker.HALF_OPEN
+
+    assert _probe_open_breaker(sync_batch_redis_cache) is False
+
+    assert sync_batch_redis_cache.redis_client.ping.call_count == 0
+    assert breaker._state == breaker.HALF_OPEN
+    breaker.record_success()
+    assert breaker._state == breaker.CLOSED
+
+
+def test_a_background_probe_pass_reaches_registered_caches(sync_batch_redis_cache):
+    from litellm.caching.redis_cache import _probe_open_breakers_once
+
+    sync_batch_redis_cache.redis_client.ping = MagicMock(return_value=True)
+    _open_the_breaker(sync_batch_redis_cache)
+
+    _probe_open_breakers_once()
+
+    assert sync_batch_redis_cache._circuit_breaker._state == sync_batch_redis_cache._circuit_breaker.CLOSED
+
+
 @pytest.mark.asyncio
 async def test_stale_success_during_the_recovery_probe_leaves_the_breaker_to_the_probe():
     """A call admitted before the trip that finishes while HALF_OPEN must not close the breaker.
