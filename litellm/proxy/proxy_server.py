@@ -10826,6 +10826,18 @@ async def audio_speech(
             ):
                 media_type = "audio/wav"  # Gemini TTS returns WAV format after conversion
 
+        if isinstance(response, HttpxBinaryResponseContent) and "x-flowspeech-job-id" in response.response.headers:
+            media_type = "audio/wav"  # rebind-ok: FlowSpeech v1 returns downloaded WAV even for proxy model aliases
+            custom_headers.update(
+                MappingProxyType(
+                    {
+                        key: response.response.headers[key]
+                        for key in ("x-flowspeech-job-id", "x-flowspeech-request-id")
+                        if key in response.response.headers
+                    }
+                )
+            )
+
         return StreamingResponse(
             _audio_speech_chunk_generator(response),
             media_type=media_type,

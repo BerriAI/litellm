@@ -12,6 +12,7 @@ from __future__ import annotations
 import io
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 from litellm.proxy import proxy_server
@@ -150,6 +151,48 @@ def test_audio_speech_happy_path(client, auth_as, patched_speech, path):
         "content_type": "audio/mpeg",
         "body_bytes": b"\x00\x01\x02",
     }
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/speech", "/audio/speech"])
+def test_flowspeech_proxy_preserves_wav_and_recovery_ids(client, auth_as, patched_speech, monkeypatch, path):
+    from litellm.types.llms.openai import HttpxBinaryResponseContent
+
+    job_id = "11111111-2222-4333-8444-555555555555"
+    request_id = "b698824b-de05-486d-8833-05d5c4522a39"
+
+    async def audio():
+        return HttpxBinaryResponseContent(
+            httpx.Response(
+                200,
+                content=b"RIFF-test-WAVE",
+                headers={
+                    "content-type": "audio/wav",
+                    "x-flowspeech-job-id": job_id,
+                    "x-flowspeech-request-id": request_id,
+                },
+            )
+        )
+
+    async def route(*args, **kwargs):
+        assert kwargs["data"]["request_id"] == request_id
+        return audio()
+
+    monkeypatch.setattr(proxy_server, "route_request", route)
+    with auth_as():
+        response = client.post(
+            path,
+            json={
+                "model": "narration-alias",
+                "input": "Hi",
+                "voice": "Kore",
+                "request_id": request_id,
+            },
+        )
+    assert response.status_code == 200
+    assert response.content == b"RIFF-test-WAVE"
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.headers["x-flowspeech-job-id"] == job_id
+    assert response.headers["x-flowspeech-request-id"] == request_id
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/speech", "/audio/speech"])

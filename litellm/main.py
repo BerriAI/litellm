@@ -8226,7 +8226,9 @@ def speech(
             _is_async=aspeech or False,
         )
     elif custom_llm_provider == "flowspeech":
+        from litellm.llms.flowspeech.text_to_speech.handler import FlowSpeechTTS
         from litellm.llms.flowspeech.text_to_speech.transformation import (
+            FlowSpeechJob,
             FlowSpeechTextToSpeechConfig,
         )
 
@@ -8244,20 +8246,56 @@ def speech(
         if api_key is not None:
             litellm_params_dict["api_key"] = api_key
 
-        voice_name: Final = voice if isinstance(voice, str) else None
-        response = base_llm_http_handler.text_to_speech_handler(  # rebind-ok: provider branch sets dispatch result
+        flowspeech_headers: Final = flowspeech_config.validate_environment(
+            extra_headers or headers or MappingProxyType({}), model, litellm_params_dict.get("api_key"), api_base
+        )
+        flowspeech_request: Final = flowspeech_config.transform_text_to_speech_request(
             model=model,
             input=input,
-            voice=voice_name,
-            text_to_speech_provider_config=flowspeech_config,
-            text_to_speech_optional_params=optional_params,
-            custom_llm_provider=custom_llm_provider,
+            voice=voice if isinstance(voice, str) else None,
+            optional_params=optional_params,
             litellm_params=litellm_params_dict,
-            logging_obj=logging_obj,
+            headers=flowspeech_headers,
+        )
+        flowspeech_url: Final = flowspeech_config.get_complete_url(model, api_base, litellm_params_dict)
+
+        def flowspeech_post_call(job: FlowSpeechJob) -> None:
+            logging_obj.post_call(
+                input=input,
+                api_key="",
+                original_response=job.model_dump_json(
+                    include={"id", "requestId", "status", "usage"}  # mutable-ok: Pydantic include contract requires set
+                ),
+                additional_args=MappingProxyType({"request_id": job.requestId, "job_id": job.id}),
+            )
+
+        flowspeech_job: Final = FlowSpeechTTS(
+            url=flowspeech_url,
+            headers=MappingProxyType(
+                {
+                    **MappingProxyType(
+                        {key: value for key, value in flowspeech_headers.items() if key.lower() != "idempotency-key"}
+                    ),
+                    **flowspeech_request["headers"],
+                }
+            ),
+            body=flowspeech_request["dict_body"],
             timeout=timeout,
-            extra_headers=extra_headers,
-            client=client,
-            _is_async=aspeech or False,
+            max_retries=max_retries,
+            on_completed=flowspeech_post_call,
+        )
+        logging_obj.pre_call(
+            input=input,
+            api_key="",
+            additional_args=MappingProxyType({"api_base": flowspeech_url, "request_id": flowspeech_job.request_id}),
+        )
+        flowspeech_client: Final = client.client if isinstance(client, (HTTPHandler, AsyncHTTPHandler)) else client
+        if flowspeech_client is not None and not isinstance(
+            flowspeech_client, httpx.AsyncClient if aspeech else httpx.Client
+        ):
+            raise ValueError("FlowSpeech client must match the synchronous or asynchronous speech call")
+        response = (  # rebind-ok: provider branch sets dispatch result
+            flowspeech_job.arun(flowspeech_client) if aspeech else flowspeech_job.run(flowspeech_client)
         )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         from litellm.llms.vertex_ai.text_to_speech.transformation import (
