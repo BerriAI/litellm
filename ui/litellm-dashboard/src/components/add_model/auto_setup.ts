@@ -32,7 +32,8 @@ const releaseVersion = (raw: string, date?: string) => {
   const release = snapshot ? raw.slice(0, -9) : raw;
   return {
     version: release.split(/[.-]/).map(Number),
-    snapshot: Number((date ?? snapshot?.[1] ?? "0").replaceAll("-", "")),
+    // An undated alias follows the current snapshot of its release.
+    snapshot: date || snapshot ? Number((date ?? snapshot![1]).replaceAll("-", "")) : Number.MAX_SAFE_INTEGER,
   };
 };
 

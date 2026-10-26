@@ -864,6 +864,18 @@ describe("AddAutoRouterTab", () => {
     expect(screen.queryByTestId("team-dropdown")).not.toBeInTheDocument();
   });
 
+  it("waits for a team before showing model inventory in simple setup", async () => {
+    renderWithProviders(
+      <AddAutoRouterTab handleOk={vi.fn()} accessToken="token" userRole="Internal User" createScope="team-required" />,
+    );
+    expect(screen.getByText("Select a team to see available models.")).toBeInTheDocument();
+    expect(screen.queryByText(/Two distinct model lines are needed/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled();
+    await userEvent.selectOptions(screen.getByTestId("team-dropdown"), "team-1");
+    expect(await screen.findByText("Chosen models")).toBeInTheDocument();
+    expect(screen.queryByText("Select a team to see available models.")).not.toBeInTheDocument();
+  });
+
   it("requires a team admin to pick a team", async () => {
     renderAdvanced(
       <AddAutoRouterTab handleOk={vi.fn()} accessToken="token" userRole="Internal User" createScope="team-required" />,

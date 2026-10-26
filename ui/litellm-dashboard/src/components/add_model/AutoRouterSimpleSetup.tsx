@@ -12,6 +12,7 @@ type Props = {
   models: readonly RouterModel[];
   everyday?: RouterModel;
   hard?: RouterModel;
+  waitingForTeam: boolean;
   loading: boolean;
   error: boolean;
   notice: string | null;
@@ -30,6 +31,7 @@ export default function AutoRouterSimpleSetup({
   models,
   everyday,
   hard,
+  waitingForTeam,
   loading,
   error,
   notice,
@@ -39,6 +41,7 @@ export default function AutoRouterSimpleSetup({
   onAdvanced,
   onRetry,
 }: Props) {
+  const inventoryReady = !waitingForTeam && !loading;
   const sameFamily = everyday && hard && everyday.family === hard.family ? ROUTER_FAMILIES[everyday.family] : null;
   const familyItems = [
     { value: "auto", label: sameFamily ? `Auto (${sameFamily})` : "Auto" },
@@ -84,13 +87,14 @@ export default function AutoRouterSimpleSetup({
           </SelectContent>
         </Select>
       </div>
-      {loading && (
+      {waitingForTeam && <p className="text-sm text-muted-foreground">Select a team to see available models.</p>}
+      {!waitingForTeam && loading && (
         <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
           <UiLoadingSpinner className="size-4" />
           Loading deployed models
         </p>
       )}
-      {!loading && error && (
+      {inventoryReady && error && (
         <p role="alert" className="text-sm text-destructive">
           Could not load deployed models.{" "}
           <Button type="button" variant="link" onClick={onRetry}>
@@ -98,7 +102,7 @@ export default function AutoRouterSimpleSetup({
           </Button>
         </p>
       )}
-      {!loading && !error && (
+      {inventoryReady && !error && (
         <>
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">

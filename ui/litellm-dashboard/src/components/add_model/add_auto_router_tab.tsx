@@ -422,7 +422,10 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     !requiresTeamScope || Boolean(watchedTeamId),
   );
   const simpleBlockedReason = advanced ? null : simpleSetupError(modelsLoading, inventoryUnavailable, everyday, hard);
-  const saveBlockedReason = simpleBlockedReason ?? submitBlockedReason ?? routerAvailability.saveBlockedReason;
+  const saveBlockedReason =
+    !advanced && requiresTeamScope && !watchedTeamId
+      ? "Select a team to see available models."
+      : simpleBlockedReason ?? submitBlockedReason ?? routerAvailability.saveBlockedReason;
   const handleClassifierChange = (config: ComplexityRouterConfigValue) => {
     setSelectedPreset(undefined);
     setComplexityRouterConfig(config);
@@ -658,6 +661,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   models={solverModels}
                   everyday={everyday}
                   hard={hard}
+                  waitingForTeam={requiresTeamScope && !watchedTeamId}
                   loading={modelsLoading}
                   error={inventoryUnavailable}
                   notice={

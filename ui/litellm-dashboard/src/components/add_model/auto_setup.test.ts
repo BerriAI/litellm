@@ -165,6 +165,19 @@ describe("recommendSolverPair", () => {
     ).toEqual(["snapshot", "large"]);
   });
 
+  it("prefers rolling aliases over snapshots of the same release", () => {
+    const models = resolve(
+      deployment("pin", "anthropic/claude-haiku-4-5-20251101"),
+      deployment("alias", "anthropic/claude-haiku-4-5"),
+      deployment("hard", "anthropic/claude-opus-5"),
+      deployment("luna-pin", "openai/gpt-6-luna-2026-01-01"),
+      deployment("luna", "openai/gpt-6-luna"),
+      deployment("astra", "openai/gpt-6-astra"),
+    );
+    expect(names(recommendSolverPair(models, "balanced", "claude"))).toEqual(["alias", "hard"]);
+    expect(names(recommendSolverPair(models, "balanced", "openai"))).toEqual(["luna", "astra"]);
+  });
+
   it("does not rank a major-release snapshot above a newer minor release", () => {
     const models = resolve(
       deployment("old", "anthropic/claude-5-haiku-20260101"),
