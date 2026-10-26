@@ -1223,6 +1223,15 @@ class LiteLLMCompletionResponsesConfig:
         _messages: Final = litellm_completion_request.get("messages") or []
         route: Final = CompletionRoute(model=model, custom_llm_provider=provider)
         session_history: Final = chat_completion_session.get("messages") or []
+        if previous_response_id and not session_history and not input_replaces_history:
+            raise litellm.BadRequestError(
+                message=(
+                    "previous_response_id was not found. The chat completions bridge rebuilds earlier turns from "
+                    "spend logs, so they must be written to a database with store_prompts_in_spend_logs enabled"
+                ),
+                model=model,
+                llm_provider=provider or "",
+            )
         stored_messages: Final = LiteLLMCompletionResponsesConfig._with_compaction_blocks_the_route_takes(
             _instruction_messages(session_history) if input_replaces_history else session_history,
             route,
