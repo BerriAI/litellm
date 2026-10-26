@@ -11,6 +11,7 @@ mod fallback;
 mod layers;
 mod lower;
 mod model;
+mod resolution;
 mod revalidate;
 mod vocabulary;
 pub mod wire;
@@ -22,6 +23,7 @@ pub use fallback::*;
 pub use layers::*;
 pub use lower::{fatal, rejects_row};
 pub use model::*;
+pub use resolution::*;
 pub use revalidate::*;
 pub use vocabulary::*;
 

@@ -106,6 +106,25 @@ impl ModelEntry {
     }
 }
 
+impl crate::Keys for Catalog {
+    fn contains(&self, key: &str) -> bool {
+        self.entries.contains_key(key) || self.aliases.contains_key(key)
+    }
+
+    fn lowercase(&self, key: &str) -> Option<String> {
+        self.lowercase_keys.get(&key.to_lowercase()).cloned()
+    }
+
+    fn provider_of(&self, key: &str) -> Option<String> {
+        let canonical = self.aliases.get(key).map_or(key, String::as_str);
+        self.entries
+            .get(canonical)?
+            .field("litellm_provider")?
+            .as_str()
+            .map(str::to_owned)
+    }
+}
+
 impl Catalog {
     pub fn parse(body: &[u8]) -> Result<Loaded<Self>, Located> {
         let document = serde_json::from_slice::<Fields>(body)
