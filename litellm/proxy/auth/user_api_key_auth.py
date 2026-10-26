@@ -9,8 +9,6 @@ Returns a UserAPIKeyAuth object if the API key is valid
 
 import asyncio
 import fnmatch
-import re
-import secrets
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -23,6 +21,15 @@ from pydantic import TypeAdapter
 from starlette.exceptions import WebSocketException
 
 import litellm
+from litellm._auth.credential import (
+    PresentedKeys,
+    WebSocketDenial,
+    WebSocketKeys,
+    scheme_credential,
+    select_api_key,
+    select_websocket_api_key,
+)
+from litellm._auth.key import is_master_key
 from litellm._internal_context import service_target
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
@@ -1025,29 +1032,6 @@ async def _check_key_model_budget_with_fallback(
             request.scope["path_params"]["model"] = fallback_model  # rebind-ok: route handlers use the fallback model
 
 
-def _get_bearer_token_or_received_api_key(api_key: str) -> str:
-    if api_key.startswith("Bearer "):  # ensure Bearer token passed in
-        api_key = api_key.replace("Bearer ", "")  # extract the token
-    elif api_key.startswith("Basic "):
-        api_key = api_key.replace("Basic ", "")  # handle langfuse input
-    elif api_key.startswith("bearer "):
-        api_key = api_key.replace("bearer ", "")
-    elif api_key.startswith("AWS4-HMAC-SHA256"):
-        # Handle AWS Signature V4 format from LangChain
-        # Format: AWS4-HMAC-SHA256 Credential=Bearer $LITELLM_MASTER_KEY/date/region/service/aws4_request, SignedHeaders=..., Signature=...
-        # Extract the Bearer token from the Credential field
-        match = re.search(r"Credential=Bearer\s+([^/\s,]+)", api_key)
-        if match:
-            api_key = match.group(1)
-        else:
-            # If no Bearer token found in Credential, try to extract just the credential value
-            match = re.search(r"Credential=([^/\s,]+)", api_key)
-            if match:
-                api_key = match.group(1)
-
-    return api_key
-
-
 def _routing_selector_matches_claim(
     selector_value: object,
     claim_value: object,
@@ -1122,29 +1106,7 @@ def _should_route_jwt_to_oauth2_override(token: str, jwt_handler: JWTHandler) ->
 def get_bearer_token(
     api_key: str,
 ) -> str:
-    if api_key.startswith("Bearer "):  # ensure Bearer token passed in
-        api_key = api_key.replace("Bearer ", "")  # extract the token
-    elif api_key.startswith("Basic "):
-        api_key = api_key.replace("Basic ", "")  # handle langfuse input
-    elif api_key.startswith("bearer "):
-        api_key = api_key.replace("bearer ", "")
-    elif api_key.startswith("AWS4-HMAC-SHA256"):
-        # Handle AWS Signature V4 format from LangChain
-        # Format: AWS4-HMAC-SHA256 Credential=Bearer $LITELLM_MASTER_KEY/date/region/service/aws4_request, SignedHeaders=..., Signature=...
-        # Extract the Bearer token from the Credential field
-        match = re.search(r"Credential=Bearer\s+([^/\s,]+)", api_key)
-        if match:
-            api_key = match.group(1)
-        else:
-            # If no Bearer token found in Credential, try to extract just the credential value
-            match = re.search(r"Credential=([^/\s,]+)", api_key)
-            if match:
-                api_key = match.group(1)
-            else:
-                api_key = ""
-    else:
-        api_key = ""
-    return api_key
+    return scheme_credential(api_key) or ""
 
 
 _get_bearer_token: Final = get_bearer_token
@@ -1179,6 +1141,14 @@ def _apply_budget_limits_to_end_user_params(
         end_user_params["end_user_model_max_budget"] = budget_info.model_max_budget
 
     verbose_proxy_logger.debug("Applied budget limits to end user %s", end_user_id)
+
+
+_WEBSOCKET_DENIAL_DETAIL: Final = MappingProxyType(
+    {
+        WebSocketDenial.NO_API_KEY: "No API key provided",
+        WebSocketDenial.INVALID_AUTHORIZATION: "Invalid Authorization header format",
+    }
+)
 
 
 async def user_api_key_auth_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
@@ -1231,27 +1201,17 @@ async def user_api_key_auth_websocket_for_model(
 
     request.body = return_body
 
-    authorization: Final = websocket.headers.get("authorization")
-    # If no Authorization header, try the api-key header
-    if not authorization:
-        api_key = websocket.headers.get("api-key")
-        if not api_key:
-            # Try extracting from WebSocket subprotocol (browser clients)
-            for protocol in websocket.headers.get("sec-websocket-protocol", "").split(","):
-                protocol = protocol.strip()
-                if protocol.startswith("openai-insecure-api-key."):
-                    api_key = protocol[len("openai-insecure-api-key.") :]
-                    break
-        if not api_key:
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-            raise HTTPException(status_code=403, detail="No API key provided")
-    else:
-        # Extract the API key from the Bearer token
-        if not authorization.startswith("Bearer "):
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-            raise HTTPException(status_code=403, detail="Invalid Authorization header format")
-
-        api_key = authorization[len("Bearer ") :].strip()
+    selected: Final = select_websocket_api_key(
+        WebSocketKeys(
+            authorization=websocket.headers.get("authorization"),
+            api_key=websocket.headers.get("api-key"),
+            subprotocols=websocket.headers.get("sec-websocket-protocol"),
+        )
+    )
+    if isinstance(selected, WebSocketDenial):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        raise HTTPException(status_code=403, detail=_WEBSOCKET_DENIAL_DETAIL[selected])
+    api_key: Final = selected
 
     # Call user_api_key_auth with the extracted API key
     # Note: You'll need to modify this to work with WebSocket context if needed
@@ -1379,9 +1339,43 @@ def get_rbac_role(jwt_handler: JWTHandler, scopes: list[str]) -> str:
         return LitellmUserRoles.TEAM
 
 
+def _query_api_key(route: str, request: Request) -> str | None:
+    from litellm.proxy.auth.route_checks import RouteChecks
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        safe_get_request_query_params,
+    )
+
+    if not RouteChecks.is_generate_content_route(route=route):
+        return None
+    return safe_get_request_query_params(request).get("key")
+
+
+def _pass_through_header_api_key(endpoint: dict, route: str, request: Request) -> str | None:
+    headers: Final[dict | None] = endpoint.get("headers") if endpoint.get("path", "") == route else None
+    if headers is None:
+        return None
+    return request.headers.get(headers.get("litellm_user_api_key", ""))
+
+
+def _pass_through_api_key(pass_through_endpoints: list[dict] | None, route: str, request: Request) -> str | None:
+    header_values: Final = tuple(
+        value
+        for value in (
+            _pass_through_header_api_key(endpoint, route, request) for endpoint in pass_through_endpoints or ()
+        )
+        if value is not None
+    )
+    return header_values[-1] if header_values else None
+
+
+def _header_or_none(value: object) -> str | None:
+    """Direct callers of ``user_api_key_auth`` leave unpassed headers as their ``fastapi.Security`` defaults."""
+    return value if isinstance(value, str) else None
+
+
 def get_api_key(
     custom_litellm_key_header: str | None,
-    api_key: str,
+    api_key: str | None,
     azure_api_key_header: str | None,
     anthropic_api_key_header: str | None,
     google_ai_studio_api_key_header: str | None,
@@ -1389,54 +1383,26 @@ def get_api_key(
     pass_through_endpoints: list[dict] | None,
     route: str,
     request: Request,
-) -> tuple[str, str | None]:
-    """
-    Returns:
-        Tuple[Optional[str], Optional[str]]: Tuple of the api_key and the passed_in_key
-    """
-    from litellm.proxy.auth.route_checks import RouteChecks
-    from litellm.proxy.common_utils.http_parsing_utils import (
-        safe_get_request_query_params,
+    *,
+    custom_header: str | None = None,
+) -> tuple[str | None, str | None]:
+    selected: Final = select_api_key(
+        PresentedKeys(
+            custom_header=custom_header,
+            litellm_header=_header_or_none(custom_litellm_key_header),
+            authorization=_header_or_none(api_key),
+            api_key=_header_or_none(azure_api_key_header),
+            x_api_key=_header_or_none(anthropic_api_key_header),
+            google=_header_or_none(google_ai_studio_api_key_header),
+            apim=_header_or_none(azure_apim_header),
+            query=_query_api_key(route, request),
+            pass_through=_pass_through_api_key(pass_through_endpoints, route, request),
+        )
     )
-
-    api_key = api_key
-    passed_in_key: str | None = None
-    if isinstance(custom_litellm_key_header, str):
-        passed_in_key = custom_litellm_key_header
-        api_key = _get_bearer_token_or_received_api_key(custom_litellm_key_header)
-    elif isinstance(api_key, str) and len(api_key) > 0:
-        passed_in_key = api_key
-        api_key = get_bearer_token(api_key=api_key)
-    elif isinstance(azure_api_key_header, str):
-        passed_in_key = azure_api_key_header
-        api_key = azure_api_key_header
-    elif isinstance(anthropic_api_key_header, str):
-        passed_in_key = anthropic_api_key_header
-        api_key = anthropic_api_key_header
-    elif isinstance(google_ai_studio_api_key_header, str):
-        passed_in_key = google_ai_studio_api_key_header
-        api_key = google_ai_studio_api_key_header
-    elif isinstance(azure_apim_header, str):
-        passed_in_key = azure_apim_header
-        api_key = azure_apim_header
-    elif (
-        RouteChecks.is_generate_content_route(route=route)
-        and request is not None
-        and safe_get_request_query_params(request).get("key")
-    ):
-        google_auth_key: Final[str] = safe_get_request_query_params(request).get("key") or ""
-        passed_in_key = google_auth_key
-        api_key = google_auth_key
-    elif pass_through_endpoints is not None:
-        for endpoint in pass_through_endpoints:
-            if endpoint.get("path", "") == route:
-                headers: dict | None = endpoint.get("headers", None)
-                if headers is not None:
-                    header_key: str = headers.get("litellm_user_api_key", "")
-                    if request.headers.get(header_key) is not None:
-                        api_key = request.headers.get(header_key) or ""
-                        passed_in_key = api_key
-    return api_key, passed_in_key
+    if selected is None:
+        return api_key, None
+    verbose_proxy_logger.debug("Selected API key from %s", selected.source.value)
+    return selected.token, selected.presented
 
 
 async def check_api_key_for_custom_headers_or_pass_through_endpoints(
@@ -2090,7 +2056,7 @@ async def _resolve_object_permission_for_unresolvable_team(
 async def user_api_key_auth_builder(
     request: Request,
     api_key: str,
-    azure_api_key_header: str,
+    azure_api_key_header: str | None,
     anthropic_api_key_header: str | None,
     google_ai_studio_api_key_header: str | None,
     azure_apim_header: str | None,
@@ -2132,8 +2098,13 @@ async def user_api_key_auth_builder(
                 route=route,
             )
         pass_through_endpoints: Final[list[dict] | None] = general_settings.get("pass_through_endpoints", None)
-        ## CHECK IF X-LITELM-API-KEY IS PASSED IN - supercedes Authorization header
-        api_key, passed_in_key = get_api_key(
+        custom_litellm_key_header_name: Final = general_settings.get("litellm_key_header_name")
+        api_key, _ = get_api_key(
+            custom_header=(
+                request.headers.get(custom_litellm_key_header_name)
+                if custom_litellm_key_header_name is not None
+                else None
+            ),
             custom_litellm_key_header=custom_litellm_key_header,
             api_key=api_key,
             azure_api_key_header=azure_api_key_header,
@@ -2144,12 +2115,6 @@ async def user_api_key_auth_builder(
             route=route,
             request=request,
         )
-        custom_litellm_key_header_name: Final = general_settings.get("litellm_key_header_name")
-        if custom_litellm_key_header_name is not None and custom_litellm_key_header_name in request.headers:
-            api_key = get_api_key_from_custom_header(
-                request=request,
-                custom_litellm_key_header_name=custom_litellm_key_header_name,
-            )
 
         if open_telemetry_logger is not None:
             # Reuse the span created by user_api_key_auth (before body parse)
@@ -2590,10 +2555,6 @@ async def user_api_key_auth_builder(
                     raise e
                 verbose_proxy_logger.debug("Unable to find user in db. Error - %s", e)
 
-        ### CHECK IF ADMIN ###
-        # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
-        ### CHECK IF ADMIN ###
-        # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
         if valid_token is None:
             ## Check CACHE
             try:
@@ -2704,19 +2665,13 @@ async def user_api_key_auth_builder(
             except Exception as e:
                 verbose_logger.debug(e)  # moving from .warning to .debug as it spams logs when team missing from cache.
 
-        try:
-            is_master_key_valid = secrets.compare_digest(api_key, master_key)
-        except Exception:
-            is_master_key_valid = False
-
-        ## VALIDATE MASTER KEY ##
         if not isinstance(master_key, str):
             raise HTTPException(
                 status_code=500,
                 detail={f"Master key must be a valid string. Current type={type(master_key)}"},
             )
 
-        if is_master_key_valid:
+        if is_master_key(api_key, master_key):
             # Substitute a stable alias for the raw master key so neither the
             # master key nor its hash propagates into spend logs, Prometheus
             # /metrics labels, audit trails, rate-limit buckets, or any other
@@ -4218,7 +4173,7 @@ def _seed_request_destinations(user_api_key_dict: UserAPIKeyAuth, request: Reque
 async def user_api_key_auth(
     request: Request,
     api_key: str = fastapi.Security(api_key_header),
-    azure_api_key_header: str = fastapi.Security(azure_api_key_header),
+    azure_api_key_header: str | None = fastapi.Security(azure_api_key_header),
     anthropic_api_key_header: str | None = fastapi.Security(anthropic_api_key_header),
     google_ai_studio_api_key_header: str | None = fastapi.Security(google_ai_studio_api_key_header),
     azure_apim_header: str | None = fastapi.Security(azure_apim_header),
@@ -4366,41 +4321,6 @@ async def _return_user_api_key_auth_obj(
         return UserAPIKeyAuth.model_validate(user_api_key_kwargs)
     else:
         return UserAPIKeyAuth.model_validate(user_api_key_kwargs)
-
-
-def get_api_key_from_custom_header(request: Request, custom_litellm_key_header_name: str) -> str:
-    """
-    Get API key from custom header
-
-    Args:
-        request (Request): Request object
-        custom_litellm_key_header_name (str): Custom header name
-
-    Returns:
-        Optional[str]: API key
-    """
-    api_key: str = ""
-    # use this as the virtual key passed to litellm proxy
-    custom_litellm_key_header_name = custom_litellm_key_header_name.lower()
-    _headers: Final = {k.lower(): v for k, v in request.headers.items()}
-    verbose_proxy_logger.debug(
-        "searching for custom_litellm_key_header_name= %s, in headers=%s",
-        custom_litellm_key_header_name,
-        _headers,
-    )
-    custom_api_key: Final = _headers.get(custom_litellm_key_header_name)
-    if custom_api_key:
-        api_key = get_bearer_token(api_key=custom_api_key)  # rebind-ok: pre-existing rebinding on a rename-only line
-        verbose_proxy_logger.debug(
-            "Found custom API key using header: %s, setting api_key=%s",
-            custom_litellm_key_header_name,
-            abbreviate_api_key(api_key),
-        )
-    else:
-        verbose_proxy_logger.exception(
-            "No LiteLLM Virtual Key pass. Please set header=%s: Bearer <api_key>", custom_litellm_key_header_name
-        )
-    return api_key
 
 
 def _get_temp_budget_increase(valid_token: UserAPIKeyAuth):
