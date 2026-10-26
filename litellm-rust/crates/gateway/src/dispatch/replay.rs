@@ -74,5 +74,11 @@ fn record(parts: &Parts, body: Bytes) -> Request<Bytes> {
     if let Some(&client) = parts.extensions.get::<ConnectInfo<SocketAddr>>() {
         recorded.extensions_mut().insert(client);
     }
+    if let Some(upgrade) = parts.extensions.get::<hyper::upgrade::OnUpgrade>() {
+        recorded.extensions_mut().insert(upgrade.clone());
+    }
+    if let Some(lifecycle) = parts.extensions.get::<crate::upgrades::Upgrades>() {
+        recorded.extensions_mut().insert(lifecycle.clone());
+    }
     recorded
 }
