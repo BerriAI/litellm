@@ -3,7 +3,7 @@ Translates from OpenAI's `/v1/audio/transcriptions` to ElevenLabs's `/v1/speech-
 """
 
 import io
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from itertools import chain, groupby
 from types import MappingProxyType
 from typing import Final, Protocol
@@ -245,7 +245,10 @@ def _transcription_response(response_object: Mapping[str, object]) -> Transcript
 
     words: Final = tuple(_JSON_OBJECTS.validate_python(response_object.get("words", ())))
     if any(word.get("speaker_id") is not None for word in words):
-        return _diarized_response(ElevenLabsSTTChunk.model_validate(response_object))
+        response: Final = _diarized_response(ElevenLabsSTTChunk.model_validate(response_object))
+        # Callers already passing diarize=True read the flat word list, so it stays alongside the segments
+        response["words"] = _openai_words(words)
+        return response
     return _flat_response(response_object, words)
 
 
@@ -260,17 +263,21 @@ def _flat_response(
 
     # Map ElevenLabs words to OpenAI format
     if "words" in response_object:
-        response["words"] = [
-            {
-                "word": word_data.get("text", ""),
-                "start": word_data.get("start", 0),
-                "end": word_data.get("end", 0),
-            }
-            for word_data in words
-            if word_data.get("type") == "word"
-        ]
+        response["words"] = _openai_words(words)
 
     return response
+
+
+def _openai_words(words: tuple[Mapping[str, object], ...]) -> Sequence[Mapping[str, object]]:
+    return [
+        {
+            "word": word_data.get("text", ""),
+            "start": word_data.get("start", 0),
+            "end": word_data.get("end", 0),
+        }
+        for word_data in words
+        if word_data.get("type") == "word"
+    ]
 
 
 def _diarized_response(transcript: ElevenLabsSTTChunk) -> TranscriptionResponse:

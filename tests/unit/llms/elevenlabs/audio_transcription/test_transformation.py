@@ -48,7 +48,7 @@ def test_transform_audio_transcription_response_keeps_only_spoken_words():
         "language_code": "en",
         "text": "Hello world",
         "words": [
-            {"type": "word", "text": "Hello", "start": 0.0, "end": 0.4},
+            {"type": "word", "text": "Hello", "start": 0.0, "end": 0.4, "speaker_id": "speaker_0"},
             {"type": "spacing", "text": " ", "start": 0.4, "end": 0.5},
             {"type": "audio_event", "text": "(laughter)", "start": 0.5, "end": 0.9},
             {"type": "word", "text": "world", "start": 0.9, "end": 1.3},
@@ -247,7 +247,11 @@ def test_diarized_response_builds_speaker_segments():
             "type": "transcript.text.segment",
         },
     )
-    assert "words" not in response
+    assert response["words"] == [
+        {"word": "Bom", "start": 3.0, "end": 3.4},
+        {"word": "dia", "start": 3.4, "end": 3.8},
+        {"word": "Oi", "start": 5.0, "end": 5.3},
+    ]
 
 
 def test_diarized_response_reports_fractional_duration_as_typed_usage():
