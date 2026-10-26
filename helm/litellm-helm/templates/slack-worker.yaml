@@ -5,6 +5,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ $name }}
+  labels:
+    app.kubernetes.io/component: slack-worker
 spec:
   replicas: 1
   strategy:
@@ -18,6 +20,7 @@ spec:
       labels:
         app.kubernetes.io/name: {{ $name }}
         app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: slack-worker
     spec:
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 75
@@ -31,7 +34,7 @@ spec:
         fsGroup: 10001
         runAsNonRoot: true
       containers:
-        - name: liteadmin
+        - name: slack-worker
           image: "{{ required "liteadmin.image.repository is required" .Values.liteadmin.image.repository }}:{{ required "liteadmin.image.tag is required when liteadmin is enabled" .Values.liteadmin.image.tag }}"
           imagePullPolicy: {{ .Values.liteadmin.image.pullPolicy }}
           command: ["litellm-admin-agent", "--web"]
@@ -88,6 +91,8 @@ apiVersion: v1
 kind: Service
 metadata:
   name: {{ $name }}
+  labels:
+    app.kubernetes.io/component: slack-worker
 spec:
   type: ClusterIP
   selector:
@@ -101,6 +106,8 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ $name }}
+  labels:
+    app.kubernetes.io/component: slack-worker
 spec:
   accessModes: [ReadWriteOnce]
   {{- with .Values.liteadmin.storageClassName }}

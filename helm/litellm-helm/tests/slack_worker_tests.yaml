@@ -1,6 +1,6 @@
-suite: LiteAdmin worker image
+suite: Slack worker image
 templates:
-  - liteadmin.yaml
+  - slack-worker.yaml
 tests:
   - it: does not deploy a worker by default
     asserts:
