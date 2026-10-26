@@ -4357,6 +4357,7 @@ class TestVertexRawPredictStreamingClassification:
                 "type": "http",
                 "method": "POST",
                 "path": f"/vertex_ai/{endpoint}",
+                "path_params": {"endpoint": endpoint},
                 "headers": [
                     (b"content-type", b"application/json"),
                     (b"x-litellm-api-key", b"test-key"),

@@ -7724,7 +7724,8 @@ async def test_user_api_key_auth_does_not_overwrite_end_user_id_set_by_builder()
 
 
 @pytest.mark.asyncio
-async def test_user_api_key_auth_authenticates_before_raising_malformed_body_error():
+@pytest.mark.parametrize("body", [b'{}{"model": "gpt-4o"}', b"[]", b"null", b"[1e400]"])
+async def test_user_api_key_auth_authenticates_before_raising_malformed_body_error(body: bytes) -> None:
     """Regression (LIT-4780): a body that fails to parse must still be authenticated
     first, so the rejected request's trace carries the caller's key / team / user
     identity instead of an anonymous root span. The parse error is re-raised
@@ -7742,10 +7743,11 @@ async def test_user_api_key_auth_authenticates_before_raising_malformed_body_err
             "headers": [(b"content-type", b"application/json")],
             "method": "POST",
             "path": "/chat/completions",
+            "query_string": b"probe=1",
         }
     )
     request._url = URL(url="/chat/completions")
-    request._body = b'{}{"model": "gpt-4o"}'
+    request._body = body
 
     attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
     originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
