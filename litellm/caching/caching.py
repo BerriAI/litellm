@@ -719,9 +719,7 @@ class Cache:
 
     def _get_ttl_for_call_type(self, kwargs: Mapping[str, object]) -> float | None:
         if self.call_type_ttl:
-            call_type: Final = kwargs.get("call_type") or (
-                "embedding" if kwargs.get("embedding") is True else None
-            )
+            call_type: Final = kwargs.get("call_type") or ("embedding" if kwargs.get("embedding") is True else None)
             if isinstance(call_type, str):
                 if call_type in self.call_type_ttl:
                     return self.call_type_ttl[call_type]
