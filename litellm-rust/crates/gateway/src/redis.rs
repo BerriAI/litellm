@@ -1,17 +1,19 @@
-mod params;
-
 use std::time::Duration;
 
 use litellm_circuit_breaker::{Breaker, Config as BreakerConfig, State};
-use litellm_config::{Config, Value};
-use litellm_redis_client::{RedisClient, RedisConfig};
-
-pub(crate) use params::Lookup;
-use params::{Params, cache_block, environment_has_target, resolve};
+use litellm_config::{
+    CacheSettings, Config, Lookup, RedisEndpoint, RedisSettings, ResolvedRedis, Value,
+    environment_has_target,
+};
+use litellm_redis_client::{
+    ClusterEndpoint, ClusterNode, DEFAULT_TIMEOUT, Endpoint, HostEndpoint, Namespace, RedisClient,
+    RedisConfig,
+};
 
 use crate::Error;
 
 const ENVIRONMENT_PING_TIMEOUT: Duration = Duration::from_secs(2);
+type Params = ResolvedRedis;
 
 pub struct RedisClients {
     pub coordination: Option<RedisClient>,
@@ -34,14 +36,17 @@ enum Target {
 
 pub(crate) fn plan(config: &Config, lookup: Lookup<'_>) -> Result<Plan, Error> {
     let response_cache = redis_cache_params(config)
-        .map(|block| resolve(&cache_block(block), lookup))
+        .map(|settings| settings.resolve_cache(lookup))
         .transpose()?;
     let coordination = match &config.general_settings.coordination_redis {
-        Some(block) => Some(Target::Configured(resolve(block, lookup)?)),
+        Some(settings) => Some(Target::Configured(settings.resolve(lookup)?)),
         None => match (&response_cache, config.litellm_settings.cache == Some(true)) {
-            (Some(cache), _) => Some(Target::Configured(cache.clone())),
+            (Some(cache), _) => Some(Target::Configured(ResolvedRedis {
+                namespace: None,
+                ..cache.clone()
+            })),
             (None, true) => environment(lookup)?.map(Target::Configured),
-            (None, false) => environment(lookup)?.map(Target::Environment),
+            (None, false) => optional_environment(lookup).map(Target::Environment),
         },
     };
     let transaction_buffer_fallback = match (&coordination, use_transaction_buffer(config)) {
@@ -60,7 +65,15 @@ pub async fn connect(config: &Config, lookup: Lookup<'_>) -> Result<RedisClients
     let breaker = breaker_config(lookup)?;
     let coordination = match plan.coordination {
         Some(Target::Configured(params)) => Some(client(params, breaker)?),
-        Some(Target::Environment(params)) => reachable(client(params, breaker)?).await,
+        Some(Target::Environment(params)) => match client(params, breaker) {
+            Ok(client) => reachable(client).await,
+            Err(_) => {
+                tracing::warn!(
+                    "REDIS_* environment variables did not form a valid Redis client, cross-pod coordination stays in memory"
+                );
+                None
+            }
+        },
         None => None,
     };
     let transaction_buffer = match (&coordination, plan.transaction_buffer_fallback) {
@@ -79,17 +92,32 @@ pub async fn connect(config: &Config, lookup: Lookup<'_>) -> Result<RedisClients
     })
 }
 
-fn redis_cache_params(config: &Config) -> Option<&litellm_config::Object> {
+fn redis_cache_params(config: &Config) -> Option<&RedisSettings> {
     let settings = &config.litellm_settings;
     let params = settings.cache_params.as_ref()?;
-    let is_redis = matches!(params.get("type"), Some(Value::String(kind)) if kind == "redis");
-    (settings.cache == Some(true) && is_redis).then_some(params)
+    match (settings.cache, params) {
+        (Some(true), CacheSettings::Redis(redis)) => Some(redis),
+        _ => None,
+    }
 }
 
 fn environment(lookup: Lookup<'_>) -> Result<Option<Params>, Error> {
     match environment_has_target(lookup) {
-        true => resolve(&Default::default(), lookup).map(Some),
+        true => RedisSettings::default()
+            .resolve(lookup)
+            .map(Some)
+            .map_err(Into::into),
         false => Ok(None),
+    }
+}
+
+fn optional_environment(lookup: Lookup<'_>) -> Option<Params> {
+    match environment(lookup) {
+        Ok(params) => params,
+        Err(error) => {
+            tracing::warn!(error = %error, "REDIS_* environment variables are invalid, cross-pod coordination stays in memory");
+            None
+        }
     }
 }
 
@@ -125,11 +153,35 @@ async fn reachable(client: RedisClient) -> Option<RedisClient> {
 }
 
 fn client(params: Params, breaker: Option<BreakerConfig>) -> Result<RedisClient, Error> {
-    tracing::info!(endpoint = ?params.endpoint, namespace = ?params.namespace.as_str(), "redis client configured");
+    tracing::info!(endpoint = ?params.endpoint, namespace = ?params.namespace, "redis client configured");
+    let endpoint = match params.endpoint {
+        RedisEndpoint::Url(url) => Endpoint::Url(url.expose().to_owned()),
+        RedisEndpoint::Host(host) => Endpoint::Host(HostEndpoint {
+            host: host.host,
+            port: host.port,
+            username: host.username.map(|value| value.expose().to_owned()),
+            password: host.password.map(|value| value.expose().to_owned()),
+            tls: host.tls,
+            db: host.db,
+        }),
+        RedisEndpoint::Cluster(cluster) => Endpoint::Cluster(ClusterEndpoint {
+            nodes: cluster
+                .nodes
+                .into_iter()
+                .map(|node| ClusterNode {
+                    host: node.host,
+                    port: node.port,
+                })
+                .collect(),
+            username: cluster.username.map(|value| value.expose().to_owned()),
+            password: cluster.password.map(|value| value.expose().to_owned()),
+            tls: cluster.tls,
+        }),
+    };
     Ok(RedisClient::new(RedisConfig {
-        endpoint: params.endpoint,
-        namespace: params.namespace,
-        timeout: params.timeout,
+        endpoint,
+        namespace: params.namespace.map(Namespace::new).unwrap_or_default(),
+        timeout: params.timeout.unwrap_or(DEFAULT_TIMEOUT),
         breaker: breaker.map(|config| Breaker::new(config, Box::new(log_transition))),
     })?)
 }
@@ -197,19 +249,16 @@ fn breaker_config(lookup: Lookup<'_>) -> Result<Option<BreakerConfig>, Error> {
 mod tests {
     use std::{collections::HashMap, time::Duration};
 
-    use litellm_config::Config;
-    use litellm_redis_client::{
-        ClusterEndpoint, ClusterNode, DEFAULT_TIMEOUT, Endpoint, HostEndpoint, Namespace,
-    };
+    use litellm_config::{Config, RedisEndpoint, RedisHost};
     use litellm_redis_testing::RedisServer;
     use rstest::rstest;
 
-    use super::{Plan, Target, connect, params::Params, plan};
+    use super::{Params, Plan, Target, connect, plan};
     use crate::Error;
 
     fn host(name: &str, port: u16) -> Params {
         Params {
-            endpoint: Endpoint::Host(HostEndpoint {
+            endpoint: RedisEndpoint::Host(RedisHost {
                 host: name.to_owned(),
                 port,
                 username: None,
@@ -217,35 +266,8 @@ mod tests {
                 tls: false,
                 db: 0,
             }),
-            namespace: Namespace::default(),
-            timeout: DEFAULT_TIMEOUT,
-        }
-    }
-
-    fn url(value: &str) -> Params {
-        Params {
-            endpoint: Endpoint::Url(value.to_owned()),
-            namespace: Namespace::default(),
-            timeout: DEFAULT_TIMEOUT,
-        }
-    }
-
-    fn cluster(ports: &[u16]) -> Params {
-        Params {
-            endpoint: Endpoint::Cluster(ClusterEndpoint {
-                nodes: ports
-                    .iter()
-                    .map(|&port| ClusterNode {
-                        host: "node".to_owned(),
-                        port,
-                    })
-                    .collect(),
-                username: None,
-                password: None,
-                tls: false,
-            }),
-            namespace: Namespace::default(),
-            timeout: DEFAULT_TIMEOUT,
+            namespace: None,
+            timeout: None,
         }
     }
 
@@ -275,20 +297,10 @@ mod tests {
 
     #[rstest]
     #[case::nothing_configured("model_list: []", &[], NO_REDIS)]
-    #[case::coordination_block(
-        "general_settings:\n  coordination_redis:\n    host: coord\n    port: 6380",
-        &[],
-        configured(host("coord", 6380), None)
-    )]
     #[case::coordination_block_wins_over_the_cache_redis(
         "general_settings:\n  coordination_redis:\n    host: coord\nlitellm_settings:\n  cache: true\n  cache_params:\n    type: redis\n    host: cache",
         &[],
         configured(host("coord", 6379), Some(host("cache", 6379)))
-    )]
-    #[case::cache_redis_is_borrowed_for_coordination_without_its_namespace(
-        "litellm_settings:\n  cache: true\n  cache_params:\n    type: redis\n    host: cache\n    namespace: responses\n    ttl: 600",
-        &[],
-        configured(host("cache", 6379), Some(host("cache", 6379)))
     )]
     #[case::cache_params_without_cache_true_are_unused(
         "litellm_settings:\n  cache_params:\n    type: redis\n    host: cache",
@@ -302,70 +314,8 @@ mod tests {
     )]
     #[case::environment_only_coordination_is_probed(
         "model_list: []",
-        &[("REDIS_HOST", "env"), ("REDIS_PORT", "6390")],
-        Plan { coordination: Some(Target::Environment(host("env", 6390))), transaction_buffer_fallback: None, response_cache: None }
-    )]
-    #[case::an_explicit_host_drops_the_environment_url(
-        "general_settings:\n  coordination_redis:\n    host: coord",
-        &[("REDIS_URL", "redis://env:6379")],
-        configured(host("coord", 6379), None)
-    )]
-    #[case::an_explicit_host_keeps_environment_credentials(
-        "general_settings:\n  coordination_redis:\n    host: coord",
-        &[("REDIS_PASSWORD", "secret"), ("REDIS_SSL", "True")],
-        configured(
-            Params {
-                endpoint: Endpoint::Host(HostEndpoint {
-                    host: "coord".to_owned(),
-                    port: 6379,
-                    username: None,
-                    password: Some("secret".to_owned()),
-                    tls: true,
-                    db: 0,
-                }),
-                namespace: Namespace::default(),
-                timeout: DEFAULT_TIMEOUT,
-            },
-            None
-        )
-    )]
-    #[case::environment_url_over_environment_host(
-        "litellm_settings:\n  cache: true",
-        &[("REDIS_URL", "redis://env:6379"), ("REDIS_HOST", "ignored")],
-        configured(url("redis://env:6379"), None)
-    )]
-    #[case::startup_nodes_win_over_a_url(
-        "general_settings:\n  coordination_redis:\n    url: redis://single:6379\n    startup_nodes:\n      - host: node\n        port: 7000",
-        &[],
-        configured(cluster(&[7000]), None)
-    )]
-    #[case::environment_cluster_nodes(
-        "general_settings:\n  coordination_redis:\n    host: ignored",
-        &[("REDIS_CLUSTER_NODES", r#"[{"host": "node", "port": "7000"}, {"host": "node", "port": 7001}]"#)],
-        configured(cluster(&[7000, 7001]), None)
-    )]
-    #[case::cache_redis_startup_nodes(
-        "litellm_settings:\n  cache: true\n  cache_params:\n    type: redis\n    redis_startup_nodes:\n      - host: node\n        port: 7000",
-        &[],
-        configured(cluster(&[7000]), Some(cluster(&[7000])))
-    )]
-    #[case::os_environ_references_are_resolved(
-        "general_settings:\n  coordination_redis:\n    host: os.environ/COORD_HOST\n    port: os.environ/COORD_PORT",
-        &[("COORD_HOST", "from-env"), ("COORD_PORT", "6400")],
-        configured(host("from-env", 6400), None)
-    )]
-    #[case::socket_timeout_and_namespace_come_through(
-        "general_settings:\n  coordination_redis:\n    host: coord\n    namespace: litellm\n    socket_timeout: 1.5",
-        &[],
-        configured(
-            Params { namespace: Namespace::new("litellm"), timeout: Duration::from_millis(1500), ..host("coord", 6379) },
-            None
-        )
-    )]
-    #[case::pool_settings_have_no_meaning_without_a_pool(
-        "general_settings:\n  coordination_redis:\n    host: coord\n    max_connections: 50",
-        &[("REDIS_HEALTH_CHECK_INTERVAL", "30")],
-        configured(host("coord", 6379), None)
+        &[("REDIS_HOST", "env")],
+        Plan { coordination: Some(Target::Environment(host("env", 6379))), transaction_buffer_fallback: None, response_cache: None }
     )]
     #[case::the_transaction_buffer_falls_back_to_the_environment_only_when_enabled(
         "general_settings:\n  use_redis_transaction_buffer: \"true\"",
@@ -381,44 +331,94 @@ mod tests {
     }
 
     #[rstest]
-    #[case::unsupported_environment_kwarg("model_list: []", &[("REDIS_HOST", "env"), ("REDIS_SSL_CERT_REQS", "none")], "ssl_cert_reqs")]
-    #[case::sentinel_in_the_block("general_settings:\n  coordination_redis:\n    sentinel_nodes: [[s, 26379]]\n    service_name: mymaster", &[], "sentinel_nodes")]
-    #[case::sentinel_in_the_environment("model_list: []", &[("REDIS_SENTINEL_NODES", "[[\"s\", 26379]]")], "sentinel_nodes")]
-    #[case::aws_iam("general_settings:\n  coordination_redis:\n    host: coord\n    aws_iam_auth: true", &[], "aws_iam_auth")]
-    #[case::gcp_iam_from_the_environment("general_settings:\n  coordination_redis:\n    host: coord", &[("REDIS_GCP_SERVICE_ACCOUNT", "projects/-/serviceAccounts/x")], "gcp_service_account")]
-    #[case::azure_ad("litellm_settings:\n  cache: true\n  cache_params:\n    type: redis\n    host: cache\n    azure_redis_ad_token: \"true\"", &[], "azure_redis_ad_token")]
-    #[case::custom_ca_on_the_cache("litellm_settings:\n  cache: true\n  cache_params:\n    type: redis\n    host: cache\n    ssl_ca_certs: /ca.pem", &[], "ssl_ca_certs")]
-    fn unsupported_settings_fail_with_their_name(
-        #[case] yaml: &str,
-        #[case] environment: &[(&str, &str)],
-        #[case] setting: &str,
-    ) {
-        let error = resolved(yaml, environment).unwrap_err();
+    fn redis_migration_regression_preserves_response_cache_namespace() {
+        let yaml = "litellm_settings:\n  cache: true\n  cache_params:\n    type: redis\n    host: cache\n    namespace: responses\n    ttl: 600";
+        let cache = Params {
+            namespace: Some("responses".to_owned()),
+            ..host("cache", 6379)
+        };
 
-        assert!(
-            matches!(&error, Error::RedisSetting(name) if name == setting),
-            "{error:?}"
+        assert_eq!(
+            resolved(yaml, &[]).unwrap(),
+            configured(host("cache", 6379), Some(cache))
         );
     }
 
     #[rstest]
-    fn a_block_without_a_target_fails() {
+    fn redis_migration_regression_malformed_optional_environment_is_absent() {
+        assert_eq!(
+            resolved(
+                "model_list: []",
+                &[("REDIS_HOST", "env"), ("REDIS_PORT", "not-a-port")],
+            )
+            .unwrap(),
+            NO_REDIS
+        );
+    }
+
+    #[rstest]
+    fn redis_migration_regression_explicit_malformed_setting_still_fails() {
         let error = resolved(
-            "general_settings:\n  coordination_redis:\n    port: 6379",
+            "general_settings:\n  coordination_redis:\n    host: coord\n    port: not-a-port",
             &[],
         )
         .unwrap_err();
 
-        assert!(
-            matches!(
-                error,
-                Error::RedisInvalid {
-                    setting: "host",
-                    ..
-                }
-            ),
-            "{error:?}"
-        );
+        assert!(matches!(
+            error,
+            Error::Config(litellm_config::Error::RedisInvalid {
+                setting: "port",
+                ..
+            })
+        ));
+    }
+
+    #[rstest]
+    fn redis_migration_regression_enabled_transaction_buffer_rejects_invalid_environment() {
+        let error = resolved(
+            "general_settings:\n  use_redis_transaction_buffer: true",
+            &[("REDIS_HOST", "env"), ("REDIS_PORT", "not-a-port")],
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::Config(litellm_config::Error::RedisInvalid {
+                setting: "port",
+                ..
+            })
+        ));
+    }
+
+    #[rstest]
+    fn redis_migration_regression_invalid_response_cache_still_fails() {
+        let error = resolved(
+            "litellm_settings:\n  cache: true\n  cache_params:\n    type: redis\n    host: cache\n    port: not-a-port",
+            &[],
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::Config(litellm_config::Error::RedisInvalid {
+                setting: "port",
+                ..
+            })
+        ));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn redis_migration_regression_invalid_optional_environment_url_is_absent() {
+        let config = Config::from_yaml("model_list: []").unwrap();
+
+        let clients = connect(&config, &|name| {
+            (name == "REDIS_URL").then(|| "not a redis URL".to_owned())
+        })
+        .await
+        .unwrap();
+
+        assert!(clients.coordination.is_none());
     }
 
     fn port_of(server: &RedisServer) -> String {

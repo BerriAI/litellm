@@ -8,8 +8,8 @@ pub enum Error {
     McpSetting(String),
     #[error(transparent)]
     Mcp(#[from] litellm_gateway_mcp::ConnectError),
-    #[error("Redis host does not yet support configured setting {0}")]
-    RedisSetting(String),
+    #[error(transparent)]
+    Config(#[from] litellm_config::Error),
     #[error("invalid Redis setting {setting}: {reason}")]
     RedisInvalid {
         setting: &'static str,
