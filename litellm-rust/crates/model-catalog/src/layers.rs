@@ -45,6 +45,17 @@ impl Layers {
         self.writes.clear();
     }
 
+    pub fn registrations(&self) -> impl Iterator<Item = (&str, Option<&str>, &SparseRow)> {
+        self.writes.iter().filter_map(|write| match write {
+            ApplicationWrite::Registration {
+                key,
+                inherits_from,
+                fields,
+            } => Some((key.as_str(), inherits_from.as_deref(), fields)),
+            ApplicationWrite::Direct { .. } | ApplicationWrite::Tombstone { .. } => None,
+        })
+    }
+
     pub fn compose<'a>(&'a self, base: &'a Catalog) -> impl Iterator<Item = ComposedRow<'a>> + 'a {
         let keys: IndexSet<&'a str> = base
             .served()
@@ -377,6 +388,48 @@ mod tests {
             layers.compose(&base).map(|row| row.key).collect::<Vec<_>>(),
             base.served().map(|(key, _)| key).collect::<Vec<_>>()
         );
+    }
+
+    #[rstest]
+    fn registrations_preserve_sparse_records_through_direct_writes_and_tombstones() {
+        let first = sparse(
+            json!({"removed": null, "input_cost_per_token": 0, "metadata": {"a": [1, null]}}),
+        );
+        let second = sparse(json!({"supports_vision": false}));
+        let mut layers = layers(vec![
+            ApplicationWrite::Registration {
+                key: "z".into(),
+                inherits_from: Some("gpt-4o".into()),
+                fields: first.clone(),
+            },
+            direct("z", json!({"direct": true, "input_cost_per_token": 9})),
+            registration("a", None, json!({})),
+            ApplicationWrite::Registration {
+                key: "z".into(),
+                inherits_from: Some("a".into()),
+                fields: second.clone(),
+            },
+            tombstone("z"),
+            direct("direct-only", json!({"extra": 1})),
+        ]);
+        let empty = SparseRow::new();
+        assert_eq!(
+            layers.registrations().collect::<Vec<_>>(),
+            [
+                ("z", Some("gpt-4o"), &first),
+                ("a", None, &empty),
+                ("z", Some("a"), &second)
+            ]
+        );
+        assert_eq!(composed(&layers, &catalog(1.0), "z"), None);
+        assert_eq!(layers.registrations().next().unwrap().2["removed"], None);
+        layers.record(registration("later", Some("z"), json!({})));
+        assert_eq!(
+            layers.registrations().last(),
+            Some(("later", Some("z"), &empty))
+        );
+        layers.forget_writes();
+        assert_eq!(layers.registrations().count(), 0);
     }
 
     #[rstest]

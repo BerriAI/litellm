@@ -44,9 +44,17 @@ pub fn resolve(keys: &impl Keys, query: &Query<'_>) -> Resolved {
 }
 
 pub fn registration_target(keys: &impl Keys, caller_key: &str) -> RegistrationTarget {
+    registration_target_with_provider(keys, caller_key, None)
+}
+
+pub fn registration_target_with_provider(
+    keys: &impl Keys,
+    caller_key: &str,
+    provider: Option<&str>,
+) -> RegistrationTarget {
     let query = Query {
         model: caller_key,
-        provider: None,
+        provider,
         base_model: None,
         region: None,
     };
@@ -904,19 +912,65 @@ mod tests {
     }
 
     #[rstest]
-    fn registration_never_uses_the_lowercase_index(counted: CountingKeys) {
+    #[case::unscoped(None)]
+    #[case::scoped(Some("custom"))]
+    fn registration_never_uses_the_lowercase_index(
+        counted: CountingKeys,
+        #[case] provider: Option<&str>,
+    ) {
         let counted = CountingKeys {
             folded: Some("model"),
             ..counted
         };
         assert_eq!(
-            registration_target(&counted, "MODEL"),
+            registration_target_with_provider(&counted, "MODEL", provider),
             RegistrationTarget {
                 write: "MODEL".into(),
                 inherit_from: None
             }
         );
         assert_eq!(counted.lowercase_calls.get(), 0);
+    }
+
+    #[rstest]
+    #[case::provider_mismatch("same", Some("azure"), None)]
+    #[case::no_provider("same", None, Some("same"))]
+    #[case::empty_provider("same", Some(""), Some("same"))]
+    #[case::qualified_preference("model", Some("openai"), Some("openai/model"))]
+    #[case::already_qualified("openai/model", Some("openai"), Some("openai/model"))]
+    #[case::bare_after_folded_candidate("bare", Some("openai"), Some("bare"))]
+    #[case::no_lowercase("hosted_vllm/example-model", Some("hosted_vllm"), None)]
+    #[case::upper_case(
+        "hosted_vllm/Example-Model",
+        Some("hosted_vllm"),
+        Some("hosted_vllm/Example-Model")
+    )]
+    #[case::independent_upper("Case", Some("openai"), Some("Case"))]
+    #[case::independent_lower("case", Some("openai"), Some("case"))]
+    #[case::suffix("version-99", Some("databricks"), Some("databricks/version"))]
+    fn registration_uses_provider_without_case_folding(
+        #[case] key: &str,
+        #[case] provider: Option<&str>,
+        #[case] inherited: Option<&str>,
+    ) {
+        let models = catalog(json!({
+            "same": {"litellm_provider": "openai"},
+            "model": {"litellm_provider": "openai"},
+            "openai/model": {"litellm_provider": "openai"},
+            "openai/Bare": {"litellm_provider": "openai"},
+            "bare": {"litellm_provider": "openai"},
+            "hosted_vllm/Example-Model": {"litellm_provider": "hosted_vllm"},
+            "Case": {"litellm_provider": "openai"},
+            "case": {"litellm_provider": "openai"},
+            "databricks/version": {"litellm_provider": "databricks"}
+        }));
+        assert_eq!(
+            registration_target_with_provider(&models, key, provider),
+            RegistrationTarget {
+                write: key.into(),
+                inherit_from: inherited.map(str::to_owned),
+            }
+        );
     }
 
     #[rstest]

@@ -207,11 +207,12 @@ pub(crate) fn resolve_model(
     })
 }
 
-#[pyfunction(pass_module)]
+#[pyfunction(pass_module, signature = (model_cost, key, *, provider=None))]
 pub(crate) fn registration_target(
     module: &Bound<'_, PyModule>,
     model_cost: &Bound<'_, PyDict>,
     key: &str,
+    provider: Option<&str>,
 ) -> PyResult<RegistrationTarget> {
     let index = module.getattr("_model_key_index")?;
     let index = index.extract::<PyRef<'_, ModelKeyIndex>>()?;
@@ -220,7 +221,7 @@ pub(crate) fn registration_target(
         index: &index,
         error: RefCell::default(),
     };
-    let target = resolution::registration_target(&view, key);
+    let target = resolution::registration_target_with_provider(&view, key, provider);
     view.finish()?;
     Ok(RegistrationTarget {
         write: target.write,
@@ -939,7 +940,7 @@ mod tests {
                 }),
             );
             let before: Value = from_py(rows.as_any()).unwrap();
-            let target = registration_target(&module(py), &rows, key).unwrap();
+            let target = registration_target(&module(py), &rows, key, None).unwrap();
             assert_eq!(
                 (target.write.as_str(), target.inherit_from.as_deref()),
                 (key, inherited)
@@ -1053,6 +1054,7 @@ models = HostileDict({"Model": {"litellm_provider": "test", "input_cost_per_toke
 assert n.resolve_model(models, "Model").key == "Model"
 assert n.resolve_model(models, "MODEL").key == "Model"
 assert n.registration_target(models, "Model").inherit_from == "Model"
+assert n.registration_target(models, "Model", provider="test").inherit_from == "Model"
 assert n.model_info(models, "Model").input_cost_per_token == 2
 "#
                 ),
@@ -1060,6 +1062,39 @@ assert n.model_info(models, "Model").input_cost_per_token == 2
                 None,
             )
             .unwrap();
+        });
+    }
+
+    #[rstest]
+    #[case::wrong_provider("same", "azure", None)]
+    #[case::bare_after_folded_candidate("model", "openai", Some("model"))]
+    #[case::qualified_preference("qualified", "openai", Some("openai/qualified"))]
+    #[case::case_sensitive("hosted_vllm/model", "hosted_vllm", None)]
+    fn registration_binding_keeps_provider_and_case_constraints(
+        #[from(interpreter)] _interpreter: (),
+        #[case] key: &str,
+        #[case] provider: &str,
+        #[case] inherited: Option<&str>,
+    ) {
+        Python::attach(|py| {
+            let rows = dict(
+                py,
+                json!({
+                    "same": {"litellm_provider": "openai"},
+                    "model": {"litellm_provider": "openai"},
+                    "openai/Model": {"litellm_provider": "openai"},
+                    "qualified": {"litellm_provider": "openai"},
+                    "openai/qualified": {"litellm_provider": "openai"},
+                    "hosted_vllm/Model": {"litellm_provider": "hosted_vllm"}
+                }),
+            );
+            let before: Value = from_py(rows.as_any()).unwrap();
+            let target = registration_target(&module(py), &rows, key, Some(provider)).unwrap();
+            assert_eq!(
+                (target.write.as_str(), target.inherit_from.as_deref()),
+                (key, inherited)
+            );
+            assert_eq!(from_py::<Value>(rows.as_any()).unwrap(), before);
         });
     }
 
@@ -1177,7 +1212,7 @@ assert n.model_info(models, "Model").input_cost_per_token == 2
             };
             assert_eq!(found.key, "openai/model");
             assert_eq!(
-                registration_target(&module, &rows, "openai/model")
+                registration_target(&module, &rows, "openai/model", None)
                     .unwrap()
                     .inherit_from
                     .as_deref(),

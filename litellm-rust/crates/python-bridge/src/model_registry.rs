@@ -404,6 +404,22 @@ impl ModelCostLayers {
         release_gil(py, || self.lock().forget_writes());
     }
 
+    fn registrations(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let records: Vec<_> = release_gil(py, || {
+            self.lock()
+                .registrations()
+                .map(|(key, inherits_from, fields)| {
+                    (
+                        key.to_owned(),
+                        inherits_from.map(str::to_owned),
+                        fields.clone(),
+                    )
+                })
+                .collect()
+        });
+        to_py(py, &records)
+    }
+
     fn compose(&self, py: Python<'_>, base: &ModelRegistry) -> PyResult<Py<PyAny>> {
         let rows = release_gil(py, || {
             self.lock()
@@ -982,6 +998,45 @@ finally:
     thread.join(5)
 assert ran_during_compose, "compose held the GIL"
 assert {key:row for key,row,_ in rows} == base.served()
+"#
+                ),
+                Some(scope),
+                Some(scope),
+            )
+            .unwrap();
+        });
+    }
+
+    #[rstest]
+    fn registration_snapshots_are_sparse_ordered_and_detached(scope: Py<PyDict>) {
+        Python::attach(|py| {
+            let scope = scope.bind(py);
+            py.run(
+                c_str!(
+                    r#"
+layers = native.ModelCostLayers()
+assert layers.registrations() == []
+fields = {"removed": None, "metadata": {"items": [{"value": 1}]}}
+layers.record_registration("z", "base", fields)
+layers.diff({"z": ({"old": 1}, {"direct": True})})
+layers.record_registration("a", None, {})
+layers.record_registration("z", "a", {"input_cost_per_token": 0})
+layers.diff({"z": ({"direct": True}, None)})
+expected = [("z", "base", fields), ("a", None, {}), ("z", "a", {"input_cost_per_token": 0})]
+first = layers.registrations()
+assert first == expected
+assert list(first[0][2]) == ["removed", "metadata"]
+first[0][2]["metadata"]["items"][0]["value"] = 2
+first[0][2]["removed"] = "changed"
+assert layers.registrations() == expected
+fields["metadata"]["items"].clear()
+assert layers.registrations()[0][2]["metadata"] == {"items": [{"value": 1}]}
+layers.record_registration("later", "z", {})
+assert len(first) == 3
+assert layers.registrations()[-1] == ("later", "z", {})
+layers.forget_writes()
+assert layers.registrations() == []
+assert len(first) == 3
 "#
                 ),
                 Some(scope),
