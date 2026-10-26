@@ -409,6 +409,12 @@ def test_a_migration_without_a_failed_row_is_not_touched(partitioned_database: s
     assert _ledger(partitioned_database) == before
 
 
+def _backend_pid(connection: "psycopg.Connection[tuple[object, ...]]") -> int:
+    row: Final = connection.execute("SELECT pg_backend_pid()").fetchone()
+    assert row is not None and isinstance(row[0], int), row
+    return row[0]
+
+
 def _pin_a_snapshot_on(database_url: str, table: str) -> "psycopg.Connection[tuple[object, ...]]":
     pin: Final = psycopg.connect(database_url)
     pin.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
@@ -742,7 +748,7 @@ def test_inserts_are_never_held_back_while_attach_partition_waits_for_a_reader_o
         reader.execute(
             sql.SQL('SELECT count(*) FROM {} WHERE "litellm_call_id" IS NULL').format(sql.Identifier(partition))
         ).fetchone()
-        reader_pid: Final = reader.execute("SELECT pg_backend_pid()").fetchone()[0]
+        reader_pid: Final = _backend_pid(reader)
         with psycopg.connect(partitioned_database, autocommit=True) as inspector:
             child_lock: Final = inspector.execute(
                 "SELECT 1 FROM pg_locks WHERE pid = %s AND relation = to_regclass(%s) "
@@ -805,7 +811,7 @@ def test_an_attach_that_never_gets_its_lock_is_left_for_the_next_index_build(
         reader.execute(
             sql.SQL('SELECT count(*) FROM {} WHERE "litellm_call_id" IS NULL').format(sql.Identifier(partition))
         ).fetchone()
-        reader_pid: Final = reader.execute("SELECT pg_backend_pid()").fetchone()[0]
+        reader_pid: Final = _backend_pid(reader)
         with psycopg.connect(partitioned_database, autocommit=True) as inspector:
             child_lock: Final = inspector.execute(
                 "SELECT 1 FROM pg_locks WHERE pid = %s AND relation = to_regclass(%s) "

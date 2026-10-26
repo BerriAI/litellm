@@ -397,10 +397,12 @@ class ProxyExtrasDBManager:
         except ImportError:
             return None
 
+        from psycopg import sql
+
         cleaned_url: Final = ProxyExtrasDBManager._strip_prisma_query_params(database_url)
-        ledger_table: Final = psycopg.sql.SQL("{}.{}").format(
-            psycopg.sql.Identifier(ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"),
-            psycopg.sql.Identifier("_prisma_migrations"),
+        ledger_table: Final = sql.SQL("{}.{}").format(
+            sql.Identifier(ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"),
+            sql.Identifier("_prisma_migrations"),
         )
         try:
             with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
