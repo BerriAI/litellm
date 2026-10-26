@@ -3369,24 +3369,29 @@ class LiteLLMCompletionResponsesConfig:
                 encrypted_content = LiteLLMCompletionResponsesConfig._encode_thinking_blocks(message)
                 if reasoning_content or encrypted_content:
                     # Only check the first choice for reasoning content
+                    # summary and encrypted_content are reasoning-only extras the shared model does not declare
                     return [
-                        GenericResponseOutputItem(
-                            type="reasoning",
-                            id=mint_reasoning_item_id(),
-                            status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
-                                choice.finish_reason
-                            ),
-                            role="assistant",
-                            content=[
-                                OutputText(
-                                    type="output_text",
-                                    text=text,
-                                    annotations=[],
-                                )
-                                for text in (reasoning_content,)
-                                if text
-                            ],
-                            encrypted_content=encrypted_content,
+                        GenericResponseOutputItem.model_validate(
+                            {
+                                "type": "reasoning",
+                                "id": mint_reasoning_item_id(),
+                                "status": LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+                                    choice.finish_reason
+                                ),
+                                "role": "assistant",
+                                "content": [
+                                    OutputText(
+                                        type="output_text",
+                                        text=text,
+                                        annotations=[],
+                                    )
+                                    for text in (reasoning_content,)
+                                    if text
+                                ],
+                                # Required by the Responses schema. The reasoning text rides in content, so it stays empty
+                                "summary": [],
+                                "encrypted_content": encrypted_content,
+                            }
                         )
                     ]
         return []
