@@ -15,7 +15,9 @@ import re
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
+
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.harness.errors import HarnessError, OptionsMismatch
@@ -29,6 +31,7 @@ from litellm.harness.types import (
     ToolCall,
     ToolResult,
 )
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.llms.base_llm.harness.transformation import (
     BaseCLIHarnessConfig,
     HarnessSessionSetup,
@@ -61,6 +64,7 @@ MANAGED_CONFIG_KEYS: Final = frozenset(
 )
 _BARE_TOML_KEY: Final = re.compile(r"^[A-Za-z0-9_-]+$")
 _TOOL_ITEM_TYPES: Final = frozenset({"command_execution", "file_change", "web_search", "mcp_tool_call"})
+_CHANGES: Final = TypeAdapter(tuple[Mapping[object, object], ...], config=ConfigDict(hide_input_in_errors=True))
 
 
 @dataclass
@@ -74,13 +78,13 @@ class CodexStreamState:
     started: set[str] = field(default_factory=set)  # mutable-ok: parser records announced tool items
 
 
-def _tool_input(item: Mapping[str, Any]) -> tuple[str, str, Mapping[str, Any], bool]:
+def _tool_input(item: Mapping[str, object]) -> tuple[str, str, Mapping[str, object], bool]:
     """(normalized name, native name, input, builtin) for a tool-like item."""
     item_type = item.get("type")
     if item_type == "command_execution":
         return "bash", "command_execution", MappingProxyType({"command": item.get("command", "")}), True
     if item_type == "file_change":
-        changes: Final = list(item.get("changes") or ())  # mutable-ok: JSON array, as codex reports it
+        changes: Final = list(iter_items(item.get("changes") or ()))  # mutable-ok: JSON array, as codex reports it
         return "edit", "apply_patch", MappingProxyType({"changes": changes}), True
     if item_type == "web_search":
         return "web_search", "web_search", MappingProxyType({"query": item.get("query", "")}), True
@@ -92,7 +96,7 @@ def _tool_input(item: Mapping[str, Any]) -> tuple[str, str, Mapping[str, Any], b
     return name, tool, tool_args, False
 
 
-def _tool_output(item: Mapping[str, Any]) -> tuple[str, bool]:
+def _tool_output(item: Mapping[str, object]) -> tuple[str, bool]:
     """(output text, is_error) for a completed tool-like item."""
     item_type = item.get("type")
     status = item.get("status")
@@ -101,7 +105,8 @@ def _tool_output(item: Mapping[str, Any]) -> tuple[str, bool]:
         is_error = status == "failed" or (exit_code is not None and exit_code != 0)
         return str(item.get("aggregated_output") or ""), is_error
     if item_type == "file_change":
-        lines = (f"{c.get('kind', '')} {c.get('path', '')}".strip() for c in item.get("changes") or ())
+        changes: Final = _CHANGES.validate_python(item.get("changes") or ())
+        lines: Final = (f"{c.get('kind', '')} {c.get('path', '')}".strip() for c in changes)
         return "\n".join(lines), status == "failed"
     if item_type == "web_search":
         return "", status == "failed"
@@ -118,7 +123,7 @@ def _tool_output(item: Mapping[str, Any]) -> tuple[str, bool]:
 
 
 def _tool_item_events(
-    item_id: str, item: Mapping[str, Any], completed: bool, state: CodexStreamState
+    item_id: str, item: Mapping[str, object], completed: bool, state: CodexStreamState
 ) -> Iterator[Event]:
     if item_id not in state.started:
         state.started.add(item_id)
@@ -129,7 +134,7 @@ def _tool_item_events(
         yield ToolResult(id=item_id, output=output, is_error=is_error)
 
 
-def _item_events(event_type: str, item: Mapping[str, Any], state: CodexStreamState) -> Sequence[Event]:
+def _item_events(event_type: str, item: Mapping[str, object], state: CodexStreamState) -> Sequence[Event]:
     item_type = item.get("type")
     item_id = str(item.get("id") or "")
     completed = event_type == "item.completed"
@@ -181,7 +186,7 @@ def _config_override(key: object, value: object) -> str:
     return f"{dotted}={toml_value(value)}"
 
 
-def config_overrides(config: Mapping[str, Any]) -> Sequence[str]:
+def config_overrides(config: Mapping[str, object]) -> Sequence[str]:
     """`-c` override strings for CodexOptions.config, rejecting managed keys."""
     overrides: Final = (_config_override(key, value) for key, value in config.items())
     return list(overrides)  # mutable-ok: public helper; tests compare to a list
@@ -310,7 +315,7 @@ class CodexHarnessConfig(BaseCLIHarnessConfig):
     def create_stream_state(self) -> CodexStreamState:
         return CodexStreamState()
 
-    def transform_stream_line(self, line: Mapping[str, Any], state: CodexStreamState) -> Sequence[Event]:
+    def transform_stream_line(self, line: Mapping[str, object], state: CodexStreamState) -> Sequence[Event]:
         """turn.completed usage is ignored on purpose: the session endpoint accounts it."""
         event_type = line.get("type")
         if event_type == "thread.started":

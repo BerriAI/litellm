@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, renderWithProviders, screen, waitFor, within } from "../../../tests/test-utils";
 import { selectAutoRouterOption } from "../../../tests/autoRouterSetup";
 import AutoRouterClassifierTabs from "./AutoRouterClassifierTabs";
+import ClassificationMethodConfig from "./ClassificationMethodConfig";
 import { AutoRouterAllowanceNote, AutoRouterAvailabilityContext } from "./AutoRouterAvailability";
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 
@@ -53,6 +54,42 @@ function Form({
 }
 
 describe("Auto-router classifier selection", () => {
+  it.each([false, true])("applies the v2 allowance to chain selection, owned: %s", (owned) => {
+    const onChange = vi.fn();
+    renderWithProviders(
+      <AutoRouterAvailabilityContext.Provider
+        value={{
+          isPending: false,
+          isError: false,
+          data: {
+            allowances: [{ key: "heuristic_v2", limit: 1, remaining: 0, available: true, used_by_this_router: owned }],
+            error: null,
+          },
+        }}
+      >
+        <ClassificationMethodConfig
+          advancedOnly
+          section="selection"
+          value={{ ...initial, classifier_type: "hybrid", hybrid_boundary_margin: 0.1 }}
+          onChange={onChange}
+          modelOptions={[]}
+          effortOptionsByModel={{}}
+        />
+      </AutoRouterAvailabilityContext.Provider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Heuristic before the judge" }));
+    const option = screen.getByRole("menuitemradio", { name: /^Heuristic v2/ });
+    if (owned) {
+      expect(option).not.toHaveAttribute("aria-disabled", "true");
+      fireEvent.click(option);
+      expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ local_heuristic: "heuristic_v2" }));
+    } else {
+      expect(option).toHaveAttribute("aria-disabled", "true");
+      fireEvent.click(option);
+      expect(onChange).not.toHaveBeenCalled();
+    }
+  });
+
   it.each(["heuristic", "heuristic_v2", "llm", "heuristic_first", "hybrid", "jev"] as const)(
     "shows saved %s without changing its configuration",
     async (classifier_type) => {
@@ -68,7 +105,7 @@ describe("Auto-router classifier selection", () => {
         llm: "LLM",
         heuristic_first: "LLM",
         hybrid: "LLM",
-        jev: "OSS Classifier",
+        jev: "Decisions Model",
       }[classifier_type];
       expect(screen.getByRole("radio", { name: new RegExp(`^${family}$`) })).toBeChecked();
       fireEvent.click(screen.getByRole("radio", { name: new RegExp(`^${family}$`) }));
@@ -154,17 +191,14 @@ describe("Auto-router classifier selection", () => {
     expect(screen.getByRole("button", { name: field })).toHaveTextContent("Used by this router");
   });
 
-  it("shows Jev's single Complexity approach without changing saved configuration", () => {
+  it("omits Jev's redundant routing approach without changing saved configuration", () => {
     const onChange = vi.fn();
     renderWithProviders(
       <AutoRouterClassifierTabs value={{ ...initial, classifier_type: "jev" }} onChange={onChange}>
         Existing settings
       </AutoRouterClassifierTabs>,
     );
-    expect(screen.getByRole("button", { name: "Routing approach" })).toHaveTextContent("ComplexityUnlimited");
-    fireEvent.click(screen.getByRole("button", { name: "Routing approach" }));
-    expect(screen.getAllByRole("menuitemradio")).toHaveLength(1);
-    fireEvent.click(screen.getByRole("menuitemradio", { name: /^Complexity/ }));
+    expect(screen.queryByRole("button", { name: "Routing approach" })).not.toBeInTheDocument();
     expect(onChange).not.toHaveBeenCalled();
   });
 

@@ -10,20 +10,18 @@ Tests for the changes to integrate cold storage handling across different compon
 """
 
 import json
-from datetime import datetime, timezone
-from typing import Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from litellm.integrations.s3_v2 import S3Logger
-from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
+from litellm.proxy._types import SpendLogsMetadata
 from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
 from litellm.proxy.spend_tracking.spend_tracking_utils import _get_spend_logs_metadata
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
-from litellm.types.utils import StandardLoggingMetadata, StandardLoggingPayload
+from litellm.types.utils import StandardLoggingMetadata
 
 
 class TestColdStorageObjectKeyIntegration:
@@ -57,7 +55,9 @@ class TestColdStorageObjectKeyIntegration:
         """
         # Create a SpendLogsMetadata instance with cold_storage_object_key
         metadata = SpendLogsMetadata(
-            user_api_key="test_key", cold_storage_object_key="test/path/to/object.json"
+            user_api_key="test_key",
+            user_api_key_user_email=None,
+            cold_storage_object_key="test/path/to/object.json",
         )
 
         # Verify the field can be set and accessed

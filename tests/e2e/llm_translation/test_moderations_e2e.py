@@ -9,9 +9,12 @@ negative stays on the shared transport, since the SDK refuses to send it.
 
 from __future__ import annotations
 
+from typing import Final
+
 import pytest
 from e2e_config import unique_marker
 from e2e_http import assert_client_error
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from openai.types import Moderation
@@ -21,6 +24,7 @@ from sdk_clients import SdkClients
 
 pytestmark = pytest.mark.e2e
 
+OPENAI_MODERATION_BACKEND: Final = "openai/omni-moderation-latest"
 VIOLENT_TEXT = "I am going to find you and kill you, and I will hurt everyone you love."
 BENIGN_TEXT = "I enjoyed the sunny afternoon and a relaxing walk in the park today."
 
@@ -35,7 +39,7 @@ def _register_moderation_model(proxy: ProxyClient, resources: ResourceManager) -
     model_id = proxy.create_model(
         model,
         LiteLLMParamsBody(
-            model="openai/omni-moderation-latest", api_key="os.environ/OPENAI_API_KEY"
+            model=OPENAI_MODERATION_BACKEND, api_key="os.environ/OPENAI_API_KEY"
         ),
     )
     resources.defer(lambda: proxy.delete_model(model_id))
@@ -52,6 +56,15 @@ def _flagged_categories(item: Moderation) -> tuple[str, ...]:
 
 class TestModerations:
     @pytest.mark.covers("llm.moderations.openai.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MODERATIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_MODERATION_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_moderations_flags_violent_content(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -64,6 +77,15 @@ class TestModerations:
         assert item.flagged, f"violent text was not flagged: {item!r}"
         assert _flagged_categories(item), f"flagged result reported no true category: {item!r}"
 
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MODERATIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_MODERATION_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_moderations_passes_benign_content(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -79,6 +101,14 @@ class TestModerations:
 
     @pytest.mark.skip(reason="stage red: product gap, /v1/moderations 500s (KeyError 'input') on missing input instead of 400")
     @pytest.mark.covers("llm.moderations.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MODERATIONS,
+            providers=(),
+            models=(),
+        )
+    )
     def test_missing_input_returns_error(
         self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:

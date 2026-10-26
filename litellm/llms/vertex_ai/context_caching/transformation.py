@@ -16,8 +16,8 @@ from litellm.utils import is_cached_message
 
 from ..common_utils import get_supports_system_message
 from ..gemini.transformation import (
-    _gemini_convert_messages_with_history,
-    _transform_system_message,
+    gemini_convert_messages_with_history,
+    transform_system_message,
 )
 
 
@@ -171,11 +171,11 @@ def transform_openai_messages_to_gemini_context_caching(
 
     supports_system_message: Final = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
 
-    transformed_system_messages, new_messages = _transform_system_message(
+    transformed_system_messages, new_messages = transform_system_message(
         supports_system_message=supports_system_message, messages=messages
     )
 
-    transformed_messages: Final = _gemini_convert_messages_with_history(
+    transformed_messages: Final = gemini_convert_messages_with_history(
         messages=new_messages,
         model=model,
         custom_llm_provider=custom_llm_provider,

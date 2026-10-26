@@ -2,7 +2,7 @@
 ## handler file for TextCompletionCodestral Integration - https://codestral.com/
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import partial
 from typing import Final, Protocol
 
@@ -13,8 +13,8 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    custom_prompt,
     prompt_factory,
+    render_custom_prompt_template,
 )
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -261,17 +261,14 @@ class CodestralTextCompletion:
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
             model_prompt_details: Final = custom_prompt_dict[model]
-            prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details["initial_prompt_value"],
-                final_prompt_value=model_prompt_details["final_prompt_value"],
-                messages=messages,
+            prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=messages, model=model, llm_provider="codestral"
             )
         else:
             prompt = prompt_factory(model=model, messages=messages)
 
         ## Load Config
-        config: Final = litellm.CodestralTextCompletionConfig.get_config()
+        config: Final[Mapping[str, object]] = litellm.CodestralTextCompletionConfig.get_config()
         for k, v in config.items():
             if (
                 k not in optional_params

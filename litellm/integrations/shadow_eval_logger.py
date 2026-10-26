@@ -20,9 +20,10 @@ from datetime import datetime, timezone
 from itertools import groupby
 from operator import itemgetter
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, field_validator, model_validator
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -40,6 +41,7 @@ from litellm.litellm_core_utils.llm_judge import (
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.auto_router_endpoints import ShadowEvalDirection
 from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
 
@@ -467,7 +469,7 @@ Return ONLY valid JSON in this exact format, no other text:
 }"""
 
 
-class PairwiseVerdict(BaseModel):
+class PairwiseVerdict(LiteLLMBaseModel):
     """The judge's blind A/B verdict: the response_format schema sent with the judge call
     and the validation contract on its reply. Both fields are required and preference is
     closed over the prompt's labels, so a malformed or truncated reply is an
@@ -630,13 +632,13 @@ async def _key_or_team_is_over_budget(metadata: Mapping[str, object]) -> bool:
     """
     try:
         from litellm.exceptions import BudgetExceededError
-        from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.auth.auth_checks import (
-            _team_max_budget_check,
-            _virtual_key_max_budget_check,
             get_team_object,
+            team_max_budget_check,
+            virtual_key_max_budget_check,
         )
         from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+        from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     except ImportError:
         return False
 
@@ -644,7 +646,7 @@ async def _key_or_team_is_over_budget(metadata: Mapping[str, object]) -> bool:
     if not isinstance(auth, UserAPIKeyAuth):
         return False
     try:
-        await _virtual_key_max_budget_check(valid_token=auth, proxy_logging_obj=proxy_logging_obj)
+        await virtual_key_max_budget_check(valid_token=auth, proxy_logging_obj=proxy_logging_obj)
         if auth.team_id:
             team: Final = await get_team_object(
                 team_id=auth.team_id,
@@ -652,7 +654,7 @@ async def _key_or_team_is_over_budget(metadata: Mapping[str, object]) -> bool:
                 user_api_key_cache=user_api_key_cache,
                 check_cache_only=True,
             )
-            await _team_max_budget_check(team_object=team, valid_token=auth, proxy_logging_obj=proxy_logging_obj)
+            await team_max_budget_check(team_object=team, valid_token=auth, proxy_logging_obj=proxy_logging_obj)
     except BudgetExceededError:
         return True
     except Exception as e:  # noqa: BLE001  # advisory gate: a failed read must not block sampling
@@ -731,7 +733,7 @@ class _JudgeVerdict:
     cost: float
 
 
-class ActiveShadowEvalJob(BaseModel):
+class ActiveShadowEvalJob(LiteLLMBaseModel):
     """One active job as the sampling path needs it, validated straight off the untyped
     job row: immutable config plus the attempt count as of the cache fill (the turn
     budget's staleness is bounded by the cache TTL). Every way a row can be unsamplable
@@ -800,6 +802,52 @@ def _scope_admits(router: "Router | None", job: "ActiveShadowEvalJob", model_gro
     return not job.models or any(_canonical_group(router, name) == model_group for name in job.models)
 
 
+class _ShadowEvalJobRow(Protocol):
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def target_type(self) -> str: ...
+
+    @property
+    def target_id(self) -> str: ...
+
+
+class _AttemptCount(TypedDict):
+    _all: ReadOnly[int]
+
+
+class _AttemptGroup(TypedDict):
+    job_id: ReadOnly[str]
+    _count: ReadOnly[_AttemptCount]
+    _sum: ReadOnly[Mapping[str, object] | None]
+
+
+class _ShadowEvalJobTable(Protocol):
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_ShadowEvalJobRow]: ...
+
+
+class _ShadowEvalAttemptTable(Protocol):
+    async def group_by(
+        self,
+        *,
+        by: Sequence[str],
+        count: bool,
+        sum: Mapping[str, bool],
+        where: Mapping[str, object],
+    ) -> Sequence[_AttemptGroup]: ...
+
+    async def create(self, *, data: Mapping[str, object]) -> object: ...
+
+
+def _shadow_eval_job_table(prisma: "PrismaClient") -> _ShadowEvalJobTable:
+    return prisma.db.litellm_shadowevaljob
+
+
+def _shadow_eval_attempt_table(prisma: "PrismaClient") -> _ShadowEvalAttemptTable:
+    return prisma.db.litellm_shadowevalattempt
+
+
 def _as_active_job(record: object, attempts: int, spend: float) -> ActiveShadowEvalJob | None:
     """The sampling path's view of one job row, or None for a row it cannot sample: an
     unknown direction, or a reverse job with no baseline model to duplicate against.
@@ -859,14 +907,14 @@ class ShadowEvalLogger(CustomLogger):
         if prisma is None:
             return _EMPTY_JOBS
         try:
-            records: Final = await prisma.db.litellm_shadowevaljob.find_many(
+            records: Final = await _shadow_eval_job_table(prisma).find_many(
                 where={
                     "stopped_at": None,
                     "ends_at": {"gt": datetime.now(timezone.utc)},
                 },
             )
             grouped: Final = (
-                await prisma.db.litellm_shadowevalattempt.group_by(
+                await _shadow_eval_attempt_table(prisma).group_by(
                     by=["job_id"],
                     count=True,
                     sum={"judge_cost": True, "shadow_cost": True, "shadow_classifier_cost": True},
@@ -893,7 +941,10 @@ class ShadowEvalLogger(CustomLogger):
                 )
             )
             jobs: Final = MappingProxyType(
-                {target: tuple(job for _, job in group) for target, group in groupby(by_target, key=itemgetter(0))}
+                {
+                    target: tuple(job for _, job in group)
+                    for target, group in groupby(by_target, key=lambda entry: entry[0])
+                }
             )
             await self._jobs_cache.async_set_cache(_JOBS_CACHE_KEY, jobs)
             self._job_starts = {}
@@ -1241,7 +1292,7 @@ class ShadowEvalLogger(CustomLogger):
         if prisma is None:
             return
         try:
-            await prisma.db.litellm_shadowevalattempt.create(
+            await _shadow_eval_attempt_table(prisma).create(
                 data={
                     "job_id": job.id,
                     "request_id": request_id,

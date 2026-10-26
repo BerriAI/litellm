@@ -6,9 +6,15 @@ Prometheus gauge `litellm_in_flight_requests`.
 """
 
 import os
-from typing import Any, Final
+from typing import Final, Protocol
 
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+
+class _InFlightGauge(Protocol):
+    def inc(self) -> None: ...
+
+    def dec(self) -> None: ...
 
 
 class InFlightRequestsMiddleware:
@@ -27,7 +33,7 @@ class InFlightRequestsMiddleware:
     """
 
     _in_flight: int = 0
-    _gauge: Any | None = None
+    _gauge: _InFlightGauge | None = None
     _gauge_init_attempted: bool = False
 
     def __init__(self, app: ASGIApp) -> None:
@@ -55,7 +61,7 @@ class InFlightRequestsMiddleware:
         return InFlightRequestsMiddleware._in_flight
 
     @staticmethod
-    def _get_gauge() -> Any | None:
+    def _get_gauge() -> _InFlightGauge | None:
         if InFlightRequestsMiddleware._gauge_init_attempted:
             return InFlightRequestsMiddleware._gauge
         InFlightRequestsMiddleware._gauge_init_attempted = True

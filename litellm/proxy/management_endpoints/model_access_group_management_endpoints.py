@@ -584,7 +584,7 @@ async def create_model_group(
     Example:
     ```bash
     curl -X POST 'http://localhost:4000/access_group/new' \\
-      -H 'Authorization: Bearer sk-1234' \\
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
       -H 'Content-Type: application/json' \\
       -d '{
         "access_group": "production-models",
@@ -729,7 +729,7 @@ async def list_access_groups(
     Example:
     ```bash
     curl -X GET 'http://localhost:4000/access_group/list' \\
-      -H 'Authorization: Bearer sk-1234'
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     
     Returns:
@@ -777,7 +777,7 @@ async def get_access_group_info(
     Example:
     ```bash
     curl -X GET 'http://localhost:4000/access_group/production-models/info' \\
-      -H 'Authorization: Bearer sk-1234'
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     
     Parameters:
@@ -841,7 +841,7 @@ async def update_access_group(
     Example:
     ```bash
     curl -X PUT 'http://localhost:4000/access_group/production-models/update' \\
-      -H 'Authorization: Bearer sk-1234' \\
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
       -H 'Content-Type: application/json' \\
       -d '{
         "model_names": ["gpt-4", "claude-3-sonnet"]
@@ -993,7 +993,7 @@ async def delete_access_group(
     Example:
     ```bash
     curl -X DELETE 'http://localhost:4000/access_group/production-models/delete' \\
-      -H 'Authorization: Bearer sk-1234'
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     
     Parameters:
@@ -1099,7 +1099,7 @@ async def get_access_group_budget(
     Example:
     ```bash
     curl -X GET 'http://localhost:4000/access_group/production-models/budget' \\
-      -H 'Authorization: Bearer sk-1234'
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Parameters:
@@ -1139,7 +1139,7 @@ async def set_access_group_budget(
     Example:
     ```bash
     curl -X PUT 'http://localhost:4000/access_group/production-models/budget' \\
-      -H 'Authorization: Bearer sk-1234' \\
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
       -H 'Content-Type: application/json' \\
       -d '{
         "max_budget": 100.0,
@@ -1213,7 +1213,7 @@ async def delete_access_group_budget(
     Example:
     ```bash
     curl -X DELETE 'http://localhost:4000/access_group/production-models/budget' \\
-      -H 'Authorization: Bearer sk-1234'
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Parameters:
