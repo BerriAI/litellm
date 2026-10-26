@@ -14,7 +14,7 @@ use reqwest::{
 };
 use serde::Serialize;
 
-use crate::Error;
+use crate::{Error, error::Repr};
 
 /// Returns the headers to add to the request; it never sees a mutable request.
 pub trait RequestSigner: Send + Sync {
@@ -27,7 +27,7 @@ pub fn json(
     body: &impl Serialize,
     timeout: Option<Duration>,
 ) -> Result<Request, Error> {
-    let body = serde_json::to_vec(body).map_err(|error| Error::RequestBody(error.to_string()))?;
+    let body = serde_json::to_vec(body).map_err(Repr::RequestBody)?;
     let with_headers = headers
         .iter()
         .fold(http::Request::post(url), |builder, (name, value)| {
@@ -41,15 +41,13 @@ pub fn json(
     } else {
         with_headers.header(CONTENT_TYPE, "application/json")
     };
-    let mut request = builder
-        .body(body)
-        .map_err(|error| Error::Request(error.to_string()))
-        .and_then(|request| {
-            Request::try_from(request)
-                .map_err(|error| Error::Request(error.without_url().to_string()))
-        })?;
+    let mut request = from_http(builder.body(body).map_err(Repr::Request)?)?;
     *request.timeout_mut() = timeout;
     Ok(request)
+}
+
+pub fn from_http<B: Into<reqwest::Body>>(request: http::Request<B>) -> Result<Request, Error> {
+    Request::try_from(request).map_err(|error| Repr::RequestUrl(error.without_url()).into())
 }
 
 pub fn signed(mut request: Request, signer: &dyn RequestSigner) -> Result<Request, Error> {
@@ -113,7 +111,7 @@ mod tests {
                     .headers()
                     .contains_key(CONTENT_TYPE)
                     .then(HeaderMap::new)
-                    .ok_or_else(|| Error::Signature("content-type was not signed".into()))
+                    .ok_or_else(|| Error::signature(std::fmt::Error))
             }
         }
 
@@ -147,7 +145,7 @@ mod tests {
         struct Refuses;
         impl RequestSigner for Refuses {
             fn sign(&self, _request: &Request) -> Result<HeaderMap, Error> {
-                Err(Error::ComputedHeader("authorization".into()))
+                Err(Error::computed_header("authorization"))
             }
         }
 
@@ -156,14 +154,14 @@ mod tests {
             &Refuses,
         )
         .unwrap_err();
-        assert_eq!(error, Error::ComputedHeader("authorization".into()));
+        assert!(error.is_computed_header());
     }
 
     #[test]
     fn a_request_that_cannot_be_sent_fails_when_it_is_built() {
         assert!(matches!(
             json("not a url", &[], &json!({}), None),
-            Err(Error::Request(_))
+            Err(error) if error.is_request()
         ));
         assert!(matches!(
             json(
@@ -172,7 +170,21 @@ mod tests {
                 &json!({}),
                 None
             ),
-            Err(Error::Request(_))
+            Err(error) if error.is_request()
         ));
+    }
+
+    #[test]
+    fn a_relative_http_request_is_the_callers_fault_and_never_reached_the_provider() {
+        let request = http::Request::get("/private?api_key=secret")
+            .body(Vec::<u8>::new())
+            .unwrap();
+
+        let error = from_http(request).unwrap_err();
+
+        assert!(error.is_request());
+        assert!(!error.dispatched());
+        let report = litellm_error::Report::new(&error).to_string();
+        assert!(!report.contains("secret"), "{report}");
     }
 }

@@ -53,13 +53,13 @@ impl RequestSigner for SigV4Signer {
             .keys()
             .find(|name| is_sigv4_computed_header(name.as_str()))
         {
-            return Err(litellm_http::Error::ComputedHeader(name.to_string()));
+            return Err(litellm_http::Error::computed_header(name.as_str()));
         }
         let body = match request.body() {
             None => &[],
-            Some(body) => body.as_bytes().ok_or_else(|| {
-                litellm_http::Error::Signature("a streaming body cannot be signed".into())
-            })?,
+            Some(body) => body
+                .as_bytes()
+                .ok_or_else(litellm_http::Error::unsignable_body)?,
         };
         sign_headers(
             request.method().as_str(),
@@ -73,7 +73,13 @@ impl RequestSigner for SigV4Signer {
                 time: (self.clock)(),
             },
         )
-        .map_err(|error| litellm_http::Error::Signature(error.to_string()))
+        .map_err(|error| match error {
+            Error::NonAsciiHeader { .. } => litellm_http::Error::unsignable_header(error),
+            Error::Credentials { .. }
+            | Error::MissingWebIdentityCredentials
+            | Error::WebIdentityExpiration(_)
+            | Error::Signing { .. } => litellm_http::Error::signature(error),
+        })
     }
 }
 
@@ -183,10 +189,28 @@ mod tests {
         )
         .unwrap_err();
 
-        assert_eq!(
-            error,
-            litellm_http::Error::ComputedHeader("authorization".into())
-        );
+        assert!(error.is_computed_header());
+        assert!(error.to_string().contains("authorization"), "{error}");
+    }
+
+    #[test]
+    fn a_forwarded_header_that_cannot_be_signed_is_the_callers_fault() {
+        let error = signed(
+            json(
+                URL,
+                &[("x-amz-meta-note".into(), "café".into())],
+                &json_value!({}),
+                None,
+            )
+            .unwrap(),
+            &signer("textract"),
+        )
+        .unwrap_err();
+
+        let report = litellm_error::Report::new(&error).to_string();
+        assert!(report.contains("x-amz-meta-note"), "{report}");
+        assert!(error.is_request());
+        assert!(!error.dispatched());
     }
 
     #[test]
@@ -198,7 +222,7 @@ mod tests {
 
         assert!(matches!(
             signed(request, &signer("textract")),
-            Err(litellm_http::Error::Signature(_))
+            Err(error) if !error.dispatched() && !error.is_request()
         ));
     }
 }

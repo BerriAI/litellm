@@ -96,7 +96,7 @@ pub async fn build_mcp(
         || !config.policies.is_empty()
         || !config.policy_attachments.is_empty()
     {
-        return Err(Error::McpSetting("guardrails or policies".into()));
+        return Err(Error::McpGuardrails);
     }
     Auth::from_config(config, secrets.clone())
         .validate()

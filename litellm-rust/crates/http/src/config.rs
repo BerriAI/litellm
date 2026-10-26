@@ -135,7 +135,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::TlsSource;
+    use crate::{TlsSource, error::Repr};
 
     fn settings(ssl_verify: Option<SslVerify>, ssl_cert_file: Option<&str>) -> HttpSettings {
         HttpSettings {
@@ -305,11 +305,10 @@ mod tests {
         };
         assert!(matches!(
             reqwest::ClientBuilder::try_from(&config),
-            Err(Error::Read {
-                path: reported,
-                tls_source: TlsSource::CaBundle,
-                ..
-            }) if reported == path
+            Err(error) if matches!(
+                error.repr(),
+                Repr::Read { path: reported, tls_source: TlsSource::CaBundle, .. } if *reported == path
+                )
         ));
     }
 
@@ -326,11 +325,10 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         assert!(matches!(
             result,
-            Err(Error::InvalidPem {
-                path: reported,
-                tls_source: TlsSource::CaBundle,
-                ..
-            }) if reported == path
+            Err(error) if matches!(
+                error.repr(),
+                Repr::InvalidPem { path: reported, tls_source: TlsSource::CaBundle, .. } if *reported == path
+                )
         ));
     }
 }

@@ -209,7 +209,7 @@ impl LocalOcrHost {
                 request,
                 caller_token: false,
             })
-            .ok_or_else(|| Error::InvalidRequest("OCR request was already projected".into()))
+            .ok_or(Error::MissingField("OCR request"))
     }
     pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, Self, Self, ()> {
         litellm_host_native::in_process::Host {
@@ -223,11 +223,11 @@ impl LocalOcrHost {
 impl litellm_host_native::services::HostCallHandler<Ocr> for LocalOcrHost {
     async fn handle_host_call(&self, op: OcrOp) -> Result<(), Error> {
         match op {
-            OcrOp::AcquireAzureAdToken(_) => {
-                Err(Error::Auth(litellm_auth::Error::CredentialAcquisition(
-                    "OCR host has no Azure AD token provider".into(),
-                )))
-            }
+            OcrOp::AcquireAzureAdToken(_) => Err(Error::Auth(
+                litellm_auth::Error::CredentialAcquisition(litellm_auth::ErrorDetail::Unresolved {
+                    subject: "OCR host Azure AD token provider",
+                }),
+            )),
         }
     }
 }

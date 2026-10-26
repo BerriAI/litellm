@@ -1,3 +1,5 @@
+use litellm_error::Source;
+
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     #[error("expected {expected}, got {actual}")]
@@ -7,31 +9,117 @@ pub enum Error {
     },
     #[error("missing required field: {0}")]
     MissingField(&'static str),
-    #[error("invalid request: {0}")]
+    #[error("invalid request")]
     InvalidRequest(#[source] ErrorDetail),
-    #[error("invalid response: {0}")]
+    #[error("invalid response")]
     InvalidResponse(#[source] ErrorDetail),
     #[error("unsupported: {0}")]
     Unsupported(&'static str),
     #[error(transparent)]
     Auth(#[from] litellm_auth::Error),
+    #[error(transparent)]
+    Http(#[from] litellm_http::Error),
+}
+
+impl Error {
+    pub fn is_request(&self) -> bool {
+        match self {
+            Self::InvalidType { .. }
+            | Self::MissingField(_)
+            | Self::InvalidRequest(_)
+            | Self::Unsupported(_) => true,
+            Self::Auth(error) => error.is_request(),
+            Self::Http(error) => error.is_request(),
+            Self::InvalidResponse(_) => false,
+        }
+    }
+
+    pub fn is_response(&self) -> bool {
+        match self {
+            Self::InvalidResponse(_) => true,
+            Self::Http(error) => error.is_response(),
+            Self::InvalidType { .. }
+            | Self::MissingField(_)
+            | Self::InvalidRequest(_)
+            | Self::Unsupported(_)
+            | Self::Auth(_) => false,
+        }
+    }
+
+    pub fn is_missing_credential(&self) -> bool {
+        match self {
+            Self::Auth(error) => error.is_missing_credential(),
+            Self::InvalidType { .. }
+            | Self::MissingField(_)
+            | Self::InvalidRequest(_)
+            | Self::InvalidResponse(_)
+            | Self::Unsupported(_)
+            | Self::Http(_) => false,
+        }
+    }
+
+    /// A transformation runs on both sides of the send, so only the transport and credential
+    /// resolution, which always runs before it, can tell whether the request reached the provider.
+    pub fn dispatched(&self) -> bool {
+        match self {
+            Self::Http(error) => error.dispatched(),
+            Self::Auth(_) => false,
+            Self::InvalidType { .. }
+            | Self::MissingField(_)
+            | Self::InvalidRequest(_)
+            | Self::InvalidResponse(_)
+            | Self::Unsupported(_) => true,
+        }
+    }
+
+    /// Why the transformation rejected the caller's request, rendered as Python's own
+    /// validation renders it, without this layer's "invalid request" prefix.
+    pub fn rejected_request(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidRequest(detail) => Some(detail),
+            Self::InvalidType { .. } | Self::MissingField(_) => Some(self),
+            Self::InvalidResponse(_) | Self::Unsupported(_) | Self::Auth(_) | Self::Http(_) => None,
+        }
+    }
+
+    pub fn upstream_response(&self) -> Option<(u16, &str)> {
+        match self {
+            Self::Http(error) => error.upstream_response(),
+            Self::InvalidType { .. }
+            | Self::MissingField(_)
+            | Self::InvalidRequest(_)
+            | Self::InvalidResponse(_)
+            | Self::Unsupported(_)
+            | Self::Auth(_) => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ErrorDetail {
-    #[error("{0}")]
-    Message(String),
-    #[error("invalid {subject}: {source}")]
+    #[error("invalid {subject}")]
     Invalid {
         subject: &'static str,
         #[source]
-        source: ErrorSource,
+        cause: Source,
     },
-    #[error("{operation} failed: {source}")]
+    #[error("{operation} failed")]
     Failed {
         operation: &'static str,
         #[source]
-        source: ErrorSource,
+        cause: Source,
+    },
+    #[error("{route} requires at least one message")]
+    NoMessages { route: &'static str },
+    #[error("{subject} must be {expected}")]
+    Expected {
+        subject: &'static str,
+        expected: &'static str,
+    },
+    #[error("{subject} is missing {field}")]
+    MissingField {
+        subject: &'static str,
+        field: &'static str,
     },
     #[error("{field} must be {expected}, got {actual}")]
     InvalidValue {
@@ -60,12 +148,18 @@ pub enum ErrorDetail {
         value: String,
         hint: String,
     },
-    #[error("invalid {subject} on line {line}: {source}")]
+    #[error(
+        "Missing API Base - A call is being made to LLM Provider but no api base is set either in the environment variables ({{LLM_PROVIDER}}_API_KEY) or via params"
+    )]
+    MissingApiBase,
+    #[error("the host call raised an exception")]
+    HostCall,
+    #[error("invalid {subject} on line {line}")]
     InvalidLine {
         subject: &'static str,
         line: usize,
         #[source]
-        source: ErrorSource,
+        cause: Source,
     },
     #[error("{operation} failed: {detail}")]
     RemoteFailure {
@@ -77,64 +171,33 @@ pub enum ErrorDetail {
 impl ErrorDetail {
     pub fn invalid(
         subject: &'static str,
-        source: impl std::error::Error + Send + Sync + 'static,
+        cause: impl std::error::Error + Send + Sync + 'static,
     ) -> Self {
         Self::Invalid {
             subject,
-            source: ErrorSource::new(source),
+            cause: Source::new(cause),
         }
     }
 
     pub fn failed(
         operation: &'static str,
-        source: impl std::error::Error + Send + Sync + 'static,
+        cause: impl std::error::Error + Send + Sync + 'static,
     ) -> Self {
         Self::Failed {
             operation,
-            source: ErrorSource::new(source),
+            cause: Source::new(cause),
+        }
+    }
+
+    pub fn invalid_line(
+        subject: &'static str,
+        line: usize,
+        cause: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self::InvalidLine {
+            subject,
+            line,
+            cause: Source::new(cause),
         }
     }
 }
-
-impl From<String> for ErrorDetail {
-    fn from(message: String) -> Self {
-        Self::Message(message)
-    }
-}
-
-impl From<&str> for ErrorDetail {
-    fn from(message: &str) -> Self {
-        Self::Message(message.into())
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ErrorSource(std::sync::Arc<dyn std::error::Error + Send + Sync>);
-
-impl std::ops::Deref for ErrorSource {
-    type Target = dyn std::error::Error + Send + Sync;
-
-    fn deref(&self) -> &Self::Target {
-        self.0.as_ref()
-    }
-}
-
-impl std::fmt::Display for ErrorSource {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, formatter)
-    }
-}
-
-impl ErrorSource {
-    pub fn new(error: impl std::error::Error + Send + Sync + 'static) -> Self {
-        Self(std::sync::Arc::new(error))
-    }
-}
-
-impl PartialEq for ErrorSource {
-    fn eq(&self, other: &Self) -> bool {
-        std::sync::Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-impl Eq for ErrorSource {}

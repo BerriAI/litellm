@@ -6,7 +6,12 @@ use std::{
 
 use reqwest::dns::Resolve;
 
-use crate::{client::Client, config::HttpClientConfig, error::Error, proxy::EnvironmentProxies};
+use crate::{
+    client::Client,
+    config::HttpClientConfig,
+    error::{Error, Repr},
+    proxy::EnvironmentProxies,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ClientVariant {
@@ -74,7 +79,8 @@ impl HttpClientPool {
         }
         let client = self
             .apply(variant, reqwest::ClientBuilder::try_from(&key.0)?)
-            .build()?;
+            .build()
+            .map_err(Repr::Client)?;
         self.lock().insert(
             key,
             PooledClient {
