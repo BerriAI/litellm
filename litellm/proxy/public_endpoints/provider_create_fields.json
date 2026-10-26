@@ -2474,6 +2474,34 @@
     "default_model_placeholder": "nace/drex-latest"
   },
   {
+    "provider": "NEARAI",
+    "provider_display_name": "NEAR AI Cloud",
+    "litellm_provider": "nearai",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://cloud-api.near.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "nearai/z-ai/glm-5.3-flash"
+  },
+  {
     "provider": "NEBIUS",
     "provider_display_name": "Nebius",
     "litellm_provider": "nebius",
