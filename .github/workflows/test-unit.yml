@@ -951,7 +951,7 @@ jobs:
             dist: loadscope
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        timeout-minutes: 3
+        timeout-minutes: ${{ matrix.shard == 'db-and-spend' && 8 || 3 }}
         with:
           persist-credentials: false
           fetch-depth: ${{ matrix.shard == 'db-and-spend' && '0' || '1' }}
