@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
-use litellm_auth_types::VertexParams;
+use litellm_auth_types::{VertexKeys, VertexKeysPartial, VertexParams};
+use litellm_layered::{Env, merge};
 use rstest::rstest;
 use serde_json::{Map, Value, json};
 
@@ -61,8 +62,9 @@ fn a_param_of_the_wrong_type_is_rejected(#[case] params: Value) {
 
 #[rstest]
 fn fields_name_every_param_once() {
-    let filled: Value = VertexParams::fields()
-        .map(|name| (name.to_string(), Value::from(name)))
+    let filled: Value = VertexKeys::LITELLM_PARAMS
+        .iter()
+        .map(|name| (name.to_string(), Value::from(*name)))
         .collect::<Map<_, _>>()
         .into();
     let params: VertexParams = serde_json::from_value(filled).unwrap();
@@ -76,8 +78,11 @@ fn fields_name_every_param_once() {
     };
     assert_eq!(params, expected);
     assert_eq!(
-        VertexParams::fields().collect::<BTreeSet<_>>().len(),
-        VertexParams::fields().count()
+        VertexKeys::LITELLM_PARAMS
+            .iter()
+            .collect::<BTreeSet<_>>()
+            .len(),
+        VertexKeys::LITELLM_PARAMS.len()
     );
 }
 
@@ -101,7 +106,7 @@ fn debug_output_does_not_expose_credentials() {
 #[case::legacy_spelling(None, Some("legacy"), &[("VERTEXAI_PROJECT", "env")], Some("legacy"))]
 #[case::blank_params_fall_to_the_environment(Some(" "), None, &[("VERTEXAI_PROJECT", "env")], Some("env"))]
 #[case::nothing(None, None, &[], None)]
-fn a_spec_resolves_from_the_params_then_the_environment(
+fn a_setting_resolves_from_the_params_then_the_environment(
     #[case] vertex_project: Option<&str>,
     #[case] vertex_ai_project: Option<&str>,
     #[case] environment: &[(&str, &str)],
@@ -112,15 +117,10 @@ fn a_spec_resolves_from_the_params_then_the_environment(
         vertex_ai_project: vertex_ai_project.map(str::to_string),
         ..VertexParams::default()
     };
-    let env = |name: &str| {
-        environment
-            .iter()
-            .find(|(key, _)| *key == name)
-            .map(|(_, value)| value.to_string())
-    };
+    let merged = merge([
+        params.keys(),
+        VertexKeysPartial::from_env(&Env::of(environment)).unwrap(),
+    ]);
 
-    assert_eq!(
-        params.resolve(&VertexParams::PROJECT, &env).as_deref(),
-        expected
-    );
+    assert_eq!(merged.project.as_deref(), expected);
 }

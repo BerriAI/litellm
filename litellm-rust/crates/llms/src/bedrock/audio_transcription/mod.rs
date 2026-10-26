@@ -88,7 +88,7 @@ fn optional_string<'a>(params: &'a Map<String, Value>, key: &str) -> Option<&'a 
 
 impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
     fn secret_names(&self) -> Vec<&'static str> {
-        litellm_auth::AwsParams::secret_names().to_vec()
+        litellm_auth::AwsKeys::ENV_NAMES.to_vec()
     }
 
     fn get_supported_openai_params(&self) -> &'static [&'static str] {

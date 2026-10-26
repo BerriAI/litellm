@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-layered.workspace = true
 litellm-auth-types.workspace = true
 litellm-http.workspace = true
 

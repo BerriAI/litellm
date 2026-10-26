@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use litellm_auth::{AwsParams, CredentialPlacement, SecretValue};
+use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_auth_aws::AwsCredentialSource;
 use litellm_auth_aws::bedrock_model_id_and_region;
 use litellm_core_utils::settings::resolve_non_empty;
@@ -164,7 +164,7 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
             .into_iter()
             .chain(REGION_ENVS.iter().copied())
             .chain(
-                AwsParams::secret_names()
+                litellm_auth::AwsKeys::ENV_NAMES
                     .iter()
                     .copied()
                     .filter(|name| !REGION_ENVS.contains(name)),
@@ -263,6 +263,7 @@ fn mantle_region(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use litellm_auth::AwsParams;
     use litellm_http::request::header_value;
     use rstest::rstest;
     use serde_json::json;
