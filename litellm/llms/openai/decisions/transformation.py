@@ -6,6 +6,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig, decisions_text
+from litellm.llms.openai.workload_identity import resolve_openai_bearer_token
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
     DecisionsImage,
@@ -310,6 +311,7 @@ def _openai_answer(question: DecisionsIRQuestion, answer: DecisionsIRAnswer) -> 
 def ir_to_openai_response(
     response: DecisionsIRResponse, request: DecisionsIRRequest, requested_model: str
 ) -> OpenAIDecisionResponse:
+    usage: Final = response.usage or DecisionsIRUsage()
     return OpenAIDecisionResponse(
         model=response.model or requested_model,
         answers=tuple(
@@ -317,14 +319,14 @@ def ir_to_openai_response(
             for question, answer in zip(request.questions, response.answers, strict=True)
         ),
         usage=OpenAIDecisionUsage(
-            input_tokens=response.usage.input_tokens,
+            input_tokens=usage.input_tokens,
             input_tokens_details=OpenAIDecisionInputTokensDetails(
-                cached_tokens=response.usage.cached_tokens,
-                cache_write_tokens=response.usage.cache_write_tokens,
+                cached_tokens=usage.cached_tokens,
+                cache_write_tokens=usage.cache_write_tokens,
             ),
-            output_tokens=response.usage.output_tokens,
-            output_tokens_details=OpenAIDecisionOutputTokensDetails(reasoning_tokens=response.usage.reasoning_tokens),
-            total_tokens=response.usage.input_tokens + response.usage.output_tokens,
+            output_tokens=usage.output_tokens,
+            output_tokens_details=OpenAIDecisionOutputTokensDetails(reasoning_tokens=usage.reasoning_tokens),
+            total_tokens=usage.input_tokens + usage.output_tokens,
         ),
     )
 
@@ -348,6 +350,11 @@ class OpenAIDecisionsConfig(BaseDecisionsConfig):
 
     def resolve_api_key(self, api_key: str | None) -> str | None:
         return api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
+
+    def resolve_credential(
+        self, api_key: str | None, api_base: str, litellm_params: Mapping[str, object]
+    ) -> str | None:
+        return resolve_openai_bearer_token(api_key=api_key, api_base=api_base, litellm_params=litellm_params)
 
     def supports_audio_input(self, model: str, custom_llm_provider: str) -> bool:
         return False

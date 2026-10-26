@@ -14,6 +14,8 @@ from tests.integration._support.client import Gateway, eventually, string_value
 from tests.integration._support.database import read_rows
 from tests.integration._support.process import owned_proxy, owned_proxy_process
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 CLEANUP_EVERY_MINUTE: Final = "* * * * *"
 RETENTION_SETTING: Final = "maximum_daily_tag_spend_retention_period"
 _MAPPING: Final = TypeAdapter(dict[str, JsonValue])

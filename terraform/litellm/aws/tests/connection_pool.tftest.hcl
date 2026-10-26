@@ -12,6 +12,7 @@ mock_provider "aws" {
 mock_provider "random" {}
 
 variables {
+  image_tag           = "v9.9.9"
   region              = "us-east-1"
   tenant              = "acme"
   env                 = "test"

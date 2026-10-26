@@ -54,6 +54,7 @@ import {
   isDecisionMode,
 } from "@/lib/decisionModels";
 import DecisionModelGarden from "@/components/AIHub/DecisionModelGarden";
+import { ModelCustomMetadata } from "./ModelCustomMetadata";
 
 interface ModelHubTableProps {
   accessToken: string | null;
@@ -62,6 +63,7 @@ interface ModelHubTableProps {
   userRole: string | null;
   canOpenPlayground: boolean;
   canAddModels: boolean;
+  variant?: "dashboard" | "chat";
 }
 
 function isMCPHubVisibilityDisabled(isLoading: boolean, servers: readonly MCPServerData[] | null): boolean {
@@ -103,11 +105,13 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   userRole,
   canOpenPlayground,
   canAddModels,
+  variant = "dashboard",
 }) => {
   const syntaxTheme = useSyntaxTheme(prism);
+  const isChat = variant === "chat";
   // Admin Viewer follows the read-parity rule: see the AI Hub catalog, but
   // cannot toggle public visibility (write).
-  const canModify = isProxyAdminRole(userRole || "");
+  const canModify = !isChat && isProxyAdminRole(userRole || "");
 
   const [publicPageAllowed, setPublicPageAllowed] = useState<boolean>(false);
   const [modelHubData, setModelHubData] = useState<ModelHubData[] | null>(null);
@@ -116,7 +120,9 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   const [selectedModel, setSelectedModel] = useState<null | ModelHubData>(null);
   const [filteredData, setFilteredData] = useState<ModelHubData[]>([]);
   const [selectedMode, setSelectedMode] = useState<string>("");
-  const showDecisionGarden = !publicPage && (selectedMode === "" || selectedMode === DECISIONS_MODE);
+  const [selectedProvider, setSelectedProvider] = useState("");
+  const isDashboardCatalog = !isChat && !publicPage;
+  const showDecisionGarden = isDashboardCatalog && (selectedMode === "" || selectedMode === DECISIONS_MODE);
   const [isMakePublicModalVisible, setIsMakePublicModalVisible] = useState(false);
   // Agent Hub state
   const [agentHubData, setAgentHubData] = useState<AgentHubData[] | null>(null);
@@ -167,15 +173,17 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
         const _modelHubData = await modelHubCall(accessToken);
         setModelHubData(_modelHubData.data);
 
-        getConfigFieldSetting(accessToken, "enable_public_model_hub")
-          .then((data) => {
-            if (data.field_value == true) {
-              setPublicPageAllowed(true);
-            }
-          })
-          .catch((error) => {
-            // do nothing
-          });
+        if (!isChat) {
+          getConfigFieldSetting(accessToken, "enable_public_model_hub")
+            .then((data) => {
+              if (data.field_value == true) {
+                setPublicPageAllowed(true);
+              }
+            })
+            .catch((error) => {
+              // do nothing
+            });
+        }
       } catch (error) {
         console.error("There was an error fetching the model data", error);
       } finally {
@@ -207,7 +215,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
       }
     };
     fetchModelData();
-  }, [accessToken, publicPage]);
+  }, [accessToken, publicPage, isChat]);
 
   // Fetch Agent Hub data
   useEffect(() => {
@@ -234,10 +242,10 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
       }
     };
 
-    if (!publicPage) {
+    if (!publicPage && !isChat) {
       fetchAgentData();
     }
-  }, [publicPage, accessToken]);
+  }, [publicPage, accessToken, isChat]);
 
   // Fetch MCP Hub data
   useEffect(() => {
@@ -258,10 +266,10 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
       }
     };
 
-    if (!publicPage) {
+    if (!publicPage && !isChat) {
       fetchMcpData();
     }
-  }, [publicPage, accessToken]);
+  }, [publicPage, accessToken, isChat]);
 
   // Fetch Skill Hub data — all skills for admins, enabled-only for public page
   useEffect(() => {
@@ -279,8 +287,8 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
       }
     };
 
-    fetchSkillData();
-  }, [accessToken, publicPage]);
+    if (!isChat) fetchSkillData();
+  }, [accessToken, publicPage, isChat]);
 
   const showModal = useCallback((model: ModelHubData) => {
     setSelectedModel(model);
@@ -425,7 +433,10 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   const [agentSorting, setAgentSorting] = useState<SortingState>([{ id: "name", desc: false }]);
   const [mcpSorting, setMcpSorting] = useState<SortingState>([{ id: "server_name", desc: false }]);
 
-  const modelColumns = useMemo(() => getModelHubTableColumns({ onModelClick: showModal }), [showModal]);
+  const modelColumns = useMemo(
+    () => getModelHubTableColumns({ onModelClick: showModal, showProviderLogos: isChat }),
+    [showModal, isChat],
+  );
   const agentColumns = useMemo(() => getAgentHubTableColumns({ onAgentClick: showAgentModal }), [showAgentModal]);
   const filteredAgentData = useMemo(
     () => filterBySearchTerm(agentHubData ?? [], agentSearchTerm, (agent) => [agent.name, agent.description]),
@@ -439,37 +450,39 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   }
 
   return (
-    <div className="mx-4">
+    <div data-slot="model-hub" className={isChat ? "chat-model-hub-catalog" : "mx-4"}>
       {publicPage == false ? (
-        <div className="w-full m-2 mt-2 p-8">
+        <div className={isChat ? "chat-model-hub-content" : "w-full m-2 mt-2 p-8"}>
           {/* Header with Title, Description and URL */}
-          <div className="flex justify-between items-center mb-6">
-            <div className="flex flex-col items-start">
-              <h2 className="text-center text-xl font-semibold">AI Hub</h2>
-              {isAdminRole(userRole || "") ? (
-                <p className="text-sm text-muted-foreground">
-                  Make models, agents, and MCP servers public for developers to know what&apos;s available.
-                </p>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  A list of all public model names personally available to you.
-                </p>
-              )}
-            </div>
-            <div className="flex items-center space-x-4">
-              <p>Model Hub URL:</p>
-              <div className="flex items-center bg-border px-2 py-1 rounded-sm">
-                <p className="mr-2">{getUiPageUrl(`${getProxyBaseUrl()}/ui/model_hub_table`)}</p>
-                <button
-                  onClick={() => void copyToClipboard(getUiPageUrl(`${getProxyBaseUrl()}/ui/model_hub_table`))}
-                  className="p-1 hover:bg-accent rounded-sm transition-colors"
-                  title="Copy URL"
-                >
-                  <Copy size={16} className="text-muted-foreground" />
-                </button>
+          {!isChat && (
+            <div className="flex justify-between items-center mb-6">
+              <div className="flex flex-col items-start">
+                <h2 className="text-center text-xl font-semibold">AI Hub</h2>
+                {isAdminRole(userRole || "") ? (
+                  <p className="text-sm text-muted-foreground">
+                    Make models, agents, and MCP servers public for developers to know what&apos;s available.
+                  </p>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    A list of all public model names personally available to you.
+                  </p>
+                )}
+              </div>
+              <div className="flex items-center space-x-4">
+                <p>Model Hub URL:</p>
+                <div className="flex items-center bg-border px-2 py-1 rounded-sm">
+                  <p className="mr-2">{getUiPageUrl(`${getProxyBaseUrl()}/ui/model_hub_table`)}</p>
+                  <button
+                    onClick={() => void copyToClipboard(getUiPageUrl(`${getProxyBaseUrl()}/ui/model_hub_table`))}
+                    className="p-1 hover:bg-accent rounded-sm transition-colors"
+                    title="Copy URL"
+                  >
+                    <Copy size={16} className="text-muted-foreground" />
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
+          )}
 
           {/* Useful Links Management Section for Admins */}
           {canModify && (
@@ -480,26 +493,36 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
 
           {/* Tab System for Model Hub, Agent Hub, MCP Hub, and Plugin Marketplace */}
           <Tabs defaultValue="models">
-            <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
-              <TabsTrigger value="models" className="flex-none rounded-none px-4 py-2">
-                Model Hub
-              </TabsTrigger>
-              <TabsTrigger value="agents" className="flex-none rounded-none px-4 py-2">
-                Agent Hub
-              </TabsTrigger>
-              <TabsTrigger value="mcp" className="flex-none rounded-none px-4 py-2">
-                MCP Hub
-              </TabsTrigger>
-              <TabsTrigger value="skills" className="flex-none rounded-none px-4 py-2">
-                Skill Hub
-              </TabsTrigger>
-            </TabsList>
+            {!isChat && (
+              <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
+                <TabsTrigger value="models" className="flex-none rounded-none px-4 py-2">
+                  Model Hub
+                </TabsTrigger>
+                <TabsTrigger value="agents" className="flex-none rounded-none px-4 py-2">
+                  Agent Hub
+                </TabsTrigger>
+                <TabsTrigger value="mcp" className="flex-none rounded-none px-4 py-2">
+                  MCP Hub
+                </TabsTrigger>
+                <TabsTrigger value="skills" className="flex-none rounded-none px-4 py-2">
+                  Skill Hub
+                </TabsTrigger>
+              </TabsList>
+            )}
 
             <div>
               {/* Model Hub Tab */}
               <TabsContent value="models" keepMounted>
                 {/* Model Filters and Table */}
-                <Card className="px-6">
+                <Card className={isChat ? "chat-model-hub-card" : "px-6"}>
+                  {isChat && (
+                    <div className="chat-model-section-heading">
+                      <h2>Models</h2>
+                      <span className="chat-model-section-count" aria-label={`${filteredData.length} models`}>
+                        {filteredData.length}
+                      </span>
+                    </div>
+                  )}
                   {/* Header with Make Public Button */}
                   {publicPage == false && canModify && (
                     <div className="flex justify-end mb-4">
@@ -509,10 +532,15 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
 
                   {/* Filters */}
                   <ModelFilters
+                    variant={variant}
                     modelHubData={modelHubData || []}
+                    className={isChat ? "chat-model-hub-filters" : undefined}
+                    showFiltersCard={!isChat}
                     onFilteredDataChange={handleFilteredDataChange}
-                    extraModes={publicPage ? [] : [DECISIONS_MODE]}
+                    extraModes={isDashboardCatalog ? [DECISIONS_MODE] : []}
                     onModeChange={setSelectedMode}
+                    selectedProvider={isChat ? selectedProvider : undefined}
+                    onProviderChange={isChat ? setSelectedProvider : undefined}
                   />
 
                   {/* Model Table */}
@@ -533,11 +561,13 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                   />
                 </Card>
 
-                <div className="mt-4 text-center space-y-2">
-                  <p className="text-sm text-muted-foreground">
-                    Showing {filteredData.length} of {modelHubData?.length || 0} models
-                  </p>
-                </div>
+                {!isChat && (
+                  <div className="mt-4 text-center space-y-2">
+                    <p className="text-sm text-muted-foreground">
+                      Showing {filteredData.length} of {modelHubData?.length || 0} models
+                    </p>
+                  </div>
+                )}
 
                 {showDecisionGarden && <DecisionModelGarden accessToken={accessToken} canAddModels={canAddModels} />}
               </TabsContent>
@@ -685,7 +715,9 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
 
       {/* Model Details Modal */}
       <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleCancel()}>
-        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]">
+        <DialogContent
+          className={`${isChat ? "chat-theme chat-model-hub-dialog " : ""}max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]`}
+        >
           <DialogHeader>
             <DialogTitle>{selectedModel?.model_group || "Model Details"}</DialogTitle>
           </DialogHeader>
@@ -719,6 +751,10 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                       <p className="mt-1">{selectedModel.description}</p>
                     </div>
                   )}
+                  <ModelCustomMetadata
+                    customTags={selectedModel.custom_tags}
+                    customMetadata={selectedModel.custom_metadata}
+                  />
                 </div>
               </div>
 

@@ -349,6 +349,14 @@ class IdJagResourceClient(LiteLLMBaseModel):
     client_auth: ClientAuth
 
 
+class IdJagSubjectSource(str, Enum):
+    """What ID-JAG leg 1 presents as the RFC 8693 subject_token: the identity assertion captured at SSO
+    login, or the refresh token that assertion was exchanged for at the IdP when the user logged in."""
+
+    login_assertion = "login_assertion"
+    refresh_token = "refresh_token"
+
+
 class IdJagConfig(HeaderCarrier):
     """draft-ietf-oauth-identity-assertion-authz-grant (Okta "AI agent token exchange").
 
@@ -368,6 +376,7 @@ class IdJagConfig(HeaderCarrier):
     client_auth: ClientAuth
     resource_client: IdJagResourceClient
     subject_token_type: str = "urn:ietf:params:oauth:token-type:id_token"
+    subject_source: IdJagSubjectSource = IdJagSubjectSource.login_assertion
     audience: str | None = None
     resource: str | None = None
     scopes: tuple[str, ...] = ()

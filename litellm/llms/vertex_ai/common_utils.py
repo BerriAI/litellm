@@ -1,11 +1,12 @@
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime, timezone
 from enum import Enum
 from functools import lru_cache
+from itertools import accumulate, chain, repeat, takewhile
 from types import MappingProxyType
-from typing import Any, Final, Literal, cast, get_type_hints
+from typing import Any, Final, Literal, TypeVar, cast, get_type_hints
 
 import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -666,12 +667,89 @@ def _fix_enum_empty_strings(schema, depth=0):
         _fix_enum_empty_strings(items, depth=depth + 1)
 
 
-def _fix_enum_types(schema, depth=0):
-    """Remove `enum` fields when the schema type is not string.
+GEMINI_MAX_ENUM_CHARACTERS: Final = 2000
+_GEMINI_EXACT_INT_MAX: Final = 2**53 - 1
 
-    Gemini / Vertex APIs only allow enums for string-typed fields. When an enum
-    is present on a non-string typed property (or when `anyOf` types do not
-    include a string type), remove the enum to avoid provider validation errors.
+
+def _gemini_integer_enum_value(value: object) -> str | None:
+    match value:
+        case bool():
+            return None
+        case int() if -_GEMINI_EXACT_INT_MAX <= value <= _GEMINI_EXACT_INT_MAX:
+            return str(int(value))
+        case str() if (
+            re.fullmatch(r"-?[0-9]{1,16}", value) and -_GEMINI_EXACT_INT_MAX <= int(value) <= _GEMINI_EXACT_INT_MAX
+        ):
+            return str(int(value))
+        case _:
+            return None
+
+
+def _gemini_integer_enum(values: Sequence[object]) -> tuple[str, ...] | None:
+    if not values:
+        return None
+    converted: Final = tuple(text for value in values if (text := _gemini_integer_enum_value(value)) is not None)
+    return converted if len(converted) == len(values) else None
+
+
+def _json_children(node: JsonValue) -> Iterable[JsonValue]:
+    match node:
+        case dict():
+            return node.values()
+        case list():
+            return node
+        case _:
+            return ()
+
+
+def _next_json_level(level: tuple[JsonValue, ...], _: None) -> tuple[JsonValue, ...]:
+    return tuple(chain.from_iterable(_json_children(node) for node in level))
+
+
+def _enum_size(node: JsonValue) -> tuple[bool, int] | None:
+    match node:
+        case {"enum": list() as values}:
+            return (str(node.get("type")).lower() == "integer", sum(len(str(value)) for value in values))
+        case _:
+            return None
+
+
+def _integer_enums_fit(schema: JsonValue) -> bool:
+    levels: Final = takewhile(bool, accumulate(repeat(None), _next_json_level, initial=(schema,)))
+    enum_sizes: Final = tuple(size for node in chain.from_iterable(levels) if (size := _enum_size(node)) is not None)
+    return (
+        not any(is_integer for is_integer, _ in enum_sizes)
+        or sum(characters for _, characters in enum_sizes) <= GEMINI_MAX_ENUM_CHARACTERS
+    )
+
+
+_GeminiRequestPart: Final = TypeVar("_GeminiRequestPart")
+
+
+def with_integer_enums_that_fit(
+    build: Callable[[bool], _GeminiRequestPart], send_integer_enums: bool
+) -> _GeminiRequestPart:
+    if not send_integer_enums:
+        return build(False)
+    with_integer_enums: Final = build(True)
+    if _integer_enums_fit(
+        cast(JsonValue, with_integer_enums)  # cast-ok: built tools and schemas are JSON request data
+    ):
+        return with_integer_enums
+    verbose_logger.debug(
+        "Gemini integer enums dropped: the request's enum values exceed %s characters", GEMINI_MAX_ENUM_CHARACTERS
+    )
+    return build(False)
+
+
+def _fix_enum_types(schema, depth=0, send_integer_enums: bool = False):
+    """Make `enum` fields acceptable to Gemini / Vertex.
+
+    Gemini / Vertex APIs only accept string enum values. With `send_integer_enums`,
+    an integer enum of values a double holds exactly is sent as type INTEGER with the
+    values as strings; the model still returns an integer.
+    On any other non-string typed property (or when `anyOf` types do not include a
+    string type), the enum is removed to avoid provider validation errors.
     """
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise ValueError(f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema.")
@@ -696,26 +774,37 @@ def _fix_enum_types(schema, depth=0):
                             break
 
         if not keep_enum:
-            schema.pop("enum", None)
+            is_integer_type: Final = isinstance(schema_type, str) and schema_type.lower() == "integer"
+            integer_enum: Final = (
+                _gemini_integer_enum(cast(Sequence[object], schema["enum"]))  # cast-ok: an untyped JSON list
+                if send_integer_enums and is_integer_type
+                else None
+            )
+            if integer_enum is not None:
+                schema["enum"] = list(integer_enum)  # rebind-ok: this function edits the schema in place by design
+            else:
+                schema.pop("enum", None)
 
     # Recurse into nested structures
     properties: Final = schema.get("properties", None)
     if properties is not None:
         for _, value in properties.items():
-            _fix_enum_types(value, depth=depth + 1)
+            _fix_enum_types(value, depth=depth + 1, send_integer_enums=send_integer_enums)
 
     items: Final = schema.get("items", None)
     if items is not None:
-        _fix_enum_types(items, depth=depth + 1)
+        _fix_enum_types(items, depth=depth + 1, send_integer_enums=send_integer_enums)
 
     anyof = schema.get("anyOf", None)
     if anyof is not None and isinstance(anyof, list):
         for item in anyof:
             if isinstance(item, dict):
-                _fix_enum_types(item, depth=depth + 1)
+                _fix_enum_types(item, depth=depth + 1, send_integer_enums=send_integer_enums)
 
 
-def build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
+def build_vertex_schema(
+    parameters: dict, add_property_ordering: bool = False, send_integer_enums: bool = False
+) -> dict[str, object]:
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
 
@@ -725,6 +814,7 @@ def build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
         parameters: dict - the json schema to build from
         add_property_ordering: bool - whether to add propertyOrdering to the schema. This is only applicable to schemas for structured outputs. See
           set_schema_property_ordering for more details.
+        send_integer_enums: bool - whether to send integer enums with string values instead of removing them
     Returns:
         parameters: dict - the input parameters, modified in place
     """
@@ -750,7 +840,7 @@ def build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     _fix_enum_empty_strings(parameters)
 
     # Remove enums for non-string typed fields (Gemini requires enum only on strings)
-    _fix_enum_types(parameters)
+    _fix_enum_types(parameters, send_integer_enums=send_integer_enums)
 
     # Handle empty items objects
     process_items(parameters)
@@ -1068,6 +1158,17 @@ def _convert_schema_types(schema, depth=0):
                         if field in schema:
                             item_schema[field] = deepcopy(schema[field])
                     any_of.append(item_schema)
+                elif t == "integer" and "enum" in schema and isinstance(schema["enum"], list):
+                    any_of.append(
+                        {
+                            "type": t,
+                            "enum": [
+                                value
+                                for value in cast(list[object], schema["enum"])  # cast-ok: an untyped JSON list
+                                if value is not None
+                            ],
+                        }
+                    )
                 else:
                     # For primitive types, only include the type
                     any_of.append({"type": t})
@@ -1263,6 +1364,52 @@ class VertexAITokenCounter(BaseTokenCounter):
 
         return custom_llm_provider == LlmProviders.VERTEX_AI.value
 
+    async def _count_translated_claude_request(
+        self,
+        model_to_use: str,
+        messages: Sequence[Mapping[str, object]] | None,
+        deployment: Mapping[str, object],
+        request_model: str,
+        tools: Sequence[Mapping[str, object]] | None,
+        system: object | None,
+        messages_format: TokenCountMessagesFormat,
+        output_format: JsonValue,
+        context_management: CountContextManagement | None,
+        chat_params: Mapping[str, JsonValue],
+    ) -> TokenCountResponse | None:
+        from litellm.llms.anthropic.count_tokens.transformation import (
+            AnthropicCountFields,
+            ChatCountTranslationError,
+            anthropic_count_fields,
+        )
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import count_tokens_publisher
+
+        if count_tokens_publisher(model_to_use) != "anthropic":
+            return None
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
+
+        match translated := await anthropic_count_fields(
+            model_to_use, messages or [], system, tools, messages_format, VertexAIAnthropicConfig(), chat_params
+        ):
+            case ChatCountTranslationError():
+                return translated.response(request_model, model_to_use, "vertex_ai_partner_models")
+            case AnthropicCountFields():
+                return await self.count_tokens(
+                    model_to_use=model_to_use,
+                    messages=[dict(message) for message in translated.messages],
+                    contents=None,
+                    deployment=dict(deployment),
+                    request_model=request_model,
+                    tools=[dict(tool) for tool in translated.tools] if translated.tools is not None else None,
+                    system=translated.system,
+                    messages_format="anthropic",
+                    output_format=output_format,
+                    context_management=context_management,
+                    count_options=translated.options,
+                )
+            case None:
+                return None
+
     async def count_tokens(
         self,
         model_to_use: str,
@@ -1275,9 +1422,12 @@ class VertexAITokenCounter(BaseTokenCounter):
         messages_format: TokenCountMessagesFormat = "openai",
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
+        chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+        count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         import copy
 
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import count_tokens_publisher
         from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
             VertexAIError as PartnerVertexAIError,
         )
@@ -1293,8 +1443,40 @@ class VertexAITokenCounter(BaseTokenCounter):
         ):
             return None
 
+        without_count_route: Final = (
+            VertexAIPartnerModels.is_vertex_partner_model(model_to_use) and count_tokens_publisher(model_to_use) is None
+        )
+        model_info: Final[Mapping[str, object]] = deployment.get("model_info") or {}
+        if without_count_route and messages and model_info.get("custom_tokenizer") is not None:
+            return None
+        if without_count_route:
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="vertex_ai_partner_models",
+                error=True,
+                error_message=f"LiteLLM does not support counting tokens for Vertex AI model {model_to_use}.",
+                status_code=400,
+            )
+
         # Check if this is a partner model (Claude, Mistral, etc.)
         if VertexAIPartnerModels.is_vertex_partner_model(model_to_use):
+            translated_count: Final = await self._count_translated_claude_request(
+                model_to_use=model_to_use,
+                messages=messages,
+                deployment=deployment,
+                request_model=request_model,
+                tools=tools,
+                system=system,
+                messages_format=messages_format,
+                output_format=output_format,
+                context_management=context_management,
+                chat_params=chat_params,
+            )
+            if translated_count is not None:
+                return translated_count
+
             # Use partner models token counter
             partner_models_handler: Final = VertexAIPartnerModels()
 
@@ -1325,6 +1507,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                     vertex_credentials=vertex_credentials,
                     system=system,
                     tools=tools,
+                    count_options=count_options,
                 )
             except (PartnerVertexAIError, httpx.HTTPStatusError) as e:
                 status_code: Final = e.response.status_code
@@ -1357,6 +1540,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                 count_context_error_response,
                 gemini_count_contents,
                 inference_request_view,
+                malformed_tool_result_text_count_error,
                 provider_error_response,
                 unconvertible_messages_error,
                 vertex_gemini_count_context,
@@ -1371,10 +1555,14 @@ class VertexAITokenCounter(BaseTokenCounter):
             )
             if isinstance(request_view, VertexGeminiCountContextError):
                 return count_context_error_response(request_view, request_model, model_to_use)
-            count_context: Final = vertex_gemini_count_context(system=request_view.system, tools=tools)
+            count_context: Final = vertex_gemini_count_context(
+                system=request_view.system, tools=tools, model=model_to_use
+            )
             if isinstance(count_context, VertexGeminiCountContextError):
                 return count_context_error_response(count_context, request_model, model_to_use)
-            blocks_error: Final = unconvertible_messages_error(request_view.messages, messages_format)
+            blocks_error: Final = unconvertible_messages_error(
+                request_view.messages, messages_format
+            ) or malformed_tool_result_text_count_error(messages, messages_format, deployment)
             if blocks_error is not None:
                 return count_context_error_response(blocks_error, request_model, model_to_use)
 

@@ -1705,6 +1705,39 @@ def test_cache_control_hook_does_not_overwrite_existing_cache_control():
     assert _count_cache_control(processed) == 1
 
 
+@pytest.mark.parametrize(
+    "content, marked_parts",
+    [
+        ([{"type": "text", "text": "Checking."}, {"type": "redacted_thinking", "data": "abc"}], [0]),
+        ([{"type": "redacted_thinking", "data": "abc"}], []),
+        ([{"type": "thinking", "thinking": "hm", "signature": "s"}], []),
+        ([{"type": "text", "text": "Checking."}, "not a content block"], [0]),
+    ],
+    ids=["text-before-trailing-redacted-thinking", "redacted-thinking-only", "signed-thinking-only", "text-before-a-string"],
+)
+def test_assistant_injection_never_marks_a_thinking_part(
+    content: list[dict[str, str] | str], marked_parts: list[int]
+):
+    """Claude 400s a cache_control on a thinking or redacted_thinking block, and Bedrock Converse 400s a cache
+    point after reasoning, so the breakpoint goes on the last part that can carry one."""
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": copy.deepcopy(content)},
+        {"role": "user", "content": "again"},
+    ]
+
+    _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model="anthropic/claude-sonnet-4-6",
+        messages=messages,
+        non_default_params={"cache_control_injection_points": [{"location": "message", "role": "assistant"}]},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assert [index for index, part in enumerate(processed[1]["content"]) if "cache_control" in part] == marked_parts
+
+
 @pytest.mark.asyncio
 async def test_cache_control_hook_bedrock_payload_caps_cachepoints_at_four(monkeypatch: pytest.MonkeyPatch):
     """End-to-end: outgoing Bedrock payload must not exceed 4 cachePoint blocks.

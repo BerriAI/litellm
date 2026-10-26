@@ -3546,6 +3546,95 @@ class TestTemporaryMCPSessionEndpoints:
         assert exchange_mock.await_args.kwargs["client_token_endpoint_auth_method"] == "client_secret_basic"
 
     @pytest.mark.asyncio
+    async def test_mcp_token_prefers_sealed_client_when_server_has_shared_client(
+        self: "TestTemporaryMCPSessionEndpoints",
+    ) -> None:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            seal_passthrough_authorization_code,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            mcp_token,
+        )
+
+        request: Final = MagicMock()
+        request.base_url = "https://litellm.example.com/"
+        request.headers = {}
+        server: Final = generate_mock_mcp_server_config_record(server_id="server-1").model_copy(
+            update={
+                "auth_type": MCPAuth.true_passthrough,
+                "client_id": "shared-gateway-client",
+                "client_secret": "shared-secret",
+                "token_endpoint_auth_method": "client_secret_basic",
+                "token_url": "https://provider.example/oauth/token",
+            }
+        )
+        admin_auth: Final = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN)
+        fake_http_response: Final = MagicMock()
+        fake_http_response.json.return_value = {"access_token": "tok", "token_type": "Bearer"}
+        fake_http_response.raise_for_status = MagicMock()
+        fake_http_client: Final = MagicMock()
+        fake_http_client.post = AsyncMock(return_value=fake_http_response)
+        prisma_client: Final = MagicMock()
+        mock_get_mcp_server: Final = AsyncMock(return_value=None)
+        mock_update_server: Final = AsyncMock()
+
+        with (
+            patch("litellm.proxy.proxy_server.master_key", "sk-lit4581-test-master-key"),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._oauth_server_operation",
+                return_value=nullcontext(server),
+            ),
+            patch(
+                "litellm.proxy.utils.get_prisma_client_or_throw",
+                return_value=prisma_client,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.get_mcp_server",
+                new=mock_get_mcp_server,
+            ),
+            patch.object(
+                global_mcp_server_manager,
+                "update_server",
+                new=mock_update_server,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+                return_value=fake_http_client,
+            ),
+        ):
+            sealed: Final = seal_passthrough_authorization_code(
+                upstream_code="up-code",
+                client_id="ephemeral-client",
+                client_secret="ephemeral-secret",
+                mcp_server_id="server-1",
+                token_endpoint_auth_method="client_secret_post",
+            )
+            result: Final = await mcp_token(
+                request=request,
+                server_id="server-1",
+                user_api_key_dict=admin_auth,
+                grant_type="authorization_code",
+                code=sealed,
+                redirect_uri="https://example.com/callback",
+                client_id=None,
+                client_secret=None,
+                code_verifier="verifier",
+                refresh_token=None,
+                scope=None,
+            )
+
+        data: Final = fake_http_client.post.call_args.kwargs["data"]
+        headers: Final = fake_http_client.post.call_args.kwargs["headers"]
+        assert data["client_id"] == "ephemeral-client", data
+        assert data["client_secret"] == "ephemeral-secret", data
+        assert data["code"] == "up-code", data
+        assert data["redirect_uri"] == "https://litellm.example.com/callback", data
+        assert "Authorization" not in headers, headers
+        assert result.status_code == 200
+        assert result.body == b'{"access_token":"tok","token_type":"Bearer"}'
+
+    @pytest.mark.asyncio
     async def test_mcp_token_refresh_grant_never_opens_sealed_code(self):
         """The minted client is unrecoverable outside the single authorization_code flow by
         contract: a refresh_token grant that echoes a leftover sealed passthrough code (plus any
@@ -3841,6 +3930,7 @@ class TestTemporaryMCPSessionEndpoints:
             refresh_token=None,
             scope=None,
             client_token_endpoint_auth_method=None,
+            sealed_client=False,
         )
 
     @pytest.mark.asyncio
@@ -3895,6 +3985,7 @@ class TestTemporaryMCPSessionEndpoints:
             refresh_token="rt-123",
             scope=None,
             client_token_endpoint_auth_method=None,
+            sealed_client=False,
         )
 
     @pytest.mark.asyncio
@@ -4458,9 +4549,9 @@ class TestAddMCPServerAtomicity:
 
 class TestIdJagRegistrationWarnsAboutTheSSOGap:
     """An `oauth2_id_jag` server only ever works when the login path captures an IdP identity
-    assertion, and only the generic OIDC arm does. Registering one under Google or Microsoft
-    succeeds and then fails for every user on every call, so the mismatch has to be said at
-    registration time, while the admin is still looking at the configuration."""
+    assertion, and only the OIDC logins (Google, Microsoft, generic) do. Registering one under SAML
+    or with no SSO succeeds and then fails for every user on every call, so the mismatch has to be
+    said at registration time, while the admin is still looking at the configuration."""
 
     @staticmethod
     def _clear_sso_env(monkeypatch):
@@ -4530,9 +4621,6 @@ class TestIdJagRegistrationWarnsAboutTheSSOGap:
     @pytest.mark.parametrize(
         "provider_env, expected_fragment",
         [
-            ({"GOOGLE_CLIENT_ID": "cid"}, "google"),
-            ({"MICROSOFT_CLIENT_ID": "cid"}, "microsoft"),
-            ({"SAML_IDP_METADATA_URL": "https://idp.example.com/metadata"}, "saml"),
             ({}, "no SSO provider is configured"),
         ],
     )
@@ -4546,8 +4634,9 @@ class TestIdJagRegistrationWarnsAboutTheSSOGap:
         assert "ema-1" in str(warnings[0])
 
     @pytest.mark.asyncio
-    async def test_create_is_silent_under_generic_oidc(self, monkeypatch, caplog):
-        await self._run_create(monkeypatch, {"GENERIC_CLIENT_ID": "cid"}, MCPAuth.oauth2_id_jag, caplog)
+    @pytest.mark.parametrize("client_id_env", ["GOOGLE_CLIENT_ID", "MICROSOFT_CLIENT_ID", "GENERIC_CLIENT_ID"])
+    async def test_create_is_silent_under_oidc_logins(self, monkeypatch, caplog, client_id_env):
+        await self._run_create(monkeypatch, {client_id_env: "cid"}, MCPAuth.oauth2_id_jag, caplog)
         assert self._id_jag_warnings(caplog) == []
 
     @pytest.mark.asyncio
@@ -4565,7 +4654,8 @@ class TestIdJagRegistrationWarnsAboutTheSSOGap:
         )
 
         self._clear_sso_env(monkeypatch)
-        monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+        for var in ("MICROSOFT_CLIENT_ID", "GOOGLE_CLIENT_ID", "GENERIC_CLIENT_ID", "SAML_IDP_METADATA_URL"):
+            monkeypatch.delenv(var, raising=False)
 
         mock_manager = MagicMock()
         mock_manager.update_server = AsyncMock()
@@ -4602,7 +4692,7 @@ class TestIdJagRegistrationWarnsAboutTheSSOGap:
 
         warnings = self._id_jag_warnings(caplog)
         assert len(warnings) == 1
-        assert "google" in str(warnings[0])
+        assert "no SSO provider is configured" in str(warnings[0])
 
 
 class TestHealthCheckServers:
