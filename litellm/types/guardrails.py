@@ -50,6 +50,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter impor
 from litellm.types.proxy.guardrails.guardrail_hooks.ovalix import (
     OvalixGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.patronus_ark import ArkConfig
 from litellm.types.proxy.guardrails.guardrail_hooks.promptguard import (
     PromptGuardConfigModel,
 )
@@ -150,6 +151,7 @@ class SupportedGuardrailIntegrations(Enum):
     RUBRIK = "rubrik"
     VIGIL_GUARD = "vigil_guard"
     REPELLOAI = "repelloai"
+    PATRONUS_ARK = "patronus_ark"
     SINGULR = "singulr"
     HEADROOM = "headroom"
     COMPRESR = "compresr"
@@ -1407,6 +1409,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     WingbackGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
+    ark: ArkConfig | None = Field(default=None, description="Patronus Ark local checks and Wolf Defender settings")
     decision_model: str | None = Field(
         default=None,
         description="For guardrail='decision_model': the Decisions-API model that scores each check",
