@@ -48,7 +48,7 @@ most likely to silently break and the one a mock can't prove works.
 |----------|---------------|-----------|------------|-------------|--------|
 | Chat | live (spend suite) | live (spend suite) | gap | live | partial |
 | Embeddings | live (spend suite) | n/a | n/a | live | covered |
-| Responses (Azure code_interpreter container files) | live | gap | live | gap | partial |
+| Responses (Azure code_interpreter container files) | live | live | live | gap | partial |
 | Image / audio / rerank / realtime | - | - | - | - | gap |
 
 ## This suite's files
@@ -63,6 +63,7 @@ most likely to silently break and the one a mock can't prove works.
 | `test_anthropic_passthrough_tool_call_logs_cost` | anthropic native, tool call, cost |
 | `test_vertex_passthrough_via_managed_model_logs_cost` | vertex_ai native, non-stream, cost |
 | `test_service_account_key_reads_container_file_by_native_id` | azure responses code_interpreter, non-stream, native container id, service-account key |
+| `test_service_account_key_reads_container_file_created_by_a_streamed_response` | azure responses code_interpreter, stream, native container id, service-account key, upload right after `[DONE]` |
 
 Vertex keeps the credential on the proxy like gemini/anthropic, but the deployment is
 added at runtime instead of declared in the gateway config: the test POSTs `/model/new`

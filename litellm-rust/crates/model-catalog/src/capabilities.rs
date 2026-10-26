@@ -9,6 +9,7 @@ pub enum Mode {
     AudioTranscription,
     Chat,
     Completion,
+    Decisions,
     Embedding,
     Evaluation,
     Guardrail,
@@ -22,20 +23,6 @@ pub enum Mode {
     Search,
     VectorStore,
     VideoGeneration,
-}
-
-/// Reasoning effort level accepted or applied by the model.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum ReasoningEffort {
-    None,
-    Minimal,
-    Low,
-    Medium,
-    High,
-    Xhigh,
-    Max,
 }
 
 /// Gemini audio generation API the model is served through.

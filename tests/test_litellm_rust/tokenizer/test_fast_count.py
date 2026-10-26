@@ -7,7 +7,7 @@ from tokenizers import Tokenizer as ReferenceTokenizer
 
 from litellm.rust_bridge import _native
 from litellm.utils import claude_json_str
-from tests.test_litellm.litellm_core_utils.test_decode_special_tokens import TOKENIZER_JSON
+from tests.unit.litellm_core_utils.test_decode_special_tokens import TOKENIZER_JSON
 
 pytestmark = pytest.mark.requires_rust_extension
 

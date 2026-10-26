@@ -3,7 +3,8 @@
 
 import os
 import traceback
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from datetime import datetime
 from typing import Final, Protocol
 
 import litellm
@@ -32,8 +33,17 @@ class DyanmoDBLogger:
             )
         self.table_name = litellm.dynamodb_table_name
 
-    async def _async_log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    async def async_log_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime,
+        end_time: datetime,
+        print_verbose: Callable[[str], object],
+    ) -> None:
         self.log_event(kwargs, response_obj, start_time, end_time, print_verbose)
+
+    _async_log_event = async_log_event
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         try:

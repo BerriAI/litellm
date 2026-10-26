@@ -14,8 +14,10 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.gigachat.utils import convert_usage, get_api_base
 from litellm.secret_managers.main import get_secret_str
@@ -35,6 +37,7 @@ else:
 
 
 _EMPTY_FUNCTION: Final[Mapping[str, object]] = MappingProxyType({})
+_JSON_VALUE: Final = TypeAdapter(object)
 
 
 def is_valid_json(value: str) -> bool:
@@ -106,8 +109,7 @@ class GigaChatConfig(BaseConfig):
         stream: bool | None = None,
     ) -> str:
         """Get complete API URL for chat completions."""
-        base: Final = get_api_base(api_base)
-        return f"{base}/chat/completions"
+        return join_api_base(get_api_base(api_base), "chat/completions")
 
     def validate_environment(
         self,
@@ -136,7 +138,7 @@ class GigaChatConfig(BaseConfig):
 
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: base class contract returns list
         """Return list of supported OpenAI parameters."""
-        return [  # mutable-ok: base class contract returns list
+        return [
             "stream",
             "temperature",
             "top_p",
@@ -195,7 +197,7 @@ class GigaChatConfig(BaseConfig):
                     schema_name = json_schema.get("name", "structured_output")
                     schema = json_schema.get("schema", {})
 
-                    function_def = {  # mutable-ok: request payload for httpx
+                    function_def = {
                         "name": schema_name,
                         "description": f"Output structured response: {schema_name}",
                         "parameters": schema,
@@ -210,7 +212,7 @@ class GigaChatConfig(BaseConfig):
                         ),
                         function_def,
                     ]
-                    optional_params["function_call"] = {"name": schema_name}  # mutable-ok: request payload
+                    optional_params["function_call"] = {"name": schema_name}
                     optional_params["_structured_output"] = True
 
         return optional_params
@@ -271,7 +273,7 @@ class GigaChatConfig(BaseConfig):
         # Default to None (don't set function_call)
         return None
 
-    def _upload_image(self, image_url: str) -> str | None:
+    def _upload_image(self, image_url: str) -> object:
         """
         Upload image to GigaChat and return file_id.
 
@@ -291,7 +293,7 @@ class GigaChatConfig(BaseConfig):
             verbose_logger.error("Failed to upload image: %s", e)
             return None
 
-    def _transform_list_content(self, content: Sequence) -> tuple[str, Sequence[str]]:
+    def _transform_list_content(self, content: Sequence) -> tuple[str, Sequence[object]]:
         """
         Extract text and image attachments from a multimodal message content list.
 
@@ -302,7 +304,7 @@ class GigaChatConfig(BaseConfig):
             Tuple of (combined text, list of attachment file ids)
         """
         texts: Final[list[str]] = []  # mutable-ok: accumulator
-        attachments: Final[list[str]] = []  # mutable-ok: accumulator
+        attachments: Final[list[object]] = []  # mutable-ok: accumulator
         for part in content:
             if isinstance(part, dict):
                 if part.get("type") == "text":
@@ -392,7 +394,7 @@ class GigaChatConfig(BaseConfig):
                 args = func.get("arguments", "{}")
                 if isinstance(args, str):
                     try:
-                        args = json.loads(args)
+                        args = _JSON_VALUE.validate_python(json.loads(args))
                     except json.JSONDecodeError:
                         args = {}
                 message["function_call"] = {

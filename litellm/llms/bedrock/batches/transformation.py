@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Final, Literal, cast
 from httpx import Headers, Response
 from pydantic import TypeAdapter, ValidationError
 
-from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix, is_bedrock_arn
+from litellm.litellm_core_utils.aws_partition import is_bedrock_arn
 from litellm.litellm_core_utils.cloud_storage_security import (
     BEDROCK_MANAGED_S3_BATCH_PREFIX,
 )
@@ -32,6 +32,7 @@ from litellm.types.utils import LiteLLMBatch, LlmProviders, Usage
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import (
     CommonBatchFilesUtils,
+    bedrock_control_plane_base_url,
     merge_bedrock_aws_request_params,
     resolve_s3_bucket_owner,
     resolve_s3_encryption_key_id,
@@ -42,7 +43,7 @@ if TYPE_CHECKING:
 
 # Bedrock batch input files are uploaded as
 # s3://bucket/litellm-bedrock-files-{model, ":" -> "-"}-{uuid4}.jsonl (see
-# BedrockFilesTransformation._get_s3_object_name). A uuid4 is always 36 hex/dash
+# _batch_s3_object_name in litellm/llms/bedrock/files/transformation.py). A uuid4 is always 36 hex/dash
 # characters, so it can be stripped off the end unambiguously even though the
 # model name itself may contain dashes.
 _S3_BATCH_FILE_UUID_SUFFIX_PATTERN: Final = re.compile(
@@ -177,11 +178,10 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         request_params: Final = merge_bedrock_aws_request_params(litellm_params, optional_params)
         aws_region_name: Final = self._get_aws_region_name(request_params, model)
 
-        # Bedrock model invocation job endpoint
-        # Format: https://bedrock.{region}.{partition dns suffix}/model-invocation-job
-        bedrock_endpoint: Final = (
-            f"https://bedrock.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}/model-invocation-job"
+        control_plane_base: Final = bedrock_control_plane_base_url(
+            request_params.get("aws_bedrock_control_plane_endpoint"), aws_region_name
         )
+        bedrock_endpoint: Final = f"{control_plane_base}/model-invocation-job"
 
         return bedrock_endpoint
 
@@ -279,9 +279,10 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         # Use common utility for AWS signing
         request_params: Final = merge_bedrock_aws_request_params(litellm_params, optional_params)
         aws_region_name: Final = self._get_aws_region_name(request_params, model)
-        endpoint_url: Final = (
-            f"https://bedrock.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}/model-invocation-job"
+        control_plane_base: Final = bedrock_control_plane_base_url(
+            request_params.get("aws_bedrock_control_plane_endpoint"), aws_region_name
         )
+        endpoint_url: Final = f"{control_plane_base}/model-invocation-job"
         signed_headers, signed_data = self.common_utils.sign_aws_request(
             service_name="bedrock",
             data=bedrock_request,
@@ -431,12 +432,13 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         import urllib.parse as _ul
 
         encoded_arn: Final = _ul.quote(batch_id, safe="")
-        endpoint_url: Final = (
-            f"https://bedrock.{region}.{get_aws_dns_suffix(region)}/model-invocation-job/{encoded_arn}"
+        request_params: Final = merge_bedrock_aws_request_params(litellm_params, optional_params)
+        control_plane_base: Final = bedrock_control_plane_base_url(
+            request_params.get("aws_bedrock_control_plane_endpoint"), region
         )
+        endpoint_url: Final = f"{control_plane_base}/model-invocation-job/{encoded_arn}"
 
         # Use common utility for AWS signing
-        request_params: Final = merge_bedrock_aws_request_params(litellm_params, optional_params)
         signed_headers, _ = self.common_utils.sign_aws_request(
             service_name="bedrock",
             data={},  # GET request has no body
@@ -506,6 +508,13 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             cancelled_at,
             expires_at,
         )
+
+    def parse_timestamps_and_status(
+        self,
+        response_data: Mapping[str, object],
+        status_str: str,
+    ) -> tuple[int | None, int | None, int | None, int | None, int | None, int | None]:
+        return self._parse_timestamps_and_status(response_data, status_str)
 
     def _extract_file_configs(self, response_data):
         """Helper to extract input and output file configurations."""

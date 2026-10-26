@@ -7,16 +7,21 @@ import pytest
 from _s3_v2_support import (
     BUCKET,
     PREFIX,
+    SURFACES,
     RecordingS3Sink,
+    call_surface,
     collect_payloads,
     matched_ids,
     mixed_burst,
     s3_config,
     surface_reply,
 )
-from integration._support.client import Gateway
+from integration._support.client import Gateway, eventually
 from integration._support.process import owned_proxy
 from integration._support.wire import wire_server
+from integration.caching.response_cache_case import entry_keys, redis_store
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 PER_REQUEST_KEY: Final = re.compile(rf"^/{BUCKET}/{PREFIX}/\d{{4}}-\d{{2}}-\d{{2}}/.+\.json$")
 BATCH_KEY: Final = re.compile(
@@ -95,3 +100,39 @@ def test_s3_v2_sink_outage_mid_mixed_burst_recovers_every_response_id(gateway: G
     assert sum(1 for r in provider.drain() if r.method == "POST") == 48
     assert matched_ids(payloads, answered)
     assert len(payloads) == 48, "a stored id was overwritten or duplicated"
+
+
+def test_s3_v2_cache_hit_twins_log_one_object_per_request(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "s3cache" + uuid.uuid4().hex[:8]
+    sink: Final = RecordingS3Sink(delay_seconds=0.1)
+    with wire_server(surface_reply) as provider, wire_server(sink.respond) as bucket:
+        config: Final = s3_config(tmp_path, bucket.url, {})
+        with (
+            owned_proxy(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "3"}, config=config) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            openai_model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+            anthropic_model: Final = scenario.model(
+                model="anthropic/claude-sonnet-4-5-20250929", api_base=provider.url, api_key="synthetic-provider-key"
+            )
+            key: Final = scenario.key(models=[openai_model, anthropic_model])
+            warmed: Final = tuple(
+                call_surface(candidate, surface, openai_model, anthropic_model, key, f"{marker}-{surface}")
+                for surface in SURFACES
+            )
+            with redis_store() as cache:
+                eventually(
+                    lambda: frozenset(entry_keys(cache, marker)), lambda owned: len(owned) >= len(SURFACES), seconds=30
+                )
+            repeated: Final = tuple(
+                call_surface(candidate, surface, openai_model, anthropic_model, key, f"{marker}-{surface}", False)
+                for surface in SURFACES
+            )
+            payloads: Final = collect_payloads(sink, 2 * len(SURFACES))
+    assert sum(1 for r in provider.drain() if r.method == "POST") == len(SURFACES), (
+        "a repeated request reached the upstream; the six repeats must all be served from cache"
+    )
+    assert len(payloads) == 12
+    assert sum(1 for payload in payloads if payload["cache_hit"] is True) == 6
+    assert sum(1 for payload in payloads if payload["cache_hit"] is not True) == 6
+    assert matched_ids(payloads, warmed + repeated)

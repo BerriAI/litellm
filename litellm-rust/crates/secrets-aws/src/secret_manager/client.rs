@@ -22,6 +22,7 @@ impl AwsSecretsManagerV2 {
             return Ok(None);
         }
         let context_client_factory = ContextClientFactory {
+            auth: litellm_auth_aws::AwsAuthService::default(),
             settings: settings.clone(),
             environment: environment.clone(),
             endpoint_url: environment
@@ -90,6 +91,7 @@ impl ContextClientFactory {
                 self.environment.as_ref(),
             )?))
             .credentials_provider(auth::Credentials::with_context(
+                self.auth.clone(),
                 &settings,
                 self.environment.clone(),
                 context,

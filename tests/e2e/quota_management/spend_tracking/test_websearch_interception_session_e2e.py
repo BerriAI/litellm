@@ -12,13 +12,15 @@ Needs a proxy booted with the callback and a real search backend, which
 ``gateway/stage_mirror_ci_config.yml`` carries as the ``e2e-search`` Perplexity tool.
 """
 
-from typing import Final
+from typing import Final, Literal
 
 import pytest
 from e2e_config import unique_marker
 from e2e_http import unwrap
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import (
+    AnthropicContentBlock,
     AnthropicMessagesBody,
     AnthropicWebSearchTool,
     ChatMessage,
@@ -26,6 +28,7 @@ from models import (
     SpendLogRow,
 )
 from proxy_client import ProxyClient
+from pydantic import BaseModel, ValidationError
 
 pytestmark = pytest.mark.e2e
 
@@ -37,10 +40,32 @@ def _has_search_row(rows: list[SpendLogRow]) -> bool:
     return any(row.call_type == SEARCH_CALL_TYPE for row in rows)
 
 
+class _SearchResultError(BaseModel):
+    type: Literal["web_search_tool_result_error"]
+    error_code: str
+
+
+def _search_error_code(block: AnthropicContentBlock) -> str | None:
+    try:
+        return _SearchResultError.model_validate((block.model_extra or {}).get("content")).error_code
+    except ValidationError:
+        return None
+
+
 class TestWebSearchInterceptionSession:
     @pytest.mark.covers(
         "quota_management.spend_tracking.websearch_interception.bills_under_request_session",
         exercised_on=("messages",),
+    )
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.MESSAGES,
+            providers=(Provider.BEDROCK, Provider.PERPLEXITY),
+            models=(BEDROCK_INVOKE_BACKEND,),
+            capabilities=(Capability.WEB_SEARCH,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_intercepted_search_is_billed_under_the_request_session(
         self, proxy: ProxyClient, resources: ResourceManager
@@ -78,6 +103,15 @@ class TestWebSearchInterceptionSession:
         assert "web_search_tool_result" in block_types, (
             f"precondition: the turn never ran an intercepted search, so there is no search row to attribute. "
             f"blocks={block_types}"
+        )
+        search_errors: Final = tuple(
+            code
+            for block in response.content or ()
+            if block.type == "web_search_tool_result" and (code := _search_error_code(block)) is not None
+        )
+        assert not search_errors, (
+            f"precondition: the e2e-search tool failed upstream ({search_errors}), so no {SEARCH_CALL_TYPE} row is "
+            "billed at all; check the proxy's search tool credentials before reading this as a session bug"
         )
 
         rows: Final = proxy.poll_logs_for_session(session_id, min_rows=2, predicate=_has_search_row)

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use futures_util::future::BoxFuture;
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_host_python::PythonContext;
+use litellm_http::Client;
 use litellm_secrets::source::SecretSource;
 use litellm_secrets::{
     Error, FailurePolicy, OidcResolver, SecretManagerState, SecretResolver, SecretValue,
@@ -15,16 +16,20 @@ pub(crate) struct ResolvedSecrets {
 }
 
 impl ResolvedSecrets {
-    pub(crate) fn new(snapshot: SecretManagerSnapshot, context: PythonContext) -> Self {
-        Self::from_state(snapshot.into_state(context))
+    pub(crate) fn new(
+        snapshot: SecretManagerSnapshot,
+        context: PythonContext,
+        client: Client,
+    ) -> Self {
+        Self::from_state(snapshot.into_state(context), client)
     }
 
-    fn from_state(state: Arc<SecretManagerState>) -> Self {
+    fn from_state(state: Arc<SecretManagerState>, client: Client) -> Self {
         Self {
             resolver: SecretResolver::new_python_compatible(
                 state,
                 Arc::new(ProcessEnvironment),
-                OidcResolver::default(),
+                OidcResolver::new(client),
             )
             .with_failure_policy(FailurePolicy::EnvironmentFallback),
         }
@@ -79,7 +84,7 @@ mod tests {
     }
 
     async fn resolve(state: Arc<SecretManagerState>, name: &'static str) -> Option<String> {
-        ResolvedSecrets::from_state(state)
+        ResolvedSecrets::from_state(state, litellm_http::Client::plain_for_test())
             .resolve(&[name])
             .await
             .unwrap()
@@ -175,7 +180,10 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        let source = ResolvedSecrets::from_state(state(&server, KeyManagementSettings::default()));
+        let source = ResolvedSecrets::from_state(
+            state(&server, KeyManagementSettings::default()),
+            litellm_http::Client::plain_for_test(),
+        );
         let snapshot = source.resolve(&[declared]).await.unwrap();
         assert_eq!(snapshot.get(undeclared), None);
         let result = source
@@ -238,9 +246,12 @@ mod tests {
 
     #[tokio::test]
     async fn oidc_failures_are_not_converted_to_missing_secrets() {
-        let result = ResolvedSecrets::from_state(Arc::new(SecretManagerState::default()))
-            .resolve(&["oidc/"])
-            .await;
+        let result = ResolvedSecrets::from_state(
+            Arc::new(SecretManagerState::default()),
+            litellm_http::Client::plain_for_test(),
+        )
+        .resolve(&["oidc/"])
+        .await;
         assert!(matches!(result, Err(litellm_secrets::Error::InvalidOidc)));
     }
 

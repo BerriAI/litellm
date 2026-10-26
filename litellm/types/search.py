@@ -4,7 +4,7 @@ LiteLLM Search API Types
 This module defines types for the unified search API across different providers.
 """
 
-from typing_extensions import Required, TypedDict
+from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.utils import SearchProviders
 
@@ -24,6 +24,7 @@ class SearchToolLiteLLMParams(TypedDict, total=False):
     api_base: str | None
     timeout: float | None
     max_retries: int | None
+    input_cost_per_query: ReadOnly[float | None]
 
 
 class SearchTool(TypedDict, total=False):
