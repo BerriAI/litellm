@@ -41,8 +41,11 @@ from litellm.proxy.proxy_server import (
     initialize,
 )
 from tests._master_key import MASTER_KEY
+from tests.integration._support.process import stop_child
+from tests.integration._support.timing import assert_enforced_within
 from tests.integration._support.wire import Reply, Wire, wire_server
 from tests.integration._support.wire import Request as WireRequest
+from tests.integration._support.ports import allocate_port
 
 CONFIG_TEMPLATE_PATH = Path("tests/integration/mcp/_config_mcp_e2e.yaml")
 MCP_SERVER_SCRIPT = Path("tests/integration/mcp/_math_server.py")
@@ -83,7 +86,10 @@ async def drain_logging_worker() -> typing.AsyncIterator[None]:
 async def test_schema_validation_stops_expensive_work_and_recovers(cancel: bool, concurrency: int) -> None:
     import psutil
 
-    from litellm.proxy._experimental.mcp_server.tool_search import _tool_argument_validation_error
+    from litellm.proxy._experimental.mcp_server.tool_search import (
+        _VALIDATION_TIMEOUT_SECONDS,
+        _tool_argument_validation_error,
+    )
 
     existing_children: Final = frozenset(child.pid for child in psutil.Process().children())
     warm_count: Final = min(concurrency, 4)
@@ -117,7 +123,7 @@ async def test_schema_validation_stops_expensive_work_and_recovers(cancel: bool,
             assert all(isinstance(result, asyncio.CancelledError) for result in await group)
         else:
             assert await group == ["Tool argument validation exceeded its time limit"] * concurrency
-        assert time.monotonic() - started < 35
+        assert_enforced_within(time.monotonic() - started, configured=_VALIDATION_TIMEOUT_SECONDS, slack=5)
         assert all(not worker.is_running() for worker in workers), "Cancelled validation must terminate worker CPU work"
         assert await _tool_argument_validation_error({"type": "object"}, {}) is None
     finally:
@@ -289,8 +295,9 @@ def _start_proxy_server(
         sock: Final = socket_factory()
         startup.callback(sock.close)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(("127.0.0.1", 0))
-        host, port = sock.getsockname()
+        host: Final = "127.0.0.1"
+        port: Final = allocate_port()
+        sock.bind((host, port))
 
         config = uvicorn.Config(proxy_app, host=host, port=port, log_level="warning", lifespan="off")
         server = uvicorn.Server(config)
@@ -364,9 +371,7 @@ def test_proxy_startup_failure_closes_acquired_resources(tmp_path: Path) -> None
 @contextmanager
 def _math_http_server(offset: int) -> typing.Iterator[str]:
     host = "127.0.0.1"
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind((host, 0))
-        _, port = sock.getsockname()
+    port: Final = allocate_port()
 
     with tempfile.TemporaryFile() as server_log:
         process = subprocess.Popen(
@@ -391,12 +396,7 @@ def _math_http_server(offset: int) -> typing.Iterator[str]:
                     time.sleep(0.05)
             yield f"http://{host}:{port}"
         finally:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
+            stop_child(process, grace_seconds=5)
 
 
 @pytest.fixture(scope="module")

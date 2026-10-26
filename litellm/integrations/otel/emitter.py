@@ -100,23 +100,19 @@ def _carried_keys(
     return frozenset(key for key, _value in attributes)
 
 
-def attribute_budget(span: Span, reserved: int, overwrites: frozenset[str] = frozenset()) -> int | None:
-    """How many mapped attributes fit on ``span`` next to what it already carries and ``reserved`` more.
+def carried_keys(span: Span) -> frozenset[str]:
+    """The attribute keys ``span`` already holds, empty for a span that exposes none."""
+    if not isinstance(span, ReadableSpan):
+        return frozenset()
+    return _carried_keys(span.attributes or ())
 
-    ``overwrites`` are the mapped keys already present on ``span``: setting one
-    replaces the value in place and consumes no slot against the limit, so only
-    the genuinely new pre-existing keys reduce the budget. Counting the
-    overwritten ones too reserves slots the fit can never spend and sheds
-    indexed message attributes for nothing.
-    """
+
+def attribute_budget(span: Span, reserved: int) -> int | None:
+    """How many new attribute keys fit on ``span`` next to what it already carries and ``reserved`` more."""
     limit: Final = span_attribute_limit(span)
     if limit is None:
         return None
-    if not isinstance(span, ReadableSpan):
-        return limit - reserved
-    existing_keys: Final = _carried_keys(span.attributes or ())
-    fresh: Final = len(existing_keys - overwrites) if overwrites else len(existing_keys)
-    return limit - fresh - reserved
+    return limit - len(carried_keys(span)) - reserved
 
 
 def stamp_error(
@@ -303,8 +299,14 @@ class SpanEmitter:
         )
         stamped_later: Final = error_attributes(error) if error else _NO_ATTRIBUTES
         reserved: Final = len(stamped_later.keys() - mapped.keys())
-        for key, value in fit_indexed_messages(mapped, attribute_budget(span, reserved, frozenset(mapped))).items():
-            span.set_attribute(key, value)
+        overwrites: Final = carried_keys(span) & mapped.keys()
+        fitted: Final = fit_indexed_messages(
+            MappingProxyType({key: value for key, value in mapped.items() if key not in overwrites}),
+            attribute_budget(span, reserved),
+        )
+        for key, value in mapped.items():
+            if key in overwrites or key in fitted:
+                span.set_attribute(key, value)
         if error:
             stamped: Final = stamp_error(span, error)
             if stamped is not None and self._event_recorder is not None and role is SpanRole.LLM_CALL:

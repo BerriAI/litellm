@@ -71,10 +71,11 @@ def _get_routing_strategies_from_router_class() -> list[str]:
 
     # Get the routing_strategy parameter
     routing_strategy_param: Final = sig.parameters.get("routing_strategy")
+    routing_strategy_annotation: Final[object] = routing_strategy_param.annotation if routing_strategy_param else None
 
-    if routing_strategy_param and routing_strategy_param.annotation:
+    if routing_strategy_param and routing_strategy_annotation:
         # Extract Literal values using get_args
-        literal_values: Final = get_args(routing_strategy_param.annotation)
+        literal_values: Final = get_args(routing_strategy_annotation)
         if literal_values:
             return list(literal_values)
 
@@ -129,8 +130,7 @@ async def get_router_settings(
                 if field.field_name == "routing_groups":
                     continue
                 if hasattr(llm_router, field.field_name):
-                    value = getattr(llm_router, field.field_name)
-                    current_values[field.field_name] = value
+                    current_values[field.field_name] = getattr(llm_router, field.field_name, None)
 
         # Merge with config values (config takes precedence)
         current_values.update(router_settings_from_config)

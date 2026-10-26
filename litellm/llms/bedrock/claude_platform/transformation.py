@@ -1,15 +1,21 @@
-from typing import Any, Final
+from collections.abc import AsyncIterator, Iterator, Mapping
+from typing import TYPE_CHECKING, Final
 
 import litellm
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig, JsonModeRequest
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponse
 
 from .common_utils import (
     BedrockClaudePlatformMixin,
     filter_claude_platform_request_body,
     resolve_unsupported_override,
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 
 
 class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
@@ -91,14 +97,27 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Any,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "ModelResponseIterator":
+        return self.get_model_response_iterator_for_request(
+            streaming_response=streaming_response, sync_stream=sync_stream, json_mode=json_mode, optional_params={}
+        )
+
+    def get_model_response_iterator_for_request(
+        self,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
+        sync_stream: bool,
+        json_mode: bool | None,
+        optional_params: Mapping[str, object],
+        logging_obj: "Logging | None" = None,
+    ) -> "ModelResponseIterator":
         from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 
         return ModelResponseIterator(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
             json_mode=bool(json_mode),
+            response_format_schema=JsonModeRequest.model_validate(optional_params).tool_schema() if json_mode else None,
         )

@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import redis
+from tests.integration._support.process import stop_child
 
 from litellm._redis import _get_redis_env_kwarg_mapping, get_redis_client
 from litellm._redis_credential_provider import _token_cache
@@ -91,12 +92,7 @@ def authenticated_redis_cluster(tmp_path: Path, unused_tcp_port_factory: Callabl
             admin.execute_command("ACL", "SETUSER", "default", "resetpass", ">local-fixture-token")
         yield port
     finally:
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
+        stop_child(process, grace_seconds=5)
         if process.stdout is not None:
             process.stdout.close()
 

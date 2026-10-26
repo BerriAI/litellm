@@ -20,7 +20,7 @@ import click
 import requests
 from pydantic import ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, field_validator
 
-from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 from ...http_client import HTTPClient
 from ._cli_context import cli_context_values

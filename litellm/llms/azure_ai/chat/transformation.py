@@ -1,6 +1,7 @@
 import copy
 import enum
 import re
+from collections.abc import AsyncIterator, Collection, Iterator
 from typing import TYPE_CHECKING, Final, cast
 
 import httpx
@@ -11,6 +12,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     audio_or_image_in_message_content,
     convert_content_list_to_str,
+    drop_tool_reference_parts_from_tool_messages,
     filter_value_from_dict,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
@@ -21,12 +23,12 @@ from litellm.llms.azure_ai.common_utils import (
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai.common_utils import drop_params_from_unprocessable_entity_error
-from litellm.llms.openai.openai import OpenAIConfig
+from litellm.llms.openai.openai import OpenAIChatCompletionResponseIterator, OpenAIConfig
 from litellm.llms.xai.chat.transformation import XAIChatConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import ModelResponse, ProviderField
+from litellm.types.utils import ModelResponse, ModelResponseStream, ProviderField
 from litellm.utils import add_path_to_api_base, supports_tool_choice
 
 if TYPE_CHECKING:
@@ -43,6 +45,14 @@ NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
     "provider_specific_fields",
     "cache_control",
 )
+
+
+class AzureAIChatCompletionResponseIterator(OpenAIChatCompletionResponseIterator):
+    def chunk_parser(self, chunk: dict[str, object]) -> ModelResponseStream:  # mutable-ok: mirrors override contract
+        usage: Final = chunk.get("usage")
+        if isinstance(usage, dict):
+            XAIChatConfig.fold_reasoning_tokens_into_completion(usage)
+        return super().chunk_parser(chunk)
 
 
 class AzureAIGPT5Config(OpenAIGPT5Config):
@@ -95,6 +105,8 @@ class AzureAIStudioConfig(OpenAIConfig):
         optional_params: dict[str, object],  # mutable-ok: OpenAIConfig.map_openai_params signature
         model: str,
         drop_params: bool,
+        *,
+        declared_reasoning_efforts: Collection[str] = (),
     ) -> dict[str, object]:  # mutable-ok: OpenAIConfig.map_openai_params signature
         if not azureAIGPT5Config.is_model_gpt_5_model(model):
             return super().map_openai_params(
@@ -108,6 +120,7 @@ class AzureAIStudioConfig(OpenAIConfig):
             optional_params=optional_params,
             model=model,
             drop_params=drop_params,
+            declared_reasoning_efforts=declared_reasoning_efforts,
         )
 
     def _supports_stop_reason(self, model: str) -> bool:
@@ -238,7 +251,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         Operates on a deep copy so the caller's messages keep their thinking blocks
         and provider metadata, which a fallback to another provider still needs.
         """
-        stripped_messages: Final = copy.deepcopy(messages)
+        stripped_messages: Final = copy.deepcopy(drop_tool_reference_parts_from_tool_messages(messages))
         for message in stripped_messages:
             message_dict = cast(dict, message)  # cast-ok: TypedDict is a runtime dict stripped on our copy
             for field in NON_OPENAI_SPEC_MESSAGE_FIELDS:
@@ -319,7 +332,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         json_mode: bool | None = None,
     ) -> ModelResponse:
         model_response.model = f"azure_ai/{model}"
-        return super().transform_response(
+        response: Final = super().transform_response(
             model=model,
             raw_response=raw_response,
             model_response=model_response,
@@ -330,6 +343,20 @@ class AzureAIStudioConfig(OpenAIConfig):
             litellm_params=litellm_params,
             encoding=encoding if encoding is not None else None,
             api_key=api_key,
+            json_mode=json_mode,
+        )
+        XAIChatConfig.fold_reasoning_tokens_into_completion(response)
+        return response
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
+        sync_stream: bool,
+        json_mode: bool | None = False,
+    ) -> "AzureAIChatCompletionResponseIterator":
+        return AzureAIChatCompletionResponseIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
             json_mode=json_mode,
         )
 
@@ -370,7 +397,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         return data
 
     def _drop_tool_level_extra_fields(self, request_data: dict, error_text: str) -> dict:
-        fields_to_drop: Final = set(re.findall(r"tools\[\d+\]\.([\w-]+)", error_text))
+        fields_to_drop: Final[Collection[str]] = set(re.findall(r"tools\[\d+\]\.([\w-]+)", error_text))
         tools: Final = request_data.get("tools")
         if fields_to_drop and isinstance(tools, list):
             for tool in tools:

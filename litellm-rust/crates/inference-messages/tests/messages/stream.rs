@@ -348,6 +348,7 @@ async fn the_timeout_covers_a_stalled_stream_body(call: MessagesCall) {
 #[rstest]
 #[case::anthropic("anthropic")]
 #[case::azure_ai("azure_ai")]
+#[case::edenai("edenai")]
 #[tokio::test]
 async fn the_sdk_returns_stream_headers_and_every_sse_byte(
     call: MessagesCall,
@@ -358,6 +359,7 @@ async fn the_sdk_returns_stream_headers_and_every_sse_byte(
         .execute(
             MessagesCall {
                 custom_llm_provider: Some(provider.into()),
+                api_key: Some("stream-key".into()),
                 litellm_params: Default::default(),
                 ..streaming(call, upstream.uri())
             },
