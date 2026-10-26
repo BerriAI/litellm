@@ -186,6 +186,51 @@ def test_disabled_thinking_defaults_to_low_for_unknown_or_non_gemini3_flash_mode
     }
 
 
+@pytest.mark.parametrize(
+    ("model", "litellm_params", "expected_level"),
+    (
+        ("gemini-3.8-flash", {}, "low"),
+        ("gemini-3.1-pro-preview", {}, "low"),
+        (
+            "gemini/custom-minimal-capable",
+            {"model_info": {"supports_minimal_reasoning_effort": True}},
+            "minimal",
+        ),
+        (
+            "gemini/custom-levels-capable",
+            {"model_info": {"reasoning_effort_levels": ["minimal", "low", "medium", "high"]}},
+            "minimal",
+        ),
+    ),
+)
+def test_minimal_thinking_level_honors_model_capability_flags_and_clamps_unsupported_models(
+    model: str,
+    litellm_params: Mapping[str, object],
+    expected_level: str,
+) -> None:
+    disabled_prepared: Final = transform_chat_to_interactions_request(
+        messages=[{"role": "user", "content": "hi"}],
+        model=model,
+        optional_params={"reasoning_effort": "none"},
+        litellm_params=litellm_params,
+    )
+    minimal_prepared: Final = transform_chat_to_interactions_request(
+        messages=[{"role": "user", "content": "hi"}],
+        model=model,
+        optional_params={"reasoning_effort": "minimal"},
+        litellm_params=litellm_params,
+    )
+
+    assert disabled_prepared.optional_params["generation_config"] == {
+        "thinking_level": expected_level,
+        "thinking_summaries": "none",
+    }
+    assert minimal_prepared.optional_params["generation_config"] == {
+        "thinking_level": expected_level,
+        "thinking_summaries": "auto",
+    }
+
+
 def test_ai_studio_fetches_remote_image_while_vertex_preserves_uri() -> None:
     calls: Final[list[tuple[str, str | None]]] = []  # mutable-ok: test spy accumulator
 

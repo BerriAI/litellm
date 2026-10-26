@@ -697,34 +697,61 @@ def _convert_response_format(params: JsonMapping) -> JsonValue:
     return base_format
 
 
-def _lowest_thinking_level_for_model(model: str) -> str:
-    if VertexGeminiConfig.is_gemini_3_or_newer(model) and "flash" in model.lower():
-        return "minimal"
-    return "low"
+def _minimal_flag_from_mapping(entry_obj: object) -> bool | None:
+    if not isinstance(entry_obj, Mapping):
+        return None
+    entry: Final = _OBJECT_MAP.validate_python(entry_obj)
+    flag: Final = entry.get("supports_minimal_reasoning_effort")
+    if isinstance(flag, bool):
+        return flag
+    levels: Final = entry.get("reasoning_effort_levels")
+    if isinstance(levels, Sequence) and not isinstance(levels, (str, bytes)):
+        return "minimal" in _OBJECT_SEQ.validate_python(levels)
+    return None
 
 
-def _resolve_thinking_fields(params: JsonMapping, model: str) -> JsonMapping:
+def _supports_minimal_thinking_level(model: str, model_info: object = None) -> bool:
+    deployment_flag: Final = _minimal_flag_from_mapping(model_info)
+    if deployment_flag is not None:
+        return deployment_flag
+    bare: Final = model.split("/")[-1]
+    cost_flags: Final = tuple(
+        _minimal_flag_from_mapping(
+            litellm.model_cost.get(candidate)  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]  # model_cost is an untyped global dict
+        )
+        for candidate in (model, bare, f"gemini/{bare}", f"vertex_ai/{bare}")
+    )
+    explicit_flag: Final = next((flag for flag in cost_flags if flag is not None), None)
+    if explicit_flag is not None:
+        return explicit_flag
+    return VertexGeminiConfig.is_gemini_3_or_newer(model) and "flash" in model.lower()
+
+
+def _lowest_thinking_level_for_model(model: str, model_info: object = None) -> str:
+    return "minimal" if _supports_minimal_thinking_level(model, model_info) else "low"
+
+
+def _resolve_thinking_fields(params: JsonMapping, model: str, model_info: object = None) -> JsonMapping:
+    lowest_level: Final = _lowest_thinking_level_for_model(model, model_info)
     effort: Final = params.get("reasoning_effort")
     effort_str: Final = (
         effort.get("effort")
         if isinstance(effort, dict) and isinstance(effort.get("effort"), str)
         else (effort if isinstance(effort, str) else None)
     )
-    if effort_str in ("minimal", "low", "medium", "high"):
+    if effort_str == "minimal":
+        return MappingProxyType({"thinking_level": lowest_level, "thinking_summaries": "auto"})
+    if effort_str in ("low", "medium", "high"):
         return MappingProxyType({"thinking_level": effort_str, "thinking_summaries": "auto"})
     if effort_str in ("none", "disable"):
-        return MappingProxyType(
-            {"thinking_level": _lowest_thinking_level_for_model(model), "thinking_summaries": "none"}
-        )
+        return MappingProxyType({"thinking_level": lowest_level, "thinking_summaries": "none"})
 
     thinking: Final = params.get("thinking")
     if isinstance(thinking, dict):
         t_type: Final = thinking.get("type")
         budget: Final = thinking.get("budget_tokens")
         if t_type == "disabled" or budget == 0:
-            return MappingProxyType(
-                {"thinking_level": _lowest_thinking_level_for_model(model), "thinking_summaries": "none"}
-            )
+            return MappingProxyType({"thinking_level": lowest_level, "thinking_summaries": "none"})
         if t_type == "enabled" or isinstance(budget, int):
             level: Final = (
                 "low"
@@ -735,7 +762,7 @@ def _resolve_thinking_fields(params: JsonMapping, model: str) -> JsonMapping:
     return MappingProxyType({})
 
 
-def _build_generation_config(params: JsonMapping, model: str) -> JsonValue:
+def _build_generation_config(params: JsonMapping, model: str, model_info: object = None) -> JsonValue:
     raw_existing: Final = params.get("generation_config")
     existing: Final = raw_existing if isinstance(raw_existing, dict) else _EMPTY_JSON_MAP
 
@@ -774,7 +801,7 @@ def _build_generation_config(params: JsonMapping, model: str) -> JsonValue:
         **({"stop_sequences": stop_seq} if stop_seq is not None else {}),
         **({"tool_choice": mapped_choice} if mapped_choice is not None else {}),
         **({"speech_config": speech_cfg} if speech_cfg is not None else {}),
-        **_resolve_thinking_fields(params, model),
+        **_resolve_thinking_fields(params, model, model_info),
     }
     return _JSON_VALUE.validate_python(merged) if merged else None
 
@@ -812,7 +839,11 @@ def transform_chat_to_interactions_request(
 
     tools: Final = _convert_tools(normalized_params)
     response_format: Final = _convert_response_format(normalized_params)
-    generation_config: Final = _build_generation_config(normalized_params, model=model)
+    generation_config: Final = _build_generation_config(
+        normalized_params,
+        model=model,
+        model_info=litellm_params.get("model_info"),
+    )
     passthrough_entries: Final = {
         key: normalized_params[key]
         for key in ("store", "previous_interaction_id", "background", "environment", "response_modalities")
