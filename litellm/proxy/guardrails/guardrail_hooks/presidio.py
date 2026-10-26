@@ -282,13 +282,12 @@ def _tool_call_arguments(tool_call: _ToolCall) -> str | None:
 
 
 def _set_tool_call_arguments(tool_call: _ToolCall, arguments: str) -> None:
-    match tool_call:
-        case {"function": function}:
-            function["arguments"] = arguments
-        case ChatCompletionMessageToolCall(function=Function() as function):
-            function.arguments = arguments
-        case _:
-            pass
+    if isinstance(tool_call, ChatCompletionMessageToolCall):
+        function: Final = tool_call.function
+        function.arguments = arguments
+    else:
+        function_chunk: Final = tool_call["function"]
+        function_chunk["arguments"] = arguments
 
 
 _JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
@@ -315,8 +314,6 @@ async def _rewritten_arguments(arguments: str, rewrite: Callable[[str], Awaitabl
     try:
         parsed: Final = _JSON_VALUE.validate_json(arguments)
     except ValidationError:
-        return await rewrite(arguments)
-    if not isinstance(parsed, (dict, list)):
         return await rewrite(arguments)
     rewritten: Final = await _rewritten_json_strings(parsed, rewrite)
     return arguments if rewritten == parsed else json.dumps(rewritten, ensure_ascii=False)

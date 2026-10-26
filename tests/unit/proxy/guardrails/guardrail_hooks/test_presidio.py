@@ -5207,6 +5207,40 @@ async def test_tool_call_arguments_without_pii_reach_the_model_byte_for_byte() -
     assert data["messages"][1]["tool_calls"][0]["function"]["arguments"] == arguments
 
 
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        pytest.param("call Jane Doe back", id="not-json"),
+        pytest.param('"Jane Doe"', id="json-string"),
+    ],
+)
+async def test_tool_call_arguments_that_are_not_a_json_object_are_still_masked_and_restored(arguments: str) -> None:
+    async with _reversible_presidio_guardrail() as guardrail:
+        data: Final = await _masked_chat_request(
+            guardrail,
+            [{"role": "assistant", "content": None, "tool_calls": [_function_tool_call("call_1", arguments)]}],
+        )
+
+    masked: Final = data["messages"][0]["tool_calls"][0]["function"]["arguments"]
+    assert "Jane Doe" not in masked, masked
+    assert OPTIONAL_PresidioPIIMasking._unmask_pii_text(masked, data["metadata"]["pii_tokens"]) == arguments, masked
+
+
+async def test_a_tool_call_without_string_arguments_passes_through_beside_masked_text() -> None:
+    tool_call: Final = {"id": "call_1", "type": "function", "function": {"name": "lookup"}}
+    async with _reversible_presidio_guardrail() as guardrail:
+        data: Final = await _masked_chat_request(
+            guardrail,
+            [
+                {"role": "user", "content": "Book for Jane Doe."},
+                {"role": "assistant", "content": None, "tool_calls": [tool_call]},
+            ],
+        )
+
+    assert "Jane Doe" not in data["messages"][0]["content"], data["messages"][0]
+    assert data["messages"][1]["tool_calls"] == [tool_call]
+
+
 async def test_apply_guardrail_restores_the_arguments_of_tool_call_objects() -> None:
     guardrail: Final = OPTIONAL_PresidioPIIMasking(
         event_hook="pre_call", default_on=True, output_parse_pii=True, mock_testing=True
