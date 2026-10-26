@@ -301,6 +301,7 @@ class _BudgetCascade:
     budgets: tuple[LiteLLM_BudgetTableFull, ...] = ()
     budget_ids: tuple[str, ...] = ()
     budget_resets: tuple[tuple[str, datetime], ...] = ()
+    budget_quarantines: tuple[str, ...] = ()
     counter_resets: tuple[tuple[str, float], ...] = ()
     cache_keys: tuple[str, ...] = ()
     rollover_caps: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
@@ -357,12 +358,70 @@ def _as_utc(moment: datetime) -> datetime:
 def _count_advanced(reset_ats: Iterable[object], cutoff: datetime) -> int:
     """How many rows the write actually moved past the due cutoff.
 
-    A budget_duration of "0s" (or one the parser cannot read) resolves to the
-    current time, so the row is written and stays due. Counting it as progress
-    would re-read the same chunk until the per-run cap on every tick.
+    A budget_duration of "0s" resolves to the current time, so the row is written
+    and stays due. Counting it as progress would re-read the same chunk until
+    the per-run cap on every tick.
     """
     utc_cutoff: Final = _as_utc(cutoff)
     return sum(1 for reset_at in reset_ats if isinstance(reset_at, datetime) and _as_utc(reset_at) > utc_cutoff)
+
+
+def _try_compute_budget_reset_at(duration: object, settings: BudgetResetSettings) -> datetime | None:
+    if not isinstance(duration, str):
+        raise ValueError(
+            f"Invalid budget_duration {duration!r}. Use the <int><unit> format (e.g. '1h', '7d', '30d', '1mo')."
+        )
+    try:
+        return compute_budget_reset_at(budget_duration=duration, settings=settings)
+    except ValueError:
+        return None
+
+
+def _is_duration_quarantine(
+    item: LiteLLM_TeamTable | LiteLLM_UserTable | LiteLLM_VerificationToken,
+) -> bool:
+    return item.budget_duration is None and item.budget_reset_at is None
+
+
+def _count_rows_leaving_due_set(
+    items: Iterable[LiteLLM_TeamTable | LiteLLM_UserTable | LiteLLM_VerificationToken],
+    cutoff: datetime,
+) -> int:
+    return sum(
+        1
+        for item in items
+        if _is_duration_quarantine(item)
+        or (isinstance(item.budget_reset_at, datetime) and _as_utc(item.budget_reset_at) > _as_utc(cutoff))
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _AdvanceWindow:
+    budget_id: str
+    reset_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class _QuarantineWindow:
+    budget_id: str
+
+
+def _plan_budget_window(
+    budget: LiteLLM_BudgetTableFull, settings: BudgetResetSettings
+) -> _AdvanceWindow | _QuarantineWindow | None:
+    budget_id: Final = budget.budget_id
+    duration: Final = budget.budget_duration
+    if budget_id is None or duration is None:
+        return None
+    reset_at: Final = _try_compute_budget_reset_at(duration, settings)
+    if reset_at is None:
+        verbose_proxy_logger.warning(
+            "Reset budget job: clearing unparseable budget_duration %r on budget %s so it leaves the due set",
+            duration,
+            budget_id,
+        )
+        return _QuarantineWindow(budget_id)
+    return _AdvanceWindow(budget_id, reset_at)
 
 
 def _phase_is_drained(outcome: _ChunkOutcome) -> bool:
@@ -766,9 +825,15 @@ class ResetBudgetJob:
         own schedule via reset_budget_for_litellm_keys(), so sweeping them here
         would reset them twice.
         """
-        budget_ids: Final = tuple(b.budget_id for b in budgets_to_reset if b.budget_id is not None)
+        window_plans: Final = tuple(_plan_budget_window(b, self.reset_settings) for b in budgets_to_reset)
+        budget_resets: Final = tuple((p.budget_id, p.reset_at) for p in window_plans if isinstance(p, _AdvanceWindow))
+        budget_quarantines: Final = tuple(p.budget_id for p in window_plans if isinstance(p, _QuarantineWindow))
+        quarantine_ids: Final = frozenset(budget_quarantines)
+        budget_ids: Final = tuple(
+            b.budget_id for b in budgets_to_reset if b.budget_id is not None and b.budget_id not in quarantine_ids
+        )
         if not budget_ids:
-            return _EMPTY_CASCADE
+            return _BudgetCascade(budgets=tuple(budgets_to_reset), budget_quarantines=budget_quarantines)
 
         team_memberships: Final[tuple[_TeamMembershipRow, ...]] = await self._fetch_linked_rows(
             table=TeamMembershipRepository(self.prisma_client).table,
@@ -804,7 +869,9 @@ class ResetBudgetJob:
             {
                 b.budget_id: cap
                 for b in budgets_to_reset
-                if b.budget_id is not None and (cap := _rollover_cap(b.max_budget)) is not None
+                if b.budget_id is not None
+                and b.budget_id not in quarantine_ids
+                and (cap := _rollover_cap(b.max_budget)) is not None
             }
             if _rollover_enabled()
             else {}
@@ -812,14 +879,8 @@ class ResetBudgetJob:
         return _BudgetCascade(
             budgets=tuple(budgets_to_reset),
             budget_ids=budget_ids,
-            budget_resets=tuple(
-                (
-                    b.budget_id,
-                    compute_budget_reset_at(budget_duration=b.budget_duration, settings=self.reset_settings),
-                )
-                for b in budgets_to_reset
-                if b.budget_id is not None and b.budget_duration is not None
-            ),
+            budget_resets=budget_resets,
+            budget_quarantines=budget_quarantines,
             counter_resets=(
                 *(
                     (_team_membership_counter_key(row), _row_carried_spend(row, rollover_caps))
@@ -896,7 +957,7 @@ class ResetBudgetJob:
         batching both means a mid-cascade failure persists nothing and the rows
         stay due for the next run.
         """
-        if not cascade.budget_ids:
+        if not cascade.budget_ids and not cascade.budget_quarantines:
             return
 
         await self._with_db_write_retry(
@@ -909,7 +970,8 @@ class ResetBudgetJob:
             db_span("reset_budget_cascade", "LiteLLM_BudgetTable"),
             budget_cascade_unit_of_work(self._new_batch) as uow,
         ):
-            uow.team_memberships.queue_total_spend_repair(cascade.budget_ids)
+            if cascade.budget_ids:
+                uow.team_memberships.queue_total_spend_repair(cascade.budget_ids)
             _queue_budget_linked_resets(uow.team_memberships, cascade)
             _queue_budget_linked_resets(uow.keys, cascade, extra=_LINKED_KEYS_WHERE)
             _queue_budget_linked_resets(uow.organizations, cascade, extra=_SPENT_ROWS_WHERE)
@@ -918,6 +980,8 @@ class ResetBudgetJob:
             _queue_budget_linked_resets(uow.projects, cascade, extra=_SPENT_ROWS_WHERE)
             for budget_id, budget_reset_at in cascade.budget_resets:
                 uow.budgets.queue_window_advance(budget_id=budget_id, budget_reset_at=budget_reset_at)
+            for budget_id in cascade.budget_quarantines:
+                uow.budgets.queue_window_quarantine(budget_id=budget_id)
 
     async def _invalidate_budget_cascade_caches(self, cascade: _BudgetCascade) -> None:
         await self._invalidate_caches(
@@ -953,7 +1017,8 @@ class ResetBudgetJob:
             advanced=_count_advanced(
                 (reset_at for _, reset_at in cascade.budget_resets),
                 cutoff=datetime.now(timezone.utc),
-            ),
+            )
+            + len(cascade.budget_quarantines),
             endusers=await self._invalidate_enduser_caches(cascade.budget_ids),
         )
 
@@ -1039,6 +1104,9 @@ class ResetBudgetJob:
             for k in updated_keys:
                 if k.row.token is None:
                     continue
+                if _is_duration_quarantine(k.row):
+                    uow.keys.queue_duration_quarantine(token=k.row.token)
+                    continue
                 uow.keys.queue_spend_reset(
                     token=k.row.token,
                     budget_reset_at=k.row.budget_reset_at,
@@ -1064,6 +1132,9 @@ class ResetBudgetJob:
             spend_reset_unit_of_work(self._new_batch) as uow,
         ):
             for u in updated_users:
+                if _is_duration_quarantine(u.row):
+                    uow.users.queue_duration_quarantine(user_id=u.row.user_id)
+                    continue
                 uow.users.queue_spend_reset(
                     user_id=u.row.user_id,
                     budget_reset_at=u.row.budget_reset_at,
@@ -1089,6 +1160,9 @@ class ResetBudgetJob:
             spend_reset_unit_of_work(self._new_batch) as uow,
         ):
             for t in updated_teams:
+                if _is_duration_quarantine(t.row):
+                    uow.teams.queue_duration_quarantine(team_id=t.row.team_id)
+                    continue
                 uow.teams.queue_spend_reset(
                     team_id=t.row.team_id,
                     budget_reset_at=t.row.budget_reset_at,
@@ -1173,6 +1247,8 @@ class ResetBudgetJob:
                 if updated_keys:
                     await self._write_key_reset_updates(updated_keys=updated_keys)
                     for k in updated_keys:
+                        if _is_duration_quarantine(k.row):
+                            continue
                         token = getattr(k.row, "token", None)
                         if token:
                             await self._invalidate_spend_counter(f"spend:key:{token}")
@@ -1180,8 +1256,8 @@ class ResetBudgetJob:
             end_time = time.time()
             outcome: Final = _ChunkOutcome(
                 fetched=len(keys_to_reset) if keys_to_reset else 0,
-                advanced=_count_advanced(
-                    (k.row.budget_reset_at for k in updated_keys),
+                advanced=_count_rows_leaving_due_set(
+                    (item.row for item in updated_keys),
                     cutoff=datetime.now(timezone.utc),
                 ),
             )
@@ -1284,6 +1360,8 @@ class ResetBudgetJob:
                 if updated_users:
                     await self._write_user_reset_updates(updated_users=updated_users)
                     for u in updated_users:
+                        if _is_duration_quarantine(u.row):
+                            continue
                         user_id = getattr(u.row, "user_id", None)
                         if user_id:
                             await self._invalidate_spend_counter(f"spend:user:{user_id}")
@@ -1293,8 +1371,8 @@ class ResetBudgetJob:
             end_time = time.time()
             outcome: Final = _ChunkOutcome(
                 fetched=len(users_to_reset) if users_to_reset else 0,
-                advanced=_count_advanced(
-                    (u.row.budget_reset_at for u in updated_users),
+                advanced=_count_rows_leaving_due_set(
+                    (item.row for item in updated_users),
                     cutoff=datetime.now(timezone.utc),
                 ),
             )
@@ -1399,6 +1477,8 @@ class ResetBudgetJob:
                 if updated_teams:
                     await self._write_team_reset_updates(updated_teams=updated_teams)
                     for t in updated_teams:
+                        if _is_duration_quarantine(t.row):
+                            continue
                         team_id = getattr(t.row, "team_id", None)
                         if team_id:
                             await self._invalidate_spend_counter(f"spend:team:{team_id}")
@@ -1406,8 +1486,8 @@ class ResetBudgetJob:
             end_time = time.time()
             outcome: Final = _ChunkOutcome(
                 fetched=len(teams_to_reset) if teams_to_reset else 0,
-                advanced=_count_advanced(
-                    (t.row.budget_reset_at for t in updated_teams),
+                advanced=_count_rows_leaving_due_set(
+                    (item.row for item in updated_teams),
                     cutoff=datetime.now(timezone.utc),
                 ),
             )
@@ -1478,6 +1558,15 @@ class ResetBudgetJob:
         reset_at: Final = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00")).replace(tzinfo=None)
         if reset_at > now:
             return False
+        budget_duration: Final = window.get("budget_duration")
+        next_reset_at: Final = _try_compute_budget_reset_at(budget_duration, reset_settings)
+        if next_reset_at is None or not isinstance(budget_duration, str):
+            verbose_proxy_logger.warning(
+                "Reset budget job: clearing unparseable budget_duration %r on a window so it is not retried",
+                budget_duration,
+            )
+            window["reset_at"] = None
+            return True
         new_value: Final = await ResetBudgetJob._window_carried_spend(window, counter_key, spend_counter_cache)
         spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=new_value)
         if spend_counter_cache.redis_cache is not None:
@@ -1485,8 +1574,6 @@ class ResetBudgetJob:
                 await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=new_value)
             except Exception as redis_err:
                 verbose_proxy_logger.warning("Failed to reset Redis counter %s: %s", counter_key, redis_err)
-        budget_duration: Final = window["budget_duration"]
-        next_reset_at: Final = compute_budget_reset_at(budget_duration=budget_duration, settings=reset_settings)
         window["reset_at"] = next_reset_at.isoformat()
         await ResetBudgetJob._roll_window_spend_row(
             prisma_client=prisma_client,
@@ -1668,11 +1755,20 @@ class ResetBudgetJob:
         still holds the pre-reset value, admitting requests past the cap.
         """
         try:
+            duration: Final = item.budget_duration
+            if duration is not None:
+                reset_at: Final = _try_compute_budget_reset_at(duration, reset_settings)
+                if reset_at is None:
+                    verbose_proxy_logger.warning(
+                        "Reset budget job: clearing unparseable budget_duration %r on %s so it leaves the due set",
+                        duration,
+                        item_type,
+                    )
+                    item.budget_duration = None
+                    item.budget_reset_at = None
+                    return item
+                item.budget_reset_at = reset_at
             item.spend = _carried_spend(item.spend, _rollover_cap(item.max_budget)) if _rollover_enabled() else 0.0
-            if hasattr(item, "budget_duration") and item.budget_duration is not None:
-                item.budget_reset_at = compute_budget_reset_at(
-                    budget_duration=item.budget_duration, settings=reset_settings
-                )
             return item
         except Exception as e:
             verbose_proxy_logger.exception("Error resetting budget for %s: %s. Item: %s", item_type, e, item)

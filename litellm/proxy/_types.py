@@ -1201,6 +1201,12 @@ from litellm.types.proxy.management_endpoints.request_base import (  # noqa: E40
 )
 
 
+def _blank_duration_as_unset(value: object) -> object:
+    if isinstance(value, str) and value.strip() == "":
+        return None
+    return value
+
+
 class GenerateKeyResponse(KeyRequestBase):
     key: str
     key_name: str | None = None
@@ -1928,6 +1934,11 @@ class NewTeamRequest(TeamBase):
             return None
         return v
 
+    @field_validator("budget_duration", "team_member_budget_duration", mode="before")
+    @classmethod
+    def empty_budget_duration_is_unset(cls, v: object) -> object:
+        return _blank_duration_as_unset(v)
+
 
 class GlobalEndUsersSpend(LiteLLMPydanticObjectBase):
     api_key: str | None = None
@@ -2001,6 +2012,11 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
             "(e.g. {'gpt-4o': {'max_budget': 10, 'budget_duration': '1d'}})"
         ),
     )
+
+    @field_validator("budget_duration", "team_member_budget_duration", mode="before")
+    @classmethod
+    def empty_budget_duration_is_unset(cls, v: object) -> object:
+        return _blank_duration_as_unset(v)
 
 
 class PatchTeamRequest(UpdateTeamRequest):

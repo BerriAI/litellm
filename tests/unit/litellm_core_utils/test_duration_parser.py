@@ -337,19 +337,18 @@ class TestWordFormBudgetDurations(unittest.TestCase):
         self.assertEqual(duration_in_seconds("weekly"), 604800)
         self.assertEqual(duration_in_seconds("monthly"), 2592000)
 
-    def test_invalid_duration_logs_warning_and_falls_back(self):
+    def test_unparseable_duration_raises_instead_of_midnight_fallback(self):
         base_time = datetime(2023, 5, 15, 15, 0, 0, tzinfo=timezone.utc)
-        with patch.object(duration_parser.verbose_logger, "warning") as mock_warning:
-            result = get_next_standardized_reset_time("garbage", base_time, "UTC")
-        self.assertEqual(result, datetime(2023, 5, 16, 0, 0, 0, tzinfo=timezone.utc))
-        mock_warning.assert_called_once()
-        self.assertIn("garbage", mock_warning.call_args.args)
+        for duration in ("", "   ", "garbage", "1x", "1dinvalid", "1hr", "fortnightly"):
+            with self.assertRaises(ValueError) as ctx:
+                get_next_standardized_reset_time(duration, base_time, "UTC")
+            self.assertIn("Invalid budget_duration", str(ctx.exception))
 
 
 class TestGetBudgetWindowStart(unittest.TestCase):
     def test_window_start_is_the_previous_reset_on_the_same_schedule(self):
         created_at: Final = datetime(2024, 10, 1, 0, 30, tzinfo=timezone.utc)
-        durations: Final = "1d 24h daily 7d weekly 2w 10d 30d monthly 1mo 4h 5h 30m 45s 1hr fortnightly".split()
+        durations: Final = "1d 24h daily 7d weekly 2w 10d 30d monthly 1mo 4h 5h 30m 45s".split()
         for duration in durations:
             with self.subTest(duration=duration):
                 reset_at = get_next_standardized_reset_time(duration, created_at, "UTC")

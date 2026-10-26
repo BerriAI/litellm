@@ -21,6 +21,12 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     skills: list[str] | None = None
 
 
+def _blank_duration_as_unset(value: object) -> object:
+    if isinstance(value, str) and value.strip() == "":
+        return None
+    return value
+
+
 class GenerateRequestBase(LiteLLMPydanticObjectBase):
     """
     Overlapping schema between key and user generate/update requests
@@ -65,3 +71,8 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
         if v == "":
             return None
         return v
+
+    @field_validator("budget_duration", mode="before")
+    @classmethod
+    def empty_budget_duration_is_unset(cls, value: object) -> object:
+        return _blank_duration_as_unset(value)
