@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import {
@@ -26,7 +27,26 @@ const ladder = () =>
     deployment("large", "anthropic/claude-opus-5-5"),
   );
 
+const catalog: Record<string, { mode?: string; litellm_provider?: string }> = JSON.parse(
+  readFileSync(new URL("../../../../../model_prices_and_context_window.json", import.meta.url), "utf8"),
+);
+const catalogOpusModels = Object.entries(catalog).filter(
+  ([id, metadata]) => metadata.mode === "chat" && /claude-opus-\d/.test(id) && !/-(?:fast|think)$/.test(id),
+);
+
 describe("deployedRouterModels", () => {
+  it.each(catalogOpusModels)(
+    "recognizes the catalog's standard Opus deployment %s behind a custom alias",
+    (id, metadata) => {
+      const row = {
+        model_name: "custom-deployment",
+        litellm_params: { model: id, custom_llm_provider: metadata.litellm_provider },
+      };
+      const models = deployedRouterModels([{ model_group: "custom-deployment", mode: "chat" }], [row]);
+      expect(models).toEqual([expect.objectContaining({ name: "custom-deployment", family: "claude", line: "opus" })]);
+    },
+  );
+
   it("resolves underlying identities independently of deployment aliases and serving providers", () => {
     const models = resolve(
       deployment("everyday", "bedrock/us.openai.gpt-6.1-sol"),

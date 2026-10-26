@@ -34,9 +34,11 @@ const parseModel = (raw: string): ModelIdentity | null => {
     .toLowerCase()
     .split("/")
     .at(-1)!
-    .replace(/^(?:us|eu|apac|global)\./, "")
+    .replace(/^(?:us|eu|apac|global|au|jp|us-gov)\./, "")
     .replace(/^(?:anthropic|openai|zai|deepseek)\./, "")
-    .replace(/-v\d+:\d+$/, "");
+    .replace(/^databricks-/, "")
+    .replace(/@default$/, "")
+    .replace(/-v\d+(?::\d+)?$/, "");
   const versionFirst = model.match(/^claude-(\d+(?:[.-]\d+)*)-(haiku|sonnet|opus)(?:[-@]([0-9]{8}))?$/);
   const claude =
     model.match(/^claude-(haiku|sonnet|opus)-(\d+(?:[.-]\d+)*)(?:@([0-9]+))?$/) ??
@@ -96,6 +98,10 @@ const providerOf = (deployment: AutoRouterDeployment, group: ModelGroup, family:
         anthropic: "Anthropic",
         openai: "OpenAI",
         azure: "Azure",
+        azure_ai: "Azure AI",
+        databricks: "Databricks",
+        github_copilot: "GitHub Copilot",
+        "vertex_ai-anthropic_models": "Vertex AI",
         vertex_ai: "Vertex AI",
         zai: "Z.ai",
         deepseek: "DeepSeek",
