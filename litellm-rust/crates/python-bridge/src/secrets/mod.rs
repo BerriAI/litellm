@@ -29,6 +29,7 @@ pub(crate) fn source(py: Python<'_>) -> PyResult<Arc<dyn SecretSource>> {
     let Some(snapshot) = PythonSettings::SecretManager.read_or_unset(py)? else {
         return Ok(Arc::new(EnvironmentSecrets::python_compatible(
             crate::http::host_client(py, litellm_http::ClientVariant::Provider)?,
+            Arc::new(crate::environment::ProcessEnvironment),
         )));
     };
     if snapshot.read(&NATIVE)? {

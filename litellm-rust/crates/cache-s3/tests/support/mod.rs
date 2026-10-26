@@ -37,6 +37,7 @@ pub fn cache_with(config: S3CacheConfig, runtime: Handle) -> JsonS3Cache {
         litellm_http::Client::plain_for_test(),
         JsonCodec::new(),
         runtime,
+        std::sync::Arc::new(litellm_layered::Env::default()),
     )
 }
 

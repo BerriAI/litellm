@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods)] // test and build tooling read their own settings from the process environment
 use super::*;
 
 #[rstest]
@@ -282,7 +283,7 @@ async fn rotation_applies_timeout_to_each_request(token_values: Vec<(&str, &str)
 #[ignore]
 async fn live_vault_round_trip() {
     let environment: Arc<dyn Lookup + Send + Sync> =
-        Arc::new(litellm_core_utils::settings::ProcessEnvironment);
+        Arc::new(|name: &str| std::env::var(name).ok());
     let manager: HashicorpVault = HashicorpVault::new(environment, true).unwrap();
     let name: String = std::env::var("LITELLM_VAULT_LIVE_SECRET_NAME").unwrap();
     let value: SecretValue = SecretValue::new("native-live-value");

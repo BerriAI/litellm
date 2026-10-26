@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use crate::environment::ProcessEnvironment;
 use futures_util::future::BoxFuture;
-use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_host_python::PythonContext;
 use litellm_http::Client;
 use litellm_secrets::source::SecretSource;

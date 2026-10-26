@@ -1,6 +1,5 @@
 use std::{
     fmt,
-    sync::Arc,
     time::{Duration, SystemTime},
 };
 
@@ -11,15 +10,14 @@ use azure_core::{
 };
 use litellm_auth_azure::{AzureAuthInputs, AzureAuthService};
 use litellm_auth_types::ResolvedCredential;
+use litellm_layered::SharedLookup;
 
 const STATIC_TOKEN_LIFETIME: Duration = Duration::from_secs(300);
 const LLM_TOKEN_ENV: &str = "AZURE_AD_TOKEN";
 
-type EnvLookup = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
-
 pub struct AzureBlobCredential {
     service: AzureAuthService,
-    env_lookup: EnvLookup,
+    env_lookup: SharedLookup,
 }
 
 impl fmt::Debug for AzureBlobCredential {
@@ -28,17 +26,8 @@ impl fmt::Debug for AzureBlobCredential {
     }
 }
 
-impl Default for AzureBlobCredential {
-    fn default() -> Self {
-        Self::new(
-            AzureAuthService::default(),
-            Arc::new(|name| std::env::var(name).ok()),
-        )
-    }
-}
-
 impl AzureBlobCredential {
-    pub fn new(service: AzureAuthService, env_lookup: EnvLookup) -> Self {
+    pub fn new(service: AzureAuthService, env_lookup: SharedLookup) -> Self {
         Self {
             service,
             env_lookup,
@@ -54,7 +43,11 @@ impl TokenCredential for AzureBlobCredential {
         _options: Option<TokenRequestOptions<'_>>,
     ) -> azure_core::Result<AccessToken> {
         let env_lookup = &self.env_lookup;
-        let lookup = move |name: &str| (name != LLM_TOKEN_ENV).then(|| env_lookup(name)).flatten();
+        let lookup = move |name: &str| {
+            (name != LLM_TOKEN_ENV)
+                .then(|| env_lookup.get(name))
+                .flatten()
+        };
         let credential = self
             .service
             .get_azure_ad_token(

@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, LazyLock, Mutex, PoisonError},
 };
 
-use litellm_core_utils::settings::ProcessEnvironment;
+use crate::environment::ProcessEnvironment;
 use litellm_http::{
     Client, ClientVariant, HttpClientConfig, HttpClientPool, HttpKeysPartial, HttpSettings,
     Resolution, SslVerify, TlsSource, Unsupported,

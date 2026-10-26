@@ -64,6 +64,7 @@ fn constructor_rejects_unusable_cluster_configs(
         &RedisTopology::Cluster { startup_nodes },
         None,
         JsonCodec::new(),
+        &|_: &str| None,
     )
     .err();
     assert!(matches!(error, Some(Error::Unavailable)));

@@ -17,10 +17,11 @@ use litellm_auth_types::AwsParams;
 
 use super::Error;
 use super::constants::{
-    AWS_ACCESS_KEY_ID, AWS_EXTERNAL_ID, AWS_PROFILE_NAME, AWS_REGION_NAME, AWS_ROLE_ARN,
-    AWS_ROLE_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_NAME, AWS_SESSION_TOKEN,
-    AWS_SIGNED_HEADER_NAMES, AWS_STS_ENDPOINT, AWS_WEB_IDENTITY_TOKEN, AWS_WEB_IDENTITY_TOKEN_FILE,
-    DEFAULT_BEDROCK_REGION, DEFAULT_SESSION_NAME_PREFIX, SIGV4_COMPUTED_HEADER_NAMES,
+    AWS_ACCESS_KEY_ID, AWS_EXTERNAL_ID, AWS_PROFILE, AWS_PROFILE_NAME, AWS_REGION_NAME,
+    AWS_ROLE_ARN, AWS_ROLE_NAME, AWS_ROLE_SESSION_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_NAME,
+    AWS_SESSION_TOKEN, AWS_SIGNED_HEADER_NAMES, AWS_STS_ENDPOINT, AWS_WEB_IDENTITY_TOKEN,
+    AWS_WEB_IDENTITY_TOKEN_FILE, DEFAULT_BEDROCK_REGION, DEFAULT_SESSION_NAME_PREFIX,
+    SIGV4_COMPUTED_HEADER_NAMES,
 };
 
 const STATIC_CREDENTIALS_TTL: Duration = Duration::from_secs(3600 - 60);
@@ -274,46 +275,26 @@ impl AwsAuthService {
                     .map_err(|error| Error::AwsProfile(error.to_string()))
             }
             AwsAuthFlow::AssumeRole { role, session_name } => {
-                if is_already_running_as_role(&role, &resolved).await? {
-                    let ambient_flow = AwsAuthFlow::DefaultChain;
-                    let key = cache_key(&resolved, &ambient_flow);
-                    if let Some(credentials) = self.get_cached_credentials(&key) {
-                        return Ok(credentials);
-                    }
-                    let provider =
-                    aws_config::default_provider::credentials::DefaultCredentialsChain::builder()
-                        .build()
-                        .await;
-                    let credentials = provider
-                        .provide_credentials()
-                        .await
-                        .map_err(|error| Error::AwsDefaultChain(error.to_string()))?;
-                    self.set_cached_credentials(
-                        key,
-                        credentials.clone(),
-                        credential_cache_ttl(&ambient_flow).unwrap_or(AMBIENT_CREDENTIALS_TTL),
-                    );
-                    return Ok(credentials);
+                if Box::pin(self.ambient_is_role(&role, &resolved, env_lookup)).await {
+                    return Box::pin(self.ambient_credentials(&resolved, env_lookup)).await;
                 }
-                let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
-                if let Some(region) = resolved.region_name.clone() {
-                    loader = loader.region(aws_types::region::Region::new(region));
-                }
-                if let Some(endpoint) = resolved.sts_endpoint.clone() {
-                    loader = loader.endpoint_url(endpoint);
-                }
-                if let (Some(access_key_id), Some(secret_access_key)) =
-                    (resolved.access_key_id, resolved.secret_access_key)
-                {
-                    loader = loader.credentials_provider(Credentials::new(
+                let source = match (
+                    resolved.access_key_id.clone(),
+                    resolved.secret_access_key.clone(),
+                ) {
+                    (Some(access_key_id), Some(secret_access_key)) => Credentials::new(
                         access_key_id,
                         secret_access_key,
-                        resolved.session_token,
+                        resolved.session_token.clone(),
                         None,
                         "litellm-role-source",
-                    ));
-                }
-                let sdk_config = loader.load().await;
+                    ),
+                    _ => Box::pin(self.ambient_credentials(&resolved, env_lookup)).await?,
+                };
+                let sdk_config = sts_config(&resolved)
+                    .credentials_provider(source)
+                    .load()
+                    .await;
                 let builder = aws_config::sts::AssumeRoleProvider::builder(role);
                 let builder = match session_name {
                     Some(name) => builder.session_name(name),
@@ -334,92 +315,175 @@ impl AwsAuthService {
                 role,
                 session_name,
             } => {
-                let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
-                if let Some(region) = resolved.region_name {
-                    loader = loader.region(aws_types::region::Region::new(region));
-                }
-                if let Some(endpoint) = resolved.sts_endpoint {
-                    loader = loader.endpoint_url(endpoint);
-                }
-                let sdk_config = loader.load().await;
-                let client = aws_sdk_sts::Client::new(&sdk_config);
-                let response = client
-                    .assume_role_with_web_identity()
-                    .role_arn(role)
-                    .role_session_name(session_name)
-                    .web_identity_token(token)
-                    .send()
-                    .await
-                    .map_err(|error| Error::AwsWebIdentity(error.to_string()))?;
-                let credentials = response
-                    .credentials()
-                    .ok_or(Error::AwsMissingWebIdentityCredentials)?;
-                let expiration = SystemTime::try_from(*credentials.expiration())
-                    .map_err(|error| Error::AwsWebIdentityExpiration(error.to_string()))?;
-                Ok(Credentials::new(
-                    credentials.access_key_id(),
-                    credentials.secret_access_key(),
-                    Some(credentials.session_token().to_string()),
-                    Some(expiration),
-                    "litellm-web-identity",
+                Box::pin(web_identity_credentials(
+                    &resolved,
+                    role,
+                    session_name,
+                    token,
                 ))
+                .await
             }
             AwsAuthFlow::DefaultChain => {
-                let key = cache_key(&resolved, &AwsAuthFlow::DefaultChain);
-                if let Some(credentials) = self.get_cached_credentials(&key) {
-                    return Ok(credentials);
-                }
-                let provider =
-                    aws_config::default_provider::credentials::DefaultCredentialsChain::builder()
-                        .build()
-                        .await;
-                let credentials = provider
-                    .provide_credentials()
-                    .await
-                    .map_err(|error| Error::AwsDefaultChain(error.to_string()))?;
-                self.set_cached_credentials(
-                    key,
-                    credentials.clone(),
-                    credential_cache_ttl(&AwsAuthFlow::DefaultChain)
-                        .unwrap_or(AMBIENT_CREDENTIALS_TTL),
-                );
-                Ok(credentials)
+                Box::pin(self.ambient_credentials(&resolved, env_lookup)).await
             }
         }
     }
+
+    async fn ambient_credentials(
+        &self,
+        resolved: &AwsAuthConfig,
+        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Result<Credentials, Error> {
+        let key = cache_key(resolved, &AwsAuthFlow::DefaultChain);
+        if let Some(credentials) = self.get_cached_credentials(&key) {
+            return Ok(credentials);
+        }
+        let credentials = match ambient(env_lookup) {
+            Ambient::Keys(credentials) => credentials,
+            Ambient::WebIdentityFile {
+                role_arn,
+                token_file,
+                session_name,
+            } => {
+                let token = std::fs::read_to_string(&token_file)
+                    .map_err(|error| Error::AwsWebIdentity(format!("{token_file}: {error}")))?;
+                web_identity_credentials(resolved, role_arn, session_name, token).await?
+            }
+            Ambient::Chain { profile_name } => {
+                let builder =
+                    aws_config::default_provider::credentials::DefaultCredentialsChain::builder();
+                let builder = match profile_name {
+                    Some(name) => builder.profile_name(&name),
+                    None => builder,
+                };
+                builder
+                    .build()
+                    .await
+                    .provide_credentials()
+                    .await
+                    .map_err(|error| Error::AwsDefaultChain(error.to_string()))?
+            }
+        };
+        self.set_cached_credentials(
+            key,
+            credentials.clone(),
+            credential_cache_ttl(&AwsAuthFlow::DefaultChain).unwrap_or(AMBIENT_CREDENTIALS_TTL),
+        );
+        Ok(credentials)
+    }
+
+    async fn ambient_is_role(
+        &self,
+        role: &str,
+        resolved: &AwsAuthConfig,
+        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> bool {
+        if role_identity(role).is_none() {
+            return false;
+        }
+        if let Ambient::WebIdentityFile { role_arn, .. } = ambient(env_lookup) {
+            return same_role_arns(role, &role_arn);
+        }
+        let Ok(credentials) = self.ambient_credentials(resolved, env_lookup).await else {
+            return false;
+        };
+        let sdk_config = sts_config(resolved)
+            .credentials_provider(credentials)
+            .load()
+            .await;
+        aws_sdk_sts::Client::new(&sdk_config)
+            .get_caller_identity()
+            .send()
+            .await
+            .is_ok_and(|response| {
+                response
+                    .arn()
+                    .is_some_and(|caller| same_role_arns(role, caller))
+            })
+    }
 }
 
-async fn is_already_running_as_role(role: &str, config: &AwsAuthConfig) -> Result<bool, Error> {
-    if role_identity(role).is_none() {
-        return Ok(false);
-    }
-    if let (Ok(current_role), Ok(token_file)) = (
-        std::env::var(AWS_ROLE_ARN),
-        std::env::var(AWS_WEB_IDENTITY_TOKEN_FILE),
-    ) && !token_file.is_empty()
-    {
-        return Ok(same_role_arns(role, &current_role));
-    }
+/// What the SDK's default credentials chain would find, read through the injected lookup so a
+/// config overlay reaches it. Only sources with no environment form are left to the SDK chain.
+enum Ambient {
+    Keys(Credentials),
+    WebIdentityFile {
+        role_arn: String,
+        token_file: String,
+        session_name: String,
+    },
+    Chain {
+        profile_name: Option<String>,
+    },
+}
 
-    let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
-    if let Some(region) = config.region_name.clone() {
-        loader = loader.region(aws_types::region::Region::new(region));
+fn ambient(env_lookup: &(dyn Fn(&str) -> Option<String> + Sync)) -> Ambient {
+    if let (Some(access_key_id), Some(secret_access_key)) = (
+        env_lookup(AWS_ACCESS_KEY_ID),
+        env_lookup(AWS_SECRET_ACCESS_KEY),
+    ) {
+        return Ambient::Keys(Credentials::new(
+            access_key_id,
+            secret_access_key,
+            env_lookup(AWS_SESSION_TOKEN),
+            None,
+            "litellm-environment",
+        ));
     }
-    if let Some(endpoint) = config.sts_endpoint.clone() {
-        loader = loader.endpoint_url(endpoint);
+    if let (Some(role_arn), Some(token_file)) = (
+        env_lookup(AWS_ROLE_ARN),
+        env_lookup(AWS_WEB_IDENTITY_TOKEN_FILE).filter(|file| !file.is_empty()),
+    ) {
+        return Ambient::WebIdentityFile {
+            role_arn,
+            token_file,
+            session_name: env_lookup(AWS_ROLE_SESSION_NAME).unwrap_or_else(default_session_name),
+        };
     }
-    let sdk_config = loader.load().await;
-    let response = match aws_sdk_sts::Client::new(&sdk_config)
-        .get_caller_identity()
+    Ambient::Chain {
+        profile_name: env_lookup(AWS_PROFILE),
+    }
+}
+
+fn sts_config(resolved: &AwsAuthConfig) -> aws_config::ConfigLoader {
+    let loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
+    let loader = match resolved.region_name.clone() {
+        Some(region) => loader.region(aws_types::region::Region::new(region)),
+        None => loader,
+    };
+    match resolved.sts_endpoint.clone() {
+        Some(endpoint) => loader.endpoint_url(endpoint),
+        None => loader,
+    }
+}
+
+async fn web_identity_credentials(
+    resolved: &AwsAuthConfig,
+    role: String,
+    session_name: String,
+    token: String,
+) -> Result<Credentials, Error> {
+    let sdk_config = sts_config(resolved).load().await;
+    let response = aws_sdk_sts::Client::new(&sdk_config)
+        .assume_role_with_web_identity()
+        .role_arn(role)
+        .role_session_name(session_name)
+        .web_identity_token(token)
         .send()
         .await
-    {
-        Ok(response) => response,
-        Err(_) => return Ok(false),
-    };
-    Ok(response
-        .arn()
-        .is_some_and(|caller| same_role_arns(role, caller)))
+        .map_err(|error| Error::AwsWebIdentity(error.to_string()))?;
+    let credentials = response
+        .credentials()
+        .ok_or(Error::AwsMissingWebIdentityCredentials)?;
+    let expiration = SystemTime::try_from(*credentials.expiration())
+        .map_err(|error| Error::AwsWebIdentityExpiration(error.to_string()))?;
+    Ok(Credentials::new(
+        credentials.access_key_id(),
+        credentials.secret_access_key(),
+        Some(credentials.session_token().to_string()),
+        Some(expiration),
+        "litellm-web-identity",
+    ))
 }
 
 fn default_session_name() -> String {
@@ -829,6 +893,66 @@ mod tests {
         assert_eq!(credentials.session_token(), None);
     }
 
+    #[tokio::test]
+    async fn lookup_keys_are_the_ambient_credentials_without_a_region() {
+        let env = |name: &str| match name {
+            AWS_ACCESS_KEY_ID => Some("lookup-ak".to_owned()),
+            AWS_SECRET_ACCESS_KEY => Some("lookup-sk".to_owned()),
+            _ => None,
+        };
+        let credentials = AwsAuthService::default()
+            .resolve_credentials(AwsAuthConfig::default(), &env)
+            .await
+            .unwrap();
+        assert_eq!(
+            (credentials.access_key_id(), credentials.secret_access_key()),
+            ("lookup-ak", "lookup-sk")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_role_the_lookup_web_identity_names_is_assumed_with_that_token() {
+        let role = "arn:aws:iam::123456789012:role/A";
+        let sts = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::body_string_contains(
+            "Action=AssumeRoleWithWebIdentity",
+        ))
+        .and(wiremock::matchers::body_string_contains(
+            "WebIdentityToken=lookup-token",
+        ))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(
+            "<AssumeRoleWithWebIdentityResponse><AssumeRoleWithWebIdentityResult><Credentials>\
+             <AccessKeyId>sts-ak</AccessKeyId><SecretAccessKey>sts-sk</SecretAccessKey>\
+             <SessionToken>sts-token</SessionToken><Expiration>2099-01-01T00:00:00Z</Expiration>\
+             </Credentials></AssumeRoleWithWebIdentityResult></AssumeRoleWithWebIdentityResponse>",
+        ))
+        .mount(&sts)
+        .await;
+        let token_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(token_file.path(), "lookup-token").unwrap();
+        let token_path = token_file.path().to_string_lossy().into_owned();
+        let env = |name: &str| match name {
+            AWS_ROLE_ARN => Some(role.to_owned()),
+            AWS_WEB_IDENTITY_TOKEN_FILE => Some(token_path.clone()),
+            _ => None,
+        };
+
+        let credentials = AwsAuthService::default()
+            .resolve_credentials(
+                AwsAuthConfig {
+                    role_name: Some(role.into()),
+                    region_name: Some("us-east-1".into()),
+                    sts_endpoint: Some(sts.uri()),
+                    ..Default::default()
+                },
+                &env,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(credentials.access_key_id(), "sts-ak");
+    }
+
     #[test]
     fn cache_policy_matches_python_flows() {
         assert_eq!(
@@ -1063,6 +1187,7 @@ mod tests {
 
     #[ignore]
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // the live test reads its own credentials
     async fn live_bedrock_invoke_model_returns_200() -> Result<(), Box<dyn std::error::Error>> {
         let access_key_id = std::env::var("AWS_BEDROCK_TEST_ACCESS_KEY_ID")?;
         let secret_access_key = std::env::var("AWS_BEDROCK_TEST_SECRET_ACCESS_KEY")?;

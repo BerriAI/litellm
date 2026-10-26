@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods)] // test and build tooling read their own settings from the process environment
 #![allow(dead_code)]
 
 use std::{
@@ -183,8 +184,10 @@ impl redis::ConnectionLike for FakeRedis {
 pub type JsonCache<C = redis::Connection> = RedisCache<JsonCodec<serde_json::Value>, C>;
 
 pub fn fake_cache(namespace: &str) -> JsonCache<FakeRedis> {
-    RedisCache::with_connection(FakeRedis::default(), None, JsonCodec::new())
-        .with_namespace(Some(namespace.into()))
+    RedisCache::with_connection(FakeRedis::default(), None, JsonCodec::new(), &|_: &str| {
+        None
+    })
+    .with_namespace(Some(namespace.into()))
 }
 
 /// Startup nodes from `LITELLM_TEST_REDIS_CLUSTER_NODES` (`host:port,host:port`); tests that
@@ -224,8 +227,14 @@ pub fn cluster_cache<S: CacheCodec>(
 ) -> Option<RedisCache<S>> {
     let topology = cluster_topology()?;
     Some(
-        RedisCache::connect(&cluster_url(), &topology, Some(default_ttl), codec)
-            .expect("cluster connection")
-            .with_namespace(Some(unique_namespace(label))),
+        RedisCache::connect(
+            &cluster_url(),
+            &topology,
+            Some(default_ttl),
+            codec,
+            &|_: &str| None,
+        )
+        .expect("cluster connection")
+        .with_namespace(Some(unique_namespace(label))),
     )
 }

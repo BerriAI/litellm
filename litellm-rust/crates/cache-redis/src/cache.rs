@@ -4,6 +4,7 @@ use std::{
 };
 
 use litellm_cache::{BatchEntry, CacheCodec, Error};
+use litellm_layered::Lookup;
 
 use crate::{
     connection::{ConnectionRef, Connections},
@@ -20,11 +21,17 @@ pub struct RedisCache<S, C = redis::Connection> {
     pub(crate) topology: RedisTopology,
     /// The server's major version, read from `INFO` once, like Python's `redis_version`.
     pub(crate) major_version: Arc<OnceLock<u32>>,
+    default_major_version: u32,
 }
 
 impl<S: CacheCodec> RedisCache<S> {
-    pub fn new(url: &str, default_ttl: Option<Duration>, codec: S) -> Result<Self, Error> {
-        Self::connect(url, &RedisTopology::Standalone, default_ttl, codec)
+    pub fn new(
+        url: &str,
+        default_ttl: Option<Duration>,
+        codec: S,
+        env: &(impl Lookup + ?Sized),
+    ) -> Result<Self, Error> {
+        Self::connect(url, &RedisTopology::Standalone, default_ttl, codec, env)
     }
 
     pub fn connect(
@@ -32,6 +39,7 @@ impl<S: CacheCodec> RedisCache<S> {
         topology: &RedisTopology,
         default_ttl: Option<Duration>,
         codec: S,
+        env: &(impl Lookup + ?Sized),
     ) -> Result<Self, Error> {
         let connections = Connections::open(url, topology)?;
         Ok(Self {
@@ -41,6 +49,7 @@ impl<S: CacheCodec> RedisCache<S> {
             namespace: None,
             topology: topology.clone(),
             major_version: Arc::default(),
+            default_major_version: default_major_version(env),
         })
     }
 }
@@ -50,7 +59,12 @@ where
     S: CacheCodec,
     C: redis::ConnectionLike + Send + 'static,
 {
-    pub fn with_connection(connection: C, default_ttl: Option<Duration>, codec: S) -> Self {
+    pub fn with_connection(
+        connection: C,
+        default_ttl: Option<Duration>,
+        codec: S,
+        env: &(impl Lookup + ?Sized),
+    ) -> Self {
         Self {
             connections: Arc::new(Connections::fixed(connection)),
             default_ttl: default_ttl.unwrap_or(DEFAULT_TTL),
@@ -58,6 +72,7 @@ where
             namespace: None,
             topology: RedisTopology::Standalone,
             major_version: Arc::default(),
+            default_major_version: default_major_version(env),
         }
     }
 
@@ -109,7 +124,7 @@ where
         let version = info
             .ok()
             .and_then(|info| parse_major_version(&info))
-            .unwrap_or_else(default_major_version);
+            .unwrap_or(self.default_major_version);
         *self.major_version.get_or_init(|| version)
     }
 
@@ -184,9 +199,9 @@ fn parse_major_version(info: &str) -> Option<u32> {
     }
 }
 
-fn default_major_version() -> u32 {
-    std::env::var("DEFAULT_REDIS_MAJOR_VERSION")
-        .ok()
+/// `DEFAULT_REDIS_MAJOR_VERSION`, the version assumed when `INFO` does not answer.
+fn default_major_version(env: &(impl Lookup + ?Sized)) -> u32 {
+    env.get("DEFAULT_REDIS_MAJOR_VERSION")
         .and_then(|value| value.parse().ok())
         .unwrap_or(7)
 }

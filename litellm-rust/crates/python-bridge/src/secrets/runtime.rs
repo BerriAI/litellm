@@ -1,6 +1,8 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use litellm_core_utils::settings::{Lookup, ProcessEnvironment};
+use litellm_core_utils::settings::Lookup;
+
+use crate::environment::ProcessEnvironment;
 use litellm_host_python::{from_py, json_object_field, to_py};
 use litellm_secrets::{
     KeyManagementSettings, KeyManagementSystem, Secret, SecretManager, load_native_manager,

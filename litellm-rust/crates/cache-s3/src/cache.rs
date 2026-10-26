@@ -15,6 +15,7 @@ use litellm_auth_aws::AwsAuthConfig;
 use litellm_cache::{
     BaseCache, BatchCache, CacheCodec, DisconnectCache, Error, ExactCacheContext, FlushCache,
 };
+use litellm_layered::SharedLookup;
 use tokio::runtime::Handle;
 
 use crate::{auth::S3Credentials, transport::ReqwestHttpClient};
@@ -47,13 +48,14 @@ impl<C: CacheCodec> S3Cache<C> {
         http: litellm_http::Client,
         codec: C,
         runtime: Handle,
+        env: SharedLookup,
     ) -> Self {
         let endpoint_url: Option<String> = config.endpoint.map(|endpoint| endpoint.url);
         let base = aws_sdk_s3::Config::builder()
             .behavior_version(BehaviorVersion::latest())
             .region(Region::new(config.region.clone()))
             .http_client(ReqwestHttpClient(http))
-            .credentials_provider(S3Credentials::new(config.auth))
+            .credentials_provider(S3Credentials::new(config.auth, env))
             .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
             .response_checksum_validation(ResponseChecksumValidation::WhenRequired);
         let builder = match &endpoint_url {

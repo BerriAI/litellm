@@ -22,6 +22,7 @@ use litellm_inference_messages::MessagesRoute;
 use litellm_inference_ocr::OcrRoute;
 use litellm_inference_responses::ResponsesRoute;
 use litellm_inference_transcription::AudioTranscriptionRoute;
+use litellm_layered::SharedLookup;
 use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
 use litellm_secrets::source::SecretSource;
 
@@ -53,6 +54,8 @@ impl Gateway {
     pub fn new(
         resources: CoreResources,
         http: HttpClientConfig,
+        ocr: OcrSettings,
+        env: SharedLookup,
         secrets: Arc<dyn SecretSource>,
         models: ModelRouter,
     ) -> Result<Self, litellm_http::Error> {
@@ -70,14 +73,14 @@ impl Gateway {
                 auth.clone(),
                 secrets.clone(),
             ),
-            messages: MessagesRoute::new(provider.clone(), auth.clone(), secrets.clone()),
+            messages: MessagesRoute::new(provider.clone(), auth.clone(), secrets.clone(), env),
             responses: ResponsesRoute::new(provider, auth.clone(), secrets.clone()),
             ocr: OcrRoute::new(OcrClient::new(
                 &resources.pool,
                 &http,
                 UrlPolicy::default(),
                 auth,
-                OcrSettings::default(),
+                ocr,
                 secrets.clone(),
             )?),
             models,

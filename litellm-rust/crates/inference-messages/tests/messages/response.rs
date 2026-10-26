@@ -277,6 +277,7 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
         provider_http(&resources, &Resolution::from(&settings).config),
         resources.auth,
         no_secrets(),
+        std::sync::Arc::new(litellm_layered::Env::of(&[])),
     )
     .execute(
         MessagesCall {
@@ -360,6 +361,7 @@ async fn route_uses_injected_dependencies_and_optional_cache(
         provider_http(&resources, &http_config()),
         resources.auth.clone(),
         Arc::new(RecordingSecrets::new([("ANTHROPIC_API_KEY", "route-key")])),
+        std::sync::Arc::new(litellm_layered::Env::of(&[])),
     );
     let route = if caching {
         route.with_cache(ScopedCache::new(

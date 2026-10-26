@@ -3,6 +3,7 @@ mod callable;
 mod coercion;
 mod credentials;
 mod diagnostics;
+mod environment;
 mod errors;
 mod execution;
 mod http;

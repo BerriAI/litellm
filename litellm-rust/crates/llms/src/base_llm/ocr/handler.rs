@@ -91,6 +91,7 @@ impl OcrClient {
             secrets: Arc::new(
                 litellm_secrets::source::EnvironmentSecrets::python_compatible(
                     provider_http.clone(),
+                    Arc::new(|_: &str| None),
                 ),
             ),
             provider_http,

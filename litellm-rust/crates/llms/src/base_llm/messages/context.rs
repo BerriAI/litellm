@@ -1,4 +1,4 @@
-use litellm_core_utils::settings::{Lookup, ProcessEnvironment};
+use litellm_core_utils::settings::Lookup;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,10 +89,11 @@ impl Default for ThinkingBudgets {
 }
 
 impl ThinkingBudgets {
-    pub fn from_lookup(env: &impl Lookup) -> Self {
+    pub fn from_lookup(env: &(impl Lookup + ?Sized)) -> Self {
         let defaults = Self::default();
         let tier = |name: &str, default: u64| {
-            env.parsed::<u64>(&format!("DEFAULT_REASONING_EFFORT_{name}_THINKING_BUDGET"))
+            env.get(&format!("DEFAULT_REASONING_EFFORT_{name}_THINKING_BUDGET"))
+                .and_then(|value| value.trim().parse().ok())
                 .unwrap_or(default)
         };
         Self {
@@ -117,14 +118,10 @@ pub struct MessagesTransformContext {
     pub drop_params: bool,
 }
 impl MessagesTransformContext {
-    pub fn new(capabilities: MessagesModelCapabilities, drop_params: bool) -> Self {
-        Self::with_lookup(capabilities, drop_params, &ProcessEnvironment)
-    }
-
-    pub fn with_lookup(
+    pub fn new(
         capabilities: MessagesModelCapabilities,
         drop_params: bool,
-        env: &impl Lookup,
+        env: &(impl Lookup + ?Sized),
     ) -> Self {
         Self {
             thinking: ThinkingContext {

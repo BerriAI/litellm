@@ -10,7 +10,8 @@ use serde_json::json;
 
 mod settings;
 
-use settings::{Settings, UiSettings};
+use litellm_layered::Env;
+use settings::{BootKeysPartial, Settings, UiKeysPartial, UiSettings};
 
 struct StderrSink {
     level: Level,
@@ -41,14 +42,15 @@ impl Sink for StderrSink {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let settings: Settings = settings::from_iter(std::env::vars_os())?;
+    let env = Env::from_process();
+    let settings = Settings::from(BootKeysPartial::from_env(&env)?);
     let level = settings.log_level();
     Logger::new(StderrSink { level }).install_global()?;
     let config = Config::load(settings.litellm_config)?;
-    let inference = litellm_gateway::build_inference(&config)?;
-    let ui = match std::env::var_os("LITELLM_UI_PATH") {
+    let inference = litellm_gateway::build_inference(&config, &env)?;
+    let ui = match &settings.ui_path {
         Some(directory) => {
-            let ui_settings: UiSettings = settings::from_iter(std::env::vars_os())?;
+            let ui_settings = UiSettings::try_from(UiKeysPartial::from_env(&env)?)?;
             let backend = UiBackend::new(ui_settings.ui_username, ui_settings.ui_password)?;
             Some(
                 litellm_gateway_ui::router(

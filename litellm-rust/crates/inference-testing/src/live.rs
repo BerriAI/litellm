@@ -32,11 +32,15 @@ impl Default for LiveResources {
         Self {
             http,
             auth: resources.auth,
-            secrets: Arc::new(EnvironmentSecrets::python_compatible(secrets_http)),
+            secrets: Arc::new(EnvironmentSecrets::python_compatible(
+                secrets_http,
+                Arc::new(Env::from_process()),
+            )),
         }
     }
 }
 
+#[allow(clippy::disallowed_methods)] // live tests read their own model names
 pub fn model(route: &str, provider: &str) -> String {
     let name = format!("LITELLM_LIVE_{route}_{provider}_MODEL").to_ascii_uppercase();
     std::env::var(&name)

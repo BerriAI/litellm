@@ -10,9 +10,11 @@ use azure_storage_blob::{
     models::{BlobClientUploadOptions, StorageErrorCode},
 };
 use futures_util::{TryStreamExt, future::try_join_all};
+use litellm_auth_azure::AzureAuthService;
 use litellm_cache::{
     BaseCache, BatchCache, CacheCodec, DisconnectCache, Error, ExactCacheContext, FlushCache,
 };
+use litellm_layered::SharedLookup;
 use tokio::runtime::Handle;
 use url::Url;
 
@@ -34,11 +36,15 @@ impl<C: CacheCodec> AzureBlobCache<C> {
         http: litellm_http::Client,
         codec: C,
         runtime: Handle,
+        env: SharedLookup,
     ) -> Result<Self, Error> {
         Self::connect_with_options(
             account_url,
             container,
-            Some(Arc::new(AzureBlobCredential::default())),
+            Some(Arc::new(AzureBlobCredential::new(
+                AzureAuthService::default(),
+                env,
+            ))),
             ClientOptions {
                 transport: Some(Transport::new(Arc::new(ReqwestTransport(http)))),
                 ..ClientOptions::default()
