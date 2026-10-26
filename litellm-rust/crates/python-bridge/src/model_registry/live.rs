@@ -9,9 +9,9 @@ use litellm_model_catalog::wire::{Fields, FlatKey};
 use litellm_model_catalog::{self as resolution, Keys, Query, Resolved};
 use litellm_model_catalog::{Error, Located, Model};
 use pyo3::class::gc::{PyTraverseError, PyVisit};
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyModule, PySet};
+use pyo3::types::{PyAny, PyDict, PyModule, PySet, PyString};
 use time::OffsetDateTime;
 
 use super::{RowError, escape_pointer_segment, fields_to_dict, nonfinite_errors, row_error};
@@ -149,6 +149,66 @@ impl Keys for PyView<'_, '_> {
     }
 }
 
+struct PyProvider<'a, 'py> {
+    value: Bound<'py, PyAny>,
+    error: &'a RefCell<Option<PyErr>>,
+}
+
+impl PyProvider<'_, '_> {
+    fn comparison(&self, result: PyResult<bool>) -> Option<bool> {
+        match result {
+            Ok(value) => Some(value),
+            Err(error) => {
+                if !error.is_instance_of::<PyException>(self.value.py()) {
+                    self.error.borrow_mut().get_or_insert(error);
+                }
+                None
+            }
+        }
+    }
+}
+
+impl resolution::ProviderValue for PyProvider<'_, '_> {
+    fn differs(&self, provider: &str) -> Option<bool> {
+        self.comparison(self.value.ne(provider))
+    }
+
+    fn equals(&self, provider: &str) -> Option<bool> {
+        self.comparison(
+            PyString::new(self.value.py(), provider)
+                .as_any()
+                .eq(&self.value),
+        )
+    }
+
+    fn starts_with(&self, prefix: &str) -> Option<bool> {
+        self.comparison(
+            self.value
+                .call_method1("startswith", (prefix,))
+                .and_then(|value| value.is_truthy()),
+        )
+    }
+}
+
+impl resolution::InfoKeys for PyView<'_, '_> {
+    fn info_provider_match(&self, key: &str, provider: &str) -> resolution::ProviderMatch {
+        let value = self
+            .read(self.dict.get_item(key))
+            .and_then(|row| row.cast::<PyDict>().ok().cloned())
+            .and_then(|row| self.read(row.get_item("litellm_provider")));
+        match value {
+            Some(value) if !value.is_none() => resolution::info_provider_match(
+                provider,
+                &PyProvider {
+                    value,
+                    error: &self.error,
+                },
+            ),
+            _ => resolution::ProviderMatch::Match,
+        }
+    }
+}
+
 #[pyclass(frozen, get_all, module = "litellm.rust_bridge._native")]
 pub(crate) struct ResolvedModel {
     key: String,
@@ -158,6 +218,12 @@ pub(crate) struct ResolvedModel {
 #[pyclass(frozen, get_all, module = "litellm.rust_bridge._native")]
 pub(crate) struct ModelNotFound {
     tried: Vec<String>,
+}
+
+#[pyclass(frozen, get_all, module = "litellm.rust_bridge._native")]
+pub(crate) struct InvalidProvider {
+    key: String,
+    provider: String,
 }
 
 #[pyclass(frozen, get_all, module = "litellm.rust_bridge._native")]
@@ -171,9 +237,14 @@ pub(crate) struct RegistrationTarget {
 pub(crate) enum ResolutionResult {
     Found(ResolvedModel),
     NotFound(ModelNotFound),
+    Invalid(InvalidProvider),
 }
 
-#[pyfunction(pass_module, signature = (model_cost, model, *, provider=None, base_model=None, region=None, inferred=None))]
+#[pyfunction(pass_module, signature = (model_cost, model, *, provider=None, base_model=None, region=None, inferred=None, info_read=false))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "preserve the keyword-only binding contract"
+)]
 pub(crate) fn resolve_model(
     module: &Bound<'_, PyModule>,
     model_cost: &Bound<'_, PyDict>,
@@ -182,6 +253,7 @@ pub(crate) fn resolve_model(
     base_model: Option<&str>,
     region: Option<&str>,
     inferred: Option<(&str, Option<&str>)>,
+    info_read: bool,
 ) -> PyResult<ResolutionResult> {
     let index = module.getattr("_model_key_index")?;
     let index = index.extract::<PyRef<'_, ModelKeyIndex>>()?;
@@ -196,21 +268,27 @@ pub(crate) fn resolve_model(
         base_model,
         region,
     };
-    let result = match inferred {
-        Some((model, provider)) => resolution::resolve_inferred(
-            &view,
-            &query,
-            resolution::InferredProvider { model, provider },
-        ),
-        None => resolution::resolve(&view, &query),
+    let inferred =
+        inferred.map(|(model, provider)| resolution::InferredProvider { model, provider });
+    let result = if info_read {
+        resolution::resolve_info(&view, &query, inferred)
+    } else {
+        Ok(match inferred {
+            Some(inferred) => resolution::resolve_inferred(&view, &query, inferred),
+            None => resolution::resolve(&view, &query),
+        })
     };
     view.finish()?;
     Ok(match result {
-        Resolved::Found { key, via } => ResolutionResult::Found(ResolvedModel {
+        Ok(Resolved::Found { key, via }) => ResolutionResult::Found(ResolvedModel {
             key,
             via: format!("{via:?}"),
         }),
-        Resolved::NotFound { tried } => ResolutionResult::NotFound(ModelNotFound { tried }),
+        Ok(Resolved::NotFound { tried }) => ResolutionResult::NotFound(ModelNotFound { tried }),
+        Err(error) => ResolutionResult::Invalid(InvalidProvider {
+            key: error.key,
+            provider: error.provider,
+        }),
     })
 }
 
@@ -790,9 +868,17 @@ mod tests {
                     "部署": {"litellm_provider": null}
                 }),
             );
-            let ResolutionResult::Found(found) =
-                resolve_model(&module(py), &rows, model, provider, base, region, None).unwrap()
-            else {
+            let ResolutionResult::Found(found) = resolve_model(
+                &module(py),
+                &rows,
+                model,
+                provider,
+                base,
+                region,
+                None,
+                false,
+            )
+            .unwrap() else {
                 panic!("not found")
             };
             assert_eq!((found.key.as_str(), found.via.as_str()), (key, via));
@@ -884,9 +970,17 @@ mod tests {
     ) {
         Python::attach(|py| {
             let rows = dict(py, json!({key: {"litellm_provider": provider}}));
-            let ResolutionResult::Found(found) =
-                resolve_model(&module(py), &rows, model, Some(provider), None, None, None).unwrap()
-            else {
+            let ResolutionResult::Found(found) = resolve_model(
+                &module(py),
+                &rows,
+                model,
+                Some(provider),
+                None,
+                None,
+                None,
+                false,
+            )
+            .unwrap() else {
                 panic!("not found")
             };
             assert_eq!((found.key.as_str(), found.via.as_str()), (key, via));
@@ -921,13 +1015,67 @@ mod tests {
                         Some(provider),
                         None,
                         None,
-                        None
+                        None,
+                        false
                     )
                     .unwrap(),
                     ResolutionResult::Found(_)
                 ),
                 found
             );
+        });
+    }
+
+    #[rstest]
+    fn info_reads_distinguish_provider_mismatch_from_invalid(
+        #[from(interpreter)] _interpreter: (),
+        #[values("openai", "bedrock", "github")] provider: &str,
+        #[values(json!(1), json!(true), json!([]), json!({}))] value: Value,
+        #[values(None, Some(""), Some("explicit"))] explicit: Option<&str>,
+    ) {
+        Python::attach(|py| {
+            let model = format!("{provider}/model");
+            let rows = dict(
+                py,
+                json!({
+                    &model: {"litellm_provider": value},
+                    "model": {"litellm_provider": provider}
+                }),
+            );
+            let result = resolve_model(
+                &module(py),
+                &rows,
+                &model,
+                explicit.map(|explicit| if explicit.is_empty() { "" } else { provider }),
+                None,
+                None,
+                Some(("model", Some(provider))),
+                true,
+            )
+            .unwrap();
+            match result {
+                ResolutionResult::Found(found) => {
+                    assert_eq!(
+                        found.key,
+                        if provider == "openai" {
+                            "model"
+                        } else {
+                            &model
+                        }
+                    );
+                    assert_ne!(provider, "bedrock");
+                }
+                ResolutionResult::Invalid(invalid) => {
+                    assert_eq!(provider, "bedrock");
+                    assert_eq!(
+                        (invalid.key.as_str(), invalid.provider.as_str()),
+                        (model.as_str(), provider)
+                    );
+                }
+                ResolutionResult::NotFound(_) => {
+                    panic!("mismatch must continue, invalid must abort")
+                }
+            }
         });
     }
 
@@ -983,7 +1131,7 @@ mod tests {
         Python::attach(|py| {
             let rows = dict(py, json!({"model": {}}));
             let ResolutionResult::NotFound(missing) =
-                resolve_model(&module(py), &rows, model, None, None, None, None).unwrap()
+                resolve_model(&module(py), &rows, model, None, None, None, None, false).unwrap()
             else {
                 panic!("unexpected match")
             };
@@ -1034,12 +1182,15 @@ assert n.price(row, usage, when).total == 21.0
             let module = module(py);
             let rows = dict(py, json!({"Model": {}}));
             let resolve = |rows: &Bound<'_, PyDict>, key| match resolve_model(
-                &module, rows, key, None, None, None, None,
+                &module, rows, key, None, None, None, None, false,
             )
             .unwrap()
             {
                 ResolutionResult::Found(found) => Some(found.key),
                 ResolutionResult::NotFound(_) => None,
+                ResolutionResult::Invalid(_) => {
+                    panic!("default lookup must not validate provider values")
+                }
             };
             assert_eq!(resolve(&rows, "MODEL").as_deref(), Some("Model"));
             rows.del_item("Model").unwrap();
@@ -1195,7 +1346,8 @@ assert n.model_info(models, "Model").input_cost_per_token == 2
                 json!({"custom/Model": {}, "custom/model": {}, "MODEL": {}}),
             );
             let ResolutionResult::Found(found) =
-                resolve_model(&module(py), &rows, model, provider, None, None, None).unwrap()
+                resolve_model(&module(py), &rows, model, provider, None, None, None, false)
+                    .unwrap()
             else {
                 panic!("not found")
             };
@@ -1260,14 +1412,23 @@ assert isinstance(n.resolve_model(rows, model, inferred=inferred), n.ModelNotFou
                 Some("missing-base"),
                 None,
                 None,
+                false,
             )
             .unwrap() else {
                 panic!("unexpected base fallback")
             };
             assert_eq!(missing.tried, ["missing-base"]);
-            let ResolutionResult::Found(found) =
-                resolve_model(&module, &rows, "model", Some("openai"), None, None, None).unwrap()
-            else {
+            let ResolutionResult::Found(found) = resolve_model(
+                &module,
+                &rows,
+                "model",
+                Some("openai"),
+                None,
+                None,
+                None,
+                false,
+            )
+            .unwrap() else {
                 panic!("not found")
             };
             assert_eq!((found.key.as_str(), found.via.as_str()), ("model", "Exact"));
@@ -1276,9 +1437,17 @@ assert isinstance(n.resolve_model(rows, model, inferred=inferred), n.ModelNotFou
                 .unwrap()
                 .set_item("litellm_provider", "openai")
                 .unwrap();
-            let ResolutionResult::Found(found) =
-                resolve_model(&module, &rows, "model", Some("openai"), None, None, None).unwrap()
-            else {
+            let ResolutionResult::Found(found) = resolve_model(
+                &module,
+                &rows,
+                "model",
+                Some("openai"),
+                None,
+                None,
+                None,
+                false,
+            )
+            .unwrap() else {
                 panic!("not found")
             };
             assert_eq!(found.key, "openai/model");
@@ -1297,6 +1466,7 @@ assert isinstance(n.resolve_model(rows, model, inferred=inferred), n.ModelNotFou
                 None,
                 None,
                 None,
+                false,
             )
             .unwrap() else {
                 panic!("unexpected match")

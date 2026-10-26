@@ -1,7 +1,95 @@
+use std::cell::RefCell;
+
+use crate::ProviderReadError;
+
 pub trait Keys {
     fn contains(&self, key: &str) -> bool;
     fn lowercase(&self, key: &str) -> Option<String>;
     fn provider_of(&self, key: &str) -> Option<String>;
+
+    fn matches_provider(&self, key: &str, provider: &str) -> bool {
+        provider_matches(provider, self.provider_of(key).as_deref())
+    }
+}
+
+pub trait InfoKeys: Keys {
+    fn info_provider_match(&self, key: &str, provider: &str) -> ProviderMatch;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::VariantArray)]
+pub enum ProviderMatch {
+    Match,
+    Mismatch,
+    Invalid,
+}
+
+pub trait ProviderValue {
+    fn differs(&self, provider: &str) -> Option<bool>;
+    fn equals(&self, provider: &str) -> Option<bool>;
+    fn starts_with(&self, prefix: &str) -> Option<bool>;
+}
+
+pub fn info_provider_match(provider: &str, value: &impl ProviderValue) -> ProviderMatch {
+    match compare_info_provider(provider, value) {
+        Some(true) => ProviderMatch::Match,
+        Some(false) => ProviderMatch::Mismatch,
+        None => ProviderMatch::Invalid,
+    }
+}
+
+fn compare_info_provider(provider: &str, value: &impl ProviderValue) -> Option<bool> {
+    if !value.differs(provider)? {
+        return Some(true);
+    }
+    if matches!(provider, "vertex_ai" | "fireworks_ai") && value.starts_with(provider)?
+        || provider.starts_with("bedrock") && value.starts_with("bedrock")?
+        || matches!(provider, "litellm_proxy" | "github" | "nadir")
+    {
+        return Some(true);
+    }
+    Some(provider == "azure_ai" && (value.equals("azure")? || value.equals("openai")?))
+}
+
+struct InfoView<'a, K> {
+    keys: &'a K,
+    error: RefCell<Option<ProviderReadError>>,
+}
+
+impl<K: InfoKeys> Keys for InfoView<'_, K> {
+    fn contains(&self, key: &str) -> bool {
+        self.error.borrow().is_none() && self.keys.contains(key)
+    }
+
+    fn lowercase(&self, key: &str) -> Option<String> {
+        if self.error.borrow().is_some() {
+            return None;
+        }
+        self.keys.lowercase(key)
+    }
+
+    fn provider_of(&self, key: &str) -> Option<String> {
+        if self.error.borrow().is_some() {
+            return None;
+        }
+        self.keys.provider_of(key)
+    }
+
+    fn matches_provider(&self, key: &str, provider: &str) -> bool {
+        if self.error.borrow().is_some() {
+            return false;
+        }
+        match self.keys.info_provider_match(key, provider) {
+            ProviderMatch::Match => true,
+            ProviderMatch::Mismatch => false,
+            ProviderMatch::Invalid => {
+                self.error.replace(Some(ProviderReadError {
+                    key: key.to_owned(),
+                    provider: provider.to_owned(),
+                }));
+                false
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,6 +136,116 @@ pub fn resolve(keys: &impl Keys, query: &Query<'_>) -> Resolved {
 pub struct InferredProvider<'a> {
     pub model: &'a str,
     pub provider: Option<&'a str>,
+}
+
+pub fn resolve_info(
+    keys: &impl InfoKeys,
+    query: &Query<'_>,
+    inferred: Option<InferredProvider<'_>>,
+) -> Result<Resolved, ProviderReadError> {
+    let view = InfoView {
+        keys,
+        error: RefCell::default(),
+    };
+    let resolved = match query.provider.filter(|provider| !provider.is_empty()) {
+        Some(provider) => resolve_info_explicit(&view, query, provider),
+        None => match inferred {
+            Some(inferred) => resolve_inferred(&view, query, inferred),
+            None => resolve(&view, query),
+        },
+    };
+    match view.error.into_inner() {
+        Some(error) => Err(error),
+        None => Ok(resolved),
+    }
+}
+
+fn resolve_info_explicit(keys: &impl Keys, query: &Query<'_>, provider: &str) -> Resolved {
+    let model = query.base_model.unwrap_or(query.model);
+    let split = model
+        .strip_prefix(provider)
+        .and_then(|model| model.strip_prefix('/'))
+        .unwrap_or(model);
+    let combined = if split == model {
+        format!("{provider}/{model}")
+    } else {
+        model.to_owned()
+    };
+    let stripped = registration_stripped(split, Some(provider));
+    let split = if matches!(provider, "bedrock" | "bedrock_converse") {
+        strip_bedrock_nova_route(bedrock_routing_model(split))
+    } else {
+        split
+    };
+    let split = if provider == "bedrock_mantle" {
+        strip_region(split, Some(provider), query.region)
+    } else {
+        split
+    };
+    let mut lookup = Lookup {
+        keys,
+        provider: Some(provider),
+        case_insensitive: true,
+        tried: Vec::new(),
+    };
+    if let Some(region) = query.region {
+        let regional = if split.starts_with(&format!("{region}/")) {
+            format!("{provider}/{split}")
+        } else {
+            format!("{provider}/{region}/{split}")
+        };
+        if let Some(found) = lookup.candidate(&regional, Via::Region) {
+            return found;
+        }
+    }
+    let exact_via = if query.base_model.is_some() {
+        Via::BaseModel
+    } else {
+        Via::Exact
+    };
+    if let Some(found) = lookup.candidate(
+        &combined,
+        if combined == model {
+            exact_via
+        } else {
+            Via::ProviderPrefix
+        },
+    ) {
+        return found;
+    }
+    if let Some(found) = lookup.candidate(model, exact_via) {
+        return found;
+    }
+    if provider == "bedrock_mantle"
+        && let Some(found) = lookup.candidate(&format!("{provider}/{split}"), Via::RegionStripped)
+    {
+        return found;
+    }
+    if let Some(found) = lookup.candidate(split, Via::ProviderStripped) {
+        return found;
+    }
+    let combined_stripped = if provider == "bedrock_mantle" {
+        format!("{provider}/{}", strip_suffix(split, Some(provider)))
+    } else {
+        format!("{provider}/{stripped}")
+    };
+    if let Some(found) = lookup.candidate(&combined_stripped, Via::ProviderSuffixStripped) {
+        return found;
+    }
+    if let Some(found) = lookup.candidate(stripped, Via::SuffixStripped) {
+        return found;
+    }
+    let prefixed = if provider == "fireworks_ai" {
+        fireworks_resource(split)
+    } else {
+        format!("{provider}/{model}")
+    };
+    if let Some(found) = lookup.candidate(&prefixed, Via::RepeatedProvider) {
+        return found;
+    }
+    Resolved::NotFound {
+        tried: lookup.tried,
+    }
 }
 
 pub fn resolve_inferred(
@@ -306,7 +504,7 @@ impl<K: Keys> Lookup<'_, K> {
             return None;
         };
         if let Some(provider) = self.provider
-            && !provider_matches(provider, self.keys.provider_of(&key).as_deref())
+            && !self.keys.matches_provider(&key, provider)
         {
             return None;
         }
@@ -607,6 +805,129 @@ mod tests {
 
     fn catalog(rows: Value) -> Catalog {
         Catalog::parse(rows.to_string().as_bytes()).unwrap().value
+    }
+
+    impl InfoKeys for Catalog {
+        fn info_provider_match(&self, key: &str, provider: &str) -> ProviderMatch {
+            if self.matches_provider(key, provider) {
+                ProviderMatch::Match
+            } else {
+                ProviderMatch::Mismatch
+            }
+        }
+    }
+
+    struct TestProvider(Option<&'static str>);
+
+    impl ProviderValue for TestProvider {
+        fn differs(&self, provider: &str) -> Option<bool> {
+            Some(self.0 != Some(provider))
+        }
+
+        fn equals(&self, provider: &str) -> Option<bool> {
+            Some(self.0 == Some(provider))
+        }
+
+        fn starts_with(&self, prefix: &str) -> Option<bool> {
+            self.0.map(|value| value.starts_with(prefix))
+        }
+    }
+
+    #[rstest]
+    #[case::ordinary("openai", None, ProviderMatch::Mismatch)]
+    #[case::azure_ai("azure_ai", None, ProviderMatch::Mismatch)]
+    #[case::bedrock("bedrock", None, ProviderMatch::Invalid)]
+    #[case::converse("bedrock_converse", None, ProviderMatch::Invalid)]
+    #[case::vertex("vertex_ai", None, ProviderMatch::Invalid)]
+    #[case::fireworks("fireworks_ai", None, ProviderMatch::Invalid)]
+    #[case::github("github", None, ProviderMatch::Match)]
+    #[case::proxy("litellm_proxy", None, ProviderMatch::Match)]
+    #[case::nadir("nadir", None, ProviderMatch::Match)]
+    #[case::exact("openai", Some("openai"), ProviderMatch::Match)]
+    #[case::family("bedrock", Some("bedrock_converse"), ProviderMatch::Match)]
+    #[case::valid_mismatch("bedrock", Some("openai"), ProviderMatch::Mismatch)]
+    #[case::azure_alias("azure_ai", Some("openai"), ProviderMatch::Match)]
+    fn info_provider_protocol(
+        #[case] requested: &str,
+        #[case] actual: Option<&'static str>,
+        #[case] expected: ProviderMatch,
+    ) {
+        assert_eq!(
+            info_provider_match(requested, &TestProvider(actual)),
+            expected
+        );
+    }
+
+    struct AbortingKeys(Cell<bool>);
+
+    impl Keys for AbortingKeys {
+        fn contains(&self, _: &str) -> bool {
+            assert!(!self.0.get(), "lookup continued after invalid provider");
+            true
+        }
+
+        fn lowercase(&self, _: &str) -> Option<String> {
+            panic!("lookup continued after invalid provider")
+        }
+
+        fn provider_of(&self, _: &str) -> Option<String> {
+            panic!("info reads must preserve provider state")
+        }
+    }
+
+    impl InfoKeys for AbortingKeys {
+        fn info_provider_match(&self, _: &str, _: &str) -> ProviderMatch {
+            self.0.set(true);
+            ProviderMatch::Invalid
+        }
+    }
+
+    #[rstest]
+    #[case::explicit(Some("bedrock"))]
+    #[case::inferred(None)]
+    #[case::empty(Some(""))]
+    fn info_provider_failure_stops_live_access(#[case] explicit: Option<&str>) {
+        let keys = AbortingKeys(Cell::new(false));
+        let error = resolve_info(
+            &keys,
+            &query("bedrock/model", explicit),
+            Some(InferredProvider {
+                model: "model",
+                provider: Some("bedrock"),
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(error.key, "bedrock/model");
+        assert_eq!(error.provider, "bedrock");
+    }
+
+    #[rstest]
+    #[case::dated("probe-model-20260101", false)]
+    #[case::qualified_priority("probe-model", true)]
+    fn info_explicit_bedrock_is_not_generic_suffix_resolution(
+        #[case] model: &str,
+        #[case] found: bool,
+    ) {
+        let rows = catalog(json!({
+            "probe-model": {"litellm_provider": "bedrock"},
+            "bedrock/probe-model": {"litellm_provider": "bedrock"}
+        }));
+        let result = resolve_info(&rows, &query(model, Some("bedrock")), None).unwrap();
+        let expected = if found {
+            Resolved::Found {
+                key: "bedrock/probe-model".into(),
+                via: Via::ProviderPrefix,
+            }
+        } else {
+            Resolved::NotFound {
+                tried: vec![format!("bedrock/{model}"), model.into()],
+            }
+        };
+        assert_eq!(result, expected);
+        assert!(matches!(
+            resolve(&rows, &query(model, Some("bedrock"))),
+            Resolved::Found { .. }
+        ));
     }
 
     fn query<'a>(model: &'a str, provider: Option<&'a str>) -> Query<'a> {

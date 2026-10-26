@@ -2,6 +2,13 @@ use std::fmt;
 
 use thiserror::Error;
 
+#[derive(Debug, Error, PartialEq, Eq)]
+#[error("provider metadata comparison failed for {key} with {provider}")]
+pub struct ProviderReadError {
+    pub key: String,
+    pub provider: String,
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("invalid JSON: {0}")]

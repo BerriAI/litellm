@@ -1,6 +1,6 @@
 from asyncio import Future
 from collections.abc import Callable, Mapping, Sequence
-from typing import Literal, Never, final
+from typing import Literal, Never, final, overload
 
 import httpx
 from pydantic import JsonValue
@@ -149,6 +149,13 @@ class ModelNotFound:
     def tried(self) -> list[str]: ...
 
 @final
+class InvalidProvider:
+    @property
+    def key(self) -> str: ...
+    @property
+    def provider(self) -> str: ...
+
+@final
 class RegistrationTarget:
     @property
     def write(self) -> str: ...
@@ -241,6 +248,7 @@ class Unpriced:
     @property
     def partial(self) -> Priced: ...
 
+@overload
 def resolve_model(
     model_cost: dict[str, object],
     model: str,
@@ -249,7 +257,19 @@ def resolve_model(
     base_model: str | None = None,
     region: str | None = None,
     inferred: tuple[str, str | None] | None = None,
+    info_read: Literal[False] = False,
 ) -> ResolvedModel | ModelNotFound: ...
+@overload
+def resolve_model(
+    model_cost: dict[str, object],
+    model: str,
+    *,
+    provider: str | None = None,
+    base_model: str | None = None,
+    region: str | None = None,
+    inferred: tuple[str, str | None] | None = None,
+    info_read: bool,
+) -> ResolvedModel | ModelNotFound | InvalidProvider: ...
 def registration_target(
     model_cost: dict[str, object], key: str, *, provider: str | None = None
 ) -> RegistrationTarget: ...
@@ -450,6 +470,7 @@ __all__ = [
     "FetchedRegistry",
     "ForkedAfterNativeRuntimeStarted",
     "HuggingFaceEncoding",
+    "InvalidProvider",
     "ModelCostLayers",
     "ModelInfoView",
     "ModelNotFound",
