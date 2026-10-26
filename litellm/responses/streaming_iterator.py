@@ -986,6 +986,7 @@ class BaseResponsesAPIStreamingIterator:
             not generated_text
             or requests_background(self.request_data)
             or is_background_response(self._created_response)
+            or self._completed_response_logged
             or self.logging_obj.model_call_details.get("combined_usage_object") is not None
         ):
             return

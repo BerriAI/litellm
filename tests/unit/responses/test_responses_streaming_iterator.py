@@ -181,12 +181,18 @@ class FailureRecorder(CustomLogger):
     async def async_log_failure_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
-        self.failure_payloads = (*self.failure_payloads, cast(StandardLoggingPayload, kwargs["standard_logging_object"]))
+        self.failure_payloads = (
+            *self.failure_payloads,
+            cast(StandardLoggingPayload, kwargs["standard_logging_object"]),
+        )
 
     async def async_log_success_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
-        self.success_payloads = (*self.success_payloads, cast(StandardLoggingPayload, kwargs["standard_logging_object"]))
+        self.success_payloads = (
+            *self.success_payloads,
+            cast(StandardLoggingPayload, kwargs["standard_logging_object"]),
+        )
 
 
 class _ChunkRecorder:
@@ -464,6 +470,51 @@ class _UpstreamThatTimesOutAfterRelayingText:
         raise httpx.ReadTimeout("Timeout on reading data from socket")
 
 
+class _UpstreamThatCompletesThenTimesOut:
+    headers: dict[str, str] = {}
+
+    async def aiter_bytes(self) -> AsyncIterator[bytes]:
+        events: Final = (
+            _CREATED_WITH_PRIORITY_TIER,
+            *(_text_delta(delta, sequence_number) for sequence_number, delta in enumerate(_SEA_DELTAS, start=1)),
+            _completed_after("".join(_SEA_DELTAS)),
+        )
+        for event in events:
+            yield f"data: {json.dumps(event)}\n\n".encode()
+        raise httpx.ReadTimeout("Timeout on reading data from socket")
+
+
+@pytest.mark.asyncio
+async def test_failure_after_completed_response_does_not_estimate_partial_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder: Final = FailureRecorder()
+    monkeypatch.setattr(litellm, "failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    logging_obj: Final = _make_logging_obj()
+    logging_obj.update_environment_variables(
+        model="gpt-5.4-nano",
+        optional_params={"stream": True},
+        litellm_params={"custom_llm_provider": "openai", "aresponses": True},
+    )
+    iterator: Final = _live_iterator(logging_obj, upstream=_UpstreamThatCompletesThenTimesOut())
+
+    with pytest.raises(litellm.Timeout, match="Timeout on reading data from socket"):
+        await _ChunkRecorder().drain(iterator)
+    await iterator._await_pending_logging()
+
+    assert len(recorder.success_payloads) == 1
+    success_payload: Final = recorder.success_payloads[0]
+    response_payload: Final = success_payload["response"]
+    assert isinstance(response_payload, dict)
+    usage: Final = cast(dict[str, object], response_payload["usage"])
+    assert (usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"]) == (5, 7, 12)
+    assert len(recorder.failure_payloads) == 1
+    assert logging_obj.model_call_details.get("combined_usage_object") is None
+
+
 class _UpstreamThatTimesOutAfterCreated:
     headers: dict[str, str] = {}
 
@@ -489,7 +540,9 @@ async def _mid_stream_failure_payload(
     logging_obj: Final = _make_logging_obj()
     logging_obj.update_environment_variables(
         model="gpt-5.4-nano",
-        optional_params={"stream": True} if requested_tier is None else {"stream": True, "service_tier": requested_tier},
+        optional_params={"stream": True}
+        if requested_tier is None
+        else {"stream": True, "service_tier": requested_tier},
         litellm_params={"custom_llm_provider": "openai", "aresponses": True},
     )
     iterator: Final = _live_iterator(logging_obj, upstream=_UpstreamThatTimesOutAfterCreated(**created_fields))
