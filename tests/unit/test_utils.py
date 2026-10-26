@@ -1207,6 +1207,19 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_output_config": {"type": "boolean"},
             "supports_speed": {"type": "boolean"},
             "supports_fast_mode": {"type": "boolean"},
+            "service_tiers": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["id"],
+                    "properties": {
+                        "id": {"type": "string", "pattern": "\\S"},
+                        "name": {"type": "string", "pattern": "\\S"},
+                        "description": {"type": "string"},
+                    },
+                },
+            },
+            "default_service_tier": {"type": "string", "pattern": "\\S"},
             "supported_audio_formats": {
                 "type": "array",
                 "items": {
