@@ -157,6 +157,13 @@ def _streamed_choice_content(choice: StreamingChoices | TextChoices) -> str | No
     return content if isinstance(content, str) else ""
 
 
+def _carries_tool_call(choice: StreamingChoices | TextChoices) -> bool:
+    if isinstance(choice, TextChoices):
+        return False
+    delta: Final = attribute_or_none(choice, "delta")
+    return bool(attribute_or_none(delta, "tool_calls") or attribute_or_none(delta, "function_call"))
+
+
 def _streamed_choices(item: object) -> Sequence[StreamingChoices | TextChoices]:
     if isinstance(item, (ModelResponseStream, TextCompletionResponse)):
         return item.choices
@@ -2277,12 +2284,13 @@ class ContentFilterGuardrail(CustomGuardrail):
                     if new_content is None:
                         continue
 
-                    choice_index = getattr(choice, "index", 0)
-                    if not isinstance(choice_index, int):
-                        choice_index = 0
+                    raw_choice_index = getattr(choice, "index", 0)
+                    choice_index = raw_choice_index if isinstance(raw_choice_index, int) else 0
 
                     is_final = stream_ended or bool(getattr(choice, "finish_reason", None))
-                    if not new_content and not is_final:
+                    carries_tool_call = _carries_tool_call(choice)
+                    flush = is_final or carries_tool_call
+                    if not new_content and not flush:
                         continue
 
                     previous_state = state_by_choice.get(choice_index, _StreamedChoiceState())
@@ -2290,15 +2298,14 @@ class ContentFilterGuardrail(CustomGuardrail):
                     if not buffered_text:
                         continue
 
-                    # Add a space at the end if it's the final chunk to trigger word boundaries (\b)
-                    text_to_scan = buffered_text + (" " if is_final else "")
+                    # Add a space at the end if the buffer is being flushed to trigger word boundaries (\b)
+                    text_to_scan = buffered_text + (" " if flush else "")
                     choice_detections: list[ContentFilterDetection] = []
                     scan_started = time.perf_counter()
 
                     try:
-                        masked_text = self._filter_single_text(text_to_scan, detections=choice_detections)
-                        if is_final and masked_text.endswith(" "):
-                            masked_text = masked_text[:-1]
+                        filtered_text = self._filter_single_text(text_to_scan, detections=choice_detections)
+                        masked_text = filtered_text.removesuffix(" ") if flush else filtered_text
                         latest_detections = tuple(choice_detections)
                     except HTTPException:
                         state_by_choice[choice_index] = replace(
@@ -2314,9 +2321,22 @@ class ContentFilterGuardrail(CustomGuardrail):
 
                     safe_to_yield_len = max(
                         previous_state.yielded_masked_text_len,
-                        len(masked_text) - (0 if is_final else plan.holdback_chars),
+                        len(masked_text) - (0 if flush else plan.holdback_chars),
                     )
                     released_text = masked_text[previous_state.yielded_masked_text_len : safe_to_yield_len]
+                    if carries_tool_call and isinstance(choice, StreamingChoices):
+                        state_by_choice[choice_index] = _StreamedChoiceState(
+                            committed_detections=(*previous_state.committed_detections, *latest_detections)
+                        )
+                        choice.delta.content = "" if new_content else choice.delta.content
+                        if released_text:
+                            yield ModelResponseStream(
+                                id=item.id,
+                                created=item.created,
+                                model=item.model,
+                                choices=[StreamingChoices(index=choice_index, delta=Delta(content=released_text))],
+                            )
+                        continue
                     if isinstance(choice, TextChoices):
                         choice.text = released_text
                     else:
