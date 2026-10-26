@@ -19,7 +19,7 @@ _API_KEY: Final = "synthetic-search-key"
 _QUERY: Final = "integration search pricing"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _PACKAGED_PRICES: Final = _JSON_OBJECT.validate_json(
-    (Path(__file__).resolve().parents[3] / "litellm" / "model_prices_and_context_window_backup.json").read_bytes()
+    (Path(__file__).resolve().parents[3] / "model_prices_and_context_window.json").read_bytes()
 )
 _RESULTS: Final = {
     "tavily": {"results": [{"title": "Priced result", "url": "https://result.invalid/a", "content": "snippet"}]},

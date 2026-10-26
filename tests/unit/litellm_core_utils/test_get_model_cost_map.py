@@ -6,14 +6,15 @@ count actual model entries, not reserved meta keys) and the extraction of the
 
 import asyncio, importlib, importlib.resources as importlib_get_model, json, litellm
 import os
+import logging
 import sys
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
 import boto3
 import pytest
-from pydantic import ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.litellm_core_utils import get_model_cost_map as get_model_cost_map_module
@@ -40,7 +41,7 @@ def _load_root_cost_map() -> dict:
 
 
 def _bundled_blob_id() -> str:
-    path = os.path.join(os.path.dirname(__file__), "../../../litellm/model_prices_and_context_window_backup.json")
+    path = os.path.join(os.path.dirname(__file__), "../../../model_prices_and_context_window.json")
     with open(path, "rb") as f:
         return git_blob_id(f.read())
 
@@ -402,7 +403,7 @@ async def test_refetch_invalid_json_fails_immediately():
     sleeper = _SleepRecorder()
     result = await refetch_model_cost_map(url=_URL, sleep=sleeper, rng=random.Random(0), client=client)
     assert isinstance(result, ModelCostMapReloadUnavailable)
-    assert "invalid JSON" in result.reason
+    assert f"invalid model cost map from {_URL}:" in result.reason
     assert calls["count"] == 1
     assert sleeper.waits == []
 
@@ -1047,7 +1048,7 @@ class TestGetModelCostMapFallback:
         assert fetches == 1
         assert result.keys() == _backup_keys()
         assert source["source"] == "local"
-        assert source["fallback_reason"] == f"Remote fetch failed: expected a JSON object from {_URL}, got list"
+        assert source["fallback_reason"].startswith(f"Remote fetch failed: invalid model cost map from {_URL}:")
 
     def test_should_fallback_when_fetched_map_shrinks_dramatically(self, monkeypatch):
         """When upstream returns far fewer models than backup, should fall back."""
@@ -1272,14 +1273,79 @@ def test_get_backup_model_cost_map():
         print("content", content)
 
 
-@pytest.mark.parametrize("backup", [b'["only-in-the-backup"]', b'"only-in-the-backup"', b"null"])
-def test_a_bundled_backup_that_is_not_a_json_object_is_rejected_without_quoting_it(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, backup: bytes
-):
-    (tmp_path / "model_prices_and_context_window_backup.json").write_bytes(backup)
-    monkeypatch.setattr(get_model_cost_map_module, "files", lambda _package: tmp_path)
+def test_sample_spec_is_raw_metadata_not_a_served_model():
+    assert "sample_spec" in GetModelCostMap.load_local_model_cost_map()
+    assert "sample_spec" not in litellm.model_cost
+    assert type(litellm.model_cost) is dict
 
-    with pytest.raises(ValidationError) as rejected:
-        GetModelCostMap.load_local_model_cost_map_with_revision()
 
-    assert "only-in-the-backup" not in str(rejected.value)
+@pytest.mark.usefixtures("isolate_litellm_state")
+def test_local_map_is_embedded_not_read_from_the_backup(monkeypatch: pytest.MonkeyPatch):
+    from litellm._catalog._load import LoadedCatalog, load, served_rows
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    backup_path: Final = Path(litellm.__file__).parent / "model_prices_and_context_window_backup.json"
+    original: Final = backup_path.read_bytes()
+    try:
+        backup_path.write_bytes(b'{"replacement": {"mode": "chat"}}')
+        loaded: Final = load(None)
+        assert isinstance(loaded, LoadedCatalog)
+        result: Final = get_model_cost_map(url=_URL)
+        assert result == served_rows(loaded)
+        assert GetModelCostMap.load_local_model_cost_map() == _load_root_cost_map()
+        assert get_model_cost_map_module.get_model_cost_map_source_info()["source_revision"] == _bundled_blob_id()
+    finally:
+        backup_path.write_bytes(original)
+
+
+def _read_every_key(model_cost: dict) -> dict[str, tuple[object, object, object]]:
+    get_model_cost_map_module.adopt_model_cost_map(model_cost)
+    litellm.get_model_info.cache_clear()
+
+    def outcome(read: Callable[[], object]) -> object:
+        try:
+            return read()
+        except Exception as error:  # noqa: BLE001  # compare existing public exception contracts
+            return type(error).__name__
+
+    return {
+        key: (
+            outcome(lambda key=key: litellm.get_model_info(key)),
+            outcome(lambda key=key: litellm.cost_per_token(model=key, prompt_tokens=1000, completion_tokens=100)),
+            model_cost[key],
+        )
+        for key in model_cost
+    }
+
+
+@pytest.mark.usefixtures("isolate_litellm_state")
+def test_every_key_reads_the_same_as_the_json_parsed_map(monkeypatch: pytest.MonkeyPatch):
+    from litellm._catalog._load import LoadedCatalog, load, served_rows
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    raw: Final = _load_root_cost_map()
+    set_fallback_generalizations(raw[FALLBACK_GENERALIZATIONS_KEY]["rules"])
+    legacy: Final = get_model_cost_map_module._expand_model_aliases(
+        {key: row for key, row in raw.items() if key not in {"sample_spec", FALLBACK_GENERALIZATIONS_KEY}}
+    )
+    from_json: Final = _read_every_key(legacy)
+    loaded: Final = load(None)
+    assert isinstance(loaded, LoadedCatalog)
+    rows: Final = served_rows(loaded)
+    assert rows == loaded.registry.served() == legacy
+    native: Final = _read_every_key(rows)
+    assert native == from_json
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("isolate_litellm_state")
+async def test_a_fetched_invalid_row_is_served_and_logged_once(caplog: pytest.LogCaptureFixture):
+    edited: Final = _load_root_cost_map()
+    edited["gpt-4o"]["mode"] = "telepathy"
+    client, fetches = _mock_client([httpx.Response(200, content=json.dumps(edited).encode())])
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result: Final = await refetch_model_cost_map(url=_URL, client=client)
+    assert isinstance(result, ModelCostMapReloaded)
+    assert fetches["count"] == 1
+    assert result.model_cost_map["gpt-4o"]["mode"] == "telepathy"
+    assert len([record for record in caplog.records if "gpt-4o.mode" in record.getMessage()]) == 1

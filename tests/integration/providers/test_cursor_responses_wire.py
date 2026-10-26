@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from importlib.resources import files
 from typing import Final
 
 import pytest
@@ -13,14 +12,14 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from integration._support.worker_readiness import wait_for_worker_readiness
 from pydantic import JsonValue, TypeAdapter
 
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
 _MODEL: Final = "gpt-5"
 _API_KEY: Final = "synthetic-cursor-key"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _PROXY_WORKERS: Final = max(1, int(os.environ.get("INTEGRATION_PROXY_WORKERS", "1")))
 _COST_MAP: Final = TypeAdapter(dict[str, dict[str, JsonValue]])
-_MODEL_ROW: Final = _COST_MAP.validate_json(
-    (files("litellm") / "model_prices_and_context_window_backup.json").read_bytes()
-)[_MODEL]
+_MODEL_ROW: Final = _COST_MAP.validate_json(GetModelCostMap.read_local_model_cost_map_bytes())[_MODEL]
 _THINKING_LEVELS: Final = tuple(
     level
     for level in ("none", "minimal", "low", "medium", "high", "xhigh", "max")

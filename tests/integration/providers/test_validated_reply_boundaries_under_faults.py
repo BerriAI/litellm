@@ -62,7 +62,7 @@ _IMAGE_USAGE: Final[dict[str, JsonValue]] = {
 }
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
-_PACKAGED_PRICES: Final = Path(__file__).resolve().parents[3] / "litellm" / "model_prices_and_context_window_backup.json"
+_PACKAGED_PRICES: Final = Path(__file__).resolve().parents[3] / "model_prices_and_context_window.json"
 
 
 def _chat_reply(model: str, usage: dict[str, JsonValue]) -> Reply:
