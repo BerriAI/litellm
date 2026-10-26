@@ -131,8 +131,8 @@ class Authenticator:
         if account_id:
             return account_id
         id_token: Final = auth_data.get("id_token")
-        access_token: Final = auth_data.get("access_token")
-        derived: Final = extract_chatgpt_account_id(_optional_str(id_token or access_token))
+        saved_access_token: Final = auth_data.get("access_token")
+        derived: Final = extract_chatgpt_account_id(_optional_str(id_token or saved_access_token))
         if derived:
             self._write_auth_file({**auth_data, "account_id": derived})
         return derived
