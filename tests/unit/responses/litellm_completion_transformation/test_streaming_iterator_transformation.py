@@ -97,6 +97,100 @@ def _response_ids(events) -> list[str]:
     ]
 
 
+def _custom_tool_stream_chunk(delta: Delta, finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[StreamingChoices(index=0, delta=delta, finish_reason=finish_reason)],
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("terminal_only", [True, False])
+@pytest.mark.parametrize("raw_input", ["", "hello", 'line one\n"世界" \\path 😀'])
+@pytest.mark.asyncio
+async def test_custom_tool_input_events_round_trip_with_interleaved_function(
+    sync_mode: bool, terminal_only: bool, raw_input: str
+):
+    arguments: Final = json.dumps({"content": raw_input}, ensure_ascii=True)
+    first: Final = Delta(
+        content=None,
+        tool_calls=[
+            {
+                "index": 0,
+                "id": "call-custom",
+                "type": "function",
+                "function": {"name": "write_note", "arguments": arguments if terminal_only else ""},
+            },
+            {
+                "index": 1,
+                "id": "call-function",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": '{"query":"ready"}'},
+            },
+        ],
+    )
+    pieces: Final = (
+        () if terminal_only else tuple(arguments[offset : offset + 3] for offset in range(0, len(arguments), 3))
+    )
+    chunks: Final = (
+        _custom_tool_stream_chunk(first, "tool_calls" if terminal_only else None),
+        *(
+            _custom_tool_stream_chunk(Delta(content=None, tool_calls=[{"index": 0, "function": {"arguments": piece}}]))
+            for piece in pieces
+        ),
+        *(() if terminal_only else (_custom_tool_stream_chunk(Delta(content=None), "tool_calls"),)),
+    )
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper(chunks),
+        request_input="Write a note and look up its status",
+        responses_api_request={
+            "tools": [
+                {"type": "custom", "name": "write_note", "format": {"type": "text"}},
+                {"type": "function", "name": "lookup", "parameters": {"type": "object"}},
+            ]
+        },
+        custom_llm_provider="openai",
+    )
+    events: Final = (
+        tuple(event.model_dump(exclude_none=True) for event in iterator)
+        if sync_mode
+        else tuple([event.model_dump(exclude_none=True) async for event in iterator])
+    )
+    completed: Final = next(event["response"] for event in events if event["type"] == "response.completed")
+    custom_item: Final = next(item for item in completed["output"] if item["type"] == "custom_tool_call")
+    function_item: Final = next(item for item in completed["output"] if item["type"] == "function_call")
+    custom_deltas: Final = tuple(event for event in events if event["type"] == "response.custom_tool_call_input.delta")
+    custom_done: Final = tuple(event for event in events if event["type"] == "response.custom_tool_call_input.done")
+    assert custom_item["input"] == raw_input
+    assert "".join(event["delta"] for event in custom_deltas) == raw_input
+    assert len(custom_done) == 1
+    assert custom_done[0]["input"] == custom_item["input"]
+    assert custom_item["call_id"] == "call-custom"
+    assert all(event["item_id"] == custom_item["id"] for event in (*custom_deltas, *custom_done))
+    assert all(isinstance(event["sequence_number"], int) for event in (*custom_deltas, *custom_done))
+    assert all(event["output_index"] == custom_done[0]["output_index"] for event in custom_deltas)
+    function_events: Final = tuple(
+        event for event in events if event["type"].startswith("response.function_call_arguments.")
+    )
+    assert all(event["item_id"] == function_item["id"] for event in function_events)
+    function_deltas: Final = tuple(event for event in function_events if event["type"].endswith(".delta"))
+    assert json.loads("".join(event["delta"] for event in function_deltas)) == {"query": "ready"}
+    function_done: Final = tuple(event for event in function_events if event["type"].endswith(".done"))
+    assert len(function_done) == 1
+    assert function_done[0]["arguments"] == function_item["arguments"]
+    item_done: Final = next(
+        event
+        for event in events
+        if event["type"] == "response.output_item.done" and event["item"]["id"] == custom_item["id"]
+    )
+    assert item_done["item"]["input"] == raw_input
+    assert item_done["sequence_number"] > custom_done[0]["sequence_number"]
+
+
 def test_tool_call_delta_is_emitted_as_responses_events():
     iterator = LiteLLMCompletionStreamingIterator(
         model="test-model",
