@@ -2836,9 +2836,9 @@ def test_client_disconnect_before_any_content_sends_no_response_scan(gateway: Ga
     with _disconnect_rig(gateway, tmp_path, shape="empty") as rig:
         try:
             _stream_and_close(rig, "/v1/chat/completions", _chat_body(rig, 0), "data: ")
+            rows: Final = _post_call_statuses(rig, rig.model)
         finally:
             rig.gate.set()
-        rows: Final = _post_call_statuses(rig, rig.model)
         assert rig.scans.response_scans(rig.secret()) == (), rig.scans.seen
         assert len(rows) == 1 and "success" not in rows[0], rows
 

@@ -9829,6 +9829,249 @@
           "title": "DecisionsUsage",
           "type": "object"
         },
+        "ExtractionAnswer": {
+          "additionalProperties": true,
+          "properties": {
+            "confidence": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
+            },
+            "guess": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "mean": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "median": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "p10": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "p90": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "p_above": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "P Above"
+            },
+            "p_below": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "P Below"
+            },
+            "p_null": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "P Null"
+            },
+            "quantiles": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/JsonValue"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Quantiles"
+            },
+            "span": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Span"
+            },
+            "spans": {
+              "anyOf": [
+                {
+                  "items": {
+                    "items": {
+                      "type": "integer"
+                    },
+                    "type": "array"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Spans"
+            },
+            "steps": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/JsonValue"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Steps"
+            },
+            "type": {
+              "title": "Type",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/components/schemas/JsonValue",
+              "description": "The answer, null when the input does not determine it"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "ExtractionAnswer",
+          "type": "object"
+        },
+        "ExtractionResponse": {
+          "additionalProperties": true,
+          "properties": {
+            "answers": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/ExtractionAnswer"
+              },
+              "title": "Answers",
+              "type": "object"
+            },
+            "model": {
+              "title": "Model",
+              "type": "string"
+            },
+            "state_text": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State Text"
+            },
+            "truncated": {
+              "title": "Truncated",
+              "type": "boolean"
+            },
+            "usage": {
+              "$ref": "#/components/schemas/ExtractionUsage"
+            }
+          },
+          "required": [
+            "model",
+            "answers",
+            "truncated",
+            "usage"
+          ],
+          "title": "ExtractionResponse",
+          "type": "object"
+        },
+        "ExtractionUsage": {
+          "additionalProperties": true,
+          "properties": {
+            "image_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Image Tokens"
+            },
+            "input_tokens": {
+              "title": "Input Tokens",
+              "type": "integer"
+            },
+            "output_tokens": {
+              "title": "Output Tokens",
+              "type": "integer"
+            },
+            "passes": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Passes"
+            },
+            "schema_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Schema Tokens"
+            },
+            "state_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State Tokens"
+            }
+          },
+          "required": [
+            "input_tokens",
+            "output_tokens"
+          ],
+          "title": "ExtractionUsage",
+          "type": "object"
+        },
+        "JsonValue": {},
         "NoulAnswer": {
           "additionalProperties": true,
           "properties": {
@@ -10765,9 +11008,406 @@
           ]
         }
       },
+      "/extraction": {
+        "post": {
+          "description": "Read a `state` text and up to 4 images and get one typed answer per named field in `fields`.\n\nField types are `text`, `number`, `date`, `time`, `datetime`, `duration`, `list` (set `items`), `estimate`\n(set `min` and `max`) and `forecast` (set `min`, `max` and `horizon`). Each answer carries its `value`, which is\nnull when the input does not determine it, plus `confidence`, `p_null`, text `span`s into the state and, for\nestimates, `mean`, `median`, `p10` and `p90`. Images are data URLs or `{content_type, base64}` objects, remote\nURLs are not accepted. An unknown field type, a field name that is not 1 to 64 letters, digits, `_`, `.` or `-`\nstarting with a letter or `_`, a remote image URL or more than 4 images is rejected with a 400 before any\nprovider is called. Any other top-level key, `stream: true` and OpenAI generation settings such as `temperature`\nincluded, is rejected with a 400 naming it unless `drop_params` or the deployment's `additional_drop_params`\ndrops it. Settings inside `fields` and `options` go to the provider as sent, so a field missing a setting its\ntype needs or an empty `state` with no images comes back with the provider's own error. `model` is any\nextraction model in the proxy model list, such as Cloudflare Clairic. The request and the answers keep the\nprovider's format.",
+          "operationId": "extraction_extraction_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "fields": {
+                    "days_to_pay": {
+                      "max": 90,
+                      "min": 0,
+                      "type": "estimate"
+                    },
+                    "invoice_date": {
+                      "type": "date"
+                    },
+                    "items": {
+                      "instructions": "What was bought?",
+                      "items": "text",
+                      "type": "list"
+                    },
+                    "total": {
+                      "type": "number",
+                      "unit": "USD"
+                    },
+                    "vendor": {
+                      "instructions": "Who sent the invoice?",
+                      "type": "text"
+                    }
+                  },
+                  "model": "clairic",
+                  "state": "Invoice #4471 from Acme Tools, dated 2026-03-03. 12 hammers. Total $174. Payment due in 30 days."
+                },
+                "schema": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "fields": {
+                      "description": "Field name to typed field spec. Each name becomes a key in the answers",
+                      "minProperties": 1,
+                      "patternProperties": {
+                        "^[A-Za-z_][A-Za-z0-9_.\\-]{0,63}$": {
+                          "additionalProperties": true,
+                          "properties": {
+                            "decimals": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Numbers, durations and number lists only, 0 to 6",
+                              "title": "Decimals"
+                            },
+                            "horizon": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Forecast only, number of steps",
+                              "title": "Horizon"
+                            },
+                            "instructions": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "What the field should contain",
+                              "title": "Instructions"
+                            },
+                            "integer": {
+                              "anyOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Numbers and durations only",
+                              "title": "Integer"
+                            },
+                            "interval": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "step",
+                                    "minute",
+                                    "hour",
+                                    "day",
+                                    "week",
+                                    "month",
+                                    "quarter",
+                                    "year"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Interval"
+                            },
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "text",
+                                    "number",
+                                    "date"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Item type, required for list fields",
+                              "title": "Items"
+                            },
+                            "max": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Estimate and forecast upper bound",
+                              "title": "Max"
+                            },
+                            "min": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Estimate and forecast lower bound",
+                              "title": "Min"
+                            },
+                            "null_threshold": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Probability of null above which the value is null",
+                              "title": "Null Threshold"
+                            },
+                            "scale": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "linear",
+                                    "log"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Scale"
+                            },
+                            "step": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Estimate grid step, or month or year",
+                              "title": "Step"
+                            },
+                            "type": {
+                              "description": "The answer type for this field",
+                              "enum": [
+                                "text",
+                                "number",
+                                "date",
+                                "time",
+                                "datetime",
+                                "duration",
+                                "list",
+                                "estimate",
+                                "forecast"
+                              ],
+                              "title": "Type",
+                              "type": "string"
+                            },
+                            "unit": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Unit label. For durations, seconds through years",
+                              "title": "Unit"
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "title": "ExtractionField",
+                          "type": "object"
+                        }
+                      },
+                      "title": "Fields",
+                      "type": "object"
+                    },
+                    "images": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "anyOf": [
+                              {
+                                "pattern": "^[Dd][Aa][Tt][Aa]:",
+                                "type": "string"
+                              },
+                              {
+                                "additionalProperties": true,
+                                "properties": {
+                                  "base64": {
+                                    "description": "Base64-encoded image bytes",
+                                    "title": "Base64",
+                                    "type": "string"
+                                  },
+                                  "content_type": {
+                                    "description": "The image media type, such as image/png",
+                                    "title": "Content Type",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "content_type",
+                                  "base64"
+                                ],
+                                "title": "ExtractionBase64Image",
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          "maxItems": 4,
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Up to 4 images as data URLs or content_type plus base64, no remote URLs",
+                      "title": "Images"
+                    },
+                    "model": {
+                      "description": "An extraction model from the proxy model_list",
+                      "title": "Model",
+                      "type": "string"
+                    },
+                    "options": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": true,
+                          "properties": {
+                            "include_quantiles": {
+                              "anyOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Add 99 percentiles to estimates",
+                              "title": "Include Quantiles"
+                            },
+                            "return_state_text": {
+                              "anyOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Return the text that spans index into",
+                              "title": "Return State Text"
+                            }
+                          },
+                          "title": "ExtractionOptions",
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reference_date": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "ISO date that anchors dates written without a year",
+                      "title": "Reference Date"
+                    },
+                    "state": {
+                      "default": "",
+                      "description": "The text to read. Must be non-empty unless images are sent. Text answers are spans of it",
+                      "title": "State",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "fields",
+                    "model"
+                  ],
+                  "title": "ExtractionRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ExtractionResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Extract typed fields from a state",
+          "tags": [
+            "decisions"
+          ]
+        }
+      },
       "/systemone": {
         "post": {
-          "description": "Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).\nTypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break\nthese rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
+          "description": "Judge a `state` against one or more named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).\nTypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break\nthese rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "systemone_systemone_post",
           "requestBody": {
             "content": {
@@ -11173,7 +11813,6 @@
                         ]
                       },
                       "description": "Named noul, choice and score questions. Each key becomes a key in the answers",
-                      "maxProperties": 128,
                       "minProperties": 1,
                       "propertyNames": {
                         "minLength": 1
@@ -11775,9 +12414,406 @@
           ]
         }
       },
+      "/v1/extraction": {
+        "post": {
+          "description": "Read a `state` text and up to 4 images and get one typed answer per named field in `fields`.\n\nField types are `text`, `number`, `date`, `time`, `datetime`, `duration`, `list` (set `items`), `estimate`\n(set `min` and `max`) and `forecast` (set `min`, `max` and `horizon`). Each answer carries its `value`, which is\nnull when the input does not determine it, plus `confidence`, `p_null`, text `span`s into the state and, for\nestimates, `mean`, `median`, `p10` and `p90`. Images are data URLs or `{content_type, base64}` objects, remote\nURLs are not accepted. An unknown field type, a field name that is not 1 to 64 letters, digits, `_`, `.` or `-`\nstarting with a letter or `_`, a remote image URL or more than 4 images is rejected with a 400 before any\nprovider is called. Any other top-level key, `stream: true` and OpenAI generation settings such as `temperature`\nincluded, is rejected with a 400 naming it unless `drop_params` or the deployment's `additional_drop_params`\ndrops it. Settings inside `fields` and `options` go to the provider as sent, so a field missing a setting its\ntype needs or an empty `state` with no images comes back with the provider's own error. `model` is any\nextraction model in the proxy model list, such as Cloudflare Clairic. The request and the answers keep the\nprovider's format.",
+          "operationId": "extraction_v1_extraction_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "fields": {
+                    "days_to_pay": {
+                      "max": 90,
+                      "min": 0,
+                      "type": "estimate"
+                    },
+                    "invoice_date": {
+                      "type": "date"
+                    },
+                    "items": {
+                      "instructions": "What was bought?",
+                      "items": "text",
+                      "type": "list"
+                    },
+                    "total": {
+                      "type": "number",
+                      "unit": "USD"
+                    },
+                    "vendor": {
+                      "instructions": "Who sent the invoice?",
+                      "type": "text"
+                    }
+                  },
+                  "model": "clairic",
+                  "state": "Invoice #4471 from Acme Tools, dated 2026-03-03. 12 hammers. Total $174. Payment due in 30 days."
+                },
+                "schema": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "fields": {
+                      "description": "Field name to typed field spec. Each name becomes a key in the answers",
+                      "minProperties": 1,
+                      "patternProperties": {
+                        "^[A-Za-z_][A-Za-z0-9_.\\-]{0,63}$": {
+                          "additionalProperties": true,
+                          "properties": {
+                            "decimals": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Numbers, durations and number lists only, 0 to 6",
+                              "title": "Decimals"
+                            },
+                            "horizon": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Forecast only, number of steps",
+                              "title": "Horizon"
+                            },
+                            "instructions": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "What the field should contain",
+                              "title": "Instructions"
+                            },
+                            "integer": {
+                              "anyOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Numbers and durations only",
+                              "title": "Integer"
+                            },
+                            "interval": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "step",
+                                    "minute",
+                                    "hour",
+                                    "day",
+                                    "week",
+                                    "month",
+                                    "quarter",
+                                    "year"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Interval"
+                            },
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "text",
+                                    "number",
+                                    "date"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Item type, required for list fields",
+                              "title": "Items"
+                            },
+                            "max": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Estimate and forecast upper bound",
+                              "title": "Max"
+                            },
+                            "min": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Estimate and forecast lower bound",
+                              "title": "Min"
+                            },
+                            "null_threshold": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Probability of null above which the value is null",
+                              "title": "Null Threshold"
+                            },
+                            "scale": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "linear",
+                                    "log"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Scale"
+                            },
+                            "step": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Estimate grid step, or month or year",
+                              "title": "Step"
+                            },
+                            "type": {
+                              "description": "The answer type for this field",
+                              "enum": [
+                                "text",
+                                "number",
+                                "date",
+                                "time",
+                                "datetime",
+                                "duration",
+                                "list",
+                                "estimate",
+                                "forecast"
+                              ],
+                              "title": "Type",
+                              "type": "string"
+                            },
+                            "unit": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Unit label. For durations, seconds through years",
+                              "title": "Unit"
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "title": "ExtractionField",
+                          "type": "object"
+                        }
+                      },
+                      "title": "Fields",
+                      "type": "object"
+                    },
+                    "images": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "anyOf": [
+                              {
+                                "pattern": "^[Dd][Aa][Tt][Aa]:",
+                                "type": "string"
+                              },
+                              {
+                                "additionalProperties": true,
+                                "properties": {
+                                  "base64": {
+                                    "description": "Base64-encoded image bytes",
+                                    "title": "Base64",
+                                    "type": "string"
+                                  },
+                                  "content_type": {
+                                    "description": "The image media type, such as image/png",
+                                    "title": "Content Type",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "content_type",
+                                  "base64"
+                                ],
+                                "title": "ExtractionBase64Image",
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          "maxItems": 4,
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Up to 4 images as data URLs or content_type plus base64, no remote URLs",
+                      "title": "Images"
+                    },
+                    "model": {
+                      "description": "An extraction model from the proxy model_list",
+                      "title": "Model",
+                      "type": "string"
+                    },
+                    "options": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": true,
+                          "properties": {
+                            "include_quantiles": {
+                              "anyOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Add 99 percentiles to estimates",
+                              "title": "Include Quantiles"
+                            },
+                            "return_state_text": {
+                              "anyOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Return the text that spans index into",
+                              "title": "Return State Text"
+                            }
+                          },
+                          "title": "ExtractionOptions",
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reference_date": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "ISO date that anchors dates written without a year",
+                      "title": "Reference Date"
+                    },
+                    "state": {
+                      "default": "",
+                      "description": "The text to read. Must be non-empty unless images are sent. Text answers are spans of it",
+                      "title": "State",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "fields",
+                    "model"
+                  ],
+                  "title": "ExtractionRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ExtractionResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Extract typed fields from a state",
+          "tags": [
+            "decisions"
+          ]
+        }
+      },
       "/v1/systemone": {
         "post": {
-          "description": "Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).\nTypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break\nthese rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
+          "description": "Judge a `state` against one or more named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).\nTypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break\nthese rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "systemone_v1_systemone_post",
           "requestBody": {
             "content": {
@@ -12183,7 +13219,6 @@
                         ]
                       },
                       "description": "Named noul, choice and score questions. Each key becomes a key in the answers",
-                      "maxProperties": 128,
                       "minProperties": 1,
                       "propertyNames": {
                         "minLength": 1
@@ -21823,6 +22858,25 @@
           "title": "Body_image_edit_api_openai_deployments__model__images_edits_post",
           "type": "object"
         },
+        "CacheWriteTokensDetails": {
+          "additionalProperties": true,
+          "properties": {
+            "ttl_12h_tokens": {
+              "title": "Ttl 12H Tokens",
+              "type": "integer"
+            },
+            "ttl_30m_tokens": {
+              "title": "Ttl 30M Tokens",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "ttl_30m_tokens",
+            "ttl_12h_tokens"
+          ],
+          "title": "CacheWriteTokensDetails",
+          "type": "object"
+        },
         "CachedTokensDetails": {
           "properties": {
             "audio_tokens": {
@@ -23316,6 +24370,27 @@
                 }
               ],
               "title": "Audio Tokens"
+            },
+            "cache_write_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cache Write Tokens"
+            },
+            "cache_write_tokens_details": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CacheWriteTokensDetails"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "cached_tokens": {
               "default": 0,
@@ -27203,6 +28278,9 @@
                       },
                       {
                         "$ref": "#/components/schemas/OutputToolSearchCall"
+                      },
+                      {
+                        "$ref": "#/components/schemas/ResponseCompactionItem"
                       }
                     ]
                   },
@@ -56855,163 +57933,6 @@
           "summary": "Delete Tool Policy Override",
           "tags": [
             "tools"
-          ]
-        }
-      }
-    }
-  },
-  "usage_ai": {
-    "components": {
-      "schemas": {
-        "ChatMessage": {
-          "properties": {
-            "content": {
-              "title": "Content",
-              "type": "string"
-            },
-            "role": {
-              "enum": [
-                "user",
-                "assistant"
-              ],
-              "title": "Role",
-              "type": "string"
-            }
-          },
-          "required": [
-            "role",
-            "content"
-          ],
-          "title": "ChatMessage",
-          "type": "object"
-        },
-        "HTTPValidationError": {
-          "properties": {
-            "detail": {
-              "items": {
-                "$ref": "#/components/schemas/ValidationError"
-              },
-              "title": "Detail",
-              "type": "array"
-            }
-          },
-          "title": "HTTPValidationError",
-          "type": "object"
-        },
-        "UsageAIChatRequest": {
-          "properties": {
-            "messages": {
-              "description": "Chat messages (user/assistant history)",
-              "items": {
-                "$ref": "#/components/schemas/ChatMessage"
-              },
-              "title": "Messages",
-              "type": "array"
-            },
-            "model": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Model to use for AI chat",
-              "title": "Model"
-            }
-          },
-          "required": [
-            "messages"
-          ],
-          "title": "UsageAIChatRequest",
-          "type": "object"
-        },
-        "ValidationError": {
-          "properties": {
-            "ctx": {
-              "title": "Context",
-              "type": "object"
-            },
-            "input": {
-              "title": "Input"
-            },
-            "loc": {
-              "items": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "integer"
-                  }
-                ]
-              },
-              "title": "Location",
-              "type": "array"
-            },
-            "msg": {
-              "title": "Message",
-              "type": "string"
-            },
-            "type": {
-              "title": "Error Type",
-              "type": "string"
-            }
-          },
-          "required": [
-            "loc",
-            "msg",
-            "type"
-          ],
-          "title": "ValidationError",
-          "type": "object"
-        }
-      }
-    },
-    "paths": {
-      "/usage/ai/chat": {
-        "post": {
-          "description": "AI chat about usage data. Streams SSE events with the AI response.\nThe AI agent has access to tools that query aggregated daily activity data.",
-          "operationId": "usage_ai_chat_usage_ai_chat_post",
-          "requestBody": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UsageAIChatRequest"
-                }
-              }
-            },
-            "required": true
-          },
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {}
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Usage Ai Chat",
-          "tags": [
-            "usage_ai"
           ]
         }
       }

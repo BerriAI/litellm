@@ -8,6 +8,7 @@ from litellm.llms.anthropic.pass_through.responses_adapters.transformation impor
 from litellm.llms.openai.responses.count_tokens.transformation import (
     OpenAICountTokensConfig,
 )
+from tests.unit.litellm_core_utils.attribute_forwarder import AttributeForwarder
 
 
 def test_transform_basic_request():
@@ -204,6 +205,23 @@ def test_messages_to_responses_input_with_tool():
         "type": "function_call_output",
         "call_id": "call_123",
         "output": "72°F",
+    }
+
+
+def test_messages_to_responses_input_reads_a_tool_call_that_forwards_its_fields():
+    tool_call: Final = {"id": "call_123", "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}
+    messages: Final = [
+        {"role": "user", "content": "What's the weather?"},
+        {"role": "assistant", "content": None, "tool_calls": [AttributeForwarder(tool_call)]},
+    ]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items[1] == {
+        "type": "function_call",
+        "call_id": "call_123",
+        "name": "get_weather",
+        "arguments": '{"city": "Paris"}',
     }
 
 

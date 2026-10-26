@@ -161,6 +161,12 @@ def test_api_base_line_keeps_an_at_sign_in_the_path(api_base: str) -> None:
 context_window_test_cases = [
     # Positive cases (should return True)
     (
+        '"{\n  "error": {\n    "message": "Your input exceeds the context window of this model. '
+        'Please adjust your input and try again.",\n    "type": "invalid_request_error",\n'
+        '    "param": "input",\n    "code": "context_length_exceeded"\n  }\n}"',
+        True,
+    ),
+    (
         "An error occurred: The input exceeds the model's maximum context limit of 8192 tokens.",
         True,
     ),
