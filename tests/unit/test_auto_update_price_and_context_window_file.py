@@ -74,13 +74,13 @@ def test_transform_non_reasoning_model_declares_no_levels(sync_module):
     assert "reasoning_effort_levels" not in entry
 
 
-def test_transform_max_tokens_mirrors_output_cap_not_context(sync_module):
+def test_transform_writes_input_and_output_caps_without_legacy_max_tokens(sync_module):
     entry = sync_module.transform_friendli_data([_reasoning_model()], {})[
         "friendliai/zai-org/GLM-Test"
     ]
     assert entry["max_input_tokens"] == 1048576
     assert entry["max_output_tokens"] == 131072
-    assert entry["max_tokens"] == entry["max_output_tokens"]
+    assert "max_tokens" not in entry
 
 
 def test_transform_prompt_caching_follows_cache_pricing(sync_module):

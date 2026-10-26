@@ -6077,11 +6077,8 @@ def get_max_tokens(model: str) -> int | None:
             return None
 
     try:
-        if model in litellm.model_cost:
-            if "max_output_tokens" in litellm.model_cost[model]:
-                return litellm.model_cost[model]["max_output_tokens"]
-            elif "max_tokens" in litellm.model_cost[model]:
-                return litellm.model_cost[model]["max_tokens"]
+        if model in litellm.model_cost and "max_output_tokens" in litellm.model_cost[model]:
+            return litellm.model_cost[model]["max_output_tokens"]
         get_llm_provider: Final = litellm_utils.get_llm_provider
         model, custom_llm_provider, _, _ = get_llm_provider(model=model)
         if custom_llm_provider == "huggingface":
@@ -6090,8 +6087,6 @@ def get_max_tokens(model: str) -> int | None:
         if model in litellm.model_cost:  # check if extracted model is in model_list
             if "max_output_tokens" in litellm.model_cost[model]:
                 return litellm.model_cost[model]["max_output_tokens"]
-            elif "max_tokens" in litellm.model_cost[model]:
-                return litellm.model_cost[model]["max_tokens"]
         else:
             raise Exception()
         return None
@@ -6740,7 +6735,7 @@ def get_model_info_helper(
 
             returned_model_info: Final = ModelInfoBase(
                 key=key,
-                max_tokens=_model_info.get("max_tokens", None),
+                max_tokens=_model_info.get("max_output_tokens") or _model_info.get("max_input_tokens"),
                 max_input_tokens=_model_info.get("max_input_tokens", None),
                 max_output_tokens=_model_info.get("max_output_tokens", None),
                 input_cost_per_token=_input_cost_per_token,
@@ -8240,9 +8235,7 @@ def trim_messages(
         if max_tokens is None:
             # Check if model is valid
             if model in litellm.model_cost:
-                max_tokens_for_model: Final = litellm.model_cost[model].get(
-                    "max_input_tokens", litellm.model_cost[model]["max_tokens"]
-                )
+                max_tokens_for_model: Final = litellm.model_cost[model]["max_input_tokens"]
                 max_tokens = int(max_tokens_for_model * trim_ratio)
             else:
                 # if user did not specify max (input) tokens

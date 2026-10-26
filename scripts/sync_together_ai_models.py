@@ -192,7 +192,6 @@ CAPABILITY_RULES: Final = (
         **_TOOLS,
         supports_reasoning=True,
         max_output_tokens=128000,
-        max_tokens=128000,
     ),
     _rule(
         "zai-org/GLM-5.3-Flash",
@@ -202,7 +201,6 @@ CAPABILITY_RULES: Final = (
         supports_reasoning=True,
         supports_vision=True,
         max_output_tokens=128000,
-        max_tokens=128000,
     ),
 )
 
@@ -301,10 +299,8 @@ def _api_fields(model: CatalogModel) -> RegistryEntry:
 
 def _new_entry(model: CatalogModel, mode: str) -> RegistryEntry:
     rule: Final = RULES_BY_ID.get(model.id)
-    legacy_ceiling: Final = {} if model.context_length is None else {"max_tokens": model.context_length}
     merged: Final = {
         **_api_fields(model),
-        **legacy_ceiling,
         "litellm_provider": PROVIDER,
         "mode": mode,
         "source": SOURCE_URL,

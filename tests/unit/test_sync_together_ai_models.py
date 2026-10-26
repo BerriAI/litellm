@@ -105,7 +105,6 @@ def test_added_chat_model_matches_reviewed_registry_shape() -> None:
         "input_cost_per_token": 3e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1048576,
-        "max_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "source": "https://docs.together.ai/docs/serverless-models",
@@ -125,7 +124,6 @@ def test_added_embedding_model_has_no_output_token_cap() -> None:
         "input_cost_per_token": 2e-08,
         "litellm_provider": "together_ai",
         "max_input_tokens": 514,
-        "max_tokens": 514,
         "mode": "embedding",
         "output_cost_per_token": 2e-08,
         "output_vector_size": 1024,
@@ -145,13 +143,11 @@ def test_output_ceiling_comes_from_the_rule_never_from_context_length() -> None:
     fresh = sync.compute_sync({}, [_chat_model("acme/unreviewed", ctx=1048576), glm], _doc({"x": "2026-01-01"}))
     unreviewed = fresh.cost_map["together_ai/acme/unreviewed"]
     assert "max_output_tokens" not in unreviewed
-    assert (unreviewed["max_input_tokens"], unreviewed["max_tokens"]) == (1048576, 1048576)
+    assert unreviewed["max_input_tokens"] == 1048576
+    assert "max_tokens" not in unreviewed
     reviewed = fresh.cost_map["together_ai/zai-org/GLM-5.2"]
-    assert (reviewed["max_input_tokens"], reviewed["max_output_tokens"], reviewed["max_tokens"]) == (
-        1048575,
-        128000,
-        128000,
-    )
+    assert (reviewed["max_input_tokens"], reviewed["max_output_tokens"]) == (1048575, 128000)
+    assert "max_tokens" not in reviewed
     inflated = {
         "together_ai/zai-org/GLM-5.2": {
             "input_cost_per_token": 1.4e-06,

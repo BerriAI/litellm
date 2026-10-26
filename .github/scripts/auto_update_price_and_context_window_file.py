@@ -125,7 +125,6 @@ def transform_friendli_data(data: list, local_data: dict) -> dict:
         max_out = model.get("max_completion_tokens")
         if max_out is not None:
             entry["max_output_tokens"] = int(max_out)
-            entry["max_tokens"] = int(max_out)
 
         pricing = _pricing(model.get("pricing", {}))
         entry.update(pricing)
@@ -197,9 +196,8 @@ def transform_openrouter_data(data):
     if not data:
         return transformed
     for row in data:
-        # Add the fields 'max_tokens' and 'input_cost_per_token'
         obj = {
-            "max_tokens": row["context_length"],
+            "max_input_tokens": row["context_length"],
             "input_cost_per_token": float(row["pricing"]["prompt"]),
         }
 
@@ -243,7 +241,6 @@ def transform_vercel_ai_gateway_data(data):
         ):
             continue
         obj = {
-            "max_tokens": row["context_window"],
             "input_cost_per_token": float(row["pricing"]["input"]),
             "output_cost_per_token": float(row["pricing"]["output"]),
             'max_output_tokens': row['max_tokens'],
