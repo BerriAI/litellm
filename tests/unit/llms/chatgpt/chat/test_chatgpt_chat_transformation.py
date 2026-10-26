@@ -417,29 +417,41 @@ async def test_one_client_limit_does_not_cool_down_other_subscriptions(
 
 
 @pytest.mark.parametrize("endpoint", ["chat", "responses"])
+@pytest.mark.parametrize("async_call", [False, True])
+@pytest.mark.parametrize("direct_headers", [False, True])
+@pytest.mark.parametrize("configured_key", [False, True])
 @pytest.mark.parametrize(
     "target", ["https://example.com/v1", "http://chatgpt.com/backend-api/codex", "https://chatgpt.com.example.com/v1"]
 )
 @pytest.mark.asyncio
-async def test_client_login_cannot_be_redirected_to_another_host(endpoint: str, target: str) -> None:
+async def test_client_login_cannot_be_redirected_to_another_host(
+    endpoint: str, target: str, async_call: bool, direct_headers: bool, configured_key: bool
+) -> None:
+    headers: Final = {"Authorization": f"Bearer {_client_token('acct-client')}"}
+    credential: Final = (
+        {"extra_headers": headers}
+        if direct_headers
+        else {"provider_specific_header": {"custom_llm_provider": "chatgpt", "extra_headers": headers}}
+    )
     params: Final = MappingProxyType(
         {
             "model": "chatgpt/gpt-6.1-sol",
             "api_base": target,
-            "provider_specific_header": {
-                "custom_llm_provider": "chatgpt",
-                "extra_headers": {"Authorization": f"Bearer {_client_token('acct-client')}"},
-            },
+            **({"api_key": "configured-test-key"} if configured_key else {}),
+            **credential,
         }
     )
     with respx.mock as transport:
-        request: Final = (
-            litellm.acompletion(**params, messages=[{"role": "user", "content": "Hello"}])
-            if endpoint == "chat"
-            else litellm.aresponses(**params, input="Hello")
-        )
         with pytest.raises(litellm.BadRequestError, match="official HTTPS ChatGPT endpoint"):
-            await request
+            if endpoint == "chat":
+                if async_call:
+                    await litellm.acompletion(**params, messages=[{"role": "user", "content": "Hello"}])
+                else:
+                    litellm.completion(**params, messages=[{"role": "user", "content": "Hello"}])
+            elif async_call:
+                await litellm.aresponses(**params, input="Hello")
+            else:
+                litellm.responses(**params, input="Hello")
         assert len(transport.calls) == 0
 
 

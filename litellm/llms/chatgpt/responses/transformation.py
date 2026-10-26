@@ -101,7 +101,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     ) -> dict:
         request: Final = super().transform_responses_api_request(
             model,
-            input,
+            [{"role": "user", "content": input}] if isinstance(input, str) else input,
             response_api_optional_request_params,
             litellm_params,
             headers,

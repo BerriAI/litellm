@@ -5491,6 +5491,7 @@ async def test_unsaved_chatgpt_account_probe_requires_proxy_admin(
             assert result["status"] == "success"
             assert upstream.calls.last.request.headers["Authorization"] == "Bearer token-probe"
             assert upstream.calls.last.request.headers["ChatGPT-Account-Id"] == "acct-probe"
+            assert isinstance(json.loads(upstream.calls.last.request.content)["input"], list)
         else:
             with pytest.raises(ProxyException) as error:
                 await call
