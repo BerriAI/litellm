@@ -925,8 +925,8 @@ async def _parse_event_data_for_error(event_line: str | bytes) -> int | None:
                         # original vendor code is preserved in the warning log
                         # for debugging.
                         verbose_proxy_logger.warning(
-                            f"SSE error code {error_code} is outside standard HTTP range "
-                            f"(100-599); mapping to 502 for failure handling"
+                            "SSE error code %s is outside standard HTTP range (100-599); mapping to 502 for failure handling",
+                            error_code,
                         )
                         return 502
                     else:
@@ -934,12 +934,12 @@ async def _parse_event_data_for_error(event_line: str | bytes) -> int | None:
                         # but keep the original behaviour of returning None while
                         # emitting the diagnostic warning (preserved from the
                         # original elif error_code_raw is not None: branch).
-                        verbose_proxy_logger.warning(f"Error has invalid or non-convertible code: {error_code}")
+                        verbose_proxy_logger.warning("Error has invalid or non-convertible code: %s", error_code)
                 elif error_code_raw is not None:
                     # error_code could not be coerced to int from the raw value
                     # (e.g., a non-numeric string). Log the original raw value
                     # for debugging and fall through to return None.
-                    verbose_proxy_logger.warning(f"Error has invalid or non-convertible code: {error_code_raw}")
+                    verbose_proxy_logger.warning("Error has invalid or non-convertible code: %s", error_code_raw)
         except (orjson.JSONDecodeError, json.JSONDecodeError):
             # not a known error chunk
             pass
