@@ -22,6 +22,7 @@ from fastapi import HTTPException, Request, status
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
+from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -87,6 +88,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     safe_get_request_headers,
 )
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
+from litellm.types.caching import CacheScope
 from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJECTED_CACHE_METADATA_KEY
 
 # Cache special headers as a frozenset for O(1) lookup performance
@@ -806,6 +808,33 @@ def _strip_router_reserved_metadata(
             verbose_proxy_logger.debug(
                 "Stripped router-reserved metadata field from request body: %s.%s", metadata_key, field
             )
+
+
+_CLIENT_CACHE_KEY_OVERRIDE_FIELDS: Final = frozenset({"cache_key", "preset_cache_key"})
+
+
+def _is_request_json_object(
+    value: object,
+) -> TypeIs[dict[str, object]]:  # guard-ok: parsed JSON request bodies have str keys  # mutable-ok: stripped in place
+    return isinstance(value, dict)
+
+
+def _strip_client_cache_key_overrides(
+    data: dict[str, object],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+) -> None:
+    """Under a scoped response cache, the cache key must come from proxy auth, never from the caller."""
+    if litellm.cache is None or litellm.cache.cache_scope == CacheScope.GLOBAL:
+        return
+    for field in _CLIENT_CACHE_KEY_OVERRIDE_FIELDS & data.keys():
+        data.pop(field)
+    if not _is_request_json_object(litellm_params := data.get("litellm_params")):
+        return
+    litellm_params.pop("preset_cache_key", None)
+    for metadata_key in ("metadata", "litellm_metadata"):
+        if not _is_request_json_object(metadata := litellm_params.get(metadata_key)):
+            continue
+        for field in tuple(key for key in metadata if key.startswith("user_api_key_")):
+            metadata.pop(field)
 
 
 def get_metadata_variable_name(request: Request) -> str:
@@ -2647,16 +2676,18 @@ async def add_litellm_data_to_request(
     # metadata (sent via multipart/form-data or extra_body) wouldn't be a
     # dict yet at the earlier strip point and the isinstance(dict) guard
     # would silently skip the field.
+    request_body: Final = cast("dict[str, object]", data)  # cast-ok: data is the untyped request body dict
     if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
-        _strip_client_pricing_overrides(data)
-    _strip_router_reserved_metadata(data)
+        _strip_client_pricing_overrides(request_body)
+    _strip_router_reserved_metadata(request_body)
+    _strip_client_cache_key_overrides(request_body)
 
     # Same reason as the strips above: runs after the metadata string-to-dict parse
     # so JSON-string metadata cannot smuggle callback credentials past the dict guard.
-    _strip_client_callback_credentials(data)
+    _strip_client_callback_credentials(request_body)
 
     if not _allow_client_message_redaction_opt_out and litellm.turn_off_message_logging is True:
-        _strip_client_message_redaction_opt_out(data)
+        _strip_client_message_redaction_opt_out(request_body)
 
     # Fill in the proxy_server_request body snapshot now that metadata has
     # been parsed. Consumers (standard_logging_payload, lago,

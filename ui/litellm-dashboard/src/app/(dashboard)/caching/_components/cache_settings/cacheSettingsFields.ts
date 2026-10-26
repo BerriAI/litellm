@@ -242,6 +242,20 @@ export const CACHE_FIELDS: readonly CacheField[] = [
     redisType: null,
   },
   {
+    name: "cache_scope",
+    label: "Cache Scope",
+    type: "select",
+    section: "cacheManagement",
+    helpText:
+      "Who can share a cache hit. Global shares hits between every caller. Team isolates hits per team, and keys without a team per key. Key isolates hits per key.",
+    redisType: null,
+    options: [
+      { value: "global", label: "Global (shared by every caller)" },
+      { value: "team", label: "Team (isolated per team)" },
+      { value: "key", label: "Key (isolated per key)" },
+    ],
+  },
+  {
     name: "ttl",
     label: "TTL (seconds)",
     type: "float",

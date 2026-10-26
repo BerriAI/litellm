@@ -24,6 +24,12 @@ class SemanticCacheScope(str, Enum):
     END_USER = "end_user"
 
 
+class CacheScope(str, Enum):
+    GLOBAL = "global"
+    TEAM = "team"
+    KEY = "key"
+
+
 CachingSupportedCallTypes = Literal[
     "completion",
     "acompletion",

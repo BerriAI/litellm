@@ -83,6 +83,16 @@ describe("buildCachePayload", () => {
     expect(node).not.toHaveProperty("semantic_cache_scope");
   });
 
+  it("should send the cache scope for every redis type and leave it to the server default when unset", () => {
+    const redisTypes = ["node", "cluster", "sentinel", "semantic"] as const;
+    for (const redisType of redisTypes) {
+      const scoped = buildCachePayload(redisType, { cache_scope: "team" }, { forTesting: false });
+      expect(scoped.cache_scope).toBe("team");
+    }
+    const unset = buildCachePayload("node", buildInitialValues({}), { forTesting: false });
+    expect(unset).not.toHaveProperty("cache_scope");
+  });
+
   it("should keep type redis when testing a semantic cache so the test endpoint accepts it", () => {
     const payload = buildCachePayload("semantic", { similarity_threshold: 0.9 }, { forTesting: true });
     expect(payload.type).toBe("redis");
