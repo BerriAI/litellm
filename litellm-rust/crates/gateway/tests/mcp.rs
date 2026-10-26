@@ -6,6 +6,7 @@ use axum::{
     http::Request,
 };
 use litellm_config::Config;
+use litellm_gateway::Fallback;
 use litellm_gateway_mcp::{
     HttpConfig,
     rmcp::{
@@ -163,7 +164,7 @@ mcp_servers:
             ..Default::default()
         },
     );
-    let app = litellm_gateway::router(inference, &config, None, Some(mcp_router));
+    let app = litellm_gateway::router(inference, &config, None, Some(mcp_router), Fallback::Reject);
     Served {
         app,
         mcp,

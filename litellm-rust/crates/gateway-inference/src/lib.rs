@@ -27,7 +27,7 @@ use litellm_secrets::source::SecretSource;
 
 pub use error::{BodyError, Error};
 pub use litellm_router::{Deployment, Router as ModelRouter};
-pub use request::{JsonObject, RequestId};
+pub use request::{JsonObject, MAX_BODY_BYTES, RequestId};
 
 pub struct Gateway {
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
@@ -104,10 +104,6 @@ pub fn router(gateway: Arc<Gateway>) -> Router {
         )
         .route("/responses", post(responses::create))
         .route("/v1/responses", post(responses::create))
-        .route("/embeddings", post(request::unsupported))
-        .route("/v1/embeddings", post(request::unsupported))
-        .route("/completions", post(request::unsupported))
-        .route("/v1/completions", post(request::unsupported))
         .layer(axum::extract::DefaultBodyLimit::max(
             request::MAX_BODY_BYTES,
         ))
@@ -115,11 +111,8 @@ pub fn router(gateway: Arc<Gateway>) -> Router {
 }
 
 fn model_routes() -> Router<Arc<Gateway>> {
-    Router::new()
-        .route(
-            "/chat/completions",
-            post(chat_completions::create_from_model_path),
-        )
-        .route("/embeddings", post(request::unsupported))
-        .route("/completions", post(request::unsupported))
+    Router::new().route(
+        "/chat/completions",
+        post(chat_completions::create_from_model_path),
+    )
 }

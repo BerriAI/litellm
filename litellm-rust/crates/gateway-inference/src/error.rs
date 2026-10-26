@@ -3,6 +3,7 @@ use axum::{
     Json,
     response::{IntoResponse, Response},
 };
+use litellm_core_utils::decline::Decline;
 use litellm_inference::Error as InferenceError;
 use litellm_llms::base_llm::ocr::error::Error as OcrError;
 use serde_json::{Map, Value, json};
@@ -23,8 +24,6 @@ pub enum Error {
     Route(#[from] InferenceError),
     #[error(transparent)]
     Ocr(#[from] OcrError),
-    #[error("{0} is not implemented by the Rust gateway")]
-    Unsupported(String),
     #[error("request body exceeds the size limit")]
     BodyTooLarge,
     #[error("unexpected HTTP host operation")]
@@ -73,7 +72,6 @@ impl Error {
         match self {
             Self::Auth(error) => error.status(),
             Self::InvalidPath(rejection) => rejection.status(),
-            Self::Unsupported(_) => StatusCode::NOT_IMPLEMENTED,
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::InvalidBody(_) | Self::UnknownModel { .. } => StatusCode::BAD_REQUEST,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
@@ -82,8 +80,34 @@ impl Error {
         }
     }
 
+    pub fn declined(&self) -> Option<&Decline> {
+        match self {
+            Self::Route(error) => error.declined(),
+            Self::Auth(_)
+            | Self::InvalidBody(_)
+            | Self::InvalidPath(_)
+            | Self::UnknownModel { .. }
+            | Self::Ocr(_)
+            | Self::BodyTooLarge
+            | Self::Internal => None,
+        }
+    }
+
     pub fn openai_response(self) -> Response {
-        (self.status(), Json(self.openai_body())).into_response()
+        self.respond(self.openai_body())
+    }
+
+    pub fn anthropic_response(self, request_id: Option<&str>) -> Response {
+        self.respond(self.body(request_id))
+    }
+
+    /// A decline rides on the response, so the dispatch layer can hand the request on.
+    fn respond(&self, body: Value) -> Response {
+        let mut response = (self.status(), Json(body)).into_response();
+        if let Some(decline) = self.declined() {
+            response.extensions_mut().insert(*decline);
+        }
+        response
     }
 
     /// The OpenAI envelope as an `event: error` frame, for a stream that fails after its
@@ -141,7 +165,6 @@ impl Error {
             | Self::UnknownModel { .. }
             | Self::Route(_)
             | Self::Ocr(_)
-            | Self::Unsupported(_)
             | Self::BodyTooLarge
             | Self::Internal => litellm_error::Report::new(self).to_string(),
         }
@@ -334,7 +357,6 @@ mod tests {
     #[case::missing_model(BodyError::MissingModel.into(), StatusCode::BAD_REQUEST)]
     #[case::unknown_model(unknown_model(), StatusCode::BAD_REQUEST)]
     #[case::oversized_body(Error::BodyTooLarge, StatusCode::PAYLOAD_TOO_LARGE)]
-    #[case::unserved_path(Error::Unsupported("/v1/completions".into()), StatusCode::NOT_IMPLEMENTED)]
     #[case::host_protocol(
         litellm_host_http::Error::<InferenceError>::Protocol.into(),
         StatusCode::INTERNAL_SERVER_ERROR

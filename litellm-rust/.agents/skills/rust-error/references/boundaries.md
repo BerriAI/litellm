@@ -16,7 +16,7 @@ The inference gateway and the Python bridge's route mapping both receive a neste
 
 | Predicate | Gateway | Bridge |
 |---|---|---|
-| `declined()` | 501 | `RustBridgeDeclined`, without the route's public mapping |
+| `declined()` | 501, or the request forwarded to Python when the gateway runs next to the proxy | `RustBridgeDeclined`, without the route's public mapping |
 | `upstream_response()` | the provider's status and body | `RustUpstreamError` |
 | `is_missing_credential()` | 401 | no class of its own, a `RuntimeError` because `is_request()` answers false |
 | `is_request()` | 400 | `ValueError` |
@@ -24,11 +24,11 @@ The inference gateway and the Python bridge's route mapping both receive a neste
 
 If you find yourself adding an arm for your variant at a boundary, check whether a predicate is missing first
 
-The two boundaries are not identical. The gateway has variants of its own for body parsing, an unknown model and an unsupported path, and the OCR bridge has Python parity arms such as `FileNotFoundError` for a missing file. Those arms match the boundary's own variants or the top level of a public enum, never a nested error's variants. A missing API key is 401 at the gateway and `RuntimeError` at both bridges, pinned by tests to what Python's own path does
+The two boundaries are not identical. The gateway has variants of its own for body parsing, an invalid path parameter and an unknown model, and the OCR bridge has Python parity arms such as `FileNotFoundError` for a missing file. Those arms match the boundary's own variants or the top level of a public enum, never a nested error's variants. A missing API key is 401 at the gateway and `RuntimeError` at both bridges, pinned by tests to what Python's own path does
 
 ## Declines
 
-A failure before anything reached the provider is a decline, and `declined()` on the route error names its reason. It means another host may serve the same request as it was received, so each boundary hands it to the host unchanged: the gateway answers 501 and the Python bridge raises `RustBridgeDeclined`, never a public exception or a `ValueError`. See [gateway](gateway.md) and [pyo3](pyo3.md) for each host's side
+A failure before anything reached the provider is a decline, and `declined()` on the route error names its reason. It means another host may serve the same request as it was received, so each boundary hands it to the host unchanged: the gateway forwards the recorded request to Python, or answers 501 when it runs standalone, and the Python bridge raises `RustBridgeDeclined`, never a public exception or a `ValueError`. See [gateway](gateway.md) and [pyo3](pyo3.md) for each host's side
 
 Anything after the send is terminal, never a decline. `declined()` answers `None` for a response fault and for a post-call hook failure even when the wrapped error was a decline, and every route that transforms the provider's answer collapses its errors with `Error::after_send`, which keeps a provider answer and a response fault as they are and nests anything else as the source of an invalid response, so a decline can never describe a call that was billed. Ask `declined()`, do not match the variant behind it, because that after-send cut lives in the predicate
 

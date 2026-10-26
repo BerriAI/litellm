@@ -160,18 +160,14 @@ async fn missing_inference_fields_use_the_same_validation_as_null(
 #[case("/engines/public%2Fmodel/embeddings")]
 #[case("/openai/deployments/public%2Fmodel/completions")]
 #[tokio::test]
-async fn unimplemented_routes_return_an_explicit_error(#[case] path: &str) {
+async fn routes_without_a_native_handler_are_left_to_the_mounting_server(#[case] path: &str) {
     let response = support::post(
         support::app("anthropic/test-model", "http://127.0.0.1:1"),
         path,
         json!({}),
     )
     .await;
-    assert_eq!(response.status(), 501);
-    let body = support::json(response).await;
-    let message = body["error"]["message"].as_str().unwrap();
-    assert!(message.contains("not implemented"));
-    assert!(message.contains(path));
+    assert_eq!(response.status(), 404);
 }
 
 #[rstest]
@@ -291,7 +287,7 @@ async fn json_extraction_rejections_use_the_endpoint_error_envelope(
 }
 
 #[rstest]
-#[case::unsupported("/engines/public%2Fmodel/embeddings", 501)]
+#[case::unserved("/engines/public%2Fmodel/embeddings", 404)]
 #[case::unknown("/engines/public%2Fmodel/unknown", 404)]
 #[case::unescaped_model("/engines/public/model/chat/completions", 404)]
 #[case::extra_segment("/engines/public%2Fmodel/extra/chat/completions", 404)]
