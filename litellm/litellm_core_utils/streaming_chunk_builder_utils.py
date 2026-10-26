@@ -1414,7 +1414,7 @@ def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_o
     if logging_obj is None:
         return
     computed_cost: Final = logging_obj.response_cost_calculator(result=response)
-    if not isinstance(computed_cost, (int, float)) or computed_cost <= 0:
+    if not isinstance(computed_cost, (int, float)) or computed_cost < 0:
         return
     stamp_billed_usage_cost(response, usage, computed_cost)
     _set_hidden_response_cost(response, float(computed_cost))

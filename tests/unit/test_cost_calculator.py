@@ -10666,6 +10666,25 @@ def test_a_usage_cost_litellm_stamped_on_a_stream_is_not_billed_again_as_a_provi
     )
 
 
+def test_a_zero_bill_is_stamped_over_the_provider_reported_usage_cost_on_a_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cost_discount_config", {"openai": 1.0})
+    logging_obj: Final = _reported_cost_logging(True, {})
+
+    response: Final[object] = litellm.stream_chunk_builder(
+        [
+            _reported_cost_stream_chunk("hi", None, None),
+            _reported_cost_stream_chunk(None, "stop", None),
+            _reported_cost_stream_chunk(None, None, Usage(**_REPORTED_USAGE)),
+        ],
+        messages=[{"role": "user", "content": "hi"}],
+        logging_obj=logging_obj,
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.usage is not None and response.usage.cost == 0.0
+    assert logging_obj.response_cost_calculator(result=response) == 0.0
+
+
 def test_provider_reported_usage_cost_splits_input_and_output_by_the_token_math_ratio(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
