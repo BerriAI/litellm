@@ -792,17 +792,23 @@ def _ui_session_cookie(gateway: Gateway, user_id: str) -> dict[str, str]:
 
 
 def _gateway_session_sign_in(
-    gateway: Gateway, user_id: str, resource: str | None = None
+    gateway: Gateway,
+    user_id: str,
+    resource: str | None = None,
+    *,
+    registration_endpoint: str = "/register",
+    authorization_endpoint: str = "/authorize",
+    token_endpoint: str = "/token",
 ) -> tuple[dict[str, object], str]:
     registered: Final = gateway.client.post(
-        "/register", json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
+        registration_endpoint, json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
     )
     assert registered.status_code in (200, 201), registered.text
     client_id: Final = str(_response_object(registered)["client_id"])
     pkce: Final = _Pkce(secrets.token_urlsafe(48))
     cookies: Final = _ui_session_cookie(gateway, user_id)
     started: Final = gateway.client.get(
-        "/authorize",
+        authorization_endpoint,
         params={
             "client_id": client_id,
             "redirect_uri": CLIENT_REDIRECT,
@@ -823,13 +829,14 @@ def _gateway_session_sign_in(
     callback: Final = parse_qs(urlsplit(completed.headers["location"]).query)
     assert "code" in callback, completed.headers["location"]
     issued: Final = gateway.client.post(
-        "/token",
+        token_endpoint,
         data={
             "grant_type": "authorization_code",
             "code": callback["code"][0],
             "redirect_uri": CLIENT_REDIRECT,
             "client_id": client_id,
             "code_verifier": pkce.verifier,
+            **({} if resource is None else {"resource": resource}),
         },
     )
     assert issued.status_code == 200, issued.text
@@ -1292,10 +1299,18 @@ def test_lite_logout_revokes_the_cli_refresh_token_sent_the_way_the_cli_sends_it
         assert completion.status_code == 200, completion.text
 
 
-def _toolset_rpc(gateway: Gateway, bearer: str, name: str, method: str, params: dict[str, object]) -> Outcome:
+def _toolset_rpc(
+    gateway: Gateway,
+    bearer: str,
+    name: str,
+    method: str,
+    params: dict[str, object],
+    *,
+    route: str = "/toolset/{name}/mcp",
+) -> Outcome:
     def post(rpc_method: str, rpc_params: dict[str, object]) -> httpx.Response:
         return gateway.client.post(
-            f"/toolset/{name}/mcp",
+            route.format(name=name),
             json={"jsonrpc": "2.0", "id": 1, "method": rpc_method, "params": rpc_params},
             headers={"Authorization": f"Bearer {bearer}", "Accept": "application/json, text/event-stream"},
         )
@@ -1306,7 +1321,12 @@ def _toolset_rpc(gateway: Gateway, bearer: str, name: str, method: str, params: 
     return _outcome_from_rpc(post(method, params))
 
 
-def test_gateway_session_bearer_of_a_team_member_is_served_the_team_toolset_on_its_route(gateway: Gateway) -> None:
+@pytest.mark.parametrize("route", ["/toolset/{name}/mcp", "/{name}/mcp"])
+def test_gateway_session_bearer_of_a_team_member_is_served_the_team_toolset_on_its_route(
+    gateway: Gateway, route: str
+) -> None:
+    from mcp.shared.auth_utils import check_resource_allowed
+
     with mcp_peer() as peer, gateway.scenario() as scenario:
         alias: Final = "lit6029sess" + uuid.uuid4().hex[:6]
         server_id: Final = register_mcp(scenario, peer, alias)
@@ -1315,19 +1335,69 @@ def test_gateway_session_bearer_of_a_team_member_is_served_the_team_toolset_on_i
         granted_id: Final = create_toolset(scenario, ((server_id, "add"),), toolset_name=granted_name)
         create_toolset(scenario, ((server_id, "multiply"),), toolset_name=withheld_name)
         member: Final = scenario.member(scenario.team(object_permission={"mcp_toolsets": [granted_id]}))
-        bearer: Final = _gateway_session_bearer(gateway, member)
+        path: Final = route.format(name=granted_name)
+        anonymous: Final = gateway.client.post(
+            path,
+            headers=ACCEPT,
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": dict(INITIALIZE)},
+        )
+        assert anonymous.status_code == 401, anonymous.text
+        metadata_url: Final = anonymous.headers["www-authenticate"].split('resource_metadata="', 1)[1].split('"', 1)[0]
+        protected: Final = gateway.client.get(metadata_url)
+        assert protected.status_code == 200, protected.text
+        protected_body: Final = _response_object(protected)
+        resource: Final = str(protected_body["resource"])
+        assert check_resource_allowed(
+            requested_resource=f"{_base(gateway)}{path}", configured_resource=resource
+        ), protected.text
+        issuers: Final = TypeAdapter(tuple[str, ...]).validate_python(protected_body["authorization_servers"])
+        assert len(issuers) == 1, protected.text
+        issuer: Final = urlsplit(issuers[0])
+        authorization: Final = gateway.client.get(
+            f"{issuer.scheme}://{issuer.netloc}/.well-known/oauth-authorization-server{issuer.path}"
+        )
+        assert authorization.status_code == 200, authorization.text
+        authorization_body: Final = _response_object(authorization)
+        assert authorization_body["issuer"] == issuers[0], authorization.text
+        token_endpoint: Final = str(authorization_body["token_endpoint"])
+        issued, client_id = _gateway_session_sign_in(
+            gateway,
+            member,
+            resource,
+            registration_endpoint=str(authorization_body["registration_endpoint"]),
+            authorization_endpoint=str(authorization_body["authorization_endpoint"]),
+            token_endpoint=token_endpoint,
+        )
+        bearer: Final = _issued_token(issued)
         assert bearer.startswith("llm_session_"), bearer[:16]
-        listed: Final = _toolset_rpc(gateway, bearer, granted_name, "tools/list", {})
+        listed: Final = _toolset_rpc(gateway, bearer, granted_name, "tools/list", {}, route=route)
         assert listed.tools == (f"{alias}-add",), listed.raw
         peer.drain()
         called: Final = _toolset_rpc(
-            gateway, bearer, granted_name, "tools/call", {"name": f"{alias}-add", "arguments": {"a": 4, "b": 5}}
+            gateway, bearer, granted_name, "tools/call",
+            {"name": f"{alias}-add", "arguments": {"a": 4, "b": 5}}, route=route
         )
         assert called.ok and called.text == "9", called.raw
         assert len(tool_calls(peer.drain())) == 1
-        denied: Final = _toolset_rpc(gateway, bearer, withheld_name, "tools/list", {})
+        denied: Final = _toolset_rpc(gateway, bearer, withheld_name, "tools/list", {}, route=route)
         assert denied.status == 403, denied.raw
         assert tool_calls(peer.drain()) == ()
+        rotated: Final = gateway.client.post(
+            token_endpoint,
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": str(issued["refresh_token"]),
+                "client_id": client_id,
+                "resource": resource,
+            },
+        )
+        assert rotated.status_code == 200, rotated.text
+        rotated_body: Final = _response_object(rotated)
+        assert rotated_body["refresh_token"] != issued["refresh_token"], rotated.text
+        refreshed: Final = _toolset_rpc(
+            gateway, _issued_token(rotated_body), granted_name, "tools/list", {}, route=route
+        )
+        assert refreshed.tools == listed.tools, refreshed.raw
 
 
 def test_resource_scoped_session_bearer_opens_a_team_toolset_inside_its_server_and_none_outside(

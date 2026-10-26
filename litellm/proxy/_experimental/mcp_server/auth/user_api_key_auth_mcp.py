@@ -27,6 +27,7 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_passthrough_resource_metadata_url,
     get_passthrough_www_authenticate,
     get_request_base_url,
+    get_route_relative_request_path,
     well_known_root_suffix,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
@@ -387,7 +388,7 @@ def _gateway_dcr_challenge(
     """The RFC 9728 challenge pointing the client at the protected-resource metadata
     matching the scope it requested: the per-server document (same URL spelling the
     request arrived on) when the single target advertises gateway-owned sign-in,
-    else the gateway's aggregate document. Either way the client discovers the gateway
+    else a gateway document containing the public resource. Either way the client discovers the gateway
     as its authorization server and starts the same sign-in flow.
 
     ``invalid_token`` adds the RFC 6750 error code for a request that DID
@@ -397,10 +398,13 @@ def _gateway_dcr_challenge(
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
     target: Final = _gateway_dcr_challenge_target(route, mcp_servers, client_ip)
     server_scope: Final = gateway_dcr_challenge_scope(route, mcp_servers, client_ip) if target is None else None
+    public_path: Final = get_route_relative_request_path(request.scope).rstrip("/")
+    aggregate_resource: Final = public_path == "/mcp" or public_path.startswith("/mcp/")
+    metadata_suffix: Final = f"{well_known_root_suffix()}/mcp" if aggregate_resource else ""
     resource_metadata_url: Final = (
         get_passthrough_resource_metadata_url(request.scope, target)
         if target is not None
-        else f"{get_request_base_url(request)}/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp"
+        else f"{get_request_base_url(request)}/.well-known/oauth-protected-resource{metadata_suffix}"
     )
     error_attr: Final = 'error="invalid_token", ' if invalid_token else ""
     scope_attr: Final = f', scope="{server_scope}"' if server_scope is not None else ""
