@@ -328,13 +328,14 @@ def calculate_img_tokens(
     if use_default_image_token_count:
         verbose_logger.debug("Using default image token count: %s", DEFAULT_IMAGE_TOKEN_COUNT)
         return DEFAULT_IMAGE_TOKEN_COUNT
-    if mode == "low" or mode == "auto":
+    if mode == "low":
         return base_tokens
-    elif mode == "high":
-        # Run the async function using the helper
+    if mode == "high" or mode == "auto":
         width, height = get_image_dimensions(
             data=data,
         )
+        if mode == "auto" and width <= MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES and height <= MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES:
+            return base_tokens
         resized_width, resized_height = resize_image_high_res(width=width, height=height)
         tiles_needed_high_res = calculate_tiles_needed(resized_width=resized_width, resized_height=resized_height)
         tile_tokens: Final = (base_tokens * 2) * tiles_needed_high_res

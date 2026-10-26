@@ -9657,6 +9657,47 @@ def test_token_counter_with_image_url_with_detail_high():
     assert _tokens == DEFAULT_IMAGE_TOKEN_COUNT + 7
 
 
+def _solid_png(width: int, height: int) -> bytes:
+    """Build a PNG in memory so the image-token tests never touch the network."""
+    import struct
+    import zlib
+
+    raw = b"".join(b"\x00" + b"\xff\xff\xff" * width for _ in range(height))
+
+    def chunk(tag: bytes, payload: bytes) -> bytes:
+        body = tag + payload
+        return struct.pack(">I", len(payload)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+
+
+def _image_message(width: int, height: int, detail: str | None = None) -> list:
+    import base64
+
+    image_url: dict = {"url": "data:image/png;base64," + base64.b64encode(_solid_png(width, height)).decode()}
+    if detail is not None:
+        image_url["detail"] = detail
+    return [{"role": "user", "content": [{"type": "image_url", "image_url": image_url}]}]
+
+
+def test_image_tokens_auto_detail_matches_high_for_large_images():
+    """`detail` defaults to `auto`, which OpenAI bills per tile for larger images."""
+    auto = litellm.utils.token_counter(model="gpt-4o", messages=_image_message(1024, 1024))
+    high = litellm.utils.token_counter(model="gpt-4o", messages=_image_message(1024, 1024, "high"))
+    low = litellm.utils.token_counter(model="gpt-4o", messages=_image_message(1024, 1024, "low"))
+
+    assert auto == high
+    assert auto > low
+
+
+def test_image_tokens_auto_detail_stays_flat_for_tile_sized_images():
+    auto = litellm.utils.token_counter(model="gpt-4o", messages=_image_message(256, 256))
+    low = litellm.utils.token_counter(model="gpt-4o", messages=_image_message(256, 256, "low"))
+
+    assert auto == low
+
+
 def test_logprobs_type():
     from litellm.types.utils import Logprobs
 
