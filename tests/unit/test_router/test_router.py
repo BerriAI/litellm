@@ -61,7 +61,10 @@ from litellm.router import (
     _without_line_breaks,
     Span,
 )
+from litellm.proxy.response_polling.polling_handler import should_use_polling_for_request
 from litellm.router_strategy import simple_shuffle
+from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
+from litellm.router_strategy.savings_baseline import Baseline, _models_in
 from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
 from litellm.router_utils.cooldown_handlers import (
     _async_get_cooldown_deployments,
@@ -29904,6 +29907,27 @@ def _deployment_ids(deployments: list[DeploymentTypedDict]) -> tuple[str, ...]:
             ("deployment-2", "deployment-3"),
             id="team_deployments_across_teams",
         ),
+        pytest.param(
+            lambda router: _deployment_ids(list(router.deployments_named("model-3") or ())),
+            ("deployment-3",),
+            id="deployments_named",
+        ),
+        pytest.param(
+            lambda router: should_use_polling_for_request(
+                background_mode=True,
+                polling_via_cache_enabled=["openai"],
+                redis_cache=MagicMock(),
+                model="model-3",
+                llm_router=router,
+            ),
+            True,
+            id="response_polling_provider_lookup",
+        ),
+        pytest.param(
+            lambda router: _models_in(router, "model-3"),
+            (Baseline("openai/gpt-3", "deployment-3"),),
+            id="savings_baseline_candidates",
+        ),
     ],
 )
 def test_lookup_during_a_concurrent_delete_returns_the_requested_deployment(
@@ -29986,6 +30010,26 @@ def test_init_adaptive_router_deployment_during_a_concurrent_delete_prices_the_l
     )
 
     assert router.adaptive_routers["adaptive"][0].strategy.model_to_cost == {"model-3": 3e-06}
+
+
+def test_complexity_router_adaptive_pool_during_a_concurrent_delete_prices_the_listed_model() -> None:
+    priced: Final = {
+        **_concurrent_delete_deployment(3),
+        "litellm_params": {"model": "openai/gpt-3", "api_key": "k", "input_cost_per_token": 3e-06},
+    }
+    router: Final = Router(model_list=[*(_concurrent_delete_deployment(index) for index in range(3)), priced])
+    complexity: Final = ComplexityRouter(
+        model_name="hybrid",
+        litellm_router_instance=router,
+        complexity_router_config={"adaptive": True, "tiers": {"SIMPLE": ["model-3"]}},
+    )
+
+    adaptive: Final = _read_during_held_write(
+        complexity._ensure_adaptive_router, lambda: router.delete_deployment("deployment-0")
+    )
+
+    assert adaptive is not None
+    assert adaptive.model_to_cost == {"model-3": 3e-06}
 
 
 def test_delete_of_an_unknown_deployment_returns_none_and_keeps_the_list() -> None:

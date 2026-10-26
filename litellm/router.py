@@ -10620,7 +10620,7 @@ class Router:
         # O(k) via the name→indices map: only touch deployments whose name
         # is listed in `available_models`, instead of scanning model_list.
         for name in config.available_models:
-            deployments = self._deployments_named(name)
+            deployments = self.deployments_named(name)
             if not deployments:
                 continue
             d = deployments[0]
@@ -11477,8 +11477,8 @@ class Router:
         if _budget_limiter is not None:
             _budget_limiter.register_deployment_budget(deployment=deployment.to_json(exclude_none=True))
 
-    def _deployments_named(self, model_name: str) -> tuple[Any, ...] | None:
-        """The deployments indexed under `model_name`, or None when the name is not indexed."""
+    def deployments_named(self, model_name: str) -> tuple[Any, ...] | None:
+        """The deployments indexed under `model_name`, read under the index lock, or None when the name is not indexed."""
         with self._deployment_index_lock:
             indices: Final = self.model_name_to_deployment_indices.get(model_name)
             return None if indices is None else tuple(self.model_list[idx] for idx in indices)
@@ -11674,7 +11674,7 @@ class Router:
         this never triggers pattern matching or deep copies, so it is safe to call per
         listed model on the /v1/models hot path.
         """
-        deployments: Final = self._deployments_named(model_name)
+        deployments: Final = self.deployments_named(model_name)
         if not deployments:
             return None
 
@@ -12775,7 +12775,7 @@ class Router:
 
         if model_name is not None:
             # O(1) lookup in model_name index, then O(k) iteration where k = deployments for this model_name
-            for model in self._deployments_named(model_name) or ():
+            for model in self.deployments_named(model_name) or ():
                 if "model_info" in model and "id" in model["model_info"]:
                     if exclude_team_models and model["model_info"].get("team_id"):
                         continue
@@ -13129,7 +13129,7 @@ class Router:
                     return returned_models
 
         # O(1) lookup in model_name index
-        named_models: Final = self._deployments_named(model_name)
+        named_models: Final = self.deployments_named(model_name)
         if named_models is not None:
             # O(k) where k = deployments for this model_name (typically 1-10)
             for model in named_models:
