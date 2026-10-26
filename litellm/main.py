@@ -8909,9 +8909,7 @@ def speech(
             logging_obj.post_call(
                 input=input,
                 api_key="",
-                original_response=job.model_dump_json(
-                    include={"id", "requestId", "status", "usage"}
-                ),
+                original_response=job.model_dump_json(include={"id", "requestId", "status", "usage"}),
                 additional_args=MappingProxyType({"request_id": job.requestId, "job_id": job.id}),
             )
 

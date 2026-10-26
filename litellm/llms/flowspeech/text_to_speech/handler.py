@@ -176,9 +176,7 @@ class FlowSpeechTTS:
             if response.is_redirect:
                 raise self.error(502, "FlowSpeech unexpected redirect rejected", response.headers)
             try:
-                payload = FlowSpeechErrorResponse.model_validate_json(
-                    response.content
-                )
+                payload = FlowSpeechErrorResponse.model_validate_json(response.content)
             except ValueError:
                 payload = None
             retryable = response.status_code == 429 or (
@@ -213,9 +211,7 @@ class FlowSpeechTTS:
                 raise self.error(502, "FlowSpeech returned a different job ID")
             self.job_id = job_id
             if job.status in ("failed", "cancelled"):
-                detail = (
-                    f"{job.error.code}: {job.error.message}" if job.error else job.status
-                )
+                detail = f"{job.error.code}: {job.error.message}" if job.error else job.status
                 raise self.error(422, f"FlowSpeech job {job.status}: {detail}")
             if job.status == "success":
                 if job.resultDeleted:
@@ -316,7 +312,10 @@ class FlowSpeechTTS:
     def run(self, client: httpx.Client | None = None) -> HttpxBinaryResponseContent:
         if client is None:
             with httpx.Client(trust_env=False) as owned_client:
-                return self.run(owned_client)
+                return self._run(owned_client)
+        return self._run(client)
+
+    def _run(self, client: httpx.Client) -> HttpxBinaryResponseContent:
         flow: Final = self.flow()
         action = next(flow)  # rebind-ok: workflow driver advances actions
         try:
@@ -342,7 +341,10 @@ class FlowSpeechTTS:
     async def arun(self, client: httpx.AsyncClient | None = None) -> HttpxBinaryResponseContent:
         if client is None:
             async with httpx.AsyncClient(trust_env=False) as owned_client:
-                return await self.arun(owned_client)
+                return await self._arun_with_deadline(owned_client)
+        return await self._arun_with_deadline(client)
+
+    async def _arun_with_deadline(self, client: httpx.AsyncClient) -> HttpxBinaryResponseContent:
         try:
             return await asyncio.wait_for(self._arun(client), timeout=self.remaining())
         except asyncio.TimeoutError as exc:

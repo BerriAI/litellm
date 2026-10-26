@@ -483,6 +483,51 @@ def test_stream_size_limit_without_content_length(invoke):
         invoke(tts, respond)
 
 
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("owned", [False, True])
+@pytest.mark.parametrize("successful", [False, True])
+@pytest.mark.asyncio
+async def test_client_lifetime(monkeypatch, asynchronous, owned, successful):
+    methods = []
+
+    def respond(request):
+        methods.append(request.method)
+        if request.method == "POST":
+            return httpx.Response(202, json=job("success" if successful else "failed"))
+        return httpx.Response(200, content=wav_bytes())
+
+    client_type = httpx.AsyncClient if asynchronous else httpx.Client
+    client = client_type(transport=httpx.MockTransport(respond))
+
+    def create_client(*, trust_env):
+        assert trust_env is False
+        return client
+
+    if owned:
+        monkeypatch.setattr(httpx, "AsyncClient" if asynchronous else "Client", create_client)
+    tts = handler(Clock())
+
+    async def call():
+        if asynchronous:
+            return await tts.arun(None if owned else client)
+        return tts.run(None if owned else client)
+
+    try:
+        if successful:
+            result = await call()
+            assert result.content == wav_bytes()
+        else:
+            with pytest.raises(FlowSpeechException, match="FlowSpeech job failed"):
+                await call()
+        assert methods == (["POST", "GET"] if successful else ["POST"])
+        assert client.is_closed is owned
+    finally:
+        if asynchronous:
+            await client.aclose()
+        else:
+            client.close()
+
+
 @pytest.mark.asyncio
 async def test_async_total_deadline_interrupts_network():
     async def respond(request):

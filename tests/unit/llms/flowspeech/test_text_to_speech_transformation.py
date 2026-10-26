@@ -58,9 +58,16 @@ def test_maps_multi_and_recovery_id():
     assert request["headers"]["Idempotency-Key"] == REQUEST_ID
 
 
-@pytest.mark.parametrize("params", [{"speed": 1}, {"instructions": "calm"}, {"response_format": "mp3"}])
-def test_rejects_unsupported_options_even_with_drop_params(params):
-    with pytest.raises(ValueError):
+@pytest.mark.parametrize(
+    "params,message",
+    [
+        ({"speed": 1}, "FlowSpeech does not support instructions or speed"),
+        ({"instructions": "calm"}, "FlowSpeech does not support instructions or speed"),
+        ({"response_format": "mp3"}, "FlowSpeech only supports response_format='wav'"),
+    ],
+)
+def test_rejects_unsupported_options_even_with_drop_params(params, message):
+    with pytest.raises(ValueError, match=message):
         FlowSpeechTextToSpeechConfig().map_openai_params("flowspeech-tts", params, drop_params=True)
 
 
@@ -72,23 +79,35 @@ def test_rejects_legacy_and_unsupported_kwargs(key):
 
 @pytest.mark.parametrize("voice", ["", " ", {}, {"voiceName": ""}, {"voiceName": 7}])
 def test_rejects_invalid_voice(voice):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="FlowSpeech voice must be a nonempty voice name"):
         FlowSpeechTextToSpeechConfig().map_openai_params("flowspeech-tts", {}, voice)
 
 
 @pytest.mark.parametrize(
-    "params,text",
+    "params,text,message",
     [
-        ({"segments": []}, ""),
-        ({"segments": [{"speaker": "A", "text": "Hi", "voiceName": "Kore", "speed": 1}]}, ""),
-        ({"segments": [{"speaker": " ", "text": "Hi", "voiceName": "Kore"}]}, ""),
-        ({"segments": [{"speaker": "A", "text": "Hi", "voiceName": "Kore"}]}, "ambiguous"),
-        ({"request_id": "../bad"}, "Hi"),
-        ({}, " "),
+        ({"segments": []}, "", "FlowSpeech requires 1 to 1000 nonempty speaker turns"),
+        (
+            {"segments": [{"speaker": "A", "text": "Hi", "voiceName": "Kore", "speed": 1}]},
+            "",
+            "Extra inputs are not permitted",
+        ),
+        (
+            {"segments": [{"speaker": " ", "text": "Hi", "voiceName": "Kore"}]},
+            "",
+            "FlowSpeech requires 1 to 1000 nonempty speaker turns",
+        ),
+        (
+            {"segments": [{"speaker": "A", "text": "Hi", "voiceName": "Kore"}]},
+            "ambiguous",
+            "Use input='' with FlowSpeech segments",
+        ),
+        ({"request_id": "../bad"}, "Hi", "FlowSpeech requires a UUID"),
+        ({}, " ", "FlowSpeech input must contain text"),
     ],
 )
-def test_invalid_requests(params, text):
-    with pytest.raises(ValueError):
+def test_invalid_requests(params, text, message):
+    with pytest.raises(ValueError, match=message):
         FlowSpeechTextToSpeechConfig().transform_text_to_speech_request("flowspeech-tts", text, None, params, {}, {})
 
 
@@ -125,7 +144,7 @@ def test_rejects_invalid_key(key):
 
 @pytest.mark.parametrize("name", ["Cookie", "Proxy-Authorization", "Host", "content-length"])
 def test_rejects_unsafe_api_headers(name):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="does not accept cookie, proxy credential, host or content-length overrides"):
         FlowSpeechTextToSpeechConfig().validate_environment({name: "test"}, "flowspeech-tts", "test-key")
 
 
@@ -145,19 +164,22 @@ def test_complete_url(base):
 
 
 @pytest.mark.parametrize(
-    "base",
+    "base,message",
     [
-        "http://example.com",
-        "https://u:p@example.com",
-        "file:///tmp/test",
-        "https://example.com/?key=x",
-        "https://example.com/#x",
-        "https://example.com/api/ai/text-to-speech",
-        "",
+        ("http://example.com", "FlowSpeech requires an HTTPS URL without credentials or fragment"),
+        ("https://u:p@example.com", "FlowSpeech requires an HTTPS URL without credentials or fragment"),
+        ("file:///tmp/test", "FlowSpeech requires an HTTPS URL without credentials or fragment"),
+        ("https://example.com/?key=x", "FlowSpeech api_base must be an origin or the /api/v1/tts/jobs endpoint"),
+        ("https://example.com/#x", "FlowSpeech requires an HTTPS URL without credentials or fragment"),
+        (
+            "https://example.com/api/ai/text-to-speech",
+            "FlowSpeech api_base must be an origin or the /api/v1/tts/jobs endpoint",
+        ),
+        ("", "FlowSpeech requires an HTTPS URL without credentials or fragment"),
     ],
 )
-def test_rejects_invalid_base(base):
-    with pytest.raises(ValueError):
+def test_rejects_invalid_base(base, message):
+    with pytest.raises(ValueError, match=message):
         FlowSpeechTextToSpeechConfig().get_complete_url("flowspeech-tts", base, {})
 
 

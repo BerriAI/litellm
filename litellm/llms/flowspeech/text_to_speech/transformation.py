@@ -131,9 +131,7 @@ class FlowSpeechTextToSpeechConfig(BaseTextToSpeechConfig):
             raise ValueError("Unsupported FlowSpeech option; use voice or segments")
         if "segments" in supplied and voice is not None:
             raise ValueError("Use segment voiceName fields instead of voice for multi-speaker input")
-        return self._resolve_voice(voice), {
-            key: supplied[key] for key in ("segments", "request_id") if key in supplied
-        }
+        return self._resolve_voice(voice), {key: supplied[key] for key in ("segments", "request_id") if key in supplied}
 
     def _resolve_voice(self, voice: str | Mapping[str, object] | None) -> str:
         if voice is None:
@@ -157,9 +155,7 @@ class FlowSpeechTextToSpeechConfig(BaseTextToSpeechConfig):
         if any(name.lower() in ("cookie", "proxy-authorization", "host", "content-length") for name in headers):
             raise ValueError("FlowSpeech does not accept cookie, proxy credential, host or content-length overrides")
         return {
-            **{
-                name: value for name, value in headers.items() if name.lower() not in ("authorization", "content-type")
-            },
+            **{name: value for name, value in headers.items() if name.lower() not in ("authorization", "content-type")},
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
         }
