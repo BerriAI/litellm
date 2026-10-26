@@ -279,8 +279,8 @@ async def test_unknown_previous_response_fails_before_sending_a_contextless_comp
     async_client: Final = AsyncHTTPHandler(transport=transport)
     with httpx.Client(transport=transport) as sync_client:
         try:
-            with pytest.raises(litellm.BadRequestError, match="previous_response_id") as raised:
-                if async_call:
+            if async_call:
+                with pytest.raises(litellm.BadRequestError, match="previous_response_id") as raised:
                     await litellm.aresponses(
                         model="hosted_vllm/test-model",
                         input="What is my favorite color?",
@@ -292,7 +292,8 @@ async def test_unknown_previous_response_fails_before_sending_a_contextless_comp
                         api_base="https://provider.invalid/v1",
                         num_retries=0,
                     )
-                else:
+            else:
+                with pytest.raises(litellm.BadRequestError, match="previous_response_id") as raised:
                     litellm.responses(
                         model="hosted_vllm/test-model",
                         input="What is my favorite color?",
