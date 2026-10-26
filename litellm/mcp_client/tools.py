@@ -138,7 +138,7 @@ async def list_tools_with_pagination(
             # after decoding: it filters invalid x-mcp-header annotations and
             # records the derived header/output-schema state used by tools/call.
             # Keep those semantics when injecting the lenient result model.
-            result = session._absorb_tool_listing(
+            result = session._absorb_tool_listing(  # pyright: ignore[reportPrivateUsage]  # no public equivalent
                 result,
                 complete=cursor is None and result.next_cursor is None,
             )
