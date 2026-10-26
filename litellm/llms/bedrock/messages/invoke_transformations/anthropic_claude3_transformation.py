@@ -583,7 +583,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         )
         beta_set.update(auto_betas)
 
-        if injected_thinking_for_clear_thinking:
+        if injected_thinking_for_clear_thinking and not AnthropicModelInfo.is_adaptive_thinking_model(model, "bedrock"):
             beta_set.add("interleaved-thinking-2025-05-14")
 
         if anthropic_model_info.is_eager_input_streaming_used(tools):
