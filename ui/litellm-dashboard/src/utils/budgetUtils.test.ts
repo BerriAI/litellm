@@ -46,17 +46,29 @@ describe("describeBudgetResetSchedule", () => {
 });
 
 describe("budgetPeriodRange", () => {
-  const resetAt = "2026-03-31T00:00:00Z";
+  const resetAt = "2026-04-01T00:00:00Z";
 
   it.each([
     ["30d", "2026-03-01T00:00:00.000Z"],
-    ["1mo", "2026-02-28T00:00:00.000Z"],
-    ["7d", "2026-03-24T00:00:00.000Z"],
-    ["24h", "2026-03-30T00:00:00.000Z"],
-    ["1h", "2026-03-30T23:00:00.000Z"],
-    ["1w", "2026-03-24T00:00:00.000Z"],
-  ])("computes the period start for %s as reset minus the duration", (duration, start) => {
-    expect(budgetPeriodRange(duration, resetAt)).toEqual({ start, end: "2026-03-31T00:00:00.000Z" });
+    ["monthly", "2026-03-01T00:00:00.000Z"],
+    ["1mo", "2026-03-01T00:00:00.000Z"],
+    ["2mo", "2026-02-01T00:00:00.000Z"],
+    ["7d", "2026-03-25T00:00:00.000Z"],
+    ["weekly", "2026-03-25T00:00:00.000Z"],
+    ["1w", "2026-03-25T00:00:00.000Z"],
+    ["15d", "2026-03-17T00:00:00.000Z"],
+    ["24h", "2026-03-31T00:00:00.000Z"],
+    ["daily", "2026-03-31T00:00:00.000Z"],
+    ["1h", "2026-03-31T23:00:00.000Z"],
+    ["hourly", "2026-03-31T23:00:00.000Z"],
+  ])("computes the period start for %s the way the proxy does", (duration, start) => {
+    expect(budgetPeriodRange(duration, resetAt)).toEqual({ start, end: "2026-04-01T00:00:00.000Z" });
+  });
+
+  it("spans a calendar month for 30d even when the viewer is in a DST-shifting timezone", () => {
+    process.env.TZ = "America/New_York";
+    expect(budgetPeriodRange("30d", "2026-04-01T00:00:00Z")?.start).toBe("2026-03-01T00:00:00.000Z");
+    expect(budgetPeriodRange("30d", "2026-03-01T00:00:00Z")?.start).toBe("2026-02-01T00:00:00.000Z");
   });
 
   it.each([

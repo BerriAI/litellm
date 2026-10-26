@@ -35,11 +35,10 @@ export const budgetPeriodLines = ({
   budgetDuration,
   budgetResetAt,
 }: BudgetPeriodTooltipProps): readonly string[] => {
-  const spendLine = `Spend this period: $${formatNumberWithCommas(spend ?? 0, 4)}`;
+  const spendLine = `${budgetDuration ? "Spend this period" : "Spend so far"}: $${formatNumberWithCommas(spend ?? 0, 4)}`;
   if (maxBudget == null) return ["No budget set", spendLine];
   const maxBudgetLine = `Max budget: $${formatNumberWithCommas(maxBudget, 2)}`;
-  if (!budgetDuration)
-    return ["Lifetime budget, never resets", maxBudgetLine, `Spend so far: $${formatNumberWithCommas(spend ?? 0, 4)}`];
+  if (!budgetDuration) return ["Lifetime budget, never resets", maxBudgetLine, spendLine];
   const periodLine = describePeriod(budgetDuration, budgetResetAt);
   return [
     ...(periodLine ? [periodLine] : []),
