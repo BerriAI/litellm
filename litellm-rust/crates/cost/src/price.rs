@@ -58,6 +58,12 @@ pub enum PriceSource {
     #[default]
     Flat,
     TokenTier(u64),
+    RowFlat(usize),
+    RowTokenTier {
+        row: usize,
+        floor: u64,
+    },
+    CallerDefault(usize),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -143,6 +149,46 @@ impl Prices {
         self.off_peak.as_ref()
     }
 
+    pub fn append_source(&mut self, row: usize, prices: Self) {
+        self.rates
+            .extend(prices.rates.into_iter().map(|((price, origin), rate)| {
+                let origin = match origin {
+                    PriceSource::Flat => PriceSource::RowFlat(row),
+                    PriceSource::TokenTier(floor) => PriceSource::RowTokenTier { row, floor },
+                    other => other,
+                };
+                ((price, origin), rate)
+            }));
+    }
+
+    pub fn source_flat(&self, row: usize, price: &Price) -> Option<UnitPrice> {
+        self.get_from(
+            price,
+            if row == 0 {
+                PriceSource::Flat
+            } else {
+                PriceSource::RowFlat(row)
+            },
+        )
+    }
+
+    pub fn insert_default(&mut self, index: usize, meter: Meter, rate: UnitPrice) {
+        self.rates.insert(
+            (
+                Price::online(meter, When::default()),
+                PriceSource::CallerDefault(index),
+            ),
+            rate,
+        );
+    }
+
+    pub fn default_rate(&self, index: usize, meter: &Meter) -> Option<UnitPrice> {
+        self.get_from(
+            &Price::online(meter.clone(), When::default()),
+            PriceSource::CallerDefault(index),
+        )
+    }
+
     pub fn with_cache_read_default(
         mut self,
         ratio: ScaleFactor,
@@ -212,7 +258,9 @@ impl Prices {
         inclusive: bool,
     ) -> Band {
         Self::find_band(
-            self.rates.keys().map(|(price, _)| price),
+            self.rates.keys().filter_map(|(price, source)| {
+                matches!(source, PriceSource::Flat | PriceSource::TokenTier(_)).then_some(price)
+            }),
             channel,
             tier,
             prompt_tokens,

@@ -13,6 +13,10 @@ pub enum SelectionPolicy<'a> {
     #[default]
     Generic,
     SdkTokens(&'a TokenPriceSources),
+    SdkOther {
+        tokens: &'a TokenPriceSources,
+        context: &'a crate::OtherContext,
+    },
     DirectionalTokens {
         threshold: NonZeroU64,
     },
@@ -31,7 +35,32 @@ pub struct TokenTier {
     pub meters: BTreeSet<Meter>,
 }
 
-impl SelectionPolicy<'_> {
+impl<'a> SelectionPolicy<'a> {
+    pub(crate) fn resolve_charge(
+        self,
+        prices: &Prices,
+        meter: &Meter,
+        band: Band,
+        usage: &Usage,
+        when: &When,
+    ) -> Option<crate::ResolvedCharge> {
+        match self {
+            Self::SdkOther { tokens, context } => {
+                context.resolve(prices, meter, band, usage, when, tokens)
+            }
+            _ => self
+                .resolve(prices, meter, band, usage, when)
+                .map(Into::into),
+        }
+    }
+
+    pub(crate) fn other(self) -> Option<&'a crate::OtherContext> {
+        match self {
+            Self::SdkOther { context, .. } => Some(context),
+            _ => None,
+        }
+    }
+
     pub(crate) fn resolve(
         self,
         prices: &Prices,
@@ -40,6 +69,11 @@ impl SelectionPolicy<'_> {
         usage: &Usage,
         when: &When,
     ) -> Option<(Meter, UnitPrice)> {
+        if let Self::SdkOther { .. } = self {
+            return self
+                .resolve_charge(prices, meter, band, usage, when)
+                .map(|charge| (charge.meter, charge.price));
+        }
         if let Self::DirectionalTokens { threshold } = self {
             return directional_token_rate(prices, meter, usage, threshold);
         }
@@ -172,8 +206,27 @@ fn directional_token_rate(
         Meter::Output(_) => Meter::Output(OutputUnit::Token(TokenKind::Text)),
         _ => Meter::TEXT_INPUT,
     };
+    directional_rate(
+        prices,
+        source.clone(),
+        usage
+            .quantities
+            .get(&source)
+            .copied()
+            .unwrap_or(crate::Quantity::Count(0)),
+        threshold,
+    )
+}
+
+pub(crate) fn directional_rate(
+    prices: &Prices,
+    source: Meter,
+    quantity: crate::Quantity,
+    threshold: NonZeroU64,
+) -> Option<(Meter, UnitPrice)> {
     let base = Price::online(source.clone(), Default::default());
-    let rate = (usage.quantities.get(&source).copied().unwrap_or(0) > threshold.get())
+    let rate = quantity
+        .exceeds(threshold.get())
         .then(|| {
             prices.get(&Price::online(
                 source.clone(),
@@ -573,6 +626,7 @@ mod tests {
                 (READ, 100),
                 (WRITE, 100),
             ]
+            .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
             .into(),
             prompt_tokens: prompt,
             inclusive_threshold: inclusive,
@@ -661,7 +715,9 @@ mod tests {
             overlay(None, Some(9.0)),
         );
         let usage = Usage {
-            quantities: [(INPUT, input), (OUTPUT, output)].into(),
+            quantities: [(INPUT, input), (OUTPUT, output)]
+                .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
+                .into(),
             prompt_tokens: 200_000,
             inclusive_threshold: inclusive,
             ..Default::default()
@@ -686,18 +742,26 @@ mod tests {
             evaluation.rates,
             vec![
                 crate::SelectedRate {
+                    source_id: None,
+                    caller_default: false,
                     requested_meter: INPUT,
                     resolved: Some((INPUT, UnitPrice::new(expected.0).unwrap()))
                 },
                 crate::SelectedRate {
+                    source_id: None,
+                    caller_default: false,
                     requested_meter: OUTPUT,
                     resolved: Some((OUTPUT, UnitPrice::new(expected.1).unwrap()))
                 },
                 crate::SelectedRate {
+                    source_id: None,
+                    caller_default: false,
                     requested_meter: READ,
                     resolved: Some((INPUT, UnitPrice::new(expected.0).unwrap()))
                 },
                 crate::SelectedRate {
+                    source_id: None,
+                    caller_default: false,
                     requested_meter: REASONING,
                     resolved: Some((OUTPUT, UnitPrice::new(expected.1).unwrap()))
                 },
@@ -724,7 +788,9 @@ mod tests {
 
     fn usage(meter: Meter, prompt_tokens: u64, inclusive_threshold: bool) -> Usage {
         Usage {
-            quantities: [(meter, 5)].into(),
+            quantities: [(meter, 5)]
+                .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
+                .into(),
             prompt_tokens,
             inclusive_threshold,
             ..Default::default()
@@ -737,8 +803,11 @@ mod tests {
             total: unit_price * 5,
             lines: vec![Line {
                 fallback_from: (meter != original).then_some(original),
+                source_id: None,
+                caller_default: false,
+                report_to: None,
                 meter,
-                quantity: 5,
+                quantity: 5.into(),
                 unit_price,
                 amount: unit_price * 5,
             }],
@@ -1076,7 +1145,9 @@ mod tests {
             None,
         );
         let usage = Usage {
-            quantities: [(Meter::TEXT_INPUT, 5), (REASONING, 5), (OUTPUT, 0)].into(),
+            quantities: [(Meter::TEXT_INPUT, 5), (REASONING, 5), (OUTPUT, 0)]
+                .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
+                .into(),
             ..Default::default()
         };
         assert_eq!(

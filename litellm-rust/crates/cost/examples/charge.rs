@@ -29,7 +29,9 @@ fn main() {
         None,
     );
     let usage = Usage {
-        quantities: [(input, 75), (cache, 25), (output, 20)].into(),
+        quantities: [(input, 75), (cache, 25), (output, 20)]
+            .map(|(meter, count)| (meter, litellm_cost::Quantity::Count(count)))
+            .into(),
         prompt_tokens: 100,
         ..Usage::default()
     };

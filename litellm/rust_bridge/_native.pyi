@@ -193,16 +193,66 @@ class ModelInfoView:
     def output_cost_per_token(self) -> float | None: ...
 
 @final
+class MeasuredQuantity:
+    def __new__(cls, value: float, *, unit: Literal["meter", "milliseconds"] = "meter") -> MeasuredQuantity: ...
+
+@final
+class PriceRowInput:
+    def __new__(cls, source_id: str, row: Mapping[str, JsonValue]) -> PriceRowInput: ...
+
+@final
+class DefaultRateInput:
+    def __new__(
+        cls, meter: str, value: float, *, per_units: int = 1, apply_when: Literal["absent", "absent_or_null"]
+    ) -> DefaultRateInput: ...
+
+@final
+class Additive:
+    def __new__(cls) -> Additive: ...
+
+@final
+class PromptUnits:
+    def __new__(cls) -> PromptUnits: ...
+
+@final
+class FirstUnit:
+    def __new__(cls, meters: Sequence[str]) -> FirstUnit: ...
+
+@final
+class SearchTiers:
+    def __new__(cls, *, outside: Literal["last"] = "last") -> SearchTiers: ...
+
+@final
+class Ocr:
+    def __new__(cls) -> Ocr: ...
+
+@final
+class DirectionalCharacters:
+    def __new__(cls, threshold: int, comparison_scale: int) -> DirectionalCharacters: ...
+
+@final
+class OtherMeterInput:
+    def __new__(
+        cls,
+        selection: Additive | PromptUnits | FirstUnit | SearchTiers | Ocr | DirectionalCharacters,
+        *,
+        fallback_sources: Sequence[PriceRowInput] = (),
+        defaults: Sequence[DefaultRateInput] = (),
+        report_to: Literal["input", "output"] | None = None,
+    ) -> OtherMeterInput: ...
+
+@final
 class UsageInput:
     """Disjoint quantities keyed by unsuffixed catalog price fields, web_search/{size}, or guardrail/{counter}."""
 
     def __new__(
         cls,
-        quantities: dict[str, int],
+        quantities: dict[str, int | MeasuredQuantity],
         *,
         prompt_tokens: int = 0,
         inclusive_threshold: bool = False,
         search_results: int = 0,
+        completion_tokens: int | None = None,
     ) -> UsageInput:
         """prompt_tokens is the full prompt size used for band selection, not the uncached input quantity."""
 
@@ -222,7 +272,15 @@ class PriceLine:
     @property
     def meter(self) -> str: ...
     @property
-    def quantity(self) -> int: ...
+    def quantity(self) -> int | float: ...
+    @property
+    def quantity_unit(self) -> str: ...
+    @property
+    def source_id(self) -> str | None: ...
+    @property
+    def caller_default(self) -> bool: ...
+    @property
+    def report_to(self) -> str | None: ...
     @property
     def unit_price(self) -> float: ...
     @property
@@ -250,6 +308,10 @@ class Unpriced:
 
 @final
 class SelectedRate:
+    @property
+    def source_id(self) -> str | None: ...
+    @property
+    def caller_default(self) -> bool: ...
     @property
     def requested_meter(self) -> str: ...
     @property
@@ -302,6 +364,7 @@ def price(
     policy: Literal["generic", "sdk_tokens"] = "generic",
     cache_read_default_ratio: float | None = None,
     directional_token_threshold: int | None = None,
+    other_meters: OtherMeterInput | None = None,
 ) -> Priced | Unpriced | RowErrors: ...
 def price_with_rates(
     row: dict[str, object],
@@ -313,6 +376,7 @@ def price_with_rates(
     factors: Sequence[float] = (),
     cache_read_default_ratio: float | None = None,
     directional_token_threshold: int | None = None,
+    other_meters: OtherMeterInput | None = None,
 ) -> PriceEvaluation | RowErrors: ...
 def trace_encode_error(message: str) -> bytes: ...
 
@@ -504,11 +568,16 @@ def process_state_started() -> bool: ...
 def reserve_process_for_forking() -> None: ...
 
 __all__ = [
+    "Additive",
     "CatalogRefresher",
+    "DefaultRateInput",
+    "DirectionalCharacters",
     "FetchedRegistry",
+    "FirstUnit",
     "ForkedAfterNativeRuntimeStarted",
     "HuggingFaceEncoding",
     "InvalidProvider",
+    "MeasuredQuantity",
     "ModelCostLayers",
     "ModelInfoView",
     "ModelNotFound",
@@ -516,10 +585,14 @@ __all__ = [
     "NativeClickHouseSpendConfig",
     "NativeClickHouseSpendStorage",
     "NativeDiagnosticProcessor",
+    "Ocr",
+    "OtherMeterInput",
     "PriceEvaluation",
     "PriceLine",
+    "PriceRowInput",
     "Priced",
     "ProcessReservedForForking",
+    "PromptUnits",
     "RegistrationTarget",
     "RegistryNotModified",
     "RegistryUnavailable",
@@ -530,6 +603,7 @@ __all__ = [
     "RowErrors",
     "RustBridgeDeclined",
     "RustUpstreamError",
+    "SearchTiers",
     "SelectedRate",
     "TokenCounter",
     "Tokenizer",

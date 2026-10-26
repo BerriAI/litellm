@@ -220,7 +220,7 @@ fn dedupe(
     {
         let origin = match policy {
             PriceLowering::Generic => PriceSource::Flat,
-            PriceLowering::SdkTokens => origin,
+            PriceLowering::SdkTokens | PriceLowering::SdkOther => origin,
         };
         match seen.entry((price, origin)) {
             Entry::Occupied(first) if first.get().0 == rate => {}
@@ -563,7 +563,9 @@ mod tests {
         entry.attributes.litellm_provider = Some("test".into());
         let model = Model::lower(entry, PriceLowering::SdkTokens).unwrap();
         let usage = litellm_cost::Usage {
-            quantities: [(meter.clone(), 5)].into(),
+            quantities: [(meter.clone(), 5)]
+                .map(|(meter, count)| (meter, litellm_cost::Quantity::Count(count)))
+                .into(),
             prompt_tokens,
             ..Default::default()
         };
@@ -646,7 +648,7 @@ mod tests {
     ) {
         let expected = match policy {
             PriceLowering::Generic => generic_error,
-            PriceLowering::SdkTokens => sdk_error,
+            PriceLowering::SdkTokens | PriceLowering::SdkOther => sdk_error,
         };
         let result = lower_prices(&wire(fields), policy);
         match (result, expected) {
@@ -678,7 +680,9 @@ mod tests {
         let generic = Model::try_from(wire(fields.clone())).unwrap();
         let sdk = Model::lower(wire(fields), PriceLowering::SdkTokens).unwrap();
         let usage = litellm_cost::Usage {
-            quantities: [(Meter::Input(InputUnit::Second), 10)].into(),
+            quantities: [(Meter::Input(InputUnit::Second), 10)]
+                .map(|(meter, count)| (meter, litellm_cost::Quantity::Count(count)))
+                .into(),
             prompt_tokens: prompt,
             inclusive_threshold: inclusive,
             ..Default::default()

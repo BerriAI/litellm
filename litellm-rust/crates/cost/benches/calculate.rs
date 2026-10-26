@@ -40,7 +40,9 @@ fn bench(c: &mut Criterion) {
         None,
     );
     let usage = Usage {
-        quantities: [(input, 750), (output, 200), (cache, 250)].into(),
+        quantities: [(input, 750), (output, 200), (cache, 250)]
+            .map(|(meter, count)| (meter, litellm_cost::Quantity::Count(count)))
+            .into(),
         prompt_tokens: 1000,
         ..Usage::default()
     };

@@ -22,9 +22,19 @@ pub enum PriceLowering {
     #[default]
     Generic,
     SdkTokens,
+    SdkOther,
 }
 
 impl Model {
+    pub fn from_fields_with_other_source(
+        fields: &Fields,
+        id: String,
+    ) -> Result<(Self, litellm_cost::OtherPriceSource), Vec<Located>> {
+        let wire = EntryWire::read_other(fields);
+        let source = crate::other::other_price_source(fields, &wire, id);
+        Self::lower(wire, PriceLowering::SdkOther).map(|model| (model, source))
+    }
+
     pub fn from_fields(fields: &Fields) -> Result<Self, Vec<Located>> {
         Self::from_fields_with_policy(fields, PriceLowering::Generic)
     }
@@ -33,6 +43,10 @@ impl Model {
         fields: &Fields,
         policy: PriceLowering,
     ) -> Result<Self, Vec<Located>> {
-        Self::lower(EntryWire::read(fields), policy)
+        let wire = match policy {
+            PriceLowering::SdkOther => EntryWire::read_other(fields),
+            PriceLowering::Generic | PriceLowering::SdkTokens => EntryWire::read(fields),
+        };
+        Self::lower(wire, policy)
     }
 }

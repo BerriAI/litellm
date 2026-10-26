@@ -21,6 +21,30 @@ pub enum TierSuffix {
 }
 
 impl FlatKey {
+    pub fn parse_other(key: &str) -> Option<(Self, u64)> {
+        if let Some(flat) = Self::parse(key) {
+            return Some((flat, 1));
+        }
+        let (feature, per_units) = match key {
+            "file_search_cost_per_1k_calls" => (Feature::FileSearchCall, 1000),
+            "file_search_cost_per_gb_per_day" => (Feature::FileSearchGbDay, 1),
+            "vector_store_cost_per_gb_per_day" => (Feature::VectorStoreGbDay, 1),
+            "computer_use_input_cost_per_1k_tokens" => (Feature::ComputerUseInputToken, 1000),
+            "computer_use_output_cost_per_1k_tokens" => (Feature::ComputerUseOutputToken, 1000),
+            "search_cost_per_result" => (Feature::SearchResult, 1),
+            "browser_open_cost_per_call" => (Feature::BrowserOpen, 1),
+            _ => return None,
+        };
+        Some((
+            Self {
+                meter: Meter::Feature(feature),
+                band: Band::Base,
+                tier: None,
+            },
+            per_units,
+        ))
+    }
+
     pub fn parse(key: &str) -> Option<Self> {
         let (rest, tier) = split_tier(key);
         let (base, suffix) = split_above(rest)?;

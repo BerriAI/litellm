@@ -6,6 +6,10 @@ pub enum PriceEvaluationError {
     NonTokenProjection,
     #[error("pricing produced a non-finite amount or rate")]
     NonFiniteValue,
+    #[error("quantity must be finite and non-negative")]
+    InvalidQuantity,
+    #[error("measured quantity unit is not valid for this meter")]
+    InvalidQuantityUnit,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -11,6 +11,7 @@ mod fallback;
 mod layers;
 mod lower;
 mod model;
+mod other;
 mod resolution;
 mod revalidate;
 mod vocabulary;

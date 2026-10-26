@@ -16,6 +16,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBool, PyDict, PyModule, PySet, PyString};
 use time::OffsetDateTime;
 
+use super::other::{LegacyCount, MeasuredQuantity, OtherMeterInput, StrictCount};
 use super::{RowError, escape_pointer_segment, fields_to_dict, nonfinite_errors, row_error};
 
 struct LowercaseIndex {
@@ -325,18 +326,34 @@ pub(crate) fn registration_target(
 
 #[pyclass(frozen, get_all, module = "litellm.rust_bridge._native")]
 pub(crate) struct RowErrors {
-    errors: Vec<RowError>,
+    pub(super) errors: Vec<RowError>,
 }
 
 fn lower_row(key: &str, row: &Bound<'_, PyAny>) -> Result<(Fields, Model), RowErrors> {
     lower_row_with_policy(key, row, litellm_model_catalog::PriceLowering::Generic)
 }
 
-fn lower_row_with_policy(
+pub(super) fn lower_row_with_policy(
     key: &str,
     row: &Bound<'_, PyAny>,
     policy: litellm_model_catalog::PriceLowering,
 ) -> Result<(Fields, Model), RowErrors> {
+    let fields = row_fields(key, row)?;
+    let model = Model::from_fields_with_policy(&fields, policy).map_err(|errors| RowErrors {
+        errors: errors
+            .into_iter()
+            .map(|error| {
+                row_error(&Located::new(
+                    format!("/{}{}", escape_pointer_segment(key), error.path),
+                    error.error,
+                ))
+            })
+            .collect(),
+    })?;
+    Ok((fields, model))
+}
+
+pub(super) fn row_fields(key: &str, row: &Bound<'_, PyAny>) -> Result<Fields, RowErrors> {
     let path = format!("/{}", escape_pointer_segment(key));
     let located = |error| RowErrors {
         errors: vec![row_error(&Located::new(&path, error))],
@@ -357,14 +374,7 @@ fn lower_row_with_policy(
         ))
     };
     valid.map_err(|_| invalid())?;
-    let fields: Fields = from_py(row).map_err(|_| invalid())?;
-    let model = Model::from_fields_with_policy(&fields, policy).map_err(|errors| RowErrors {
-        errors: errors
-            .into_iter()
-            .map(|error| row_error(&Located::new(format!("{path}{}", error.path), error.error)))
-            .collect(),
-    })?;
-    Ok((fields, model))
+    from_py(row).map_err(|_| invalid())
 }
 
 #[pyclass(frozen, module = "litellm.rust_bridge._native")]
@@ -468,31 +478,64 @@ pub(crate) fn model_info(model_cost: &Bound<'_, PyDict>, key: &str) -> PyResult<
 #[pyclass(frozen, module = "litellm.rust_bridge._native")]
 pub(crate) struct UsageInput {
     usage: Usage,
+    boolean_count: bool,
 }
 
 #[pymethods]
 impl UsageInput {
     #[new]
-    #[pyo3(signature = (quantities, *, prompt_tokens=0, inclusive_threshold=false, search_results=0))]
+    #[pyo3(signature = (quantities, *, prompt_tokens=LegacyCount::ZERO, inclusive_threshold=false, search_results=LegacyCount::ZERO, completion_tokens=None), text_signature = "(quantities, *, prompt_tokens=0, inclusive_threshold=False, search_results=0, completion_tokens=None)")]
+    fn py_new(
+        quantities: &Bound<'_, PyDict>,
+        prompt_tokens: LegacyCount,
+        inclusive_threshold: bool,
+        search_results: LegacyCount,
+        completion_tokens: Option<StrictCount>,
+    ) -> PyResult<Self> {
+        let mut input = Self::new(
+            quantities,
+            prompt_tokens.value,
+            inclusive_threshold,
+            search_results.value,
+        )?;
+        input.boolean_count |= prompt_tokens.boolean || search_results.boolean;
+        input.usage.completion_tokens = completion_tokens.map(|count| count.0);
+        Ok(input)
+    }
+}
+
+impl UsageInput {
     fn new(
         quantities: &Bound<'_, PyDict>,
         prompt_tokens: u64,
         inclusive_threshold: bool,
         search_results: u64,
     ) -> PyResult<Self> {
+        let boolean_count = quantities
+            .iter()
+            .any(|(_, value)| value.is_instance_of::<PyBool>());
         let quantities = quantities
             .iter()
             .map(|(key, quantity)| {
                 let key: String = key.extract()?;
                 let meter = parse_meter(&key)
                     .ok_or_else(|| PyValueError::new_err(format!("unknown usage meter: {key}")))?;
-                Ok((meter, quantity.extract::<u64>()?))
+                let quantity = if quantity.is_instance_of::<MeasuredQuantity>() {
+                    quantity
+                        .extract::<PyRef<'_, MeasuredQuantity>>()?
+                        .quantity(&meter)?
+                } else {
+                    litellm_cost::Quantity::Count(quantity.extract::<u64>()?)
+                };
+                Ok((meter, quantity))
             })
             .collect::<PyResult<_>>()?;
         Ok(Self {
+            boolean_count,
             usage: Usage {
                 quantities,
                 prompt_tokens,
+                completion_tokens: None,
                 inclusive_threshold,
                 search_results,
             },
@@ -500,7 +543,7 @@ impl UsageInput {
     }
 }
 
-fn parse_meter(key: &str) -> Option<Meter> {
+pub(super) fn parse_meter(key: &str) -> Option<Meter> {
     use litellm_cost::price::{GuardrailUnit, SearchContextSize};
     if let Some(counter) = key.strip_prefix("guardrail/") {
         return (!counter.is_empty()).then(|| Meter::Guardrail(GuardrailUnit::new(counter)));
@@ -509,7 +552,8 @@ fn parse_meter(key: &str) -> Option<Meter> {
         "web_search/low" => Some(Meter::WebSearch(SearchContextSize::Low)),
         "web_search/medium" => Some(Meter::WebSearch(SearchContextSize::Medium)),
         "web_search/high" => Some(Meter::WebSearch(SearchContextSize::High)),
-        key => FlatKey::parse(key)
+        key => FlatKey::parse_other(key)
+            .map(|(flat, _)| flat)
             .filter(|flat| !flat.has_suffix())
             .map(|flat| flat.meter),
     }
@@ -556,10 +600,29 @@ impl WhenInput {
 #[derive(Clone)]
 pub(crate) struct PriceLine {
     meter: String,
-    quantity: u64,
+    quantity: PythonQuantity,
     unit_price: f64,
     amount: f64,
     fallback_from: Option<String>,
+    source_id: Option<String>,
+    caller_default: bool,
+    quantity_unit: String,
+    report_to: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, IntoPyObject)]
+enum PythonQuantity {
+    Count(u64),
+    Measured(f64),
+}
+
+impl From<litellm_cost::Quantity> for PythonQuantity {
+    fn from(quantity: litellm_cost::Quantity) -> Self {
+        match quantity {
+            litellm_cost::Quantity::Count(count) => Self::Count(count),
+            litellm_cost::Quantity::Measured(value) => Self::Measured(value.get()),
+        }
+    }
 }
 
 #[pyclass(frozen, get_all, module = "litellm.rust_bridge._native")]
@@ -586,11 +649,17 @@ impl From<litellm_cost::Breakdown> for Priced {
                 .lines
                 .into_iter()
                 .map(|line| PriceLine {
+                    quantity_unit: quantity_unit(&line.meter).to_owned(),
                     meter: meter_name(&line.meter),
-                    quantity: line.quantity,
+                    quantity: line.quantity.into(),
                     unit_price: line.unit_price.get(),
                     amount: line.amount.get(),
                     fallback_from: line.fallback_from.as_ref().map(meter_name),
+                    source_id: line.source_id,
+                    caller_default: line.caller_default,
+                    report_to: line
+                        .report_to
+                        .map(|direction| <&'static str>::from(direction).to_owned()),
                 })
                 .collect(),
         }
@@ -615,6 +684,8 @@ pub(crate) struct SelectedRate {
     requested_meter: String,
     source_meter: Option<String>,
     unit_price: Option<f64>,
+    source_id: Option<String>,
+    caller_default: bool,
 }
 
 #[pyclass(frozen, get_all, module = "litellm.rust_bridge._native")]
@@ -645,7 +716,18 @@ enum PricePolicy {
 }
 
 impl PricePolicy {
-    fn selection(self, model: &Model, threshold: Option<NonZeroU64>) -> SelectionPolicy<'_> {
+    fn selection<'a>(
+        self,
+        model: &'a Model,
+        threshold: Option<NonZeroU64>,
+        other: Option<&'a litellm_cost::OtherContext>,
+    ) -> SelectionPolicy<'a> {
+        if let Some(context) = other {
+            return SelectionPolicy::SdkOther {
+                tokens: &model.token_price_sources,
+                context,
+            };
+        }
         if let Some(threshold) = threshold {
             return SelectionPolicy::DirectionalTokens { threshold };
         }
@@ -742,7 +824,7 @@ fn parse_directional_threshold(
     let threshold = NonZeroU64::new(value.extract()?)
         .ok_or_else(|| PyValueError::new_err("token threshold must be a positive integer"))?;
     if usage.quantities.iter().any(|(meter, quantity)| {
-        *quantity != 0
+        !quantity.is_zero()
             && !matches!(
                 meter,
                 Meter::Input(InputUnit::Token(TokenKind::Text))
@@ -775,7 +857,7 @@ pub(crate) fn has_token_prices(
 }
 
 #[pyfunction]
-#[pyo3(signature = (row, usage, when, *, policy="generic", cache_read_default_ratio=None, directional_token_threshold=None))]
+#[pyo3(signature = (row, usage, when, *, policy="generic", cache_read_default_ratio=None, directional_token_threshold=None, other_meters=None))]
 pub(crate) fn price(
     row: &Bound<'_, PyAny>,
     usage: &UsageInput,
@@ -783,6 +865,7 @@ pub(crate) fn price(
     policy: &str,
     cache_read_default_ratio: Option<&Bound<'_, PyAny>>,
     directional_token_threshold: Option<&Bound<'_, PyAny>>,
+    other_meters: Option<&OtherMeterInput>,
 ) -> PyResult<PriceResult> {
     let policy = pricing_policy(policy)?;
     let ratio = cache_read_default(policy, cache_read_default_ratio)?;
@@ -793,12 +876,31 @@ pub(crate) fn price(
         &when.when,
         ratio.is_some(),
     )?;
-    let model = match policy.lower(row, when.when.channel) {
+    validate_other_context(policy, usage, &when.when, threshold, other_meters)?;
+    let (model, other) = match lower_price_context(policy, row, when.when.channel, other_meters) {
         Ok(model) => model,
         Err(errors) => return Ok(PriceResult::Errors(errors)),
     };
     let model = policy.prepare(model, when.when.channel, ratio)?;
-    let policy = policy.selection(&model, threshold);
+    let policy = policy.selection(&model, threshold, other.as_ref());
+    if other.is_some()
+        || usage
+            .usage
+            .quantities
+            .values()
+            .any(|quantity| matches!(quantity, litellm_cost::Quantity::Measured(_)))
+    {
+        let evaluation = litellm_cost::calculate_with_rates(
+            &model.prices,
+            &usage.usage,
+            &when.when,
+            policy,
+            &[],
+            &[],
+        )
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        return price_result(row.py(), evaluation.pricing);
+    }
     price_result(
         row.py(),
         litellm_cost::calculate_with_policy(&model.prices, &usage.usage, &when.when, policy),
@@ -817,8 +919,8 @@ fn price_result(py: Python<'_>, priced: litellm_cost::Priced) -> PyResult<PriceR
 
 #[pyfunction]
 #[pyo3(
-    signature = (row, usage, when, *, policy="generic", project=Vec::new(), factors=Vec::new(), cache_read_default_ratio=None, directional_token_threshold=None),
-    text_signature = "(row, usage, when, *, policy='generic', project=(), factors=(), cache_read_default_ratio=None, directional_token_threshold=None)"
+    signature = (row, usage, when, *, policy="generic", project=Vec::new(), factors=Vec::new(), cache_read_default_ratio=None, directional_token_threshold=None, other_meters=None),
+    text_signature = "(row, usage, when, *, policy='generic', project=(), factors=(), cache_read_default_ratio=None, directional_token_threshold=None, other_meters=None)"
 )]
 #[expect(
     clippy::too_many_arguments,
@@ -833,6 +935,7 @@ pub(crate) fn price_with_rates(
     factors: Vec<Bound<'_, PyAny>>,
     cache_read_default_ratio: Option<&Bound<'_, PyAny>>,
     directional_token_threshold: Option<&Bound<'_, PyAny>>,
+    other_meters: Option<&OtherMeterInput>,
 ) -> PyResult<EvaluationResult> {
     let policy = pricing_policy(policy)?;
     let ratio = cache_read_default(policy, cache_read_default_ratio)?;
@@ -863,7 +966,8 @@ pub(crate) fn price_with_rates(
                 .ok_or_else(|| PyValueError::new_err("factors must be finite non-negative numbers"))
         })
         .collect::<PyResult<Vec<_>>>()?;
-    let model = match policy.lower(row, when.when.channel) {
+    validate_other_context(policy, usage, &when.when, threshold, other_meters)?;
+    let (model, other) = match lower_price_context(policy, row, when.when.channel, other_meters) {
         Ok(model) => model,
         Err(errors) => return Ok(EvaluationResult::Errors(errors)),
     };
@@ -872,7 +976,7 @@ pub(crate) fn price_with_rates(
         &model.prices,
         &usage.usage,
         &when.when,
-        policy.selection(&model, threshold),
+        policy.selection(&model, threshold, other.as_ref()),
         &project,
         &factors,
     )
@@ -883,12 +987,79 @@ pub(crate) fn price_with_rates(
             .rates
             .into_iter()
             .map(|rate| SelectedRate {
+                source_id: rate.source_id,
+                caller_default: rate.caller_default,
                 requested_meter: meter_name(&rate.requested_meter),
                 source_meter: rate.resolved.as_ref().map(|(meter, _)| meter_name(meter)),
                 unit_price: rate.resolved.map(|(_, price)| price.get()),
             })
             .collect(),
     }))
+}
+
+fn lower_price_context(
+    policy: PricePolicy,
+    row: &Bound<'_, PyAny>,
+    channel: Channel,
+    other: Option<&OtherMeterInput>,
+) -> Result<(Model, Option<litellm_cost::OtherContext>), RowErrors> {
+    match other {
+        Some(other) => other
+            .prepare(row)
+            .map(|(model, context)| (model, Some(context))),
+        None => policy.lower(row, channel).map(|model| (model, None)),
+    }
+}
+
+fn validate_other_context(
+    policy: PricePolicy,
+    usage: &UsageInput,
+    when: &When,
+    threshold: Option<NonZeroU64>,
+    other: Option<&OtherMeterInput>,
+) -> PyResult<()> {
+    if other.is_some() && (!matches!(policy, PricePolicy::SdkTokens) || threshold.is_some()) {
+        return Err(PyValueError::new_err(
+            "other_meters requires sdk_tokens and cannot be combined with directional_token_threshold",
+        ));
+    }
+    if other.is_some_and(OtherMeterInput::directional) && when.channel != Channel::Online {
+        return Err(PyValueError::new_err(
+            "directional characters requires online pricing",
+        ));
+    }
+    if usage.boolean_count
+        && (other.is_some()
+            || usage
+                .usage
+                .quantities
+                .values()
+                .any(|quantity| matches!(quantity, litellm_cost::Quantity::Measured(_))))
+    {
+        return Err(PyValueError::new_err(
+            "boolean counts are not valid in measured or other_meters usage",
+        ));
+    }
+    Ok(())
+}
+
+fn quantity_unit(meter: &Meter) -> &'static str {
+    use litellm_cost::price::Feature;
+    match meter {
+        Meter::WallClockSecond
+        | Meter::Input(
+            InputUnit::Second | InputUnit::AudioSecond | InputUnit::VideoSecond { .. },
+        )
+        | Meter::Output(OutputUnit::Second(_) | OutputUnit::VideoSecond) => "seconds",
+        Meter::Input(InputUnit::Character) | Meter::Output(OutputUnit::Character) => "characters",
+        Meter::Feature(Feature::FileSearchGbDay | Feature::VectorStoreGbDay) => "gb_days",
+        Meter::Feature(Feature::FileSearchCall | Feature::BrowserOpen) => "calls",
+        Meter::Feature(Feature::ComputerUseInputToken | Feature::ComputerUseOutputToken) => {
+            "tokens"
+        }
+        meter if meter.is_token() => "tokens",
+        _ => "count",
+    }
 }
 
 fn meter_name(meter: &Meter) -> String {
@@ -957,6 +1128,13 @@ fn meter_name(meter: &Meter) -> String {
             Feature::GoogleMapsGroundingQuery => "google_maps_grounding_cost_per_query",
             Feature::OcrCredit => "ocr_cost_per_credit",
             Feature::OcrPage => "ocr_cost_per_page",
+            Feature::FileSearchCall => "file_search_cost_per_1k_calls",
+            Feature::FileSearchGbDay => "file_search_cost_per_gb_per_day",
+            Feature::VectorStoreGbDay => "vector_store_cost_per_gb_per_day",
+            Feature::ComputerUseInputToken => "computer_use_input_cost_per_1k_tokens",
+            Feature::ComputerUseOutputToken => "computer_use_output_cost_per_1k_tokens",
+            Feature::SearchResult => "search_cost_per_result",
+            Feature::BrowserOpen => "browser_open_cost_per_call",
         }
         .into(),
         Meter::WebSearch(context) => format!(
@@ -1585,6 +1763,7 @@ assert n.model_info(models, "Model").input_cost_per_token == 2
                 &usage,
                 &WhenInput::new(0, "standard", "online").unwrap(),
                 policy,
+                None,
                 None,
                 None,
             )
@@ -2358,6 +2537,7 @@ with pytest.raises(ValueError):
                 policy,
                 None,
                 None,
+                None,
             )
             .unwrap();
             match result {
@@ -2468,6 +2648,7 @@ assert json.dumps(row) == before
                 &usage,
                 &WhenInput::new(0, "standard", "online").unwrap(),
                 "sdk_tokens",
+                None,
                 None,
                 None,
             )
@@ -2805,6 +2986,7 @@ assert isinstance(n.resolve_model(rows, model, inferred=inferred), n.ModelNotFou
                 "generic",
                 None,
                 None,
+                None,
             )
             .unwrap() else {
                 panic!("not priced")
@@ -2830,6 +3012,7 @@ assert isinstance(n.resolve_model(rows, model, inferred=inferred), n.ModelNotFou
                 &usage,
                 &WhenInput::new(0, "standard", "online").unwrap(),
                 "generic",
+                None,
                 None,
                 None,
             )
@@ -2923,6 +3106,7 @@ assert seen == ["released"]
                     "generic",
                     None,
                     None,
+                    None,
                 )
                 .unwrap() else {
                     panic!("not priced: {}", fields[0])
@@ -2983,7 +3167,9 @@ assert seen == ["released"]
                             0,
                         )
                         .unwrap();
-                        match price(row.as_any(), &usage, &when, "generic", None, None).unwrap() {
+                        match price(row.as_any(), &usage, &when, "generic", None, None, None)
+                            .unwrap()
+                        {
                             PriceResult::Priced(result) => assert_eq!(result.total, expected),
                             PriceResult::Unpriced(result) => {
                                 assert_eq!(expected, 0.0);
@@ -3018,7 +3204,7 @@ assert seen == ["released"]
                 json!({"litellm_provider":"test", "input_cost_per_token": 2}),
             );
             let PriceResult::Unpriced(result) =
-                price(row.as_any(), &usage, &when, "generic", None, None).unwrap()
+                price(row.as_any(), &usage, &when, "generic", None, None, None).unwrap()
             else {
                 panic!("expected unpriced")
             };
@@ -3035,7 +3221,7 @@ assert seen == ["released"]
             row.set_item("output_cost_per_token", 0).unwrap();
             row.set_item("input_cost_per_audio_token", 0).unwrap();
             let PriceResult::Priced(result) =
-                price(row.as_any(), &usage, &when, "generic", None, None).unwrap()
+                price(row.as_any(), &usage, &when, "generic", None, None, None).unwrap()
             else {
                 panic!("expected free")
             };
@@ -3064,6 +3250,7 @@ assert seen == ["released"]
                 "generic",
                 None,
                 None,
+                None,
             )
             .unwrap() else {
                 panic!("not priced")
@@ -3077,7 +3264,7 @@ assert seen == ["released"]
                     result.lines[0].amount,
                     &result.lines[0].fallback_from
                 ),
-                (3, 2.0, 6.0, &None)
+                (PythonQuantity::Count(3), 2.0, 6.0, &None)
             );
         });
     }

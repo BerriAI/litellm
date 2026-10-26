@@ -77,6 +77,17 @@ impl Mul<u64> for UnitPrice {
     }
 }
 
+impl Mul<crate::Quantity> for UnitPrice {
+    type Output = Usd;
+
+    fn mul(self, units: crate::Quantity) -> Usd {
+        match units {
+            crate::Quantity::Count(count) => self * count,
+            crate::Quantity::Measured(value) => Usd(self.0 * value.get()),
+        }
+    }
+}
+
 impl Mul<Multiplier> for UnitPrice {
     type Output = UnitPrice;
 

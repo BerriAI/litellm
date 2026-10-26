@@ -2,15 +2,16 @@ use std::collections::BTreeMap;
 
 use time::OffsetDateTime;
 
-use crate::PriceEvaluationError;
 use crate::money::{ScaleFactor, UnitPrice, Usd};
 use crate::price::{Band, Channel, InputUnit, Meter, OutputUnit, Prices, ServiceTier};
 use crate::selection::SelectionPolicy;
+use crate::{PriceEvaluationError, Quantity};
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Usage {
-    pub quantities: BTreeMap<Meter, u64>,
+    pub quantities: BTreeMap<Meter, Quantity>,
     pub prompt_tokens: u64,
+    pub completion_tokens: Option<u64>,
     pub inclusive_threshold: bool,
     pub search_results: u64,
 }
@@ -40,16 +41,21 @@ pub struct Breakdown {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Line {
     pub meter: Meter,
-    pub quantity: u64,
+    pub quantity: Quantity,
     pub unit_price: UnitPrice,
     pub amount: Usd,
     pub fallback_from: Option<Meter>,
+    pub source_id: Option<String>,
+    pub caller_default: bool,
+    pub report_to: Option<crate::ReportTo>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SelectedRate {
     pub requested_meter: Meter,
     pub resolved: Option<(Meter, UnitPrice)>,
+    pub source_id: Option<String>,
+    pub caller_default: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -69,6 +75,14 @@ pub fn calculate_with_rates(
     if project.iter().any(|meter| !meter.is_token()) {
         return Err(PriceEvaluationError::NonTokenProjection);
     }
+    for (meter, quantity) in &usage.quantities {
+        if let Quantity::Measured(value) = quantity {
+            Quantity::measured(*value, crate::QuantityUnit::Meter, meter)?;
+        }
+    }
+    if let Some(context) = policy.other() {
+        context.validate_usage(usage)?;
+    }
     let factor = ScaleFactor::combine(factors).ok_or(PriceEvaluationError::NonFiniteValue)?;
     let band = prices.channel_band(
         when.channel,
@@ -79,18 +93,21 @@ pub fn calculate_with_rates(
     let rates = project
         .iter()
         .map(|meter| {
-            let resolved = policy
-                .resolve(prices, meter, band, usage, when)
-                .map(|(source, rate)| {
+            let charge = policy.resolve_charge(prices, meter, band, usage, when);
+            let resolved = charge
+                .as_ref()
+                .map(|charge| {
                     factor
-                        .price(rate)
-                        .map(|rate| (source, rate))
+                        .price(charge.price)
+                        .map(|rate| (charge.meter.clone(), rate))
                         .ok_or(PriceEvaluationError::NonFiniteValue)
                 })
                 .transpose()?;
             Ok(SelectedRate {
                 requested_meter: meter.clone(),
                 resolved,
+                source_id: charge.as_ref().and_then(|charge| charge.source_id.clone()),
+                caller_default: charge.is_some_and(|charge| charge.caller_default),
             })
         })
         .collect::<Result<_, PriceEvaluationError>>()?;
@@ -133,7 +150,7 @@ impl Breakdown {
     pub fn input(&self) -> Usd {
         self.lines
             .iter()
-            .filter(|line| !matches!(line.meter, Meter::Output(_)))
+            .filter(|line| !line.is_output())
             .map(|line| line.amount)
             .sum()
     }
@@ -141,9 +158,22 @@ impl Breakdown {
     pub fn output(&self) -> Usd {
         self.lines
             .iter()
-            .filter(|line| matches!(line.meter, Meter::Output(_)))
+            .filter(|line| line.is_output())
             .map(|line| line.amount)
             .sum()
+    }
+}
+
+impl Line {
+    fn is_output(&self) -> bool {
+        match self.report_to {
+            Some(crate::ReportTo::Input) => false,
+            Some(crate::ReportTo::Output) => true,
+            None => matches!(
+                self.meter,
+                Meter::Output(_) | Meter::Feature(crate::price::Feature::ComputerUseOutputToken)
+            ),
+        }
     }
 }
 
@@ -166,17 +196,36 @@ pub fn calculate_with_policy(
     let mut lines = Vec::new();
     let mut missing = Vec::new();
     for (meter, &quantity) in &usage.quantities {
-        if quantity == 0 {
+        if quantity.is_zero() {
             continue;
         }
-        let selected = select_meter(prices, meter, quantity, usage, when);
-        match policy.resolve(prices, &selected, band, usage, when) {
-            Some((priced_meter, unit_price)) => lines.push(Line {
-                fallback_from: (priced_meter != selected).then(|| meter.clone()),
-                meter: priced_meter,
-                quantity,
-                unit_price,
-                amount: unit_price * quantity,
+        if policy
+            .other()
+            .is_some_and(|context| !context.charges(prices, meter, usage, when))
+        {
+            continue;
+        }
+        let selected = if policy
+            .other()
+            .is_some_and(|context| matches!(context.selection, crate::OtherSelection::SearchTiers))
+        {
+            meter.clone()
+        } else {
+            select_meter(prices, meter, quantity, usage, when)
+        };
+        match policy.resolve_charge(prices, &selected, band, usage, when) {
+            Some(charge) => lines.push(Line {
+                fallback_from: (charge.meter != selected).then(|| meter.clone()),
+                meter: charge.meter,
+                quantity: charge.quantity.unwrap_or(quantity),
+                unit_price: charge.price,
+                amount: charge.price * charge.quantity.unwrap_or(quantity),
+                source_id: charge.source_id,
+                caller_default: charge.caller_default,
+                report_to: policy
+                    .other()
+                    .filter(|_| !meter.is_token())
+                    .and_then(|context| context.report_to),
             }),
             None => missing.push(meter.clone()),
         }
@@ -198,7 +247,7 @@ pub fn calculate_with_policy(
 fn select_meter(
     prices: &Prices,
     meter: &Meter,
-    quantity: u64,
+    quantity: Quantity,
     usage: &Usage,
     when: &When,
 ) -> Meter {
@@ -228,7 +277,7 @@ fn select_meter(
                 Meter::Input(InputUnit::VideoSecond {
                     over_seconds: Some(floor),
                 }),
-            ) if quantity > floor.get() => Some((floor, &price.meter)),
+            ) if quantity.exceeds(floor.get()) => Some((floor, &price.meter)),
             _ => None,
         })
         .max_by_key(|(floor, _)| *floor)
@@ -336,7 +385,9 @@ mod tests {
                 .chain(output.map(|rate| (OUTPUT, rate))),
         );
         let usage = Usage {
-            quantities: BTreeMap::from([(INPUT, 10)]),
+            quantities: [(INPUT, 10)]
+                .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
+                .into(),
             ..Usage::default()
         };
         let evaluated = calculate_with_rates(
@@ -351,6 +402,8 @@ mod tests {
         assert_eq!(
             evaluated.rates,
             vec![SelectedRate {
+                source_id: None,
+                caller_default: false,
                 requested_meter: OUTPUT,
                 resolved: output.map(|rate| (OUTPUT, UnitPrice::new(rate * factor).unwrap()))
             }]
@@ -361,10 +414,13 @@ mod tests {
                 total: Usd::new(10.0 * factor).unwrap(),
                 lines: vec![Line {
                     meter: INPUT,
-                    quantity: 10,
+                    quantity: 10.into(),
                     unit_price: UnitPrice::new(factor).unwrap(),
                     amount: Usd::new(10.0 * factor).unwrap(),
-                    fallback_from: None
+                    fallback_from: None,
+                    source_id: None,
+                    caller_default: false,
+                    report_to: None,
                 }],
             })
         );
@@ -376,7 +432,9 @@ mod tests {
     fn projection_scales_partial_without_inventing_missing_rates(when: When, #[case] factor: f64) {
         let prices = prices([(INPUT, 1.0)]);
         let usage = Usage {
-            quantities: BTreeMap::from([(INPUT, 10), (OUTPUT, 5)]),
+            quantities: [(INPUT, 10), (OUTPUT, 5)]
+                .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
+                .into(),
             ..Usage::default()
         };
         let evaluated = calculate_with_rates(
@@ -391,6 +449,8 @@ mod tests {
         assert_eq!(
             evaluated.rates,
             vec![SelectedRate {
+                source_id: None,
+                caller_default: false,
                 requested_meter: OUTPUT,
                 resolved: None
             }]
@@ -401,7 +461,7 @@ mod tests {
         assert_eq!(missing, vec![OUTPUT]);
         assert_eq!(partial.total.get(), 10.0 * factor);
         assert_eq!(partial.lines.len(), 1);
-        assert_eq!(partial.lines[0].quantity, 10);
+        assert_eq!(partial.lines[0].quantity, Quantity::Count(10));
         assert_eq!(partial.lines[0].unit_price.get(), factor);
     }
 
@@ -416,7 +476,9 @@ mod tests {
     ) {
         let prices = prices([(INPUT, f64::MAX)]);
         let usage = Usage {
-            quantities: BTreeMap::from([(INPUT, quantity)]),
+            quantities: [(INPUT, quantity)]
+                .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
+                .into(),
             ..Usage::default()
         };
         let projection = if project { vec![INPUT] } else { Vec::new() };
@@ -520,6 +582,7 @@ mod tests {
                 ),
                 (meter.clone(), quantity),
             ]
+            .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
             .into(),
             prompt_tokens: 1000,
             ..Usage::default()
@@ -538,7 +601,7 @@ mod tests {
             .find(|line| line.fallback_from == Some(meter.clone()))
             .unwrap();
         assert_eq!(fallback.meter, base);
-        assert_eq!(fallback.quantity, quantity);
+        assert_eq!(fallback.quantity, Quantity::Count(quantity));
     }
 
     #[rstest]
@@ -551,7 +614,9 @@ mod tests {
     fn an_explicit_zero_is_a_priced_line_not_a_fallback(when: When, #[case] meter: Meter) {
         let row = prices([(INPUT, 1.0), (OUTPUT, 2.0), (meter.clone(), 0.0)]);
         let usage = Usage {
-            quantities: [(meter.clone(), 100)].into(),
+            quantities: [(meter.clone(), 100)]
+                .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
+                .into(),
             ..Usage::default()
         };
         let result = known(calculate(&row, &usage, &when));
@@ -560,10 +625,13 @@ mod tests {
             result.lines,
             [Line {
                 meter,
-                quantity: 100,
+                quantity: 100.into(),
                 unit_price: UnitPrice::new(0.0).unwrap(),
                 amount: Usd::ZERO,
                 fallback_from: None,
+                source_id: None,
+                caller_default: false,
+                report_to: None,
             }]
         );
     }
@@ -572,7 +640,9 @@ mod tests {
     fn every_missing_meter_is_reported_and_priced_lines_survive(when: When) {
         let audio = Meter::Input(InputUnit::Token(TokenKind::Audio));
         let usage = Usage {
-            quantities: [(INPUT, 3), (OUTPUT, 4), (audio.clone(), 2)].into(),
+            quantities: [(INPUT, 3), (OUTPUT, 4), (audio.clone(), 2)]
+                .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
+                .into(),
             ..Usage::default()
         };
         let Priced::Unpriced { missing, partial } =
@@ -584,14 +654,16 @@ mod tests {
         assert_eq!(partial.total.get(), 8.0);
         assert_eq!(partial.lines.len(), 1);
         assert_eq!(partial.lines[0].meter, OUTPUT);
-        assert_eq!(partial.lines[0].quantity, 4);
+        assert_eq!(partial.lines[0].quantity, Quantity::Count(4));
         assert_eq!(partial.output().get(), 8.0);
     }
 
     #[rstest]
     fn an_unpriced_row_cannot_fall_back_to_zero(when: When) {
         let usage = Usage {
-            quantities: [(INPUT, 1000), (OUTPUT, 1000)].into(),
+            quantities: [(INPUT, 1000), (OUTPUT, 1000)]
+                .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
+                .into(),
             ..Usage::default()
         };
         assert_eq!(
@@ -609,7 +681,9 @@ mod tests {
     #[rstest]
     fn unused_meters_need_no_price(when: When) {
         let usage = Usage {
-            quantities: [(INPUT, 0), (OUTPUT, 0)].into(),
+            quantities: [(INPUT, 0), (OUTPUT, 0)]
+                .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
+                .into(),
             ..Usage::default()
         };
         assert_eq!(
@@ -624,7 +698,9 @@ mod tests {
     #[rstest]
     fn one_hour_writes_fall_back_to_the_default_write_price(when: When) {
         let usage = Usage {
-            quantities: [(WRITE, 4), (HOUR, 6)].into(),
+            quantities: [(WRITE, 4), (HOUR, 6)]
+                .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
+                .into(),
             ..Usage::default()
         };
         let result = known(calculate(
@@ -673,7 +749,9 @@ mod tests {
             None,
         );
         let usage = Usage {
-            quantities: [(INPUT, 101)].into(),
+            quantities: [(INPUT, 101)]
+                .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
+                .into(),
             prompt_tokens: 101,
             ..Usage::default()
         };
@@ -702,7 +780,9 @@ mod tests {
         #[case] meter: Meter,
     ) {
         let usage = Usage {
-            quantities: [(meter.clone(), 7)].into(),
+            quantities: [(meter.clone(), 7)]
+                .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
+                .into(),
             ..Usage::default()
         };
         let result = known(calculate(&prices([(meter.clone(), 0.25)]), &usage, &when));
@@ -728,7 +808,9 @@ mod tests {
             over_results: NonZeroU64::new(10),
         });
         let usage = Usage {
-            quantities: [(query.clone(), 2)].into(),
+            quantities: [(query.clone(), 2)]
+                .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
+                .into(),
             search_results: results,
             ..Usage::default()
         };
@@ -754,7 +836,9 @@ mod tests {
             over_seconds: NonZeroU64::new(10),
         });
         let usage = Usage {
-            quantities: [(base.clone(), seconds)].into(),
+            quantities: [(base.clone(), seconds)]
+                .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
+                .into(),
             ..Usage::default()
         };
         assert_eq!(
@@ -796,7 +880,9 @@ mod tests {
             ),
         );
         let usage = Usage {
-            quantities: [(INPUT, 2), (READ, 4), (HOUR, 7), (OUTPUT, 2)].into(),
+            quantities: [(INPUT, 2), (READ, 4), (HOUR, 7), (OUTPUT, 2)]
+                .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
+                .into(),
             ..Usage::default()
         };
         let result = known(calculate(
@@ -855,7 +941,9 @@ mod tests {
             None,
         );
         let usage = Usage {
-            quantities: [(INPUT, 4), (OUTPUT, 2)].into(),
+            quantities: [(INPUT, 4), (OUTPUT, 2)]
+                .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
+                .into(),
             ..Usage::default()
         };
         assert_eq!(
@@ -876,7 +964,9 @@ mod tests {
     #[rstest]
     fn absent_batch_rates_use_half_online_base_rates(when: When) {
         let usage = Usage {
-            quantities: [(INPUT, 4), (OUTPUT, 2), (READ, 6)].into(),
+            quantities: [(INPUT, 4), (OUTPUT, 2), (READ, 6)]
+                .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
+                .into(),
             ..Usage::default()
         };
         let result = known(calculate(
@@ -929,7 +1019,9 @@ mod tests {
             None,
         );
         let usage = Usage {
-            quantities: [(INPUT, 2), (READ, 3), (OUTPUT, 4)].into(),
+            quantities: [(INPUT, 2), (READ, 3), (OUTPUT, 4)]
+                .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
+                .into(),
             prompt_tokens,
             inclusive_threshold,
             ..Usage::default()
@@ -951,7 +1043,9 @@ mod tests {
     fn dedicated_modality_and_long_ttl_rates_win(when: When) {
         let audio = Meter::Input(InputUnit::Token(TokenKind::Audio));
         let usage = Usage {
-            quantities: [(INPUT, 10), (audio.clone(), 5), (WRITE, 3), (HOUR, 2)].into(),
+            quantities: [(INPUT, 10), (audio.clone(), 5), (WRITE, 3), (HOUR, 2)]
+                .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
+                .into(),
             ..Usage::default()
         };
         let result = known(calculate(
@@ -973,7 +1067,9 @@ mod tests {
     #[rstest]
     fn decisions_prices_are_isolated_from_online_and_batch(when: When) {
         let usage = Usage {
-            quantities: [(INPUT, 4)].into(),
+            quantities: [(INPUT, 4)]
+                .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
+                .into(),
             ..Usage::default()
         };
         assert!(matches!(
@@ -1056,6 +1152,7 @@ mod tests {
                     (READ, count(3)),
                     (WRITE, count(4)),
                 ]
+                .map(|(meter, count)| (meter, crate::Quantity::Count(count)))
                 .into(),
                 prompt_tokens: count(1),
                 ..Usage::default()

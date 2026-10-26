@@ -72,6 +72,13 @@ pub enum Feature {
     GoogleMapsGroundingQuery,
     OcrCredit,
     OcrPage,
+    FileSearchCall,
+    FileSearchGbDay,
+    VectorStoreGbDay,
+    ComputerUseInputToken,
+    ComputerUseOutputToken,
+    SearchResult,
+    BrowserOpen,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

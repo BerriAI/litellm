@@ -29,6 +29,28 @@ pub struct EntryWire {
 }
 
 impl EntryWire {
+    pub fn read_other(fields: &Fields) -> Self {
+        let mut wire = Self::read(fields);
+        let mut reader = Reader {
+            problems: &mut wire.problems,
+        };
+        for (key, value) in fields.iter().filter(|(_, value)| !value.is_null()) {
+            if FlatKey::parse(key).is_some() {
+                continue;
+            }
+            let Some((flat, per_units)) = FlatKey::parse_other(key) else {
+                continue;
+            };
+            wire.unknown.remove(key);
+            if let Some(mut price) = reader.price(key.clone(), pointer_for_key(key), flat, value) {
+                price.price = UnitPrice::new(price.price.get() / per_units as f64)
+                    .expect("finite rate divided by a positive unit basis");
+                wire.prices.push(price);
+            }
+        }
+        wire
+    }
+
     pub fn read(fields: &Fields) -> Self {
         let mut problems = Vec::new();
         let mut wire = Self::default();
