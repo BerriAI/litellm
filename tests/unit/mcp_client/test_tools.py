@@ -46,6 +46,7 @@ def mock_session():
         return await session.list_tools()
 
     session.send_request = AsyncMock(side_effect=send_request)
+    session._absorb_tool_listing.side_effect = lambda result, **_kwargs: result
     return session
 
 

@@ -134,6 +134,14 @@ async def list_tools_with_pagination(
                 ListToolsRequest(params=params),
                 _LenientListToolsResult,
             )
+            # ClientSession.list_tools() normally performs this post-processing
+            # after decoding: it filters invalid x-mcp-header annotations and
+            # records the derived header/output-schema state used by tools/call.
+            # Keep those semantics when injecting the lenient result model.
+            result = session._absorb_tool_listing(
+                result,
+                complete=cursor is None and result.next_cursor is None,
+            )
             tools.extend(result.tools)
 
             next_cursor = result.next_cursor
