@@ -78851,5 +78851,23 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true
+    },
+    "baseten/decision-models/baseten-elephant-9b-latest": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "baseten",
+        "max_input_tokens": 16384,
+        "mode": "decisions",
+        "output_cost_per_token": 0.0,
+        "source": "https://inference.baseten.co/v1/models",
+        "supports_vision": true
+    },
+    "baseten/decision-models/baseten-mammoth-27b-latest": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "baseten",
+        "max_input_tokens": 16384,
+        "mode": "decisions",
+        "output_cost_per_token": 0.0,
+        "source": "https://inference.baseten.co/v1/models",
+        "supports_vision": true
     }
 }
