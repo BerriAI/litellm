@@ -11,7 +11,7 @@ import pytest
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.flowspeech.text_to_speech.handler import FlowSpeechTTS
-from litellm.llms.flowspeech.text_to_speech.transformation import FlowSpeechException
+from litellm.llms.flowspeech.text_to_speech.transformation import FlowSpeechException, FlowSpeechTextToSpeechConfig
 from litellm.types.utils import LlmProviders
 
 REQUEST_ID = "b698824b-de05-486d-8833-05d5c4522a39"
@@ -81,9 +81,9 @@ class Clock:
         await asyncio.sleep(0)
 
 
-def handler(clock, timeout=120, **kwargs):
+def handler(clock, timeout=120, url=URL, **kwargs):
     return FlowSpeechTTS(
-        URL,
+        url,
         {
             "Authorization": "Bearer test-key",
             "Idempotency-Key": REQUEST_ID,
@@ -152,6 +152,29 @@ def test_all_pending_states_and_uncredentialed_download(invoke):
     assert clock.sleeps == [5, 5, 5, 5]
     assert len(requests) == 6
     assert requests[-1].extensions["timeout"]["read"] == 100
+
+
+@pytest.mark.parametrize("prefix", ["/p%2Fq", "/p%2fq", "/p%252Fq", "/p%3Fq", "/p%23q"])
+def test_encoded_gateway_prefix_survives_submission_and_polling(invoke, prefix):
+    requests = []
+    endpoint = f"{prefix}/api/v1/tts/jobs"
+    url = FlowSpeechTextToSpeechConfig().get_complete_url("flowspeech-tts", f"https://gateway.example{prefix}/", {})
+
+    def respond(request):
+        requests.append(request)
+        if request.method == "POST":
+            return httpx.Response(202, json=job("queued"))
+        if request.url.host == "gateway.example":
+            return httpx.Response(200, json=job())
+        return httpx.Response(200, content=wav_bytes())
+
+    assert invoke(handler(Clock(), url=url), respond).content == wav_bytes()
+    assert [(request.method, request.url.raw_path) for request in requests] == [
+        ("POST", endpoint.encode()),
+        ("GET", f"{endpoint}/{JOB_ID}".encode()),
+        ("GET", b"/recording.wav"),
+    ]
+    assert requests[0].headers["Idempotency-Key"] == REQUEST_ID
 
 
 @pytest.mark.parametrize("failure", ["network", "server", "rate_limit"])
@@ -425,6 +448,73 @@ def test_deadline_during_request(invoke):
 
     with pytest.raises(FlowSpeechException, match="deadline"):
         invoke(handler(clock, timeout=10), respond)
+
+
+@pytest.mark.parametrize("stage", ["submission", "download"])
+@pytest.mark.parametrize("header_delay,body_delay,expected_reads", [(0.125, 0, 0), (0.075, 0.075, 1)])
+def test_expired_stream_is_closed_without_more_work(invoke, stage, header_delay, body_delay, expected_reads):
+    clock = Clock()
+    completed = []
+    requests = []
+
+    class Stream(httpx.SyncByteStream, httpx.AsyncByteStream):
+        def __init__(self):
+            self.reads = 0
+            self.closed = False
+
+        def __iter__(self):
+            self.reads += 1
+            clock.now += body_delay
+            yield wav_bytes() if stage == "download" else json.dumps(job()).encode()
+            pytest.fail("must not advance a stream after its budget expires")
+
+        async def __aiter__(self):
+            for chunk in self:
+                yield chunk
+
+        def close(self):
+            self.closed = True
+
+        async def aclose(self):
+            self.close()
+
+    stream = Stream()
+
+    def respond(request):
+        requests.append(request)
+        if stage == "download" and request.method == "POST":
+            return httpx.Response(202, json=job())
+        clock.now += header_delay
+        return httpx.Response(200, stream=stream)
+
+    with pytest.raises(FlowSpeechException, match="total deadline") as error:
+        invoke(handler(clock, timeout=0.1, on_completed=completed.append), respond)
+    assert error.value.status_code == 408
+    assert REQUEST_ID in str(error.value)
+    assert f"job_id={JOB_ID if stage == 'download' else 'unknown'}" in str(error.value)
+    assert stream.reads == expected_reads
+    assert stream.closed
+    assert [request.method for request in requests] == (["POST", "GET"] if stage == "download" else ["POST"])
+    assert clock.sleeps == []
+    assert completed == []
+
+
+def test_deadline_after_wav_validation_prevents_success_callback(invoke, monkeypatch):
+    clock = Clock()
+    completed = []
+    content = wav_bytes()
+    open_wav = wave.open
+
+    def delayed_open(*args, **kwargs):
+        clock.now = 11
+        return open_wav(*args, **kwargs)
+
+    monkeypatch.setattr(wave, "open", delayed_open)
+    responses = iter([httpx.Response(202, json=job()), httpx.Response(200, content=content)])
+    with pytest.raises(FlowSpeechException, match="total deadline"):
+        invoke(handler(clock, timeout=10, on_completed=completed.append), lambda request: next(responses))
+    assert completed == []
+    assert clock.sleeps == []
 
 
 @pytest.mark.parametrize("timeout", [0, -1, float("inf"), float("nan"), httpx.Timeout(None)])

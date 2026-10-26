@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Final, Literal
 from uuid import UUID, uuid4
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, TypeAdapter, ValidationError, field_validator
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -101,6 +101,13 @@ def validate_url(value: str) -> httpx.URL:
     return url
 
 
+def credential_headers(value: object) -> Mapping[str, str] | None:
+    try:
+        return TypeAdapter(Mapping[StrictStr, StrictStr]).validate_python(value)
+    except ValidationError:
+        return None
+
+
 class FlowSpeechTextToSpeechConfig(BaseTextToSpeechConfig):
     TTS_BASE_URL = "https://flowspeech.io"
     TTS_ENDPOINT_PATH = "/api/v1/tts/jobs"
@@ -147,15 +154,27 @@ class FlowSpeechTextToSpeechConfig(BaseTextToSpeechConfig):
         raise ValueError("FlowSpeech voice must be a nonempty voice name")
 
     def validate_environment(
-        self, headers: Mapping[str, str], model: str, api_key: str | None = None, api_base: str | None = None
+        self, headers: object, model: str, api_key: object = None, api_base: str | None = None
     ) -> dict[str, str]:  # mutable-ok: base provider interface
         key: Final = api_key if api_key is not None else (litellm.api_key or get_secret_str("FLOWSPEECH_API_KEY"))
-        if not key or not key.isascii() or any(char.isspace() or ord(char) < 33 or ord(char) == 127 for char in key):
+        if (
+            not isinstance(key, str)
+            or not key
+            or not key.isascii()
+            or any(char.isspace() or ord(char) < 33 or ord(char) == 127 for char in key)
+        ):
             raise ValueError("FlowSpeech API key is required and must be a nonempty token. Set FLOWSPEECH_API_KEY.")
-        if any(name.lower() in ("cookie", "proxy-authorization", "host", "content-length") for name in headers):
+        checked_headers: Final = credential_headers(headers)
+        if checked_headers is None:
+            raise ValueError("FlowSpeech headers must be a mapping of string names to string values")
+        if any(name.lower() in ("cookie", "proxy-authorization", "host", "content-length") for name in checked_headers):
             raise ValueError("FlowSpeech does not accept cookie, proxy credential, host or content-length overrides")
         return {
-            **{name: value for name, value in headers.items() if name.lower() not in ("authorization", "content-type")},
+            **{
+                name: value
+                for name, value in checked_headers.items()
+                if name.lower() not in ("authorization", "content-type")
+            },
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
         }
@@ -231,10 +250,11 @@ class FlowSpeechTextToSpeechConfig(BaseTextToSpeechConfig):
     def get_complete_url(self, model: str, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
         base: Final = api_base if api_base is not None else (get_secret_str("FLOWSPEECH_API_BASE") or self.TTS_BASE_URL)
         url: Final = validate_url(base)
-        if url.query:
+        if url.query or b"?" in url.raw_path:
             raise ValueError("FlowSpeech api_base must not contain a query")
-        path: Final = url.path.rstrip("/")
-        if path.endswith("/api/ai/text-to-speech"):
+        if url.path.rstrip("/").endswith("/api/ai/text-to-speech"):
             raise ValueError("FlowSpeech api_base must not use the legacy text-to-speech endpoint")
-        endpoint: Final = path if path.endswith(self.TTS_ENDPOINT_PATH) else path + self.TTS_ENDPOINT_PATH
-        return str(url.copy_with(path=endpoint))
+        path: Final = url.raw_path.rstrip(b"/")
+        suffix: Final = self.TTS_ENDPOINT_PATH.encode("ascii")
+        endpoint: Final = path if path.endswith(suffix) else path + suffix
+        return str(url.copy_with(raw_path=endpoint))

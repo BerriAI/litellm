@@ -1,5 +1,7 @@
 import io
 import json
+import logging
+import traceback
 import wave
 from uuid import UUID
 
@@ -7,11 +9,27 @@ import httpx
 import pytest
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.flowspeech.text_to_speech.transformation import FlowSpeechTextToSpeechConfig
 
 REQUEST_ID = "b698824b-de05-486d-8833-05d5c4522a39"
 JOB_ID = "11111111-2222-4333-8444-555555555555"
+SECRET_SENTINEL = "credential-value-must-not-appear-672911"
+
+
+class FailureRecorder(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.errors = []
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.errors.append(
+            (str(kwargs["exception"]), kwargs["traceback_exception"], kwargs["standard_logging_object"]["error_str"])
+        )
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.log_failure_event(kwargs, response_obj, start_time, end_time)
 
 
 def wav_bytes():
@@ -170,6 +188,7 @@ def test_complete_url(base):
         ("https://u:p@example.com", "FlowSpeech requires an HTTPS URL without credentials or fragment"),
         ("file:///tmp/test", "FlowSpeech requires an HTTPS URL without credentials or fragment"),
         ("https://example.com/?key=x", "FlowSpeech api_base must not contain a query"),
+        ("https://example.com/p?", "FlowSpeech api_base must not contain a query"),
         ("https://example.com/#x", "FlowSpeech requires an HTTPS URL without credentials or fragment"),
         (
             "https://example.com/api/ai/text-to-speech",
@@ -194,6 +213,68 @@ def test_rejects_invalid_base(base, message):
 )
 def test_gateway_base_preserves_prefix_without_duplicating_endpoint(base, expected):
     assert FlowSpeechTextToSpeechConfig().get_complete_url("flowspeech-tts", base, {}) == expected
+
+
+@pytest.mark.parametrize("prefix", ["/p%2Fq", "/p%2fq", "/p%252Fq", "/p%3Fq", "/p%23q"])
+@pytest.mark.parametrize("suffix", ["/", "/api/v1/tts/jobs", "/api/v1/tts/jobs/"])
+def test_gateway_prefix_preserves_encoded_path(prefix, suffix):
+    url = FlowSpeechTextToSpeechConfig().get_complete_url("flowspeech-tts", f"https://gateway.example{prefix}{suffix}", {})
+    assert httpx.URL(url).raw_path == f"{prefix}/api/v1/tts/jobs".encode("ascii")
+    assert httpx.URL(url).query == b""
+    assert httpx.URL(url).fragment == ""
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [SECRET_SENTINEL, {SECRET_SENTINEL.encode(): "invalid"}, {"Authorization": {"value": SECRET_SENTINEL}}],
+)
+def test_invalid_headers_raise_no_input_bearing_exception_chain(headers):
+    with pytest.raises(ValueError, match="FlowSpeech headers must be a mapping") as error:
+        FlowSpeechTextToSpeechConfig().validate_environment(headers, "flowspeech-tts", "test-key")
+    assert error.value.__context__ is None
+    assert SECRET_SENTINEL not in "".join(traceback.format_exception(error.value))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize(
+    "invalid,message",
+    [
+        ({"api_key": SECRET_SENTINEL.encode()}, "FlowSpeech API key is required"),
+        ({"api_key": {"value": SECRET_SENTINEL}}, "FlowSpeech API key is required"),
+        ({"headers": {"Authorization": SECRET_SENTINEL.encode()}}, "FlowSpeech headers must be a mapping"),
+        ({"headers": {"Authorization": {"value": SECRET_SENTINEL}}}, "FlowSpeech headers must be a mapping"),
+        ({"extra_headers": {"Authorization": SECRET_SENTINEL.encode()}}, "FlowSpeech headers must be a mapping"),
+        ({"extra_headers": {"Authorization": {"value": SECRET_SENTINEL}}}, "FlowSpeech headers must be a mapping"),
+    ],
+)
+async def test_invalid_credentials_never_reach_errors_or_logs(asynchronous, invalid, message, monkeypatch, caplog, capsys):
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+    recorder = FailureRecorder()
+    monkeypatch.setattr(litellm, "failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json=success())
+
+    kwargs = {"model": "flowspeech/flowspeech-tts", "input": "Hello", "api_key": "test-key", **invalid}
+    if asynchronous:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            with pytest.raises(litellm.APIConnectionError, match=message) as error:
+                await litellm.aspeech(**kwargs, client=client)
+    else:
+        with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+            with pytest.raises(ValueError, match=message) as error:
+                litellm.speech(**kwargs, client=client)
+    captured = capsys.readouterr()
+    assert requests == []
+    assert recorder.errors
+    assert SECRET_SENTINEL not in str(error.value)
+    assert SECRET_SENTINEL not in "".join(traceback.format_exception(error.value))
+    assert SECRET_SENTINEL not in repr(recorder.errors)
+    assert SECRET_SENTINEL not in caplog.text + captured.out + captured.err
 
 
 def test_registers_provider():

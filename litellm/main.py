@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 import dotenv
 import httpx
 import openai
-from pydantic import BaseModel, StrictStr, TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import assert_never, overload
 
 import litellm
@@ -8894,11 +8894,9 @@ def speech(
 
         flowspeech_params: Final = TypeAdapter(Mapping[str, object]).validate_python(litellm_params_dict)
         flowspeech_headers: Final = flowspeech_config.validate_environment(
-            TypeAdapter(Mapping[StrictStr, StrictStr]).validate_python(
-                extra_headers or headers or MappingProxyType({})
-            ),
+            TypeAdapter(object).validate_python(extra_headers or headers or MappingProxyType({})),
             model,
-            TypeAdapter[str | None](str | None).validate_python(flowspeech_params.get("api_key"), strict=True),
+            flowspeech_params.get("api_key"),
             api_base,
         )
         flowspeech_request: Final = flowspeech_config.transform_text_to_speech_request(

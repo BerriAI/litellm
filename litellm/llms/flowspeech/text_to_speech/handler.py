@@ -232,9 +232,12 @@ class FlowSpeechTTS:
             response = yield from self.exchange("GET", f"{self.url}/{job_id}")
 
     def completed_response(self, job: FlowSpeechJob, response: httpx.Response) -> HttpxBinaryResponseContent:
+        self.remaining()
         result: Final = self.audio_response(response)
+        self.remaining()
         if self.on_completed is not None:
             self.on_completed(job)
+        self.remaining()
         return result
 
     def audio_response(self, response: httpx.Response) -> HttpxBinaryResponseContent:
@@ -280,15 +283,19 @@ class FlowSpeechTTS:
         return maximum
 
     def read(self, client: httpx.Client, request: httpx.Request) -> httpx.Response:
+        self.remaining()
         response: Final = client.send(request, stream=True, auth=None, follow_redirects=False)
         try:
+            self.remaining()
             maximum: Final = self.limit(request, response)
             with io.BytesIO() as content:
+                self.remaining()
                 for chunk in response.iter_bytes():
                     self.remaining()
                     if content.tell() + len(chunk) > maximum:
                         raise self.error(502, "FlowSpeech response exceeds size limit")
                     content.write(chunk)
+                    self.remaining()
                 self.remaining()
                 return httpx.Response(
                     response.status_code, headers=response.headers, content=content.getvalue(), request=request
@@ -297,15 +304,19 @@ class FlowSpeechTTS:
             response.close()
 
     async def aread(self, client: httpx.AsyncClient, request: httpx.Request) -> httpx.Response:
+        self.remaining()
         response: Final = await client.send(request, stream=True, auth=None, follow_redirects=False)
         try:
+            self.remaining()
             maximum: Final = self.limit(request, response)
             with io.BytesIO() as content:
+                self.remaining()
                 async for chunk in response.aiter_bytes():
                     self.remaining()
                     if content.tell() + len(chunk) > maximum:
                         raise self.error(502, "FlowSpeech response exceeds size limit")
                     content.write(chunk)
+                    self.remaining()
                 self.remaining()
                 return httpx.Response(
                     response.status_code, headers=response.headers, content=content.getvalue(), request=request
