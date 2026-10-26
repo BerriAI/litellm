@@ -1,17 +1,24 @@
 from __future__ import annotations
 
+import ast
+import asyncio
+import itertools
 import json
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
+import anthropic
 import httpx
+import openai
 import pytest
 import yaml
 
-from tests.integration._support.client import Gateway, gateway_from_environment
+from tests.integration._support.client import Gateway, eventually, gateway_from_environment, object_value
+from tests.integration._support.otlp_sink import Span, SpanSinks, recorded_spans
 from tests.integration._support.process import owned_proxy
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
@@ -22,6 +29,7 @@ _PROMPT_SHIELD: Final = "prompt-shield-step"
 _REQUEST_FIRST: Final = "request-first-step"
 _REQUEST_SECOND: Final = "request-second-step"
 _REQUEST_BLOCKER: Final = "request-blocking-step"
+_REQUEST_ERRORING: Final = "request-erroring-step"
 _RESPONSE_FIRST: Final = "response-first-step"
 _RESPONSE_SECOND: Final = "response-second-step"
 _RESPONSE_BLOCKER: Final = "response-blocking-step"
@@ -37,6 +45,8 @@ _MOVES_PAST_FIRST: Final = "moves-past-first"
 _RESPONSE_MOVES_PAST_FIRST: Final = "response-moves-past-first"
 _SCANS_AFTER_RELEASE: Final = "scans-after-release"
 _CANNOT_HOLD_STREAM: Final = "cannot-hold-stream"
+_ERRORS_PAST_FIRST: Final = "errors-past-first"
+_ENDPOINTS: Final = ("/v1/chat/completions", "/v1/responses", "/v1/messages")
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +55,7 @@ class _Rig:
     vendor: Wire
     upstream: Wire
     model: str
+    traces: str
 
 
 def _completion_chunk(identity: str, delta: dict[str, str], finish_reason: str | None) -> bytes:
@@ -58,7 +69,63 @@ def _completion_chunk(identity: str, delta: dict[str, str], finish_reason: str |
     return f"data: {json.dumps(chunk)}\n\n".encode()
 
 
+def _event(event: dict[str, object]) -> bytes:
+    return f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode()
+
+
+def _response(identity: str) -> dict[str, object]:
+    return {
+        "id": identity,
+        "object": "response",
+        "created_at": 1,
+        "status": "completed",
+        "model": "gpt-4o-mini",
+        "output": [
+            {
+                "id": f"msg_{identity}",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "guarded", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 3, "output_tokens": 1, "total_tokens": 4},
+    }
+
+
+def _responses_reply(request: Request) -> Reply:
+    identity: Final = f"resp_{uuid.uuid4().hex}"
+    response: Final = _response(identity)
+    if json.loads(request.body).get("stream") is not True:
+        return Reply(body=json.dumps(response).encode())
+    return Reply(
+        content_type="text/event-stream",
+        chunks=(
+            _event(
+                {
+                    "type": "response.created",
+                    "sequence_number": 0,
+                    "response": {**response, "status": "in_progress", "output": []},
+                }
+            ),
+            _event(
+                {
+                    "type": "response.output_text.delta",
+                    "sequence_number": 1,
+                    "item_id": f"msg_{identity}",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": "guarded",
+                }
+            ),
+            _event({"type": "response.completed", "sequence_number": 2, "response": response}),
+        ),
+    )
+
+
 def _completion(request: Request) -> Reply:
+    if request.target == "/v1/responses":
+        return _responses_reply(request)
     assert request.target == "/v1/chat/completions", request.target
     identity: Final = f"chatcmpl-{uuid.uuid4().hex}"
     if json.loads(request.body).get("stream") is True:
@@ -94,6 +161,8 @@ def _vendor(request: Request) -> Reply:
     if request.target.startswith(f"/{_UNGATED_STEP}/"):
         return Reply(body=json.dumps({"finalAction": "NONE", "appliedPolicies": []}).encode())
     assert request.target.endswith(_VENDOR_PATH), request.target
+    if request.target.startswith(f"/{_REQUEST_ERRORING}/"):
+        return Reply(status=503, body=json.dumps({"error": "guardrail service unavailable"}).encode())
     if request.target.startswith((f"/{_REQUEST_BLOCKER}/", f"/{_RESPONSE_BLOCKER}/")):
         return Reply(body=json.dumps({"action": "BLOCKED", "blocked_reason": "first step refused"}).encode())
     return Reply(body=json.dumps({"action": "NONE"}).encode())
@@ -113,13 +182,13 @@ def _guardrail(name: str, mode: str, vendor: Wire, **params: object) -> dict[str
     }
 
 
-def _policy(mode: str, steps: tuple[tuple[str, str, str], ...]) -> dict[str, object]:
+def _policy(mode: str, steps: tuple[tuple[str, str, str], ...], *, on_error: str | None = None) -> dict[str, object]:
     return {
         "guardrails": {"add": [guardrail for guardrail, _, _ in steps]},
         "pipeline": {
             "mode": mode,
             "steps": [
-                {"guardrail": guardrail, "on_pass": on_pass, "on_fail": on_fail}
+                {"guardrail": guardrail, "on_pass": on_pass, "on_fail": on_fail, "on_error": on_error}
                 for guardrail, on_pass, on_fail in steps
             ],
         },
@@ -128,8 +197,12 @@ def _policy(mode: str, steps: tuple[tuple[str, str, str], ...]) -> dict[str, obj
 
 def _config(directory: Path, vendor: Wire) -> Path:
     configuration: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    configuration["litellm_settings"] = {**configuration.get("litellm_settings", {}), "callbacks": ["otel"]}
     configuration["guardrails"] = [
-        *(_guardrail(name, "pre_call", vendor) for name in (_REQUEST_FIRST, _REQUEST_SECOND, _REQUEST_BLOCKER)),
+        *(
+            _guardrail(name, "pre_call", vendor)
+            for name in (_REQUEST_FIRST, _REQUEST_SECOND, _REQUEST_BLOCKER, _REQUEST_ERRORING)
+        ),
         *(_guardrail(name, "post_call", vendor) for name in (_RESPONSE_FIRST, _RESPONSE_SECOND, _RESPONSE_BLOCKER)),
         *(
             _guardrail(name, "post_call", vendor, streaming_buffer_until_moderated=False)
@@ -180,6 +253,9 @@ def _config(directory: Path, vendor: Wire) -> Path:
         _CANNOT_HOLD_STREAM: _policy(
             "post_call", ((_UNGATED_STEP, "next", "block"), (_RESPONSE_SECOND, "next", "block"))
         ),
+        _ERRORS_PAST_FIRST: _policy(
+            "pre_call", ((_REQUEST_ERRORING, "next", "block"), (_REQUEST_SECOND, "next", "block")), on_error="next"
+        ),
     }
     configuration["policy_attachments"] = [{"policy": policy, "tags": [policy]} for policy in configuration["policies"]]
     path: Final = directory / "guardrail-pipeline-applied-header.yaml"
@@ -188,34 +264,60 @@ def _config(directory: Path, vendor: Wire) -> Path:
 
 
 @pytest.fixture(scope="module")
-def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
+def rig(tmp_path_factory: pytest.TempPathFactory, audit_sinks: SpanSinks) -> Iterator[_Rig]:
     directory: Final = tmp_path_factory.mktemp("guardrail-pipeline-applied-header")
     with (
         wire_server(_vendor) as vendor,
         wire_server(_completion) as upstream,
         gateway_from_environment() as shared,
-        owned_proxy(shared, directory, {}, config=_config(directory, vendor)) as owned,
+        owned_proxy(
+            shared,
+            directory,
+            {"OTEL_EXPORTER": "http/json", "OTEL_ENDPOINT": audit_sinks.operator, "OTEL_BSP_SCHEDULE_DELAY": "100"},
+            config=_config(directory, vendor),
+            workers=2,
+        ) as owned,
         owned.scenario() as scenario,
     ):
-        yield _Rig(owned, vendor, upstream, scenario.model(api_base=f"{upstream.url}/v1", api_key="sk-fixture"))
+        model: Final = scenario.model(api_base=f"{upstream.url}/v1", api_key="sk-fixture")
+        yield _Rig(owned, vendor, upstream, model, audit_sinks.operator)
 
 
-def _ask_as_team_tagged(rig: _Rig, tag: str, *, stream: bool = False) -> httpx.Response:
+def _body(path: str, model: str, stream: bool) -> dict[str, object]:
+    prompt: Final = f"hello {uuid.uuid4().hex}"
+    if path == "/v1/responses":
+        return {"model": model, "input": prompt, "stream": stream}
+    messages: Final = [{"role": "user", "content": prompt}]
+    if path == "/v1/messages":
+        return {"model": model, "max_tokens": 20, "messages": messages, "stream": stream}
+    return {"model": model, "messages": messages, "stream": stream}
+
+
+def _ask_as_new_team(
+    rig: _Rig,
+    tag: str,
+    *,
+    stream: bool = False,
+    path: str = "/v1/chat/completions",
+    extra: Mapping[str, object] = MappingProxyType({}),
+) -> tuple[str, httpx.Response]:
     rig.vendor.drain()
     rig.upstream.drain()
     with rig.gateway.scenario() as scenario:
         team: Final = scenario.team(metadata={"tags": [tag]})
         key: Final = scenario.key(team_id=team)
-        return rig.gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {
-                "model": rig.model,
-                "messages": [{"role": "user", "content": f"hello {uuid.uuid4().hex}"}],
-                "stream": stream,
-            },
-            key=key,
-        )
+        return team, rig.gateway.request("POST", path, {**_body(path, rig.model, stream), **extra}, key=key)
+
+
+def _ask_as_team_tagged(
+    rig: _Rig,
+    tag: str,
+    *,
+    stream: bool = False,
+    path: str = "/v1/chat/completions",
+    extra: Mapping[str, object] = MappingProxyType({}),
+) -> httpx.Response:
+    return _ask_as_new_team(rig, tag, stream=stream, path=path, extra=extra)[1]
 
 
 def _steps_that_ran(rig: _Rig) -> tuple[str, ...]:
@@ -312,3 +414,244 @@ def test_a_stream_its_pipeline_cannot_hold_names_the_steps_that_run_on_their_own
     assert set(response.headers.get(_HEADER, "").split(",")) == {_UNGATED_STEP, _RESPONSE_SECOND}, dict(
         response.headers
     )
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["whole", "streamed"])
+@pytest.mark.parametrize("path", ["/v1/responses", "/v1/messages"])
+def test_a_request_pipeline_that_allows_at_its_first_step_names_only_that_step_on_every_endpoint(
+    rig: _Rig, path: str, stream: bool
+) -> None:
+    response: Final = _ask_as_team_tagged(rig, _STOPS_AFTER_FIRST, stream=stream, path=path)
+    assert response.status_code == 200, response.text
+    assert _steps_that_ran(rig) == (_REQUEST_FIRST,)
+    assert len(rig.upstream.drain()) == 1
+    assert response.headers.get(_HEADER) == _REQUEST_FIRST, dict(response.headers)
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["whole", "streamed"])
+@pytest.mark.parametrize("path", ["/v1/responses", "/v1/messages"])
+def test_a_response_pipeline_that_allows_at_its_first_step_names_only_that_step_on_every_endpoint(
+    rig: _Rig, path: str, stream: bool
+) -> None:
+    response: Final = _ask_as_team_tagged(rig, _RESPONSE_STOPS_AFTER_FIRST, stream=stream, path=path)
+    assert response.status_code == 200, response.text
+    assert _steps_that_ran(rig) == (_RESPONSE_FIRST,)
+    assert response.headers.get(_HEADER) == _RESPONSE_FIRST, dict(response.headers)
+
+
+def test_a_request_pipeline_names_a_step_whose_service_errored_before_moving_on(rig: _Rig) -> None:
+    response: Final = _ask_as_team_tagged(rig, _ERRORS_PAST_FIRST)
+    assert response.status_code == 200, response.text
+    assert _steps_that_ran(rig) == (_REQUEST_ERRORING, _REQUEST_SECOND)
+    assert len(rig.upstream.drain()) == 1
+    assert set(response.headers.get(_HEADER, "").split(",")) == {_REQUEST_ERRORING, _REQUEST_SECOND}, dict(
+        response.headers
+    )
+
+
+@pytest.mark.parametrize(
+    "forged",
+    [
+        pytest.param(
+            {
+                "metadata": {
+                    "applied_guardrails": [_REQUEST_SECOND],
+                    "_pre_call_executed_guardrails": [f"deadbeef:{_REQUEST_SECOND}", _REQUEST_SECOND],
+                }
+            },
+            id="names-in-its-metadata",
+        ),
+        pytest.param({"guardrails": [_REQUEST_SECOND]}, id="asks-for-the-skipped-step"),
+    ],
+)
+def test_a_request_cannot_get_a_step_that_never_ran_named(rig: _Rig, forged: Mapping[str, object]) -> None:
+    response: Final = _ask_as_team_tagged(rig, _STOPS_AFTER_FIRST, extra=forged)
+    assert response.status_code == 200, response.text
+    assert _steps_that_ran(rig) == (_REQUEST_FIRST,)
+    assert response.headers.get(_HEADER) == _REQUEST_FIRST, dict(response.headers)
+
+
+def _spans_naming_guardrails(rig: _Rig, since: int, team: str) -> tuple[Span, ...]:
+    spans: Final = recorded_spans(rig.traces, since)[1]
+    return tuple(
+        span
+        for span in spans
+        if span["attributes"].get("metadata.user_api_key_team_id") == team
+        and "metadata.applied_guardrails" in span["attributes"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("tag", "path", "stream", "expected"),
+    [
+        pytest.param(_STOPS_AFTER_FIRST, "/v1/chat/completions", False, [_REQUEST_FIRST], id="request-pipeline"),
+        pytest.param(_STOPS_AFTER_FIRST, "/v1/chat/completions", True, [_REQUEST_FIRST], id="request-pipeline-stream"),
+        pytest.param(_STOPS_AFTER_FIRST, "/v1/responses", True, [_REQUEST_FIRST], id="request-pipeline-responses"),
+        pytest.param(
+            _RESPONSE_STOPS_AFTER_FIRST, "/v1/chat/completions", False, [_RESPONSE_FIRST], id="response-pipeline"
+        ),
+        pytest.param(
+            _RESPONSE_STOPS_AFTER_FIRST, "/v1/chat/completions", True, [_RESPONSE_FIRST], id="response-pipeline-stream"
+        ),
+        pytest.param(
+            _RESPONSE_STOPS_AFTER_FIRST, "/v1/messages", True, [_RESPONSE_FIRST], id="response-pipeline-messages"
+        ),
+    ],
+)
+def test_the_spend_log_and_the_trace_name_only_the_steps_that_ran(
+    rig: _Rig, tag: str, path: str, stream: bool, expected: list[str]
+) -> None:
+    since: Final = recorded_spans(rig.traces)[0]
+    team, response = _ask_as_new_team(rig, tag, stream=stream, path=path)
+    assert response.status_code == 200, response.text
+    rows: Final = eventually(
+        lambda: rig.gateway.rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE team_id = %s', (team,)),
+        lambda found: len(found) == 1,
+        seconds=70,
+    )
+    spans: Final = eventually(lambda: _spans_naming_guardrails(rig, since, team), bool, seconds=30)
+    assert object_value(rows[0]["metadata"]).get("applied_guardrails") == expected, rows
+    assert [ast.literal_eval(str(span["attributes"]["metadata.applied_guardrails"])) for span in spans] == [
+        expected
+    ] * len(spans), spans
+
+
+def _openai_chat(base: str, key: str, model: str) -> str | None:
+    with (
+        httpx.Client(timeout=30, trust_env=False) as transport,
+        openai.OpenAI(api_key=key, base_url=f"{base}/v1", max_retries=0, http_client=transport) as client,
+    ):
+        response: Final = client.chat.completions.with_raw_response.create(
+            model=model, messages=[{"role": "user", "content": f"hello {uuid.uuid4().hex}"}]
+        )
+        return response.headers.get(_HEADER)
+
+
+def _openai_responses(base: str, key: str, model: str) -> str | None:
+    with (
+        httpx.Client(timeout=30, trust_env=False) as transport,
+        openai.OpenAI(api_key=key, base_url=f"{base}/v1", max_retries=0, http_client=transport) as client,
+    ):
+        return client.responses.with_raw_response.create(model=model, input=f"hello {uuid.uuid4().hex}").headers.get(
+            _HEADER
+        )
+
+
+def _async_openai_streamed_chat(base: str, key: str, model: str) -> str | None:
+    async def run() -> str | None:
+        async with (
+            httpx.AsyncClient(timeout=30, trust_env=False) as transport,
+            openai.AsyncOpenAI(api_key=key, base_url=f"{base}/v1", max_retries=0, http_client=transport) as client,
+            client.chat.completions.with_streaming_response.create(
+                model=model, messages=[{"role": "user", "content": f"hello {uuid.uuid4().hex}"}], stream=True
+            ) as response,
+        ):
+            lines: Final = [line async for line in response.iter_lines()]
+            assert "data: [DONE]" in lines, lines
+            return response.headers.get(_HEADER)
+
+    return asyncio.run(run())
+
+
+def _async_openai_streamed_responses(base: str, key: str, model: str) -> str | None:
+    async def run() -> str | None:
+        async with (
+            httpx.AsyncClient(timeout=30, trust_env=False) as transport,
+            openai.AsyncOpenAI(api_key=key, base_url=f"{base}/v1", max_retries=0, http_client=transport) as client,
+            client.responses.with_streaming_response.create(
+                model=model, input=f"hello {uuid.uuid4().hex}", stream=True
+            ) as response,
+        ):
+            lines: Final = [line async for line in response.iter_lines()]
+            assert any("response.completed" in line for line in lines), lines
+            return response.headers.get(_HEADER)
+
+    return asyncio.run(run())
+
+
+def _anthropic_streamed_messages(base: str, key: str, model: str) -> str | None:
+    with (
+        httpx.Client(timeout=30, trust_env=False) as transport,
+        anthropic.Anthropic(api_key=key, base_url=base, max_retries=0, http_client=transport) as client,
+        client.messages.with_streaming_response.create(
+            model=model,
+            max_tokens=20,
+            messages=[{"role": "user", "content": f"hello {uuid.uuid4().hex}"}],
+            stream=True,
+        ) as response,
+    ):
+        lines: Final = tuple(response.iter_lines())
+        assert any("message_stop" in line for line in lines), lines
+        return response.headers.get(_HEADER)
+
+
+def _async_anthropic_messages(base: str, key: str, model: str) -> str | None:
+    async def run() -> str | None:
+        async with (
+            httpx.AsyncClient(timeout=30, trust_env=False) as transport,
+            anthropic.AsyncAnthropic(api_key=key, base_url=base, max_retries=0, http_client=transport) as client,
+        ):
+            response: Final = await client.messages.with_raw_response.create(
+                model=model, max_tokens=20, messages=[{"role": "user", "content": f"hello {uuid.uuid4().hex}"}]
+            )
+            return response.headers.get(_HEADER)
+
+    return asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "client",
+    [
+        pytest.param(_openai_chat, id="openai-chat"),
+        pytest.param(_async_openai_streamed_chat, id="async-openai-chat-stream"),
+        pytest.param(_openai_responses, id="openai-responses"),
+        pytest.param(_async_openai_streamed_responses, id="async-openai-responses-stream"),
+        pytest.param(_anthropic_streamed_messages, id="anthropic-messages-stream"),
+        pytest.param(_async_anthropic_messages, id="async-anthropic-messages"),
+    ],
+)
+def test_every_sdk_client_sees_only_the_step_that_ran(rig: _Rig, client: Callable[[str, str, str], str | None]) -> None:
+    rig.vendor.drain()
+    with rig.gateway.scenario() as scenario:
+        key: Final = scenario.key(team_id=scenario.team(metadata={"tags": [_STOPS_AFTER_FIRST]}))
+        header: Final = client(str(rig.gateway.client.base_url).rstrip("/"), key, rig.model)
+    assert _steps_that_ran(rig) == (_REQUEST_FIRST,)
+    assert header == _REQUEST_FIRST
+
+
+async def _send_concurrently(
+    rig: _Rig, keys: Mapping[str, str], cases: tuple[tuple[str, str, bool], ...]
+) -> tuple[httpx.Response, ...]:
+    async with httpx.AsyncClient(base_url=rig.gateway.client.base_url, timeout=60, trust_env=False) as client:
+        return tuple(
+            await asyncio.gather(
+                *(
+                    client.post(
+                        path, json=_body(path, rig.model, stream), headers={"Authorization": f"Bearer {keys[tag]}"}
+                    )
+                    for tag, path, stream in cases
+                )
+            )
+        )
+
+
+def test_a_concurrent_burst_names_only_each_requests_own_steps(rig: _Rig) -> None:
+    expected: Final = MappingProxyType(
+        {
+            _STOPS_AFTER_FIRST: _REQUEST_FIRST,
+            _RUNS_EVERY_STEP: f"{_REQUEST_FIRST},{_REQUEST_SECOND}",
+            _RESPONSE_STOPS_AFTER_FIRST: _RESPONSE_FIRST,
+        }
+    )
+    cases: Final = tuple(itertools.product(expected, _ENDPOINTS, (False, True))) * 2
+    with rig.gateway.scenario() as scenario:
+        keys: Final = MappingProxyType(
+            {tag: scenario.key(team_id=scenario.team(metadata={"tags": [tag]})) for tag in expected}
+        )
+        responses: Final = asyncio.run(_send_concurrently(rig, keys, cases))
+    rig.vendor.drain()
+    rig.upstream.drain()
+    assert [
+        (tag, path, stream, response.status_code, response.headers.get(_HEADER))
+        for (tag, path, stream), response in zip(cases, responses, strict=True)
+    ] == [(tag, path, stream, 200, expected[tag]) for tag, path, stream in cases]
