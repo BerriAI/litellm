@@ -139,6 +139,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    WEBSOCKET_CLIENT_TEXT_COUNT_KEY,
     EndpointType,
     PassthroughStandardLoggingPayload,
 )
@@ -2489,13 +2490,14 @@ def _with_trace_context(headers: Mapping[str, str], parent_span: object) -> dict
 async def websocket_passthrough_request(
     websocket: WebSocket,
     target: str,
-    custom_headers: dict,
+    custom_headers: Mapping[str, str],
     user_api_key_dict: UserAPIKeyAuth,
     forward_headers: bool | None = False,
     endpoint: str | None = None,
     cost_per_request: float | None = None,
     accept_websocket: bool = True,
     setup_model_rewriter: Callable[[str], str] | None = None,
+    count_client_text: Callable[[str | bytes], int] | None = None,
 ):
     """
     WebSocket passthrough request handler.
@@ -2509,6 +2511,9 @@ async def websocket_passthrough_request(
         endpoint: The endpoint path (for logging purposes)
         cost_per_request: Optional field - cost per request to the target endpoint
         setup_model_rewriter: Optional rewrite of the setup frame's model before it reaches the upstream
+        count_client_text: Optional read-only count of each client frame, text or binary, after it reaches the
+            upstream, such as billable characters. Only the sum reaches the success handler, under WEBSOCKET_CLIENT_TEXT_COUNT_KEY
+            in request_body, so routes whose client text must not be stored can still bill it
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.proxy_server import proxy_config, proxy_logging_obj
@@ -2519,6 +2524,7 @@ async def websocket_passthrough_request(
     # Initialize tracking variables
     start_time: Final = datetime.now()
     websocket_messages: Final[list[dict[str, object]]] = []
+    client_text_count: int = 0  # rebind-ok: forward_client_to_upstream adds each client frame's count
     litellm_call_id: Final = str(uuid.uuid4())
 
     verbose_proxy_logger.info("WebSocket passthrough (%s): Starting WebSocket connection to %s", endpoint, target)
@@ -2637,6 +2643,7 @@ async def websocket_passthrough_request(
 
             async def forward_client_to_upstream() -> None:
                 """Forward messages from client to upstream WebSocket"""
+                nonlocal client_text_count
                 try:
                     while True:
                         message = await websocket.receive()
@@ -2706,8 +2713,12 @@ async def websocket_passthrough_request(
                                     # Not a JSON message or doesn't contain setup data
 
                             await upstream_ws.send(_rewrite_vertex_live_setup_model(text_data, setup_model_rewriter))
+                            if count_client_text is not None:
+                                client_text_count += count_client_text(text_data)
                         elif bytes_data is not None:
                             await upstream_ws.send(bytes_data)
+                            if count_client_text is not None:
+                                client_text_count += count_client_text(bytes_data)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -2844,7 +2855,9 @@ async def websocket_passthrough_request(
                     end_time=end_time,
                     logging_obj=logging_obj,
                     cache_hit=False,
-                    request_body={},
+                    request_body={}
+                    if count_client_text is None
+                    else {WEBSOCKET_CLIENT_TEXT_COUNT_KEY: client_text_count},
                     **success_kwargs,
                 )
             )

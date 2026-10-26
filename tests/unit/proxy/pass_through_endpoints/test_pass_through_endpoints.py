@@ -66,6 +66,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    WEBSOCKET_CLIENT_TEXT_COUNT_KEY,
     EndpointType,
     PassthroughStandardLoggingPayload,
 )
@@ -7806,6 +7807,151 @@ async def _track_cost_for_passthrough_kwargs(kwargs: dict) -> AsyncMock:
         )
 
     return increment_spend_counters
+
+
+DEEPGRAM_SPEAK_TARGET = "wss://api.deepgram.com/v1/speak?model=aura-2-thalia-en"
+SPEAK_AUDIO_CHUNK = bytes(range(256)) * 8
+SPOKEN_TEXT = "The quick brown fox jumps over the lazy dog."
+SPEAK_FRAME = json.dumps({"type": "Speak", "text": SPOKEN_TEXT})
+FLUSH_FRAME = json.dumps({"type": "Flush"})
+FLUSHED_FRAME = json.dumps({"type": "Flushed", "sequence_id": 0})
+SPEAK_CLOSE_FRAME = json.dumps({"type": "Close"})
+CLIENT_BINARY_FRAME = b"\x00\xffclient-binary"
+SPEAK_SESSION_FRAMES = ({"text": SPEAK_FRAME}, {"bytes": CLIENT_BINARY_FRAME}, {"text": FLUSH_FRAME})
+SPEAK_SESSION_CLIENT_LENGTH = sum(map(len, (SPEAK_FRAME, CLIENT_BINARY_FRAME, FLUSH_FRAME, SPEAK_CLOSE_FRAME)))
+RELAY_HANG_GUARD_SECONDS = 5.0
+
+
+class SpeakingUpstreamWebSocket:
+    """Answers each Speak with audio as soon as it arrives and ends the session on Close, the way Deepgram speak
+    does, so a relay that held audio back until the end would never see the Close it waits for"""
+
+    def __init__(self, close_code: int = 1000, close_reason: str = ""):
+        self.received: list[str | bytes] = []
+        self.close = AsyncMock()
+        self._close_code = close_code
+        self._close_reason = close_reason
+        self._replies: asyncio.Queue[str | bytes | None] = asyncio.Queue()
+
+    async def send(self, message: str | bytes) -> None:
+        self.received.append(message)
+        match json.loads(message).get("type") if isinstance(message, str) else None:
+            case "Speak":
+                self._replies.put_nowait(SPEAK_AUDIO_CHUNK)
+            case "Flush":
+                self._replies.put_nowait(FLUSHED_FRAME)
+            case "Close":
+                self._replies.put_nowait(None)
+
+    async def recv(self, decode: bool | None = None) -> str | bytes:
+        from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
+        from websockets.frames import Close
+
+        reply = await self._replies.get()
+        if reply is not None:
+            return reply
+        close = Close(self._close_code, self._close_reason)
+        closed = ConnectionClosedOK if self._close_code == 1000 else ConnectionClosedError
+        raise closed(rcvd=close, sent=close, rcvd_then_sent=True)
+
+
+def _speak_client(frames: tuple[dict[str, str | bytes], ...] = SPEAK_SESSION_FRAMES):
+    """A client socket that sends ``frames``, then Close once the first audio has reached it"""
+    first_audio = asyncio.Event()
+
+    async def script():
+        for frame in frames:
+            yield {"type": "websocket.receive", **frame}
+        await first_audio.wait()
+        yield {"type": "websocket.receive", "text": SPEAK_CLOSE_FRAME}
+        await asyncio.Event().wait()
+
+    steps = script()
+
+    async def receive():
+        return await anext(steps)
+
+    websocket = _client_websocket(receive)
+    websocket.send_bytes = AsyncMock(side_effect=lambda data: first_audio.set())
+    return websocket
+
+
+async def _relay_deepgram_speak(upstream_ws, websocket, count_client_text):
+    """Runs the generic relay the way the Deepgram speak route does and returns the success handler mock"""
+    with (
+        _patched_websocket_passthrough_environment(upstream_ws),
+        patch(  # test-quality-ok: pass_through_endpoint_logging is a module global read inside websocket_passthrough_request; there is no injection seam
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints."
+            "pass_through_endpoint_logging.pass_through_async_success_handler",
+            new=AsyncMock(),
+        ) as success_handler,
+    ):
+        await asyncio.wait_for(
+            websocket_passthrough_request(
+                websocket=websocket,
+                target=DEEPGRAM_SPEAK_TARGET,
+                custom_headers={"Authorization": "Token dg-provider-key"},
+                user_api_key_dict=UserAPIKeyAuth(),
+                forward_headers=False,
+                endpoint="/deepgram/v1/speak",
+                accept_websocket=False,
+                count_client_text=count_client_text,
+            ),
+            timeout=RELAY_HANG_GUARD_SECONDS,
+        )
+    return success_handler
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_counts_client_text_without_changing_what_is_relayed():
+    """Audio reaches the client while the session is open, every client frame reaches the upstream unchanged, and
+    the success handler gets only the summed count of the text and binary frames, never the frames"""
+    upstream_ws = SpeakingUpstreamWebSocket()
+    websocket = _speak_client()
+
+    success_handler = await _relay_deepgram_speak(upstream_ws, websocket, count_client_text=len)
+
+    assert upstream_ws.received == [SPEAK_FRAME, CLIENT_BINARY_FRAME, FLUSH_FRAME, SPEAK_CLOSE_FRAME]
+    assert [call.args[0] for call in websocket.send_bytes.await_args_list] == [SPEAK_AUDIO_CHUNK]
+    assert [call.args[0] for call in websocket.send_text.await_args_list] == [FLUSHED_FRAME]
+    assert success_handler.call_args.kwargs["request_body"] == {
+        WEBSOCKET_CLIENT_TEXT_COUNT_KEY: SPEAK_SESSION_CLIENT_LENGTH
+    }
+    websocket.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_without_a_counter_reports_an_empty_request_body():
+    """Listen, realtime and every other caller pass no counter, so their success handler sees what it saw before"""
+    upstream_ws = SpeakingUpstreamWebSocket()
+
+    success_handler = await _relay_deepgram_speak(upstream_ws, _speak_client(), count_client_text=None)
+
+    assert upstream_ws.received == [SPEAK_FRAME, CLIENT_BINARY_FRAME, FLUSH_FRAME, SPEAK_CLOSE_FRAME]
+    assert success_handler.call_args.kwargs["request_body"] == {}
+    assert success_handler.call_args.kwargs["response_body"] == [json.loads(FLUSHED_FRAME)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("close_code", "close_reason"),
+    [
+        pytest.param(1008, "DATA-0000: invalid text", id="policy"),
+        pytest.param(1011, "NET-0001: internal", id="internal"),
+    ],
+)
+async def test_websocket_passthrough_counts_client_text_when_the_upstream_ends_with_an_error_close(
+    close_code: int, close_reason: str
+):
+    upstream_ws = SpeakingUpstreamWebSocket(close_code=close_code, close_reason=close_reason)
+    websocket = _speak_client()
+
+    success_handler = await _relay_deepgram_speak(upstream_ws, websocket, count_client_text=len)
+
+    websocket.close.assert_awaited_once_with(code=close_code, reason=close_reason)
+    assert success_handler.call_args.kwargs["request_body"] == {
+        WEBSOCKET_CLIENT_TEXT_COUNT_KEY: SPEAK_SESSION_CLIENT_LENGTH
+    }
 
 
 @pytest.mark.asyncio
