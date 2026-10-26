@@ -16694,14 +16694,14 @@
         "supports_tool_choice": true
     },
     "coralbricks/deepseek-v4.1-flash-fast": {
-        "cache_creation_input_token_cost": 9e-08,
-        "cache_read_input_token_cost": 0.0,
-        "input_cost_per_token": 1e-08,
+        "cache_creation_input_token_cost": 4.5e-07,
+        "cache_read_input_token_cost": 9e-09,
+        "input_cost_per_token": 4.5e-07,
         "litellm_provider": "coralbricks",
         "max_input_tokens": 1048576,
         "max_tokens": 1048576,
         "mode": "chat",
-        "output_cost_per_token": 1.2e-06,
+        "output_cost_per_token": 1.8e-06,
         "source": "https://www.coralbricks.ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -16717,14 +16717,14 @@
         "supports_vision": true
     },
     "coralbricks/deepseek-v4.1-flash-fast-fp4": {
-        "cache_creation_input_token_cost": 9e-08,
-        "cache_read_input_token_cost": 0.0,
-        "input_cost_per_token": 1e-08,
+        "cache_creation_input_token_cost": 4.5e-07,
+        "cache_read_input_token_cost": 9e-09,
+        "input_cost_per_token": 4.5e-07,
         "litellm_provider": "coralbricks",
         "max_input_tokens": 1048576,
         "max_tokens": 1048576,
         "mode": "chat",
-        "output_cost_per_token": 1.2e-06,
+        "output_cost_per_token": 1.8e-06,
         "source": "https://www.coralbricks.ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -16740,14 +16740,14 @@
         "supports_vision": true
     },
     "coralbricks/deepseek-v4.1-flash": {
-        "cache_creation_input_token_cost": 9e-08,
-        "cache_read_input_token_cost": 0.0,
-        "input_cost_per_token": 1e-08,
+        "cache_creation_input_token_cost": 1.9e-07,
+        "cache_read_input_token_cost": 8e-09,
+        "input_cost_per_token": 1.9e-07,
         "litellm_provider": "coralbricks",
         "max_input_tokens": 1048576,
         "max_tokens": 1048576,
         "mode": "chat",
-        "output_cost_per_token": 1.2e-06,
+        "output_cost_per_token": 6e-07,
         "source": "https://www.coralbricks.ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
