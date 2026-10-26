@@ -169,8 +169,8 @@ def _serialize_arguments(raw_args: JsonValue) -> str:
     return "{}"
 
 
-def _step_thought_signature(prev_sig: str | None, step: JsonMapping) -> str | None:
-    if step.get("type") != "thought":
+def _step_thought_signature(prev_sig: str, step: str | JsonMapping) -> str:
+    if isinstance(step, str) or step.get("type") != "thought":
         return prev_sig
     sig_val: Final = step.get("signature")
     return sig_val if isinstance(sig_val, str) and sig_val else prev_sig
@@ -219,7 +219,8 @@ def _output_blocks_from_step(step: JsonMapping) -> _ParsedOutputBlocks | None:
 
 def _extract_steps(steps: Sequence[JsonValue]) -> _ExtractedSteps:
     dict_steps: Final = tuple(step for step in steps if isinstance(step, dict))
-    sigs_after_each: Final = tuple(accumulate(dict_steps, _step_thought_signature, initial=None))
+    seeded_steps: Final[tuple[str | JsonMapping, ...]] = ("", *dict_steps)
+    sigs_before_each: Final = tuple(accumulate(seeded_steps, _step_thought_signature))
 
     thought_steps: Final = tuple(step for step in dict_steps if step.get("type") == "thought")
     reasoning_parts: Final = tuple(_summary_text(step.get("summary")) for step in thought_steps)
@@ -227,7 +228,9 @@ def _extract_steps(steps: Sequence[JsonValue]) -> _ExtractedSteps:
     thinking_blocks: Final = tuple(b for b in raw_thinking_blocks if b is not None)
 
     fc_with_sigs: Final = tuple(
-        (step, prev_sig) for step, prev_sig in zip(dict_steps, sigs_after_each) if step.get("type") == "function_call"
+        (step, prev_sig or None)
+        for step, prev_sig in zip(dict_steps, sigs_before_each)
+        if step.get("type") == "function_call"
     )
     tool_calls: Final = tuple(
         _tool_call_from_step(idx, step, prev_sig) for idx, (step, prev_sig) in enumerate(fc_with_sigs)

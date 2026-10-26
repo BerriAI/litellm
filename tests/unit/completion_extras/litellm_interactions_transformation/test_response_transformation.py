@@ -170,3 +170,59 @@ def test_stateless_openai_client_stripping_extra_fields_roundtrips_signature_cle
             "result": [{"type": "text", "text": '{"temp": 16}'}],
         },
     ]
+
+
+def test_thought_step_signature_inherits_cleanly_when_function_call_omits_inline_signature() -> None:
+    turn1_raw: Final = {
+        "status": "requires_action",
+        "steps": [
+            {"type": "thought", "signature": "argon_thought_sig_base64"},
+            {
+                "type": "function_call",
+                "id": "call_bash_1",
+                "name": "bash",
+                "arguments": {"cmd": "ls"},
+            },
+        ],
+        "usage": {"total_input_tokens": 20, "total_output_tokens": 10, "total_tokens": 30},
+    }
+
+    turn1_resp: Final = transform_interactions_response_to_chat_response(
+        raw_response=turn1_raw,
+        model="gemini-4-argon",
+        model_response=ModelResponse(id="chatcmpl-argon"),
+    )
+    choice: Final = turn1_resp.choices[0]
+    assert isinstance(choice, Choices)
+    fn_calls: Final = [tc for tc in (choice.message.tool_calls or []) if isinstance(tc, ChatCompletionMessageToolCall)]
+    assert len(fn_calls) == 1
+    assert fn_calls[0].id == "call_bash_1__thought__argon_thought_sig_base64"
+
+    stripped_assistant: Final = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": fn_calls[0].id,
+                "type": "function",
+                "function": {"name": fn_calls[0].function.name or "", "arguments": fn_calls[0].function.arguments},
+            }
+        ],
+    }
+    turn2_prepared: Final = transform_chat_to_interactions_request(
+        messages=[
+            {"role": "user", "content": "List files"},
+            stripped_assistant,
+            {"role": "tool", "tool_call_id": fn_calls[0].id, "content": "README.md\n"},
+        ],
+        model="gemini-4-argon",
+        optional_params={},
+        litellm_params={},
+    )
+    assert turn2_prepared.input_steps[1] == {
+        "type": "function_call",
+        "id": "call_bash_1",
+        "name": "bash",
+        "arguments": {"cmd": "ls"},
+        "signature": "argon_thought_sig_base64",
+    }
