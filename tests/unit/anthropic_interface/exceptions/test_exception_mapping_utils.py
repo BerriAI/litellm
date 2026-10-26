@@ -65,12 +65,14 @@ class TestCreateErrorResponse:
 
     @pytest.mark.parametrize(
         ("status_code", "expected_error_type"),
-        [(418, "invalid_request_error"), (422, "invalid_request_error"), (502, "api_error"), (599, "api_error")],
+        [(422, "invalid_request_error"), (418, "api_error"), (502, "api_error"), (599, "api_error")],
     )
-    def test_an_unmapped_status_is_the_callers_fault_when_4xx(self, status_code: int, expected_error_type: str):
-        """An unmapped 4xx is the client's mistake, so it must not answer api_error, which
-        the Anthropic taxonomy reserves for server-side failures; 5xx keeps api_error."""
-        response = AnthropicExceptionMapping.create_error_response(status_code, "mapped only by range")
+    def test_a_budget_status_is_a_request_error_and_a_status_the_table_does_not_name_is_api_error(
+        self, status_code: int, expected_error_type: str
+    ):
+        """The proxy's budget status is a caller-fault request error, so the table names 422.
+        A status the table does not name, such as a 418 or a 5xx, keeps api_error."""
+        response = AnthropicExceptionMapping.create_error_response(status_code, "scripted status")
         assert response["error"]["type"] == expected_error_type
 
 

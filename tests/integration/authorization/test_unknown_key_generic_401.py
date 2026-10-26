@@ -50,7 +50,23 @@ class _ErrorResponse(BaseModel):
     error: _ProxyError
 
 
+class _AnthropicErrorDetail(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: str
+    message: str
+
+
+class _AnthropicErrorResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: str
+    error: _AnthropicErrorDetail
+
+
 GENERIC_ERROR: Final = _ProxyError(message=GENERIC_MESSAGE, type="token_not_found_in_db", param="key", code="401")
+MESSAGES_PATH: Final = "/v1/messages"
+ANTHROPIC_GENERIC_ERROR: Final = _AnthropicErrorDetail(type="authentication_error", message=GENERIC_MESSAGE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +135,23 @@ def _assert_generic_refusal(response: httpx.Response, *secrets: str) -> None:
         assert secret not in response.text, response.text
 
 
+def _assert_messages_refusal(response: httpx.Response, *secrets: str) -> None:
+    assert response.status_code == 401, response.text
+    body: Final = _AnthropicErrorResponse.model_validate_json(response.content)
+    assert body.type == "error", response.text
+    assert body.error == ANTHROPIC_GENERIC_ERROR, response.text
+    for secret in secrets:
+        assert secret not in response.text, response.text
+
+
+def _assert_refusal(path: str, response: httpx.Response, *secrets: str) -> None:
+    """The Messages routes answer the Anthropic envelope, every other route the OpenAI one."""
+    if path == MESSAGES_PATH:
+        _assert_messages_refusal(response, *secrets)
+    else:
+        _assert_generic_refusal(response, *secrets)
+
+
 def _side(gateway: Gateway, peer: Gateway, side: Side) -> Gateway:
     return gateway if side == "gateway" else peer
 
@@ -129,7 +162,10 @@ def test_an_unknown_key_gets_the_generic_401_without_reaching_the_provider(
     gateway: Gateway, peer: Gateway, provider: SharedProvider, route: str, side: Side
 ) -> None:
     key: Final = _unknown_key()
-    _assert_generic_refusal(_send(_side(gateway, peer, side), ROUTES[route], key), key, key[-4:], _digest(key))
+    request_route: Final = ROUTES[route]
+    _assert_refusal(
+        request_route.path, _send(_side(gateway, peer, side), request_route, key), key, key[-4:], _digest(key)
+    )
     assert provider.received() == ()
 
 
@@ -183,8 +219,9 @@ def test_two_different_unknown_keys_in_both_headers_get_the_generic_401_naming_n
     bearer: Final = _unknown_key()
     api_key: Final = _unknown_key()
     headers: Final = {**_headers("authorization", bearer), **_headers("x-api-key", api_key)}
-    for path, body in (("/v1/chat/completions", CHAT), ("/v1/messages", MESSAGES)):
-        _assert_generic_refusal(
+    for path, body in (("/v1/chat/completions", CHAT), (MESSAGES_PATH, MESSAGES)):
+        _assert_refusal(
+            path,
             gateway.client.post(path, json=dict(body), headers=headers),
             bearer,
             api_key,
@@ -359,16 +396,15 @@ async def _send_async(client: httpx.AsyncClient, route: _Route, key: str) -> htt
     )
 
 
-async def _burst(owned: OwnedProxy, keys: tuple[str, ...]) -> tuple[httpx.Response, ...]:
+async def _burst(owned: OwnedProxy, keys: tuple[str, ...]) -> tuple[tuple[_Route, httpx.Response], ...]:
+    """Each key's response paired with the route it was sent on, so the caller asserts the
+    envelope the route actually answered with."""
+    routes: Final = tuple(ROUTES[BURST_ROUTES[index % len(BURST_ROUTES)]] for index in range(len(keys)))
     async with httpx.AsyncClient(base_url=str(owned.gateway.client.base_url), timeout=60, trust_env=False) as client:
-        return tuple(
-            await asyncio.gather(
-                *(
-                    _send_async(client, ROUTES[BURST_ROUTES[index % len(BURST_ROUTES)]], key)
-                    for index, key in enumerate(keys)
-                )
-            )
+        responses: Final = await asyncio.gather(
+            *(_send_async(client, route, key) for route, key in zip(routes, keys, strict=True))
         )
+    return tuple(zip(routes, responses, strict=True))
 
 
 def _log_after(owned: OwnedProxy, offset: int) -> str:
@@ -397,7 +433,7 @@ async def test_a_burst_across_a_worker_kill_answers_every_unknown_key_with_the_g
             lambda text: all(_console_line(key) in text for key in keys),
             30,
         )
-    for response, key in zip((*during, *after), keys, strict=True):
-        _assert_generic_refusal(response, key, _digest(key))
+    for (route, response), key in zip((*during, *after), keys, strict=True):
+        _assert_refusal(route.path, response, key, _digest(key))
     assert [window.count(_console_line(key)) for key in keys] == [1] * len(keys)
     assert [key for key in keys if key in window] == []

@@ -447,15 +447,14 @@ def test_device_authorization_polls_complete_sso_and_mints_a_model_restricted_be
             )
             assert model_b_response.status_code == 403, model_b_response.text
             assert _JSON_OBJECT.validate_json(model_b_response.content) == {
+                "type": "error",
                 "error": {
+                    "type": "permission_error",
                     "message": (
                         f"The requested model '{model_b}' is not available for this API key, or the model name is "
                         "invalid. Check the models available to you and try again."
                     ),
-                    "type": "team_model_access_denied",
-                    "param": "model",
-                    "code": "403",
-                }
+                },
             }, model_b_response.text
             assert upstream.drain() == ()
 

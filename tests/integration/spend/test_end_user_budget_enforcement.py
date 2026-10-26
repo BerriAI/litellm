@@ -258,9 +258,20 @@ def _observed(upstream: httpx.Client) -> list[JsonValue]:
     return requests
 
 
-def _denial_error(denied: httpx.Response) -> dict[str, JsonValue]:
+def _denial_error(denied: httpx.Response, route: str) -> dict[str, JsonValue]:
     assert denied.status_code == 422, denied.text
-    return object_value(object_value(denied.json())["error"])
+    if route == "/v1/messages":
+        body: Final = object_value(denied.json())
+        assert body["type"] == "error", denied.text
+        anthropic_error: Final = object_value(body["error"])
+        assert anthropic_error["type"] == "invalid_request_error", denied.text
+        assert "param" not in anthropic_error and "code" not in anthropic_error, denied.text
+        return anthropic_error
+    openai_error: Final = object_value(object_value(denied.json())["error"])
+    assert openai_error["type"] == "budget_exceeded", denied.text
+    assert openai_error["param"] is None
+    assert openai_error["code"] == "422"
+    return openai_error
 
 
 def _prove_end_user_budget_lockout(
@@ -304,8 +315,7 @@ def _prove_end_user_budget_lockout(
     _observed(upstream)
     denied: Final = _send(gateway, spelling, deployment, key, end_user_id, f"denied {end_user_id}")
     assert _observed(upstream) == [], denied.text
-    error: Final = _denial_error(denied)
-    assert error["type"] == "budget_exceeded", denied.text
+    error: Final = _denial_error(denied, spelling.route)
     matched: Final = re.fullmatch(
         rf"ExceededBudget: End User={re.escape(end_user_id)} over budget\. "
         rf"Spend=([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?), Budget=0\.05",

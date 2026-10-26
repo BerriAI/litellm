@@ -118,6 +118,19 @@ def _assert_budget_refusal(response: httpx.Response, end_user: str) -> None:
     ]
 
 
+def _assert_messages_budget_refusal(response: httpx.Response, end_user: str) -> None:
+    """A budget refusal on /v1/messages keeps its 422 but answers the Anthropic envelope."""
+    assert response.status_code == 422, response.text
+    body: Final = _json_object(response.content)
+    assert body["type"] == "error", response.text
+    error: Final = object_value(body["error"])
+    assert error["type"] == "invalid_request_error"
+    assert "param" not in error and "code" not in error, response.text
+    assert str(error["message"]).startswith(f"ExceededBudget: End User={end_user} over budget. Spend="), error[
+        "message"
+    ]
+
+
 def _json_object(raw: bytes) -> dict[str, JsonValue]:
     return _JSON_OBJECT.validate_json(raw)
 
@@ -341,7 +354,7 @@ def test_anthropic_messages_metadata_user_id_is_charged_and_budget_enforced(gate
             json={**body, "messages": [{"role": "user", "content": f"again {uuid.uuid4().hex}"}]},
             headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
         )
-        _assert_budget_refusal(denied, end_user)
+        _assert_messages_budget_refusal(denied, end_user)
         assert _observed(upstream) == []
 
 
