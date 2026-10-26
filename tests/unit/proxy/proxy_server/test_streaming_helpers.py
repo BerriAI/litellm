@@ -541,6 +541,19 @@ def test_fast_serialize_simple_model_response_stream_returns_bytes_payload():
     }
 
 
+def test_fast_serialize_falls_back_when_choice_carries_provider_extras():
+    chunk = _simple_chunk()
+    chunk.choices[0].stop_reason = "eos"
+    chunk.choices[0].token_ids = [1, 2, 3]
+
+    assert _fast_serialize_simple_model_response_stream(chunk) is None
+
+    serialized: Final = _serialize_streaming_chunk(chunk)
+    payload: Final = json.loads(serialized)
+    assert payload["choices"][0]["stop_reason"] == "eos"
+    assert payload["choices"][0]["token_ids"] == [1, 2, 3]
+
+
 def test_fast_serialize_simple_model_response_stream_with_usage_returns_none_invalid():
     """Fast path bails (returns None) when ``usage`` is populated — the slow
     path is required to preserve usage fields. Returning None here is the

@@ -56,6 +56,7 @@ from .get_headers import get_response_headers
 
 _MESSAGE_FIELDS: Final[frozenset] = frozenset(Message.model_fields.keys())
 _CHOICES_FIELDS: Final[frozenset] = frozenset(Choices.model_fields.keys())
+_CHOICES_EXPLICIT_KWARGS: Final[frozenset] = _CHOICES_FIELDS | {"enhancements"}
 _MODEL_RESPONSE_FIELDS: Final[frozenset] = frozenset(ModelResponse.model_fields.keys()) | {"usage"}
 
 
@@ -790,7 +791,7 @@ def convert_to_model_response_object(
                     logprobs=logprobs,
                     enhancements=enhancements,
                     provider_specific_fields=provider_specific_fields,
-                    **{f: v for f, v in provider_specific_fields.items() if f not in _CHOICES_FIELDS},
+                    **{f: v for f, v in provider_specific_fields.items() if f not in _CHOICES_EXPLICIT_KWARGS},
                 )
                 if provider_sent_logprobs and logprobs is None:
                     choice.logprobs = None

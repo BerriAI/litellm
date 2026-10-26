@@ -299,7 +299,7 @@ class CustomStreamWrapper:
         self.send_stream_usage = True if self.check_send_stream_usage(self.stream_options) else False
         self._continuous_usage_stats = (
             isinstance(self.stream_options, dict) and self.stream_options.get("continuous_usage_stats") is True
-        )
+        ) and self.send_stream_usage
         self.tool_call = False
         self.chunks: list = []  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
         self._repeated_messages_count = 1
@@ -1006,6 +1006,7 @@ class CustomStreamWrapper:
         response_obj: dict[str, Any],
     ):
         from litellm.litellm_core_utils.core_helpers import (
+            preserve_streaming_choice_provider_extras,
             preserve_upstream_non_openai_attributes,
         )
 
@@ -1100,6 +1101,10 @@ class CustomStreamWrapper:
             _original_chunk: Final = response_obj.get("original_chunk", None)
             if _original_chunk is not None:
                 preserve_upstream_non_openai_attributes(
+                    model_response=model_response,
+                    original_chunk=_original_chunk,
+                )
+                preserve_streaming_choice_provider_extras(
                     model_response=model_response,
                     original_chunk=_original_chunk,
                 )
@@ -1550,6 +1555,8 @@ class CustomStreamWrapper:
                             model_response.choices[0].delta = Delta()
                 else:
                     if self.send_stream_usage is True:
+                        if self._continuous_usage_stats:
+                            self.sent_stream_usage = True
                         model_response.choices = []
                         return model_response
                     self._record_usage_only_chunk(model_response=model_response)

@@ -2968,3 +2968,64 @@ def test_convert_to_model_response_object_function_output():
     assert result.usage.completion_tokens_details == CompletionTokensDetailsWrapper(reasoning_tokens=0)
 
     assert result._hidden_params is not None
+
+
+def test_convert_to_model_response_object_keeps_provider_choice_level_extras_at_choice_level():
+    response_object = {
+        "id": "chatcmpl-vllm-extras",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "HostedVLLM/Qwen2.5-0.5B-Instruct",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hi"},
+                "finish_reason": "stop",
+                "stop_reason": "eos",
+                "token_ids": [11, 22, 33],
+            }
+        ],
+        "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        response_type="completion",
+    )
+
+    choice: Final = result.choices[0]
+    assert getattr(choice, "stop_reason", None) == "eos"
+    assert getattr(choice, "token_ids", None) == [11, 22, 33]
+    assert choice.provider_specific_fields is not None
+    assert choice.provider_specific_fields["stop_reason"] == "eos"
+    assert choice.provider_specific_fields["token_ids"] == [11, 22, 33]
+    dumped: Final = json.loads(choice.model_dump_json())
+    assert dumped["stop_reason"] == "eos"
+    assert dumped["token_ids"] == [11, 22, 33]
+
+
+def test_convert_to_model_response_object_accepts_a_choice_enhancements_key():
+    response_object = {
+        "id": "chatcmpl-enhancements",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "azure/gpt-4o",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hi"},
+                "finish_reason": "stop",
+                "enhancements": {"grounding": True},
+            }
+        ],
+        "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        response_type="completion",
+    )
+
+    assert result.choices[0].enhancements == {"grounding": True}

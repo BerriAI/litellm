@@ -171,6 +171,7 @@ from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
+    STREAMING_CHOICE_OPENAI_FIELDS,
     CountContextManagement,
     ModelResponse,
     ModelResponseStream,
@@ -9856,14 +9857,11 @@ def _restamp_streaming_chunk_model(
     return chunk, model_mismatch_logged
 
 
-_OPENAI_CHUNK_CHOICE_FIELDS: Final = frozenset({"index", "delta", "finish_reason", "logprobs", "enhancements"})
-
-
 def _streaming_choice_carries_provider_extras(choice: object) -> bool:
     extra: Final = getattr(choice, "__pydantic_extra__", None)
     if not isinstance(extra, dict):
         return False
-    return any(key not in _OPENAI_CHUNK_CHOICE_FIELDS for key in extra)
+    return any(key not in STREAMING_CHOICE_OPENAI_FIELDS for key in extra)
 
 
 def _fast_serialize_simple_model_response_stream(

@@ -8434,6 +8434,23 @@ class TestApplyStreamUsageTracking:
         assert "stream_options" not in data
         assert "_litellm_strip_stream_usage" not in data
 
+    def test_client_continuous_usage_stats_is_not_injected_onto_the_caller(self):
+        data = {"stream": True, "stream_options": {"continuous_usage_stats": True}}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["stream_options"] == {"include_usage": True}
+        assert data["_litellm_strip_stream_usage"] is True
+
+    def test_client_requested_continuous_usage_stats_reaches_the_backend_intact(self):
+        requested: Final = {"include_usage": True, "continuous_usage_stats": True}
+        data = {"stream": True, "stream_options": dict(requested)}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["stream_options"] == requested
+        assert "_litellm_strip_stream_usage" not in data
+
     def test_client_supplied_strip_marker_is_neutralized(self):
         data = {
             "stream": True,

@@ -6689,3 +6689,88 @@ async def test_leaving_an_async_with_block_closes_the_provider_stream():
     async with _wrapper_over(stream):
         pass
     assert stream.close_calls == 1
+
+
+def _vllm_wrapper(chunks: list[ModelResponseStream], stream_options: dict | None = None) -> CustomStreamWrapper:
+    return CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model="hosted_vllm/m",
+        custom_llm_provider="hosted_vllm",
+        stream_options=stream_options,
+        logging_obj=Logging(
+            model="hosted_vllm/m",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="acompletion",
+            start_time=time.time(),
+            litellm_call_id="vllm-choice",
+            function_id="test",
+        ),
+    )
+
+
+def _vllm_chunk(choice: dict, usage: dict | None = None) -> ModelResponseStream:
+    body: Final = {"id": "c", "created": 1, "model": "hosted_vllm/m", "choices": [choice]}
+    if usage is not None:
+        body["usage"] = usage
+    return ModelResponseStream(**body)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_vllm_choice_extras_survive_the_terminal_finish_chunk(sync_mode: bool):
+    chunks: Final = [
+        _vllm_chunk({"index": 0, "delta": {"content": "Hi"}, "finish_reason": None}),
+        _vllm_chunk({"index": 0, "delta": {}, "finish_reason": "stop", "stop_reason": "eos", "token_ids": [9]}),
+    ]
+    wrapper: Final = _vllm_wrapper(chunks)
+
+    emitted: Final = [chunk async for chunk in wrapper] if not sync_mode else list(wrapper)
+
+    finish_choice: Final = emitted[-1].choices[0]
+    assert getattr(finish_choice, "stop_reason", None) == "eos"
+    assert getattr(finish_choice, "token_ids", None) == [9]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_continuous_usage_stats_keeps_usage_on_every_chunk(sync_mode: bool):
+    counts: Final = [
+        {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+        {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+        {"prompt_tokens": 10, "completion_tokens": 3, "total_tokens": 13},
+    ]
+    chunks: Final = [
+        _vllm_chunk({"index": 0, "delta": {"content": "Hi"}, "finish_reason": None}, usage=counts[0]),
+        _vllm_chunk({"index": 0, "delta": {}, "finish_reason": "stop"}, usage=counts[1]),
+        ModelResponseStream(id="c", created=1, model="hosted_vllm/m", choices=[], usage=Usage(**counts[2])),
+    ]
+    wrapper: Final = _vllm_wrapper(chunks, stream_options={"include_usage": True, "continuous_usage_stats": True})
+
+    emitted: Final = [chunk async for chunk in wrapper] if not sync_mode else list(wrapper)
+
+    usage_chunks: Final = [chunk for chunk in emitted if getattr(chunk, "usage", None) is not None]
+    assert [chunk.usage.total_tokens for chunk in usage_chunks] == [11, 12, 13]
+    assert emitted[-1].choices == []
+    assert litellm.stream_chunk_builder(chunks=emitted).usage.total_tokens == 13
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_include_usage_without_continuous_usage_stats_still_emits_only_a_final_usage_chunk(sync_mode: bool):
+    counts: Final = [
+        {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+        {"prompt_tokens": 10, "completion_tokens": 3, "total_tokens": 13},
+    ]
+    chunks: Final = [
+        _vllm_chunk({"index": 0, "delta": {"content": "Hi"}, "finish_reason": None}, usage=counts[0]),
+        _vllm_chunk({"index": 0, "delta": {}, "finish_reason": "stop"}, usage=counts[1]),
+    ]
+    wrapper: Final = _vllm_wrapper(chunks, stream_options={"include_usage": True})
+
+    emitted: Final = [chunk async for chunk in wrapper] if not sync_mode else list(wrapper)
+
+    content_chunks: Final = [chunk for chunk in emitted[:-1] if chunk.choices and chunk.choices[0].delta.content]
+    assert content_chunks
+    assert all(getattr(chunk, "usage", None) is None for chunk in content_chunks)
+    assert getattr(emitted[-1], "usage", None) is not None
