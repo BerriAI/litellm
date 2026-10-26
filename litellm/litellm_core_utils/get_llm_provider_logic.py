@@ -717,12 +717,15 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.HostedVLLMChatConfig().get_openai_compatible_provider_info(api_base, api_key)
-    elif custom_llm_provider == "llamafile":
-        # llamafile is OpenAI compatible.
+    elif custom_llm_provider in ("llamafile", "llmman"):
+        # llamafile and llmman are OpenAI compatible.
+        local_config: Final = (
+            litellm.LlamafileChatConfig if custom_llm_provider == "llamafile" else litellm.LlmmanChatConfig
+        )
         (
             api_base,
             dynamic_api_key,
-        ) = litellm.LlamafileChatConfig().get_openai_compatible_provider_info(api_base, api_key)
+        ) = local_config().get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "datarobot":
         # DataRobot is OpenAI compatible.
         (
