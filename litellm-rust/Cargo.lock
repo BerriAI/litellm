@@ -4292,6 +4292,7 @@ dependencies = [
 name = "litellm-redis-client"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "litellm-redis-testing",
  "redis",
  "rstest",

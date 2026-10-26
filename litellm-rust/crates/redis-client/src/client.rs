@@ -1,27 +1,16 @@
 use std::time::Duration;
 
-use redis::{
-    Cmd, ConnectionInfo, FromRedisValue, IntoConnectionInfo, RedisResult, ToRedisArgs,
-    ToSingleRedisArg,
-    aio::{ConnectionManager, ConnectionManagerConfig},
-    cluster::ClusterClientBuilder,
-    cluster_async::ClusterConnection,
+use redis::{Cmd, FromRedisValue, IntoConnectionInfo, ToRedisArgs, ToSingleRedisArg, Value};
+
+use crate::{
+    ConnectError, Endpoint, Error, Namespace, Pipeline, RedisConfig, Script, commands,
+    connection::Connection,
 };
-
-use crate::{ClusterEndpoint, ConnectError, Endpoint, Error, Namespace, RedisConfig};
-
-const RETRIES: u32 = 3;
 
 #[derive(Clone)]
 pub struct RedisClient {
-    connection: Connection,
+    pub(crate) connection: Connection,
     namespace: Namespace,
-}
-
-#[derive(Clone)]
-enum Connection {
-    Standalone(ConnectionManager),
-    Cluster(ClusterConnection),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -35,10 +24,12 @@ impl RedisClient {
     pub async fn connect(config: RedisConfig) -> Result<Self, ConnectError> {
         let connection = match &config.endpoint {
             Endpoint::Url(url) => {
-                standalone(url.as_str().into_connection_info()?, config.timeout).await?
+                Connection::standalone(url.as_str().into_connection_info()?, config.timeout).await?
             }
-            Endpoint::Host(host) => standalone(host.connection_info()?, config.timeout).await?,
-            Endpoint::Cluster(cluster) => self::cluster(cluster, config.timeout).await?,
+            Endpoint::Host(host) => {
+                Connection::standalone(host.connection_info()?, config.timeout).await?
+            }
+            Endpoint::Cluster(cluster) => Connection::cluster(cluster, config.timeout).await?,
         };
         Ok(Self {
             connection,
@@ -47,14 +38,14 @@ impl RedisClient {
     }
 
     pub async fn get<T: FromRedisValue>(&self, key: &str) -> Result<Option<T>, Error> {
-        self.query(redis::cmd("GET").arg(self.key(key))).await
+        self.query(&commands::get(self.key(key))).await
     }
 
     pub async fn mget<T: FromRedisValue>(&self, keys: &[&str]) -> Result<Vec<Option<T>>, Error> {
         if keys.is_empty() {
             return Ok(Vec::new());
         }
-        self.query(redis::cmd("MGET").arg(self.keys(keys))).await
+        self.query(&commands::mget(self.keys(keys))).await
     }
 
     pub async fn set(
@@ -63,14 +54,7 @@ impl RedisClient {
         value: impl ToSingleRedisArg,
         ttl: Duration,
     ) -> Result<(), Error> {
-        self.query(
-            redis::cmd("SET")
-                .arg(self.key(key))
-                .arg(value)
-                .arg("PX")
-                .arg(millis(ttl)),
-        )
-        .await
+        self.query(&commands::set(self.key(key), value, ttl)).await
     }
 
     pub async fn set_nx(
@@ -80,14 +64,7 @@ impl RedisClient {
         ttl: Duration,
     ) -> Result<bool, Error> {
         let reply: Option<String> = self
-            .query(
-                redis::cmd("SET")
-                    .arg(self.key(key))
-                    .arg(value)
-                    .arg("NX")
-                    .arg("PX")
-                    .arg(millis(ttl)),
-            )
+            .query(&commands::set_nx(self.key(key), value, ttl))
             .await?;
         Ok(reply.is_some())
     }
@@ -96,16 +73,15 @@ impl RedisClient {
         if keys.is_empty() {
             return Ok(0);
         }
-        self.query(redis::cmd("DEL").arg(self.keys(keys))).await
+        self.query(&commands::del(self.keys(keys))).await
     }
 
     pub async fn expire(&self, key: &str, ttl: Duration) -> Result<bool, Error> {
-        self.query(redis::cmd("PEXPIRE").arg(self.key(key)).arg(millis(ttl)))
-            .await
+        self.query(&commands::expire(self.key(key), ttl)).await
     }
 
     pub async fn ttl(&self, key: &str) -> Result<Ttl, Error> {
-        let reply: i64 = self.query(redis::cmd("PTTL").arg(self.key(key))).await?;
+        let reply: i64 = self.query(&commands::ttl(self.key(key))).await?;
         Ok(match reply {
             -2 => Ttl::Missing,
             -1 => Ttl::Persistent,
@@ -114,18 +90,38 @@ impl RedisClient {
     }
 
     pub async fn incr_by(&self, key: &str, delta: i64) -> Result<i64, Error> {
-        self.query(redis::cmd("INCRBY").arg(self.key(key)).arg(delta))
-            .await
+        self.query(&commands::incr_by(self.key(key), delta)).await
     }
 
     pub async fn incr_by_float(&self, key: &str, delta: f64) -> Result<f64, Error> {
-        self.query(redis::cmd("INCRBYFLOAT").arg(self.key(key)).arg(delta))
+        self.query(&commands::incr_by_float(self.key(key), delta))
             .await
     }
 
     pub async fn rpush(&self, key: &str, values: impl ToRedisArgs) -> Result<usize, Error> {
-        self.query(redis::cmd("RPUSH").arg(self.key(key)).arg(values))
-            .await
+        self.query(&commands::rpush(self.key(key), values)).await
+    }
+
+    pub async fn eval<T: FromRedisValue>(
+        &self,
+        script: &Script,
+        keys: &[&str],
+        args: impl ToRedisArgs,
+    ) -> Result<T, Error> {
+        let keys = self.keys(keys);
+        let args = args.to_redis_args();
+        Ok(script
+            .invocation(&keys, &args)
+            .invoke_async(&mut self.connection.clone())
+            .await?)
+    }
+
+    pub fn pipeline(&self) -> Pipeline {
+        Pipeline::new(self.namespace.clone())
+    }
+
+    pub async fn run(&self, pipeline: &Pipeline) -> Vec<Result<Value, Error>> {
+        pipeline.run(&self.connection).await
     }
 
     fn key(&self, key: &str) -> String {
@@ -137,144 +133,22 @@ impl RedisClient {
     }
 
     async fn query<T: FromRedisValue>(&self, command: &Cmd) -> Result<T, Error> {
-        let reply = match self.connection.clone() {
-            Connection::Standalone(mut connection) => command.query_async(&mut connection).await,
-            Connection::Cluster(mut connection) => command.query_async(&mut connection).await,
-        };
-        Ok(reply?)
+        Ok(command.query_async(&mut self.connection.clone()).await?)
     }
-}
-
-async fn standalone(info: ConnectionInfo, timeout: Duration) -> RedisResult<Connection> {
-    let config = ConnectionManagerConfig::new()
-        .set_connection_timeout(Some(timeout))
-        .set_response_timeout(Some(timeout))
-        .set_number_of_retries(RETRIES as usize);
-    let manager = redis::Client::open(info)?
-        .get_connection_manager_with_config(config)
-        .await?;
-    Ok(Connection::Standalone(manager))
-}
-
-async fn cluster(endpoint: &ClusterEndpoint, timeout: Duration) -> RedisResult<Connection> {
-    let builder = ClusterClientBuilder::new(endpoint.addrs())
-        .connection_timeout(timeout)
-        .response_timeout(timeout)
-        .retries(RETRIES);
-    let builder = match &endpoint.username {
-        Some(username) => builder.username(username),
-        None => builder,
-    };
-    let builder = match &endpoint.password {
-        Some(password) => builder.password(password),
-        None => builder,
-    };
-    Ok(Connection::Cluster(
-        builder.build()?.get_async_connection().await?,
-    ))
-}
-
-fn millis(duration: Duration) -> u64 {
-    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
 
-    use litellm_redis_testing::{RedisCluster, RedisServer};
-    use redis::cluster_routing::{Route, RoutingInfo, SingleNodeRoutingInfo, SlotAddr};
+    use litellm_redis_testing::RedisServer;
     use rstest::rstest;
 
-    use super::{Connection, RedisClient, Ttl};
+    use super::{RedisClient, Ttl};
     use crate::{
-        ClusterEndpoint, ClusterNode, DEFAULT_TIMEOUT, Endpoint, Error, HostEndpoint, Namespace,
-        RedisConfig,
+        DEFAULT_TIMEOUT, Endpoint, Error, HostEndpoint, Namespace, RedisConfig,
+        test_support::{Server, Topology, client_id},
     };
-
-    #[derive(Clone, Copy, Debug)]
-    enum Topology {
-        Standalone,
-        Cluster,
-    }
-
-    enum Server {
-        Standalone(RedisServer),
-        Cluster(RedisCluster),
-    }
-
-    impl Server {
-        async fn start(topology: Topology) -> Self {
-            match topology {
-                Topology::Standalone => Self::Standalone(RedisServer::start().await.unwrap()),
-                Topology::Cluster => Self::Cluster(RedisCluster::start().await.unwrap()),
-            }
-        }
-
-        fn endpoint(&self) -> Endpoint {
-            match self {
-                Self::Standalone(server) => Endpoint::Url(server.url().to_owned()),
-                Self::Cluster(cluster) => Endpoint::Cluster(ClusterEndpoint {
-                    nodes: cluster
-                        .nodes()
-                        .map(|(host, port)| ClusterNode {
-                            host: host.to_owned(),
-                            port,
-                        })
-                        .collect(),
-                    username: None,
-                    password: None,
-                    tls: false,
-                }),
-            }
-        }
-
-        async fn client(&self, namespace: &str, timeout: Duration) -> RedisClient {
-            RedisClient::connect(RedisConfig {
-                endpoint: self.endpoint(),
-                namespace: Namespace::new(namespace),
-                timeout,
-            })
-            .await
-            .unwrap()
-        }
-
-        async fn restart(&self) {
-            match self {
-                Self::Standalone(server) => server.restart().await.unwrap(),
-                Self::Cluster(cluster) => cluster.restart().await.unwrap(),
-            }
-        }
-
-        async fn freeze(&self) {
-            match self {
-                Self::Standalone(server) => server.freeze().await.unwrap(),
-                Self::Cluster(cluster) => cluster.freeze().await.unwrap(),
-            }
-        }
-
-        async fn thaw(&self) {
-            match self {
-                Self::Standalone(server) => server.thaw().await.unwrap(),
-                Self::Cluster(cluster) => cluster.thaw().await.unwrap(),
-            }
-        }
-    }
-
-    async fn client_id(client: &RedisClient, key: &str) -> i64 {
-        let command = redis::cmd("CLIENT").arg("ID").to_owned();
-        match client.connection.clone() {
-            Connection::Standalone(mut connection) => {
-                command.query_async(&mut connection).await.unwrap()
-            }
-            Connection::Cluster(mut connection) => {
-                let node = Route::with_key(key, SlotAddr::Master);
-                let routing = RoutingInfo::SingleNode(SingleNodeRoutingInfo::SpecificNode(node));
-                redis::from_redis_value(connection.route_command(command, routing).await.unwrap())
-                    .unwrap()
-            }
-        }
-    }
 
     #[rstest]
     #[tokio::test]
@@ -498,6 +372,31 @@ mod tests {
         client.incr_by_float("spend", 0.25).await.unwrap();
 
         assert_eq!(client.incr_by_float("spend", 0.5).await.unwrap(), 0.75);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn concurrent_commands_on_one_cloned_client_all_apply(
+        #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+    ) {
+        let server = Server::start(topology).await;
+        let client = server.client("", DEFAULT_TIMEOUT).await;
+
+        let tasks: Vec<_> = (0..100)
+            .map(|_| {
+                let client = client.clone();
+                tokio::spawn(async move {
+                    for _ in 0..10 {
+                        client.incr_by("shared", 1).await.unwrap();
+                    }
+                })
+            })
+            .collect();
+        for task in tasks {
+            task.await.unwrap();
+        }
+
+        assert_eq!(client.get::<i64>("shared").await.unwrap(), Some(1000));
     }
 
     #[rstest]

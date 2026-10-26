@@ -21,6 +21,14 @@
 - On cluster, redis-rs splits MGET and DEL by slot and returns MGET values in input order. Other multi-key commands are not split, so a new one needs a cross-slot test
 - TTLs are `Duration` and are sent in milliseconds (`PX`, `PEXPIRE`, `PTTL`)
 
+## Scripts and pipelines
+- A `Script` declares every key it touches in KEYS. On cluster an undeclared key works or fails depending on which node owns its slot, so it can pass tests and break in production
+- `eval` goes through redis-rs `invoke_async`, which loads the script on NOSCRIPT. Inside a pipeline nothing reloads, so a NOSCRIPT op reruns alone with `invoke_async`
+- A pipeline is never atomic. Every op gets its own `Result`, from `.ignore_errors()`, so one rejected op leaves the others alone. A transport failure fails every op of that round trip
+- redis-rs rejects an async cluster pipeline whose ops span slots. `Pipeline` groups ops by the slot of their first key, runs the groups concurrently and returns results in input order
+- Pipeline ops take one key each. A multi-key op would span slots inside one group
+- Command builders live in `commands.rs` and are shared by `RedisClient` and `Pipeline`, so a command is written once
+
 ## Tests
 - Against real Redis from `litellm-redis-testing`, never a mocked wire or asserted command bytes
 - Every command test runs on each topology through `#[values(Topology::Standalone, Topology::Cluster)]`. A test is single-topology only when the behavior exists on one (a `db` number has no cluster meaning)
