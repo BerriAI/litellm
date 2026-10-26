@@ -275,7 +275,7 @@ class TestImageGenerationExtraHeaders:
             await openai_chat_completions.aimage_generation(
                 prompt="A white cat",
                 data={"model": "gpt-image-2", "prompt": "A white cat", **optional_params},
-                model_response=MagicMock(),
+                model_response=ImageResponse(),
                 timeout=60.0,
                 logging_obj=mock_logging_obj,
                 api_key="test-key",
