@@ -1,3 +1,4 @@
+import { copyToClipboard } from "@/utils/dataUtils";
 /**
  * RealtimePrettyView - Structured pretty view for OpenAI Realtime API logs
  * Displays session config, conversation turns, and token usage
@@ -8,7 +9,6 @@ import { useState } from "react";
 import { ChevronDown, ChevronUp, MessageSquare, Mic, Settings, Volume2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { copyToClipboard } from "@/utils/dataUtils";
 import { SectionHeader } from "./SectionHeader";
 
 interface RealtimeEvent {
@@ -277,7 +277,7 @@ function ConversationCard({
         (r.output || []).flatMap((o) => (o.content || []).map((c) => `${o.role}: ${c.transcript || c.text || ""}`)),
       )
       .join("\n");
-    copyToClipboard(transcripts);
+    void copyToClipboard(transcripts);
   };
 
   return (

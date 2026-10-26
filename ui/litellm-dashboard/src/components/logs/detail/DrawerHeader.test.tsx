@@ -1,11 +1,17 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { render } from "../../../../tests/test-utils";
 import type { LogEntry } from "../types";
 import { DrawerHeader } from "./DrawerHeader";
+import { copyToClipboard } from "@/utils/dataUtils";
+
+vi.mock("@/utils/dataUtils", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/dataUtils")>()),
+  copyToClipboard: vi.fn(),
+}));
 
 const logEntry = (overrides: Partial<LogEntry>): LogEntry =>
   ({
@@ -119,23 +125,21 @@ describe("DrawerHeader back link", () => {
   });
 });
 
-describe("DrawerHeader copy", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    Reflect.deleteProperty(navigator, "clipboard");
-    Reflect.deleteProperty(document, "execCommand");
-  });
-
-  it("copies the request id when the browser has no clipboard API, as on a plain HTTP origin", async () => {
+describe("DrawerHeader copying", () => {
+  it.each([true, false])("confirms both ids only when copying succeeds (%s)", async (success) => {
     const user = userEvent.setup();
     Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
-    Object.defineProperty(document, "execCommand", { value: () => true, configurable: true });
-    const select = vi.spyOn(HTMLTextAreaElement.prototype, "select");
-    renderHeader(logEntry({}), false);
+    vi.mocked(copyToClipboard).mockReset().mockResolvedValue(success);
+    renderHeader(logEntry({ request_id: "request-copy", litellm_call_id: "call-copy" }), false);
 
-    await user.click(screen.getByRole("button", { name: "Copy Request ID" }));
+    const requestButton = screen.getByRole("button", { name: "Copy Request ID" });
+    const callButton = screen.getByRole("button", { name: "Copy x-litellm-call-id" });
+    await user.click(requestButton);
+    await user.click(callButton);
 
-    expect(select.mock.contexts.map((textArea) => textArea.value)).toEqual(["170d64ea-69f0-431a-be72-332f8f78c18a"]);
-    expect(await screen.findByRole("button", { name: "Copied!" })).toBeInTheDocument();
+    expect(copyToClipboard).toHaveBeenNthCalledWith(1, "request-copy");
+    expect(copyToClipboard).toHaveBeenNthCalledWith(2, "call-copy");
+    expect(requestButton).toHaveAccessibleName(success ? "Copied!" : "Copy Request ID");
+    expect(callButton).toHaveAccessibleName(success ? "Copied!" : "Copy x-litellm-call-id");
   });
 });

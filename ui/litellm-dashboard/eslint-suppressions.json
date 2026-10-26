@@ -2175,11 +2175,6 @@
       "count": 1
     }
   },
-  "src/utils/dataUtils.test.ts": {
-    "max-nested-callbacks": {
-      "count": 1
-    }
-  },
   "tests/CreateKeyPage.expiredToken.test.tsx": {
     "@typescript-eslint/no-require-imports": {
       "count": 3

@@ -13,13 +13,9 @@ vi.mock("lucide-react", async (importOriginal) => ({
   Check: (props: ComponentProps<"svg">) => <svg {...props} role="img" aria-label="Copied icon" />,
 }));
 
-const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
-
 afterEach(() => {
   vi.useRealTimers();
   vi.resetAllMocks();
-  if (clipboardDescriptor) Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
-  else Reflect.deleteProperty(navigator, "clipboard");
 });
 
 describe("CopyButton", () => {
@@ -28,10 +24,25 @@ describe("CopyButton", () => {
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
-  it("does not show the checkmark when copying fails", async () => {
+  it("shows the icon confirmation only after copying succeeds", async () => {
+    const user = userEvent.setup();
+    const pendingCopy = Promise.withResolvers<boolean>();
+    vi.mocked(copyToClipboard).mockReturnValue(pendingCopy.promise);
+    renderWithProviders(<CopyButton value="secret-value" label="Copy value" copiedLabel="Value copied" />);
+
+    await user.click(screen.getByRole("button", { name: "Copy value" }));
+
+    expect(copyToClipboard).toHaveBeenCalledWith("secret-value", "Value copied");
+    expect(screen.getByRole("img", { name: "Copy icon" })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "Copied icon" })).not.toBeInTheDocument();
+
+    await act(async () => pendingCopy.resolve(true));
+    expect(screen.getByRole("img", { name: "Copied icon" })).toBeInTheDocument();
+  });
+
+  it("keeps the icon unchanged when copying fails", async () => {
     const user = userEvent.setup();
     vi.mocked(copyToClipboard).mockResolvedValue(false);
-
     renderWithProviders(<CopyButton value="secret-value" label="Copy value" />);
 
     await user.click(screen.getByRole("button", { name: "Copy value" }));
@@ -39,19 +50,6 @@ describe("CopyButton", () => {
     expect(copyToClipboard).toHaveBeenCalledWith("secret-value", "Copied");
     expect(screen.queryByRole("img", { name: "Copied icon" })).not.toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Copy icon" })).toBeInTheDocument();
-  });
-
-  it("still copies when the clipboard API is unavailable, as on a plain HTTP origin", async () => {
-    const user = userEvent.setup();
-    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
-    vi.mocked(copyToClipboard).mockResolvedValue(true);
-
-    renderWithProviders(<CopyButton value="secret-value" label="Copy value" />);
-
-    await user.click(screen.getByRole("button", { name: "Copy value" }));
-
-    expect(copyToClipboard).toHaveBeenCalledWith("secret-value", "Copied");
-    expect(await screen.findByRole("img", { name: "Copied icon" })).toBeInTheDocument();
   });
 
   it("keeps the default icon styling, custom classes, title and 1200ms confirmation", async () => {

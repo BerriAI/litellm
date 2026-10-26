@@ -1,3 +1,4 @@
+import { copyToClipboard } from "@/utils/dataUtils";
 import { useState } from "react";
 import { Check, ChevronDown, ChevronRight, CircleAlert, Copy, Info } from "lucide-react";
 import moment from "moment";
@@ -9,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { LogEntry } from "../types";
-import { copyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { PROMPT_CACHE_CREATION_TOOLTIP, PROMPT_CACHE_READ_TOOLTIP } from "@/utils/promptCacheUsage";
 import GuardrailViewer from "./sections/GuardrailViewer/GuardrailViewer";
 import EvalViewer from "./sections/EvalViewer/EvalViewer";
@@ -304,9 +305,10 @@ function CopyButton({
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
-    if (!(await copyToClipboard(getText()))) return;
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1200);
+    if (await copyToClipboard(getText())) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    }
   };
 
   return (

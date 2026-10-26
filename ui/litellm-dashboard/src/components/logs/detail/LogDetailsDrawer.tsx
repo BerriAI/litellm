@@ -1,3 +1,4 @@
+import { copyToClipboard } from "@/utils/dataUtils";
 import { useEffect, useMemo, useState } from "react";
 import { Bot, Check, Copy, Sparkles, Wrench } from "lucide-react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
@@ -13,7 +14,7 @@ import { useKeyboardNavigation } from "./useKeyboardNavigation";
 import { LogDetailContent, GuardrailJumpLink } from "./LogDetailContent";
 import { sessionSpendLogsCall } from "../../networking";
 import { useQuery } from "@tanstack/react-query";
-import { copyToClipboard, getSpendString } from "@/utils/dataUtils";
+import { getSpendString } from "@/utils/dataUtils";
 import { normalizeGuardrailEntries, sortSessionLogs, SessionLogSortMode } from "./utils";
 import { DRAWER_WIDTH } from "./constants";
 import { useLogDetails } from "@/app/(dashboard)/hooks/logDetails/useLogDetails";
@@ -288,9 +289,11 @@ export function LogDetailsDrawer({
   const leftPanelDisplayId = leftPanelId.length > 14 ? `${leftPanelId.slice(0, 11)}...` : leftPanelId;
 
   const handleCopyLeftPanelId = async () => {
-    if (!(await copyToClipboard(leftPanelId))) return;
-    setCopiedLeftPanelId(true);
-    setTimeout(() => setCopiedLeftPanelId(false), 1200);
+    if (!leftPanelId) return;
+    if (await copyToClipboard(leftPanelId)) {
+      setCopiedLeftPanelId(true);
+      setTimeout(() => setCopiedLeftPanelId(false), 1200);
+    }
   };
 
   if (!currentLog || !enrichedLog) return null;

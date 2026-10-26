@@ -19,7 +19,11 @@ interface OutputCardProps {
 export function OutputCard({ message, completionTokens, outputCost }: OutputCardProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
 
-  const handleCopy = () => copyToClipboard(message?.content, "Output copied");
+  const handleCopy = () => {
+    if (!message) return;
+
+    void copyToClipboard(message.content || "", "Output copied");
+  };
 
   return (
     <div className="overflow-hidden rounded-md" style={{ border: `1px solid ${COLOR_BORDER}` }}>

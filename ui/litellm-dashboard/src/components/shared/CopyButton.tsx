@@ -53,7 +53,9 @@ const CopyButton: React.FC<CopyButtonProps> = ({
 
   if (value == null || (!value && !isAction)) return null;
 
-  const handleCopy = async () => setCopied(await copyToClipboard(value, copiedLabel));
+  const handleCopy = async () => {
+    setCopied(await copyToClipboard(value, copiedLabel));
+  };
 
   const button = (
     <Button

@@ -30,7 +30,10 @@ export function InputCard({ messages, promptTokens, inputCost }: InputCardProps)
   const lastMessage = nonSystemMessages.length > 0 ? nonSystemMessages[nonSystemMessages.length - 1] : null;
   const historyMessages = nonSystemMessages.slice(0, -1);
 
-  const handleCopy = () => copyToClipboard(lastMessage?.content, "Input copied");
+  const handleCopy = () => {
+    const content = lastMessage?.content || "";
+    void copyToClipboard(content, "Input copied");
+  };
 
   return (
     <div
