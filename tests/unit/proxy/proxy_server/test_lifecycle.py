@@ -29,10 +29,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 from typing_extensions import TypedDict
 
 import litellm.proxy.proxy_server as ps
+from litellm.constants import REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY
+from litellm.proxy._types import BaseDailySpendTransaction, DailyTagSpendTransaction
+from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.management_helpers.audit_logs import track_audit_task
 from litellm.proxy.proxy_server import (
     ProxyStartupEvent,
@@ -52,6 +55,8 @@ from litellm.proxy.proxy_server import (
 )
 
 from .conftest import normalize
+
+_TAG_BATCH_ADAPTER: Final = TypeAdapter(dict[str, DailyTagSpendTransaction])
 
 # ---------------------------------------------------------------------------
 # cleanup_router_config_variables
@@ -409,6 +414,96 @@ async def test_flush_spend_counters_on_shutdown_logs_and_swallows_commit_errors(
         await ps.flush_spend_counters_on_shutdown()
 
     assert "Error flushing spend counters on shutdown: db gone" in caplog.text
+
+
+def _daily_tag_spend(tag: str) -> dict[str, BaseDailySpendTransaction]:
+    return {
+        f"{tag}_2026-10-26_key-1_gpt-4o_openai": DailyTagSpendTransaction(
+            tag=tag,
+            date="2026-10-26",
+            api_key="key-1",
+            model="gpt-4o",
+            model_group=None,
+            custom_llm_provider="openai",
+            mcp_namespaced_tool_name="",
+            endpoint="",
+            prompt_tokens=10,
+            completion_tokens=5,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+            compression_saved_tokens=0,
+            compression_savings_spend=0.0,
+            prompt_caching_savings_spend=0.0,
+            gateway_injected_caching_savings_spend=0.0,
+            spend=0.01,
+            api_requests=1,
+            successful_requests=1,
+            failed_requests=0,
+            request_id=None,
+        )
+    }
+
+
+@pytest.mark.asyncio
+async def test_flush_spend_counters_on_shutdown_commits_the_daily_tag_spend_buffered_since_the_last_tag_job_run(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The tag job runs every batch interval x DAILY_TAG_SPEND_BATCH_MULTIPLIER, so a worker that exits
+    between runs must still write the tag rows it buffered or every tag rollup undercounts LiteLLM_SpendLogs."""
+    writer: Final = DBSpendUpdateWriter()
+    await writer.daily_tag_spend_update_queue.add_update(_daily_tag_spend("prod-tag"))
+    fake_prisma: Final = MagicMock()
+    execute_raw: Final = AsyncMock(return_value=1)
+    fake_prisma.db.execute_raw = execute_raw
+    fake_prisma.db.tx.return_value.__aenter__.return_value.execute_raw = execute_raw
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
+    monkeypatch.setattr(ps, "general_settings", {}, raising=False)
+    monkeypatch.setattr(ps.proxy_logging_obj, "db_spend_update_writer", writer)
+    monkeypatch.setattr(writer, "db_update_spend_transaction_handler", AsyncMock())
+
+    await ps.flush_spend_counters_on_shutdown()
+
+    tag_upserts: Final = [
+        call.args for call in execute_raw.await_args_list if '"LiteLLM_DailyTagSpend"' in str(call.args[0])
+    ]
+    observed: Final = {
+        "tag_upserts": len(tag_upserts),
+        "tag_written": "prod-tag" in tag_upserts[0][1:] if tag_upserts else False,
+        "left_in_memory": writer.daily_tag_spend_update_queue.update_queue.qsize(),
+    }
+    assert observed == {"tag_upserts": 1, "tag_written": True, "left_in_memory": 0}
+
+
+@pytest.mark.asyncio
+async def test_flush_spend_counters_on_shutdown_hands_daily_tag_spend_to_redis_when_another_pod_holds_the_lock(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """With the Redis transaction buffer, a pod that is not the tag-commit leader keeps its tag spend by pushing
+    it to the shared buffer on shutdown, where the leader's next tag job commits it."""
+    async_rpush: Final = AsyncMock(return_value=1)
+    redis_cache: Final = MagicMock()
+    redis_cache.async_rpush = async_rpush
+    writer: Final = DBSpendUpdateWriter(redis_cache=redis_cache)
+    await writer.daily_tag_spend_update_queue.add_update(_daily_tag_spend("prod-tag"))
+    monkeypatch.setattr(ps, "prisma_client", MagicMock(), raising=False)
+    monkeypatch.setattr(ps, "general_settings", {"use_redis_transaction_buffer": True}, raising=False)
+    monkeypatch.setattr(ps.proxy_logging_obj, "db_spend_update_writer", writer)
+    monkeypatch.setattr(writer, "db_update_spend_transaction_handler", AsyncMock())
+    monkeypatch.setattr(writer.pod_lock_manager, "acquire_lock", AsyncMock(return_value=False))
+
+    await ps.flush_spend_counters_on_shutdown()
+
+    pushed_batches: Final = [
+        _TAG_BATCH_ADAPTER.validate_json(value)
+        for call in async_rpush.await_args_list
+        if call.kwargs["key"] == REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY
+        for value in call.kwargs["values"]
+    ]
+    observed: Final = {
+        "pushed_tags": [txn["tag"] for batch in pushed_batches for txn in batch.values()],
+        "left_in_memory": writer.daily_tag_spend_update_queue.update_queue.qsize(),
+    }
+    assert observed == {"pushed_tags": ["prod-tag"], "left_in_memory": 0}
 
 
 # ---------------------------------------------------------------------------
@@ -1007,7 +1102,9 @@ async def test_proxy_shutdown_commits_spend_before_waiting_on_a_slow_logging_tas
 
     task_may_finish: Final = asyncio.Event()
     task_finished: Final = asyncio.Event()
-    flushes: Final[list[tuple[str, bool]]] = []  # mutable-ok: records what each shutdown flush saw, which is the assertion
+    flushes: Final[
+        list[tuple[str, bool]]
+    ] = []  # mutable-ok: records what each shutdown flush saw, which is the assertion
 
     async def slow_logging_task() -> None:
         await task_may_finish.wait()

@@ -8412,9 +8412,10 @@ async def update_daily_tag_spend(
     Separate scheduler job to commit daily tag spend updates.
 
     Runs at a longer interval (2.3x default) than the main update_spend job
-    to reduce query contention for DailyTagSpend table.
+    to reduce query contention for DailyTagSpend table. The proxy shutdown
+    flush also calls it once, so the tags buffered since the last tick are kept.
 
-    This is called by a dedicated scheduler job and does NOT process:
+    It does NOT process:
     - Regular spend updates (user, key, team, org)
     - End-user spend
     - Agent spend
