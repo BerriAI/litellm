@@ -173,9 +173,9 @@ export const deployedRouterModels = (
         active.length > 0
           ? active.map((row) => providerOf(row, group, first.family))
           : [providerOf({}, group, first.family)];
-      return [{ ...first, name: group.model_group, provider: [...new Set(providers)].sort().join(", ") }];
+      return [{ ...first, name: group.model_group, provider: [...new Set(providers)].toSorted().join(", ") }];
     })
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .toSorted((a, b) => a.name.localeCompare(b.name));
 
 const latestLines = (models: readonly RouterModel[]): RouterModel[] =>
   models.filter(
@@ -210,7 +210,7 @@ export const recommendSolverPair = (
     (everyday.rank === hard.rank ? 10 : 0) +
     Math.abs(everyday.rank - low) +
     Math.abs(hard.rank - high);
-  const chosen = pairs.sort(
+  const chosen = pairs.toSorted(
     (a, b) =>
       score(a) - score(b) || a.everyday.name.localeCompare(b.everyday.name) || a.hard.name.localeCompare(b.hard.name),
   )[0];
