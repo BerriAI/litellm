@@ -187,6 +187,7 @@ class TestMCPClientUnitTests:
             )
         ]
         mock_session_instance.send_request.return_value = ListToolsResult(tools=mock_tools)
+        mock_session_instance._absorb_tool_listing = MagicMock(side_effect=lambda result, **_kwargs: result)
 
         client = MCPClient("http://example.com")
         result = await client.list_tools()
@@ -231,6 +232,7 @@ class TestMCPClientUnitTests:
             ListToolsResult(tools=first_page_tools, nextCursor="page-2"),
             ListToolsResult(tools=[second_page_tool]),
         ]
+        mock_session_instance._absorb_tool_listing = MagicMock(side_effect=lambda result, **_kwargs: result)
 
         client = MCPClient("http://example.com")
         result = await client.list_tools()
@@ -272,6 +274,7 @@ class TestMCPClientUnitTests:
             ),
             RuntimeError("transient upstream failure"),
         ]
+        mock_session_instance._absorb_tool_listing = MagicMock(side_effect=lambda result, **_kwargs: result)
 
         client = MCPClient("http://example.com")
         result = await client.list_tools()

@@ -1637,6 +1637,7 @@ class TestListToolsRestAPI:
                 ]
             ),
         ]
+        mock_session_instance._absorb_tool_listing = MagicMock(side_effect=lambda result, **_kwargs: result)
         mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session_instance)
         mock_session_ctx.__aexit__ = AsyncMock(return_value=None)
         monkeypatch.setattr(
