@@ -29,6 +29,9 @@ from .llm_provider_handlers.cursor_passthrough_logging_handler import (
 from .llm_provider_handlers.deepgram_listen_passthrough_logging_handler import (
     DeepgramListenPassthroughLoggingHandler,
 )
+from .llm_provider_handlers.deepgram_speak_passthrough_logging_handler import (
+    DeepgramSpeakPassthroughLoggingHandler,
+)
 from .llm_provider_handlers.fal_ai_passthrough_logging_handler import (
     FalAIPassthroughLoggingHandler,
 )
@@ -150,7 +153,7 @@ class PassThroughEndpointLogging:
 
     _handle_logging = handle_logging
 
-    def normalize_llm_passthrough_logging_payload(
+    def normalize_llm_passthrough_logging_payload(  # noqa: C901  # provider dispatch, one branch per provider
         self,
         httpx_response: httpx.Response,
         response_body: dict | list[dict[str, object]] | None,
@@ -400,6 +403,17 @@ class PassThroughEndpointLogging:
             )
             standard_logging_response_object = deepgram_handler_result["result"]  # rebind-ok: elif-chain
             kwargs = deepgram_handler_result["kwargs"]  # rebind-ok: elif-chain contract
+        elif DeepgramSpeakPassthroughLoggingHandler.is_deepgram_speak_route(url_route, httpx_response.request.method):
+            deepgram_speak_handler_result: Final = (
+                DeepgramSpeakPassthroughLoggingHandler.deepgram_speak_passthrough_handler(
+                    request_body=request_body,
+                    logging_obj=logging_obj,
+                    upstream_url=str(httpx_response.request.url),
+                    kwargs=kwargs,
+                )
+            )
+            standard_logging_response_object = deepgram_speak_handler_result["result"]  # rebind-ok: elif-chain
+            kwargs = deepgram_speak_handler_result["kwargs"]  # rebind-ok: elif-chain contract
         elif FalAIPassthroughLoggingHandler.is_fal_ai_route(url_route, custom_llm_provider):
             fal_ai_handler_result: Final = FalAIPassthroughLoggingHandler().fal_ai_passthrough_handler(
                 response_body=response_body if isinstance(response_body, dict) else MappingProxyType({}),

@@ -34,6 +34,7 @@ from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.deepgram.common_utils import deepgram_speak_characters
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
@@ -7952,6 +7953,66 @@ async def test_websocket_passthrough_counts_client_text_when_the_upstream_ends_w
     assert success_handler.call_args.kwargs["request_body"] == {
         WEBSOCKET_CLIENT_TEXT_COUNT_KEY: SPEAK_SESSION_CLIENT_LENGTH
     }
+
+
+class _CapturingSpendLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.payloads: list[StandardLoggingPayload] = []  # mutable-ok: the logger appends each payload it receives
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.payloads.append(kwargs["standard_logging_object"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_deepgram_speak_session_logs_character_spend_once_and_never_the_spoken_text(monkeypatch):
+    """Runs the relay with the speak counter and the real success handler, so the spend logger sees what production
+    writes for one Speak message"""
+    capturing_logger = _CapturingSpendLogger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [capturing_logger])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    queued: list[Coroutine[object, object, None]] = []  # mutable-ok: the fake logging worker keeps each coroutine
+    upstream_ws = SpeakingUpstreamWebSocket()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as proxy_logging,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
+            return_value=FakeUpstreamConnect(upstream_ws),
+        ),
+        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER") as worker,
+    ):
+        proxy_logging.pre_call_hook = AsyncMock(return_value={})
+        proxy_logging.post_call_success_hook = AsyncMock()
+        proxy_logging.post_call_failure_hook = AsyncMock()
+        worker.ensure_initialized_and_enqueue = MagicMock(
+            side_effect=lambda async_coroutine: queued.append(async_coroutine)
+        )
+        await asyncio.wait_for(
+            websocket_passthrough_request(
+                websocket=_speak_client(),
+                target=DEEPGRAM_SPEAK_TARGET,
+                custom_headers={"Authorization": "Token dg-provider-key"},
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", team_id="team-tts"),
+                forward_headers=False,
+                endpoint="/deepgram/v1/speak",
+                accept_websocket=False,
+                count_client_text=deepgram_speak_characters,
+            ),
+            timeout=RELAY_HANG_GUARD_SECONDS,
+        )
+    for coroutine in queued:
+        await coroutine
+
+    assert len(capturing_logger.payloads) == 1
+    payload = capturing_logger.payloads[0]
+    assert payload["model"] == "aura-2-thalia-en"
+    assert payload["custom_llm_provider"] == "deepgram"
+    # Aura-2 pay as you go rate, $0.030 per 1,000 characters, from https://deepgram.com/pricing, checked 2026-10-26
+    assert payload["response_cost"] == pytest.approx(len(SPOKEN_TEXT) * 0.030 / 1000)
+    assert SPOKEN_TEXT not in json.dumps(payload, default=str)
 
 
 @pytest.mark.asyncio
