@@ -13088,6 +13088,7 @@ class Router:
                     healthy_deployments=remaining,
                     request_kwargs=tag_request,
                     metadata_variable_name=metadata_variable_name,
+                    request_deployments=request_deployments,
                 )
             except ValueError:  # tag routing sends this request to none of the rest
                 break
@@ -15053,6 +15054,7 @@ class Router:
             request_kwargs=request_kwargs,
             healthy_deployments=healthy_deployments,
             metadata_variable_name=self._get_metadata_variable_name_from_kwargs(request_kwargs),
+            request_deployments=request_deployments,
         )
 
         # narrow to whatever `self.routing_plugins` left in candidate_models
