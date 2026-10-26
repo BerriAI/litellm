@@ -76844,7 +76844,7 @@
         "max_input_tokens": 262144,
         "max_output_tokens": 235929,
         "input_cost_per_token": 1.06944e-07,
-        "cache_read_input_token_cost": 2.6736e-08,
+        "cache_read_input_token_cost": 8.0208e-08,
         "output_cost_per_token": 1.0026e-06,
         "litellm_provider": "mallard",
         "mode": "chat",
