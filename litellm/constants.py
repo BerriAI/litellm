@@ -480,6 +480,7 @@ REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_end_user_sp
 REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_agent_spend_update_buffer"
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_tag_spend_update_buffer"
 REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_window_spend_update_buffer"
+REDIS_TOOL_DISCOVERY_BUFFER_KEY: Final = "litellm_tool_discovery_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT: Final = get_env_int("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100)
 REDIS_SPEND_LOGS_BUFFER_KEY: Final = "litellm_spend_logs_buffer"
 REDIS_SPEND_LOGS_BUFFER_MAX_ROWS: Final = 100000
@@ -861,6 +862,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "heroku",
     "oci",
     "morph",
+    "opencode_go",
     "lambda_ai",
     "inception",
     "vercel_ai_gateway",
@@ -1116,6 +1118,7 @@ openai_compatible_providers: Final[list[str]] = [
     "v0",
     "helicone",
     "morph",
+    "opencode_go",
     "lambda_ai",
     "inception",
     "hyperbolic",
@@ -1842,6 +1845,7 @@ LITELLM_UI_SESSION_DURATION: Final = os.getenv("LITELLM_UI_SESSION_DURATION", "2
 
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME: Final = "db_spend_update_job"
+TOOL_DISCOVERY_COMMIT_JOB_NAME: Final = "tool_discovery_commit_job"
 DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME: Final = "db_daily_tag_spend_update_job"
 PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME: Final = "prometheus_emit_budget_metrics"
 CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME: Final = "cloudzero_export_usage_data"

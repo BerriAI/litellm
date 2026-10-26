@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from functools import reduce
 from itertools import chain
 from types import MappingProxyType
-from typing import Annotated, Any, Final, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
@@ -31,6 +31,9 @@ from ..constants import (
 )
 from ..errors import AnthropicContextManagementError
 from ..placeholders import build_cleared_tool_result_content
+
+if TYPE_CHECKING:
+    from litellm.types.llms.openai import ChatCompletionToolParam
 
 T = TypeVar("T")
 # api.anthropic.com, measured 2026-10-19: text results of 1 to 46 bytes are never cleared or counted toward keep
@@ -216,7 +219,7 @@ def _trigger_met(
     current_tokens: Final = litellm.token_counter(
         model=model,
         messages=messages,
-        tools=cast(Any, tools),
+        tools=cast("list[ChatCompletionToolParam] | None", tools),
     )
     verbose_logger.debug("context_management polyfill: current_tokens: %s", current_tokens)
     verbose_logger.debug("context_management polyfill: threshold: %s", threshold)
@@ -366,9 +369,13 @@ def apply_clear_tool_uses_20250919(
     tokens_before: Final = (
         counted_tokens
         if counted_tokens is not None
-        else litellm.token_counter(model=model, messages=messages, tools=cast(Any, tools))
+        else litellm.token_counter(
+            model=model, messages=messages, tools=cast("list[ChatCompletionToolParam] | None", tools)
+        )
     )
-    tokens_after: Final = litellm.token_counter(model=model, messages=final_messages, tools=cast(Any, tools))
+    tokens_after: Final = litellm.token_counter(
+        model=model, messages=final_messages, tools=cast("list[ChatCompletionToolParam] | None", tools)
+    )
     cleared_input_tokens: Final = max(tokens_before - tokens_after, 0)
 
     return final_messages, {
