@@ -9,6 +9,7 @@ duration_in_seconds is used in diff parts of the code base, example
 import re
 import time as time_module
 from datetime import datetime, time, timedelta, timezone, tzinfo
+from types import MappingProxyType
 from typing import Final
 from zoneinfo import ZoneInfo
 
@@ -22,8 +23,25 @@ _BUDGET_DURATION_WORD_ALIASES: Final[dict[str, str]] = {
 }
 
 
+_FIXED_UNIT_SECONDS: Final = MappingProxyType({"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800})
+
+
 def _normalize_duration(duration: str) -> str:
     return _BUDGET_DURATION_WORD_ALIASES.get(duration.strip().lower(), duration)
+
+
+def budget_reset_period_key(duration: str | None) -> str | None:
+    """Equal keys mean the same reset schedule: fixed-length periods compare by length, so "7d" matches "1w",
+    while a calendar month only matches the same number of months."""
+    if duration is None:
+        return None
+    normalized: Final = _normalize_duration(duration).strip()
+    parsed: Final = re.fullmatch(r"(\d+)(mo|[smhdw])", normalized)
+    if parsed is None:
+        return normalized
+    value: Final = int(parsed[1])
+    unit: Final = parsed[2]
+    return f"{value}mo" if unit == "mo" else f"{value * _FIXED_UNIT_SECONDS[unit]}s"
 
 
 def _extract_from_regex(duration: str) -> tuple[int, str]:

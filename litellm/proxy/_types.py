@@ -1935,6 +1935,9 @@ class GlobalEndUsersSpend(LiteLLMPydanticObjectBase):
     endTime: datetime | None = None
 
 
+TeamMemberBudgetBackfill: TypeAlias = Literal["none", "raise_to_default", "lower_to_default", "all_to_default"]
+
+
 class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     """
     UpdateTeamRequest, used by /team/update when you need to update a team
@@ -1977,6 +1980,14 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     team_member_model_max_budget: GenericBudgetConfigType | None = None
     team_member_rpm_limit: int | None = None
     team_member_tpm_limit: int | None = None
+    team_member_budget_backfill: TeamMemberBudgetBackfill | None = Field(
+        default=None,
+        description=(
+            "Which members with their own budget move onto the team_member_budget sent in the same request: "
+            "'raise_to_default' moves those below it, 'lower_to_default' those above it, 'all_to_default' both. "
+            "Members whose budget resets on a different schedule than the default are left alone"
+        ),
+    )
     team_member_key_duration: str | None = None
     allowed_passthrough_routes: list | None = None
     denied_passthrough_routes: list[str] | None = None
@@ -2001,6 +2012,21 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
             "(e.g. {'gpt-4o': {'max_budget': 10, 'budget_duration': '1d'}})"
         ),
     )
+
+    @model_validator(mode="after")
+    def _backfill_needs_a_positive_default(self) -> "UpdateTeamRequest":
+        if self.team_member_budget_backfill in (None, "none"):
+            return self
+        if self.team_member_budget is None or self.team_member_budget <= 0:
+            raise ValueError("team_member_budget_backfill needs a positive team_member_budget in the same request")
+        return self
+
+
+class TeamMemberBudgetBackfillResult(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    moved_to_default: int
+    skipped_other_reset_period: int
 
 
 class PatchTeamRequest(UpdateTeamRequest):

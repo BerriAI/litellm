@@ -69,6 +69,9 @@ def happy_path_upsert(monkeypatch):
 
     class _FakeTx:
         litellm_teamtable = prisma_client.db.litellm_teamtable
+        litellm_teammembership = types.SimpleNamespace(
+            find_unique=AsyncMock(return_value=types.SimpleNamespace(user_id="user-1", budget_id="bud-under-lock"))
+        )
 
         async def __aenter__(self):
             return self
@@ -121,6 +124,17 @@ async def test_team_member_update_sends_provided_fields_as_patch(happy_path_upse
         "budget_duration": "30d",
     }
     assert response.budget_duration == "30d"
+
+
+@pytest.mark.asyncio
+async def test_team_member_update_writes_the_budget_the_member_has_once_the_team_lock_is_held(happy_path_upsert):
+    """A team default backfill that commits while this update waits for the lock can relink the member. The
+    update must then write the budget the member points at now, not the one read before the lock."""
+    data, request, auth = _member_update_request(max_budget_in_team=30.0)
+
+    await team_member_update(data, request, auth)
+
+    assert happy_path_upsert.await_args.kwargs["existing_budget_id"] == "bud-under-lock"
 
 
 @pytest.mark.asyncio

@@ -905,7 +905,6 @@ async def test_team_update_reaches_inherited_members_but_not_overridden_ones():
     from litellm.proxy._types import LitellmUserRoles
     from litellm.proxy.auth.auth_checks import _check_team_member_budget
     from litellm.proxy.management_endpoints.common_utils import upsert_budget_and_membership
-    from litellm.proxy.management_endpoints.team_endpoints import TeamMemberBudgetHandler
     from litellm.proxy.utils import ProxyLogging
 
     db: Final = _FakeDb()
@@ -940,15 +939,7 @@ async def test_team_update_reaches_inherited_members_but_not_overridden_ones():
     assert db.litellm_teammembership.membership(team_id, "overridden").budget_id != default_budget.budget_id
     assert db.litellm_budgettable.rows[default_budget.budget_id]["max_budget"] == 100.0
 
-    with patch(  # test-quality-ok: update_budget reads this module global; no dependency injection seam exists
-        "litellm.proxy.proxy_server.prisma_client", prisma_client
-    ):
-        await TeamMemberBudgetHandler.upsert_team_member_budget_table(
-            team_table=team,
-            user_api_key_dict=admin,
-            updated_kv={},
-            team_member_budget=1.0,
-        )
+    await db.litellm_budgettable.update(where={"budget_id": default_budget.budget_id}, data={"max_budget": 1.0})
 
     async def spend_from_membership(counter_key: str, fallback_spend: float, max_budget: float | None = None) -> float:
         return fallback_spend

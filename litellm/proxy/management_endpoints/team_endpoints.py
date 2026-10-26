@@ -89,6 +89,8 @@ from litellm.proxy._types import (
     TeamInfoResponseObjectTeamTable,
     TeamListResponseObject,
     TeamMemberAddRequest,
+    TeamMemberBudgetBackfill,
+    TeamMemberBudgetBackfillResult,
     TeamMemberBudgetSource,
     TeamMemberDeleteRequest,
     TeamMemberResetBudgetResponse,
@@ -204,6 +206,14 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
     set_object_permission,
 )
 from litellm.proxy.management_helpers.ptu_share_guard import raise_if_teams_hold_ptu_shares
+from litellm.proxy.management_helpers.team_member_default_budget import (
+    MAX_MEMBER_BUDGETS_MOVED_PER_UPDATE,
+    TeamMemberDefaultBudgetWrite,
+    TooManyMemberBudgetsToMove,
+    move_member_budgets_to_default,
+    plan_team_member_default_budget_write,
+    write_team_member_default_budget,
+)
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
@@ -529,6 +539,10 @@ def _team_membership_db(prisma_client: PrismaClient | None) -> "TableActions[pri
     return TeamMembershipRepository(prisma_client).table
 
 
+def _team_membership_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_TeamMembership]":
+    return tx.litellm_teammembership  # pyright: ignore[reportReturnType]  # TableActions widens the generated inputs to Mapping, as the repositories do
+
+
 def _user_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_UserTable]":
     return UserRepository(prisma_client).table
 
@@ -678,15 +692,14 @@ class TeamMemberBudgetHandler:
 
     @staticmethod
     @with_service_target("team_member_budgets")
-    async def _evict_default_budget_cache(
+    async def evict_default_budget_cache(
         budget_id: str,
         user_api_key_cache: UserApiKeyCache | None,
     ) -> None:
         if user_api_key_cache is not None:
-            try:
-                await user_api_key_cache.async_delete_cache(key=f"team_member_default_budget:{budget_id}")
-            except Exception:  # noqa: BLE001  # Cache failure must not fail a committed budget update.
-                verbose_proxy_logger.warning("Failed to evict the team member default budget cache", exc_info=True)
+            await evict_and_broadcast(
+                cache_keys=(f"team_member_default_budget:{budget_id}",), user_api_key_cache=user_api_key_cache
+            )
 
     @staticmethod
     async def create_team_member_budget_table(
@@ -741,7 +754,7 @@ class TeamMemberBudgetHandler:
             budget_obj=budget_request,
             user_api_key_dict=user_api_key_dict,
         )
-        await TeamMemberBudgetHandler._evict_default_budget_cache(
+        await TeamMemberBudgetHandler.evict_default_budget_cache(
             budget_id=team_member_budget_table.budget_id,
             user_api_key_cache=user_api_key_cache,
         )
@@ -757,89 +770,6 @@ class TeamMemberBudgetHandler:
         return new_team_data_json
 
     @staticmethod
-    async def upsert_team_member_budget_table(
-        team_table: _TeamBudgetRow,
-        user_api_key_dict: UserAPIKeyAuth,
-        updated_kv: dict,
-        team_member_budget: float | None = None,
-        team_member_rpm_limit: int | None = None,
-        team_member_tpm_limit: int | None = None,
-        team_member_budget_duration: str | None = None,
-        team_member_model_max_budget: GenericBudgetConfigType | None = None,
-        user_api_key_cache: UserApiKeyCache | None = None,
-        explicitly_set_fields: AbstractSet[str] = frozenset(),
-    ) -> dict:
-        """Upsert team member budget table with provided limits.
-
-        A field the caller explicitly sent as null is written as null, so a
-        team can keep a member budget while dropping its reset period.
-        """
-        from litellm.proxy._types import BudgetNewRequest
-        from litellm.proxy.management_endpoints.budget_management_endpoints import (
-            update_budget,
-        )
-
-        if team_table.metadata is None:
-            team_table.metadata = {}
-
-        team_member_budget_id: Final = team_table.metadata.get("team_member_budget_id")
-        if team_member_budget_id is not None and isinstance(team_member_budget_id, str):
-            # Budget exists - create update request with only provided values
-            budget_request: Final = BudgetNewRequest(budget_id=team_member_budget_id)
-
-            if team_member_budget is not None or "team_member_budget" in explicitly_set_fields:
-                budget_request.max_budget = team_member_budget
-            if team_member_rpm_limit is not None or "team_member_rpm_limit" in explicitly_set_fields:
-                budget_request.rpm_limit = team_member_rpm_limit
-            if team_member_tpm_limit is not None or "team_member_tpm_limit" in explicitly_set_fields:
-                budget_request.tpm_limit = team_member_tpm_limit
-            if team_member_budget_duration is not None or "team_member_budget_duration" in explicitly_set_fields:
-                budget_request.budget_duration = team_member_budget_duration
-                if team_member_budget_duration is None:
-                    budget_request.budget_reset_at = None
-            if team_member_model_max_budget is not None or "team_member_model_max_budget" in explicitly_set_fields:
-                budget_request.model_max_budget = (
-                    {} if team_member_model_max_budget is None else team_member_model_max_budget
-                )
-
-            budget_row: Final = await _as_budget_write(update_budget)(
-                budget_obj=budget_request,
-                user_api_key_dict=user_api_key_dict,
-            )
-            await TeamMemberBudgetHandler._evict_default_budget_cache(
-                budget_id=team_member_budget_id,
-                user_api_key_cache=user_api_key_cache,
-            )
-            verbose_proxy_logger.info(
-                "Updated team member budget table: %s, with team_member_budget=%s, team_member_rpm_limit=%s, team_member_tpm_limit=%s",
-                budget_row.budget_id,
-                team_member_budget,
-                team_member_rpm_limit,
-                team_member_tpm_limit,
-            )
-            if updated_kv.get("metadata") is None:
-                updated_kv["metadata"] = {}
-            updated_kv["metadata"]["team_member_budget_id"] = budget_row.budget_id
-
-        else:  # budget does not exist
-            updated_kv = await TeamMemberBudgetHandler.create_team_member_budget_table(
-                data=team_table,
-                new_team_data_json=updated_kv,
-                user_api_key_dict=user_api_key_dict,
-                team_member_budget=team_member_budget,
-                team_member_rpm_limit=team_member_rpm_limit,
-                team_member_tpm_limit=team_member_tpm_limit,
-                team_member_budget_duration=team_member_budget_duration,
-                team_member_model_max_budget=team_member_model_max_budget,
-                user_api_key_cache=user_api_key_cache,
-                explicitly_set_fields=explicitly_set_fields,
-            )
-
-        # Remove team member fields from updated_kv
-        TeamMemberBudgetHandler.clean_team_member_fields(updated_kv)
-        return updated_kv
-
-    @staticmethod
     def clean_team_member_fields(data_dict: dict) -> None:
         """Remove team member fields from data dictionary"""
         data_dict.pop("team_member_budget", None)
@@ -849,118 +779,11 @@ class TeamMemberBudgetHandler:
         data_dict.pop(  # pyright: ignore[reportUnknownMemberType]  # legacy raw dict lacks key typing
             "team_member_model_max_budget", None
         )
+        data_dict.pop(  # pyright: ignore[reportUnknownMemberType]  # legacy raw dict lacks key typing
+            "team_member_budget_backfill", None
+        )
 
     _clean_team_member_fields = clean_team_member_fields
-
-    @staticmethod
-    async def clear_team_member_budget_fields(
-        team_table: _TeamBudgetRow,
-        user_api_key_dict: "UserAPIKeyAuth",
-        updated_kv: dict,
-        explicitly_set_fields: set,
-        user_api_key_cache: UserApiKeyCache | None = None,
-    ) -> dict:
-        """Clear explicitly-nulled fields on the team member budget row."""
-        from litellm.proxy._types import BudgetNewRequest
-        from litellm.proxy.management_endpoints.budget_management_endpoints import (
-            update_budget,
-        )
-
-        if team_table.metadata is None:
-            team_table.metadata = {}
-
-        team_member_budget_id: Final = team_table.metadata.get("team_member_budget_id")
-        if team_member_budget_id is not None and isinstance(team_member_budget_id, str):
-            budget_request: Final = BudgetNewRequest(budget_id=team_member_budget_id)
-            if "team_member_budget" in explicitly_set_fields:
-                budget_request.max_budget = None
-            if "team_member_budget_duration" in explicitly_set_fields:
-                budget_request.budget_duration = None
-                budget_request.budget_reset_at = None
-            if "team_member_rpm_limit" in explicitly_set_fields:
-                budget_request.rpm_limit = None
-            if "team_member_tpm_limit" in explicitly_set_fields:
-                budget_request.tpm_limit = None
-            if "team_member_model_max_budget" in explicitly_set_fields:
-                budget_request.model_max_budget = {}
-            await update_budget(
-                budget_obj=budget_request,
-                user_api_key_dict=user_api_key_dict,
-            )
-            await TeamMemberBudgetHandler._evict_default_budget_cache(
-                budget_id=team_member_budget_id,
-                user_api_key_cache=user_api_key_cache,
-            )
-
-        TeamMemberBudgetHandler.clean_team_member_fields(updated_kv)
-        return updated_kv
-
-    @staticmethod
-    async def backfill_team_member_budget_entries(
-        team_id: str,
-        members_with_roles: Sequence[Member | dict[str, object]],
-        team_member_budget_id: str,
-        prisma_client: PrismaClient,
-    ) -> None:
-        """
-        Ensure every team member has a TeamMembership row linked to the
-        team_member_budget.
-
-        Called after team_member_budget is set/updated on a team. Creates
-        rows for members who don't have one, and populates budget_id on
-        existing rows where it is NULL. Rows with a non-NULL budget_id
-        are left untouched, which preserves per-member overrides but also
-        means rows pointing to a prior team-default budget_id are not
-        migrated to the new one.
-        """
-        if not members_with_roles:
-            return
-
-        # Batch-fetch existing memberships for this team (avoids N+1 queries)
-        existing_memberships: Final = await _team_membership_db(prisma_client).find_many(where={"team_id": team_id})
-        existing_user_ids: Final = {m.user_id for m in existing_memberships}
-
-        # Identify members with no existing membership row.
-        # members_with_roles may contain Member instances or raw dicts depending
-        # on how the team was fetched/deserialized.
-        missing: Final = []
-        for m in members_with_roles:
-            user_id = m.get("user_id") if isinstance(m, dict) else m.user_id
-            if user_id is not None and user_id not in existing_user_ids:
-                missing.append(
-                    {
-                        "team_id": team_id,
-                        "user_id": user_id,
-                        "budget_id": team_member_budget_id,
-                    }
-                )
-
-        if missing:
-            await _team_membership_db(prisma_client).create_many(
-                data=missing,
-                skip_duplicates=True,  # safety net against concurrent races
-            )
-            verbose_proxy_logger.info(
-                "Backfilled %d team_memberships for team %s with budget %s",
-                len(missing),
-                _sanitize_for_log(team_id),
-                _sanitize_for_log(team_member_budget_id),
-            )
-
-        # Heal existing membership rows that predate the team_member_budget
-        # configuration: populate budget_id where it is currently NULL.
-        # Rows with an explicit budget_id (per-member override) are left alone.
-        updated: Final = await _team_membership_db(prisma_client).update_many(
-            where={"team_id": team_id, "budget_id": None},
-            data={"budget_id": team_member_budget_id},
-        )
-        if updated:
-            verbose_proxy_logger.info(
-                "Populated budget_id on %d existing team_memberships for team %s with budget %s",
-                updated,
-                _sanitize_for_log(team_id),
-                _sanitize_for_log(team_member_budget_id),
-            )
 
 
 def _get_default_team_param(field: str) -> object:
@@ -1422,6 +1245,8 @@ def _check_team_budget_update_authority(
     return guard
 
 
+_TEAM_MEMBER_BUDGET_TX_TIMEOUT: Final = timedelta(seconds=60)
+
 _TEAM_UPDATE_INCLUDE: Final = MappingProxyType(
     {
         "litellm_model_table": True,
@@ -1434,26 +1259,83 @@ _TEAM_UPDATE_INCLUDE: Final = MappingProxyType(
 
 
 async def _write_team_update(
-    prisma_client: PrismaClient | None,
+    teams: "TableActions[prisma_models.LiteLLM_TeamTable]",
     team_id: str,
     team_update_data: Mapping[str, object],
     max_budget_guard: _MaxBudgetGuard | None,
 ) -> "prisma_models.LiteLLM_TeamTable | None":
     by_id: Final[_TeamIdWhere] = {"team_id": team_id}
     if max_budget_guard is None:
-        return await _team_db(prisma_client).update(where=by_id, data=team_update_data, include=_TEAM_UPDATE_INCLUDE)
+        return await teams.update(where=by_id, data=team_update_data, include=_TEAM_UPDATE_INCLUDE)
     as_checked: Final[_TeamBudgetGuardWhere] = {
         "team_id": team_id,
         "max_budget": max_budget_guard.max_budget,
         "organization_id": max_budget_guard.organization_id,
     }
-    written: Final = await _team_db(prisma_client).update_many(where=as_checked, data=team_update_data)
+    written: Final = await teams.update_many(where=as_checked, data=team_update_data)
     if written == 0:
         conflict: Final[_ErrorDetail] = {
             "error": "The team's organization or max_budget changed during this update. Reload the team and try again."
         }
         raise HTTPException(status_code=409, detail=conflict)
-    return await _team_db(prisma_client).find_unique(where=by_id, include=_TEAM_UPDATE_INCLUDE)
+    return await teams.find_unique(where=by_id, include=_TEAM_UPDATE_INCLUDE)
+
+
+@dataclass(frozen=True, slots=True)
+class _TeamWrite:
+    team_row: "prisma_models.LiteLLM_TeamTable | None"
+    changed_member_user_ids: tuple[str, ...]
+    backfill_result: TeamMemberBudgetBackfillResult | None
+
+
+async def _write_team_with_member_default_budget(
+    prisma_client: PrismaClient,
+    *,
+    team_id: str,
+    team_update_data: Mapping[str, object],
+    max_budget_guard: _MaxBudgetGuard | None,
+    default_budget_write: TeamMemberDefaultBudgetWrite,
+    backfill: TeamMemberBudgetBackfill,
+    changed_by: str,
+) -> _TeamWrite:
+    """One transaction under the team lock, so the default, every member it reaches and the team row commit
+    together or not at all."""
+    async with prisma_client.tx(timeout=_TEAM_MEMBER_BUDGET_TX_TIMEOUT) as tx:
+        await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
+        members: Final = await TeamRepository(prisma_client).get_members_with_roles_locked(tx, team_id)
+        if members is None:
+            raise HTTPException(
+                status_code=404, detail={"error": f"Team={team_id} was deleted while this update was running"}
+            )
+        member_user_ids: Final = tuple(member.user_id for member in members if member.user_id is not None)
+        await write_team_member_default_budget(
+            tx, default_budget_write, team_id=team_id, member_user_ids=member_user_ids, changed_by=changed_by
+        )
+        moved: Final = await move_member_budgets_to_default(
+            tx,
+            team_id=team_id,
+            default_budget_id=default_budget_write.budget_id,
+            backfill=backfill,
+            changed_by=changed_by,
+        )
+        if isinstance(moved, TooManyMemberBudgetsToMove):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": (
+                        f"{moved.count} members would move onto the new default, more than the "
+                        f"{MAX_MEMBER_BUDGETS_MOVED_PER_UPDATE} one update can move. Save with "
+                        "team_member_budget_backfill set to 'none', then move members in batches with "
+                        f"POST /management/v1/teams/{team_id}/members/bulk_update"
+                    )
+                },
+            )
+        team_row: Final = await _write_team_update(_team_tx_db(tx), team_id, team_update_data, max_budget_guard)
+    return _TeamWrite(
+        team_row=team_row,
+        changed_member_user_ids=tuple(dict.fromkeys((*member_user_ids, *moved.user_ids))),
+        backfill_result=moved.result() if backfill != "none" else None,
+    )
 
 
 def _existing_model_cap(raw_budget_config: object) -> BudgetConfig | None:
@@ -2284,15 +2166,6 @@ def validate_team_org_change(
     return True
 
 
-def _member_user_ids(members_with_roles: Sequence[dict[str, object]]) -> tuple[str, ...]:
-    """Extract the string ``user_id`` of each team member, dropping rows without one.
-
-    ``members_with_roles`` is a Prisma-deserialized JSON column, so its ``user_id`` is typed
-    ``object``; the ``isinstance`` narrows it to the ``str`` ``invalidate_team_member_spend_state`` needs.
-    """
-    return tuple(user_id for member in members_with_roles if isinstance((user_id := member.get("user_id")), str))
-
-
 async def _evict_created_membership_caches(
     user_ids: Iterable[str],
     team_id: str,
@@ -2361,6 +2234,7 @@ async def update_team(
     - team_member_model_max_budget: Optional[dict] - Per-model budgets shared by team members without an override.
     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
+    - team_member_budget_backfill: Optional[str] - Moves members with their own budget onto the team_member_budget sent in the same request: "raise_to_default" (those below it), "lower_to_default" (those above it), "all_to_default" (both) or "none". Members on a different reset schedule are skipped, and the response's team_member_budget_backfill_result counts who moved.
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
     - denied_passthrough_routes: Optional[List[str]] - List of pass through routes the team's keys may not call, even if allowed. Applies together with each key's `denied_passthrough_routes`.
@@ -2702,50 +2576,18 @@ async def update_team(
                     },
                 }
 
-        if _team_member_fields_in_request and TeamMemberBudgetHandler.should_create_budget(
-            team_member_budget=data.team_member_budget,
-            team_member_rpm_limit=data.team_member_rpm_limit,
-            team_member_tpm_limit=data.team_member_tpm_limit,
-            team_member_budget_duration=data.team_member_budget_duration,
-            team_member_model_max_budget=data.team_member_model_max_budget,
-        ):
-            updated_kv = await TeamMemberBudgetHandler.upsert_team_member_budget_table(
-                team_table=existing_team_row,
-                user_api_key_dict=user_api_key_dict,
-                updated_kv=updated_kv,
-                team_member_budget=data.team_member_budget,
-                team_member_rpm_limit=data.team_member_rpm_limit,
-                team_member_tpm_limit=data.team_member_tpm_limit,
-                team_member_budget_duration=data.team_member_budget_duration,
-                team_member_model_max_budget=data.team_member_model_max_budget,
-                user_api_key_cache=user_api_key_cache,
-                explicitly_set_fields=_team_member_fields_in_request,
-            )
-            # Backfill team_memberships for members who joined before the
-            # budget was configured — they won't have a membership row yet.
-            _backfill_budget_id: Final = (updated_kv.get("metadata") or {}).get("team_member_budget_id")
-            if _backfill_budget_id and existing_team_row.members_with_roles:
-                await TeamMemberBudgetHandler.backfill_team_member_budget_entries(
-                    team_id=data.team_id,
-                    members_with_roles=existing_team_row.members_with_roles,
-                    team_member_budget_id=_backfill_budget_id,
-                    prisma_client=prisma_client,
-                )
-                await _evict_created_membership_caches(
-                    user_ids=_member_user_ids(existing_team_row.members_with_roles),
-                    team_id=data.team_id,
-                    user_api_key_cache=user_api_key_cache,
-                )
-        elif _team_member_fields_in_request:
-            updated_kv = await TeamMemberBudgetHandler.clear_team_member_budget_fields(
-                team_table=existing_team_row,
-                user_api_key_dict=user_api_key_dict,
-                updated_kv=updated_kv,
-                explicitly_set_fields=_team_member_fields_in_request,
-                user_api_key_cache=user_api_key_cache,
-            )
-        else:
-            TeamMemberBudgetHandler.clean_team_member_fields(updated_kv)
+        default_budget_write: Final = plan_team_member_default_budget_write(
+            data=data,
+            existing_budget_id=stored_team_member_budget_id(existing_team),
+            team_alias=existing_team_row.team_alias,
+            team_budget_duration=existing_team_row.budget_duration,
+        )
+        if default_budget_write is not None:
+            updated_kv["metadata"] = {
+                **(updated_kv.get("metadata") or {}),
+                "team_member_budget_id": default_budget_write.budget_id,
+            }
+        TeamMemberBudgetHandler.clean_team_member_fields(updated_kv)
 
         # Check object permission
         if data.object_permission is not None:
@@ -2784,7 +2626,31 @@ async def update_team(
 
         updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
         team_update_data: Final[Mapping[str, object]] = updated_kv
-        team_row: Final = await _write_team_update(prisma_client, data.team_id, team_update_data, max_budget_guard)
+        team_write: Final = (
+            _TeamWrite(
+                team_row=await _write_team_update(
+                    _team_db(prisma_client), data.team_id, team_update_data, max_budget_guard
+                ),
+                changed_member_user_ids=(),
+                backfill_result=None,
+            )
+            if default_budget_write is None
+            else await _write_team_with_member_default_budget(
+                prisma_client,
+                team_id=data.team_id,
+                team_update_data=team_update_data,
+                max_budget_guard=max_budget_guard,
+                default_budget_write=default_budget_write,
+                backfill=data.team_member_budget_backfill or "none",
+                changed_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
+            )
+        )
+        team_row: Final = team_write.team_row
+        backfill_response: Final = (
+            {"team_member_budget_backfill_result": team_write.backfill_result}
+            if team_write.backfill_result is not None
+            else {}
+        )
 
         if team_row is None or team_row.team_id is None:
             raise HTTPException(
@@ -2793,6 +2659,16 @@ async def update_team(
             )
 
         verbose_proxy_logger.info("Successfully updated team - %s, info", team_row.team_id)
+        if default_budget_write is not None:
+            await TeamMemberBudgetHandler.evict_default_budget_cache(
+                budget_id=default_budget_write.budget_id, user_api_key_cache=user_api_key_cache
+            )
+        await evict_team_member_cache_keys(
+            team_id=team_row.team_id,
+            member_user_ids=team_write.changed_member_user_ids,
+            cache_keys=tuple(team_membership_cache_keys(team_row.team_id, team_write.changed_member_user_ids)),
+            user_api_key_cache=user_api_key_cache,
+        )
         await sync_team_access_group_membership(prisma_client=prisma_client, team_id=team_row.team_id)
         await invalidate_cached_object_permissions(
             object_permission_ids=(existing_team.object_permission_id, team_row.object_permission_id),
@@ -2807,14 +2683,14 @@ async def update_team(
         if is_audit_logging_enabled():
             await _create_team_update_audit_log(
                 existing_team_row=existing_team_row,
-                updated_kv=updated_kv,
+                updated_kv={**updated_kv, **{key: value.model_dump() for key, value in backfill_response.items()}},
                 team_id=data.team_id,
                 litellm_changed_by=litellm_changed_by,
                 user_api_key_dict=user_api_key_dict,
                 litellm_proxy_admin_name=litellm_proxy_admin_name,
             )
 
-        return {"team_id": team_row.team_id, "data": team_row}
+        return {"team_id": team_row.team_id, "data": team_row, **backfill_response}
     except Exception as e:
         raise handle_exception_on_proxy(e)
 
@@ -4115,13 +3991,6 @@ async def team_member_update(
             status_code=400,
             detail={"error": f"User id doesn't exist in team table. Data={data}"},
         )
-    ## find the relevant team membership
-    identified_budget_id: str | None = None
-    for tm in returned_team_info["team_memberships"]:
-        if tm.user_id == received_user_id:
-            identified_budget_id = tm.budget_id
-            break
-
     # If this membership still points at the team's shared default member
     # budget, _upsert_budget_and_membership will clone-on-write so that the
     # update only touches this user (not every member sharing the default).
@@ -4134,6 +4003,7 @@ async def team_member_update(
     ### upsert new budget
     budget_patch: Final = member_budget_patch(data)
     async with prisma_client.tx() as tx:
+        await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, data.team_id)
         role_change: Final = (
             await _update_team_member_role(
                 tx=tx,
@@ -4146,11 +4016,14 @@ async def team_member_update(
             if data.role is not None
             else None
         )
+        locked_membership: Final = await _team_membership_tx_db(tx).find_unique(
+            where={"user_id_team_id": {"user_id": received_user_id, "team_id": data.team_id}}
+        )
         await upsert_budget_and_membership(
             tx=tx,
             team_id=data.team_id,
             user_id=received_user_id,
-            existing_budget_id=identified_budget_id,
+            existing_budget_id=locked_membership.budget_id if locked_membership is not None else None,
             user_api_key_dict=user_api_key_dict,
             budget_patch=budget_patch,
             team_default_budget_id=team_default_budget_id,
@@ -5014,22 +4887,23 @@ async def _invalidate_deleted_team_member_cache(
     user_api_key_cache: UserApiKeyCache,
 ) -> None:
     for team_id, member_user_ids in member_ids_per_team:
-        await _evict_deleted_team_member_cache(
+        await evict_team_member_cache_keys(
             team_id=team_id,
             member_user_ids=member_user_ids,
+            cache_keys=tuple(member_cache_keys(team_id, member_user_ids)),
             user_api_key_cache=user_api_key_cache,
         )
 
 
-async def _evict_deleted_team_member_cache(
+async def evict_team_member_cache_keys(
     team_id: str,
     member_user_ids: Sequence[str],
+    cache_keys: Sequence[str],
     user_api_key_cache: UserApiKeyCache,
 ) -> None:
     _ = await asyncio.gather(
         *(await_inflight_team_membership_load(user_id=user_id, team_id=team_id) for user_id in member_user_ids)
     )
-    cache_keys: Final = tuple(member_cache_keys(team_id, member_user_ids))
     evict_local(cache_keys=cache_keys, user_api_key_cache=user_api_key_cache)
     await evict_shared(cache_keys=cache_keys, cache=user_api_key_cache)
     await broadcast_evictions(cache_keys=cache_keys)
@@ -5038,6 +4912,11 @@ async def _evict_deleted_team_member_cache(
 def member_cache_keys(team_id: str, user_ids: Sequence[str]) -> Iterator[str]:
     for user_id in user_ids:
         yield user_id
+        yield from team_membership_cache_keys(team_id, (user_id,))
+
+
+def team_membership_cache_keys(team_id: str, user_ids: Sequence[str]) -> Iterator[str]:
+    for user_id in user_ids:
         yield team_membership_auth_cache_key(team_id=team_id, user_id=user_id)
         yield team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
 
