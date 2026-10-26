@@ -1616,6 +1616,12 @@ class LiteLLMCompletionResponsesConfig:
         new_content: Final = new_message.get("content")
         if new_content is None:
             return None
+        # Empty trailing assistant turns (tool-only Responses replays) must not
+        # be wrapped as {"type":"text","text":""} when merged onto prior text.
+        if new_content == "":
+            return cast(  # cast-ok: trailing assistant unchanged
+                ChatCompletionAssistantMessage, last_message
+            )
         previous_content: Final = last_message.get("content")
         previous_cache_control: Final = _input_item_cache_control(last_message)
         new_cache_control: Final = _input_item_cache_control(new_message)
@@ -2539,7 +2545,8 @@ class LiteLLMCompletionResponsesConfig:
             content_list: Final[list[str | dict[str, object]]] = []
             for item in content:
                 if isinstance(item, str):
-                    content_list.append(item)
+                    if item:
+                        content_list.append(item)
                 elif isinstance(item, dict):
                     if item.get("type") == "input_file":
                         content_list.append(
@@ -2559,9 +2566,10 @@ class LiteLLMCompletionResponsesConfig:
                                 OpenAIChatCompletionTextObject(type="text", text=str(encrypted_content))
                             )
                     else:
-                        # Skip text blocks with None text to avoid downstream errors
+                        # Skip None/empty text blocks: content=[{"type":"text","text":""}]
+                        # is rejected by some backends (e.g. Z.ai 1210).
                         text_value = item.get("text")
-                        if text_value is None:
+                        if text_value is None or text_value == "":
                             continue
                         content_block: dict[str, object] = {
                             "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
@@ -2572,7 +2580,8 @@ class LiteLLMCompletionResponsesConfig:
                         if "cache_control" in item:
                             content_block["cache_control"] = item["cache_control"]
                         content_list.append(content_block)
-            return content_list
+            # Prefer content="" over [] when every part was dropped.
+            return content_list if content_list else ""
         else:
             raise ValueError(f"Invalid content type: {type(content)}")
 
