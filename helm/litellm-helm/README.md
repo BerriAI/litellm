@@ -259,3 +259,9 @@ itself.
 `lensWorker.mode` selects `disabled`, `bundled` or `external`. Bundled mode generates separate service and identity-signing credentials. External mode requires `lensWorker.gateway.secretName` and `lensWorker.serviceTokenSecret.name`; their keys default to `gateway-secret` and `service-token`. Provision distinct values matching the external Lens deployment
 
 Follow the [Lens Helm connection guide](https://github.com/BerriAI/lens/blob/main/helm/lens/README.md#connect-a-gateway) for complete values, verification, GitOps credential requirements and existing-data migration. Source-chart installation requires a built Lens image until the first signed Lens release is published
+
+### LiteAdmin Slack worker
+
+`/admin/mcp` is served inside LiteLLM and does not require `liteadmin.enabled`. That option deploys the separate Slack worker. Set `liteadmin.image.repository` to the worker repository and `liteadmin.image.tag` to an independently published version. A worker tag is required when the worker is enabled. `liteadmin.image.pullPolicy` defaults to `IfNotPresent`
+
+For an existing Slack deployment, publish or build the worker image before upgrading this chart. Preserve `liteadmin.existingSecret`, the encryption key, and the persistent volume. The chart starts the worker with `litellm-admin-agent --web` and `CONNECTION_AUTH_MODE=native`. See the [worker deployment guide](https://github.com/BerriAI/litellm-admin-agent/blob/main/docs/compatibility.md#native-enterprise-deployment)

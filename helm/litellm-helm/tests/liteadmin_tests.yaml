@@ -1,0 +1,42 @@
+suite: LiteAdmin worker image
+templates:
+  - liteadmin.yaml
+tests:
+  - it: does not deploy a worker by default
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: requires an independently selected worker version
+    set:
+      liteadmin.enabled: true
+      liteadmin.existingSecret: liteadmin-secret
+    asserts:
+      - failedTemplate:
+          errorMessage: liteadmin.image.tag is required when liteadmin is enabled
+  - it: deploys the dedicated worker while retaining native authentication
+    set:
+      liteadmin.enabled: true
+      liteadmin.existingSecret: liteadmin-secret
+      liteadmin.gatewayUrl: https://gateway.example
+      liteadmin.model: admin-model
+      liteadmin.image.repository: registry.example/admin-worker
+      liteadmin.image.tag: reviewed-worker
+      liteadmin.image.pullPolicy: Never
+      image.repository: registry.example/gateway
+      image.tag: gateway-release
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.example/admin-worker:reviewed-worker
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: [litellm-admin-agent, --web]
+      - equal:
+          path: spec.template.spec.containers[0].imagePullPolicy
+          value: Never
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CONNECTION_AUTH_MODE
+            value: native

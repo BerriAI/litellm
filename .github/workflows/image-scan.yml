@@ -22,7 +22,7 @@ on:
       - docker/component_entrypoint.sh
       - docker/entrypoint.sh
       - litellm/proxy/prisma_migration.py
-      - litellm/proxy/admin_mcp.py
+      - litellm/proxy/admin_mcp/**
       - litellm/proxy/proxy_server.py
       - backend/routes/allowlist.py
       - pyproject.toml

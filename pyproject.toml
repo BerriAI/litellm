@@ -247,7 +247,9 @@ e2e-dev = [
     "mcp>=2.3.0,<3",
 ]
 admin-mcp = [
-    "litellm-admin-mcp @ https://github.com/BerriAI/liteadmin-mcp/archive/d35ec9c19c117d4c50cc1eccf6ce1296aac25a1a.tar.gz#sha256=86b930f6706fb2da10d53d1798ee7fd14e44fb0afdef0da122cf0e6bb88fa2c3 ; python_version >= '3.12'",
+    "mcp>=2.3.0,<3",
+    "httpx2>=2.10.0,<3",
+    "jsonschema>=4.22.0,<5",
 ]
 proxy-dev = [
     { include-group = "admin-mcp" },
@@ -327,6 +329,8 @@ include = [
     "litellm/router_strategy/complexity_router/artifacts/*.json",
     "litellm/router_strategy/complexity_router/fuse_presets.json",
     "litellm/proxy/model_insights_tasks.json",
+    "litellm/proxy/admin_mcp/operations.json",
+    "litellm/proxy/admin_mcp/LICENSE",
     "litellm/proxy/public_endpoints/whats_new.json",
     "litellm/proxy/common_utils/codex_base_instructions.md",
     "litellm/proxy/common_utils/codex_bundled_models_0.159.3.json",

@@ -32,9 +32,9 @@ spec:
         runAsNonRoot: true
       containers:
         - name: liteadmin
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          args: ["--admin-agent"]
+          image: "{{ required "liteadmin.image.repository is required" .Values.liteadmin.image.repository }}:{{ required "liteadmin.image.tag is required when liteadmin is enabled" .Values.liteadmin.image.tag }}"
+          imagePullPolicy: {{ .Values.liteadmin.image.pullPolicy }}
+          command: ["litellm-admin-agent", "--web"]
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

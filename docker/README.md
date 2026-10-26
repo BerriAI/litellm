@@ -127,3 +127,18 @@ This command should succeed (showing engine versions) even with `--network none`
 
 -   **`build_admin_ui.sh: not found`**: This error can occur if the Docker build context is not set correctly. Ensure that you are running the `docker-compose` command from the root of the project.
 -   **`Master key is not initialized`**: This error means the `LITELLM_MASTER_KEY` environment variable is not set. Make sure you have created a `.env` file in the project root with the `LITELLM_MASTER_KEY` defined.
+
+## LiteAdmin Slack worker
+
+The `/admin/mcp` endpoint runs inside LiteLLM. Its code is part of this repository and its dependencies use `uv.lock`. Enabling MCP does not require a Slack worker
+
+Slack integration uses a separate [litellm-admin-agent](https://github.com/BerriAI/litellm-admin-agent) image. Set `LITEADMIN_IMAGE` to a reviewed worker image before using `docker-compose.liteadmin.yml`. The gateway keeps using `LITELLM_IMAGE`. Build the worker from a reviewed source revision until its first image release is published
+
+```bash
+docker build -t litellm-admin-agent:local /path/to/litellm-admin-agent
+export LITEADMIN_IMAGE=litellm-admin-agent:local
+```
+
+When upgrading an existing Slack deployment, change the worker image and replace `--admin-agent` with `litellm-admin-agent --web`. Preserve `CONNECTION_AUTH_MODE=native`, the shared service token, encryption key, and state volume. The gateway's private worker URL and login routes stay the same. The main LiteLLM image no longer contains `/opt/liteadmin`
+
+For Helm, set `liteadmin.image.repository`, `liteadmin.image.tag`, and optionally `liteadmin.image.pullPolicy`. The worker tag is required when `liteadmin.enabled=true` and is independent of the gateway's `image.tag`. Keep one worker per Slack app

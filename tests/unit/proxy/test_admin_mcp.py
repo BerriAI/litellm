@@ -119,7 +119,7 @@ def management_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
 @pytest.mark.parametrize("enabled", [None, "false", "0", "off", "No"])
 def test_disabled_preserves_existing_admin_namespace(monkeypatch: pytest.MonkeyPatch, enabled: str | None) -> None:
     monkeypatch.setattr(proxy_server, "premium_user", False)
-    monkeypatch.setitem(sys.modules, "litellm_admin_mcp.config", None)
+    monkeypatch.setitem(sys.modules, "httpx2", None)
     if enabled is None:
         monkeypatch.delenv("LITELLM_ENABLE_ADMIN_MCP", raising=False)
     else:
@@ -136,10 +136,10 @@ def test_disabled_preserves_existing_admin_namespace(monkeypatch: pytest.MonkeyP
     assert response.json() == {"server": "admin"}
 
 
-def test_enabled_without_connector_explains_installation(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_enabled_without_mcp_dependencies_explains_installation(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(proxy_server, "premium_user", True)
     monkeypatch.setenv("LITELLM_ENABLE_ADMIN_MCP", "true")
-    monkeypatch.setitem(sys.modules, "litellm_admin_mcp.config", None)
+    monkeypatch.setitem(sys.modules, "httpx2", None)
     with pytest.raises(RuntimeError, match="admin-mcp dependency group"):
         with TestClient(FastAPI(lifespan=admin_mcp_lifespan)):
             pytest.fail("Enabling the connector without its dependency must fail startup")
@@ -151,7 +151,7 @@ def test_unlicensed_opt_in_fails_before_loading_connector(
 ) -> None:
     monkeypatch.setattr(proxy_server, "premium_user", False)
     monkeypatch.setenv("LITELLM_ENABLE_ADMIN_MCP", enabled)
-    monkeypatch.setitem(sys.modules, "litellm_admin_mcp.config", None)
+    monkeypatch.setitem(sys.modules, "httpx2", None)
     with pytest.raises(HTTPException) as exc:
         with TestClient(management_app):
             pytest.fail("An unlicensed deployment must not serve the hosted admin connector")

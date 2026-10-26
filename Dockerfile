@@ -118,16 +118,6 @@ RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/
 RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh && \
     sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
 
-FROM $LITELLM_BUILD_IMAGE AS liteadmin-builder
-COPY --from=uvbin /uv /usr/local/bin/uv
-RUN apk add --no-cache python-3.13
-ADD --checksum=sha256:4fb1847e28e2be30ba76dac94f02c4903291326516a0f4ba772f6ffb8b25d05c \
-    https://github.com/BerriAI/litellm-admin-agent/archive/5661c805ce479a0cf11b842ea133cf8d22cd7e34.tar.gz /tmp/liteadmin.tar.gz
-RUN mkdir /tmp/liteadmin && tar xzf /tmp/liteadmin.tar.gz --strip-components=1 -C /tmp/liteadmin && \
-    uv venv /opt/liteadmin --python python3.13 && \
-    uv pip install --python /opt/liteadmin/bin/python --require-hashes -r /tmp/liteadmin/requirements.txt && \
-    uv pip install --python /opt/liteadmin/bin/python --no-deps /tmp/liteadmin
-
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 ARG LITELLM_RELEASE_TAG=""
@@ -157,7 +147,6 @@ ENV PATH="/app/.venv/bin:${PATH}" \
 # ship (manifest-scanning tools attribute everything in it to this image).
 # entrypoint.sh invokes litellm/proxy/prisma_migration.py by source path.
 COPY --from=builder /app/.venv /app/.venv
-COPY --from=liteadmin-builder /opt/liteadmin /opt/liteadmin
 COPY --from=builder /app/docker /app/docker
 COPY --from=builder /app/schema.prisma /app/schema.prisma
 COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/prisma_migration.py

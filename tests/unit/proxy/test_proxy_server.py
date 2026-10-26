@@ -75,8 +75,8 @@ async def test_admin_mcp_failure_still_closes_proxy_resources(
 ) -> None:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from apscheduler.schedulers.base import STATE_PAUSED
-    from litellm_admin_mcp import server as connector_server
-    from litellm_admin_mcp.gateway import Gateway
+    from litellm.proxy.admin_mcp import server as connector_server
+    from litellm.proxy.admin_mcp.gateway import Gateway
 
     from litellm.proxy import proxy_server
     from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
