@@ -689,6 +689,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> bool:
         return cls._forward_gemini_function_call_id(model)
 
+    @classmethod
+    def supports_multimodal_function_responses(cls, model: str) -> bool:
+        return cls.is_gemini_3_or_newer(model)
+
     def _supports_penalty_parameters(self, model: str) -> bool:
         # Gemini 3 models do not support penalty parameters
         if VertexGeminiConfig._is_gemini_3_or_newer(model):

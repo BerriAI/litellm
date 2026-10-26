@@ -2,7 +2,7 @@ import base64
 from collections.abc import Sequence
 from itertools import chain
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 import pytest
@@ -1650,10 +1650,28 @@ def test_convert_tool_response_with_base64_image():
     assert inline_data["data"] == test_image_base64
 
 
-def test_gemini_history_nests_multimodal_tool_response_parts():
-    """Full history conversion should not emit sibling inline_data tool result parts."""
-    test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-    messages = [
+@pytest.mark.parametrize("provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
+@pytest.mark.parametrize(
+    "model,nested",
+    [
+        (None, True),
+        ("gemini-2.5-pro", False),
+        ("gemini/gemini-2.5-flash", False),
+        ("vertex_ai/gemini-2.5-flash-lite", False),
+        ("123456789", False),
+        ("gemini-3.8-flash", True),
+        ("gemini/gemini-3.8-flash", True),
+        ("vertex_ai/gemini-3.8-flash", True),
+        ("gemini-flash-latest", True),
+    ],
+)
+def test_gemini_history_places_tool_media_for_model(
+    model: str | None,
+    nested: bool,
+    provider: Literal["gemini", "vertex_ai", "vertex_ai_beta"],
+) -> None:
+    test_image_base64: Final = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    messages: Final = [
         {"role": "user", "content": "Get me an image"},
         {
             "role": "assistant",
@@ -1679,24 +1697,53 @@ def test_gemini_history_nests_multimodal_tool_response_parts():
                         "data": test_image_base64,
                     },
                 },
+                {
+                    "type": "file",
+                    "file": {"file_data": "data:application/pdf;base64,JVBERi0xLjQ="},
+                },
             ],
         },
+        {"role": "user", "content": "Describe the image and file again"},
     ]
 
-    contents = gemini_convert_messages_with_history(messages=messages)
-
-    tool_response_parts = contents[-1]["parts"]
-    assert len(tool_response_parts) == 1
-    assert "inline_data" not in tool_response_parts[0]
-    function_response = tool_response_parts[0]["function_response"]
-    assert function_response["parts"] == [
+    contents: Final = (
+        gemini_convert_messages_with_history(messages=messages)
+        if model is None
+        else transform_request_body(
+            messages=messages,
+            model=model,
+            custom_llm_provider=provider,
+            optional_params={},
+            litellm_params={},
+            cached_content=None,
+        )["contents"]
+    )
+    media_parts: Final = [
         {
             "inline_data": {
                 "data": test_image_base64,
                 "mime_type": "image/png",
             }
-        }
+        },
+        {"inline_data": {"data": "JVBERi0xLjQ=", "mime_type": "application/pdf"}},
     ]
+    function_response: Final = {
+        "name": "get_image",
+        "response": {"image_ref": "inline"},
+        **({"id": "call_get_image"} if model is not None and nested else {}),
+        **({"parts": media_parts} if nested else {}),
+    }
+    assert contents[-2] == {
+        "role": "user",
+        "parts": [
+            {"function_response": function_response},
+            *([] if nested else media_parts),
+        ],
+    }
+    assert contents[-1] == {
+        "role": "user",
+        "parts": [{"text": "Describe the image and file again"}],
+    }
 
 
 def test_convert_tool_response_text_only():

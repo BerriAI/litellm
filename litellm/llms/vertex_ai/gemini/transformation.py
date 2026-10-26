@@ -726,6 +726,9 @@ def gemini_convert_messages_with_history(
     from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
     forward_function_call_id: Final = VertexGeminiConfig.forward_gemini_function_call_id(model or "")
+    supports_multimodal_function_responses: Final = model is None or (
+        VertexGeminiConfig.supports_multimodal_function_responses(model)
+    )
 
     try:
         while msg_i < len(messages):
@@ -1029,6 +1032,7 @@ def gemini_convert_messages_with_history(
                     messages[msg_i],
                     last_message_with_tool_calls,
                     forward_function_call_id=forward_function_call_id,
+                    supports_multimodal_function_responses=supports_multimodal_function_responses,
                 )
                 msg_i += 1
                 # Handle both single part and list of parts (for Computer Use with images)
