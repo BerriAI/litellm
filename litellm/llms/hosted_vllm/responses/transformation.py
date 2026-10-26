@@ -74,7 +74,10 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
         )
 
         for param in HOSTED_VLLM_RESPONSES_SUPPORTED_PARAMS:
-            if param in response_api_optional_request_params and response_api_optional_request_params[param] is not None:
+            if (
+                param in response_api_optional_request_params
+                and response_api_optional_request_params[param] is not None
+            ):
                 request[param] = response_api_optional_request_params[param]
             elif litellm_params is not None:
                 val = (

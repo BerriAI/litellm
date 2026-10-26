@@ -339,9 +339,7 @@ class ResponsesAPIRequestUtils:
         special_params: Final[dict[str, object]] = params.pop("kwargs", {})
 
         allowed_openai_params: Final = (
-            params.get("allowed_openai_params")
-            or special_params.get("allowed_openai_params")
-            or []
+            params.get("allowed_openai_params") or special_params.get("allowed_openai_params") or []
         )
         allowed_set: Final = {p for p in allowed_openai_params if isinstance(p, str)}
         default_keys: Final = set(valid_keys) | allowed_set

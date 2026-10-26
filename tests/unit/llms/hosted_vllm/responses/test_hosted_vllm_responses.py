@@ -185,7 +185,6 @@ def test_hosted_vllm_validate_environment_custom_api_key():
     assert headers.get("Authorization") == "Bearer my-custom-key"
 
 
-
 def test_hosted_vllm_responses_supported_params():
     """Test get_supported_openai_params() includes vLLM provider-specific params."""
     config = HostedVLLMResponsesAPIConfig()
@@ -254,3 +253,22 @@ def test_hosted_vllm_responses_transform_request_from_litellm_params():
     assert request["chat_template_kwargs"] == {"enable_thinking": False}
     assert request["top_k"] == 50
     assert request["min_p"] == 0.05
+
+
+def test_hosted_vllm_responses_transform_request_from_optional_request_params():
+    """Test transform_responses_api_request forwards provider params from response_api_optional_request_params."""
+    config = HostedVLLMResponsesAPIConfig()
+
+    request = config.transform_responses_api_request(
+        model="Qwen/Qwen3-8B",
+        input="test input",
+        response_api_optional_request_params={
+            "chat_template_kwargs": {"enable_thinking": False},
+            "top_k": 30,
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert request["chat_template_kwargs"] == {"enable_thinking": False}
+    assert request["top_k"] == 30
