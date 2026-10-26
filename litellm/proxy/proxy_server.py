@@ -14577,6 +14577,7 @@ async def count_request_tokens(
     output_format: JsonValue = None,
     context_management: JsonValue = None,
     request_litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
+    require_deployment: bool = False,
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -14594,6 +14595,20 @@ async def count_request_tokens(
     litellm_model_name = None
     model_info: ModelMapInfo | None = None
     if llm_router is not None:
+        # An unserved model on the Anthropic count route is a 404, not a local estimate from an
+        # unrelated tokenizer. pass_through_all_models opts out, as on the completion routes.
+        pass_through_all_models: Final = llm_router.router_general_settings.pass_through_all_models
+        if (
+            require_deployment
+            and not pass_through_all_models
+            and not llm_router.get_routable_deployments(request.model)
+        ):
+            raise ProxyException(
+                message=f"Model not found: {request.model}",
+                type=ProxyErrorTypes.not_found_error,
+                param="model",
+                code=404,
+            )
         # get 1 deployment corresponding to the model
         try:
             deployment = await llm_router.async_get_available_deployment(
@@ -14601,6 +14616,8 @@ async def count_request_tokens(
                 request_kwargs={},
             )
         except Exception:
+            if require_deployment and not pass_through_all_models:
+                raise
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.token_counter(): Exception occured while getting deployment"
             )

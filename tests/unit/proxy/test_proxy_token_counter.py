@@ -181,6 +181,7 @@ async def test_anthropic_messages_count_tokens_endpoint():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
+        require_deployment=False,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "claude-3-sonnet-20240229"
@@ -261,6 +262,7 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
+        require_deployment=False,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "gpt-4"
@@ -1079,6 +1081,7 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
+        require_deployment=False,
     ):
         raise ProxyException(
             message='{"detail":{"message":"Input is too long for requested model."}}',
@@ -1136,6 +1139,7 @@ async def test_anthropic_endpoint_403_permission_error_format():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
+        require_deployment=False,
     ):
         raise ProxyException(
             message='{"Message":"Bearer Token has expired"}',
@@ -1193,6 +1197,7 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         output_format=None,
         context_management=None,
         request_litellm_params=None,
+        require_deployment=False,
     ):
         raise ProxyException(
             message="Rate limit exceeded",
@@ -1835,3 +1840,125 @@ async def test_call_endpoint_prompt_keeps_the_local_count_on_a_counter_that_need
         local.total_tokens,
         local.tokenizer_type,
     )
+
+
+_NONEXISTENT_MODEL_ROUTER_MODEL_LIST: Final = [
+    {
+        "model_name": "claude-counted",
+        "litellm_params": {"model": "anthropic/claude-3-sonnet-20240229", "api_key": "test-key"},
+    },
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_model",
+    ["does-not-exist", "openai/gpt-4o-not-served"],
+    ids=["unknown-name", "unknown-passthrough-name"],
+)
+async def test_anthropic_count_tokens_rejects_a_model_the_router_does_not_serve(
+    monkeypatch: pytest.MonkeyPatch, requested_model: str
+) -> None:
+    """The Anthropic count route answers 404 not_found_error for a model the gateway does not serve.
+
+    Before the fix `count_request_tokens` swallowed the router's "no deployments" error and answered
+    HTTP 200 from the generic local tokenizer, so a typo'd or unserved model looked counted.
+    """
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(model_list=_NONEXISTENT_MODEL_ROUTER_MODEL_LIST),
+    )
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.headers = {}
+    body: Final = {"model": requested_model, "messages": [{"role": "user", "content": "Hello!"}]}
+
+    with patch.object(anthropic_endpoints, "read_request_body", AsyncMock(return_value=body)):
+        response: Final = await anthropic_count_tokens(mock_request, MagicMock())
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 404
+    detail: Final = json.loads(bytes(response.body))
+    assert detail["type"] == "error"
+    assert detail["error"]["type"] == "not_found_error"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("make_router", "requested_model"),
+    (
+        (
+            lambda: Router(model_list=_NONEXISTENT_MODEL_ROUTER_MODEL_LIST),
+            "claude-counted",
+        ),
+        (
+            lambda: Router(model_list=[{**_NONEXISTENT_MODEL_ROUTER_MODEL_LIST[0], "model_info": {"id": "dep-1"}}]),
+            "dep-1",
+        ),
+        (
+            lambda: Router(
+                model_list=_NONEXISTENT_MODEL_ROUTER_MODEL_LIST,
+                model_group_alias={"counted-alias": "claude-counted"},
+            ),
+            "counted-alias",
+        ),
+        (
+            lambda: Router(
+                model_list=[{"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": "k"}}]
+            ),
+            "openai/gpt-4o",
+        ),
+    ),
+    ids=("group-name", "deployment-id", "model-alias", "wildcard"),
+)
+async def test_anthropic_count_tokens_resolves_aliases_and_wildcards_before_counting(
+    monkeypatch: pytest.MonkeyPatch, make_router: Callable[[], Router], requested_model: str
+) -> None:
+    """A model the router can resolve by group, deployment id, alias, or wildcard is not rejected."""
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", make_router())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.headers = {}
+    mock_request.scope = {}
+    body: Final = {"model": requested_model, "messages": [{"role": "user", "content": "Hello!"}]}
+
+    with (
+        patch.object(anthropic_endpoints, "read_request_body", AsyncMock(return_value=body)),
+        patch.object(
+            litellm.proxy.proxy_server,
+            "_try_provider_token_count",
+            AsyncMock(return_value=TokenCountResponse(
+                total_tokens=11,
+                request_model=requested_model,
+                model_used=requested_model,
+                tokenizer_type="openai_tokenizer",
+            )),
+        ),
+    ):
+        response: Final = await anthropic_count_tokens(mock_request, MagicMock())
+
+    assert response == {"input_tokens": 11}
+
+
+@pytest.mark.asyncio
+async def test_utils_token_counter_keeps_the_local_fallback_for_an_unlisted_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The public /utils/token_counter keeps its documented fallback: an unlisted model counts locally.
+
+    Only the Anthropic count route opts into `require_deployment`, so this route's contract is unchanged.
+    """
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "llm_router", Router(model_list=_NONEXISTENT_MODEL_ROUTER_MODEL_LIST)
+    )
+
+    response: Final = await token_counter(
+        request=TokenCountRequest(model="unlisted-model", messages=[{"role": "user", "content": "hello"}])
+    )
+
+    assert response.model_used == "unlisted-model"
+    assert response.total_tokens > 0
