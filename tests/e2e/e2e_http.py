@@ -593,6 +593,27 @@ def post_json_external(
     )
 
 
+def put_json_external(
+    url: str,
+    *,
+    headers: BaseModel,
+    json: BaseModel,
+    timeout: float = 30.0,
+) -> ExternalWrite:
+    """PUT an absolute URL outside the proxy under its own bearer, for an API whose
+    update answers with a status and no body (Keycloak's realm event config)."""
+    try:
+        resp = requests.put(
+            url,
+            headers=_headers(headers),
+            json=json.model_dump(by_alias=True, exclude_none=True),
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return ExternalWrite(status_code=-1, body=str(exc))
+    return ExternalWrite(status_code=resp.status_code, body=resp.text)
+
+
 def send_text_external(
     method: Literal["GET", "POST", "PATCH"],
     url: str,

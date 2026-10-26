@@ -689,16 +689,13 @@ class TestProxySettingEndpoints:
         # Verify settings were updated
         settings = data["settings"]
         assert settings["google_client_id"] == new_sso_settings["google_client_id"]
-        assert (
-            settings["google_client_secret"] == new_sso_settings["google_client_secret"]
-        )
+        assert settings["google_client_secret"] != new_sso_settings["google_client_secret"]
+        assert "*" in settings["google_client_secret"]
         assert (
             settings["microsoft_client_id"] == new_sso_settings["microsoft_client_id"]
         )
-        assert (
-            settings["microsoft_client_secret"]
-            == new_sso_settings["microsoft_client_secret"]
-        )
+        assert settings["microsoft_client_secret"] != new_sso_settings["microsoft_client_secret"]
+        assert "*" in settings["microsoft_client_secret"]
         assert settings["proxy_base_url"] == new_sso_settings["proxy_base_url"]
         assert settings["user_email"] == new_sso_settings["user_email"]
 
@@ -1138,6 +1135,134 @@ class TestProxySettingEndpoints:
         create_sso_settings = json.loads(create_data["sso_settings"])
         assert create_sso_settings["ui_access_mode"] is None
         assert create_sso_settings["user_email"] is None
+
+    def _mock_sso_update_db(self, monkeypatch, stored_sso_settings):
+        """Point /update/sso_settings at a stored SSO row (or None) with encryption as identity."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        mock_prisma = MagicMock()
+        if stored_sso_settings is None:
+            record = None
+        else:
+            record = MagicMock()
+            record.sso_settings = stored_sso_settings
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=record)
+        mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.writer_db.litellm_config.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_config.update = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+        monkeypatch.setattr(proxy_config, "encrypt_env_variables", lambda environment_variables: environment_variables)
+        identity = lambda value, key=None, exception_type="error", return_original_value=False: value  # noqa: E731
+        monkeypatch.setattr("litellm.proxy.config_resolvers.sso.decrypt_value_helper", identity)
+        monkeypatch.setattr("litellm.proxy.proxy_server.decrypt_value_helper", identity)
+        return mock_prisma
+
+    @staticmethod
+    def _upserted_sso_settings(mock_prisma):
+        import json
+
+        return json.loads(mock_prisma.db.litellm_ssoconfig.upsert.call_args.kwargs["data"]["update"]["sso_settings"])
+
+    @pytest.mark.parametrize(
+        "secret_field,env_var",
+        [
+            ("google_client_secret", "GOOGLE_CLIENT_SECRET"),
+            ("microsoft_client_secret", "MICROSOFT_CLIENT_SECRET"),
+            ("generic_client_secret", "GENERIC_CLIENT_SECRET"),
+        ],
+    )
+    def test_update_sso_settings_round_tripped_mask_keeps_stored_secret(
+        self, mock_proxy_config, mock_auth, monkeypatch, secret_field, env_var
+    ):
+        """Regression for LIT-8683: saving the settings page (which only ever holds the masked
+        secret from /get/sso_settings) must not overwrite the stored client secret with the mask."""
+        monkeypatch.delenv(env_var, raising=False)
+        stored_secret = "stored-client-secret-0123456789"
+        mock_prisma = self._mock_sso_update_db(monkeypatch, {secret_field: stored_secret})
+
+        shown = client.get("/get/sso_settings").json()["values"]
+        assert shown[secret_field] != stored_secret
+        role_mappings = {"provider": "generic", "group_claim": "groups", "roles": {"proxy_admin": ["admins"]}}
+        response = client.patch("/update/sso_settings", json={**shown, "role_mappings": role_mappings})
+
+        assert response.status_code == 200, response.text
+        persisted = self._upserted_sso_settings(mock_prisma)
+        assert persisted[secret_field] == stored_secret
+        assert persisted["role_mappings"]["roles"]["proxy_admin"] == ["admins"]
+        assert os.environ[env_var] == stored_secret
+        assert response.json()["settings"][secret_field] == shown[secret_field]
+
+    def test_update_sso_settings_round_tripped_mask_keeps_env_secret(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """A secret that only lives in the process env is shown masked too, and saving the
+        page persists that secret rather than the mask."""
+        monkeypatch.setenv("GENERIC_CLIENT_SECRET", "env-only-secret-0123456789")
+        mock_prisma = self._mock_sso_update_db(monkeypatch, None)
+
+        shown = client.get("/get/sso_settings").json()["values"]
+        response = client.patch("/update/sso_settings", json=shown)
+
+        assert response.status_code == 200, response.text
+        assert self._upserted_sso_settings(mock_prisma)["generic_client_secret"] == "env-only-secret-0123456789"
+        assert os.environ["GENERIC_CLIENT_SECRET"] == "env-only-secret-0123456789"
+
+    def test_update_sso_settings_omitted_fields_keep_stored_values(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """The UI access control form sends only ui_access_mode. That must not null out the
+        rest of the stored SSO configuration."""
+        monkeypatch.delenv("GENERIC_CLIENT_SECRET", raising=False)
+        stored = {
+            "generic_client_id": "stored-client-id",
+            "generic_client_secret": "stored-client-secret-0123456789",
+            "generic_token_endpoint": "https://idp.example.com/token",
+            "role_mappings": {"provider": "generic", "group_claim": "groups", "roles": {"proxy_admin": ["admins"]}},
+        }
+        mock_prisma = self._mock_sso_update_db(monkeypatch, stored)
+
+        response = client.patch("/update/sso_settings", json={"ui_access_mode": "none"})
+
+        assert response.status_code == 200, response.text
+        persisted = self._upserted_sso_settings(mock_prisma)
+        assert persisted["ui_access_mode"] == "none"
+        assert persisted["generic_client_id"] == "stored-client-id"
+        assert persisted["generic_client_secret"] == "stored-client-secret-0123456789"
+        assert persisted["generic_token_endpoint"] == "https://idp.example.com/token"
+        assert persisted["role_mappings"]["roles"]["proxy_admin"] == ["admins"]
+        assert os.environ["GENERIC_CLIENT_SECRET"] == "stored-client-secret-0123456789"
+
+    def test_update_sso_settings_new_secret_replaces_stored_secret(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        mock_prisma = self._mock_sso_update_db(
+            monkeypatch, {"generic_client_secret": "stored-client-secret-0123456789"}
+        )
+
+        response = client.patch("/update/sso_settings", json={"generic_client_secret": "rotated-secret-9876543210"})
+
+        assert response.status_code == 200, response.text
+        assert self._upserted_sso_settings(mock_prisma)["generic_client_secret"] == "rotated-secret-9876543210"
+        assert os.environ["GENERIC_CLIENT_SECRET"] == "rotated-secret-9876543210"
+        assert "rotated-secret-9876543210" not in response.text
+
+    @pytest.mark.parametrize("cleared", [None, ""])
+    def test_update_sso_settings_explicit_clear_drops_stored_secret(
+        self, mock_proxy_config, mock_auth, monkeypatch, cleared
+    ):
+        mock_prisma = self._mock_sso_update_db(
+            monkeypatch, {"generic_client_secret": "stored-client-secret-0123456789"}
+        )
+
+        response = client.patch("/update/sso_settings", json={"generic_client_secret": cleared})
+
+        assert response.status_code == 200, response.text
+        assert not self._upserted_sso_settings(mock_prisma)["generic_client_secret"]
+        assert "GENERIC_CLIENT_SECRET" not in os.environ
 
     def test_get_ui_theme_settings(self, mock_proxy_config):
         """Test getting UI theme settings without authentication"""

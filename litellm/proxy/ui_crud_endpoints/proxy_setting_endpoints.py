@@ -33,6 +33,7 @@ from litellm.proxy.config_resolvers.settings_store import ConfigOwnedKeyError
 from litellm.proxy.config_resolvers.sso import (
     SSO_FIELD_ENV_VARS,
     SSO_SECRET_FIELDS,
+    ResolvedSSOConfig,
     resolve_sso_config,
 )
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
@@ -1230,6 +1231,49 @@ async def get_sso_settings():
     }
 
 
+_SSO_SETTINGS_VALUES: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def _stored_sso_settings(record: _StoredSsoSettingsRow | None) -> Mapping[str, JsonValue] | None:
+    if record is None or not record.sso_settings:
+        return None
+    stored: Final = record.sso_settings
+    decoded: Final = _DECODED_JSON.validate_python(json.loads(stored)) if isinstance(stored, str) else stored
+    try:
+        return _SSO_SETTINGS_VALUES.validate_python(decoded)
+    except ValidationError:
+        return None
+
+
+def _current_sso_value(current: ResolvedSSOConfig, field_name: str, value: JsonValue) -> JsonValue:
+    return None if current.provenance.get(field_name) in ("default", "unset") else value
+
+
+def _merged_sso_field(field_name: str, incoming: JsonValue, current: JsonValue, submitted: bool) -> JsonValue:
+    if not submitted:
+        return current
+    if field_name not in SSO_SECRET_FIELDS or not isinstance(current, str) or not current:
+        return incoming
+    if incoming == mask_sensitive_keys({field_name: current}, {field_name})[field_name]:
+        return current
+    return incoming
+
+
+def merge_sso_settings_update(sso_config: SSOConfig, current: ResolvedSSOConfig) -> Mapping[str, JsonValue]:
+    """Fields the request omits keep their effective value, and a client secret sent back
+    as the mask /get/sso_settings returned keeps the real secret. An explicit null or empty
+    string still clears a field."""
+    incoming: Final = _SSO_SETTINGS_VALUES.validate_python(sso_config.model_dump(mode="json"))
+    current_values: Final = {
+        name: _current_sso_value(current, name, value)
+        for name, value in _SSO_SETTINGS_VALUES.validate_python(current.config.model_dump(mode="json")).items()
+    }
+    return {
+        name: _merged_sso_field(name, value, current_values[name], name in sso_config.model_fields_set)
+        for name, value in incoming.items()
+    }
+
+
 @router.patch(
     "/update/sso_settings",
     tags=["SSO Settings"],
@@ -1272,15 +1316,12 @@ async def update_sso_settings(
     existing_sso_record: Final = await _stored_sso_settings_db(SSOConfigRepository(prisma_client)).find_unique(
         where={"id": "sso_config"}
     )
-    before_sso_data: dict[str, JsonValue] | None = None
-    if existing_sso_record and existing_sso_record.sso_settings:
-        stored = existing_sso_record.sso_settings
-        if isinstance(stored, str):
-            stored = _DECODED_JSON.validate_python(json.loads(stored))
-        if isinstance(stored, dict):
-            before_sso_data = (  # rebind-ok: pre-existing rebinding on a rename-only line
-                proxy_config.decrypt_db_variables(stored)
-            )
+    stored_sso_settings: Final = _stored_sso_settings(existing_sso_record)
+    before_sso_data: Final = (
+        _SSO_SETTINGS_VALUES.validate_python(proxy_config.decrypt_db_variables(dict(stored_sso_settings)))
+        if stored_sso_settings is not None
+        else None
+    )
 
     # Load existing config
     config: Final = await proxy_config.get_config()
@@ -1294,17 +1335,17 @@ async def update_sso_settings(
         config["general_settings"] = {}
 
     # Update environment variables in config and in memory
-    sso_data: Final = sso_config.model_dump()
+    sso_data: Final = merge_sso_settings_update(sso_config, resolve_sso_config(stored_sso_settings, os.environ))
     for field_name, value in sso_data.items():
         if field_name in SSO_FIELD_ENV_VARS:
             env_var_name = SSO_FIELD_ENV_VARS[field_name]
-            if value:
+            if isinstance(value, str) and value:
                 os.environ[env_var_name] = value
             else:
                 # Clear environment variable if value is null/empty
                 os.environ.pop(env_var_name, None)
 
-    encrypted_sso_data: Final = proxy_config.encrypt_env_variables(environment_variables=sso_data)
+    encrypted_sso_data: Final = proxy_config.encrypt_env_variables(environment_variables=dict(sso_data))
 
     # Save to dedicated SSO table
     await _stored_sso_settings_db(SSOConfigRepository(prisma_client)).upsert(
@@ -1325,7 +1366,7 @@ async def update_sso_settings(
             param_name="sso_config",
             action="updated",
             before_value=before_sso_data,
-            after_value=sso_data,
+            after_value=dict(sso_data),
             user_api_key_dict=user_api_key_dict,
             table_name=LitellmTableNames.SSO_CONFIG_TABLE_NAME,
         )
@@ -1368,7 +1409,7 @@ async def update_sso_settings(
     return {
         "message": "SSO settings updated successfully",
         "status": "success",
-        "settings": sso_data,
+        "settings": mask_sensitive_keys(sso_data, set(SSO_SECRET_FIELDS)),
     }
 
 

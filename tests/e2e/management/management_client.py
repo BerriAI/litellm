@@ -59,6 +59,10 @@ from models import (
     OrgNewBody,
     OrgNewResponse,
     OrgUpdateBody,
+    SSOCallbackParams,
+    SSOSettingsResponse,
+    SSOSettingsUpdateBody,
+    SSOSettingsUpdateResponse,
     TagDeleteBody,
     TagListEntry,
     TagListResponse,
@@ -198,6 +202,32 @@ class ManagementClient:
             )
         )
 
+    @step("Read the SSO settings the dashboard shows from /get/sso_settings")
+    def sso_settings(self) -> SSOSettingsResponse:
+        return unwrap(
+            self.proxy.transport.get(
+                "/get/sso_settings",
+                headers=self.proxy.management_headers(),
+                params=NoBody(),
+                response_type=SSOSettingsResponse,
+            )
+        )
+
+    @step("Save SSO settings with /update/sso_settings")
+    def update_sso_settings(self, body: SSOSettingsUpdateBody) -> SSOSettingsUpdateResponse:
+        return unwrap(
+            self.proxy.transport.patch(
+                "/update/sso_settings",
+                headers=self.proxy.management_headers(),
+                json=body,
+                response_type=SSOSettingsUpdateResponse,
+            )
+        )
+
+    @step("Finish an SSO login at /sso/callback with the authorization code {code}")
+    def sso_callback(self, code: str) -> ProbeResult:
+        return self.proxy.transport.probe("/sso/callback", params=SSOCallbackParams(code=code, state="e2e"))
+
     @step("Read the key's settings back from /key/info")
     def key_info_as(self, key: str, *, caller_key: str | None = None) -> Result[KeyInfoResponse]:
         return self.proxy.transport.get(
@@ -256,6 +286,7 @@ class ManagementClient:
                 response_type=NoBody,
             )
         )
+
     @step("Regenerate the virtual key with /key/regenerate")
     def regenerate_key(self, key: str, *, grace_period: str | None = None) -> str:
         return unwrap(
