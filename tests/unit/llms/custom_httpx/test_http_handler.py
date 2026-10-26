@@ -25,6 +25,7 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     MaskedHTTPStatusError,
+    get_async_httpx_client,
     get_httpx_client,
     get_shared_realtime_ssl_context,
     get_ssl_configuration,
@@ -2172,3 +2173,101 @@ async def test_async_ollama_ssl_verify_false_builds_a_client_that_skips_certific
     assert route.call_count == 1
     assert text == "Sunny"
     assert _cached_clients_verify_modes(client_cache, AsyncHTTPHandler) == (ssl.CERT_NONE,)
+
+
+@pytest.mark.asyncio
+async def test_aclient_session_is_used_by_http_handler_providers_and_not_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hits: Final[list[str]] = []  # mutable-ok: transport capture buffer
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        hits.append(str(request.url))
+        return httpx.Response(
+            400,
+            request=request,
+            json={"error": {"message": "mock", "type": "invalid_request_error"}},
+        )
+
+    client_cache: Final = LLMClientCache()
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", client_cache)
+    monkeypatch.setattr(litellm, "num_retries", 0)
+
+    default_handler: Final = get_async_httpx_client(llm_provider="anthropic")
+    assert default_handler.owns_client is True
+
+    session: Final = httpx.AsyncClient(transport=httpx.MockTransport(handle), trust_env=False)
+    try:
+        monkeypatch.setattr(litellm, "aclient_session", session)
+        session_handler: Final = get_async_httpx_client(llm_provider="anthropic")
+        assert session_handler.client is session
+        assert session_handler.owns_client is False
+
+        module_level_handler: Final = get_async_httpx_client(llm_provider="litellm_module_level_client")
+        assert module_level_handler.client is not session
+        assert module_level_handler.owns_client is True
+
+        with pytest.raises(litellm.BadRequestError):
+            await litellm.acompletion(
+                model="anthropic/claude-sonnet-4-20250514",
+                messages=[{"role": "user", "content": "hi"}],
+                api_key="sk-test",
+                api_base="http://127.0.0.1:9",
+                timeout=3,
+            )
+
+        assert hits == ["http://127.0.0.1:9/v1/messages"]
+        await session_handler.close()
+        assert not session.is_closed
+    finally:
+        await session.aclose()
+        await default_handler.close()
+
+
+def test_client_session_is_used_by_sync_http_handler_providers_and_not_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hits: Final[list[str]] = []  # mutable-ok: transport capture buffer
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        hits.append(str(request.url))
+        return httpx.Response(
+            400,
+            request=request,
+            json={"error": {"message": "mock", "type": "invalid_request_error"}},
+        )
+
+    client_cache: Final = LLMClientCache()
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", client_cache)
+    monkeypatch.setattr(litellm, "num_retries", 0)
+
+    default_handler: Final = get_httpx_client()
+    assert default_handler.owns_client is True
+
+    session: Final = httpx.Client(transport=httpx.MockTransport(handle), trust_env=False)
+    try:
+        monkeypatch.setattr(litellm, "client_session", session)
+        session_handler: Final = get_httpx_client()
+        assert session_handler.client is session
+        assert session_handler.owns_client is False
+
+        module_level_sync: Final = HTTPHandler()
+        assert module_level_sync.client is not session
+        assert module_level_sync.owns_client is True
+        module_level_sync.close()
+
+        with pytest.raises(litellm.BadRequestError):
+            litellm.completion(
+                model="anthropic/claude-sonnet-4-20250514",
+                messages=[{"role": "user", "content": "hi"}],
+                api_key="sk-test",
+                api_base="http://127.0.0.1:9",
+                timeout=3,
+            )
+
+        assert hits == ["http://127.0.0.1:9/v1/messages"]
+        session_handler.close()
+        assert not session.is_closed
+    finally:
+        session.close()
+        default_handler.close()

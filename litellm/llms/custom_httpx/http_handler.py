@@ -665,6 +665,28 @@ class AsyncHTTPHandler:
         self._client = client
         self._owns_client = False
 
+    @property
+    def owns_client(self) -> bool:
+        return self._owns_client
+
+    @classmethod
+    def from_client(
+        cls,
+        client: httpx.AsyncClient,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> "AsyncHTTPHandler":
+        handler: Final = cls.__new__(cls)
+        handler.timeout = timeout
+        handler.event_hooks = None
+        handler.ssl_verify = None
+        handler.shared_session = None
+        handler.transport = None
+        handler.follow_redirects = True
+        handler._owns_client = False
+        handler._client = client
+        handler.client_alias = None
+        return handler
+
     def create_client(
         self,
         timeout: float | httpx.Timeout | None,
@@ -1460,6 +1482,10 @@ class HTTPHandler:
         self._client = client
         self._owns_client = False
 
+    @property
+    def owns_client(self) -> bool:
+        return self._owns_client
+
     def close(self):
         # Close the client when you're done with it
         if self._owns_client:
@@ -1762,7 +1788,16 @@ def get_async_httpx_client(
             except Exception:
                 pass
 
-    _cache_key_name: Final = "async_httpx_client" + _params_key_name + llm_provider
+    aclient_session: Final = (
+        litellm.aclient_session
+        if isinstance(litellm.aclient_session, httpx.AsyncClient)
+        and shared_session is None
+        and llm_provider != "litellm_module_level_client"
+        and (params is None or ("transport" not in params and "event_hooks" not in params))
+        else None
+    )
+    _session_key_name: Final = f"_aclient_session_{id(aclient_session)}" if aclient_session is not None else ""
+    _cache_key_name: Final = "async_httpx_client" + _params_key_name + llm_provider + _session_key_name
 
     # Lazily initialize the global in-memory client cache to avoid relying on
     # litellm globals being fully populated during import time.
@@ -1777,7 +1812,12 @@ def get_async_httpx_client(
     if _cached_client:
         return _cached_client
 
-    if params is not None:
+    if aclient_session is not None:
+        _new_client = AsyncHTTPHandler.from_client(  # rebind-ok: branch-specific handler initialization
+            client=aclient_session,
+            timeout=_default_cached_client_timeout(),
+        )
+    elif params is not None:
         # Filter out params that are only used for cache key, not for AsyncHTTPHandler.__init__
         handler_params: Final = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
         handler_params["shared_session"] = shared_session
@@ -1792,7 +1832,7 @@ def get_async_httpx_client(
         key=_cache_key_name,
         value=_new_client,
         ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
-        litellm_owned_client=True,
+        litellm_owned_client=_new_client.owns_client,
     )
     return _new_client
 
@@ -1812,7 +1852,13 @@ def get_httpx_client(params: dict | None = None) -> HTTPHandler:
             except Exception:
                 pass
 
-    _cache_key_name: Final = "httpx_client" + _params_key_name
+    client_session: Final = (
+        litellm.client_session
+        if isinstance(litellm.client_session, httpx.Client) and (params is None or "client" not in params)
+        else None
+    )
+    _session_key_name: Final = f"_client_session_{id(client_session)}" if client_session is not None else ""
+    _cache_key_name: Final = "httpx_client" + _params_key_name + _session_key_name
 
     # Lazily initialize the global in-memory client cache to avoid relying on
     # litellm globals being fully populated during import time.
@@ -1827,7 +1873,12 @@ def get_httpx_client(params: dict | None = None) -> HTTPHandler:
     if _cached_client:
         return _cached_client
 
-    if params is not None:
+    if client_session is not None:
+        _new_client = HTTPHandler(  # rebind-ok: branch-specific handler initialization
+            timeout=_default_cached_client_timeout(),
+            client=client_session,
+        )
+    elif params is not None:
         # Filter out params that are only used for cache key, not for HTTPHandler.__init__
         handler_params: Final = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
         _new_client = HTTPHandler(**handler_params)
@@ -1838,7 +1889,7 @@ def get_httpx_client(params: dict | None = None) -> HTTPHandler:
         key=_cache_key_name,
         value=_new_client,
         ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
-        litellm_owned_client=True,
+        litellm_owned_client=_new_client.owns_client,
     )
     return _new_client
 
