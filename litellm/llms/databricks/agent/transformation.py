@@ -206,7 +206,7 @@ def _without_authorization(headers: Mapping[str, object]) -> Mapping[str, object
     return {name: value for name, value in headers.items() if name.lower() != "authorization"}
 
 
-def _env_oauth_m2m_token(api_base: str | None) -> str | None:
+def env_oauth_m2m_token(api_base: str | None) -> str | None:
     client_id: Final = get_secret_str("DATABRICKS_CLIENT_ID")
     client_secret: Final = get_secret_str("DATABRICKS_CLIENT_SECRET")
     if not (client_id and client_secret):
@@ -327,7 +327,7 @@ class DatabricksAgentConfig(BaseConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict[str, object]:  # mutable-ok: mirrors override contract
-        bearer: Final = api_key or _env_oauth_m2m_token(api_base) or get_secret_str("DATABRICKS_API_KEY")
+        bearer: Final = api_key or env_oauth_m2m_token(api_base) or get_secret_str("DATABRICKS_API_KEY")
         if bearer:
             return {
                 **_without_authorization(headers),
