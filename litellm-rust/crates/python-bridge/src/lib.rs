@@ -32,10 +32,11 @@ mod _native {
     use crate::logger::NativeDiagnosticProcessor;
     #[pymodule_export]
     use crate::model_registry::{
-        ModelCostLayers, ModelInfoView, ModelNotFound, ModelRegistry, PriceLine, Priced,
-        RegistrationTarget, ResolvedModel, RowError, RowErrors, Unpriced, UsageInput, WhenInput,
-        invalidate_model_cost_index, model_info, model_row_errors, price, registration_target,
-        resolve_model, write_rows,
+        CatalogRefresher, FetchedRegistry, ModelCostLayers, ModelInfoView, ModelNotFound,
+        ModelRegistry, PriceLine, Priced, RegistrationTarget, RegistryNotModified,
+        RegistryUnavailable, ResolvedModel, RowError, RowErrors, Unpriced, UsageInput, WhenInput,
+        fetch_once, invalidate_model_cost_index, model_info, model_row_errors, price,
+        registration_target, resolve_model, write_rows,
     };
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
@@ -123,6 +124,11 @@ assert live == {"model": {"litellm_provider": "openai", "input_cost_per_token": 
         Python::attach(|py| {
             let mut expected = vec![
                 "NativeCacheHandle",
+                "CatalogRefresher",
+                "FetchedRegistry",
+                "RegistryNotModified",
+                "RegistryUnavailable",
+                "fetch_once",
                 "ModelRegistry",
                 "ModelCostLayers",
                 "RowError",

@@ -19,12 +19,14 @@ huggingface = ["litellm-token-counter/huggingface"]
 tiktoken = ["litellm-token-counter/tiktoken"]
 
 [dependencies]
+async-trait = "0.1.89"
 fancy-regex.workspace = true
 litellm-tracing.workspace = true
 litellm-spend-clickhouse.workspace = true
 litellm-storage-clickhouse.workspace = true
 litellm-host.workspace = true
 litellm-model-catalog.workspace = true
+litellm-model-catalog-refresh.workspace = true
 litellm-cost.workspace = true
 time.workspace = true
 bytes.workspace = true

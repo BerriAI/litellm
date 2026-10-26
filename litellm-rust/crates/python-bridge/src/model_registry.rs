@@ -1,6 +1,8 @@
 mod live;
+mod refresh;
 
 pub(crate) use live::*;
+pub(crate) use refresh::*;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
@@ -102,6 +104,10 @@ pub(crate) struct RowError {
 #[derive(Clone)]
 pub(crate) struct ModelRegistry {
     pub(crate) parsed: Arc<ParsedRegistry>,
+    #[pyo3(get)]
+    pub(crate) source_revision: Option<String>,
+    #[pyo3(get)]
+    pub(crate) source_validator: Option<String>,
 }
 
 #[pymethods]
@@ -117,6 +123,8 @@ impl ModelRegistry {
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
         Ok(Self {
             parsed: Arc::new(parsed),
+            source_revision: None,
+            source_validator: None,
         })
     }
 
@@ -127,6 +135,8 @@ impl ModelRegistry {
                 catalog: Arc::clone(&BUNDLED.catalog),
                 errors: Arc::clone(&BUNDLED.errors),
             }),
+            source_revision: None,
+            source_validator: None,
         })
     }
 
@@ -196,6 +206,8 @@ impl ModelRegistry {
                     catalog: Arc::new(catalog),
                     errors: Arc::clone(&self.parsed.errors),
                 }),
+                source_revision: self.source_revision.clone(),
+                source_validator: self.source_validator.clone(),
             },
             removed_errors,
         )

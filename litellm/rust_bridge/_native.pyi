@@ -1,5 +1,5 @@
 from asyncio import Future
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Literal, Never, final
 
 import httpx
@@ -55,6 +55,10 @@ class RowError:
 
 @final
 class ModelRegistry:
+    @property
+    def source_revision(self) -> str | None: ...
+    @property
+    def source_validator(self) -> str | None: ...
     @staticmethod
     def parse(body: bytes) -> ModelRegistry: ...
     @staticmethod
@@ -69,6 +73,45 @@ class ModelRegistry:
     def check_size(self, reference: int) -> RowError | None: ...
 
 def model_row_errors(key: str, row: dict[str, JsonValue]) -> list[RowError]: ...
+@final
+class FetchedRegistry:
+    @property
+    def registry(self) -> ModelRegistry: ...
+    @property
+    def revision(self) -> str: ...
+    @property
+    def validator(self) -> str | None: ...
+
+@final
+class RegistryNotModified: ...
+
+@final
+class RegistryUnavailable:
+    @property
+    def reason(self) -> str: ...
+    @property
+    def retryable(self) -> bool: ...
+    @property
+    def retry_after(self) -> float | None: ...
+
+def fetch_once(
+    source: str, *, if_none_match: str | None, timeout_seconds: float
+) -> FetchedRegistry | RegistryNotModified | RegistryUnavailable: ...
+@final
+class CatalogRefresher:
+    def __new__(
+        cls,
+        source: str,
+        *,
+        installed_revision: str | None,
+        installed_validator: str | None,
+        install: Callable[[int, ModelRegistry, list[RowError]], int | None],
+        checked: Callable[[str | None], None],
+        generation: Callable[[], int],
+    ) -> CatalogRefresher: ...
+    def stop(self) -> None: ...
+    def after_fork(self) -> None: ...
+
 def write_rows(target: dict[str, object], set: dict[str, object], remove: list[str]) -> None: ...
 @final
 class ModelCostLayers:
@@ -384,6 +427,8 @@ def process_state_started() -> bool: ...
 def reserve_process_for_forking() -> None: ...
 
 __all__ = [
+    "CatalogRefresher",
+    "FetchedRegistry",
     "ForkedAfterNativeRuntimeStarted",
     "HuggingFaceEncoding",
     "ModelCostLayers",
@@ -397,6 +442,8 @@ __all__ = [
     "Priced",
     "ProcessReservedForForking",
     "RegistrationTarget",
+    "RegistryNotModified",
+    "RegistryUnavailable",
     "ResolvedModel",
     "ResponsesWebSocketConnection",
     "RowError",
@@ -417,6 +464,7 @@ __all__ = [
     "atranscription",
     "completion",
     "embedding",
+    "fetch_once",
     "gil_stats",
     "invalidate_model_cost_index",
     "messages",

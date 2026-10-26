@@ -4309,6 +4309,7 @@ dependencies = [
 name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "aws-sdk-secretsmanager",
  "bytes",
  "criterion",
@@ -4335,6 +4336,7 @@ dependencies = [
  "litellm-llms",
  "litellm-llms-types",
  "litellm-model-catalog",
+ "litellm-model-catalog-refresh",
  "litellm-router-types",
  "litellm-secrets",
  "litellm-secrets-aws",
