@@ -2781,3 +2781,39 @@ async def test_websocket_turns_logging_survives_garbage_collection(terminal_even
     await _run_websocket_turn(logger, terminal_event)
 
     assert await _logging_tasks_left_after_garbage_collection(logger) == 1
+
+
+def test_logging_copy_keeps_the_provider_usage_cost_behind_a_stamped_bill() -> None:
+    from litellm.litellm_core_utils.hidden_params import USAGE_COST_BEFORE_LITELLM_STAMP
+    from litellm.responses.streaming_iterator import _logging_copy
+
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="aresponses",
+        start_time=datetime.now(),
+        litellm_call_id="stamped-copy",
+        function_id="stamped-copy",
+    )
+    iterator = _make_iterator(sse_events=[], logging_obj=logging_obj)
+    billed = ResponsesAPIResponse(
+        id="resp_stamped",
+        created_at=1,
+        status="completed",
+        model="gpt-4o-mini",
+        object="response",
+        output=[],
+        usage={"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "cost": 0.63},
+    )
+    billed.hidden_params = {USAGE_COST_BEFORE_LITELLM_STAMP: 0.42, "response_cost": 0.63}
+    iterator.completed_response = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED, response=billed
+    )
+    logging_response = _logging_copy(iterator.completed_response)
+
+    iterator._restore_provider_response_headers(logging_response)
+
+    copied = logging_response.response.hidden_params
+    assert copied[USAGE_COST_BEFORE_LITELLM_STAMP] == 0.42
+    assert "response_cost" not in copied

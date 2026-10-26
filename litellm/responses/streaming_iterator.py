@@ -41,7 +41,7 @@ from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_api_base
-from litellm.litellm_core_utils.hidden_params import stamp_billed_usage_cost
+from litellm.litellm_core_utils.hidden_params import USAGE_COST_BEFORE_LITELLM_STAMP, stamp_billed_usage_cost
 from litellm.litellm_core_utils.internal_call_metadata import without_budget_reservation
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -676,10 +676,17 @@ class BaseResponsesAPIStreamingIterator:
         headers: Final[Mapping[str, object]] = processed if isinstance(processed, Mapping) else EMPTY_MAPPING
         raw_headers: Final[Mapping[str, object]] = raw if isinstance(raw, Mapping) else EMPTY_MAPPING
         # rebuild by value and let existing keys win: sharing the source dicts would alias what the proxy
-        # splats into the client's HTTP headers, and copying non-header keys would carry response_cost
+        # splats into the client's HTTP headers, and copying non-header keys would carry response_cost.
+        # The provider's own usage.cost travels along, or the stamped bill would be priced as a provider report
+        stamp: Final[Mapping[str, object]] = (
+            {USAGE_COST_BEFORE_LITELLM_STAMP: source[USAGE_COST_BEFORE_LITELLM_STAMP]}
+            if USAGE_COST_BEFORE_LITELLM_STAMP in source
+            else EMPTY_MAPPING
+        )
         target.hidden_params = {
             "additional_headers": {**headers},
             "headers": {**raw_headers},
+            **stamp,
             **existing,
         }
 
