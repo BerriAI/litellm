@@ -279,6 +279,9 @@ _CLAUDE_MODEL_ROUTES: Final = frozenset(
 )
 _CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
 _GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_PASS_THROUGH_HEADERS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(
+    Mapping[str, object] | None
+)
 
 
 async def _normalize_claude_model(
@@ -1350,14 +1353,17 @@ def _query_api_key(route: str, request: Request) -> str | None:
     return safe_get_request_query_params(request).get("key")
 
 
-def _pass_through_header_api_key(endpoint: dict, route: str, request: Request) -> str | None:
-    headers: Final[dict | None] = endpoint.get("headers") if endpoint.get("path", "") == route else None
-    if headers is None:
+def _pass_through_header_api_key(endpoint: Mapping[str, object], route: str, request: Request) -> str | None:
+    if endpoint.get("path", "") != route:
         return None
-    return request.headers.get(headers.get("litellm_user_api_key", ""))
+    headers: Final = _PASS_THROUGH_HEADERS_ADAPTER.validate_python(endpoint.get("headers"))
+    header_name: Final = headers.get("litellm_user_api_key", "") if headers is not None else None
+    return request.headers.get(header_name) if isinstance(header_name, str) else None
 
 
-def _pass_through_api_key(pass_through_endpoints: list[dict] | None, route: str, request: Request) -> str | None:
+def _pass_through_api_key(
+    pass_through_endpoints: Sequence[Mapping[str, object]] | None, route: str, request: Request
+) -> str | None:
     header_values: Final = tuple(
         value
         for value in (
@@ -1375,17 +1381,17 @@ def _header_or_none(value: object) -> str | None:
 
 def get_api_key(
     custom_litellm_key_header: str | None,
-    api_key: str | None,
+    api_key: str,
     azure_api_key_header: str | None,
     anthropic_api_key_header: str | None,
     google_ai_studio_api_key_header: str | None,
     azure_apim_header: str | None,
-    pass_through_endpoints: list[dict] | None,
+    pass_through_endpoints: Sequence[Mapping[str, object]] | None,
     route: str,
     request: Request,
     *,
     custom_header: str | None = None,
-) -> tuple[str | None, str | None]:
+) -> tuple[str, str | None]:
     selected: Final = select_api_key(
         PresentedKeys(
             custom_header=custom_header,

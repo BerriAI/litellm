@@ -7882,7 +7882,6 @@ async def send_email(
 def hash_password(password: str) -> str:
     """Hash a password using scrypt with a random salt."""
     import base64
-    import hashlib
     import os
 
     salt: Final = os.urandom(16)
@@ -7893,7 +7892,6 @@ def hash_password(password: str) -> str:
 def verify_password(password: str, stored: str) -> bool:
     """Verify a password against a stored hash. Supports scrypt and SHA256."""
     import base64
-    import hashlib
     import secrets
 
     if stored.startswith("scrypt:"):

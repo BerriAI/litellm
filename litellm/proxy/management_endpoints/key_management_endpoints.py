@@ -6378,9 +6378,7 @@ async def regenerate_key_fn(
         # value in that field.
         regenerate_target_key: Final = data.key if data and data.key else key
         is_master_key_regeneration: Final = (
-            data is not None
-            and data.new_master_key is not None
-            and is_master_key(api_key=regenerate_target_key, _master_key=master_key)
+            data is not None and data.new_master_key is not None and is_master_key(regenerate_target_key, master_key)
         )
 
         if (
@@ -6408,7 +6406,7 @@ async def regenerate_key_fn(
                 detail={"error": "DB not connected. prisma_client is None"},
             )
 
-        _is_master_key_valid: Final = is_master_key(api_key=key, _master_key=master_key)
+        _is_master_key_valid: Final = is_master_key(key, master_key)
 
         if master_key is not None and data and _is_master_key_valid:
             if data.new_master_key is None:
