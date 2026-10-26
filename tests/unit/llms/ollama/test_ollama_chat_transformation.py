@@ -854,6 +854,64 @@ class TestOllamaReasoningContentStreaming:
 
 
 class TestOllamaToolCallTransformation:
+    @pytest.mark.parametrize("stream", [False, True])
+    def test_transform_request_keeps_parallel_call_ids_paired_with_results(self, stream: bool) -> None:
+        result: Final = OllamaChatConfig().transform_request(
+            model="minimax-m3.1-flash",
+            messages=[
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_first",
+                            "type": "function",
+                            "function": {"name": "read_fixture", "arguments": '{"path":"first.txt"}'},
+                        },
+                        {
+                            "id": "call_second",
+                            "type": "function",
+                            "function": {"name": "read_fixture", "arguments": '{"path":"second.txt"}'},
+                        },
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_second", "content": "second result"},
+                {"role": "tool", "tool_call_id": "call_first", "content": "first result"},
+            ],
+            optional_params={"stream": stream},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["messages"][0]["tool_calls"] == [
+            {"id": "call_first", "function": {"name": "read_fixture", "arguments": {"path": "first.txt"}}},
+            {"id": "call_second", "function": {"name": "read_fixture", "arguments": {"path": "second.txt"}}},
+        ]
+        assert result["messages"][1:] == [
+            {"role": "tool", "tool_call_id": "call_second", "content": "second result", "images": []},
+            {"role": "tool", "tool_call_id": "call_first", "content": "first result", "images": []},
+        ]
+        assert result["stream"] is stream
+
+    def test_transform_request_does_not_invent_an_id_for_an_unidentified_call(self) -> None:
+        result: Final = OllamaChatConfig().transform_request(
+            model="minimax-m3.1-flash",
+            messages=[
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": None, "type": "function", "function": {"name": "read_fixture", "arguments": "{}"}}
+                    ],
+                }
+            ],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["messages"][0]["tool_calls"] == [{"function": {"name": "read_fixture", "arguments": {}}}]
+
     def test_transform_request_preserves_tool_calls(self):
         """
         tool_calls on assistant messages must survive transform_request.
