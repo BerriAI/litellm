@@ -324,3 +324,23 @@ def test_deepgram_listen_is_priced(
 )
 def test_deepgram_listen_addon_pricing_models(upstream_url: str, expected: tuple[str, ...]):
     assert deepgram_listen_addon_pricing_models(upstream_url) == expected
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("pricing_model", "usd_per_thousand_characters"),
+    [
+        pytest.param("aura-2", 0.030, id="aura-2"),
+        pytest.param("aura", 0.015, id="aura-1"),
+    ],
+)
+def test_aura_rows_bill_speech_per_character_at_the_published_rate(
+    pricing_model: str, usd_per_thousand_characters: float
+):
+    """Pay as you go rates from https://deepgram.com/pricing, checked 2026-10-26"""
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model=pricing_model, custom_llm_provider="deepgram", call_type="speech", prompt_characters=1000
+    )
+
+    assert prompt_cost == pytest.approx(usd_per_thousand_characters)
+    assert completion_cost == 0.0
