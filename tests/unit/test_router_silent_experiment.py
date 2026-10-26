@@ -949,3 +949,37 @@ async def test_generic_mirroring_skips_deployment_mcp(mcp_deployment, mcp_config
 
     provider.assert_awaited_once()
     assert provider.await_args.kwargs["model"] == "openai/gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_type,attempt_method",
+    [
+        ("aresponses", "_ageneric_api_call_with_fallbacks_responses_attempt"),
+        ("anthropic_messages", "_ageneric_api_call_with_fallbacks_anthropic_messages_attempt"),
+    ],
+)
+async def test_generic_primary_attempt_rejects_missing_provider_response(call_type, attempt_method):
+    provider: Final = AsyncMock(return_value=None)
+    provider.__name__ = call_type
+    router: Final = Router(model_list=_generic_silent_model_list())
+    with pytest.raises(TypeError, match="request returned no response"):
+        await getattr(router, attempt_method)(model="silent-model", original_generic_function=provider, input="hi")
+
+
+@pytest.mark.asyncio
+async def test_generic_mirror_does_not_reuse_primary_attempt_callback():
+    primary_attempt: Final = AsyncMock(return_value="primary-only")
+    provider: Final = AsyncMock(return_value="mirror-result")
+    provider.__name__ = "aresponses"
+    router: Final = Router(model_list=_generic_silent_model_list())
+
+    await router._silent_experiment_ageneric(
+        silent_model="silent-model",
+        original_function=provider,
+        silent_kwargs={"input": "hi", "attempt_function": primary_attempt},
+    )
+
+    primary_attempt.assert_not_awaited()
+    provider.assert_awaited_once()
+    assert provider.await_args.kwargs["model"] == "openai/gpt-4o"

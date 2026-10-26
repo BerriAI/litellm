@@ -4497,10 +4497,12 @@ class Router:
         """
         try:
             verbose_router_logger.info("Starting silent experiment for model %s", silent_model)
+            remaining_kwargs: Final = {key: value for key, value in silent_kwargs.items() if key != "attempt_function"}
             await self._ageneric_api_call_with_fallbacks(
                 model=silent_model,
                 original_function=original_function,
-                **silent_kwargs,
+                attempt_function=None,
+                **remaining_kwargs,
             )
         except Exception as e:  # noqa: BLE001 - a background mirror must never break the primary request
             verbose_router_logger.error("Silent experiment failed for model %s: %s", silent_model, e)
@@ -6452,6 +6454,8 @@ class Router:
         carry_over_routed_deployment(live_kwargs=kwargs, snapshot=hop_kwargs)
         if kwargs.get("stream") and isinstance(response, BaseResponsesAPIStreamingIterator):
             return await self._aresponses_streaming_iterator(response=response, initial_kwargs=hop_kwargs)
+        if response is None:
+            raise TypeError("Responses request returned no response")
         return response
 
     async def _aanthropic_messages_streaming_iterator(
@@ -7015,6 +7019,8 @@ class Router:
                 response=cast("AsyncIterator[bytes]", response),  # cast-ok: stream=True always returns a byte iterator
                 initial_kwargs=hop_kwargs,
             )
+        if response is None:
+            raise TypeError("Anthropic Messages request returned no response")
         return response
 
     async def _dispatch_generic_call_type(
