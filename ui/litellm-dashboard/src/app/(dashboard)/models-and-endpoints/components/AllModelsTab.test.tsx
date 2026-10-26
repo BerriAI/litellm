@@ -426,12 +426,12 @@ describe("AllModelsTab", () => {
     });
   });
 
-  it("applies a public model name filter through the drawer", async () => {
+  it("applies a virtual model name filter through the drawer", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AllModelsTab {...defaultProps} />);
 
     await user.click(screen.getByTestId("datatable-filters-trigger"));
-    await user.click(await screen.findByPlaceholderText("Filter by Public Model Name"));
+    await user.click(await screen.findByPlaceholderText("Filter by Virtual Model Name"));
     await user.click(await screen.findByRole("option", { name: "gpt-3.5-turbo" }));
     await user.click(screen.getByTestId("filter-drawer-apply"));
 
@@ -440,12 +440,12 @@ describe("AllModelsTab", () => {
     });
   });
 
-  it("uses All Proxy Models as the public model name filter default", async () => {
+  it("uses All Proxy Models as the virtual model name filter default", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AllModelsTab {...defaultProps} />);
 
     await user.click(screen.getByTestId("datatable-filters-trigger"));
-    await user.click(await screen.findByPlaceholderText("Filter by Public Model Name"));
+    await user.click(await screen.findByPlaceholderText("Filter by Virtual Model Name"));
 
     expect(await screen.findByRole("option", { name: "All Proxy Models" })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "All Models" })).not.toBeInTheDocument();

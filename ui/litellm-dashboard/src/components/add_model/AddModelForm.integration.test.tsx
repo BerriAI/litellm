@@ -997,7 +997,7 @@ describe("AddModelForm", () => {
 
       await clickTestConnect();
 
-      await expectBlockedWith("All model mappings must have valid public names");
+      await expectBlockedWith("All model mappings must have valid virtual model names");
     });
   });
 
