@@ -1,6 +1,6 @@
 import { test, expect, type APIRequestContext, type Locator, type Page as PlaywrightPage } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
-import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
+import { navigateToPage, dismissFeedbackPopup, setAriaHidden } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
 import {
   CHAT_MODEL_A,
@@ -74,6 +74,7 @@ test.describe("Logs pagination with Aria in the header", () => {
         );
         await Promise.all(ids.map((id) => waitForSpendLog(request, id)));
         await openLogs(page);
+        await setAriaHidden(page, false);
         await applyKeyAliasFilter(page, await openFilterDrawer(page), alias);
         await setRowsPerPage(page, "25");
         await expect(visibleTestId(page, "pagination-range")).toHaveText("Showing 1-25 of 26");
