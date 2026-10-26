@@ -2184,7 +2184,7 @@ class Router:
         if team_id is None or public_model_name is None:
             return False
         siblings: Final = self._team_deployments_named(team_id, public_model_name) or ()
-        routable_siblings: Final = self._filter_blocked_deployments(list(siblings))
+        routable_siblings: Final = self._filter_blocked_deployments([dict(sibling) for sibling in siblings])
         return len(routable_siblings) > 1
 
     _OVERRIDABLE_ROUTING_STRATEGIES: frozenset[str] = frozenset({"simple-shuffle", *_DEFAULT_SELECTOR_ATTR_BY_STRATEGY})
@@ -10834,16 +10834,13 @@ class Router:
             if not deployments:
                 continue
             d = deployments[0]
-            mi = d.get("model_info") if isinstance(d, dict) else d.model_info
-            mi_dict: dict[str, Any] = mi if isinstance(mi, dict) else (mi.model_dump() if mi else {})
+            mi_dict: dict[str, Any] = d.get("model_info") or {}
             prefs_raw = mi_dict.get("adaptive_router_preferences")
             if prefs_raw is not None:
                 model_to_prefs[name] = AdaptiveRouterPreferences(**prefs_raw)
 
             # model_info is the conventional pricing location elsewhere in LiteLLM; litellm_params wins if set.
-            lp = d.get("litellm_params") if isinstance(d, dict) else d.litellm_params
-            lp_dict: dict[str, Any] = lp if isinstance(lp, dict) else (lp.model_dump() if lp else {})
-            cost = lp_dict.get("input_cost_per_token")
+            cost = d.get("litellm_params", {}).get("input_cost_per_token")
             if cost is None:
                 cost = mi_dict.get("input_cost_per_token")
             if cost is not None:
@@ -11693,13 +11690,13 @@ class Router:
         if _budget_limiter is not None:
             _budget_limiter.register_deployment_budget(deployment=deployment.to_json(exclude_none=True))
 
-    def deployments_named(self, model_name: str) -> tuple[Any, ...] | None:
+    def deployments_named(self, model_name: str) -> tuple[DeploymentTypedDict, ...] | None:
         """The deployments indexed under `model_name`, read under the index lock, or None when the name is not indexed."""
         with self._deployment_index_lock:
             indices: Final = self.model_name_to_deployment_indices.get(model_name)
             return None if indices is None else tuple(self.model_list[idx] for idx in indices)
 
-    def _team_deployments_named(self, team_id: str, public_model_name: str) -> tuple[Any, ...] | None:
+    def _team_deployments_named(self, team_id: str, public_model_name: str) -> tuple[DeploymentTypedDict, ...] | None:
         """The deployments `team_id` serves under `public_model_name`, or None when that pair is not indexed."""
         with self._deployment_index_lock:
             indices: Final = self.team_model_to_deployment_indices.get((team_id, public_model_name))
@@ -13271,7 +13268,9 @@ class Router:
         # handled downstream by the pattern_router in _common_checks_available_deployment.
         return None
 
-    def should_include_deployment(self, model_name: str, model: dict, team_id: str | None = None) -> bool:
+    def should_include_deployment(
+        self, model_name: str, model: DeploymentTypedDict | dict, team_id: str | None = None
+    ) -> bool:
         """
         Get the team-specific model name if team_id matches the deployment.
         """

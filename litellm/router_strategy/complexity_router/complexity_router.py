@@ -3133,8 +3133,7 @@ class ComplexityRouter(CustomLogger):
                 model_to_cost[name] = 0.0
                 continue
             deployment = deployments[0]
-            mi = deployment.get("model_info") if isinstance(deployment, dict) else deployment.model_info
-            mi_dict: dict[str, Any] = mi if isinstance(mi, dict) else (mi.model_dump() if mi else {})
+            mi_dict: dict[str, Any] = deployment.get("model_info") or {}
             prefs_raw = mi_dict.get("adaptive_router_preferences")
             if prefs_raw is not None:
                 model_to_prefs[name] = AdaptiveRouterPreferences(**prefs_raw)
@@ -3142,9 +3141,7 @@ class ComplexityRouter(CustomLogger):
                 model_to_prefs[name] = AdaptiveRouterPreferences(quality_tier=2, strengths=[])
 
             # model_info is the conventional pricing location elsewhere in LiteLLM; litellm_params wins if set.
-            lp = deployment.get("litellm_params") if isinstance(deployment, dict) else deployment.litellm_params
-            lp_dict: dict[str, Any] = lp if isinstance(lp, dict) else (lp.model_dump() if lp else {})
-            cost = lp_dict.get("input_cost_per_token")
+            cost = deployment.get("litellm_params", {}).get("input_cost_per_token")
             if cost is None:
                 cost = mi_dict.get("input_cost_per_token")
             model_to_cost[name] = float(cost) if cost is not None else 0.0
