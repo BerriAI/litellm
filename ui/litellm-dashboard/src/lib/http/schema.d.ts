@@ -26368,6 +26368,126 @@ export interface components {
              */
             type: "apply_patch";
         };
+        /** ArkConfig */
+        ArkConfig: {
+            /**
+             * Dlp
+             * @default redact
+             * @enum {string}
+             */
+            dlp: "off" | "block" | "redact";
+            /**
+             * Dlp Mode
+             * @default balanced
+             * @enum {string}
+             */
+            dlp_mode: "strict" | "balanced" | "recall";
+            /**
+             * Dlp Sources
+             * @default [
+             *       "user_input",
+             *       "tool_call",
+             *       "tool_result"
+             *     ]
+             */
+            dlp_sources: ("user_input" | "tool_call" | "tool_result")[];
+            /**
+             * Max Findings
+             * @default 10000
+             */
+            max_findings: number;
+            /**
+             * Max Input Bytes
+             * @default 1048576
+             */
+            max_input_bytes: number;
+            /**
+             * Max Queued
+             * @default 8
+             */
+            max_queued: number;
+            /**
+             * Native Pi
+             * @default true
+             */
+            native_pi: boolean;
+            /**
+             * Pi Sources
+             * @default [
+             *       "user_input",
+             *       "tool_result"
+             *     ]
+             */
+            pi_sources: ("user_input" | "tool_call" | "tool_result")[];
+            /**
+             * Pii
+             * @default redact
+             * @enum {string}
+             */
+            pii: "off" | "block" | "redact";
+            /**
+             * Pii Mode
+             * @default balanced
+             * @enum {string}
+             */
+            pii_mode: "strict" | "balanced" | "recall";
+            /**
+             * Pii Sources
+             * @default [
+             *       "user_input",
+             *       "tool_call",
+             *       "tool_result"
+             *     ]
+             */
+            pii_sources: ("user_input" | "tool_call" | "tool_result")[];
+            /**
+             * Queue Timeout
+             * @default 0.5
+             */
+            queue_timeout: number;
+            /** Rules */
+            rules?: {
+                [key: string]: boolean;
+            };
+            wolf?: components["schemas"]["ArkWolfConfig"];
+        };
+        /** ArkWolfConfig */
+        ArkWolfConfig: {
+            /**
+             * Backend
+             * @default off
+             * @enum {string}
+             */
+            backend: "off" | "local" | "api";
+            /**
+             * Batch Size
+             * @default 1
+             */
+            batch_size: number;
+            /** Bundle Dir */
+            bundle_dir?: string | null;
+            /**
+             * Overlap Tokens
+             * @default 0
+             */
+            overlap_tokens: number;
+            /**
+             * Precision
+             * @default fp16
+             * @enum {string}
+             */
+            precision: "auto" | "fp16" | "int8_int4";
+            /**
+             * Threshold
+             * @default 0.8
+             */
+            threshold: number;
+            /**
+             * Window Tokens
+             * @default 256
+             */
+            window_tokens: number;
+        };
         /**
          * AttachmentImpactResponse
          * @description Response for estimating the impact of a policy attachment.
@@ -36445,6 +36565,8 @@ export interface components {
              * @description Application ID for Noma Security. Defaults to 'litellm' if not provided
              */
             application_id?: string | null;
+            /** @description Patronus Ark local checks and Wolf Defender settings */
+            ark?: components["schemas"]["ArkConfig"] | null;
             /**
              * Assertions
              * @description Custom assertions to validate against the output. Each assertion is a string describing a condition.
