@@ -6,8 +6,10 @@ ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Final
 from unittest.mock import patch
@@ -144,13 +146,15 @@ class TestMaybeSetupPrometheusMultiprocDir:
             os.environ.pop("prometheus_multiproc_dir", None)
 
             # Should not raise TypeError
-            ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
+            result_dir = ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
                 num_workers=4,
                 litellm_settings=litellm_settings,
             )
 
             # Cleanup
             os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
+            if result_dir is not None:
+                shutil.rmtree(result_dir, ignore_errors=True)
 
     @pytest.mark.parametrize(
         "num_workers, litellm_settings",
@@ -193,9 +197,12 @@ class TestMaybeSetupPrometheusMultiprocDir:
             result_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
             assert result_dir is not None
             assert os.path.isdir(result_dir)
+            legacy_shared = os.path.join(tempfile.gettempdir(), "litellm_prometheus_multiproc")
+            assert result_dir != legacy_shared
 
             # Cleanup
             os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
+            shutil.rmtree(result_dir, ignore_errors=True)
 
     @pytest.mark.parametrize(
         "litellm_settings",
@@ -223,6 +230,7 @@ class TestMaybeSetupPrometheusMultiprocDir:
             assert os.path.isdir(result_dir)
 
             os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
+            shutil.rmtree(result_dir, ignore_errors=True)
 
     def test_lowercase_env_var_is_reused_and_exported_uppercase(self, tmp_path):
         """prometheus_client honours both spellings; the metrics server only reads the uppercase one."""
@@ -257,3 +265,53 @@ class TestMaybeSetupPrometheusMultiprocDir:
             assert os.environ["PROMETHEUS_MULTIPROC_DIR"] == str(tmp_path)
         assert not admitted.exists()
         assert not samples.exists()
+
+    def test_auto_created_dir_is_unique_per_boot_and_keeps_sibling_counters(self):
+        """A fixed default dir made the second proxy boot wipe the first proxy's live counters (issue #42566)."""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
+            os.environ.pop("prometheus_multiproc_dir", None)
+            litellm_settings = {"callbacks": ["prometheus"]}
+
+            first = ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
+                num_workers=4, litellm_settings=litellm_settings
+            )
+            assert first is not None and os.path.isdir(first)
+
+            stale = os.path.join(first, "counter_proxy_one.db")
+            with open(stale, "w") as f:
+                f.write("live")
+
+            os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)  # simulate a second, independent boot
+            second = ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
+                num_workers=4, litellm_settings=litellm_settings
+            )
+            assert second is not None and os.path.isdir(second)
+
+            assert first != second
+            assert os.path.exists(stale)
+
+            os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
+
+            # The exit hook removes the dir only from the creating process: a forked worker
+            # (different PID) sharing the dir must leave its siblings' samples alone.
+            ProxyInitializationHelpers._rmtree_auto_created_dir(first, 999999)
+            assert os.path.exists(first)
+            ProxyInitializationHelpers._rmtree_auto_created_dir(second, os.getpid())
+            assert not os.path.exists(second)
+
+            shutil.rmtree(first, ignore_errors=True)
+
+    def test_configured_dir_is_still_wiped_on_boot(self, tmp_path):
+        """A directory the operator set keeps its historical wipe-on-boot lifecycle."""
+        stale = tmp_path / "counter_stale.db"
+        stale.write_text("old")
+
+        with patch.dict(os.environ, {"PROMETHEUS_MULTIPROC_DIR": str(tmp_path)}):
+            result_dir = ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
+                num_workers=4,
+                litellm_settings={"callbacks": ["prometheus"]},
+            )
+
+            assert result_dir == str(tmp_path)
+            assert not stale.exists()
