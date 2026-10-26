@@ -1,0 +1,14 @@
+{
+  "base": "f96200bcea3a08adcd08ad4eb5ad169d226cdda5",
+  "tip": "e750b016158cc86efd70211219ea18fa6542e5af",
+  "componentTests": 107,
+  "browserRegressions": 2,
+  "lint": "PASS",
+  "baselineRegression": "4 scoped header-access cases fail on base and pass on candidate",
+  "localValidationLimits": [
+    "Generated Next dev types reject pre-existing AgentControlPlaneView layout export on both base and candidate",
+    "Webpack rejects existing claude.svg image import on both base and candidate; this also prevents live current Usage page verification",
+    "Default Turbopack build cannot follow shared node_modules symlink outside worktree root"
+  ],
+  "browserSetup": "Current-source dashboard and proxy, isolated PostgreSQL, repository scripted LLM upstream; no intercepted browser requests or paid provider calls"
+}

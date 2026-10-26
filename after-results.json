@@ -1,0 +1,54 @@
+[
+  {
+    "route": "/ui/usage/",
+    "status": "Not browser-verified: existing claude.svg import failure also reproduced on base"
+  },
+  {
+    "width": 1440,
+    "pagination": "26-26 of 26"
+  },
+  {
+    "width": 1440,
+    "route": "/ui/",
+    "header": "opens and restores focus"
+  },
+  {
+    "width": 1440,
+    "route": "/ui/cost-tracking/",
+    "header": "opens and restores focus"
+  },
+  {
+    "width": 1440,
+    "route": "/ui/playground/",
+    "header": "opens and restores focus"
+  },
+  {
+    "width": 1440,
+    "route": "/ui/api-keys/",
+    "header": "opens and restores focus"
+  },
+  {
+    "width": 390,
+    "pagination": "26-26 of 26"
+  },
+  {
+    "width": 390,
+    "route": "/ui/",
+    "header": "opens and restores focus"
+  },
+  {
+    "width": 390,
+    "route": "/ui/cost-tracking/",
+    "header": "opens and restores focus"
+  },
+  {
+    "width": 390,
+    "route": "/ui/playground/",
+    "header": "opens and restores focus"
+  },
+  {
+    "width": 390,
+    "route": "/ui/api-keys/",
+    "header": "opens and restores focus"
+  }
+]
