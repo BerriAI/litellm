@@ -902,6 +902,10 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.MorphChatConfig().get_openai_compatible_provider_info(api_base, api_key)
+    elif custom_llm_provider == "opencode_go":
+        from litellm.llms.opencode.common_utils import go_api_base, go_api_key
+
+        return model, custom_llm_provider, go_api_key(api_key), go_api_base(api_base, model)
     elif custom_llm_provider == "lambda_ai":
         (
             api_base,
@@ -972,3 +976,9 @@ def _get_openai_compatible_provider_info(
     if dynamic_api_key is None and api_key is not None:
         dynamic_api_key = api_key
     return model, custom_llm_provider, dynamic_api_key, api_base
+
+
+def get_provider_affinity_header(api_base: str | None) -> str | None:
+    from litellm.llms.opencode.transformation import OpenCodeProviderAdapter
+
+    return OpenCodeProviderAdapter().get_provider_affinity_header(api_base)

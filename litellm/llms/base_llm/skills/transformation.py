@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic_skills import (
     CreateSkillRequest,
@@ -71,7 +72,7 @@ class BaseSkillsAPIConfig(ABC):
         """
         if api_base is None:
             raise ValueError("api_base is required")
-        return f"{api_base}/v1/{endpoint}"
+        return join_api_base(api_base, f"v1/{endpoint}")
 
     @abstractmethod
     def transform_create_skill_request(

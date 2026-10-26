@@ -219,6 +219,8 @@ from litellm.types.proxy.auth.user_roles import (  # noqa: E402  # re-export aft
     KeyManagementRoutes as KeyManagementRoutes,  # noqa: PLC0414  # public re-export
 )
 
+MODEL_LIST_ROUTES: Final = ("/models", "/v1/models", "/claude_code_gateway/v1/models")
+
 
 class LiteLLMRoutes(enum.Enum):
     openai_route_names = [
@@ -307,8 +309,7 @@ class LiteLLMRoutes(enum.Enum):
         "/threads/{thread_id}/runs",
         "/v1/threads/{thread_id}/runs",
         # models
-        "/models",
-        "/v1/models",
+        *MODEL_LIST_ROUTES,
         # token counter
         "/utils/token_counter",
         "/utils/model_info",
@@ -577,8 +578,7 @@ class LiteLLMRoutes(enum.Enum):
         "/health/services",
         "/key/list",
         "/user/filter/ui",
-        "/models",
-        "/v1/models",
+        *MODEL_LIST_ROUTES,
         "/sso/get/ui_settings",
         "/get/user_banner",
         "/get/latest_release_info",
@@ -760,8 +760,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/info",
         "/v2/model/info",
         "/v2/key/info",
-        "/models",
-        "/v1/models",
+        *MODEL_LIST_ROUTES,
         "/global/spend",
         "/global/spend/logs",
         "/global/spend/keys",
@@ -1767,8 +1766,10 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
     max_parallel_requests: int | None = Field(
         default=None, description="Max concurrent requests allowed for this budget id."
     )
-    tpm_limit: int | None = Field(default=None, description="Max tokens per minute, allowed for this budget id.")
-    rpm_limit: int | None = Field(default=None, description="Max requests per minute, allowed for this budget id.")
+    tpm_limit: int | None = Field(default=None, ge=0, description="Max tokens per minute, allowed for this budget id.")
+    rpm_limit: int | None = Field(
+        default=None, ge=0, description="Max requests per minute, allowed for this budget id."
+    )
     tpd_limit: int | None = Field(
         default=None, description="Max tokens per day, charged by batch submissions, allowed for this budget id."
     )
@@ -1879,6 +1880,8 @@ RouterSettingsDict = Annotated[
 
 
 class NewTeamRequest(TeamBase):
+    tpm_limit: int | None = Field(default=None, ge=0)
+    rpm_limit: int | None = Field(default=None, ge=0)
     router_settings: RouterSettingsDict | None = None
     model_aliases: dict | None = None
     model_max_budget: GenericBudgetConfigType | None = Field(
@@ -1958,8 +1961,8 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     team_alias: str | None = None
     organization_id: str | None = None
     metadata: dict | None = None
-    tpm_limit: int | None = None
-    rpm_limit: int | None = None
+    tpm_limit: int | None = Field(default=None, ge=0)
+    rpm_limit: int | None = Field(default=None, ge=0)
     tpd_limit: int | None = None
     max_budget: float | None = None
     soft_budget: float | None = None
@@ -2715,6 +2718,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "state cached without turning on `enable_health_check_routing`, so routing is "
             "unaffected. With no health state nothing is hidden. Hiding is presentation-only, a "
             "hidden model can still be called."
+        ),
+    )
+    return_wildcard_routes: bool | None = Field(
+        None,
+        description=(
+            "When true, `/v1/models` lists wildcard routes like `openai/*` unless the request passes "
+            "`return_wildcard_routes=false`."
         ),
     )
     alerting: list | None = Field(
@@ -3731,6 +3741,7 @@ class SpendLogsMetadata(TypedDict):
     routing_decision: StandardLoggingRoutingDecision | None
     kubernetes_pod_routing: ReadOnly[StandardLoggingKubernetesPodRouting | None]
     internal_call_origin: InternalCallOrigin | None
+    billed_retry_attempt: ReadOnly[NotRequired[bool | None]]
     litellm_roi_estimator: ReadOnly[NotRequired[bool | None]]
     guardrail_information: list[StandardLoggingGuardrailInformation] | None
     eval_information: Any | None
@@ -5254,6 +5265,7 @@ class ToolDiscoveryQueueItem(TypedDict, total=False):
     team_id: str | None  # team that triggered discovery
     key_alias: str | None  # human-readable key alias
     user_agent: str | None  # HTTP User-Agent of the caller
+    call_count: ReadOnly[int]  # invocations folded into this row since the previous flush
 
 
 from litellm.models.managed_files import (  # noqa: E402

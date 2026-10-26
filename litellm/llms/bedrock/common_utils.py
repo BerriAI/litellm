@@ -31,6 +31,7 @@ from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.common_utils import schema_property_count
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -1305,10 +1306,7 @@ def build_mantle_messages_url(
     """
     override: Final = api_base or aws_bedrock_runtime_endpoint or _mantle_api_base_from_env()
     if override:
-        base: Final = override.rstrip("/")
-        if base.endswith(MANTLE_MESSAGES_PATH):
-            return base
-        return f"{base}{MANTLE_MESSAGES_PATH}"
+        return ensure_api_route(override, MANTLE_MESSAGES_PATH)
     return f"https://bedrock-mantle.{region}.api.aws{MANTLE_MESSAGES_PATH}"
 
 
@@ -2023,8 +2021,13 @@ def get_bedrock_response_stream_shape():
 _BEDROCK_STREAM_OUTPUT_SHAPES: Final = ("ConverseStreamOutput", "ResponseStream")
 
 
+class _ModeledErrorMetadata(TypedDict, total=False):
+    httpStatusCode: ReadOnly[int]
+
+
 def _modeled_error_status(member: Shape) -> int | None:
-    status: Final = (member.metadata or {}).get("error", {}).get("httpStatusCode")
+    error: Final[_ModeledErrorMetadata] = (member.metadata or {}).get("error", {})
+    status: Final = error.get("httpStatusCode")
     return None if status is None else int(status)
 
 

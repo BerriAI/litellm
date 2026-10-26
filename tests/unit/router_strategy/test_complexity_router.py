@@ -1065,6 +1065,11 @@ class TestCustomDimensions:
                 "create table widgets (id integer); ALTER TABLE widgets ADD label text;",
                 id="regex",
             ),
+            pytest.param(
+                {"patterns": [r"\b(?P<verb>create|alter)\s{1,4}?table\b"]},
+                "CREATE TABLE widgets (id integer)",
+                id="named-group-alternation-lazy-repeat",
+            ),
         ],
     )
     def test_custom_dimension_changes_only_matching_requests(
