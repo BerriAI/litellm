@@ -4851,7 +4851,7 @@ async def test_callback_error_path_reads_cookie_and_clears_it(monkeypatch):
     assert cleared[cookie_name]["max-age"] == "0"
 
 
-def _issuer_anchored_oauth_server(issuer: str | None = "https://idp.example.com"):
+def _issuer_anchored_oauth_server(issuer: str | None = "https://idp.example.com") -> "MCPServer":
     from litellm.proxy._types import MCPTransport
     from litellm.types.mcp import MCPAuth
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -4870,22 +4870,29 @@ def _issuer_anchored_oauth_server(issuer: str | None = "https://idp.example.com"
     )
 
 
-async def _authorize_then_callback(server, iss, monkeypatch, expected_issuer_override=..., error=None):
+async def _authorize_then_callback(
+    server: "MCPServer",
+    iss: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+    error: str | None = None,
+    drop_state_keys: tuple[str, ...] = (),
+) -> tuple[Response, dict[str, object]]:
     """Run /authorize for ``server``, then feed the resulting flow back through /callback with the
     RFC 9207 ``iss`` the authorization server supposedly returned. Returns (callback_response,
     sealed_state_data)."""
     from http.cookies import SimpleCookie
     from urllib.parse import parse_qs, urlparse
 
-    from fastapi import Request
+    from pydantic import TypeAdapter
 
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
         _oauth_state_cookie_name,
         authorize_with_server,
         callback,
         decode_state_hash,
-        encode_state_with_base_url,
     )
+
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-for-LIT-5940")
     client_redirect_uri = "http://127.0.0.1:6274/oauth/callback/debug"
@@ -4907,15 +4914,15 @@ async def _authorize_then_callback(server, iss, monkeypatch, expected_issuer_ove
     jar = SimpleCookie()
     jar.load(authorize_response.headers["set-cookie"])
     cookie_name = _oauth_state_cookie_name(handle)
-    sealed_state = jar[cookie_name].value
-    if expected_issuer_override is not ...:
-        # A state minted before the issuer was sealed into it: same shape, key absent.
-        sealed_state = encode_state_with_base_url(
-            base_url=client_redirect_uri,
-            original_state="client-original-state-9207",
-            client_redirect_uri=client_redirect_uri,
-            expected_issuer=expected_issuer_override,
+    original_state: Final = jar[cookie_name].value
+    state_data: Final = TypeAdapter(dict[str, object]).validate_python(decode_state_hash(original_state))
+    sealed_state: Final = (
+        encrypt_value_helper(
+            json.dumps({key: value for key, value in state_data.items() if key not in drop_state_keys})
         )
+        if drop_state_keys
+        else original_state
+    )
 
     callback_request = MagicMock(spec=Request)
     callback_request.base_url = "https://proxy.example.com/"
@@ -4929,7 +4936,7 @@ async def _authorize_then_callback(server, iss, monkeypatch, expected_issuer_ove
         state=handle,
         iss=iss,
     )
-    return response, decode_state_hash(sealed_state)
+    return response, TypeAdapter(dict[str, object]).validate_python(decode_state_hash(sealed_state))
 
 
 @pytest.mark.asyncio
@@ -5015,9 +5022,227 @@ async def test_callback_legacy_state_requires_absent_issuer(monkeypatch, iss, ex
         _issuer_anchored_oauth_server(),
         iss=iss,
         monkeypatch=monkeypatch,
-        expected_issuer_override=None,
+        drop_state_keys=("expected_issuer", "configured_authorization_origin"),
     )
     assert response.status_code == expected_status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("authorization_url", "iss"),
+    (
+        ("https://idp.example.com/oauth/authorize", "https://idp.example.com"),
+        ("https://idp.example.com/tenant-a/authorize", "https://idp.example.com/tenant-a"),
+        ("https://IDP.example.com:443/authorize?prompt=consent", "https://idp.example.com"),
+        ("https://idp.example.com/authorize", "https://IDP.example.com:443"),
+        ("http://127.0.0.1:54582/authorize", "http://127.0.0.1:54582"),
+        ("http://localhost/authorize", "http://localhost:80"),
+        ("http://[::1]:54582/authorize", "http://[::1]:54582"),
+    ),
+)
+async def test_callback_accepts_an_issuer_on_the_configured_authorization_origin(
+    monkeypatch: pytest.MonkeyPatch, authorization_url: str, iss: str
+) -> None:
+    from urllib.parse import parse_qs, urlparse
+
+    server: Final = _issuer_anchored_oauth_server(issuer=None).model_copy(
+        update={
+            "authorization_url": authorization_url,
+            "configured_authorization_url": authorization_url,
+            "token_url": "https://tokens.example.com/token",
+            "configured_token_url": "https://tokens.example.com/token",
+        }
+    )
+    response, _ = await _authorize_then_callback(server, iss, monkeypatch)
+
+    assert response.status_code == 302
+    destination: Final = urlparse(response.headers["location"])
+    assert destination._replace(query="").geturl() == "http://127.0.0.1:6274/oauth/callback/debug"
+    assert parse_qs(destination.query) == {"code": ["upstream-auth-code"], "state": ["client-original-state-9207"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "iss",
+    (
+        "https://attacker.example.com",
+        "https://idp.example.com.evil.com",
+        "http://idp.example.com",
+        "ftp://idp.example.com",
+        "https://idp.example.com:8443",
+        "https://idp.example.com.",
+        "https://idp.example.com%40evil.com",
+        "https://idp.example.com?tenant=a",
+        "https://idp.example.com?",
+        "https://idp.example.com#fragment",
+        "https://idp.example.com#",
+        "https://idp.example.com@evil.com",
+        "https://user@idp.example.com",
+        "https://evil.com\\@idp.example.com",
+        " https://idp.example.com",
+        "https://idp.example.com\n",
+        "https://idp.exa\tmple.com",
+        "https://idp.example.com/\x00",
+        "idp.example.com",
+        "",
+        "https://[idp.example.com",
+        "https://[not-ipv6]/",
+        "https://idp.example.com:+443",
+        "https://idp.example.com:٤٤٣",
+        "https://idp.example.com:-443",
+        "https://idp.example.com:65536",
+    ),
+)
+async def test_callback_rejects_an_issuer_off_the_configured_authorization_origin(
+    monkeypatch: pytest.MonkeyPatch, iss: str
+) -> None:
+    server: Final = _issuer_anchored_oauth_server(issuer=None).model_copy(
+        update={
+            "configured_authorization_url": "https://idp.example.com/oauth/authorize",
+            "configured_token_url": "https://idp.example.com/oauth/token",
+        }
+    )
+    response, _ = await _authorize_then_callback(server, iss, monkeypatch)
+
+    assert response.status_code == 400
+    assert "location" not in response.headers
+    assert b"invalid_issuer" in response.body
+    assert b"upstream-auth-code" not in response.body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("authorization_url", "iss"),
+    (
+        ("http://[::1]:54582/authorize", "http://[0:0::1]:54582"),
+        ("https://xn--bcher-kva.example/authorize", "https://bücher.example"),
+    ),
+)
+async def test_callback_rejects_an_issuer_whose_host_is_spelled_differently(
+    monkeypatch: pytest.MonkeyPatch, authorization_url: str, iss: str
+) -> None:
+    server: Final = _issuer_anchored_oauth_server(issuer=None).model_copy(
+        update={
+            "authorization_url": authorization_url,
+            "configured_authorization_url": authorization_url,
+            "token_url": "https://tokens.example.com/token",
+            "configured_token_url": "https://tokens.example.com/token",
+        }
+    )
+    response, _ = await _authorize_then_callback(server, iss, monkeypatch)
+
+    assert response.status_code == 400
+    assert "location" not in response.headers
+    assert b"invalid_issuer" in response.body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "configured_url", (None, "https://other.example.com/authorize", "https://idp.example.com/manual-authorize")
+)
+async def test_callback_rejects_an_issuer_when_the_authorization_url_was_discovered(
+    monkeypatch: pytest.MonkeyPatch, configured_url: str | None
+) -> None:
+    server: Final = _issuer_anchored_oauth_server(issuer=None).model_copy(
+        update={
+            "configured_authorization_url": configured_url,
+            "configured_token_url": "https://idp.example.com/oauth/token",
+        }
+    )
+    response, _ = await _authorize_then_callback(server, "https://idp.example.com", monkeypatch)
+
+    assert response.status_code == 400
+    assert "location" not in response.headers
+    assert b"invalid_issuer" in response.body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("iss, expected_status", ((None, 302), ("https://idp.example.com", 400)))
+async def test_callback_legacy_state_without_a_configured_origin(
+    monkeypatch: pytest.MonkeyPatch, iss: str | None, expected_status: int
+) -> None:
+    server: Final = _issuer_anchored_oauth_server(issuer=None).model_copy(
+        update={
+            "configured_authorization_url": "https://idp.example.com/oauth/authorize",
+            "configured_token_url": "https://idp.example.com/oauth/token",
+        }
+    )
+    response, _ = await _authorize_then_callback(
+        server, iss, monkeypatch, drop_state_keys=("configured_authorization_origin",)
+    )
+
+    assert response.status_code == expected_status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("iss, expected_status", (("https://idp.example.com", 302), ("https://other.example.com", 400)))
+async def test_callback_relays_an_error_only_from_the_configured_authorization_origin(
+    monkeypatch: pytest.MonkeyPatch, iss: str, expected_status: int
+) -> None:
+    from urllib.parse import parse_qs, urlparse
+
+    server: Final = _issuer_anchored_oauth_server(issuer=None).model_copy(
+        update={
+            "configured_authorization_url": "https://idp.example.com/oauth/authorize",
+            "configured_token_url": "https://idp.example.com/oauth/token",
+        }
+    )
+    response, _ = await _authorize_then_callback(server, iss, monkeypatch, error="access_denied")
+
+    assert response.status_code == expected_status
+    if expected_status == 302:
+        assert parse_qs(urlparse(response.headers["location"]).query) == {
+            "error": ["access_denied"],
+            "state": ["client-original-state-9207"],
+        }
+    else:
+        assert "location" not in response.headers
+        assert b"invalid_issuer" in response.body
+
+
+@pytest.mark.asyncio
+async def test_callback_holds_a_known_issuer_to_exact_match_on_the_configured_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server: Final = _issuer_anchored_oauth_server().model_copy(
+        update={
+            "configured_authorization_url": "https://idp.example.com/oauth/authorize",
+            "configured_token_url": "https://idp.example.com/oauth/token",
+        }
+    )
+    response, _ = await _authorize_then_callback(server, "https://idp.example.com/", monkeypatch)
+
+    assert response.status_code == 400
+    assert "location" not in response.headers
+    assert b"invalid_issuer" in response.body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", (None, "access_denied"))
+@pytest.mark.parametrize(
+    ("configured_token_url", "token_url"),
+    (
+        (None, None),
+        (None, "https://collector.example.com/token"),
+        ("https://idp.example.com/oauth/token", "https://collector.example.com/token"),
+    ),
+)
+async def test_callback_rejects_an_unknown_issuer_when_the_token_endpoint_is_not_configured(
+    monkeypatch: pytest.MonkeyPatch, configured_token_url: str | None, token_url: str | None, error: str | None
+) -> None:
+    server: Final = _issuer_anchored_oauth_server(issuer=None).model_copy(
+        update={
+            "configured_authorization_url": "https://idp.example.com/oauth/authorize",
+            "configured_token_url": configured_token_url,
+            "token_url": token_url,
+        }
+    )
+    response, _ = await _authorize_then_callback(server, "https://idp.example.com", monkeypatch, error=error)
+
+    assert response.status_code == 400
+    assert "location" not in response.headers
+    assert b"invalid_issuer" in response.body
+    assert b"upstream-auth-code" not in response.body
 
 
 @pytest.mark.asyncio

@@ -2275,7 +2275,8 @@ export interface paths {
          *       forwarded back to the validated client ``redirect_uri`` with the
          *       original (un-wrapped) ``state``, once the RFC 9207 ``iss`` (when the
          *       authorization server sent one) matches the issuer /authorize sealed
-         *       into the state.
+         *       into the state. Without a known issuer, it must match the sealed origin of
+         *       the configured authorization URL.
          *     - An error response (``error``[+``error_description``/``error_uri``]), per
          *       RFC 6749 §4.1.2.1. When ``state`` is present and decodes to a trusted
          *       ``redirect_uri``, the error params are propagated back to the client so
