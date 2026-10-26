@@ -1,7 +1,8 @@
 use std::{future::Future, sync::Arc, time::Duration};
 
-use litellm_http::{ClientVariant, HttpSettings, HttpSettingsLayer, Resolution};
+use litellm_http::{ClientVariant, HttpKeysPartial, HttpSettings, Resolution};
 use litellm_inference::resources::CoreResources;
+use litellm_layered::Env;
 use litellm_secrets::source::{EnvironmentSecrets, SecretSource};
 
 pub const DEADLINE: Duration = Duration::from_secs(120);
@@ -15,10 +16,10 @@ pub struct LiveResources {
 impl Default for LiveResources {
     fn default() -> Self {
         let resources = CoreResources::new(Arc::new(super::http_pool()));
-        let settings =
-            HttpSettings::from_layers([HttpSettingsLayer::from_environment(&|key: &str| {
-                std::env::var(key).ok()
-            })]);
+        let settings = HttpSettings::from(
+            HttpKeysPartial::from_env(&Env::from_process())
+                .expect("live HTTP environment variables must be valid"),
+        );
         let resolution = Resolution::from(&settings);
         let http = resources
             .pool
