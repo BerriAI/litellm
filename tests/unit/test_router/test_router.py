@@ -8953,10 +8953,9 @@ def test_team_byok_wildcard_is_served_before_a_proxy_wide_wildcard_of_the_same_n
     )
     requested: Final = "openrouter/openai/gpt-5-nano"
 
-    early: Final = router._try_early_resolve_deployments_for_model_not_in_names(model=requested, request_team_id=team_id)
+    served: Final = router.wildcard_route_deployments(requested, team_id)
 
-    assert early is not None and isinstance(early[1], list)
-    assert tuple(Deployment.model_validate(d).model_info.id for d in early[1]) == (expected_id,)
+    assert tuple(Deployment.model_validate(d).model_info.id for d in served) == (expected_id,)
 
 
 def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint():
