@@ -31,17 +31,20 @@ from litellm.types.realtime import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, LlmProviders
-from litellm.utils import ProviderConfigManager
+from litellm.utils import ProviderConfigManager, resolve_api_key_secret_reference
 
+from ..litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params
 from ..litellm_core_utils.credential_accessor import CredentialAccessor
 from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from ..litellm_core_utils.realtime_streaming import client_websocket_scope
 from ..llms.azure.common_utils import get_azure_ad_token
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
-from ..llms.bedrock.realtime.handler import BedrockRealtime
+from ..llms.bedrock.realtime.handler import BedrockRealtime, raise_if_session_committed
 from ..llms.custom_httpx.http_handler import realtime_ssl_for_url
 from ..llms.openai.live.handler import OpenAILiveSessions
 from ..llms.openai.realtime.handler import OpenAIRealtime
+from ..llms.openai.workload_identity import openai_static_api_key, resolve_openai_bearer_token_async
 from ..llms.vertex_ai.audio_transcription.realtime_transformation import is_vertex_speech_to_text_model
 from ..llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig, vertex_realtime_config
 from ..llms.vertex_ai.vertex_llm_base import VertexBase
@@ -78,6 +81,13 @@ def _with_resolved_session_model(session: dict[str, object], model_name: str) ->
     if "model" not in session:
         return session
     return {**session, "model": model_name}
+
+
+def _resolved_request_session(request_data: Mapping[str, object], model_name: str) -> Mapping[str, object] | None:
+    session: Final = as_str_mapping(request_data.get("session"))
+    if not isinstance(session, dict):
+        return None
+    return _with_resolved_session_model(session, model_name)
 
 
 def _build_litellm_metadata(kwargs: dict) -> dict[str, object]:
@@ -129,6 +139,17 @@ def _get_realtime_http_provider_config(
     return provider_config, resolved_api_base.rstrip("/"), resolved_api_key
 
 
+async def _realtime_http_bearer_token(
+    custom_llm_provider: str, api_key: str, api_base: str, litellm_params: GenericLiteLLMParams
+) -> str:
+    if custom_llm_provider != LlmProviders.OPENAI.value:
+        return api_key
+    bearer_token: Final = await resolve_openai_bearer_token_async(
+        static_api_key=api_key or None, api_base=api_base, litellm_params=litellm_params.model_dump(exclude_none=True)
+    )
+    return bearer_token or ""
+
+
 @wrapper_client
 async def acreate_realtime_client_secret(
     model: str | None = None,
@@ -153,6 +174,7 @@ async def acreate_realtime_client_secret(
         dynamic_api_base,
     ) = get_llm_provider(
         model=model_name,
+        custom_llm_provider=litellm_params.custom_llm_provider,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
@@ -174,11 +196,14 @@ async def acreate_realtime_client_secret(
         custom_llm_provider=custom_llm_provider,
     )
     request_data: Final = req.model_dump(exclude_none=True, exclude={"model"})
-    if isinstance(request_data.get("session"), dict):
-        request_data["session"] = _with_resolved_session_model(request_data["session"], model_name)
+    resolved_session: Final = _resolved_request_session(request_data, model_name)
+    if resolved_session is not None:
+        request_data["session"] = resolved_session
     return await base_llm_http_handler.async_realtime_client_secret_handler(
         api_base=resolved_api_base,
-        api_key=resolved_api_key,
+        api_key=await _realtime_http_bearer_token(
+            custom_llm_provider, resolved_api_key, resolved_api_base, litellm_params
+        ),
         request_data=request_data,
         logging_obj=litellm_logging_obj,
         timeout=timeout or request_timeout,
@@ -221,6 +246,7 @@ async def acreate_realtime_transcription_session(
         dynamic_api_base,
     ) = get_llm_provider(
         model=model_name,
+        custom_llm_provider=litellm_params.custom_llm_provider,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
@@ -250,7 +276,9 @@ async def acreate_realtime_transcription_session(
         request_data["input_audio_transcription"]["model"] = model_name
     return await base_llm_http_handler.async_realtime_transcription_session_handler(
         api_base=resolved_api_base,
-        api_key=resolved_api_key,
+        api_key=await _realtime_http_bearer_token(
+            custom_llm_provider, resolved_api_key, resolved_api_base, litellm_params
+        ),
         request_data=request_data,
         logging_obj=litellm_logging_obj,
         timeout=timeout or request_timeout,
@@ -267,7 +295,7 @@ async def arealtime_calls(
     openai_ephemeral_key: str,
     sdp_body: bytes,
     model: str | None = None,
-    session: dict[str, Any] | None = None,
+    session: dict[str, object] | None = None,
     timeout: float | None = None,
     **kwargs,
 ):
@@ -282,6 +310,7 @@ async def arealtime_calls(
         dynamic_api_base,
     ) = get_llm_provider(
         model=model_name,
+        custom_llm_provider=litellm_params.custom_llm_provider,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
@@ -414,17 +443,21 @@ async def _alive_session(
     api_base: str | None,
     api_key: str | None,
     litellm_metadata: Mapping[str, object],
+    litellm_params: Mapping[str, object],
 ) -> None:
     rejection: Final = _live_session_rejection(custom_llm_provider, litellm_metadata)
     if rejection is not None:
         _raise_live_session_rejection(rejection)
+    resolved_api_base: Final = api_base or litellm.api_base or "https://api.openai.com/"
     await openai_live_sessions.async_live_session(
         model=model,
         websocket=websocket,
         logging_obj=litellm_logging_obj,
         session_start=session_start,
-        api_base=api_base or litellm.api_base or "https://api.openai.com/",
-        api_key=api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY"),
+        api_base=resolved_api_base,
+        api_key=await resolve_openai_bearer_token_async(
+            static_api_key=openai_static_api_key(api_key), api_base=resolved_api_base, litellm_params=litellm_params
+        ),
     )
 
 
@@ -447,6 +480,7 @@ async def _arealtime(
 
     For PROXY use only.
     """
+    raise_if_session_committed(client_websocket_scope(websocket))
     headers = cast(dict | None, kwargs.get("headers"))
     extra_headers: Final = cast(dict | None, kwargs.get("extra_headers"))
     if headers is None:
@@ -461,6 +495,7 @@ async def _arealtime(
 
     model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
         model=model,
+        custom_llm_provider=litellm_params.custom_llm_provider,
         api_base=api_base,
         api_key=api_key,
     )
@@ -492,14 +527,17 @@ async def _arealtime(
             api_base=dynamic_api_base or litellm_params.api_base,
             api_key=dynamic_api_key,
             litellm_metadata=_build_litellm_metadata(kwargs),
+            litellm_params=kwargs,
         )
         return
 
+    drop_params: Final = litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True
     provider_config: BaseRealtimeConfig | None = None
     if _custom_llm_provider in LlmProviders._member_map_.values():
         provider_config = ProviderConfigManager.get_provider_realtime_config(
             model=model,
             provider=LlmProviders(_custom_llm_provider),
+            drop_params=drop_params,
         )
     if provider_config is not None:
         await base_llm_http_handler.async_realtime(
@@ -532,7 +570,12 @@ async def _arealtime(
             configured_realtime_protocol, query_params=query_params, websocket=websocket
         )
         resolved_azure_ad_token: Final = (
-            None if api_key else get_azure_ad_token(GenericLiteLLMParams(**kwargs, azure_ad_token=azure_ad_token))
+            None
+            if api_key
+            else await asyncio.to_thread(
+                get_azure_ad_token,
+                GenericLiteLLMParams(**kwargs, azure_ad_token=azure_ad_token),
+            )
         )
         await azure_realtime.async_realtime(
             model=model,
@@ -551,8 +594,9 @@ async def _arealtime(
         )
     elif _custom_llm_provider == "openai":
         api_base = dynamic_api_base or litellm_params.api_base or litellm.api_base or "https://api.openai.com/"
-        # set API KEY
-        api_key = dynamic_api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
+        api_key = await resolve_openai_bearer_token_async(
+            static_api_key=openai_static_api_key(dynamic_api_key), api_base=api_base, litellm_params=kwargs
+        )
 
         await openai_realtime.async_realtime(
             model=model,
@@ -600,6 +644,7 @@ async def _arealtime(
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_external_id=aws_external_id,
             aws_session_tags=aws_session_tags,
+            drop_params=drop_params,
         )
     elif _custom_llm_provider == "xai":
         api_base = (
@@ -664,6 +709,7 @@ async def _arealtime(
             resolve_access_token=resolve_vertex_access_token,
             project=resolved_project,
             location=vertex_location,
+            drop_params=drop_params,
         )
 
         await base_llm_http_handler.async_realtime(
@@ -710,15 +756,21 @@ def _azure_realtime_health_protocol(
     return "GA", query_params
 
 
-def _realtime_health_check_auth_headers(
+async def _realtime_health_check_auth_headers(
     custom_llm_provider: str, api_key: str | None, model_params: Mapping[str, object]
 ) -> Mapping[str, str]:
     if custom_llm_provider == "azure":
+        azure_ad_token: Final = (
+            None
+            if api_key
+            else await asyncio.to_thread(
+                get_azure_ad_token,
+                GenericLiteLLMParams.model_validate(dict(model_params)),
+            )
+        )
         return azure_realtime.get_auth_headers(
             api_key=api_key,
-            azure_ad_token=(
-                None if api_key else get_azure_ad_token(GenericLiteLLMParams.model_validate(dict(model_params)))
-            ),
+            azure_ad_token=azure_ad_token,
         )
     if api_key is None:
         return _EMPTY_AUTH_HEADERS
@@ -755,19 +807,33 @@ async def realtime_health_check(
     import websockets
 
     resolved_params: Final = _model_params_with_stored_credentials(model_params or _EMPTY_MODEL_PARAMS)
-    resolved_api_key: Final = cast(  # cast-ok: provider parameters expose optional string credentials
-        str | None, api_key or resolved_params.get("api_key")
-    )
     resolved_api_base: Final = cast(  # cast-ok: provider parameters expose optional string endpoints
         str | None, api_base or resolved_params.get("api_base")
+    )
+    resolved_api_key: Final = resolve_api_key_secret_reference(
+        cast(  # cast-ok: provider parameters expose optional string credentials
+            str | None, api_key or resolved_params.get("api_key")
+        ),
+        model=model,
+        llm_provider=custom_llm_provider,
+        upstream=MappingProxyType({**resolved_params, "api_base": resolved_api_base}),
     )
     resolved_api_version: Final = cast(  # cast-ok: provider parameters expose optional string versions
         str | None, api_version or resolved_params.get("api_version")
     )
     url: str | None = None
-    auth_headers: Final = _realtime_health_check_auth_headers(
+    health_check_api_key: Final = (
+        await resolve_openai_bearer_token_async(
+            static_api_key=openai_static_api_key(resolved_api_key),
+            api_base=resolved_api_base,
+            litellm_params=resolved_params,
+        )
+        if custom_llm_provider == LlmProviders.OPENAI.value
+        else resolved_api_key
+    )
+    auth_headers: Final = await _realtime_health_check_auth_headers(
         custom_llm_provider=custom_llm_provider,
-        api_key=resolved_api_key,
+        api_key=health_check_api_key,
         model_params=resolved_params,
     )
     if custom_llm_provider == "azure":

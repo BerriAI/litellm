@@ -17,6 +17,7 @@ from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Generic, ParamSpec, TypeAlias, TypeVar, cast
 
+from mcp.shared.exceptions import MCPError
 from mcp.types import CacheableResult
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
@@ -1055,12 +1056,20 @@ async def aggregate_gateway_tools(
         )
 
 
+class ToolListingFailedOutright(MCPError):
+    pass
+
+
 async def list_gateway_tools(
     context: OperationContext, params: PaginatedRequestParams, *, log_list_tools_to_spendlogs: bool = True
 ) -> ListToolsResult:
-    from mcp.types import ListToolsResult
+    from mcp.types import INTERNAL_ERROR, ListToolsResult
 
-    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY, outcome_wire_value
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
+        SERVER_OUTCOMES_META_KEY,
+        listing_failed_outright,
+        outcome_wire_value,
+    )
     from litellm.proxy._experimental.mcp_server.operations import _list_mcp_tools
 
     caller, auth, servers, server_headers, oauth_headers, headers, client_ip = context.legacy_auth()
@@ -1078,16 +1087,21 @@ async def list_gateway_tools(
         record_listing=True,
         list_tools_log_source="mcp_protocol",
     )
+    wire_outcomes: Final = (
+        {key: outcome_wire_value(outcome) for key, outcome in listing.outcomes.items()} if listing.outcomes else None
+    )
+    if params.cursor is None and listing_failed_outright(listing.outcomes):
+        raise ToolListingFailedOutright(
+            code=INTERNAL_ERROR,
+            message="Every MCP server in scope failed to list tools",
+            data={SERVER_OUTCOMES_META_KEY: wire_outcomes},
+        )
     return ListToolsResult(
         tools=listing.tools,
         next_cursor=listing.next_cursor,
         ttl_ms=listing.ttl_ms,
         cache_scope="private",
-        _meta={
-            SERVER_OUTCOMES_META_KEY: {key: outcome_wire_value(outcome) for key, outcome in listing.outcomes.items()}
-        }
-        if listing.outcomes
-        else None,
+        _meta={SERVER_OUTCOMES_META_KEY: wire_outcomes} if wire_outcomes else None,
     )
 
 
@@ -1159,12 +1173,9 @@ async def list_gateway_catalog(
 
             try:
                 page: Final = await fetch_optional_catalog_page(context, request, server, allowed, cursor)
+                page_meta: Final[Mapping[str, object]] = page.meta or {}
                 return page.model_copy(
-                    update={
-                        "meta": {
-                            key: value for key, value in (page.meta or {}).items() if key != SERVER_OUTCOMES_META_KEY
-                        }
-                    }
+                    update={"meta": {key: value for key, value in page_meta.items() if key != SERVER_OUTCOMES_META_KEY}}
                 )
             except Exception as error:
                 if cursor is not None:

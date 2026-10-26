@@ -42,6 +42,11 @@ def _parse_deprecation_date(raw_value: object) -> date | None:
         return None
 
 
+def _successor_model(raw_value: object) -> str | None:
+    """A non-empty successor name, or None when the field is missing, blank, or not a string"""
+    return raw_value.strip() or None if isinstance(raw_value, str) else None
+
+
 def _cost_map_lookup(model_key: object) -> _ResolvedDeprecation | None:
     if not isinstance(model_key, str) or not model_key:
         return None
@@ -103,7 +108,24 @@ def _classify(days_until: int, warn_within_days: int) -> DeprecationStatus:
     return "upcoming"
 
 
-def _build_info(deployment: Mapping[str, object], today: date, warn_within_days: int) -> ModelDeprecationInfo | None:
+def _checked_successor(model_name: str, model_info: Mapping[str, object], llm_router: Router) -> str | None:
+    """The deployment's successor_model as set, with a warning when no model in its team scope matches it"""
+    successor: Final = _successor_model(model_info.get("successor_model"))
+    if successor is None:
+        return None
+    team_id: Final = model_info.get("team_id")
+    if not llm_router.get_model_list(model_name=successor, team_id=team_id if isinstance(team_id, str) else None):
+        verbose_logger.warning(
+            "model_deprecation: %s names successor %s, which matches no model group, alias, or wildcard route here",
+            model_name,
+            successor,
+        )
+    return successor
+
+
+def _build_info(
+    deployment: Mapping[str, object], llm_router: Router, today: date, warn_within_days: int
+) -> ModelDeprecationInfo | None:
     model_name: Final = deployment.get("model_name")
     if not isinstance(model_name, str) or not model_name:
         return None
@@ -120,7 +142,24 @@ def _build_info(deployment: Mapping[str, object], today: date, warn_within_days:
         days_until_deprecation=days_until,
         status=_classify(days_until, warn_within_days),
         litellm_provider=resolved.litellm_provider,
+        successor_model=_checked_successor(model_name, _mapping_field(deployment, "model_info"), llm_router),
     )
+
+
+def _merge_group(group: Sequence[ModelDeprecationInfo]) -> ModelDeprecationInfo:
+    """Keep the group's first deployment in config order, naming the first successor any of its deployments names"""
+    first: Final = group[0]
+    successors: Final = tuple(model.successor_model for model in group if model.successor_model is not None)
+    if not successors:
+        return first
+    if len(frozenset(successors)) > 1:
+        verbose_logger.warning(
+            "model_deprecation: %s names several successors %s, reporting %s",
+            first.model_name,
+            sorted(frozenset(successors)),
+            successors[0],
+        )
+    return first.model_copy(update={"successor_model": successors[0]})
 
 
 def _dedupe(
@@ -129,7 +168,8 @@ def _dedupe(
     """Report a model group carrying the same date on several deployments once"""
     ordered: Final = sorted(models, key=lambda model: (model.model_name, model.deprecation_date))
     return tuple(
-        next(group) for _, group in groupby(ordered, key=lambda model: (model.model_name, model.deprecation_date))
+        _merge_group(tuple(group))
+        for _, group in groupby(ordered, key=lambda model: (model.model_name, model.deprecation_date))
     )
 
 
@@ -142,20 +182,12 @@ def _bucket(models: Sequence[ModelDeprecationInfo], status: DeprecationStatus) -
     )
 
 
-def collect_model_deprecations(
-    llm_router: Router | None,
-    warn_within_days: int = DEFAULT_DEPRECATION_WARN_DAYS,
-    today: date | None = None,
-) -> ModelDeprecationResponse:
-    """Bucket every deployment carrying a deprecation date by how urgent it is"""
-    snapshot_time: Final = datetime.now(timezone.utc)
-    effective_today: Final = today or snapshot_time.date()
-    deployments: Final = (llm_router.get_model_list() or ()) if llm_router is not None else ()
-
+def _collect_from_router(llm_router: Router, today: date, warn_within_days: int) -> tuple[ModelDeprecationInfo, ...]:
+    deployments: Final = llm_router.get_model_list() or ()
     deduped: Final = _dedupe(
         tuple(
             info
-            for info in (_build_info(deployment, effective_today, warn_within_days) for deployment in deployments)
+            for info in (_build_info(deployment, llm_router, today, warn_within_days) for deployment in deployments)
             if info is not None
         )
     )
@@ -164,6 +196,20 @@ def collect_model_deprecations(
         "model_deprecation: %d/%d deployments carry a deprecation date",
         len(deduped),
         len(deployments),
+    )
+    return deduped
+
+
+def collect_model_deprecations(
+    llm_router: Router | None,
+    warn_within_days: int = DEFAULT_DEPRECATION_WARN_DAYS,
+    today: date | None = None,
+) -> ModelDeprecationResponse:
+    """Bucket every deployment carrying a deprecation date by how urgent it is"""
+    snapshot_time: Final = datetime.now(timezone.utc)
+    effective_today: Final = today or snapshot_time.date()
+    deduped: Final = (
+        _collect_from_router(llm_router, effective_today, warn_within_days) if llm_router is not None else ()
     )
 
     return ModelDeprecationResponse(
@@ -186,10 +232,11 @@ def _format_entry(info: ModelDeprecationInfo) -> str:
         if info.days_until_deprecation < 0
         else f"in {info.days_until_deprecation}d"
     )
+    migration: Final = f", migrate to `{_escape_slack_mrkdwn(info.successor_model)}`" if info.successor_model else ""
     return (
         f"• `{_escape_slack_mrkdwn(info.model_name)}` "
         f"(provider: {_escape_slack_mrkdwn(info.litellm_provider) if info.litellm_provider else 'unknown'}, "
-        f"deprecates {info.deprecation_date.isoformat()}, {suffix})"
+        f"deprecates {info.deprecation_date.isoformat()}, {suffix}{migration})"
     )
 
 

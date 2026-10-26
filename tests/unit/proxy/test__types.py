@@ -1,4 +1,5 @@
 import json
+from typing import Final
 
 import pytest
 from pydantic import ValidationError
@@ -32,32 +33,39 @@ SERVER_ONLY_MARKERS = (
     "billing_agent_policy",
     "mcp_admitted_user_subject",
     "mcp_source_team_rpm_limits",
-    "mcp_session_resource_server_id",
+    "mcp_session_resource_server_ids",
     "via_virtual_key",
 )
 
 
+def _server_only_marker_value(marker: str, value: str) -> str | tuple[str, ...]:
+    return (value,) if marker == "mcp_session_resource_server_ids" else value
+
+
 @pytest.mark.parametrize("marker", SERVER_ONLY_MARKERS)
 def test_a_caller_cannot_forge_a_server_only_marker_through_the_constructor(marker):
-    auth = UserAPIKeyAuth(**{marker: "forged-by-caller"})
+    marker_value: Final = _server_only_marker_value(marker, "forged-by-caller")
+    auth = UserAPIKeyAuth(**{marker: marker_value})
 
-    assert getattr(auth, marker) != "forged-by-caller"
+    assert getattr(auth, marker) != marker_value
 
 
 @pytest.mark.parametrize("marker", SERVER_ONLY_MARKERS)
 def test_a_caller_cannot_forge_a_server_only_marker_through_model_validate(marker):
-    auth = UserAPIKeyAuth.model_validate({marker: "forged-by-caller"})
+    marker_value: Final = _server_only_marker_value(marker, "forged-by-caller")
+    auth = UserAPIKeyAuth.model_validate({marker: marker_value})
 
-    assert getattr(auth, marker) != "forged-by-caller"
+    assert getattr(auth, marker) != marker_value
 
 
 @pytest.mark.parametrize("marker", SERVER_ONLY_MARKERS)
 def test_the_server_sets_a_marker_by_assignment_after_construction(marker):
     auth = UserAPIKeyAuth()
+    marker_value: Final = _server_only_marker_value(marker, "set-by-the-server")
 
-    setattr(auth, marker, "set-by-the-server")
+    setattr(auth, marker, marker_value)
 
-    assert getattr(auth, marker) == "set-by-the-server"
+    assert getattr(auth, marker) == marker_value
 
 
 def test_a_virtual_key_is_hashed_out_of_the_auth_object():
@@ -249,15 +257,39 @@ def test_an_audit_log_does_not_store_the_key_it_recorded_a_change_to(field):
 
 @pytest.mark.parametrize("field", ("before_value", "updated_values"))
 def test_an_audit_log_keeps_the_non_secret_fields_it_recorded(field):
-    sent = {"key": SECRET, "max_budget": 50, "models": ["gpt-4o"]}
+    sent = {"key": SECRET, "token": "88dc28d0f030c55ed4ab", "max_budget": 50, "models": ["gpt-4o"]}
 
     log = _audit_log(**{field: json.dumps(sent)})
 
     assert json.loads(getattr(log, field)) == {
         "key": SECRET_MASKED,
+        "token": "88dc28d0f030c55ed4ab",
         "max_budget": 50,
         "models": ["gpt-4o"],
     }
+
+
+@pytest.mark.parametrize("field", ("before_value", "updated_values"))
+def test_an_audit_log_stores_null_values_as_null(field):
+    sent = {
+        "key": SECRET,
+        "key_alias": None,
+        "metadata": {"ignored_until": None},
+        "tags": ["prod", None, {"owner": None}],
+    }
+
+    log = _audit_log(**{field: json.dumps(sent)})
+
+    assert json.loads(getattr(log, field)) == {**sent, "key": SECRET_MASKED}
+
+
+@pytest.mark.parametrize("field", ("before_value", "updated_values"))
+def test_an_audit_log_stores_a_list_of_changes_as_json_text_with_keys_masked(field):
+    sent = [{"id": "no_redis", "key": SECRET}, {"id": "detailed_debug"}]
+
+    log = _audit_log(**{field: json.dumps(sent)})
+
+    assert json.loads(getattr(log, field)) == [{"id": "no_redis", "key": SECRET_MASKED}, {"id": "detailed_debug"}]
 
 
 @pytest.mark.parametrize("field", ("before_value", "updated_values"))
