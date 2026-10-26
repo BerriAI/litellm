@@ -6,7 +6,7 @@ Canonical definitions for the ``litellm_managed*`` tables. Re-exported from
 """
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Literal
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 from litellm.types.llms.openai import OpenAIFileObject, ResponsesAPIResponse
@@ -39,7 +39,7 @@ class LiteLLM_ManagedVectorStoreTable(LiteLLMPydanticObjectBase):
     """Table for managing vector stores with target_model_names support."""
 
     unified_resource_id: str
-    resource_object: Any | None = None
+    resource_object: object | None = None
     model_mappings: dict[str, str]
     flat_model_resource_ids: list[str]
     created_by: str | None = None
@@ -54,10 +54,11 @@ class LiteLLM_ManagedVectorStoresTable(LiteLLMPydanticObjectBase):
     custom_llm_provider: str
     vector_store_name: str | None = None
     vector_store_description: str | None = None
-    vector_store_metadata: dict[str, Any] | None = None
+    vector_store_metadata: dict[str, object] | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     litellm_credential_name: str | None = None
-    litellm_params: dict[str, Any] | None = None
+    litellm_params: dict[str, object] | None = None
     team_id: str | None = None
     user_id: str | None = None
+    is_config: bool = False

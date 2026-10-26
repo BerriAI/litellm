@@ -72,7 +72,7 @@ class ModelsManagementClient:
         model_params: Mapping[str, object],
         model_info: Mapping[str, object] | None = None,
         return_request: bool = False,
-    ) -> dict[str, Any] | requests.Request:
+    ) -> dict[str, object] | requests.Request:
         """
         Add a new model to the proxy.
 
@@ -115,7 +115,7 @@ class ModelsManagementClient:
                 raise UnauthorizedError(e)
             raise
 
-    def delete(self, model_id: str, return_request: bool = False) -> dict[str, Any] | requests.Request:
+    def delete(self, model_id: str, return_request: bool = False) -> dict[str, object] | requests.Request:
         """
         Delete a model from the proxy.
 
@@ -158,7 +158,7 @@ class ModelsManagementClient:
         model_id: str | None = None,
         model_name: str | None = None,
         return_request: bool = False,
-    ) -> dict[str, Any] | requests.Request:
+    ) -> dict[str, object] | requests.Request:
         """
         Get information about a specific model by its ID or name.
 
@@ -168,7 +168,7 @@ class ModelsManagementClient:
             return_request (bool): If True, returns the prepared request object instead of executing it
 
         Returns:
-            Union[Dict[str, Any], requests.Request]: Either the model information from the server or
+            dict[str, object] | requests.Request: Either the model information from the server or
             a prepared request object if return_request is True
 
         Raises:
@@ -249,7 +249,7 @@ class ModelsManagementClient:
         model_params: Mapping[str, object],
         model_info: Mapping[str, object] | None = None,
         return_request: bool = False,
-    ) -> dict[str, Any] | requests.Request:
+    ) -> dict[str, object] | requests.Request:
         """
         Update an existing model's configuration.
 

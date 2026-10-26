@@ -1,25 +1,40 @@
 import asyncio
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from pydantic import TypeAdapter
+
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.common_utils.config_sync_pubsub import (
-    _ConfigSyncPubSub,
-    _pubsub_capable_client,
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.proxy.common_utils.config_sync_pubsub import (  # noqa: F401  # legacy module exports
+    ConfigSyncPubSub,
+    _ConfigSyncPubSub,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _pubsub_capable_client,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     coordination_redis_cache,
+    pubsub_capable_client,
 )
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 
 if TYPE_CHECKING:
+    from litellm.caching.dual_cache import DualCache
     from litellm.caching.in_memory_cache import InMemoryCache
     from litellm.caching.redis_cache import RedisCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
 AUTH_CACHE_INVALIDATION_CHANNEL: Final = "litellm_proxy.auth_cache_invalidation"
 _POLL_TIMEOUT_SECONDS: Final = 1.0
+_MAX_PENDING_PUBLISHES: Final = 1024
+_MAX_IN_FLIGHT_PUBLISHES: Final = 16
+_BULK_EVICTION_WAIT_SECONDS: Final = 2.0
+_pending_publishes: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: strong refs keep background publishes alive
+_in_flight_publishes: Final = asyncio.Semaphore(_MAX_IN_FLIGHT_PUBLISHES)
 _BACKOFF_INITIAL_SECONDS: Final = 5.0
 _BACKOFF_MAX_SECONDS: Final = 60.0
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def auth_cache_invalidation_channel(redis_cache: "RedisCache") -> str:
@@ -36,7 +51,9 @@ class _CacheInvalidationMessage:
 
 
 def _cache_invalidation_message_json(cache_key: str, new_value: float | None = None, ttl: float | None = None) -> str:
-    message: Final = asdict(_CacheInvalidationMessage(cache_key=cache_key, new_value=new_value, ttl=ttl))
+    message: Final[Mapping[str, object]] = MappingProxyType(
+        asdict(_CacheInvalidationMessage(cache_key=cache_key, new_value=new_value, ttl=ttl))
+    )
     return json.dumps({field: value for field, value in message.items() if value is not None})
 
 
@@ -52,10 +69,10 @@ def _message_from_data(data: object) -> _CacheInvalidationMessage | None:
     if not isinstance(data, str):
         return None
     try:
-        parsed: Final = json.loads(data)
+        parsed: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(data)))
     except json.JSONDecodeError:
         return None
-    if not isinstance(parsed, dict):
+    if parsed is None:
         return None
     cache_key: Final = parsed.get("cache_key")
     if not isinstance(cache_key, str):
@@ -65,6 +82,41 @@ def _message_from_data(data: object) -> _CacheInvalidationMessage | None:
         new_value=_finite_number_or_none(parsed.get("new_value")),
         ttl=_finite_number_or_none(parsed.get("ttl")),
     )
+
+
+async def _publish_to_redis(redis_cache: "RedisCache", cache_key: str, message: str) -> None:
+    try:
+        client: Final = pubsub_capable_client(redis_cache)
+        async with _in_flight_publishes:
+            await client.publish(auth_cache_invalidation_channel(redis_cache), message)
+    except Exception as e:  # noqa: BLE001  # best-effort publish; mutations must never fail on redis errors
+        verbose_proxy_logger.warning("auth cache invalidation publish for %s failed: %s", cache_key, e)
+
+
+async def _publish_batch_to_redis(redis_cache: "RedisCache", cache_keys: tuple[str, ...]) -> None:
+    try:
+        client: Final = pubsub_capable_client(redis_cache)
+        channel: Final = auth_cache_invalidation_channel(redis_cache)
+        pipeline: Final = client.pipeline(transaction=False)
+        for cache_key in cache_keys:
+            _ = pipeline.publish(channel, _cache_invalidation_message_json(cache_key))
+        async with _in_flight_publishes:
+            _ = await pipeline.execute()
+    except Exception as e:  # noqa: BLE001  # best-effort publish; mutations must never fail on redis errors
+        verbose_proxy_logger.warning("auth cache invalidation publish for %d keys failed: %s", len(cache_keys), e)
+
+
+def _has_room_for_publish(key_count: int) -> bool:
+    _pending_publishes.difference_update({task for task in _pending_publishes if task.done()})
+    if len(_pending_publishes) < _MAX_PENDING_PUBLISHES:
+        return True
+    verbose_proxy_logger.warning(
+        "auth cache invalidation publish for %d keys dropped: %d publishes already waiting on redis; "
+        "other workers keep their cached copy until its TTL expires",
+        key_count,
+        len(_pending_publishes),
+    )
+    return False
 
 
 async def publish_auth_cache_invalidation(
@@ -80,34 +132,92 @@ async def publish_auth_cache_invalidation(
     writes the value into its additional in-memory caches rather than deleting
     the key. A spend reset uses this so the handler's self-delivered message
     cannot erase the freshly-written post-reset counter or floor marker.
+
+    The Redis round trip runs as a background task: this call returns once the
+    publish has been handed to the event loop, so a Redis that accepts
+    connections but never replies costs the caller nothing. The DB write has
+    already committed and the local eviction already happened, so the caller
+    has nothing to do with the publish result. At most 16 publishes hold a
+    Redis connection at once; the rest wait in the task set, so a wedge cannot
+    drain the shared connection pool.
     """
     redis_cache: Final = coordination_redis_cache()
-    if redis_cache is None:
+    if redis_cache is None or not _has_room_for_publish(1):
+        return
+    task: Final = asyncio.create_task(
+        _publish_to_redis(
+            redis_cache, cache_key, _cache_invalidation_message_json(cache_key, new_value=new_value, ttl=ttl)
+        )
+    )
+    _pending_publishes.add(task)
+    await asyncio.sleep(0)
+
+
+@with_service_target(AUTH_OBJECTS_TARGET)
+async def broadcast_evictions(cache_keys: Sequence[str]) -> None:
+    """
+    Tell every other worker to drop these keys, in one pipelined Redis round trip.
+
+    For bulk callers that already dropped the keys here and from Redis (``evict_local`` and
+    ``evict_shared``). A publish task per key would pass the pending cap above on a roster of a few
+    hundred members, and every dropped key would stay cached on the other workers until its TTL.
+    The caller waits for the round trip at most ``_BULK_EVICTION_WAIT_SECONDS``, so a Redis that
+    never answers cannot hang the request.
+    """
+    redis_cache: Final = coordination_redis_cache()
+    if redis_cache is None or not cache_keys or not _has_room_for_publish(len(cache_keys)):
+        return
+    task: Final = asyncio.create_task(_publish_batch_to_redis(redis_cache, tuple(cache_keys)))
+    _pending_publishes.add(task)
+    _ = await asyncio.wait((task,), timeout=_BULK_EVICTION_WAIT_SECONDS)
+
+
+def evict_local(cache_keys: Sequence[str], user_api_key_cache: "UserApiKeyCache") -> None:
+    """
+    Drop cached objects from this worker's memory alone, before any Redis round trip, so a deleted
+    key stops authenticating on the handling worker the instant its rows are gone, whatever Redis
+    is doing.
+    """
+    for cache_key in cache_keys:
+        _drop_from_memory(cache_key, user_api_key_cache)
+
+
+def _drop_from_memory(cache_key: str, user_api_key_cache: "UserApiKeyCache") -> None:
+    user_api_key_cache.in_memory_cache_for(cache_key).delete_cache(cache_key)
+
+
+@with_service_target(AUTH_OBJECTS_TARGET)
+async def evict_shared(cache_keys: Sequence[str], cache: "DualCache") -> None:
+    """
+    Drop cached objects from the cache's memory and, when it has one, its Redis layer, in one
+    chunked round trip.
+
+    Runs right after ``evict_local``: with ``enable_redis_auth_cache`` on, a miss on this worker
+    refills from Redis, so an entry dropped from memory alone comes straight back. Best-effort and
+    bounded like ``broadcast_evictions``: the rows are already gone, so a Redis that errors or never
+    answers must not fail the caller.
+    """
+    if not cache_keys:
         return
     try:
-        client: Final = _pubsub_capable_client(redis_cache)
-        if client is None:
-            verbose_proxy_logger.debug(
-                "auth cache invalidation publish for %s skipped: cluster redis client has no pub/sub support",
-                cache_key,
-            )
-            return
-        await client.publish(
-            auth_cache_invalidation_channel(redis_cache),
-            _cache_invalidation_message_json(cache_key, new_value=new_value, ttl=ttl),
+        await asyncio.wait_for(cache.async_delete_cache_keys(cache_keys), timeout=_BULK_EVICTION_WAIT_SECONDS)
+    except Exception as e:  # noqa: BLE001  # best-effort: a Redis error must not fail a committed write
+        verbose_proxy_logger.warning(
+            "Failed to drop %d cached entries from Redis; stale objects may be served until their TTL expires: %s",
+            len(cache_keys),
+            e,
         )
-    except Exception as e:  # noqa: BLE001  # best-effort publish; mutations must never fail on redis errors
-        verbose_proxy_logger.warning("auth cache invalidation publish for %s failed: %s", cache_key, e)
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "UserApiKeyCache") -> None:
     """
     Drop cached management objects here and on every other worker.
 
     Every endpoint that mutates a cached object must call this: auth serves those objects
     cache-first with no freshness check, so a mutation that leaves the entry in place keeps the
-    stale object enforced until its TTL expires (LIT-3803). Best-effort on both steps: the DB write
-    has already committed, so a cache backend error must not fail the endpoint.
+    stale object enforced until its TTL expires (LIT-3803). Best-effort: the DB write has already
+    committed, so a cache backend error must not fail the endpoint.
     """
     for cache_key in cache_keys:
         try:
@@ -155,17 +265,11 @@ class AuthCacheInvalidationSubscriber:
         backoff_seconds = _BACKOFF_INITIAL_SECONDS  # rebind-ok: exponential backoff accumulator across reconnects
         while True:
             try:
-                client = _pubsub_capable_client(self._redis_cache)  # rebind-ok: re-resolved on every reconnect
-                if client is None:
-                    verbose_proxy_logger.warning(
-                        "auth cache invalidation subscriber disabled: cluster redis client has no pub/sub support; "
-                        "cross-worker eviction falls back to the local cache TTL"
-                    )
-                    return
-                pubsub = client.pubsub()  # rebind-ok: fresh pubsub per reconnect
+                client = pubsub_capable_client(self._redis_cache)
+                pubsub = client.pubsub()
                 try:
                     await pubsub.subscribe(auth_cache_invalidation_channel(self._redis_cache))
-                    backoff_seconds = _BACKOFF_INITIAL_SECONDS  # rebind-ok: reset after successful subscribe
+                    backoff_seconds = _BACKOFF_INITIAL_SECONDS
                     await self._consume(pubsub)
                 finally:
                     await self._close_pubsub(pubsub)
@@ -178,15 +282,16 @@ class AuthCacheInvalidationSubscriber:
                     backoff_seconds,
                 )
                 await asyncio.sleep(backoff_seconds)
-                backoff_seconds = min(backoff_seconds * 2, _BACKOFF_MAX_SECONDS)  # rebind-ok: backoff accumulator
+                backoff_seconds = min(backoff_seconds * 2, _BACKOFF_MAX_SECONDS)
 
-    async def _consume(self, pubsub: _ConfigSyncPubSub) -> None:
+    async def _consume(self, pubsub: ConfigSyncPubSub) -> None:
         while True:
             message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=_POLL_TIMEOUT_SECONDS)
             if message is None:
                 continue
             self._apply_message(message)
 
+    @with_service_target(AUTH_OBJECTS_TARGET)
     def _apply_message(self, message: object) -> None:
         data: Final = message.get("data") if isinstance(message, dict) else None
         parsed: Final = _message_from_data(data)
@@ -196,12 +301,12 @@ class AuthCacheInvalidationSubscriber:
             for additional_cache in self._additional_in_memory_caches:
                 additional_cache.set_cache(parsed.cache_key, parsed.new_value, ttl=parsed.ttl)
             return
-        self._user_api_key_cache.in_memory_cache_for(parsed.cache_key).delete_cache(parsed.cache_key)
+        _drop_from_memory(parsed.cache_key, self._user_api_key_cache)
         for additional_cache in self._additional_in_memory_caches:
             additional_cache.delete_cache(parsed.cache_key)
 
     @staticmethod
-    async def _close_pubsub(pubsub: _ConfigSyncPubSub) -> None:
+    async def _close_pubsub(pubsub: ConfigSyncPubSub) -> None:
         try:
             await pubsub.aclose()
         except Exception as e:  # noqa: BLE001  # best-effort close of a possibly-broken connection

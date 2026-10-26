@@ -6,28 +6,56 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator
-from typing import TYPE_CHECKING, Any, Final, Literal, cast, get_type_hints, overload
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from itertools import accumulate, count
+from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 
 import httpx
 
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
+    strip_litellm_internal_message_fields,
     strip_none_values_from_message,
 )
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
+)
+from litellm.router_utils.reasoning_effort_capability import (
+    declared_reasoning_efforts_for_model,
+    nearest_declared_reasoning_effort,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.mistral import MistralThinkingBlock, MistralToolCallMessage
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, ModelResponseStream
-from litellm.utils import convert_to_model_response_object
+from litellm.utils import convert_to_model_response_object, supports_reasoning
 
 if TYPE_CHECKING:
-    import tiktoken
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+
+def _accepted_reasoning_effort(model: str, requested: str, custom_llm_provider: str) -> str:
+    declared: Final = declared_reasoning_efforts_for_model(model, custom_llm_provider)
+    if declared is None:
+        return requested
+    accepted: Final = nearest_declared_reasoning_effort(requested, declared)
+    if accepted != requested:
+        verbose_logger.debug(
+            "%s: %s takes reasoning_effort %s, sending %s in place of %s",
+            custom_llm_provider,
+            model,
+            declared,
+            accepted,
+            requested,
+        )
+    return accepted
+
+
+_NO_TOOL_CALL_TURN: Final[tuple[int, frozenset[str]]] = (-1, frozenset())
 
 
 class MistralConfig(OpenAIGPTConfig):
@@ -77,7 +105,7 @@ class MistralConfig(OpenAIGPTConfig):
         response_format: dict | None = None,
         stop: str | list | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -86,8 +114,16 @@ class MistralConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
+    @property
+    def custom_llm_provider(self) -> str:
+        return "mistral"
+
     def get_supported_openai_params(self, model: str) -> list[str]:
-        supported_params: Final = [
+        is_magistral: Final = "magistral" in model.lower()
+        accepts_reasoning_effort: Final = is_magistral or supports_reasoning(
+            model=model, custom_llm_provider=self.custom_llm_provider
+        )
+        return [
             "stream",
             "temperature",
             "top_p",
@@ -99,13 +135,9 @@ class MistralConfig(OpenAIGPTConfig):
             "stop",
             "response_format",
             "parallel_tool_calls",
+            *(("thinking",) if is_magistral else ()),
+            *(("reasoning_effort",) if accepts_reasoning_effort else ()),
         ]
-
-        # Add reasoning support for magistral models
-        if "magistral" in model.lower():
-            supported_params.extend(["thinking", "reasoning_effort"])
-
-        return supported_params
 
     def _map_tool_choice(self, tool_choice: str) -> str:
         if tool_choice == "auto" or tool_choice == "none":
@@ -171,10 +203,9 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["extra_body"] = {"random_seed": value}
             if param == "response_format":
                 optional_params["response_format"] = value
-            if param == "reasoning_effort" and "magistral" in model.lower():
-                # Flag that we need to add reasoning system prompt
-                optional_params["_add_reasoning_prompt"] = True
-            if param == "thinking" and "magistral" in model.lower():
+            if param == "reasoning_effort" and "magistral" not in model.lower():
+                optional_params["reasoning_effort"] = _accepted_reasoning_effort(model, value, self.custom_llm_provider)
+            if param in ("reasoning_effort", "thinking") and "magistral" in model.lower():
                 # Flag that we need to add reasoning system prompt
                 optional_params["_add_reasoning_prompt"] = True
             if param == "parallel_tool_calls":
@@ -190,8 +221,7 @@ class MistralConfig(OpenAIGPTConfig):
         )
 
         # if api_base does not end with /v1 we add it
-        if api_base is not None and not api_base.endswith("/v1"):  # Mistral always needs a /v1 at the end
-            api_base = api_base + "/v1"
+        api_base = ensure_api_route(api_base, "v1")
         dynamic_api_key: Final = (
             api_key
             or get_secret_str("MISTRAL_AZURE_API_KEY")  # for Azure AI Mistral
@@ -204,7 +234,7 @@ class MistralConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: 
+    ) -> Coroutine[object, object, list[AllMessageValues]]:
         ...
 
     @overload
@@ -219,7 +249,7 @@ class MistralConfig(OpenAIGPTConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         """
         - handles scenario where content is list and not string
         - content list is just text, and no images
@@ -247,19 +277,53 @@ class MistralConfig(OpenAIGPTConfig):
         messages = handle_messages_with_content_list_to_str_conversion(messages)
 
         ## 3. Handle name in message
-        new_messages: Final[list[AllMessageValues]] = []
-        for m in messages:
-            m = MistralConfig._handle_name_in_message(m)
-            m = MistralConfig._handle_tool_call_message(m)
-            if MistralConfig._is_empty_assistant_message(m):
-                continue
-            m = strip_none_values_from_message(m)  # prevents 'extra_forbidden' error
-            new_messages.append(m)
+        prepared_messages: Final = tuple(
+            MistralConfig._handle_tool_call_message(MistralConfig._handle_name_in_message(m)) for m in messages
+        )
+        empty_flags: Final = tuple(map(MistralConfig._is_empty_assistant_message, prepared_messages))
+        tool_call_turns: Final = accumulate(
+            zip(count(), prepared_messages, empty_flags, strict=False),
+            MistralConfig._tool_call_turn,
+            initial=_NO_TOOL_CALL_TURN,
+        )
+        tool_reply_keys: Final = tuple(map(MistralConfig._tool_reply_key, prepared_messages, tool_call_turns))
+        first_reply_positions: Final = {
+            key: position for position, key in reversed(tuple(enumerate(tool_reply_keys))) if key is not None
+        }
+        keys_answered_with_content: Final = frozenset(
+            key for key, is_empty in zip(tool_reply_keys, empty_flags, strict=True) if not is_empty
+        )
+        answering_positions: Final = frozenset(
+            position for key, position in first_reply_positions.items() if key not in keys_answered_with_content
+        )
+        new_messages: Final[list[AllMessageValues]] = [
+            strip_none_values_from_message(MistralConfig._with_tool_reply_content(m))
+            for position, (m, is_empty) in enumerate(zip(prepared_messages, empty_flags, strict=True))
+            if not is_empty or position in answering_positions
+        ]
 
         if is_async:
             return super()._transform_messages(new_messages, model, True)
         else:
             return super()._transform_messages(new_messages, model, False)
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
+    def transform_messages(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: mirrors override contract
+        model: str,
+        is_async: bool = False,
+    ) -> (
+        list[AllMessageValues]  # mutable-ok: mirrors override contract
+        | Coroutine[object, object, list[AllMessageValues]]
+    ):
+        return self._transform_messages(messages, model, is_async)
 
     async def _transform_messages_async(self, messages: list[AllMessageValues], model: str) -> list[AllMessageValues]:
         """
@@ -369,29 +433,26 @@ class MistralConfig(OpenAIGPTConfig):
         import copy
 
         from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-        from litellm.utils import _remove_json_schema_refs
+        from litellm.utils import remove_json_schema_refs
 
         cleaned_tools = copy.deepcopy(tools)
 
         # Apply all cleaning functions with max_depth protection
-        cleaned_tools = _remove_json_schema_refs(cleaned_tools, max_depth=DEFAULT_MAX_RECURSE_DEPTH)
+        cleaned_tools = remove_json_schema_refs(cleaned_tools, max_depth=DEFAULT_MAX_RECURSE_DEPTH)
 
         return cleaned_tools
 
     @classmethod
     def _strip_output_only_fields(cls, message: AllMessageValues) -> AllMessageValues:
         """
-        ``reasoning_content`` and ``thinking_blocks`` are output-only fields that
-        LiteLLM attaches to assistant responses. Mistral's input schema forbids
+        LiteLLM attaches output-only fields (``reasoning_content``, ``thinking_blocks``,
+        ``provider_specific_fields``) to assistant responses. Mistral's input schema forbids
         unknown fields, so replaying them verbatim in a follow-up turn triggers a
         422 ``extra_forbidden``. Drop them before the request is sent.
         """
         if message["role"] != "assistant":
             return message
-        return cast(
-            AllMessageValues,
-            {k: v for k, v in message.items() if k not in ("reasoning_content", "thinking_blocks")},
-        )
+        return strip_litellm_internal_message_fields(message)
 
     @classmethod
     def _handle_name_in_message(cls, message: AllMessageValues) -> AllMessageValues:
@@ -427,6 +488,44 @@ class MistralConfig(OpenAIGPTConfig):
                 mistral_tool_calls.append(_tool_call_message)
             message["tool_calls"] = mistral_tool_calls
         return message
+
+    @staticmethod
+    def _tool_call_id(tool_call: object) -> str | None:
+        match tool_call:
+            case {"id": str(tool_call_id)}:
+                return tool_call_id
+            case _:
+                return None
+
+    @staticmethod
+    def _tool_call_turn(
+        turn: tuple[int, frozenset[str]], message_entry: tuple[int, AllMessageValues, bool]
+    ) -> tuple[int, frozenset[str]]:
+        match message_entry:
+            case (position, {"role": "assistant", "tool_calls": list(tool_calls)}, _):
+                return position, frozenset(filter(None, map(MistralConfig._tool_call_id, tool_calls)))
+            case (_, {"role": "tool"}, _) | (_, _, True):
+                return turn
+            case _:
+                return _NO_TOOL_CALL_TURN
+
+    @staticmethod
+    def _tool_reply_key(message: AllMessageValues, turn: tuple[int, frozenset[str]]) -> tuple[int, str] | None:
+        match message, turn:
+            case {"role": "tool", "tool_call_id": str(tool_call_id)}, (position, tool_call_ids) if (
+                tool_call_id in tool_call_ids
+            ):
+                return position, tool_call_id
+            case _:
+                return None
+
+    @staticmethod
+    def _with_tool_reply_content(message: AllMessageValues) -> AllMessageValues:
+        match message:
+            case {"role": "tool"} if not message.get("content"):
+                return {**message, "content": ""}
+            case _:
+                return message
 
     @classmethod
     def _is_empty_assistant_message(cls, message: AllMessageValues) -> bool:
@@ -534,11 +633,13 @@ class MistralConfig(OpenAIGPTConfig):
         if "magistral" in model.lower() and optional_params.get("_add_reasoning_prompt", False):
             messages = self._add_reasoning_system_prompt_if_needed(messages, optional_params)
 
+        upstream_params: Final = {key: value for key, value in optional_params.items() if key != "client_metadata"}
+
         # Call parent transform_request which handles _transform_messages
         return super().transform_request(
             model=model,
             messages=messages,
-            optional_params=optional_params,
+            optional_params=upstream_params,
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -553,7 +654,7 @@ class MistralConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
