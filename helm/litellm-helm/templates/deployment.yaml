@@ -59,6 +59,19 @@ spec:
             {{- include "litellm.lensConnectionEnv" . | nindent 12 }}
             {{- include "litellm.proxyEnv" . | nindent 12 }}
             {{- if .Values.liteadmin.enabled }}
+            {{- range .Values.extraEnvVars }}
+            {{- if eq .name "LITELLM_ENABLE_ADMIN_MCP" }}
+            {{- fail "Configure LITELLM_ENABLE_ADMIN_MCP through envVars, not extraEnvVars, when liteadmin.enabled=true" }}
+            {{- end }}
+            {{- end }}
+            {{- if hasKey (default dict .Values.envVars) "LITELLM_ENABLE_ADMIN_MCP" }}
+            {{- if not (has (.Values.envVars.LITELLM_ENABLE_ADMIN_MCP | toString | trim | lower) (list "true" "1" "on" "yes")) }}
+            {{- fail "liteadmin.enabled=true requires envVars.LITELLM_ENABLE_ADMIN_MCP to be enabled" }}
+            {{- end }}
+            {{- else }}
+            - name: LITELLM_ENABLE_ADMIN_MCP
+              value: "true"
+            {{- end }}
             - name: LITELLM_ADMIN_AGENT_URL
               value: {{ printf "http://%s-liteadmin:10000" (include "litellm.fullname" . | trunc 53 | trimSuffix "-") | quote }}
             - name: ADMIN_AGENT_SERVICE_TOKEN

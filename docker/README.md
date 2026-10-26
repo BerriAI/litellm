@@ -141,4 +141,8 @@ export LITEADMIN_IMAGE=litellm-admin-agent:local
 
 When upgrading an existing Slack deployment, change the worker image and replace `--admin-agent` with `litellm-admin-agent --web`. Preserve `CONNECTION_AUTH_MODE=native`, the shared service token, encryption key, and state volume. The gateway's private worker URL and login routes stay the same. The main LiteLLM image no longer contains `/opt/liteadmin`
 
+The native worker requires `LITELLM_ENABLE_ADMIN_MCP=true` and a valid Enterprise license on the process serving `/admin/mcp`. The Compose overlay and enabled Helm worker set the flag automatically. Supply the license through the gateway's existing environment or Secret configuration
+
+For microservices, the backend hosts MCP and account linking, while the gateway handles inference. Configure the worker with one public HTTPS origin that routes management requests to the backend and inference requests to the gateway, as the shared-host component ingress does. Separate component hostnames alone are insufficient because the worker derives authentication and login URLs from its model URL. `ADMIN_MCP_URL` changes only the tool endpoint. Set the flag, license, private worker URL, shared service token, and public base URL on the backend, and deploy the worker separately
+
 For Helm, set `liteadmin.image.repository`, `liteadmin.image.tag`, and optionally `liteadmin.image.pullPolicy`. The worker tag is required when `liteadmin.enabled=true` and is independent of the gateway's `image.tag`. Keep one worker per Slack app

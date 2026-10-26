@@ -2,6 +2,7 @@ services:
   litellm:
     image: ${LITELLM_IMAGE:?Set the native-enabled gateway image}
     environment:
+      LITELLM_ENABLE_ADMIN_MCP: "true"
       LITELLM_ADMIN_AGENT_URL: http://liteadmin:10000
       ADMIN_AGENT_SERVICE_TOKEN: ${ADMIN_AGENT_SERVICE_TOKEN:?Set a shared worker token}
       PROXY_BASE_URL: ${LITELLM_PUBLIC_URL:?Set the existing HTTPS gateway URL}
