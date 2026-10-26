@@ -601,8 +601,6 @@ def test_silent_experiment_sends_shadow_request_attributed_to_the_silent_model(r
     assert primary_metadata == {"model_group": "primary-model"}
 
 
-
-
 _EMBEDDING_API_BASE: Final = "https://embeddings.example.test/v1"
 
 
@@ -662,6 +660,8 @@ async def test_aembedding_with_silent_model_sends_provider_body_without_it(
     request_body: Final = json.loads(route.calls.last.request.read())
     assert request_body == {"model": "embed-model", "input": ["black dresses"], "input_type": "query"}
     assert response.data[0]["embedding"] == [0.1, 0.2]
+
+
 @pytest.mark.parametrize("run_silent_experiment", SILENT_EXPERIMENT_RUNNERS)
 def test_silent_experiment_does_not_launch_from_a_shadow_request(run_silent_experiment):
     router = Router(model_list=_streaming_model_list(["shadow-a"]))
@@ -943,9 +943,7 @@ async def test_generic_mirroring_skips_deployment_mcp(mcp_deployment, mcp_config
     endpoint: Final = router.factory_function(provider, call_type="aresponses")
     await endpoint(model="primary-model", input="hi")
     mirrors: Final = tuple(
-        task
-        for task in asyncio.all_tasks()
-        if task.get_coro().__qualname__.endswith("._silent_experiment_ageneric")
+        task for task in asyncio.all_tasks() if task.get_coro().__qualname__.endswith("._silent_experiment_ageneric")
     )
     await asyncio.gather(*mirrors)
 

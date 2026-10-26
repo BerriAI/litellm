@@ -1180,7 +1180,6 @@ def _base_model_widened_window(
     return MappingProxyType({"max_input_tokens": base_max_input_tokens})
 
 
-
 class Router:
     @property
     def _routing_groups(self) -> dict[str, RoutingGroup]:
