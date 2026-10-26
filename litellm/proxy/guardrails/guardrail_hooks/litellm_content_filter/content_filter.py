@@ -40,6 +40,7 @@ from litellm.proxy.guardrails.content_filter_data import (
 )
 from litellm.types.utils import (
     CallTypes,
+    Delta,
     Function,
     GenericGuardrailAPIInputs,
     GuardrailStatus,
@@ -47,6 +48,7 @@ from litellm.types.utils import (
     Message,
     ModelResponse,
     ModelResponseStream,
+    StreamingChoices,
 )
 
 if TYPE_CHECKING:
@@ -2116,8 +2118,12 @@ class ContentFilterGuardrail(CustomGuardrail):
 
                         content = getattr(choice.delta, "content", None)
                         is_final = bool(getattr(choice, "finish_reason", None))
+                        carries_tool_call = bool(
+                            getattr(choice.delta, "tool_calls", None) or getattr(choice.delta, "function_call", None)
+                        )
+                        flush = is_final or carries_tool_call
                         new_content = content if isinstance(content, str) else ""
-                        if not new_content and not is_final:
+                        if not new_content and not flush:
                             continue
 
                         previous_state = state_by_choice.get(choice_index, _StreamedChoiceState())
@@ -2125,15 +2131,14 @@ class ContentFilterGuardrail(CustomGuardrail):
                         if not buffered_text:
                             continue
 
-                        # Add a space at the end if it's the final chunk to trigger word boundaries (\b)
-                        text_to_scan = buffered_text + (" " if is_final else "")
+                        # Add a space at the end if the buffer is being flushed to trigger word boundaries (\b)
+                        text_to_scan = buffered_text + (" " if flush else "")
                         choice_detections: list[ContentFilterDetection] = []
                         scan_started = time.perf_counter()
 
                         try:
-                            masked_text = self._filter_single_text(text_to_scan, detections=choice_detections)
-                            if is_final and masked_text.endswith(" "):
-                                masked_text = masked_text[:-1]
+                            filtered_text = self._filter_single_text(text_to_scan, detections=choice_detections)
+                            masked_text = filtered_text.removesuffix(" ") if flush else filtered_text
                             latest_detections = tuple(choice_detections)
                         except HTTPException:
                             state_by_choice[choice_index] = replace(
@@ -2149,9 +2154,23 @@ class ContentFilterGuardrail(CustomGuardrail):
 
                         safe_to_yield_len = max(
                             previous_state.yielded_masked_text_len,
-                            len(masked_text) - (0 if is_final else CONTENT_FILTER_STREAMING_HOLDBACK_CHARS),
+                            len(masked_text) - (0 if flush else CONTENT_FILTER_STREAMING_HOLDBACK_CHARS),
                         )
-                        choice.delta.content = masked_text[previous_state.yielded_masked_text_len : safe_to_yield_len]
+                        released_text = masked_text[previous_state.yielded_masked_text_len : safe_to_yield_len]
+                        if carries_tool_call:
+                            state_by_choice[choice_index] = _StreamedChoiceState(
+                                committed_detections=(*previous_state.committed_detections, *latest_detections)
+                            )
+                            choice.delta.content = "" if new_content else content
+                            if released_text:
+                                yield ModelResponseStream(
+                                    id=item.id,
+                                    created=item.created,
+                                    model=item.model,
+                                    choices=[StreamingChoices(index=choice_index, delta=Delta(content=released_text))],
+                                )
+                            continue
+                        choice.delta.content = released_text
                         next_state = replace(
                             previous_state,
                             buffered_text=buffered_text,

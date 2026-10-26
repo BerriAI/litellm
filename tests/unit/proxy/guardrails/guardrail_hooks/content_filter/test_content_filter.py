@@ -4,7 +4,8 @@ Tests for the Content Filter Guardrail
 
 import json
 import os
-from typing import Final
+from collections.abc import AsyncIterator
+from typing import Final, Literal
 from unittest.mock import MagicMock
 
 import pytest
@@ -522,6 +523,99 @@ class TestContentFilterGuardrail:
         assert "second@example.com" not in content_by_choice[1]
         assert content_by_choice[0] == "Contact [EMAIL_REDACTED] for help"
         assert content_by_choice[1] == "Email [EMAIL_REDACTED] for support"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_field", ["tool_calls", "function_call"])
+    async def test_streaming_hook_releases_held_back_text_before_tool_call(
+        self, tool_field: Literal["tool_calls", "function_call"]
+    ) -> None:
+        """
+        Regression: the masked text held back for cross-chunk patterns was only released
+        at finish_reason, so it reached the client after the tool call chunk and agent
+        clients dropped it. The held-back text must now arrive, masked, before the tool call.
+        """
+        from litellm.types.utils import (
+            ChatCompletionDeltaToolCall,
+            Delta,
+            Function,
+            FunctionCall,
+            ModelResponseStream,
+            StreamingChoices,
+        )
+
+        tool_delta: Final = (
+            Delta(
+                tool_calls=[
+                    ChatCompletionDeltaToolCall(
+                        id="call_1", type="function", function=Function(name="lookup", arguments="{}"), index=0
+                    )
+                ]
+            )
+            if tool_field == "tool_calls"
+            else Delta(function_call=FunctionCall(name="lookup", arguments="{}"))
+        )
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-streaming-tool-call-order",
+            patterns=[
+                ContentFilterPattern(
+                    pattern_type="prebuilt",
+                    pattern_name="email",
+                    action=ContentFilterAction.MASK,
+                ),
+                ContentFilterPattern(
+                    pattern_type="prebuilt",
+                    pattern_name="us_ssn",
+                    action=ContentFilterAction.MASK,
+                ),
+            ],
+            event_hook=GuardrailEventHooks.post_call,
+        )
+
+        async def mock_stream() -> AsyncIterator[ModelResponseStream]:
+            for i, content in enumerate(("I will look that up for you right now. Write to test@ex", "ample.com")):
+                yield ModelResponseStream(
+                    id=f"c{i}",
+                    choices=[StreamingChoices(delta=Delta(content=content), index=0)],
+                    model="gpt-4",
+                )
+            yield ModelResponseStream(
+                id="tool",
+                choices=[StreamingChoices(delta=tool_delta, index=0)],
+                model="gpt-4",
+            )
+            for i, content in enumerate(("Found it, ssn 123-45", "-6789 on file")):
+                yield ModelResponseStream(
+                    id=f"after{i}",
+                    choices=[StreamingChoices(delta=Delta(content=content), index=0)],
+                    model="gpt-4",
+                )
+            yield ModelResponseStream(
+                id="final",
+                choices=[StreamingChoices(delta=Delta(content=""), index=0, finish_reason="stop")],
+                model="gpt-4",
+            )
+
+        metadata: Final[dict[str, list[StandardLoggingGuardrailInformation]]] = {}
+        events: Final[list[tuple[str, str]]] = []
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=MagicMock(),
+            response=mock_stream(),
+            request_data={"messages": [], "model": "gpt-4o", "metadata": metadata},
+        ):
+            delta = chunk.choices[0].delta
+            if delta.content:
+                events.append(("text", delta.content))
+            if delta.tool_calls or delta.function_call:
+                events.append(("tool", ""))
+
+        tool_positions: Final = [i for i, (kind, _) in enumerate(events) if kind == "tool"]
+        assert len(tool_positions) == 1
+        text_before: Final = "".join(text for _, text in events[: tool_positions[0]])
+        text_after: Final = "".join(text for _, text in events[tool_positions[0] + 1 :])
+        assert text_before == "I will look that up for you right now. Write to [EMAIL_REDACTED]"
+        assert text_after == "Found it, ssn [US_SSN_REDACTED] on file"
+        entry: Final = metadata["standard_logging_guardrail_information"][0]
+        assert entry.get("masked_entity_count") == {"email": 1, "us_ssn": 1}
 
     @pytest.mark.asyncio
     async def test_streaming_hook_block(self):
