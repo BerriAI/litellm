@@ -1,4 +1,5 @@
 import io
+import sys
 from collections.abc import Iterator
 from typing import Final
 
@@ -210,6 +211,13 @@ def test_diarization_mechanism_follows_audio_channel_count(
 
 def test_unreadable_audio_falls_back_to_acoustic_diarize():
     assert _form_data(b"not audio at all", {"diarize": True}) == {"model_id": "scribe_v2", "diarize": "True"}
+
+
+def test_stereo_audio_without_soundfile_installed_falls_back_to_acoustic_diarize(monkeypatch: pytest.MonkeyPatch):
+    stereo: Final = _wav_bytes(2)
+    monkeypatch.setitem(sys.modules, "soundfile", None)
+
+    assert _form_data(stereo, {"diarize": True}) == {"model_id": "scribe_v2", "diarize": "True"}
 
 
 def test_diarized_response_builds_speaker_segments():
