@@ -1,3 +1,5 @@
+For new Redis-backed access, redis-py interface extraction, or explicit Rust ports, follow [the Redis access skill](litellm-rust/.agents/skills/redis-access/SKILL.md)
+
 Do not write comments unless they are any of:
 - absolutely necessary to explain some very complex business logic (in which case, keep it concise and clear)
 - used as an input for tools to read and act on. For example:

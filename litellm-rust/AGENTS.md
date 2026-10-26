@@ -1,5 +1,7 @@
 # Rust workspace rules
 
+For Redis-backed operations and incremental redis-py migration, follow [.agents/skills/redis-access/SKILL.md](.agents/skills/redis-access/SKILL.md)
+
 For diagnostic tracing changes, follow [.agents/skills/rust-tracing/SKILL.md](.agents/skills/rust-tracing/SKILL.md)
 
 For string-valued enums and their Serde conversions, follow [.agents/skills/rust-string-enums/SKILL.md](.agents/skills/rust-string-enums/SKILL.md)
