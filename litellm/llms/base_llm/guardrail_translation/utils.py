@@ -6,6 +6,7 @@ from typing import Final, TypeVar, cast  # noqa: TID251  # a rebuilt chat row ha
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.llms.openai import AllMessageValues, ResponseAPIUsage
 
@@ -319,6 +320,27 @@ def anthropic_tool_names(tool: object) -> tuple[str, ...]:
 def anthropic_tool_name(tool: object) -> str | None:
     names: Final = anthropic_tool_names(tool)
     return names[0] if names else None
+
+
+def extract_tool_from_addition_block(block: object) -> Mapping[str, object] | None:
+    """Extract raw tool dict from an Anthropic tool_addition block."""
+    mapping: Final = as_str_mapping(block)
+    if mapping is None:
+        return None
+    tool_data: Final = as_str_mapping(mapping.get("tool"))
+    if tool_data is not None:
+        if (
+            tool_data.get("type") == "tool_definition"
+            and "definition" in tool_data
+            and (definition := as_str_mapping(tool_data.get("definition"))) is not None
+        ):
+            return definition
+        return tool_data
+    if "definition" in mapping and (definition := as_str_mapping(mapping.get("definition"))) is not None:
+        return definition
+    if (tool_def := as_str_mapping(mapping.get("tool_definition"))) is not None:
+        return tool_def
+    return None
 
 
 def merge_returned_tools_into_request_tools(
