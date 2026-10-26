@@ -7,9 +7,12 @@ repository.workspace = true
 
 [dependencies]
 litellm-cache.workspace = true
-redis = "1.7.0"
-serde_json.workspace = true
+redis = { version = "1.7.0", features = ["cluster", "tls-rustls"] }
+r2d2 = "0.8.10"
 tokio.workspace = true
 
 [dev-dependencies]
+litellm-cache-testing.workspace = true
 redis-test = "1.0.4"
+rstest.workspace = true
+serde_json.workspace = true

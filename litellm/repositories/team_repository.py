@@ -5,6 +5,7 @@ Team repository for database operations on LiteLLM_TeamTable.
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from types import TracebackType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
@@ -40,7 +41,41 @@ def _team_arrays(team: LiteLLM_TeamTable) -> _TeamArrays:
     return team
 
 
+class _TeamTables(Protocol):
+    """The two team tables this repository reads and writes."""
+
+    @property
+    def litellm_teamtable(self) -> TableActions["prisma_models.LiteLLM_TeamTable"]: ...
+
+    @property
+    def litellm_deletedteamtable(self) -> TableActions["prisma_models.LiteLLM_DeletedTeamTable"]: ...
+
+
+class _TeamTransactionManager(Protocol):
+    async def __aenter__(self) -> _TeamTables: ...
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None: ...
+
+
+class _PrismaTeamDb(_TeamTables, Protocol):
+    def tx(self) -> _TeamTransactionManager: ...
+
+
+class _PrismaClientView(Protocol):
+    @property
+    def db(self) -> _PrismaTeamDb: ...
+
+    @property
+    def writer_db(self) -> _PrismaTeamDb: ...
+
+
 _MEMBERS_WITH_ROLES_ADAPTER: Final = TypeAdapter(list[Member])
+_RAW_COLUMN: Final = TypeAdapter(object)
 _JSON_ENCODED_TEAM_FIELDS: Final = (
     "metadata",
     "model_spend",
@@ -54,13 +89,22 @@ _JSON_ENCODED_TEAM_FIELDS: Final = (
 class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
     """Repository for team database operations."""
 
+    def __init__(self, prisma_client: object, *, use_writer: bool = False) -> None:
+        super().__init__(prisma_client)
+        self._use_writer = use_writer
+
+    @property
+    def _db(self) -> _PrismaTeamDb:
+        client: Final[_PrismaClientView] = self.prisma_client
+        return client.writer_db if self._use_writer else client.db
+
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_TeamTable"]:
-        return self.prisma_client.db.litellm_teamtable
+        return self._db.litellm_teamtable
 
     @property
     def deleted_table(self) -> TableActions["prisma_models.LiteLLM_DeletedTeamTable"]:
-        return self.prisma_client.db.litellm_deletedteamtable
+        return self._db.litellm_deletedteamtable
 
     @property
     def model_class(self) -> type[LiteLLM_TeamTable]:
@@ -99,7 +143,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         )
         if not rows:
             return None
-        raw_value: Final[object] = rows[0]["members_with_roles"]
+        raw_value: Final = _RAW_COLUMN.validate_python(rows[0]["members_with_roles"])
         parsed: Final[object] = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
         if not parsed:
             return []
@@ -256,7 +300,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         archive_data["litellm_changed_by"] = litellm_changed_by
         archive_data["deleted_at"] = datetime.utcnow()
 
-        async with self.prisma_client.db.tx() as tx:
+        async with self._db.tx() as tx:
             await tx.litellm_deletedteamtable.create(data=archive_data)
             await tx.litellm_teamtable.delete(where={"team_id": team_id})
 

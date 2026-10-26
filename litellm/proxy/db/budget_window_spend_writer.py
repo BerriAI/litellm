@@ -19,8 +19,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Final, Protocol
 
+from typing_extensions import LiteralString, ReadOnly, TypedDict
+
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import Litellm_EntityType
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     WindowSpendTransaction,
     to_naive_utc,
@@ -90,6 +93,57 @@ _SEED_FROM_SPEND_LOGS_TEAM_UNBOUNDED_SQL: Final = (
 _UPSERT_TRANSACTION_TIMEOUT: Final = timedelta(seconds=60)
 
 
+class _SeedTotalsRow(TypedDict):
+    total: ReadOnly[float | None]
+    before_batch: ReadOnly[float | None]
+
+
+class _ExistingKeyRow(TypedDict):
+    entity_type: ReadOnly[str]
+    entity_id: ReadOnly[str]
+    window_duration: ReadOnly[str]
+
+
+class _SeedTotalsQuery(Protocol):
+    async def __call__(self, query: LiteralString, *args: object) -> Sequence[_SeedTotalsRow]: ...
+
+
+class _ExistingKeysQuery(Protocol):
+    async def __call__(self, query: LiteralString, *args: object) -> Sequence[_ExistingKeyRow]: ...
+
+
+class _UpsertBatch(Protocol):
+    def execute_raw(self, query: LiteralString, *args: object) -> None: ...
+
+
+class _UpsertBatchManager(Protocol):
+    async def __aenter__(self) -> _UpsertBatch: ...
+
+    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+
+
+class _UpsertTransaction(Protocol):
+    def batch_(self) -> _UpsertBatchManager: ...
+
+
+class _UpsertTransactionManager(Protocol):
+    async def __aenter__(self) -> _UpsertTransaction: ...
+
+    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+
+
+def _seed_totals_query(prisma_client: "PrismaClient") -> _SeedTotalsQuery:
+    return prisma_client.db.query_raw
+
+
+def _existing_keys_query(prisma_client: "PrismaClient") -> _ExistingKeysQuery:
+    return prisma_client.db.query_raw
+
+
+def _upsert_transaction(prisma_client: "PrismaClient") -> _UpsertTransactionManager:
+    return prisma_client.db.tx(timeout=_UPSERT_TRANSACTION_TIMEOUT)
+
+
 @dataclass(frozen=True, slots=True)
 class WindowSeedTotals:
     """The two sums a seed needs: everything persisted for the window, and the
@@ -146,16 +200,17 @@ async def spend_logs_seed_totals(
         bounded_sql, unbounded_sql = _SEED_FROM_SPEND_LOGS_TEAM_SQL, _SEED_FROM_SPEND_LOGS_TEAM_UNBOUNDED_SQL
     else:
         return None
-    rows: Final = (
-        await prisma_client.db.query_raw(unbounded_sql, entity_id, window_start)
-        if batch_started_at is None
-        else await prisma_client.db.query_raw(
-            bounded_sql,
-            entity_id,
-            window_start,
-            _exclusion_upper_bound(batch_started_at),
+    async with db_span("seed_window_spend", "LiteLLM_SpendLogs"):
+        rows: Final = (
+            await _seed_totals_query(prisma_client)(unbounded_sql, entity_id, window_start)
+            if batch_started_at is None
+            else await _seed_totals_query(prisma_client)(
+                bounded_sql,
+                entity_id,
+                window_start,
+                _exclusion_upper_bound(batch_started_at),
+            )
         )
-    )
     if not rows:
         return WindowSeedTotals(total=0.0, before_batch=0.0)
     return WindowSeedTotals(
@@ -182,12 +237,13 @@ async def _existing_primary_keys(
     prisma_client: "PrismaClient",
     transactions: tuple[WindowSpendTransaction, ...],
 ) -> frozenset[tuple[str, str, str]]:
-    rows: Final = await prisma_client.db.query_raw(
-        _SELECT_EXISTING_ROWS_SQL,
-        tuple(transaction["entity_type"] for transaction in transactions),
-        tuple(transaction["entity_id"] for transaction in transactions),
-        tuple(transaction["window_duration"] for transaction in transactions),
-    )
+    async with db_span("select_window_spend_rows", "LiteLLM_BudgetWindowSpend"):
+        rows: Final = await _existing_keys_query(prisma_client)(
+            _SELECT_EXISTING_ROWS_SQL,
+            tuple(transaction["entity_type"] for transaction in transactions),
+            tuple(transaction["entity_id"] for transaction in transactions),
+            tuple(transaction["window_duration"] for transaction in transactions),
+        )
     return frozenset((row["entity_type"], row["entity_id"], row["window_duration"]) for row in rows or ())
 
 
@@ -300,7 +356,8 @@ async def commit_window_spend_updates(
         len(existing_primary_keys),
     )
     async with (
-        prisma_client.db.tx(timeout=_UPSERT_TRANSACTION_TIMEOUT) as db_transaction,
+        db_span("commit_window_spend_updates", "LiteLLM_BudgetWindowSpend"),
+        _upsert_transaction(prisma_client) as db_transaction,
         db_transaction.batch_() as batcher,
     ):
         for transaction, seed_base in zip(ordered, seed_bases):
@@ -323,11 +380,12 @@ async def roll_window_spend_row(
     pod that already rolled the row (or increments that arrived under the new
     window) are not clobbered.
     """
-    await prisma_client.db.execute_raw(
-        _ROLL_WINDOW_SPEND_SQL,
-        entity_type,
-        entity_id,
-        window_duration,
-        to_naive_utc(new_window_start),
-        to_naive_utc(datetime.now(timezone.utc)),
-    )
+    async with db_span("roll_window_spend_row", "LiteLLM_BudgetWindowSpend"):
+        await prisma_client.db.execute_raw(
+            _ROLL_WINDOW_SPEND_SQL,
+            entity_type,
+            entity_id,
+            window_duration,
+            to_naive_utc(new_window_start),
+            to_naive_utc(datetime.now(timezone.utc)),
+        )

@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
 
 func TestVectorStoreReadDoesNotPersistServerLitellmParams(t *testing.T) {
@@ -51,5 +54,37 @@ func TestVectorStoreReadDoesNotPersistServerLitellmParams(t *testing.T) {
 	}
 	if d.Get("vector_store_name").(string) != "kb" {
 		t.Fatalf("read did not populate non-sensitive fields")
+	}
+}
+
+func TestVectorStoreLitellmParamsWarnsOnSecretKeys(t *testing.T) {
+	diags := resourceLiteLLMVectorStore().Validate(terraform.NewResourceConfigRaw(map[string]interface{}{
+		"vector_store_name":   "kb",
+		"custom_llm_provider": "openai",
+		"litellm_params": map[string]interface{}{
+			"api_key":         "sk-in-state",
+			"vector_store_id": "vs-123",
+		},
+	}))
+	if diags.HasError() {
+		t.Fatalf("a secret key must warn, not fail: %v", diags)
+	}
+	var warned []string
+	for _, d := range diags {
+		if d.Severity == diag.Warning {
+			warned = append(warned, d.Summary)
+		}
+	}
+	if len(warned) != 1 || !strings.Contains(warned[0], `"api_key"`) {
+		t.Fatalf("expected exactly one warning naming api_key, got %v", warned)
+	}
+
+	clean := resourceLiteLLMVectorStore().Validate(terraform.NewResourceConfigRaw(map[string]interface{}{
+		"vector_store_name":   "kb",
+		"custom_llm_provider": "openai",
+		"litellm_params":      map[string]interface{}{"vector_store_id": "vs-123"},
+	}))
+	if len(clean) != 0 {
+		t.Fatalf("non-secret keys must not warn, got %v", clean)
 	}
 }

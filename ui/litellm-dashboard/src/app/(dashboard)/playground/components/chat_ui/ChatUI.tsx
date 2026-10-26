@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ArrowDown,
   Bot,
   Code2,
   Database,
@@ -287,7 +288,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   // Code Interpreter state (using custom hook)
   const codeInterpreter = useCodeInterpreter();
 
-  const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
 
   // Fetch MCP servers and toolsets
   const loadMCPServers = async () => {
@@ -516,17 +517,19 @@ const ChatUI: React.FC<ChatUIProps> = ({
   }, [accessToken, apiKeySource, apiKey, endpointType, customProxyBaseUrl, selectedAgent]);
 
   useEffect(() => {
-    // Scroll to the bottom of the chat whenever chatHistory updates
-    if (chatEndRef.current) {
-      // Add a small delay to ensure content is rendered
-      setTimeout(() => {
-        chatEndRef.current?.scrollIntoView({
-          behavior: "smooth",
-          block: "end", // Keep the scroll position at the end
-        });
-      }, 100);
-    }
+    const el = chatScrollRef.current;
+    if (!el || chatHistory.at(-1)?.role !== "user") return;
+    const userMessages = el.querySelectorAll<HTMLElement>('[data-role="user"]');
+    const last = userMessages[userMessages.length - 1];
+    if (last) el.scrollTop = last.offsetTop;
   }, [chatHistory]);
+
+  const scrollToLastMessage = () => {
+    const el = chatScrollRef.current;
+    const messages = el?.querySelectorAll<HTMLElement>("[data-role]");
+    const last = messages?.[messages.length - 1];
+    if (el && last) el.scrollTop = last.offsetTop + last.offsetHeight - el.clientHeight;
+  };
 
   const handleCancelRequest = () => {
     if (abortControllerRef.current) {
@@ -1801,51 +1804,68 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     )}
                   </div>
                 </div>
-                <div className="min-h-0 min-w-0 flex-1 overflow-auto p-3 pb-0 sm:p-4 sm:pb-0">
-                  {chatHistory.length === 0 && (
-                    <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
-                      <Bot className="mb-4 size-12" aria-hidden="true" />
-                      <p className="text-sm">Start a conversation, generate an image, or handle audio</p>
-                    </div>
-                  )}
-
-                  {chatHistory.map((message, index) => (
-                    <div key={index}>
-                      <ChatMessageBubble
-                        message={message}
-                        isLastMessage={index === chatHistory.length - 1}
-                        endpointType={endpointType as EndpointType}
-                        mcpEvents={mcpEvents}
-                        codeInterpreterResult={codeInterpreter.result}
-                        accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
-                      />
-                    </div>
-                  ))}
-
-                  {isLoading &&
-                    mcpEvents.length > 0 &&
-                    (endpointType === EndpointType.RESPONSES || endpointType === EndpointType.CHAT) &&
-                    chatHistory.length > 0 &&
-                    chatHistory[chatHistory.length - 1].role === "user" && (
-                      <div className="mb-4 text-left">
-                        <div className="inline-block max-w-[80%] rounded-lg border border-border bg-card p-3.5 px-4 text-left text-card-foreground shadow-xs">
-                          <div className="mb-1.5 flex items-center gap-2">
-                            <div className="mr-1 flex h-6 w-6 items-center justify-center rounded-full bg-muted">
-                              <Bot className="size-3 text-muted-foreground" aria-hidden="true" />
-                            </div>
-                            <strong className="text-sm capitalize">Assistant</strong>
-                          </div>
-                          <MCPEventsDisplay events={mcpEvents} />
-                        </div>
+                <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+                  <div
+                    ref={chatScrollRef}
+                    className="relative min-h-0 min-w-0 flex-1 overflow-auto p-3 pb-0 sm:p-4 sm:pb-0"
+                  >
+                    {chatHistory.length === 0 && (
+                      <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
+                        <Bot className="mb-4 size-12" aria-hidden="true" />
+                        <p className="text-sm">Start a conversation, generate an image, or handle audio</p>
                       </div>
                     )}
 
-                  {isLoading && (
-                    <div className="my-4 flex items-center justify-center">
-                      <Loader2 className="size-6 animate-spin text-muted-foreground" aria-label="Loading" />
-                    </div>
+                    {chatHistory.map((message, index) => (
+                      <div key={index} data-role={message.role}>
+                        <ChatMessageBubble
+                          message={message}
+                          isLastMessage={index === chatHistory.length - 1}
+                          endpointType={endpointType as EndpointType}
+                          mcpEvents={mcpEvents}
+                          codeInterpreterResult={codeInterpreter.result}
+                          accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
+                        />
+                      </div>
+                    ))}
+
+                    {isLoading &&
+                      mcpEvents.length > 0 &&
+                      (endpointType === EndpointType.RESPONSES || endpointType === EndpointType.CHAT) &&
+                      chatHistory.length > 0 &&
+                      chatHistory[chatHistory.length - 1].role === "user" && (
+                        <div className="mb-4 text-left">
+                          <div className="inline-block max-w-[80%] rounded-lg border border-border bg-card p-3.5 px-4 text-left text-card-foreground shadow-xs">
+                            <div className="mb-1.5 flex items-center gap-2">
+                              <div className="mr-1 flex h-6 w-6 items-center justify-center rounded-full bg-muted">
+                                <Bot className="size-3 text-muted-foreground" aria-hidden="true" />
+                              </div>
+                              <strong className="text-sm capitalize">Assistant</strong>
+                            </div>
+                            <MCPEventsDisplay events={mcpEvents} />
+                          </div>
+                        </div>
+                      )}
+
+                    {isLoading && (
+                      <div className="my-4 flex items-center justify-center">
+                        <Loader2 className="size-6 animate-spin text-muted-foreground" aria-label="Loading" />
+                      </div>
+                    )}
+                    {chatHistory.length > 0 && <div aria-hidden className="h-[calc(100%-3rem)]" />}
+                  </div>
+                  {chatHistory.length > 0 && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      aria-label="Jump to bottom"
+                      className="absolute bottom-3 right-3 rounded-full shadow-sm"
+                      onClick={scrollToLastMessage}
+                    >
+                      <ArrowDown className="size-4" />
+                    </Button>
                   )}
-                  <div ref={chatEndRef} style={{ height: "1px" }} />
                 </div>
 
                 <div className="max-h-[50%] shrink-0 overflow-y-auto border-t border-border bg-card p-3 sm:p-4">

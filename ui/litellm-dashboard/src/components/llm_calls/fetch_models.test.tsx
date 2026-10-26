@@ -38,6 +38,21 @@ describe("fetchAvailableModels", () => {
     vi.clearAllMocks();
   });
 
+  it("retains provider identity without inventing it for an unknown route", async () => {
+    modelHubCallMock.mockResolvedValue({
+      data: [
+        { model_group: "direct", providers: ["anthropic"] },
+        { model_group: "mixed", providers: ["bedrock", "anthropic"] },
+        { model_group: "unknown", providers: null },
+      ],
+    });
+    expect(await fetchAvailableModels("token")).toEqual([
+      { model_group: "direct", providers: ["anthropic"] },
+      { model_group: "mixed", providers: ["bedrock", "anthropic"] },
+      { model_group: "unknown" },
+    ]);
+  });
+
   it("carries the reasoning capabilities the model hub reports for each group", async () => {
     modelHubCallMock.mockResolvedValue({
       data: [

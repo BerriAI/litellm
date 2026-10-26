@@ -7,7 +7,10 @@ import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.constants import HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
+from litellm.litellm_core_utils.asyncify import can_block_current_thread
+from litellm.litellm_core_utils.request_timeout_resolver import get_configured_request_timeout
+from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
 from .common_utils import (
     CHATGPT_API_BASE,
@@ -26,6 +29,7 @@ from .common_utils import (
 )
 
 TOKEN_EXPIRY_SKEW_SECONDS: Final = 60
+TOKEN_REFRESH_TIMEOUT_SECONDS: Final = 30
 DEVICE_CODE_TIMEOUT_SECONDS: Final = 15 * 60
 DEVICE_CODE_COOLDOWN_SECONDS: Final = 5 * 60
 DEVICE_CODE_POLL_SLEEP_SECONDS: Final = 5
@@ -35,6 +39,14 @@ _JSON_OBJECT_ADAPTER: Final = TypeAdapter(JsonObject)
 
 def _optional_str(value: JsonValue | None) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _token_refresh_timeout() -> httpx.Timeout:
+    configured: Final = get_configured_request_timeout()
+    seconds: Final = (
+        TOKEN_REFRESH_TIMEOUT_SECONDS if configured is None else min(configured, TOKEN_REFRESH_TIMEOUT_SECONDS)
+    )
+    return httpx.Timeout(seconds, connect=HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS)
 
 
 class Authenticator:
@@ -62,6 +74,18 @@ class Authenticator:
                     return refreshed["access_token"]
                 except RefreshAccessTokenError as exc:
                     verbose_logger.warning("ChatGPT refresh token failed, re-login required: %s", exc)
+
+        if not can_block_current_thread():
+            raise GetAccessTokenError(
+                message=(
+                    "ChatGPT device-code login needs a human and cannot run inside a running event loop "
+                    "or a worker thread (for example the LiteLLM proxy). Log in once outside the proxy with "
+                    '`python -c "from litellm.llms.chatgpt.authenticator import Authenticator; '
+                    'Authenticator().get_access_token()"` and mount the resulting auth.json into the proxy, '
+                    "or set CHATGPT_TOKEN_DIR to a directory that already holds it."
+                ),
+                status_code=401,
+            )
 
         cooldown_remaining: Final = self._get_device_code_cooldown_remaining(auth_data)
         if cooldown_remaining > 0:
@@ -148,7 +172,7 @@ class Authenticator:
 
     def _request_device_code(self) -> dict[str, str]:
         try:
-            client: Final = _get_httpx_client()
+            client: Final = get_httpx_client()
             resp: Final = client.post(
                 CHATGPT_DEVICE_CODE_URL,
                 json={"client_id": CHATGPT_CLIENT_ID},
@@ -181,7 +205,7 @@ class Authenticator:
         }
 
     def _poll_for_authorization_code(self, device_code: dict[str, str]) -> dict[str, str]:
-        client: Final = _get_httpx_client()
+        client: Final = get_httpx_client()
         interval: Final = int(device_code.get("interval", "5"))
         start_time: Final = time.time()
         while time.time() - start_time < DEVICE_CODE_TIMEOUT_SECONDS:
@@ -231,7 +255,7 @@ class Authenticator:
 
     def _exchange_code_for_tokens(self, code_data: dict[str, str]) -> dict[str, str]:
         try:
-            client: Final = _get_httpx_client()
+            client: Final = get_httpx_client()
             redirect_uri: Final = f"{CHATGPT_AUTH_BASE}/deviceauth/callback"
             body: Final = (
                 "grant_type=authorization_code"
@@ -274,7 +298,7 @@ class Authenticator:
 
     def _refresh_tokens(self, refresh_token: str) -> dict[str, str]:
         try:
-            client: Final = _get_httpx_client()
+            client: Final = get_httpx_client()
             resp: Final = client.post(
                 CHATGPT_OAUTH_TOKEN_URL,
                 json={
@@ -283,6 +307,7 @@ class Authenticator:
                     "refresh_token": refresh_token,
                     "scope": "openid profile email",
                 },
+                timeout=_token_refresh_timeout(),
             )
             resp.raise_for_status()
             data: Final = _JSON_OBJECT_ADAPTER.validate_python(resp.json())

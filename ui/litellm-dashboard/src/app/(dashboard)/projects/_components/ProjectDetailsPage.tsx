@@ -1,5 +1,8 @@
+import { useCanManageProjects } from "@/app/(dashboard)/hooks/projects/projectAccess";
 import { useProjectDetails } from "@/app/(dashboard)/hooks/projects/useProjectDetails";
 import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import { BarChart } from "@/components/shared/charts";
 import { ArrowLeftIcon, DollarSignIcon, EditIcon, UsersIcon } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -24,6 +27,10 @@ const utilisationTone = (percent: number) => (percent >= 90 ? "over" : percent >
 export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
   const { data: project, isLoading } = useProjectDetails(projectId);
   const { data: teamInfo } = useTeam(project?.team_id ?? undefined);
+  const { userId } = useAuthorized();
+  const canEditProject = useCanManageProjects(
+    isUserTeamAdminForSingleTeam(teamInfo?.members_with_roles ?? null, userId ?? ""),
+  );
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
 
   const spend = project?.spend ?? 0;
@@ -87,10 +94,12 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
             </div>
           </div>
         </div>
-        <Button onClick={() => setIsEditModalVisible(true)}>
-          <EditIcon className="size-4" />
-          Edit Project
-        </Button>
+        {canEditProject && (
+          <Button onClick={() => setIsEditModalVisible(true)}>
+            <EditIcon className="size-4" />
+            Edit Project
+          </Button>
+        )}
       </div>
 
       <Card className="mb-6">

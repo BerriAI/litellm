@@ -9,6 +9,7 @@ interface AuthMock {
   userRoleLabel: string;
   premiumUser: boolean;
   accessToken: string;
+  loginMethod?: string | null;
 }
 
 let mockUseAuthorizedImpl: () => AuthMock = () => ({
@@ -18,6 +19,12 @@ let mockUseAuthorizedImpl: () => AuthMock = () => ({
   premiumUser: false,
   accessToken: "test-token",
 });
+
+const mockRouterPush = vi.fn();
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: mockRouterPush }),
+}));
 
 let mockUseDisableShowPromptsImpl = () => false;
 let mockUseDisableBouncingIconImpl = () => false;
@@ -199,6 +206,42 @@ describe("SidebarAccountMenu", () => {
     await user.click(screen.getByRole("button", { name: /logout/i }));
 
     expect(mockOnLogout).toHaveBeenCalledTimes(1);
+  });
+
+  it("should navigate to the change-password page for username/password sessions", async () => {
+    mockUseAuthorizedImpl = () => ({
+      userId: "test-user-id",
+      userEmail: "test@example.com",
+      userRoleLabel: "Admin",
+      premiumUser: false,
+      accessToken: "test-token",
+      loginMethod: "username_password",
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<SidebarAccountMenu onLogout={mockOnLogout} />);
+
+    await openMenu(user);
+
+    await user.click(screen.getByRole("button", { name: /change password/i }));
+
+    expect(mockRouterPush).toHaveBeenCalledWith(expect.stringContaining("change-password"));
+  });
+
+  it("should hide the change-password entry for SSO sessions", async () => {
+    mockUseAuthorizedImpl = () => ({
+      userId: "test-user-id",
+      userEmail: "test@example.com",
+      userRoleLabel: "Admin",
+      premiumUser: false,
+      accessToken: "test-token",
+      loginMethod: "sso",
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<SidebarAccountMenu onLogout={mockOnLogout} />);
+
+    await openMenu(user);
+
+    expect(screen.queryByRole("button", { name: /change password/i })).not.toBeInTheDocument();
   });
 
   it("should toggle hide new feature indicators on", async () => {

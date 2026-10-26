@@ -47,6 +47,7 @@ export async function expectUnrestrictedDashboard(page: Page): Promise<void> {
   const session = await readDashboardSession(page);
   expect(session.password_reset_required === true, "login must not require a password reset").toBe(false);
   await virtualKeys.click();
+  await expect(page).toHaveURL(/\/ui\/api-keys\/?$/);
   await expect(page.getByRole("main").getByRole("heading", { name: "Virtual Keys", exact: true })).toBeVisible({
     timeout: 30_000,
   });
@@ -56,4 +57,14 @@ export async function expectUnrestrictedDashboard(page: Page): Promise<void> {
   });
   expect(info.ok(), `Read own user with dashboard session: HTTP ${info.status()}`).toBe(true);
   expect((await info.json()).user_id).toBe(session.user_id);
+}
+
+export async function logInThroughLoginPage(page: Page, email: string, password: string): Promise<void> {
+  await page.goto(`${rootPath()}/ui/login`);
+  await page.getByPlaceholder("Enter your username").fill(email);
+  await page.getByPlaceholder("Enter your password").fill(password);
+  await page.getByRole("button", { name: "Login", exact: true }).click();
+  await page.waitForURL((url) => url.pathname.startsWith(`${rootPath()}/ui`) && !url.pathname.includes("/login"), {
+    timeout: 30_000,
+  });
 }
