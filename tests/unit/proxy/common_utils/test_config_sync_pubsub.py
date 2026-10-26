@@ -181,6 +181,13 @@ class _ExplodingRedisCache:
         raise ConnectionError("cannot connect")
 
 
+def _fetched_catalog(model_cost_map):
+    from litellm._catalog._load import LoadedCatalog
+    from litellm.rust_bridge._native import ModelRegistry
+
+    return LoadedCatalog(ModelRegistry.parse(json.dumps(model_cost_map).encode()))
+
+
 def _recording_callback(
     events: List[str], name: str, fired: asyncio.Event
 ) -> Callable[[], Coroutine[None, None, None]]:
@@ -234,9 +241,7 @@ async def test_publish_reaches_cluster_derived_pubsub_clients() -> None:
 
     await publish_config_change(redis_cache=cache, object_type="litellm_proxymodeltable")
 
-    assert client.published == [
-        (CONFIG_SYNC_CHANNEL, json.dumps({"object_type": "litellm_proxymodeltable"}))
-    ]
+    assert client.published == [(CONFIG_SYNC_CHANNEL, json.dumps({"object_type": "litellm_proxymodeltable"}))]
 
 
 async def test_subscriber_runs_injected_callbacks_in_order_on_message() -> None:
@@ -855,13 +860,9 @@ async def test_model_cost_map_reload_does_not_publish_config_change() -> None:
     original_model_cost = litellm.model_cost.copy()
     _set_redis_usage_cache(_FakeRedisCache(client))
     try:
-        from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
-
         with patch(
-            "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
-            new=AsyncMock(
-                return_value=ModelCostMapReloaded(model_cost_map={"gpt-5.2": {"input_cost_per_token": 0.001}})
-            ),
+            "litellm._catalog.fetch",
+            new=MagicMock(return_value=_fetched_catalog(model_cost_map={"gpt-5.2": {"input_cost_per_token": 0.001}})),
         ):
             await ProxyConfig()._check_and_reload_model_cost_map(prisma_client=prisma_client)
     finally:

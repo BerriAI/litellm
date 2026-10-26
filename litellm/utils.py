@@ -305,7 +305,7 @@ except (ImportError, AttributeError, TypeError):
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
 from collections.abc import AsyncIterator, Callable, Collection, Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
 
 from typing_extensions import assert_never
 
@@ -3827,15 +3827,37 @@ def _registration_attempt(
     custom_llm_provider: str | None,
     warning_display_name: str | None,
     final_attempt: bool,
+    persist_across_reloads: bool = True,
 ) -> _RegistrationWrite | None:
+    from litellm._catalog._install import registration_write
+
+    generation: Final = get_model_cost_mutation_generation()
     source: Final = _builtin_cost_map()
     write: Final = _registration_write(key, value, custom_llm_provider, warning_display_name)
-    _replace_cost_map_entry(_builtin_cost_map() if final_attempt else source, write.key, write.entry, value)
-    return write if final_attempt or litellm.model_cost is source else None
+    if not final_attempt and get_model_cost_mutation_generation() != generation:
+        return None
+    provider: Final = value.get("litellm_provider")
+    match: Final = _resolve_builtin_model_cost_entry(
+        key=write.key, provider=provider if isinstance(provider, str) else ""
+    )
+    registration_write(
+        _builtin_cost_map() if final_attempt else source,
+        write.key,
+        write.entry,
+        value,
+        persist=persist_across_reloads,
+        inherits_from=match.key if match is not None and match.key != write.key else None,
+        replace=_replace_cost_map_entry,
+    )
+    return write if final_attempt or get_model_cost_mutation_generation() == generation else None
 
 
 def _register_on_current_map(
-    key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
+    key: str,
+    value: Mapping[str, object],
+    custom_llm_provider: str | None,
+    warning_display_name: str | None,
+    persist_across_reloads: bool = True,
 ) -> _RegistrationWrite:
     """A price data reload that swaps the map while the entry is being built or written would otherwise get the old
     map's prices written over its own, or drop the entry with the old map, so each attempt writes into the map it was
@@ -3843,7 +3865,12 @@ def _register_on_current_map(
     writes into the current map, so the entry is never lost."""
     attempts: Final = (
         _registration_attempt(
-            key, value, custom_llm_provider, warning_display_name, final_attempt=attempt == _REGISTRATION_ATTEMPTS - 1
+            key,
+            value,
+            custom_llm_provider,
+            warning_display_name,
+            final_attempt=attempt == _REGISTRATION_ATTEMPTS - 1,
+            persist_across_reloads=persist_across_reloads,
         )
         for attempt in range(_REGISTRATION_ATTEMPTS)
     )
@@ -3881,7 +3908,7 @@ class _LiveDeploymentReplay:
     reader, and neither needs a ``global`` statement.
     """
 
-    callback: Callable[[], None] | None = None
+    callbacks: ClassVar[tuple[Callable[[], None], ...]] = ()
 
 
 def set_live_deployment_replay(replay: Callable[[], None]) -> None:
@@ -3892,7 +3919,7 @@ def set_live_deployment_replay(replay: Callable[[], None]) -> None:
     objects are alive at that moment, which this module cannot see, and importing
     the router here would be circular.
     """
-    _LiveDeploymentReplay.callback = replay
+    _LiveDeploymentReplay.callbacks = (replay,)
 
 
 def reapply_runtime_model_cost_registrations() -> None:
@@ -3913,8 +3940,8 @@ def reapply_runtime_model_cost_registrations() -> None:
     have no such owner are recorded and replayed, and a registration describing
     a single request opts out of even that.
     """
-    if _LiveDeploymentReplay.callback is not None:
-        _LiveDeploymentReplay.callback()
+    for replay in _LiveDeploymentReplay.callbacks:
+        replay()
     if _runtime_registered_model_cost:
         register_model(model_cost=dict(_runtime_registered_model_cost))
 
@@ -3981,7 +4008,18 @@ def register_model(
         # Convert stringified numbers to appropriate numeric types
         loaded_model_cost = model_cost
     elif isinstance(model_cost, str):
-        loaded_model_cost = litellm.get_model_cost_map(url=model_cost, max_attempts=1)
+        from litellm._catalog._fetch import CatalogUnavailable, Remote, fetch
+        from litellm._catalog._install import accepted_catalog
+        from litellm._catalog._load import served_rows
+
+        fetched: Final = fetch(Remote(model_cost), max_attempts=1)
+        if isinstance(fetched, CatalogUnavailable):
+            verbose_logger.warning("LiteLLM: register_model fetch failed: %s", fetched.reason)
+            return model_cost
+        accepted: Final = accepted_catalog(fetched)
+        if accepted is None:
+            return model_cost
+        loaded_model_cost = served_rows(accepted)
 
     if persist_across_reloads:
         _registrations: Final[Mapping[str, Mapping[str, object]]] = loaded_model_cost
@@ -3992,7 +4030,12 @@ def register_model(
             )
 
     for key, value in loaded_model_cost.items():
-        write = _register_on_current_map(str(key), value, custom_llm_provider, warning_display_name)
+        from litellm._catalog._install import LOCK
+
+        with LOCK:
+            write = _register_on_current_map(
+                str(key), value, custom_llm_provider, warning_display_name, persist_across_reloads
+            )
 
         # Invalidate case-insensitive lookup map since model_cost was modified
         _invalidate_model_cost_lowercase_map()

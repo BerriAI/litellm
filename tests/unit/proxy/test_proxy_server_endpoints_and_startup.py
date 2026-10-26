@@ -30,7 +30,6 @@ import litellm.proxy.proxy_server as proxy_server_module
 from litellm._internal_context import current_service_target
 from litellm.caching.caching import RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
-from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
     AwsErrorTypeProxyException,
@@ -75,6 +74,13 @@ example_embedding_result = {
     "model": "text-embedding-3-small",
     "usage": {"prompt_tokens": 5, "total_tokens": 5},
 }
+
+
+def _fetched_catalog(model_cost_map):
+    from litellm._catalog._load import LoadedCatalog
+    from litellm.rust_bridge._native import ModelRegistry
+
+    return LoadedCatalog(ModelRegistry.parse(json.dumps(model_cost_map).encode()))
 
 
 def mock_patch_aembedding():
@@ -1789,9 +1795,7 @@ class _DatabaseWithOneStoredCredential:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "encrypted_with, asks_to_migrate", [(PUBLICLY_KNOWN_KEY, True), ("sk-some-other-key", False)]
-)
+@pytest.mark.parametrize("encrypted_with, asks_to_migrate", [(PUBLICLY_KNOWN_KEY, True), ("sk-some-other-key", False)])
 async def test_proxy_startup_asks_to_migrate_only_when_the_database_holds_values_under_the_unsafe_key(
     monkeypatch, tmp_path, encrypted_with, asks_to_migrate
 ):
@@ -1874,9 +1878,7 @@ async def test_proxy_startup_names_the_config_file_that_set_the_unsafe_key(monke
     from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
     from litellm.proxy.proxy_server import proxy_startup_event
 
-    config_path, announced = _boot_with_general_settings(
-        monkeypatch, tmp_path, {"master_key": PUBLICLY_KNOWN_KEY}
-    )
+    config_path, announced = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": PUBLICLY_KNOWN_KEY})
 
     with pytest.raises(UnsafeMasterKeyError):
         async with proxy_startup_event(FastAPI()):
@@ -4541,14 +4543,13 @@ class TestPriceDataReloadAPI:
         # Save the original model_cost so the endpoint's direct assignment
         # (litellm.model_cost = new_model_cost_map) does not contaminate
         # subsequent tests running in the same worker process.
-        from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 
         original_model_cost = litellm.model_cost.copy()
         try:
             with patch(
-                "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
-                new=AsyncMock(
-                    return_value=ModelCostMapReloaded(model_cost_map={"gpt-3.5-turbo": {"input_cost_per_token": 0.001}})
+                "litellm._catalog.fetch",
+                new=MagicMock(
+                    return_value=_fetched_catalog(model_cost_map={"gpt-3.5-turbo": {"input_cost_per_token": 0.001}})
                 ),
             ):
                 # Mock the database connection
@@ -4599,8 +4600,8 @@ class TestPriceDataReloadAPI:
     def test_reload_model_cost_map_error_handling(self, client_with_auth):
         """Test error handling in the reload endpoint"""
         with patch(
-            "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
-            new=AsyncMock(side_effect=Exception("Network error")),
+            "litellm._catalog.fetch",
+            new=MagicMock(side_effect=Exception("Network error")),
         ):
             # Mock the database connection
             with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
@@ -4813,13 +4814,11 @@ class TestPriceDataReloadIntegration:
             "gpt-4": {"input_cost_per_token": 0.03, "output_cost_per_token": 0.06},
         }
 
-        from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
-
         original_model_cost = litellm.model_cost.copy()
         try:
             with patch(
-                "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
-                new=AsyncMock(return_value=ModelCostMapReloaded(model_cost_map=mock_cost_map)),
+                "litellm._catalog.fetch",
+                new=MagicMock(return_value=_fetched_catalog(model_cost_map=mock_cost_map)),
             ):
                 # Mock the database connection
                 with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
@@ -4882,17 +4881,13 @@ class TestPriceDataReloadIntegration:
         proxy_config.model_cost_map_loaded_at = frozen_now - timedelta(minutes=1)
         proxy_config.model_cost_map_applied_revision = 3
 
-        from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
-
         original_model_cost = litellm.model_cost.copy()
         try:
             with (
-                patch(
-                    "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map", new_callable=AsyncMock
-                ) as mock_get_map,
+                patch("litellm._catalog.fetch", new_callable=MagicMock) as mock_get_map,
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
-                mock_get_map.return_value = ModelCostMapReloaded(
+                mock_get_map.return_value = _fetched_catalog(
                     model_cost_map={"gpt-3.5-turbo": {"input_cost_per_token": 0.001}}
                 )
 
@@ -4935,9 +4930,7 @@ class TestPriceDataReloadIntegration:
         original_model_cost = litellm.model_cost.copy()
         try:
             with (
-                patch(
-                    "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map", new_callable=AsyncMock
-                ) as mock_get_map,
+                patch("litellm._catalog.fetch", new_callable=MagicMock) as mock_get_map,
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
@@ -4972,12 +4965,10 @@ class TestPriceDataReloadIntegration:
         original_model_cost = litellm.model_cost.copy()
         try:
             with (
-                patch(
-                    "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map", new_callable=AsyncMock
-                ) as mock_get_map,
+                patch("litellm._catalog.fetch", new_callable=MagicMock) as mock_get_map,
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
-                mock_get_map.return_value = ModelCostMapReloaded(
+                mock_get_map.return_value = _fetched_catalog(
                     model_cost_map={"gpt-4-test": {"input_cost_per_token": 0.5}}
                 )
 
@@ -5017,14 +5008,10 @@ class TestPriceDataReloadIntegration:
         original_model_cost = litellm.model_cost.copy()
         try:
             with (
-                patch(
-                    "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map", new_callable=AsyncMock
-                ) as mock_get_map,
+                patch("litellm._catalog.fetch", new_callable=MagicMock) as mock_get_map,
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
-                mock_get_map.return_value = ModelCostMapReloaded(
-                    model_cost_map={"gpt-4": {"input_cost_per_token": 0.001}}
-                )
+                mock_get_map.return_value = _fetched_catalog(model_cost_map={"gpt-4": {"input_cost_per_token": 0.001}})
 
                 for _ in range(3):
                     for pod in pods:
@@ -5061,14 +5048,10 @@ class TestPriceDataReloadIntegration:
         original_model_cost = litellm.model_cost.copy()
         try:
             with (
-                patch(
-                    "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map", new_callable=AsyncMock
-                ) as mock_get_map,
+                patch("litellm._catalog.fetch", new_callable=MagicMock) as mock_get_map,
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
-                mock_get_map.return_value = ModelCostMapReloaded(
-                    model_cost_map={"gpt-4": {"input_cost_per_token": 0.001}}
-                )
+                mock_get_map.return_value = _fetched_catalog(model_cost_map={"gpt-4": {"input_cost_per_token": 0.001}})
 
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
@@ -5097,14 +5080,10 @@ class TestPriceDataReloadIntegration:
         original_model_cost = litellm.model_cost.copy()
         try:
             with (
-                patch(
-                    "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map", new_callable=AsyncMock
-                ) as mock_get_map,
+                patch("litellm._catalog.fetch", new_callable=MagicMock) as mock_get_map,
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
-                mock_get_map.return_value = ModelCostMapReloaded(
-                    model_cost_map={"gpt-4": {"input_cost_per_token": 0.001}}
-                )
+                mock_get_map.return_value = _fetched_catalog(model_cost_map={"gpt-4": {"input_cost_per_token": 0.001}})
 
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
@@ -5139,14 +5118,12 @@ class TestPriceDataReloadIntegration:
         try:
             with (
                 patch(
-                    "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
-                    new_callable=AsyncMock,
+                    "litellm._catalog.fetch",
+                    new_callable=MagicMock,
                 ) as mock_get_map,
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
-                mock_get_map.return_value = ModelCostMapReloaded(
-                    model_cost_map={"gpt-4": {"input_cost_per_token": 0.1}}
-                )
+                mock_get_map.return_value = _fetched_catalog(model_cost_map={"gpt-4": {"input_cost_per_token": 0.1}})
 
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
@@ -5165,8 +5142,8 @@ class TestPriceDataReloadIntegration:
         so a pod that records it as applied without the data stays mispriced until someone
         clicks again
         """
-        from litellm.litellm_core_utils.get_model_cost_map import (
-            ModelCostMapReloadUnavailable,
+        from litellm._catalog import (
+            CatalogUnavailable,
         )
         from litellm.proxy.proxy_server import ProxyConfig
 
@@ -5184,8 +5161,8 @@ class TestPriceDataReloadIntegration:
         original_model_cost = litellm.model_cost
         with (
             patch(
-                "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
-                new=AsyncMock(return_value=ModelCostMapReloadUnavailable(reason="HTTP 429 from upstream")),
+                "litellm._catalog.fetch",
+                new=MagicMock(return_value=CatalogUnavailable(reason="HTTP 429 from upstream")),
             ),
             patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
         ):
@@ -5210,7 +5187,6 @@ class TestPriceDataReloadIntegration:
         after it is swallowed by the surrounding except and would otherwise
         leave the metadata correct while the path is quietly broken"""
         from litellm import utils as litellm_utils
-        from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
         from litellm.proxy.proxy_server import ProxyConfig
 
         proxy_config = ProxyConfig()
@@ -5231,9 +5207,9 @@ class TestPriceDataReloadIntegration:
 
             with (
                 patch(
-                    "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
-                    new=AsyncMock(
-                        return_value=ModelCostMapReloaded(
+                    "litellm._catalog.fetch",
+                    new=MagicMock(
+                        return_value=_fetched_catalog(
                             model_cost_map={"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}}
                         )
                     ),
@@ -5297,20 +5273,14 @@ class TestPriceDataReloadIntegration:
         client = TestClient(app)
         frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
 
-        from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
-
         original_model_cost = litellm.model_cost.copy()
         try:
             with (
-                patch(
-                    "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map", new_callable=AsyncMock
-                ) as mock_get_map,
+                patch("litellm._catalog.fetch", new_callable=MagicMock) as mock_get_map,
                 patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
-                mock_get_map.return_value = ModelCostMapReloaded(
-                    model_cost_map={"gpt-4": {"input_cost_per_token": 0.001}}
-                )
+                mock_get_map.return_value = _fetched_catalog(model_cost_map={"gpt-4": {"input_cost_per_token": 0.001}})
                 mock_prisma.db.litellm_config.upsert = AsyncMock(
                     return_value=_reload_schedule_row({}, reload_revision=9)
                 )
@@ -8101,10 +8071,18 @@ async def test_update_general_settings_db_pass_through_endpoint_overrides_yaml_e
     request.headers = {}
     request.query_params = {}
 
-    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
-    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint])  # test-quality-ok: module global holding the YAML endpoints the fix merges in
-    initialize: Final = patch("litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock())  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
-    master_key: Final = patch("litellm.proxy.proxy_server.master_key", MASTER_KEY)  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
+    settings: Final = patch(
+        "litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]}
+    )  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch(
+        "litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint]
+    )  # test-quality-ok: module global holding the YAML endpoints the fix merges in
+    initialize: Final = patch(
+        "litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock()
+    )  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
+    master_key: Final = patch(
+        "litellm.proxy.proxy_server.master_key", MASTER_KEY
+    )  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
     with settings, yaml_endpoints, initialize, master_key:
         await ProxyConfig()._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
 
@@ -15584,4 +15562,3 @@ async def test_spend_capture_rate_check_job_clears_the_gauge_once_the_setting_is
         call(api_provider="openai", capture_rate=0.97),
         call(api_provider="openai", capture_rate=None),
     ]
-

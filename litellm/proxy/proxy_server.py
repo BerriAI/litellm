@@ -5382,7 +5382,9 @@ def resolve_classifier_plugin(
     return resolved
 
 
-def _swap_in_model_cost_map(new_model_cost_map: dict) -> int:
+def _swap_in_model_cost_map(  # pyright: ignore[reportUnusedFunction]  # retained compatibility wrapper for callers
+    new_model_cost_map: dict,
+) -> int:
     from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
 
     return adopt_model_cost_map(new_model_cost_map)
@@ -9093,13 +9095,10 @@ class ProxyConfig:
             if not is_due:
                 return
 
-            from litellm.litellm_core_utils.get_model_cost_map import (
-                ModelCostMapReloadUnavailable,
-                refetch_model_cost_map,
-            )
+            from litellm._catalog import CatalogUnavailable, reload
 
-            reload_result = await refetch_model_cost_map(url=litellm.model_cost_map_url)
-            if isinstance(reload_result, ModelCostMapReloadUnavailable):
+            reload_result = await reload(url=litellm.model_cost_map_url)
+            if isinstance(reload_result, CatalogUnavailable):
                 verbose_proxy_logger.warning(
                     "Model cost map reload failed (%s); keeping current pricing data. The revision stays "
                     "unapplied so this pod retries on its next poll",
@@ -9107,7 +9106,7 @@ class ProxyConfig:
                 )
                 return
 
-            models_count = _swap_in_model_cost_map(reload_result.model_cost_map)
+            models_count = reload_result.models_count
             self.model_cost_map_loaded_at = current_time
             await record_reload_run(prisma_client, MODEL_COST_MAP_RELOAD_PARAM_NAME, current_time)
             # Adopted last, so neither a failed fetch nor a failed status write is recorded
@@ -20953,20 +20952,17 @@ async def reload_model_cost_map(
             raise HTTPException(status_code=500, detail="Database connection not available")
 
         # Immediately reload the model cost map in the current pod
-        from litellm.litellm_core_utils.get_model_cost_map import (
-            ModelCostMapReloadUnavailable,
-            get_model_cost_map_provenance,
-            refetch_model_cost_map,
-        )
+        from litellm._catalog import CatalogUnavailable, reload
+        from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map_provenance
 
-        reload_result = await refetch_model_cost_map(url=litellm.model_cost_map_url)
-        if isinstance(reload_result, ModelCostMapReloadUnavailable):
+        reload_result = await reload(url=litellm.model_cost_map_url)
+        if isinstance(reload_result, CatalogUnavailable):
             raise HTTPException(
                 status_code=502,
                 detail=f"Failed to reload model cost map: {reload_result.reason}. Current pricing data was kept.",
             )
 
-        models_count = _swap_in_model_cost_map(reload_result.model_cost_map)
+        models_count = reload_result.models_count
         current_time = utc_now()
         proxy_config.model_cost_map_loaded_at = current_time
         provenance: Final = get_model_cost_map_provenance()

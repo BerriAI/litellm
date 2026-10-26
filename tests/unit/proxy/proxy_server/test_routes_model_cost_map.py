@@ -32,6 +32,13 @@ _ROOT_COST_MAP = Path(__file__).resolve().parents[4] / "model_prices_and_context
 # ---------------------------------------------------------------------------
 
 
+def _fetched_catalog(model_cost_map):
+    from litellm._catalog._load import LoadedCatalog
+    from litellm.rust_bridge._native import ModelRegistry
+
+    return LoadedCatalog(ModelRegistry.parse(json.dumps(model_cost_map).encode()))
+
+
 def _attach_litellm_config(mock_prisma):
     """Attach a litellm_config table mock (not in conftest's _PRISMA_TABLES)."""
     table = MagicMock()
@@ -55,7 +62,6 @@ def _attach_litellm_config(mock_prisma):
 
 def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
     """Admin can trigger a manual reload; handler returns model count + status."""
-    from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
@@ -64,11 +70,10 @@ def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
 
     fake_cost_map = {"gpt-4": {"input_cost": 0.03}, "gpt-3.5": {"input_cost": 0.002}}
     monkeypatch.setattr(
-        "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
-        AsyncMock(return_value=ModelCostMapReloaded(model_cost_map=fake_cost_map)),
+        "litellm._catalog.fetch",
+        MagicMock(return_value=_fetched_catalog(model_cost_map=fake_cost_map)),
     )
     monkeypatch.setattr("litellm.add_known_models", lambda model_cost_map=None: None)
-    monkeypatch.setattr("litellm.model_cost", {}, raising=False)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server._invalidate_model_cost_lowercase_map",
         lambda: None,
@@ -98,9 +103,8 @@ def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
 
 
 def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every_status_surface(
-    client, auth_as, monkeypatch, mock_prisma
+    client, auth_as, monkeypatch, mock_prisma, tmp_path
 ):
-    import httpx
 
     import litellm
     from litellm.litellm_core_utils.get_model_cost_map import _finalize_model_cost_map, git_blob_id
@@ -111,14 +115,11 @@ def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
     monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
     body = _ROOT_COST_MAP.read_bytes()
-    expected = {"source_revision": git_blob_id(body), "etag": _SERVED_ETAG}
-    served = httpx.Response(200, headers={"ETag": _SERVED_ETAG}, content=body)
-    monkeypatch.setattr(
-        "litellm.litellm_core_utils.get_model_cost_map._default_reload_client",
-        lambda: httpx.AsyncClient(transport=httpx.MockTransport(lambda request: served)),
-    )
+    expected = {"source_revision": git_blob_id(body), "etag": None}
+    path = tmp_path / "catalog.json"
+    path.write_bytes(body)
+    monkeypatch.setattr(litellm, "model_cost_map_url", path.as_uri())
     monkeypatch.setattr("litellm.add_known_models", lambda model_cost_map=None: None)
-    monkeypatch.setattr("litellm.model_cost", {}, raising=False)
 
     async def _fake_invalidate(name):
         return None
@@ -145,16 +146,14 @@ def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every
     assert reload_body["models_count"] == len(_finalize_model_cost_map(json.loads(body)))
 
 
-def test_reload_model_cost_map_fetch_failure_502_keeps_map(
-    client, auth_as, monkeypatch, mock_prisma
-):
+def test_reload_model_cost_map_fetch_failure_502_keeps_map(client, auth_as, monkeypatch, mock_prisma):
     """Fetch failure returns 502 with the reason; the pod's map and DB flag are untouched.
 
     Regression: the endpoint used to report success after silently swapping in
     the stale packaged backup.
     """
-    from litellm.litellm_core_utils.get_model_cost_map import (
-        ModelCostMapReloadUnavailable,
+    from litellm._catalog import (
+        CatalogUnavailable,
     )
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
@@ -165,12 +164,8 @@ def test_reload_model_cost_map_fetch_failure_502_keeps_map(
     sentinel_map = {"existing-model": {"input_cost": 0.01}}
     monkeypatch.setattr("litellm.model_cost", sentinel_map, raising=False)
     monkeypatch.setattr(
-        "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
-        AsyncMock(
-            return_value=ModelCostMapReloadUnavailable(
-                reason="HTTP 429 from upstream (after 3 attempts)"
-            )
-        ),
+        "litellm._catalog.fetch",
+        MagicMock(return_value=CatalogUnavailable(reason="HTTP 429 from upstream (after 3 attempts)")),
     )
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
@@ -212,9 +207,7 @@ def test_reload_model_cost_map_no_db_500(client, auth_as, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_schedule_model_cost_map_reload_happy(
-    client, auth_as, monkeypatch, mock_prisma
-):
+def test_schedule_model_cost_map_reload_happy(client, auth_as, monkeypatch, mock_prisma):
     """Admin schedules a reload — handler upserts config and echoes interval."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
@@ -243,9 +236,7 @@ def test_schedule_model_cost_map_reload_happy(
     assert set(upsert_data["create"]) == {"param_name", "param_value"}
 
 
-def test_schedule_model_cost_map_reload_invalid_hours(
-    client, auth_as, monkeypatch, mock_prisma
-):
+def test_schedule_model_cost_map_reload_invalid_hours(client, auth_as, monkeypatch, mock_prisma):
     """hours <= 0 is rejected with 400."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
@@ -322,9 +313,7 @@ def test_cancel_model_cost_map_reload_no_db_500(client, auth_as, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_get_model_cost_map_reload_status_no_db_not_scheduled(
-    client, auth_as, monkeypatch
-):
+def test_get_model_cost_map_reload_status_no_db_not_scheduled(client, auth_as, monkeypatch):
     """No prisma client → returns the not-scheduled shape (all-null) plus the cost map provenance."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
@@ -342,9 +331,7 @@ def test_get_model_cost_map_reload_status_no_db_not_scheduled(
     }
 
 
-def test_get_model_cost_map_reload_status_scheduled(
-    client, auth_as, monkeypatch, mock_prisma
-):
+def test_get_model_cost_map_reload_status_scheduled(client, auth_as, monkeypatch, mock_prisma):
     """A valid config row → scheduled=True and the interval is echoed."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
@@ -369,9 +356,7 @@ def test_get_model_cost_map_reload_status_scheduled(
     }
 
 
-def test_get_model_cost_map_reload_status_reports_persisted_last_run(
-    client, auth_as, monkeypatch, mock_prisma
-):
+def test_get_model_cost_map_reload_status_reports_persisted_last_run(client, auth_as, monkeypatch, mock_prisma):
     """last_run/next_run come from the DB row, so status survives pod restarts."""
     from datetime import datetime, timezone
 
@@ -398,9 +383,7 @@ def test_get_model_cost_map_reload_status_reports_persisted_last_run(
     }
 
 
-def test_get_model_cost_map_reload_status_no_config_not_scheduled(
-    client, auth_as, monkeypatch, mock_prisma
-):
+def test_get_model_cost_map_reload_status_no_config_not_scheduled(client, auth_as, monkeypatch, mock_prisma):
     """A row left behind by a manual reload (interval_hours=None) → not scheduled."""
     from datetime import datetime, timezone
 
@@ -473,9 +456,7 @@ def test_get_model_cost_map_source_happy(client, auth_as, monkeypatch):
     }
 
 
-def test_get_model_cost_map_source_admin_view_only_allowed(
-    client, auth_as, monkeypatch
-):
+def test_get_model_cost_map_source_admin_view_only_allowed(client, auth_as, monkeypatch):
     """PROXY_ADMIN_VIEW_ONLY can read source info — pins the read-only ACL."""
     from litellm.proxy._types import LitellmUserRoles
 

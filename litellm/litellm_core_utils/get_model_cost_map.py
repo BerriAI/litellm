@@ -12,28 +12,22 @@ export LITELLM_LOCAL_MODEL_COST_MAP=True
 import asyncio
 import hashlib
 import json
-import os
 import random
-import sys
 import threading
 import time
-import urllib.parse
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from itertools import chain
-from pathlib import Path
 from types import MappingProxyType
 from typing import (
     Final,
     Protocol,
-    TypeAlias,
-    cast,  # noqa: TID251  # adapts boto3 and botocore's dynamic client responses
 )
 
 import httpx
 from pydantic import TypeAdapter
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm import verbose_logger
 from litellm._catalog._load import CatalogUnusable, LoadedCatalog, load, served_rows
@@ -41,21 +35,10 @@ from litellm.constants import (
     MODEL_COST_MAP_MAX_SHRINK_RATIO,
     MODEL_COST_MAP_MIN_MODEL_COUNT,
 )
-from litellm.litellm_core_utils.fallback_generalizations import (
-    set_fallback_generalizations,
-)
-from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.rust_bridge._native import ModelRegistry
 
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
 _CATALOG_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
-_CLI_ENTRYPOINT_NAMES: Final = frozenset({"lite", "litellm-proxy"})
-
-
-def _is_cli_process() -> bool:
-    return Path(sys.argv[0]).stem in _CLI_ENTRYPOINT_NAMES
-
-
 # Reserved top-level keys that are not model entries. They must be excluded
 # from the model-count integrity check so a real upstream shrink can't be masked.
 RESERVED_TOP_LEVEL_KEYS: Final = frozenset({"sample_spec", FALLBACK_GENERALIZATIONS_KEY})
@@ -241,60 +224,12 @@ class ModelCostMapReloadUnavailable:
 ModelCostMapReloadResult = ModelCostMapReloaded | ModelCostMapReloadUnavailable
 
 
-@dataclass(frozen=True, slots=True)
-class _FetchAttemptRetryable:
-    reason: str
-    retry_after_seconds: float | None
-
-
-def _parse_retry_after_seconds(response: httpx.Response) -> float | None:
-    try:
-        header: Final = response.headers["Retry-After"]
-    except KeyError:
-        return None
-    try:
-        seconds: Final = float(header)
-    except ValueError:
-        return None
-    return seconds if seconds >= 0 else None
-
-
-def _retry_wait_seconds(outcome: _FetchAttemptRetryable, attempt: int, rng: random.Random) -> float:
-    if outcome.retry_after_seconds is not None:
-        return min(outcome.retry_after_seconds, MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS)
-    return min(2.0**attempt + rng.uniform(0.0, 1.0), MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS)
-
-
 class _AsyncGetClient(Protocol):
     def get(self, url: str, *, timeout: float | None = None) -> Awaitable[httpx.Response]: ...
 
 
 class _SyncGetClient(Protocol):
     def get(self, url: str, *, timeout: float | None = None) -> httpx.Response: ...
-
-
-class _S3Body(Protocol):
-    def read(self) -> bytes: ...
-
-
-class _S3GetObjectResponse(TypedDict):
-    Body: ReadOnly[_S3Body]
-    ETag: NotRequired[ReadOnly[str]]
-
-
-class _S3Client(Protocol):
-    def get_object(self, *, Bucket: str, Key: str) -> _S3GetObjectResponse: ...
-
-
-@dataclass(frozen=True, slots=True)
-class _FetchedCatalog:
-    catalog: LoadedCatalog
-    revision: str
-    etag: str | None = None
-
-
-_CatalogFetchResult: TypeAlias = _FetchedCatalog | ModelCostMapReloadUnavailable
-_FetchAttemptOutcome: TypeAlias = _CatalogFetchResult | _FetchAttemptRetryable
 
 
 def _loaded_or_raise(catalog: LoadedCatalog | CatalogUnusable) -> LoadedCatalog:
@@ -305,171 +240,6 @@ def _loaded_or_raise(catalog: LoadedCatalog | CatalogUnusable) -> LoadedCatalog:
             return catalog
 
 
-def _bundled_catalog() -> _FetchedCatalog:
-    catalog: Final = _loaded_or_raise(load(None))
-    return _FetchedCatalog(catalog, git_blob_id(ModelRegistry.bundled_bytes()))
-
-
-def _check_catalog_size(catalog: LoadedCatalog) -> bool:
-    reference: Final = GetModelCostMap.get_backup_model_count()
-    if catalog.registry.check_size(reference) is None:
-        return True
-    GetModelCostMap.validate_model_cost_map(fetched_map=catalog.registry.to_dict(), backup_model_count=reference)
-    return False
-
-
-def _default_reload_client() -> _AsyncGetClient:
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-    from litellm.types.llms.custom_http import httpxSpecialProvider
-
-    return get_async_httpx_client(llm_provider=httpxSpecialProvider.ModelCostMap)
-
-
-def _default_s3_client(timeout: int) -> _S3Client:
-    import boto3
-    from botocore.config import Config
-
-    return cast(  # cast-ok: boto3's generic client factory does not expose its generated S3 response type
-        _S3Client,
-        boto3.client(  # pyright: ignore[reportUnknownMemberType]  # generic factory returns Unknown service clients
-            "s3",
-            region_name=os.getenv("AWS_REGION_NAME") or None,
-            config=Config(connect_timeout=timeout, read_timeout=timeout, retries={"total_max_attempts": 1}),
-        ),
-    )
-
-
-def _classify_fetch_error(error: httpx.HTTPError | httpx.InvalidURL, url: str) -> _FetchAttemptOutcome:
-    reason: Final = f"{type(error).__name__} fetching {url}: {error}"
-    if isinstance(error, (httpx.InvalidURL, httpx.UnsupportedProtocol)):
-        return ModelCostMapReloadUnavailable(reason=reason)
-    return _FetchAttemptRetryable(reason=reason, retry_after_seconds=None)
-
-
-def _classify_fetch_content(content: bytes, url: str, etag: str | None) -> _FetchAttemptOutcome:
-    catalog: Final = load(content)
-    if isinstance(catalog, CatalogUnusable):
-        return ModelCostMapReloadUnavailable(reason=f"invalid model cost map from {url}: {catalog.reason}")
-    return _FetchedCatalog(catalog=catalog, revision=git_blob_id(content), etag=etag)
-
-
-def _split_url(url: str) -> urllib.parse.SplitResult | ModelCostMapReloadUnavailable:
-    try:
-        return urllib.parse.urlsplit(url)
-    except ValueError as error:
-        return ModelCostMapReloadUnavailable(reason=f"invalid URL {url}: {error}")
-
-
-def _attempt_fetch_s3(parts: urllib.parse.SplitResult, url: str, timeout: int) -> _FetchAttemptOutcome:
-    from botocore.exceptions import BotoCoreError, ClientError
-
-    bucket: Final = parts.netloc
-    key: Final = parts.path.lstrip("/")
-    if not bucket or not key:
-        return ModelCostMapReloadUnavailable(reason=f"invalid S3 URL {url}: expected s3://bucket/key")
-
-    try:
-        client: Final = _default_s3_client(timeout)
-        response: Final = client.get_object(Bucket=bucket, Key=key)
-        content: Final = response["Body"].read()
-    except (BotoCoreError, ClientError) as error:
-        return ModelCostMapReloadUnavailable(reason=f"S3 {type(error).__name__} fetching {url}: {error}")
-    return _classify_fetch_content(content, url, response.get("ETag"))
-
-
-async def _attempt_fetch(client: _AsyncGetClient, url: str, timeout: int) -> _FetchAttemptOutcome:
-    parts: Final = _split_url(url)
-    if isinstance(parts, ModelCostMapReloadUnavailable):
-        return parts
-    if parts.scheme == "s3":
-        return await asyncio.to_thread(_attempt_fetch_s3, parts, url, timeout)
-    try:
-        response: Final = await client.get(url, timeout=timeout)
-    except (httpx.HTTPError, httpx.InvalidURL) as e:
-        return _classify_fetch_error(e, url)
-    return _classify_fetch_response(response, url)
-
-
-def _attempt_fetch_sync(client: _SyncGetClient, url: str, timeout: int) -> _FetchAttemptOutcome:
-    parts: Final = _split_url(url)
-    if isinstance(parts, ModelCostMapReloadUnavailable):
-        return parts
-    if parts.scheme == "s3":
-        return _attempt_fetch_s3(parts, url, timeout)
-    try:
-        response: Final = client.get(url, timeout=timeout)
-    except (httpx.HTTPError, httpx.InvalidURL) as e:
-        return _classify_fetch_error(e, url)
-    return _classify_fetch_response(response, url)
-
-
-def _classify_fetch_response(response: httpx.Response, url: str) -> _FetchAttemptOutcome:
-    if response.status_code in RETRYABLE_FETCH_STATUS_CODES:
-        return _FetchAttemptRetryable(
-            reason=f"HTTP {response.status_code} from {url}",
-            retry_after_seconds=_parse_retry_after_seconds(response),
-        )
-    if response.is_error:
-        return ModelCostMapReloadUnavailable(reason=f"HTTP {response.status_code} from {url}")
-    etag_values: Final = response.headers.get_list("etag")
-    return _classify_fetch_content(response.content, url, ", ".join(etag_values) if etag_values else None)
-
-
-def _next_retry_wait(
-    outcome: _FetchAttemptRetryable, attempt: int, max_attempts: int, rng: random.Random
-) -> float | ModelCostMapReloadUnavailable:
-    if attempt == max_attempts:
-        return ModelCostMapReloadUnavailable(reason=f"{outcome.reason} (after {max_attempts} attempts)")
-    wait_seconds: Final = _retry_wait_seconds(outcome=outcome, attempt=attempt, rng=rng)
-    verbose_logger.warning(
-        "LiteLLM: model cost map fetch attempt %d/%d failed (%s); retrying in %.1fs",
-        attempt,
-        max_attempts,
-        outcome.reason,
-        wait_seconds,
-    )
-    return wait_seconds
-
-
-async def _fetch_remote_model_cost_map_with_retry(
-    url: str,
-    timeout: int,
-    max_attempts: int,
-    sleep: Callable[[float], Awaitable[None]],
-    rng: random.Random,
-    client: _AsyncGetClient,
-) -> _CatalogFetchResult:
-    for attempt in range(1, max_attempts + 1):
-        outcome = await _attempt_fetch(client=client, url=url, timeout=timeout)
-        if not isinstance(outcome, _FetchAttemptRetryable):
-            return outcome
-        wait_seconds = _next_retry_wait(outcome=outcome, attempt=attempt, max_attempts=max_attempts, rng=rng)
-        if isinstance(wait_seconds, ModelCostMapReloadUnavailable):
-            return wait_seconds
-        await sleep(wait_seconds)
-    return ModelCostMapReloadUnavailable(reason="model cost map fetch failed")
-
-
-def _fetch_remote_model_cost_map_with_retry_sync(
-    url: str,
-    timeout: int,
-    attempts: range,
-    sleep: Callable[[float], None],
-    rng: random.Random,
-    client: _SyncGetClient,
-) -> _CatalogFetchResult:
-    max_attempts: Final = attempts.stop - 1
-    for attempt in attempts:
-        outcome = _attempt_fetch_sync(client=client, url=url, timeout=timeout)
-        if not isinstance(outcome, _FetchAttemptRetryable):
-            return outcome
-        wait_seconds = _next_retry_wait(outcome=outcome, attempt=attempt, max_attempts=max_attempts, rng=rng)
-        if isinstance(wait_seconds, ModelCostMapReloadUnavailable):
-            return wait_seconds
-        sleep(wait_seconds)
-    return ModelCostMapReloadUnavailable(reason="model cost map fetch failed")
-
-
 async def refetch_model_cost_map(
     url: str,
     timeout: int = 5,
@@ -478,44 +248,22 @@ async def refetch_model_cost_map(
     rng: random.Random | None = None,
     client: "_AsyncGetClient | None" = None,
 ) -> ModelCostMapReloadResult:
-    """
-    Re-fetch the model cost map for a runtime reload, retrying transient HTTP
-    errors (429/5xx/transport) with Retry-After-aware backoff.
+    """Fetch reload data without changing the installed catalog."""
+    from litellm._catalog import reload_source
+    from litellm._catalog._fetch import CatalogUnavailable, fetch
+    from litellm._catalog._install import accepted_catalog
 
-    Unlike ``get_model_cost_map`` this never falls back to the packaged backup:
-    on failure it returns ``ModelCostMapReloadUnavailable`` so callers keep the
-    map they already have.
-    """
-    if is_offline_mode() or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
-        _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
-        _cost_map_source_info.source = "local"
-        _cost_map_source_info.url = None
-        _cost_map_source_info.is_env_forced = True
-        _cost_map_source_info.fallback_reason = None
-        return _finalize_loaded_model_cost_map(_bundled_catalog())
-
-    result: Final = await _fetch_remote_model_cost_map_with_retry(
-        url=url,
-        timeout=timeout,
-        max_attempts=max_attempts,
-        sleep=sleep,
-        rng=rng if rng is not None else random.Random(),
-        client=client if client is not None else _default_reload_client(),
+    result: Final = await asyncio.to_thread(fetch, reload_source(url), max_attempts=max_attempts, timeout=timeout)
+    if isinstance(result, CatalogUnavailable):
+        return ModelCostMapReloadUnavailable(result.reason)
+    accepted: Final = accepted_catalog(result)
+    if accepted is None:
+        return ModelCostMapReloadUnavailable("Model cost map failed integrity validation")
+    return ModelCostMapReloaded(
+        served_rows(accepted),
+        result.registry.source_revision or git_blob_id(ModelRegistry.bundled_bytes()),
+        result.registry.source_validator,
     )
-    if isinstance(result, ModelCostMapReloadUnavailable):
-        verbose_logger.warning(
-            "LiteLLM: model cost map reload failed: %s. Keeping the currently loaded map.",
-            result.reason,
-        )
-        return result
-    if not _check_catalog_size(result.catalog):
-        return ModelCostMapReloadUnavailable(reason=f"model cost map from {url} failed integrity validation")
-    _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
-    _cost_map_source_info.source = "remote"
-    _cost_map_source_info.url = url
-    _cost_map_source_info.is_env_forced = False
-    _cost_map_source_info.fallback_reason = None
-    return _finalize_loaded_model_cost_map(result)
 
 
 class ModelCostMapSourceInfo:
@@ -669,75 +417,23 @@ def _finalize_model_cost_map(  # pyright: ignore[reportUnusedFunction]  # import
 
 
 def _serve_catalog(catalog: LoadedCatalog) -> dict[str, AliasedCostEntry]:  # mutable-ok: public mutable model_cost
-    set_fallback_generalizations(catalog.registry.fallback_rules())
     return served_rows(catalog)
-
-
-def _finalize_loaded_model_cost_map(loaded: _FetchedCatalog) -> ModelCostMapReloaded:
-    _cost_map_source_info.source_revision = loaded.revision
-    _cost_map_source_info.etag = loaded.etag
-    finalized: Final = _serve_catalog(loaded.catalog)
-    GetModelCostMap._snapshot_loaded_catalog(finalized)  # pyright: ignore[reportPrivateUsage]  # same module
-    return ModelCostMapReloaded(model_cost_map=finalized, revision=loaded.revision, etag=loaded.etag)
 
 
 def adopt_model_cost_map(
     new_model_cost_map: dict,  # mutable-ok: public API preserves the mutable cost-map contract
 ) -> int:
-    import litellm
-    from litellm import utils
+    from litellm._catalog._install import Provenance, install
 
-    litellm.model_cost = new_model_cost_map
-    utils._invalidate_model_cost_lowercase_map()  # pyright: ignore[reportPrivateUsage]  # required cache invalidation
-    litellm.add_known_models(model_cost_map=new_model_cost_map)
-    fetched_model_count: Final = len(new_model_cost_map) if new_model_cost_map else 0
-    utils.reapply_runtime_model_cost_registrations()
-    return fetched_model_count
-
-
-def _retry_remote_fetch_in_background(
-    url: str,
-    timeout: int,
-    max_attempts: int,
-    sleep: Callable[[float], None],
-    rng: random.Random,
-    client: _SyncGetClient,
-    first_outcome: _FetchAttemptRetryable,
-) -> None:
-    try:
-        first_wait: Final = _next_retry_wait(outcome=first_outcome, attempt=1, max_attempts=max_attempts, rng=rng)
-        if isinstance(first_wait, ModelCostMapReloadUnavailable):
-            return
-        sleep(first_wait)
-        result: Final = _fetch_remote_model_cost_map_with_retry_sync(
-            url=url,
-            timeout=timeout,
-            attempts=range(2, max_attempts + 1),
-            sleep=sleep,
-            rng=rng,
-            client=client,
-        )
-        if isinstance(result, ModelCostMapReloadUnavailable):
-            verbose_logger.warning(
-                "LiteLLM: Failed to fetch remote model cost map from %s after %d attempts; keeping local backup",
-                url,
-                max_attempts,
-            )
-            return
-        _litellm_import_complete.wait()
-        if not _check_catalog_size(result.catalog):
-            verbose_logger.warning(
-                "LiteLLM: Fetched model cost map failed integrity check. Using local backup instead. url=%s",
-                url,
-            )
-            return
-        finalized: Final = _finalize_loaded_model_cost_map(result).model_cost_map
-        _cost_map_source_info.source = "remote"
-        _cost_map_source_info.fallback_reason = None
-        _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
-        adopt_model_cost_map(finalized)
-    except Exception as e:  # noqa: BLE001  # a failed background retry must not kill the task; the backup stays
-        verbose_logger.warning("LiteLLM: Background model cost map retry failed: %s", e)
+    catalog: Final = _loaded_or_raise(load(json.dumps(new_model_cost_map).encode()))
+    return install(
+        catalog,
+        provenance=Provenance(
+            source="local",
+            revision=_cost_map_source_info.source_revision,
+            etag=_cost_map_source_info.etag,
+        ),
+    )
 
 
 def get_model_cost_map(
@@ -748,69 +444,18 @@ def get_model_cost_map(
     rng: random.Random | None = None,
     client: "_SyncGetClient | None" = None,
 ) -> dict:
+    """Read one explicit source without installing it or scheduling retries.
+
+    A non-empty URL wins over LITELLM_LOCAL_MODEL_COST_MAP. Empty URLs return
+    bundled rows. Legacy retry/client arguments remain accepted, but transport
+    and settings come from the native catalog fetcher.
     """
-    Public entry point — returns the model cost map dict.
+    from litellm._catalog._fetch import Bundled, CatalogUnavailable, Remote, fetch
+    from litellm._catalog._install import accepted_catalog
 
-    1. If ``LITELLM_LOCAL_MODEL_COST_MAP`` is set or this is a ``lite`` /
-       ``litellm-proxy`` CLI process, uses the local backup only.
-    2. Otherwise fetches from ``url``, retrying transient HTTP errors
-       (429/5xx/transport) with Retry-After-aware backoff in a background
-       thread, validates integrity, and falls back to the local backup on any
-       failure.
-
-    Only the backup model count is cached (a single int) for validation.
-    The full backup dict is only parsed when it must be *returned* as a
-    fallback — it is never held in memory long-term.
-    """
-    _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
-    # Note: can't use get_secret_bool here — this runs during litellm.__init__
-    # before litellm._key_management_settings is set.
-    if is_offline_mode() or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true" or _is_cli_process():
-        _cost_map_source_info.source = "local"
-        _cost_map_source_info.url = None
-        _cost_map_source_info.is_env_forced = True
-        _cost_map_source_info.fallback_reason = None
-        return _finalize_loaded_model_cost_map(_bundled_catalog()).model_cost_map
-
-    _cost_map_source_info.url = url
-    _cost_map_source_info.is_env_forced = False
-
-    fetch_client: Final = client if client is not None else httpx
-    fetch_rng: Final = rng if rng is not None else random.Random()
-    outcome: Final = _attempt_fetch_sync(client=fetch_client, url=url, timeout=timeout)
-    if isinstance(outcome, _FetchAttemptRetryable) and max_attempts > 1:
-        threading.Thread(
-            target=_retry_remote_fetch_in_background,
-            kwargs={
-                "url": url,
-                "timeout": timeout,
-                "max_attempts": max_attempts,
-                "sleep": sleep,
-                "rng": fetch_rng,
-                "client": fetch_client,
-                "first_outcome": outcome,
-            },
-            name="litellm-model-cost-map-retry",
-            daemon=True,
-        ).start()
-    if not isinstance(outcome, _FetchedCatalog):
-        verbose_logger.warning(
-            "LiteLLM: Failed to fetch remote model cost map from %s: %s. Falling back to local backup.",
-            url,
-            outcome.reason,
-        )
-        _cost_map_source_info.source = "local"
-        _cost_map_source_info.fallback_reason = f"Remote fetch failed: {outcome.reason}"
-        return _finalize_loaded_model_cost_map(_bundled_catalog()).model_cost_map
-    if not _check_catalog_size(outcome.catalog):
-        verbose_logger.warning(
-            "LiteLLM: Fetched model cost map failed integrity check. Using local backup instead. url=%s",
-            url,
-        )
-        _cost_map_source_info.source = "local"
-        _cost_map_source_info.fallback_reason = "Remote data failed integrity validation"
-        return _finalize_loaded_model_cost_map(_bundled_catalog()).model_cost_map
-
-    _cost_map_source_info.source = "remote"
-    _cost_map_source_info.fallback_reason = None
-    return _finalize_loaded_model_cost_map(outcome).model_cost_map
+    result: Final = fetch(Remote(url) if url else Bundled(), max_attempts=1, timeout=timeout)
+    if isinstance(result, CatalogUnavailable):
+        verbose_logger.warning("LiteLLM: model cost map fetch failed: %s. Using bundled rows.", result.reason)
+        return served_rows(LoadedCatalog(ModelRegistry.bundled()))
+    accepted: Final = accepted_catalog(result) if url else result
+    return served_rows(accepted if accepted is not None else LoadedCatalog(ModelRegistry.bundled()))

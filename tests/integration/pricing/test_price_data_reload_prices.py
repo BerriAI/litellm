@@ -27,8 +27,73 @@ _CLAUDE: Final = "claude-audit-reload-sonnet"
 _MINI: Final = "gpt-audit-reload-mini"
 _USAGE: Final = re.compile(r"bill (\d+) (\d+) (\d+)")
 _CUSTOM: Final = MappingProxyType({"input_cost_per_token": 1.1e-06, "output_cost_per_token": 2.3e-06})
-_COST_MAP_LIMITS: Final = MappingProxyType({"MODEL_COST_MAP_MIN_MODEL_COUNT": "1", "MODEL_COST_MAP_MAX_SHRINK_RATIO": "0"})
+_COST_MAP_LIMITS: Final = MappingProxyType(
+    {"MODEL_COST_MAP_MIN_MODEL_COUNT": "1", "MODEL_COST_MAP_MAX_SHRINK_RATIO": "0"}
+)
 _PUBLISHED_SCALE: Final = 2.0
+
+
+@pytest.mark.parametrize("s3", [False, True])
+def test_native_catalog_side_read_uses_explicit_http_or_s3_under_local_flag(
+    s3: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap, get_model_cost_map_source_info
+    from litellm.rust_bridge._native import ModelRegistry
+
+    body: Final = json.dumps({**ModelRegistry.bundled().to_dict(), "m2-wire-only": {"mode": "chat"}}).encode()
+    live: Final = litellm.model_cost
+    provenance: Final = get_model_cost_map_source_info()
+    snapshot: Final = GetModelCostMap.loaded_model_cost_map()
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    with wire_server(lambda _: Reply(body=body)) as peer:
+        if s3:
+            monkeypatch.setenv("AWS_ACCESS_KEY_ID", "local-test")
+            monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "local-test")
+            monkeypatch.setenv("AWS_REGION", "us-east-1")
+            monkeypatch.setenv("AWS_ENDPOINT_URL_S3", peer.url)
+        url: Final = "s3://catalog/prices.json" if s3 else peer.url + "/prices.json"
+        rows: Final = litellm.get_model_cost_map(url)
+        requests: Final = peer.drain()
+    assert rows == ModelRegistry.parse(body).served()
+    assert len(requests) == 1
+    assert requests[0].target.split("?", 1)[0] == ("/catalog/prices.json" if s3 else "/prices.json")
+    assert litellm.model_cost is live
+    assert get_model_cost_map_source_info() == provenance
+    assert GetModelCostMap.loaded_model_cost_map() is snapshot
+
+
+@pytest.mark.parametrize("s3", [False, True])
+def test_native_catalog_bounded_retry_handles_http_and_s3_throttling(s3: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm._catalog._fetch import Remote, fetch
+    from litellm._catalog._load import LoadedCatalog, served_rows
+    from litellm.litellm_core_utils.get_model_cost_map import git_blob_id
+    from litellm.rust_bridge._native import ModelRegistry
+
+    body: Final = ModelRegistry.bundled_bytes()
+    attempts: Final = itertools.count()
+
+    def respond(_: Request) -> Reply:
+        if next(attempts) == 0:
+            return Reply(status=503, body=b"<Error><Code>SlowDown</Code></Error>", headers={"Retry-After": "0"})
+        return Reply(body=body, headers={"ETag": '"native-catalog"'})
+
+    with wire_server(respond) as peer:
+        if s3:
+            monkeypatch.setenv("AWS_ACCESS_KEY_ID", "local-test")
+            monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "local-test")
+            monkeypatch.setenv("AWS_REGION", "us-east-1")
+            monkeypatch.setenv("AWS_ENDPOINT_URL_S3", peer.url)
+        url: Final = "s3://catalog/prices.json" if s3 else peer.url + "/prices.json"
+        catalog: Final = fetch(Remote(url), max_attempts=2)
+        requests: Final = peer.drain()
+    assert isinstance(catalog, LoadedCatalog), catalog
+    assert len(requests) == 2
+    assert catalog.registry.source_revision == git_blob_id(body)
+    assert catalog.registry.source_validator == '"native-catalog"'
+    assert served_rows(catalog) == ModelRegistry.bundled().served()
+
+
 _CATALOG: Final[Mapping[str, Mapping[str, JsonValue]]] = MappingProxyType(
     {
         _ROW: {
@@ -352,7 +417,9 @@ def test_price_data_reload_reprices_catalog_deployments_and_keeps_custom_prices(
             _Usage(2000, 1000, 1000),
             _catalog_rates(_FINETUNE),
         ),
-        _Deployment("finetune-custom", f"openai/{_FINETUNE}:org:suffix:z", _CUSTOM, _Usage(2000, 0, 1000), _custom_rates),
+        _Deployment(
+            "finetune-custom", f"openai/{_FINETUNE}:org:suffix:z", _CUSTOM, _Usage(2000, 0, 1000), _custom_rates
+        ),
         _Deployment("cross-provider-unpriced", f"azure/{_CLAUDE}", {}, _Usage(2000, 1000, 1000), _unpriced),
         _Deployment(
             "region-custom-above-threshold",

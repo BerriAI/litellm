@@ -318,12 +318,38 @@ def _provider_model_sets() -> tuple[set[str], ...]:
 
 @pytest.fixture(autouse=True)
 def isolate_model_catalog() -> Iterator[None]:
+    import copy
+
+    from litellm._catalog import _install
+    from litellm.litellm_core_utils import get_model_cost_map as catalog_loader
+    from litellm.litellm_core_utils.fallback_generalizations import (
+        get_fallback_generalization_rules,
+        set_fallback_generalizations,
+    )
+
+    original_layers: Final = _install.LAYERS
+    original_state: Final = _install.STATE
+    original_source: Final = catalog_loader._cost_map_source_info
+    original_snapshot: Final = catalog_loader.GetModelCostMap._loaded_catalog
+    original_fields: Final = catalog_loader.GetModelCostMap._loaded_catalog_fields
+    original_rules: Final = get_fallback_generalization_rules()
+    _install.LAYERS = _install.ModelCostLayers()
+    _install.STATE = _install._Installed()
+    _install.STATE.rows = copy.deepcopy(dict(litellm.model_cost))
+    _install.STATE.registry = original_state.registry
+    catalog_loader._cost_map_source_info = copy.copy(original_source)
     model_cost: Final = litellm.model_cost
     model_cost_entries: Final = dict(model_cost)
     models_by_provider: Final = litellm.models_by_provider
     models_by_provider_entries: Final = dict(models_by_provider)
     provider_model_sets: Final = tuple((models, frozenset(models)) for models in _provider_model_sets())
     yield
+    _install.LAYERS = original_layers
+    _install.STATE = original_state
+    catalog_loader._cost_map_source_info = original_source
+    catalog_loader.GetModelCostMap._loaded_catalog = original_snapshot
+    catalog_loader.GetModelCostMap._loaded_catalog_fields = original_fields
+    set_fallback_generalizations(original_rules)
     model_cost.clear()
     model_cost.update(model_cost_entries)
     models_by_provider.clear()
