@@ -219,6 +219,21 @@ class ProxyInitializationHelpers:
     _run_health_check = run_health_check
 
     @staticmethod
+    def run_db_preflight(use_migrate: bool) -> int:
+        """`--db_preflight`: the pre-migration row check against DATABASE_URL, nothing applied.
+        0 when the pending schema changes fit the rows, 2 with the refusal when they do not."""
+        if os.getenv("DATABASE_URL") is None:
+            raise click.UsageError("--db_preflight requires DATABASE_URL")
+        from litellm.proxy.db.prisma_client import PrismaManager
+
+        refusal: Final = PrismaManager.db_preflight_report(use_migrate=use_migrate)
+        if refusal is None:
+            print("LiteLLM Proxy: the pending migrations and indexes can be applied to the rows this database has.")
+            return 0
+        print(f"\033[1;31mLiteLLM Proxy: Database migration cannot proceed. {refusal}\033[0m", file=sys.stderr, flush=True)
+        return 2
+
+    @staticmethod
     def run_config_validation(config: str | None) -> None:
         if config is None:
             raise click.UsageError("--validate_config requires --config <path>")
@@ -979,6 +994,13 @@ class ProxyInitializationHelpers:
     help="Load and validate the config file (including mcp_servers) without starting the server, then exit. Exit code 1 on any config error.",
 )
 @click.option(
+    "--db_preflight",
+    is_flag=True,
+    default=False,
+    help="Check, read-only, that the rows in DATABASE_URL can take this version's pending migrations and indexes, "
+    "print what would block them, then exit without applying anything. Exit code 2 when something blocks.",
+)
+@click.option(
     "--keepalive_timeout",
     default=None,
     type=int,
@@ -1127,6 +1149,7 @@ def run_server(
     use_prisma_db_push: bool,
     skip_server_startup,
     validate_config: bool,
+    db_preflight: bool,
     keepalive_timeout,
     timeout_worker_healthcheck,
     max_requests_before_restart: int | None,
@@ -1172,6 +1195,8 @@ def run_server(
     if validate_config is True:
         ProxyInitializationHelpers.run_config_validation(config)
         return
+    if db_preflight is True:
+        sys.exit(ProxyInitializationHelpers.run_db_preflight(use_migrate=not use_prisma_db_push))
     if enforce_prisma_migration_check:
         print(
             "\033[1;33mLiteLLM Proxy: --enforce_prisma_migration_check is "

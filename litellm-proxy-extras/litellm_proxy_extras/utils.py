@@ -28,7 +28,18 @@ from litellm_proxy_extras.replica_identity import (
     REPLICA_IDENTITY_FULL_ENV_VAR,
     apply_replica_identity_full,
 )
-from litellm_proxy_extras.request_log_indexes import ensure_request_log_indexes, filter_request_log_index_diff
+from litellm_proxy_extras.db_preflight import (
+    Finding,
+    find_blockers,
+    pending_change_checks,
+    preflight_timeout_seconds,
+    report,
+)
+from litellm_proxy_extras.request_log_indexes import (
+    REQUEST_LOG_INDEXES,
+    ensure_request_log_indexes,
+    filter_request_log_index_diff,
+)
 
 if TYPE_CHECKING:
     import psycopg
@@ -1438,6 +1449,7 @@ class ProxyExtrasDBManager:
         ensure_prisma_toolchain(
             prisma_command=_get_prisma_command(), prisma_env=_get_prisma_env()
         )
+        ProxyExtrasDBManager.raise_if_rows_block_pending_changes(use_migrate=use_migrate)
         migrated = ProxyExtrasDBManager._run_migrations(
             use_migrate=use_migrate, use_v2_resolver=use_v2_resolver
         )
@@ -1446,6 +1458,44 @@ class ProxyExtrasDBManager:
         ProxyExtrasDBManager.repair_invalid_indexes()
         ProxyExtrasDBManager.apply_replica_identity_full_if_requested()
         return True
+
+    @staticmethod
+    def preflight_findings(use_migrate: bool = True) -> tuple[Finding, ...]:
+        """What in the existing rows would make a pending migration or request-log index
+        fail, read with count queries only: no write, no table lock. Empty when nothing
+        blocks, when no database is configured, or when it cannot be reached, so the
+        migration step that follows reports the connection problem the way it does today."""
+        import psycopg
+
+        database_url: Final = os.environ.get("DATABASE_URL")
+        if not database_url:
+            return ()
+        direct_url: Final = ProxyExtrasDBManager._strip_prisma_query_params(os.environ.get("DIRECT_URL") or database_url)
+        schema: Final = ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"
+        migrations_dir: Final = Path(ProxyExtrasDBManager._get_prisma_dir()) / "migrations" if use_migrate else None
+        indexes: Final = tuple((index.table, index.name, index.columns) for index in REQUEST_LOG_INDEXES)
+        try:
+            with psycopg.connect(direct_url, connect_timeout=10, autocommit=True) as connection:
+                checks: Final = pending_change_checks(connection, schema, migrations_dir, indexes)
+                return find_blockers(connection, schema, checks, preflight_timeout_seconds())
+        except psycopg.OperationalError as exc:
+            logger.warning("Could not reach the database for the pre-migration row check: %s", _redact_credentials(str(exc)))
+            return ()
+
+    @staticmethod
+    def preflight_report(use_migrate: bool = True) -> Optional[str]:
+        """The operator-facing refusal for `preflight_findings`, None when nothing blocks."""
+        findings: Final = ProxyExtrasDBManager.preflight_findings(use_migrate=use_migrate)
+        return report(findings) if findings else None
+
+    @staticmethod
+    def raise_if_rows_block_pending_changes(use_migrate: bool) -> None:
+        """Refuse to run migrations that the existing rows would make fail, before any is
+        applied. The RuntimeError carries the report and reaches the operator through the
+        proxy's "Database migration cannot proceed" exit."""
+        refusal: Final = ProxyExtrasDBManager.preflight_report(use_migrate=use_migrate)
+        if refusal is not None:
+            raise RuntimeError(refusal)
 
     @staticmethod
     def build_request_log_indexes(build: Callable[[str, str], bool] = ensure_request_log_indexes) -> bool:
