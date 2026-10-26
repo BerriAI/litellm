@@ -1013,7 +1013,7 @@ async def get_all_team_memberships(
 
     returned_tm: Final[list[LiteLLM_TeamMembership]] = []
     for tm in team_memberships:
-        returned_tm.append(LiteLLM_TeamMembership.model_validate(tm.model_dump()))
+        returned_tm.append(with_total_spend_floor(LiteLLM_TeamMembership.model_validate(tm.model_dump())))
 
     return returned_tm
 
@@ -4202,6 +4202,23 @@ def _check_not_resetting_own_spend(user_id: str, user_api_key_dict: UserAPIKeyAu
         _raise_reset_spend_error(status.HTTP_403_FORBIDDEN, "Cannot reset your own spend. Ask a proxy admin.")
 
 
+# One statement so the validated spend cannot go stale between the read and the write: the WHERE re-checks
+# reset_to <= spend, and total_spend is floored at spend before spend drops so the history survives the reset.
+_RESET_TEAM_MEMBER_SPEND_SQL: Final = """
+UPDATE "LiteLLM_TeamMembership"
+SET total_spend = GREATEST(total_spend, spend), spend = $3::float8
+WHERE user_id = $1 AND team_id = $2 AND spend >= $3::float8
+"""
+
+
+def with_total_spend_floor(membership: LiteLLM_TeamMembership) -> LiteLLM_TeamMembership:
+    """Rows written before total_spend existed (migration 20260421135425) hold their history only in spend."""
+    spend: Final = membership.spend or 0.0
+    if (membership.total_spend or 0.0) >= spend:
+        return membership
+    return membership.model_copy(update={"total_spend": spend})
+
+
 def _raise_reset_spend_error(status_code: int, message: str) -> NoReturn:
     detail: Final = {"error": message}
     raise HTTPException(status_code=status_code, detail=detail)
@@ -4286,10 +4303,12 @@ async def reset_team_member_spend_fn(
     current_spend: Final = membership.spend or 0.0
     reset_to: Final = _validate_team_member_reset_spend_value(data.reset_to, membership)
 
-    await _team_membership_db(prisma_client).update(
-        where=membership_where,
-        data={"spend": reset_to},
-    )
+    reset_rows: Final = await _execute_raw(prisma_client)(_RESET_TEAM_MEMBER_SPEND_SQL, user_id, team_id, reset_to)
+    if reset_rows == 0:
+        _raise_reset_spend_error(
+            status.HTTP_409_CONFLICT,
+            f"Member spend changed since it was read; reset_to ({reset_to}) must be <= current spend. Retry.",
+        )
 
     await invalidate_team_member_spend_state(
         user_id=user_id,
@@ -5548,16 +5567,17 @@ async def team_member_me(
             litellm_budget_table=None,
         )
 
+    floored: Final = with_total_spend_floor(membership)
     return TeamMemberInfoResponse(
         user_id=caller_user_id,
         team_id=team_id,
         team_alias=team_table.team_alias,
         role=member_role,
         user_email=user_email,
-        spend=membership.spend,
-        total_spend=membership.total_spend,
-        budget_id=membership.budget_id,
-        litellm_budget_table=membership.litellm_budget_table,
+        spend=floored.spend,
+        total_spend=floored.total_spend,
+        budget_id=floored.budget_id,
+        litellm_budget_table=floored.litellm_budget_table,
     )
 
 
