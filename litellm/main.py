@@ -678,7 +678,10 @@ async def acompletion(
     if custom_llm_provider is None:
         _supplemental: Final = cast(  # cast-ok: kwargs values are request-scoped objects
             "dict[str, object]",
-            {k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS | {"provider_specific_header"} if k in kwargs},
+            {
+                **{k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS | {"provider_specific_header"} if k in kwargs},
+                "extra_headers": extra_headers,
+            },
         )
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
@@ -5680,7 +5683,8 @@ def completion(
             model = deployment_id
             custom_llm_provider = "azure"
         _supplemental_provider_params: Final = {
-            k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS | {"provider_specific_header"} if k in kwargs
+            **{k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS | {"provider_specific_header"} if k in kwargs},
+            "extra_headers": extra_headers,
         }
         model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
             model=model,

@@ -171,7 +171,9 @@ class TestChatGPTMultiAccountChat:
 
 def _subscription_response(request: httpx.Request) -> httpx.Response:
     account: Final = request.headers["ChatGPT-Account-Id"]
-    assert request.headers["Authorization"] == f"Bearer token-{account.removeprefix('acct-')}"
+    assert request.headers["Authorization"] in (
+        f"Bearer token-{account.removeprefix('acct-')}", f"Bearer {_client_token(account)}"
+    )
     assert "chatgpt_auth_file" not in request.content.decode()
     message: Final = {
         "id": "msg_test",
@@ -498,3 +500,54 @@ async def test_cross_provider_fallback_does_not_receive_the_chatgpt_login(
         assert response.output[0].content[0].text == "fallback"
         assert fallback.calls.last.request.headers["Authorization"] == "Bearer sk-example-fallback"
         assert "ChatGPT-Account-Id" not in fallback.calls.last.request.headers
+
+
+@pytest.mark.parametrize("endpoint", ["chat", "responses"])
+@pytest.mark.parametrize("async_call", [False, True])
+@pytest.mark.parametrize("with_prompt", [False, True])
+@pytest.mark.asyncio
+async def test_sdk_extra_headers_use_client_login_without_gateway_auth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, endpoint: str, async_call: bool, with_prompt: bool
+) -> None:
+    blocked: Final = tmp_path / "blocked"
+    blocked.write_text("ordinary file")
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(blocked / "unused"))
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    headers: Final = {"Authorization": f"Bearer {_client_token('acct-client-a')}"}
+    prompt_params: Final = {"prompt_id": "sdk-client"} if with_prompt else {}
+    if with_prompt:
+        monkeypatch.setattr(
+            litellm,
+            "callbacks",
+            [
+                DotpromptManager(
+                    prompt_id="sdk-client",
+                    prompt_data={"content": "Hello", "metadata": {"model": "chatgpt/gpt-6-luna"}},
+                )
+            ],
+        )
+    with respx.mock as transport:
+        transport.post("https://chatgpt.com/backend-api/codex/responses").mock(side_effect=_subscription_response)
+        if endpoint == "chat":
+            params: Final = {
+                "model": "chatgpt/gpt-6.1-sol",
+                "messages": [{"role": "user", "content": "Hello"}],
+                "extra_headers": headers,
+                **prompt_params,
+            }
+            result: Final = await litellm.acompletion(**params) if async_call else litellm.completion(**params)
+            assert result.choices[0].message.content == "acct-client-a"
+        else:
+            response: Final = (
+                await litellm.aresponses(
+                    model="chatgpt/gpt-6.1-sol", input="Hello", extra_headers=headers, **prompt_params
+                )
+                if async_call
+                else litellm.responses(
+                    model="chatgpt/gpt-6.1-sol", input="Hello", extra_headers=headers, **prompt_params
+                )
+            )
+            assert response.output[0].content[0].text == "acct-client-a"
+        assert transport.calls.last.request.headers["Authorization"] == headers["Authorization"]
+        assert len(transport.calls) == 1

@@ -911,7 +911,8 @@ async def aresponses(
                 model=model,
                 api_base=local_vars.get("base_url", None),
                 litellm_params=GenericLiteLLMParams(
-                    **cast("dict[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
+                    extra_headers=extra_headers,
+                    **cast("dict[str, object]", kwargs),  # cast-ok: kwargs is the untyped request dict
                 ),
             )
             # Update local_vars with detected provider (fixes #19782)
@@ -974,7 +975,7 @@ async def aresponses(
                     original_model=original_model,
                     swapped_model=model,
                     custom_llm_provider=custom_llm_provider,
-                    kwargs=kwargs,
+                    kwargs={**kwargs, "extra_headers": extra_headers},
                     prompt_id=prompt_id,
                 )
             kwargs.pop("prompt_id", None)
@@ -1153,7 +1154,7 @@ def _apply_prompt_management_to_responses_call(
                 original_model=original_model,
                 swapped_model=model,
                 custom_llm_provider=custom_llm_provider,
-                kwargs=kwargs,
+                kwargs={**kwargs, "extra_headers": local_vars.get("extra_headers")},
                 prompt_id=prompt_id,
             )
         )
@@ -1509,7 +1510,8 @@ def responses(
                 model=model,
                 api_base=local_vars.get("base_url", None),
                 litellm_params=GenericLiteLLMParams(
-                    **cast("dict[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
+                    extra_headers=extra_headers,
+                    **cast("dict[str, object]", kwargs),  # cast-ok: kwargs is the untyped request dict
                 ),
             )
             local_vars["custom_llm_provider"] = custom_llm_provider
@@ -1527,7 +1529,7 @@ def responses(
 
         from litellm.litellm_core_utils.core_helpers import attribute_or_none
 
-        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams(extra_headers=extra_headers, **kwargs)
         provider_headers: Final = ResponsesAPIRequestUtils.merge_provider_specific_headers(
             extra_headers=extra_headers,
             provider_specific_header=attribute_or_none(litellm_params, "provider_specific_header"),

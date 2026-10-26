@@ -1,4 +1,8 @@
+from collections.abc import Iterator
+from pathlib import Path
 from typing import Final
+
+import respx
 
 import asyncio, httpx, importlib, os
 import pytest
@@ -719,14 +723,14 @@ def test_opencode_affinity_resolution_preserves_existing_transport(prefix: str) 
 
 
 @pytest.fixture
-def chatgpt_login_tripwire(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    from litellm.llms.chatgpt.authenticator import Authenticator
-
-    def _tripwire(self: Authenticator) -> str:
-        raise AssertionError("metadata lookup ran the ChatGPT OAuth device flow")
-
-    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "missing-login"))
-    monkeypatch.setattr(Authenticator, "get_access_token", _tripwire)
+def chatgpt_login_tripwire(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
+    blocked: Final = tmp_path / "blocked"
+    blocked.write_text("ordinary file")
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(blocked / "unused"))
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+    with respx.mock as transport:
+        yield
+        assert len(transport.calls) == 0
 
 
 @pytest.mark.parametrize(
