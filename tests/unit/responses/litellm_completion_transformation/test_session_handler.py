@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import litellm
+from litellm.proxy import proxy_server
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_proxy_server_request_for_spend_logs_payload,
 )
@@ -170,25 +171,32 @@ async def test_get_chat_completion_message_history_for_previous_response_id():
 
 
 @pytest.mark.asyncio
-async def test_get_chat_completion_message_history_empty_spend_logs():
-    """
-    Test get_chat_completion_message_history_for_previous_response_id with empty spend logs
-    """
-    with patch.object(
-        ResponsesSessionHandler,
-        "get_all_spend_logs_for_previous_response_id",
-        new_callable=AsyncMock,
-    ) as mock_get_spend_logs:
-        mock_get_spend_logs.return_value = []
+async def test_get_chat_completion_message_history_empty_spend_logs(instant_session_lookup_retries: None):
+    with patch.object(proxy_server, "prisma_client", _FakePrismaClient(results=[])):
+        with pytest.raises(litellm.BadRequestError, match=r"previous_response_id.*non-existent-id") as error:
+            await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+                "non-existent-id"
+            )
 
-        previous_response_id = "non-existent-id"
-        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
-            previous_response_id
+    assert error.value.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored_request", [None, "{}", "null", {}, {"model": "bridge-test"}])
+async def test_message_history_rejects_a_stored_turn_without_its_input(stored_request: object):
+    stored: Final = _StoredSpendLogs(
+        (
+            {
+                **_spend_log("resp_missing_input", "session-a", "Remember 7", "Noted"),
+                "proxy_server_request": stored_request,
+            },
         )
-
-        # Verify empty result structure
-        assert result.get("messages") == []
-        assert result.get("litellm_session_id") is None
+    )
+    with patch.object(proxy_server, "prisma_client", SimpleNamespace(db=stored)):
+        with pytest.raises(litellm.BadRequestError, match=r"previous_response_id.*resp_missing_input"):
+            await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+                "resp_missing_input"
+            )
 
 
 @pytest.mark.asyncio

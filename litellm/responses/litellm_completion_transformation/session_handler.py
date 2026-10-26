@@ -217,6 +217,19 @@ class ResponsesSessionHandler:
         replayed_turns: Final = (
             replayable_turns if _holds_compaction_point(all_spend_logs, proxy_server_requests) else len(all_spend_logs)
         )
+        if not all_spend_logs or any(
+            request is None or (request.get("input") is None and request.get("messages") is None)
+            for index, request in enumerate(proxy_server_requests[start.index : replayed_turns], start=start.index)
+            if not (start.at_output and index == start.index)
+        ):
+            raise litellm.BadRequestError(
+                message=(
+                    f"Cannot reconstruct conversation history for previous_response_id '{previous_response_id}'. "
+                    "Resend the full conversation without previous_response_id."
+                ),
+                model="",
+                llm_provider="",
+            )
         earlier_instructions: Final = _instruction_items_before(proxy_server_requests, start)
         replayed_history: Final = ResponsesSessionHandler._history_of_turns(
             all_spend_logs[start.index : replayed_turns],

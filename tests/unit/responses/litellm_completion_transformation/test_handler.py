@@ -13,7 +13,7 @@ kwargs lack the flag and these tests fail.
 """
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import patch
@@ -22,7 +22,8 @@ import httpx
 import pytest
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.proxy import proxy_server
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
@@ -209,15 +210,17 @@ async def test_bridged_follow_up_turn_keeps_the_addressed_response_id_off_the_pr
     client: Final = AsyncHTTPHandler()
     client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
 
-    response = await litellm.aresponses(
-        model="azure_ai/claude-sonnet-4-6",
-        api_base="https://fake-foundry-resource.services.ai.azure.com",
-        api_key="fake-api-key",
-        input="Double it",
-        previous_response_id="resp_turn_one",
-        client=client,
-        **{ADDRESSED_RESPONSE_ID_FIELD: "resp_turn_one"},
-    )
+    database: Final = SimpleNamespace(db=_StoredTurns((_stored_mcp_turn("resp_turn_one"),)))
+    with patch.object(proxy_server, "prisma_client", database):
+        response = await litellm.aresponses(
+            model="azure_ai/claude-sonnet-4-6",
+            api_base="https://fake-foundry-resource.services.ai.azure.com",
+            api_key="fake-api-key",
+            input="Double it",
+            previous_response_id="resp_turn_one",
+            client=client,
+            **{ADDRESSED_RESPONSE_ID_FIELD: "resp_turn_one"},
+        )
 
     assert provider.request_body is not None, "the bridged turn never reached the provider"
     assert ADDRESSED_RESPONSE_ID_FIELD not in provider.request_body, (
@@ -303,10 +306,143 @@ async def test_bridged_next_turn_replays_a_turn_stored_under_the_id_the_client_h
         )
 
     assert provider.request_body is not None, "the bridged turn never reached the provider"
-    assert [
-        (message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]
-    ] == [
+    assert [(message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]] == [
         ("user", json.dumps([{"type": "text", "text": "My favorite number is 7."}])),
         ("assistant", json.dumps([{"type": "text", "text": "Noted."}])),
         ("user", json.dumps([{"type": "text", "text": "Double it"}])),
     ]
+
+
+_CHAT_COMPLETION_PAYLOAD: Final = {
+    "id": "chatcmpl-current-turn",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "bridge-test",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "14"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+}
+
+
+@pytest.fixture(params=["no_database", "unknown_response", "unstored_input"])
+def unavailable_response_history(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    rows: Final = (
+        ({**_stored_mcp_turn("resp_missing_history"), "proxy_server_request": {}},)
+        if request.param == "unstored_input"
+        else ()
+    )
+    database: Final = None if request.param == "no_database" else SimpleNamespace(db=_StoredTurns(rows))
+    monkeypatch.setattr(litellm.constants, "RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL", 0.0)
+    with patch.object(proxy_server, "prisma_client", database):
+        yield
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_sync_bridge_rejects_unavailable_previous_response_before_inference(
+    unavailable_response_history: None, stream: bool
+):
+    provider: Final = _RecordingAnthropicHandler(_CHAT_COMPLETION_PAYLOAD)
+    with httpx.Client(transport=httpx.MockTransport(provider)) as http_client:
+        with pytest.raises(litellm.BadRequestError, match=r"previous_response_id.*resp_missing_history") as error:
+            litellm.responses(
+                model="hosted_vllm/bridge-test",
+                api_base="https://provider.example/v1",
+                api_key="test-key",
+                input="Double it",
+                previous_response_id="resp_missing_history",
+                use_chat_completions_api=True,
+                stream=stream,
+                client=HTTPHandler(client=http_client),
+            )
+
+    assert error.value.status_code == 400
+    assert provider.request_body is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_async_bridge_rejects_unavailable_previous_response_before_inference(
+    unavailable_response_history: None, stream: bool
+):
+    provider: Final = _RecordingAnthropicHandler(_CHAT_COMPLETION_PAYLOAD)
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(provider))
+    try:
+        with pytest.raises(litellm.BadRequestError, match=r"previous_response_id.*resp_missing_history") as error:
+            await litellm.aresponses(
+                model="hosted_vllm/bridge-test",
+                api_base="https://provider.example/v1",
+                api_key="test-key",
+                input="Double it",
+                previous_response_id="resp_missing_history",
+                use_chat_completions_api=True,
+                stream=stream,
+                client=client,
+            )
+    finally:
+        await client.close()
+
+    assert error.value.status_code == 400
+    assert provider.request_body is None
+
+
+@pytest.mark.parametrize("previous_response_id", [None, "resp_stored"])
+def test_sync_bridge_preserves_available_history_and_first_turns(previous_response_id: str | None):
+    provider: Final = _RecordingAnthropicHandler(_CHAT_COMPLETION_PAYLOAD)
+    database: Final = SimpleNamespace(db=_StoredTurns((_stored_mcp_turn("resp_stored"),)))
+    with httpx.Client(transport=httpx.MockTransport(provider)) as http_client:
+        with patch.object(proxy_server, "prisma_client", database):
+            response = litellm.responses(
+                model="hosted_vllm/bridge-test",
+                api_base="https://provider.example/v1",
+                api_key="test-key",
+                input="Double it",
+                previous_response_id=previous_response_id,
+                use_chat_completions_api=True,
+                client=HTTPHandler(client=http_client),
+            )
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert response.status == "completed"
+    assert provider.request_body is not None
+    assert provider.request_body["messages"] == (
+        [
+            {"role": "user", "content": "My favorite number is 7."},
+            {"role": "assistant", "content": "Noted."},
+            {"role": "user", "content": "Double it"},
+        ]
+        if previous_response_id
+        else [{"role": "user", "content": "Double it"}]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("previous_response_id", [None, "resp_stored"])
+async def test_async_bridge_preserves_available_history_and_first_turns(previous_response_id: str | None):
+    provider: Final = _RecordingAnthropicHandler(_CHAT_COMPLETION_PAYLOAD)
+    database: Final = SimpleNamespace(db=_StoredTurns((_stored_mcp_turn("resp_stored"),)))
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(provider))
+    try:
+        with patch.object(proxy_server, "prisma_client", database):
+            response = await litellm.aresponses(
+                model="hosted_vllm/bridge-test",
+                api_base="https://provider.example/v1",
+                api_key="test-key",
+                input="Double it",
+                previous_response_id=previous_response_id,
+                use_chat_completions_api=True,
+                client=client,
+            )
+    finally:
+        await client.close()
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert response.status == "completed"
+    assert provider.request_body is not None
+    assert provider.request_body["messages"] == (
+        [
+            {"role": "user", "content": "My favorite number is 7."},
+            {"role": "assistant", "content": "Noted."},
+            {"role": "user", "content": "Double it"},
+        ]
+        if previous_response_id
+        else [{"role": "user", "content": "Double it"}]
+    )
