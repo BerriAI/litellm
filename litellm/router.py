@@ -4805,7 +4805,12 @@ class Router:
         request_context: Final = cast(  # cast-ok: the router's legacy request dict has string keys
             Mapping[str, object], kwargs
         )
-        deployment_context: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment["litellm_params"])
+        raw_deployment_params: Final[object] = deployment["litellm_params"]
+        deployment_context: Final = _LITELLM_PARAMS_ADAPTER.validate_python(
+            raw_deployment_params.model_dump(exclude_none=True)
+            if isinstance(raw_deployment_params, LiteLLM_Params)
+            else raw_deployment_params
+        )
         declared_provider: Final = deployment_context.get("custom_llm_provider")
         declared_model: Final = deployment_context.get("model")
         forwarded_authorization: Final = ProviderSpecificHeaderUtils.forwarded_authorization(
