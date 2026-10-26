@@ -24,6 +24,7 @@ from collections.abc import (
     Awaitable,
     Callable,
     Collection,
+    Container,
     Iterable,
     Mapping,
     MutableMapping,
@@ -360,6 +361,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_parent_otel_span_from_kwargs,
     iter_items,
     normalize_drop_params,
+    require_attributes,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -474,6 +476,7 @@ from litellm.proxy.common_utils.codex_model_catalog import codex_model_list_body
 from litellm.proxy.common_utils.config_includes import resolve_include_file_path, resolve_includes
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
 from litellm.proxy.common_utils.credential_hydration import decrypted_or_stored
+from litellm.proxy.common_utils.custom_openapi_spec import JsonObject
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
 from litellm.proxy.common_utils.discoverable_model_filter import (
@@ -1141,7 +1144,7 @@ def _redact_worker_config_for_logging(worker_config: str | dict[str, JsonValue] 
         return None
     if isinstance(worker_config, dict):
         return _redact_secret_values_in_obj(worker_config)
-    parsed: Final = safe_json_loads(worker_config, default=None)
+    parsed: Final[JsonValue] = safe_json_loads(worker_config, default=None)
     if isinstance(parsed, dict):
         return safe_dumps(_redact_secret_values_in_obj(parsed))
     return worker_config
@@ -1467,11 +1470,13 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                     )
                 _module_path, _func_name = _hook_spec.rsplit(":", 1)
                 _module = importlib.import_module(_module_path)
-                _hook_fn = getattr(_module, _func_name)
+                _hook_fn = _UNTYPED_VALUE.validate_python(getattr(_module, _func_name))
                 if inspect.iscoroutinefunction(_hook_fn):
                     await _hook_fn()
-                else:
+                elif callable(_hook_fn):
                     _hook_fn()
+                else:
+                    raise TypeError(f"'{type(_hook_fn).__name__}' object is not callable")
                 verbose_proxy_logger.info("Worker startup hook '%s' executed successfully", _hook_spec)
             except Exception as e:
                 verbose_proxy_logger.error("Worker startup hook '%s' failed: %s", _hook_spec, e)
@@ -1919,15 +1924,22 @@ def _strip_operation_id_method_suffix(operation_id: str) -> str:
     return operation_id
 
 
+class _SupportsValues(Protocol):
+    def values(self) -> Iterable[JsonValue]: ...
+
+
+def _openapi_path_items(openapi_schema: JsonObject) -> Iterable[JsonObject]:
+    paths: Final = require_attributes(openapi_schema.get("paths", {}), _SupportsValues, "values")
+    return (path_item for path_item in paths.values() if isinstance(path_item, dict))
+
+
 def ensure_unique_openapi_operation_ids(
-    openapi_schema: dict[str, Any],
+    openapi_schema: JsonObject,
     reserved_operation_ids: set[str] | None = None,
-) -> dict[str, Any]:
+) -> JsonObject:
     operation_entries: Final = []
     operation_id_counts: Final[dict[str, int]] = {}
-    for path_item in openapi_schema.get("paths", {}).values():
-        if not isinstance(path_item, dict):
-            continue
+    for path_item in _openapi_path_items(openapi_schema):
         for method, operation in path_item.items():
             if method not in _OPENAPI_HTTP_METHODS or not isinstance(operation, dict):
                 continue
@@ -2004,6 +2016,19 @@ from starlette.routing import BaseRoute
 from litellm.proxy.common_utils.openapi_route import OpenAPISchema, serve_openapi_off_the_event_loop
 
 
+class _OpenAPIQueryParam(Protocol):
+    @property
+    def name(self) -> object: ...
+
+    @property
+    def required(self) -> object: ...
+
+
+def _query_param_name_and_required(param: object) -> tuple[object, object]:
+    fields: Final = require_attributes(param, _OpenAPIQueryParam, "name", "required")
+    return fields.name, fields.required
+
+
 def _inject_websocket_stubs_into_openapi_schema(openapi_schema: dict, websocket_routes: list) -> dict:
     """
     Add a synthetic GET stub for each WebSocket route so it appears in Swagger UI.
@@ -2020,14 +2045,15 @@ def _inject_websocket_stubs_into_openapi_schema(openapi_schema: dict, websocket_
         try:
             if hasattr(route, "dependant") and route.dependant is not None:
                 # Handle both FastAPI <0.120 and >=0.120
-                query_params = getattr(route.dependant, "query_params", [])
+                query_params = _UNTYPED_VALUE.validate_python(getattr(route.dependant, "query_params", []))
                 if query_params:
-                    for param in query_params:
+                    for param in iter_items(query_params):
+                        name, required = _query_param_name_and_required(param)
                         parameters.append(
                             {
-                                "name": param.name,
+                                "name": name,
                                 "in": "query",
-                                "required": param.required,
+                                "required": required,
                                 "schema": {"type": "string"},
                             }
                         )
@@ -5577,6 +5603,13 @@ def _log_ignored_cost_map_copy(model_id: str, fields: tuple[str, ...]) -> None:
 _DB_CONFIG_CALLBACK_EVENT_TYPES: Final[Mapping[str, tuple[Literal["success", "failure"], ...]]] = MappingProxyType(
     {"success_callback": ("success",), "failure_callback": ("failure",), "callbacks": ("success", "failure")}
 )
+_DB_CONFIG_CALLBACK_LISTS: Final[Mapping[str, Callable[[], Container[object]]]] = MappingProxyType(
+    {
+        "success_callback": lambda: litellm.success_callback,
+        "failure_callback": lambda: litellm.failure_callback,
+        "callbacks": lambda: litellm.callbacks,
+    }
+)
 _CALLBACK_LIST_NAMES: Final = (
     "callbacks",
     "success_callback",
@@ -5587,7 +5620,9 @@ _CALLBACK_LIST_NAMES: Final = (
 
 
 def _callback_list_entries(list_name: str) -> tuple[tuple[str, object], ...]:
-    return tuple((list_name, entry) for entry in getattr(litellm, list_name))
+    return tuple(
+        (list_name, entry) for entry in iter_items(_UNTYPED_VALUE.validate_python(getattr(litellm, list_name)))
+    )
 
 
 def _registered_callback_entries() -> tuple[tuple[str, object], ...]:
@@ -5616,7 +5651,7 @@ def _restore_displaced_callback(list_name: str, entry: object) -> None:
 def _unregister_db_callback(registration: _DbCallbackRegistration) -> None:
     for list_name, entry in registration.added:
         litellm.logging_callback_manager.remove_callback_from_list_by_object(
-            getattr(litellm, list_name), entry, require_self=False
+            _UNTYPED_VALUE.validate_python(getattr(litellm, list_name)), entry, require_self=False
         )
     for list_name, entry in registration.displaced:
         _restore_displaced_callback(list_name, entry)
@@ -7825,7 +7860,7 @@ class ProxyConfig:
         self,
         callback: str,
         event_types: list[Literal["success", "failure"]],
-        existing_callbacks: list,
+        existing_callbacks: Container[object],
     ) -> None:
         """
         Helper method to add a single callback to litellm for specified event types.
@@ -7868,7 +7903,7 @@ class ProxyConfig:
         self._add_callback_from_db_to_in_memory_litellm_callbacks(
             callback=callback,
             event_types=list(_DB_CONFIG_CALLBACK_EVENT_TYPES[setting_key]),
-            existing_callbacks=getattr(litellm, setting_key),
+            existing_callbacks=_DB_CONFIG_CALLBACK_LISTS[setting_key](),
         )
         after: Final = _registered_callback_entries()
         return _DbCallbackRegistration(
@@ -8363,8 +8398,12 @@ class ProxyConfig:
         environment_read: Final = next(self._environment_read_numbers)
         sections: Final = tuple(self._settings_stores)
         responses: Final = await asyncio.gather(*(get_config_param(prisma_client, section) for section in sections))
+        response: _ConfigParamValueRow | None
         for section, response in zip(sections, responses):
-            if response is None or (param_value := getattr(response, "param_value", None)) is None:
+            if response is None:
+                continue
+            param_value: JsonValue = getattr(response, "param_value", None)
+            if param_value is None:
                 continue
 
             verbose_proxy_logger.debug(
@@ -8391,7 +8430,10 @@ class ProxyConfig:
         self, prisma_client: PrismaClient, row: object, environment_before_db: Mapping[str, str], read: int
     ) -> None:
         current: Final = await self._environment_row_not_behind_the_applied_one(prisma_client, row)
-        if current is None or (param_value := getattr(current, "param_value", None)) is None:
+        if current is None:
+            return
+        param_value: Final[object] = getattr(current, "param_value", None)
+        if param_value is None:
             return
         self._apply_db_environment_variables(param_value, _config_row_revision(current), environment_before_db, read)
 
@@ -11255,6 +11297,19 @@ class ProxyStartupEvent:
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )
 
+        ### TOOL DISCOVERY (own lock, same interval, never rides the spend commit) ###
+        from litellm.proxy.utils import commit_tool_discoveries
+
+        scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
+            commit_tool_discoveries,
+            "interval",
+            seconds=batch_writing_interval,
+            args=[prisma_client, proxy_logging_obj],
+            id="commit_tool_discoveries_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+
         ### UPDATE DAILY TAG SPEND (separate scheduler job with longer interval) ###
         ## Reduces QPS as there are more tags for a single request
         tag_spend_update_interval: Final = int(batch_writing_interval * DAILY_TAG_SPEND_BATCH_MULTIPLIER)
@@ -12211,7 +12266,7 @@ async def _deployment_hidden_by_listing_callbacks(deployment: Deployment, user_a
 async def model_list(
     request: Request = None,  # pyright: ignore[reportArgumentType]  # FastAPI always injects the Request; the None default only serves direct in-process callers
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    return_wildcard_routes: bool | None = False,
+    return_wildcard_routes: bool | None = None,
     team_id: str | None = None,
     include_model_access_groups: bool | None = False,
     only_model_access_groups: bool | None = False,
@@ -12227,6 +12282,9 @@ async def model_list(
     This is just for compatibility with openai projects like aider.
 
     Query Parameters:
+    - return_wildcard_routes: When true, also list wildcard routes such as `openai/*`.
+                    Defaults to `general_settings.return_wildcard_routes`, and an explicit
+                    value on the request wins over it
     - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
                     provider's model catalog. When present, the response is Codex's own
                     catalog shape (`{"models": [...]}`) built from the same listing, with
@@ -12255,6 +12313,9 @@ async def model_list(
     global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
 
     settings: Final = cast(dict[str, object], general_settings)  # any-ok: legacy settings
+    include_wildcard_routes: Final = (
+        return_wildcard_routes if return_wildcard_routes is not None else settings.get("return_wildcard_routes") is True
+    )
 
     from litellm.llms.anthropic.common_utils import (
         create_anthropic_model_list_response,
@@ -12344,7 +12405,7 @@ async def model_list(
             proxy_model_list=proxy_model_list,
             user_model=None,
             infer_model_from_keys=False,
-            return_wildcard_routes=return_wildcard_routes or False,
+            return_wildcard_routes=include_wildcard_routes,
             llm_router=llm_router,
             model_access_groups=model_access_groups,
             include_model_access_groups=include_model_access_groups or False,
@@ -12412,7 +12473,7 @@ async def model_list(
         team_id=team_id,
         include_model_access_groups=include_model_access_groups or False,
         only_model_access_groups=only_model_access_groups or False,
-        return_wildcard_routes=return_wildcard_routes or False,
+        return_wildcard_routes=include_wildcard_routes,
         user_api_key_cache=user_api_key_cache,
     )
 
@@ -16042,7 +16103,23 @@ async def _get_caller_byok_team_scope(
     return key_team_scope | set(user_row.teams or [])
 
 
-def _byok_row_outside_caller_teams(model_info_dict: dict[str, JsonValue], allowed_team_ids: set[str] | None) -> bool:
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
+def _with_get(value: object) -> _SupportsGet:
+    return require_attributes(value, _SupportsGet, "get")
+
+
+class _SupportsLower(Protocol):
+    def lower(self) -> object: ...
+
+
+def _lowered(value: object) -> object:
+    return require_attributes(value, _SupportsLower, "lower").lower()
+
+
+def _byok_row_outside_caller_teams(model_info_dict: object, allowed_team_ids: set[str] | None) -> bool:
     """Whether a team BYOK row belongs to a team the caller is not a member of.
 
     `team_id` is only set on team BYOK rows; non-team rows fall through
@@ -16050,7 +16127,7 @@ def _byok_row_outside_caller_teams(model_info_dict: dict[str, JsonValue], allowe
     """
     if allowed_team_ids is None:
         return False
-    team_id: Final = model_info_dict.get("team_id")
+    team_id: Final = _with_get(model_info_dict).get("team_id")
     if team_id is None:
         return False
     return team_id not in allowed_team_ids
@@ -16151,7 +16228,7 @@ async def _fetch_db_models_for_search(
 
 
 async def _apply_search_filter_to_models(
-    all_models: list[dict[str, Any]],
+    all_models: list[dict[str, object]],
     search: str,
     prisma_client: PrismaClient | None,
     proxy_config: ProxyConfig,
@@ -16203,7 +16280,7 @@ async def _apply_search_filter_to_models(
         prisma_client=prisma_client,
     )
 
-    def _is_byok_outside_caller_teams(model_info_dict: dict[str, JsonValue]) -> bool:
+    def _is_byok_outside_caller_teams(model_info_dict: object) -> bool:
         return _byok_row_outside_caller_teams(model_info_dict, allowed_team_ids)
 
     def _model_matches_search(m: dict[str, Any]) -> bool:
@@ -16240,7 +16317,7 @@ async def _apply_search_filter_to_models(
     db_model_ids_in_router: Final = set()
 
     for m in filtered_router_models:
-        model_info = m.get("model_info", {})
+        model_info = _with_get(m.get("model_info", {}))
         is_db_model = model_info.get("db_model", False)
         model_id = model_info.get("id")
 
@@ -16351,7 +16428,7 @@ def _sort_models(
     reverse: Final = sort_order.lower() == "desc"
 
     def get_sort_key(model: dict[str, Any]) -> Any:
-        model_info: Final = model.get("model_info", {})
+        model_info: Final = _with_get(_UNTYPED_VALUE.validate_python(model.get("model_info", {})))
 
         if sort_by == "model_name":
             # Team BYOK models persist an internal `model_name` (e.g.
@@ -16363,7 +16440,7 @@ def _sort_models(
             team_public_model_name: Final = model_info.get("team_public_model_name")
             if team_public_model_name:
                 return str(team_public_model_name).lower()
-            return model.get("model_name", "").lower()
+            return _lowered(_UNTYPED_VALUE.validate_python(model.get("model_name", "")))
 
         elif sort_by == "created_at":
             created_at: Final = model_info.get("created_at")
@@ -16389,8 +16466,8 @@ def _sort_models(
             return normalized_dt
 
         elif sort_by == "costs":
-            input_cost: Final = model_info.get("input_cost_per_token", 0) or 0
-            output_cost: Final = model_info.get("output_cost_per_token", 0) or 0
+            input_cost: Final = model.get("model_info", {}).get("input_cost_per_token", 0) or 0
+            output_cost: Final = model.get("model_info", {}).get("output_cost_per_token", 0) or 0
             total_cost: Final = input_cost + output_cost
             # Put 0 or None costs at the end for asc, at the start for desc
             if total_cost == 0:
@@ -16625,7 +16702,7 @@ async def _authorize_team_id_query(
 
 
 async def _filter_models_by_team_id(
-    all_models: list[dict[str, Any]],
+    all_models: list[dict[str, object]],
     team_id: str,
     prisma_client: PrismaClient,
     llm_router: Router,
@@ -16669,7 +16746,7 @@ async def _filter_models_by_team_id(
     # every public model the admin can call.
     filtered_models: Final = []
     for _model in all_models:
-        model_info = _model.get("model_info", {})
+        model_info = _with_get(_model.get("model_info", {}))
         model_id = model_info.get("id", None)
 
         # BYOK rows owned by this team are always accessible to it, even if
@@ -19708,6 +19785,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "proxy_config_reload_interval_seconds": "Integer",
         "pass_through_endpoints": "PydanticModel",
         "store_model_in_db": "Boolean",
+        "return_wildcard_routes": "Boolean",
         "store_prompts_in_spend_logs": "Boolean",
         "disable_requester_ip_address_logging": "Boolean",
         "disable_fallbacks_on_per_model_rate_limits": "Boolean",

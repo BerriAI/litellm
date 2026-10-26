@@ -1,17 +1,23 @@
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final
 from unittest.mock import patch
 
+import httpx
 import pytest
+from pydantic import JsonValue
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.anthropic.wif import get_anthropic_wif_token
 from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
+from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
 from litellm.llms.tencent.messages.transformation import TencentAnthropicMessagesConfig
+from litellm.types.llms.anthropic import AnthropicFinishReason
 from litellm.types.router import GenericLiteLLMParams
 from tests.unit.llms.anthropic.test_anthropic_wif import (
     ScriptedPoster,
@@ -25,6 +31,52 @@ _WIF_PARAMS: Final[dict] = {
     "anthropic_organization_id": "org-uuid-1",
     "anthropic_identity_token_file": "/var/run/secrets/identity-token",
 }
+
+
+@pytest.mark.parametrize("config", (AnthropicMessagesConfig(), OpenAILikeAnthropicMessagesConfig()), ids=type)
+@pytest.mark.parametrize(
+    ("stop_reason", "stop_fields", "expected_stop_sequence"),
+    (
+        pytest.param("end_turn", {}, None, id="end_turn_missing"),
+        pytest.param("max_tokens", {}, None, id="max_tokens_missing"),
+        pytest.param("tool_use", {}, None, id="tool_use_missing"),
+        pytest.param("end_turn", {"stop_sequence": None}, None, id="explicit_null"),
+        pytest.param("stop_sequence", {"stop_sequence": ", 7"}, ", 7", id="matched_stop"),
+    ),
+)
+def test_native_response_defaults_stop_sequence_without_changing_other_fields(
+    config: AnthropicMessagesConfig,
+    stop_reason: AnthropicFinishReason,
+    stop_fields: Mapping[str, str | None],
+    expected_stop_sequence: str | None,
+) -> None:
+    upstream: Final[dict[str, JsonValue]] = {
+        "id": "msg_test",
+        "type": "message",
+        "role": "assistant",
+        "model": "test-model",
+        "content": [{"type": "text", "text": "ok"}],
+        "stop_reason": stop_reason,
+        "usage": {"input_tokens": 19, "output_tokens": 42},
+        **stop_fields,
+    }
+    logging_obj: Final = Logging(
+        model="test-model",
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="test-call",
+        function_id="test-function",
+    )
+    response: Final = config.transform_anthropic_messages_response(
+        model="test-model", raw_response=httpx.Response(200, json=upstream), logging_obj=logging_obj
+    )
+
+    assert response == {
+        **upstream,
+        "stop_sequence": expected_stop_sequence,
+    }
 
 
 def test_workload_identity_allowed_for_anthropic() -> None:

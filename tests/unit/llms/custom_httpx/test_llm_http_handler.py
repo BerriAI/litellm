@@ -24,6 +24,7 @@ from litellm.integrations.code_interpreter_interception.handler import (
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from litellm.llms.azure.vector_stores.transformation import AzureOpenAIVectorStoreConfig
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -5640,3 +5641,114 @@ async def test_anthropic_messages_dropped_safeguards_send_neither_the_field_nor_
     sent: Final = received[0]
     assert "safeguards" not in json.loads(sent.content)
     assert "dangerous-tool-use-2026-09-03" not in sent.headers.get("anthropic-beta", ""), dict(sent.headers)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("environment_base", [None, "ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"])
+@pytest.mark.parametrize(
+    ("api_base", "explicit_header", "expected_session"),
+    [
+        ("https://opencode.ai/inference/go/anthropic", None, "conversation-123"),
+        ("https://opencode.ai/inference/go/anthropic", "caller-override", "caller-override"),
+        ("https://other.example", None, None),
+    ],
+)
+async def test_messages_opencode_session_header(
+    stream: bool,
+    environment_base: str | None,
+    api_base: str,
+    explicit_header: str | None,
+    expected_session: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    if environment_base:
+        monkeypatch.setenv(environment_base, "https://opencode.ai/inference/go/anthropic")
+    received: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
+    payload: Final = {
+        "id": "msg_test",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-haiku-5-5",
+        "content": [{"type": "text", "text": "OK"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    }
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        received.put_nowait(request)
+        return (
+            httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text=f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': payload})}\n\n"
+                'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+            )
+            if stream
+            else httpx.Response(200, json=payload)
+        )
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+    try:
+        result: Final = await litellm.anthropic.messages.acreate(
+            model="anthropic/claude-haiku-5-5",
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=128000,
+            api_base=None if environment_base and api_base == "https://opencode.ai/inference/go/anthropic" else api_base,
+            api_key="test-key",
+            stream=stream,
+            litellm_session_id="conversation-123",
+            client=upstream,
+            extra_headers={"X-OpenCode-Session": explicit_header} if explicit_header else {"x-existing": "unchanged"},
+        )
+        if stream:
+            chunks: Final = b"".join([chunk async for chunk in result])
+            assert b'"text": "OK"' in chunks
+            assert b"message_stop" in chunks
+        else:
+            assert result["content"] == [{"type": "text", "text": "OK"}]
+    finally:
+        await upstream.close()
+    sent: Final = received.get_nowait()
+    assert str(sent.url) == f"{api_base}/v1/messages"
+    assert sent.headers.get("x-opencode-session") == expected_session
+    assert sent.headers["x-api-key"] == "test-key"
+    assert json.loads(sent.content) == {
+        "model": "claude-haiku-5-5",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 128000,
+        "stream": stream,
+    }
+    assert received.empty()
+
+
+def test_vector_store_retrieve_handler_sends_id_before_azure_api_version_query() -> None:
+    received: Final[list[httpx.Request]] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(200, json={"id": "vs_abc", "object": "vector_store"})
+
+    handler: Final = BaseLLMHTTPHandler()
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(answer)))
+
+    handler.vector_store_retrieve_handler(
+        vector_store_id="vs_abc",
+        vector_store_provider_config=AzureOpenAIVectorStoreConfig(),
+        custom_llm_provider="azure",
+        litellm_params=GenericLiteLLMParams(
+            api_base="https://x.openai.azure.com",
+            api_key="azure-test-key",
+            api_version="2025-04-01-preview",
+        ),
+        logging_obj=Mock(),
+        client=client,
+        _is_async=False,
+    )
+
+    sent: Final = received[0]
+    assert str(sent.url) == "https://x.openai.azure.com/openai/vector_stores/vs_abc?api-version=2025-04-01-preview"
+    assert len(received) == 1

@@ -226,7 +226,7 @@ def rate_limit_retry_delay(
 ) -> float:
     if retry_after_seconds is not None:
         return min(retry_after_seconds, max_delay)
-    return min(max_delay, base_delay * 2**attempt * (1 + jitter))
+    return min(max_delay, base_delay * 2.0**attempt * (1 + jitter))
 
 
 T: Final = TypeVar("T")
