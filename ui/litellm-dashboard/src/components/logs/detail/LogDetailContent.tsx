@@ -1,3 +1,4 @@
+import { copyToClipboard } from "@/utils/dataUtils";
 import { useState } from "react";
 import { Check, ChevronDown, ChevronRight, CircleAlert, Copy, Info } from "lucide-react";
 import moment from "moment";
@@ -304,12 +305,9 @@ function CopyButton({
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(getText());
+    if (await copyToClipboard(getText())) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1200);
-    } catch {
-      /* clipboard unavailable in non-secure contexts */
     }
   };
 

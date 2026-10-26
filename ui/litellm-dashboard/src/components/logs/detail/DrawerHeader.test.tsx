@@ -6,6 +6,12 @@ import { describe, expect, it, vi } from "vitest";
 import { render } from "../../../../tests/test-utils";
 import type { LogEntry } from "../types";
 import { DrawerHeader } from "./DrawerHeader";
+import { copyToClipboard } from "@/utils/dataUtils";
+
+vi.mock("@/utils/dataUtils", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/dataUtils")>()),
+  copyToClipboard: vi.fn(),
+}));
 
 const logEntry = (overrides: Partial<LogEntry>): LogEntry =>
   ({
@@ -116,5 +122,24 @@ describe("DrawerHeader back link", () => {
   it("shows no back link when opened from the logs page", () => {
     renderWithBack();
     expect(screen.queryByRole("button", { name: /^Back to/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("DrawerHeader copying", () => {
+  it.each([true, false])("confirms both ids only when copying succeeds (%s)", async (success) => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    vi.mocked(copyToClipboard).mockReset().mockResolvedValue(success);
+    renderHeader(logEntry({ request_id: "request-copy", litellm_call_id: "call-copy" }), false);
+
+    const requestButton = screen.getByRole("button", { name: "Copy Request ID" });
+    const callButton = screen.getByRole("button", { name: "Copy x-litellm-call-id" });
+    await user.click(requestButton);
+    await user.click(callButton);
+
+    expect(copyToClipboard).toHaveBeenNthCalledWith(1, "request-copy");
+    expect(copyToClipboard).toHaveBeenNthCalledWith(2, "call-copy");
+    expect(requestButton).toHaveAccessibleName(success ? "Copied!" : "Copy Request ID");
+    expect(callButton).toHaveAccessibleName(success ? "Copied!" : "Copy x-litellm-call-id");
   });
 });
