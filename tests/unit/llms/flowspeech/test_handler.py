@@ -9,8 +9,10 @@ from email.utils import format_datetime
 import httpx
 import pytest
 
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.flowspeech.text_to_speech.handler import FlowSpeechTTS
 from litellm.llms.flowspeech.text_to_speech.transformation import FlowSpeechException
+from litellm.types.utils import LlmProviders
 
 REQUEST_ID = "b698824b-de05-486d-8833-05d5c4522a39"
 JOB_ID = "11111111-2222-4333-8444-555555555555"
@@ -504,7 +506,10 @@ async def test_client_lifetime(monkeypatch, asynchronous, owned, successful):
         return client
 
     if owned:
-        monkeypatch.setattr(httpx, "AsyncClient" if asynchronous else "Client", create_client)
+        if asynchronous:
+            get_async_httpx_client(LlmProviders.FLOWSPEECH).client = client
+        else:
+            monkeypatch.setattr(httpx, "Client", create_client)
     tts = handler(Clock())
 
     async def call():
@@ -520,12 +525,40 @@ async def test_client_lifetime(monkeypatch, asynchronous, owned, successful):
             with pytest.raises(FlowSpeechException, match="FlowSpeech job failed"):
                 await call()
         assert methods == (["POST", "GET"] if successful else ["POST"])
-        assert client.is_closed is owned
+        assert client.is_closed is (owned and not asynchronous)
     finally:
         if asynchronous:
             await client.aclose()
         else:
             client.close()
+
+
+@pytest.mark.asyncio
+async def test_default_async_client_is_reused_without_download_credentials():
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        if request.method == "POST":
+            return httpx.Response(202, json=job())
+        assert "authorization" not in request.headers
+        assert "cookie" not in request.headers
+        assert "x-client-secret" not in request.headers
+        return httpx.Response(200, content=wav_bytes())
+
+    cached = get_async_httpx_client(LlmProviders.FLOWSPEECH)
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(respond),
+        headers={"Authorization": "discard", "X-Client-Secret": "discard"},
+        cookies={"session": "discard"},
+    ) as client:
+        cached.client = client
+        for _ in range(2):
+            result = await handler(Clock()).arun()
+            assert result.content == wav_bytes()
+            assert not client.is_closed
+        assert get_async_httpx_client(LlmProviders.FLOWSPEECH).client is client
+    assert [request.method for request in requests] == ["POST", "GET", "POST", "GET"]
 
 
 @pytest.mark.asyncio

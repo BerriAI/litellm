@@ -13378,22 +13378,26 @@ async def audio_speech(
             response_format=requested_format if isinstance(requested_format, str) else None,
         )
 
-        if isinstance(response, HttpxBinaryResponseContent) and "x-flowspeech-job-id" in response.response.headers:
-            media_type = "audio/wav"
-            custom_headers.update(
-                MappingProxyType(
-                    {
-                        key: response.response.headers[key]
-                        for key in ("x-flowspeech-job-id", "x-flowspeech-request-id")
-                        if key in response.response.headers
-                    }
-                )
+        flowspeech_raw_response: Final = _UNTYPED_VALUE.validate_python(
+            getattr(_UNTYPED_VALUE.validate_python(response), "response", None)
+        )
+        flowspeech_recovery_headers: Final[Mapping[str, str]] = (
+            MappingProxyType(
+                {
+                    key: flowspeech_raw_response.headers[key]
+                    for key in ("x-flowspeech-job-id", "x-flowspeech-request-id")
+                    if key in flowspeech_raw_response.headers
+                }
             )
+            if isinstance(flowspeech_raw_response, httpx.Response)
+            and "x-flowspeech-job-id" in flowspeech_raw_response.headers
+            else MappingProxyType({})
+        )
 
         return StreamingResponse(
             _audio_speech_chunk_generator(response),
             media_type=media_type,
-            headers=custom_headers,
+            headers={**TypeAdapter(Mapping[str, str]).validate_python(custom_headers), **flowspeech_recovery_headers},
         )
 
     except Exception as e:

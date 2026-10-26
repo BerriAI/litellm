@@ -231,6 +231,10 @@ class FlowSpeechTextToSpeechConfig(BaseTextToSpeechConfig):
     def get_complete_url(self, model: str, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
         base: Final = api_base if api_base is not None else (get_secret_str("FLOWSPEECH_API_BASE") or self.TTS_BASE_URL)
         url: Final = validate_url(base)
-        if url.query or url.path.rstrip("/") not in ("", self.TTS_ENDPOINT_PATH):
-            raise ValueError("FlowSpeech api_base must be an origin or the /api/v1/tts/jobs endpoint")
-        return str(url.copy_with(path=self.TTS_ENDPOINT_PATH))
+        if url.query:
+            raise ValueError("FlowSpeech api_base must not contain a query")
+        path: Final = url.path.rstrip("/")
+        if path.endswith("/api/ai/text-to-speech"):
+            raise ValueError("FlowSpeech api_base must not use the legacy text-to-speech endpoint")
+        endpoint: Final = path if path.endswith(self.TTS_ENDPOINT_PATH) else path + self.TTS_ENDPOINT_PATH
+        return str(url.copy_with(path=endpoint))

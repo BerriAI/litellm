@@ -169,11 +169,11 @@ def test_complete_url(base):
         ("http://example.com", "FlowSpeech requires an HTTPS URL without credentials or fragment"),
         ("https://u:p@example.com", "FlowSpeech requires an HTTPS URL without credentials or fragment"),
         ("file:///tmp/test", "FlowSpeech requires an HTTPS URL without credentials or fragment"),
-        ("https://example.com/?key=x", "FlowSpeech api_base must be an origin or the /api/v1/tts/jobs endpoint"),
+        ("https://example.com/?key=x", "FlowSpeech api_base must not contain a query"),
         ("https://example.com/#x", "FlowSpeech requires an HTTPS URL without credentials or fragment"),
         (
             "https://example.com/api/ai/text-to-speech",
-            "FlowSpeech api_base must be an origin or the /api/v1/tts/jobs endpoint",
+            "FlowSpeech api_base must not use the legacy text-to-speech endpoint",
         ),
         ("", "FlowSpeech requires an HTTPS URL without credentials or fragment"),
     ],
@@ -181,6 +181,19 @@ def test_complete_url(base):
 def test_rejects_invalid_base(base, message):
     with pytest.raises(ValueError, match=message):
         FlowSpeechTextToSpeechConfig().get_complete_url("flowspeech-tts", base, {})
+
+
+@pytest.mark.parametrize(
+    "base,expected",
+    [
+        ("https://gateway.example/p", "https://gateway.example/p/api/v1/tts/jobs"),
+        ("https://gateway.example/p/", "https://gateway.example/p/api/v1/tts/jobs"),
+        ("https://gateway.example/p/api/v1/tts/jobs/", "https://gateway.example/p/api/v1/tts/jobs"),
+        ("https://api/v1/", "https://api/v1/api/v1/tts/jobs"),
+    ],
+)
+def test_gateway_base_preserves_prefix_without_duplicating_endpoint(base, expected):
+    assert FlowSpeechTextToSpeechConfig().get_complete_url("flowspeech-tts", base, {}) == expected
 
 
 def test_registers_provider():
@@ -191,10 +204,14 @@ def test_registers_provider():
     assert model == "flowspeech-tts"
     assert provider == "flowspeech"
     assert isinstance(config, FlowSpeechTextToSpeechConfig)
+    assert "flowspeech/flowspeech-tts" in litellm.model_list
+    assert litellm.models_by_provider[provider] == litellm.flowspeech_models
+    assert "flowspeech/flowspeech-tts" in litellm.models_by_provider[provider]
 
 
 @pytest.mark.parametrize("multi", [False, True])
-def test_speech_dispatch(multi):
+@pytest.mark.parametrize("timeout_args", [{}, {"timeout": None}, {"timeout": 60}])
+def test_speech_dispatch(multi, timeout_args):
     requests = []
     logs = []
     segments = [{"speaker": "A", "text": "Hi", "voiceName": "Kore"}]
@@ -229,9 +246,9 @@ def test_speech_dispatch(multi):
             api_key="test-key",
             response_format="wav",
             request_id=REQUEST_ID,
-            timeout=60,
             client=HTTPHandler(client=http_client),
             logger_fn=log_event,
+            **timeout_args,
             **({"segments": segments} if multi else {"voice": "Aoede"}),
         )
     assert result.content == wav_bytes()
@@ -245,7 +262,8 @@ def test_speech_dispatch(multi):
 
 
 @pytest.mark.asyncio
-async def test_aspeech_dispatch():
+@pytest.mark.parametrize("timeout_args", [{}, {"timeout": None}, {"timeout": 60}])
+async def test_aspeech_dispatch(timeout_args):
     requests = []
     logs = []
 
@@ -268,8 +286,8 @@ async def test_aspeech_dispatch():
             input="Hello",
             api_key="test-key",
             client=client,
-            timeout=60,
             logger_fn=log_event,
+            **timeout_args,
         )
     assert result.content == wav_bytes()
     assert len(requests) == 2
@@ -277,3 +295,31 @@ async def test_aspeech_dispatch():
     assert json.loads(logs[0][1])["requestId"] == requests[0].headers["idempotency-key"]
     assert logs[0][2]["job_id"] == JOB_ID
     assert "test-key" not in repr(logs) and "audio.example.com" not in repr(logs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_dispatch_rejects_mismatched_client_before_sending(asynchronous):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json=success())
+
+    client_type = httpx.Client if asynchronous else httpx.AsyncClient
+    client = client_type(transport=httpx.MockTransport(respond))
+    try:
+        kwargs = {"model": "flowspeech/flowspeech-tts", "input": "Hello", "api_key": "test-key", "client": client}
+        message = "client must match the synchronous or asynchronous speech call"
+        if asynchronous:
+            with pytest.raises(litellm.APIConnectionError, match=message):
+                await litellm.aspeech(**kwargs)
+        else:
+            with pytest.raises(ValueError, match=message):
+                litellm.speech(**kwargs)
+        assert requests == []
+    finally:
+        if isinstance(client, httpx.AsyncClient):
+            await client.aclose()
+        else:
+            client.close()

@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 import dotenv
 import httpx
 import openai
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, StrictStr, TypeAdapter, ValidationError
 from typing_extensions import assert_never, overload
 
 import litellm
@@ -8892,21 +8892,27 @@ def speech(
         if api_key is not None:
             litellm_params_dict["api_key"] = api_key
 
+        flowspeech_params: Final = TypeAdapter(Mapping[str, object]).validate_python(litellm_params_dict)
         flowspeech_headers: Final = flowspeech_config.validate_environment(
-            extra_headers or headers or MappingProxyType({}), model, litellm_params_dict.get("api_key"), api_base
+            TypeAdapter(Mapping[StrictStr, StrictStr]).validate_python(
+                extra_headers or headers or MappingProxyType({})
+            ),
+            model,
+            TypeAdapter[str | None](str | None).validate_python(flowspeech_params.get("api_key"), strict=True),
+            api_base,
         )
         flowspeech_request: Final = flowspeech_config.transform_text_to_speech_request(
             model=model,
             input=input,
             voice=voice if isinstance(voice, str) else None,
-            optional_params=optional_params,
-            litellm_params=litellm_params_dict,
+            optional_params=TypeAdapter(Mapping[str, object]).validate_python(optional_params),
+            litellm_params=flowspeech_params,
             headers=flowspeech_headers,
         )
-        flowspeech_url: Final = flowspeech_config.get_complete_url(model, api_base, litellm_params_dict)
+        flowspeech_url: Final = flowspeech_config.get_complete_url(model, api_base, flowspeech_params)
 
         def flowspeech_post_call(job: FlowSpeechJob) -> None:
-            logging_obj.post_call(
+            logging_obj.post_call(  # pyright: ignore[reportUnknownMemberType]  # upstream logging callback has untyped parameters
                 input=input,
                 api_key="",
                 original_response=job.model_dump_json(include={"id", "requestId", "status", "usage"}),
@@ -8920,27 +8926,30 @@ def speech(
                     **MappingProxyType(
                         {key: value for key, value in flowspeech_headers.items() if key.lower() != "idempotency-key"}
                     ),
-                    **flowspeech_request["headers"],
+                    **TypeAdapter(Mapping[str, str]).validate_python(flowspeech_request.get("headers"), strict=True),
                 }
             ),
-            body=flowspeech_request["dict_body"],
-            timeout=timeout,
+            body=TypeAdapter(Mapping[str, object]).validate_python(flowspeech_request.get("dict_body")),
+            timeout=http_timeout,
             max_retries=max_retries,
             on_completed=flowspeech_post_call,
         )
-        logging_obj.pre_call(
+        logging_obj.pre_call(  # pyright: ignore[reportUnknownMemberType]  # upstream logging callback has untyped parameters
             input=input,
             api_key="",
             additional_args=MappingProxyType({"api_base": flowspeech_url, "request_id": flowspeech_job.request_id}),
         )
-        flowspeech_client: Final = client.client if isinstance(client, (HTTPHandler, AsyncHTTPHandler)) else client
-        if flowspeech_client is not None and not isinstance(
-            flowspeech_client, httpx.AsyncClient if aspeech else httpx.Client
-        ):
-            raise ValueError("FlowSpeech client must match the synchronous or asynchronous speech call")
-        response = (  # rebind-ok: provider branch sets dispatch result
-            flowspeech_job.arun(flowspeech_client) if aspeech else flowspeech_job.run(flowspeech_client)
+        flowspeech_client: Final = TypeAdapter(object).validate_python(
+            client.client if isinstance(client, (HTTPHandler, AsyncHTTPHandler)) else client
         )
+        if aspeech:
+            if flowspeech_client is not None and not isinstance(flowspeech_client, httpx.AsyncClient):
+                raise ValueError("FlowSpeech client must match the synchronous or asynchronous speech call")
+            response = flowspeech_job.arun(flowspeech_client)  # rebind-ok: provider branch sets dispatch result
+        else:
+            if flowspeech_client is not None and not isinstance(flowspeech_client, httpx.Client):
+                raise ValueError("FlowSpeech client must match the synchronous or asynchronous speech call")
+            response = flowspeech_job.run(flowspeech_client)  # rebind-ok: provider branch sets dispatch result
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         from litellm.llms.vertex_ai.text_to_speech.transformation import (
             VertexAILyriaTextToSpeechConfig,

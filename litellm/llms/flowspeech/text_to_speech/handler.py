@@ -13,7 +13,11 @@ from typing import Final, TypeAlias
 
 import httpx
 
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # unused factory params are untyped upstream
+)
 from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.utils import LlmProviders
 
 from .transformation import (
     FlowSpeechErrorResponse,
@@ -339,10 +343,10 @@ class FlowSpeechTTS:
             flow.close()
 
     async def arun(self, client: httpx.AsyncClient | None = None) -> HttpxBinaryResponseContent:
-        if client is None:
-            async with httpx.AsyncClient(trust_env=False) as owned_client:
-                return await self._arun_with_deadline(owned_client)
-        return await self._arun_with_deadline(client)
+        selected_client: Final = (
+            client if client is not None else get_async_httpx_client(LlmProviders.FLOWSPEECH).client
+        )
+        return await self._arun_with_deadline(selected_client)
 
     async def _arun_with_deadline(self, client: httpx.AsyncClient) -> HttpxBinaryResponseContent:
         try:
