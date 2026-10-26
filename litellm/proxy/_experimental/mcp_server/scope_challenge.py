@@ -33,9 +33,8 @@ class OAuthScopeResponse:
         self._request_path = request_path
         self._ready = asyncio.Event()
         self._lock = asyncio.Lock()
-        self._start: Message | None = None
         self._challenge: MCPUpstreamAuthError | None = None
-        self._refused = False
+        self._closed = False
 
     @property
     def pending(self) -> bool:
@@ -50,31 +49,33 @@ class OAuthScopeResponse:
             self._ready.set()
 
     async def __call__(self, message: Message) -> None:
-        if message["type"] == "http.response.start":
-            self._start = message
-            if message["status"] != 200:
-                self.allow()
-            return
-        await self._ready.wait()
         async with self._lock:
-            if self._refused:
+            if self._closed:
                 return
-            if self._start is not None:
-                start: Final = self._start
-                self._start = None
-                if self._challenge is not None:
-                    error: Final = self._challenge.to_http_exception(self._base_url, self._request_path)
-                    response: Final = JSONResponse(
-                        status_code=error.status_code, content={"detail": error.detail}, headers=error.headers
-                    )
-                    self._refused = True
-                    await self._send(
-                        {"type": "http.response.start", "status": response.status_code, "headers": response.raw_headers}
-                    )
-                    await self._send({"type": "http.response.body", "body": bytes(response.body)})
-                    return
-                await self._send(start)
-            await self._send(message)
+            try:
+                if message["type"] == "http.response.start":
+                    if message["status"] != 200:
+                        self.allow()
+                    await self._ready.wait()
+                    if self._challenge is not None:
+                        error: Final = self._challenge.to_http_exception(self._base_url, self._request_path)
+                        response: Final = JSONResponse(
+                            status_code=error.status_code, content={"detail": error.detail}, headers=error.headers
+                        )
+                        self._closed = True
+                        await self._send(
+                            {
+                                "type": "http.response.start",
+                                "status": response.status_code,
+                                "headers": response.raw_headers,
+                            }
+                        )
+                        await self._send({"type": "http.response.body", "body": bytes(response.body)})
+                        return
+                await self._send(message)
+            except BaseException:
+                self._closed = True
+                raise
 
 
 def scope_response_from_request(request: object) -> OAuthScopeResponse | None:

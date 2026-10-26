@@ -5,6 +5,7 @@ from litellm.proxy._experimental.mcp_server import operations as mcp_operations
 import asyncio
 import logging
 import sys
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -531,12 +532,12 @@ async def test_scope_challenge_replaces_pending_stream_headers_once():
 
     send = AsyncMock()
     response = OAuthScopeResponse(send, "https://gateway.example", "/docs/mcp")
-    await response({"type": "http.response.start", "status": 200, "headers": []})
+    headers: Final = asyncio.create_task(response({"type": "http.response.start", "status": 200, "headers": []}))
     body = asyncio.create_task(response({"type": "http.response.body", "body": b"event: message\n"}))
     await asyncio.sleep(0)
     send.assert_not_awaited()
     response.deny(MCPUpstreamAuthError(403, None, "docs", required_scope="tools.write"))
-    await asyncio.wait_for(body, 1)
+    await asyncio.wait_for(asyncio.gather(headers, body), 1)
     await response({"type": "http.response.body", "body": b"private tool error"})
     assert send.await_count == 2
     start, result = [call.args[0] for call in send.await_args_list]
@@ -567,7 +568,7 @@ async def test_scope_authorization_releases_progress_without_waiting_for_tool_re
     context = ServerRequestContext(session=MagicMock(), lifespan_context={}, protocol_version="2025-11-25", method="tools/call", request=request)
     token = active_mcp_request_ctx_var.set(context)
     try:
-        await gate({"type": "http.response.start", "status": 200, "headers": []})
+        headers: Final = asyncio.create_task(gate({"type": "http.response.start", "status": 200, "headers": []}))
         progress = asyncio.create_task(gate({"type": "http.response.body", "body": b"progress", "more_body": True}))
         await asyncio.sleep(0)
         for method, status in [("initialize", 200), ("tools/list", 200), ("tools/call", 403)]:
@@ -582,7 +583,7 @@ async def test_scope_authorization_releases_progress_without_waiting_for_tool_re
         upstream = MCPClient(server_url="https://upstream.example/mcp")
         async with upstream._create_httpx_client_factory(transport=httpx2.MockTransport(lambda request: httpx2.Response(200, content=b"tool result")))() as client:
             async with client.stream("POST", "https://upstream.example/mcp", json={"method": "tools/call"}):
-                await asyncio.wait_for(progress, 1)
+                await asyncio.wait_for(asyncio.gather(headers, progress), 1)
                 assert send.await_args_list[-1].args[0]["body"] == b"progress"
         gate.deny(MCPUpstreamAuthError(403, None, "docs", required_scope="tools.write"))
         await gate({"type": "http.response.body", "body": b"result"})
@@ -594,21 +595,105 @@ async def test_scope_authorization_releases_progress_without_waiting_for_tool_re
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [ValueError, asyncio.CancelledError])
-async def test_scope_middleware_releases_waiting_response_on_validation_or_cancellation(failure):
+@pytest.mark.parametrize("fail_send", [False, True])
+async def test_scope_middleware_releases_waiting_response_on_validation_or_cancellation(
+    failure: type[BaseException], fail_send: bool,
+) -> None:
     from mcp.server.context import ServerRequestContext
     from starlette.requests import Request
 
     from litellm.proxy._experimental.mcp_server.scope_challenge import SCOPE_RESPONSE_KEY, OAuthScopeResponse, finish_scope_response
 
-    send = AsyncMock()
-    gate = OAuthScopeResponse(send, "https://gateway.example", "/mcp/docs")
-    context = ServerRequestContext(session=MagicMock(), lifespan_context={}, protocol_version="2025-11-25", method="tools/call", request=Request({"type": "http", SCOPE_RESPONSE_KEY: gate}))
+    send: Final = AsyncMock(side_effect=BrokenPipeError("peer disconnected") if fail_send else None)
+    gate: Final = OAuthScopeResponse(send, "https://gateway.example", "/mcp/docs")
+    context: Final = ServerRequestContext(session=MagicMock(), lifespan_context={}, protocol_version="2025-11-25", method="tools/call", request=Request({"type": "http", SCOPE_RESPONSE_KEY: gate}))
+    headers: Final = asyncio.create_task(gate({"type": "http.response.start", "status": 200, "headers": []}))
+    await asyncio.sleep(0)
     with pytest.raises(failure):
         await finish_scope_response(context, AsyncMock(side_effect=failure))
-    await gate({"type": "http.response.start", "status": 200, "headers": []})
+    if fail_send:
+        with pytest.raises(BrokenPipeError, match="peer disconnected"):
+            await headers
+    else:
+        await headers
     await gate({"type": "http.response.body", "body": b"error"})
     assert not gate.pending
-    assert send.await_args_list[-1].args[0]["body"] == b"error"
+    assert send.await_args_list[-1].args[0]["type"] == ("http.response.start" if fail_send else "http.response.body")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_send", [False, True])
+async def test_scope_transport_owns_header_send_cancellation_and_errors(fail_send: bool) -> None:
+    import httpx2
+    from starlette.types import Message
+
+    from litellm.proxy._experimental.mcp_server.legacy_callbacks import record_upstream_tool_authorization
+    from litellm.proxy._experimental.mcp_server.scope_challenge import OAuthScopeResponse
+
+    send_started: Final = asyncio.Event()
+    send_stopped: Final = asyncio.Event()
+    writable: Final = asyncio.Event()
+    sent: Final[list[Message]] = []
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+        assert message["type"] == "http.response.start"
+        send_started.set()
+        try:
+            if fail_send:
+                raise BrokenPipeError("peer disconnected")
+            await writable.wait()
+        finally:
+            send_stopped.set()
+
+    gate: Final = OAuthScopeResponse(send, "https://gateway.example", "/mcp/docs")
+    headers: Final = asyncio.create_task(gate({"type": "http.response.start", "status": 200, "headers": []}))
+    body: Final = asyncio.create_task(gate({"type": "http.response.body", "body": b"result"}))
+    await asyncio.sleep(0)
+    assert not send_started.is_set()
+    response: Final = httpx2.Response(200, request=httpx2.Request(
+        "POST", "https://upstream.example/mcp", json={"method": "tools/call"},
+    ))
+    try:
+        await record_upstream_tool_authorization(response, pending=gate)
+        await send_started.wait()
+        if fail_send:
+            with pytest.raises(BrokenPipeError, match="peer disconnected"):
+                await headers
+        else:
+            headers.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await headers
+        await body
+        assert len(sent) == 1
+        assert send_stopped.is_set()
+    finally:
+        writable.set()
+        await send_stopped.wait()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allowed_before_start", [False, True])
+async def test_scope_authorization_sends_stream_headers_before_the_first_body_chunk(allowed_before_start: bool) -> None:
+    from starlette.types import Message
+
+    from litellm.proxy._experimental.mcp_server.scope_challenge import OAuthScopeResponse
+
+    send: Final = AsyncMock()
+    gate: Final = OAuthScopeResponse(send, "https://gateway.example", "/mcp/docs")
+    start: Final[Message] = {"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"text/event-stream")]}
+    if allowed_before_start:
+        gate.allow()
+    headers: Final = asyncio.create_task(gate(start))
+    await asyncio.sleep(0)
+    if not allowed_before_start:
+        send.assert_not_awaited()
+        gate.allow()
+    await headers
+    send.assert_awaited_once_with(start)
+    await gate({"type": "http.response.body", "body": b"event: message\n", "more_body": True})
+    assert send.await_args_list[-1].args[0]["body"] == b"event: message\n"
+    assert send.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -697,13 +782,14 @@ async def test_scope_challenges_are_isolated_between_concurrent_requests():
         context = ServerRequestContext(session=MagicMock(), lifespan_context={}, protocol_version="2025-11-25", method="tools/call", request=Request({"type": "http", SCOPE_RESPONSE_KEY: gate}))
         token = active_mcp_request_ctx_var.set(context)
         try:
-            await gate({"type": "http.response.start", "status": 200, "headers": []})
+            headers: Final = asyncio.create_task(gate({"type": "http.response.start", "status": 200, "headers": []}))
             await asyncio.sleep(0)
             assert get_scope_response() is gate
             if denied:
                 gate.deny(MCPUpstreamAuthError(403, None, "docs", required_scope="tools.write"))
             else:
                 await record_upstream_tool_authorization(httpx2.Response(200, request=httpx2.Request("POST", "https://upstream.example/mcp", json={"method": "tools/call"})), pending=get_scope_response())
+            await headers
             await gate({"type": "http.response.body", "body": b"done"})
             return send.await_args_list[0].args[0]["status"]
         finally:

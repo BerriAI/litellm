@@ -7681,7 +7681,7 @@ class TestMCPServerManager:
             request=Request({"type": "http", SCOPE_RESPONSE_KEY: gate}),
         )
         token = active_mcp_request_ctx_var.set(context)
-        await gate({"type": "http.response.start", "status": 200, "headers": []})
+        headers: Final = asyncio.create_task(gate({"type": "http.response.start", "status": 200, "headers": []}))
         progress = asyncio.create_task(gate({"type": "http.response.body", "body": b"progress", "more_body": True}))
 
         async def upstream_call(*args, **kwargs):
@@ -7701,7 +7701,7 @@ class TestMCPServerManager:
             assert not result.is_error
         finally:
             gate.allow()
-            await asyncio.wait_for(progress, 1)
+            await asyncio.wait_for(asyncio.gather(headers, progress), 1)
             active_mcp_request_ctx_var.reset(token)
 
     @pytest.mark.asyncio
