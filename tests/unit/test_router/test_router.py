@@ -30488,6 +30488,7 @@ async def test_anthropic_caller_rate_limit_does_not_block_other_credentials(
     from litellm.types.router import AllowedFailsPolicy
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr("time.time", lambda: 1767225600.0)
 
     def upstream(request: httpx.Request) -> httpx.Response:
         credential: Final = request.headers.get("authorization", request.headers.get("x-api-key", ""))
