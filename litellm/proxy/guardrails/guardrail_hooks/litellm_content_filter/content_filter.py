@@ -2030,9 +2030,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         )
         if any(word in cut_sentence for word in plan.conditional_words):
             return True
-        if not tail.strip() or (head and head[-1].isspace() and tail and tail[0].isspace()):
-            return True
-        return False
+        return bool(not tail.strip() or (head and head[-1].isspace() and tail and tail[0].isspace()))
 
     def _trim_streamed_choice_buffer(
         self, state: _StreamedChoiceState, masked_text: str, plan: _StreamedScanPlan
