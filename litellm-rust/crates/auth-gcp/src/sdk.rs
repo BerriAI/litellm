@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use google_cloud_auth::credentials::{CacheableResource, CredentialsProvider, EntityTag};
 use google_cloud_auth::errors::CredentialsError;
-use http::{Extensions, HeaderMap, HeaderName, HeaderValue};
+use http::{Extensions, HeaderMap};
 use litellm_auth_types::Error;
 
 use crate::{VertexAuth, VertexConfig};
@@ -25,22 +25,13 @@ impl GoogleCredentials {
     }
 
     pub async fn request_headers(&self) -> Result<HeaderMap, Error> {
-        let response = self
+        Ok(self
             .auth
-            .validate_environment(Vec::new(), None, &self.config, &|name| {
+            .validate_environment(HeaderMap::new(), None, &self.config, &|name| {
                 (self.environment)(name)
             })
-            .await?;
-        response
-            .headers
-            .into_iter()
-            .map(|(key, value)| {
-                let name =
-                    HeaderName::from_bytes(key.as_bytes()).map_err(|_| Error::InvalidHeader)?;
-                let value = HeaderValue::from_str(&value).map_err(|_| Error::InvalidHeader)?;
-                Ok((name, value))
-            })
-            .collect()
+            .await?
+            .headers)
     }
 }
 

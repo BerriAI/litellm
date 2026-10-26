@@ -1,3 +1,4 @@
+use http::HeaderMap;
 use litellm_core_utils::decline::Decline;
 use std::convert::Infallible;
 
@@ -33,7 +34,7 @@ use crate::{
         base_model_iterator::{StreamError, StreamTransformer, transform_stream},
         messages::{
             streaming::{ByteStream, EventStream, StreamDecoder},
-            transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
+            transformation::{BaseMessagesConfig, ValidatedEnvironment},
         },
     },
     bedrock::chat::invoke_handler::{decode_invoke_anthropic_chunk, invoke_chunk_stream},
@@ -144,7 +145,7 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
     /// caller passed none. Without one the request is signed with SigV4.
     fn validate_environment(
         &self,
-        headers: Headers,
+        headers: HeaderMap,
         api_key: Option<&str>,
         model: &str,
         _optional_params: &MessagesOptionalParams,
@@ -617,7 +618,7 @@ mod tests {
         };
         let validated = AmazonAnthropicClaudeMessagesConfig
             .validate_environment(
-                Vec::new(),
+                http::HeaderMap::new(),
                 None,
                 "anthropic.claude-3",
                 &MessagesOptionalParams::default(),
@@ -658,7 +659,7 @@ mod tests {
         };
         let validated = AmazonAnthropicClaudeMessagesConfig
             .validate_environment(
-                vec![("authorization".into(), "Bearer forwarded".into())],
+                litellm_http::request::header_map(&[("authorization", "Bearer forwarded")]),
                 api_key,
                 "anthropic.claude-3",
                 &MessagesOptionalParams::default(),

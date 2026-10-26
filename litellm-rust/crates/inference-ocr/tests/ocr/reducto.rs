@@ -308,7 +308,7 @@ async fn guardrail_headers_reach_both_upload_and_parse(
     );
     let host = LocalOcrHost::new(request).with_before_send(|wire, _| {
         Ok(WireRequest {
-            headers: vec![("authorization".into(), "Bearer guarded".into())],
+            headers: litellm_http::request::header_map(&[("authorization", "Bearer guarded")]),
             ..wire
         })
     });

@@ -4,6 +4,7 @@
 //! the `max_completion_tokens` -> `max_tokens` rename and the usage
 //! `*_tokens` null-to-zero sanitize.
 
+use http::{HeaderMap, header::AUTHORIZATION};
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_core_utils::core_helpers::unix_now;
 use litellm_llms_types::formats::chat_completions::{
@@ -17,8 +18,7 @@ use crate::{
     base_llm::{
         auth::AuthScheme,
         chat::transformation::{
-            BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
-            ValidatedEnvironment,
+            BaseConfig, ProviderChatRequestData, ProviderChatResponseData, ValidatedEnvironment,
         },
     },
     openai_like::common_utils::{complete_openai_like_url, openai_compatible_provider_info},
@@ -188,16 +188,13 @@ impl BaseConfig for OpenAILikeChatConfig {
     /// endpoints take no key; Python still sends `Bearer ` in that case.
     fn validate_environment(
         &self,
-        headers: Headers,
+        headers: HeaderMap,
         api_key: Option<&str>,
         _model: &str,
         _optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
-        if headers
-            .iter()
-            .any(|(name, _)| name.eq_ignore_ascii_case("authorization"))
-        {
+        if headers.contains_key(AUTHORIZATION) {
             return Ok(ValidatedEnvironment {
                 headers,
                 auth: AuthScheme::Forwarded,
@@ -438,7 +435,7 @@ mod tests {
     fn the_resolved_key_authenticates_as_a_bearer() {
         let validated = OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG
             .validate_environment(
-                vec![],
+                http::HeaderMap::new(),
                 Some("sk-test"),
                 "my-model",
                 &params(json!({})),
@@ -458,7 +455,7 @@ mod tests {
     fn the_key_falls_back_to_the_environment() {
         let validated = OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG
             .validate_environment(
-                vec![],
+                http::HeaderMap::new(),
                 None,
                 "my-model",
                 &params(json!({})),
@@ -475,7 +472,7 @@ mod tests {
     fn a_forwarded_authorization_is_the_whole_credential() {
         // Python adds `Bearer <key>` only when the caller did not already send
         // `Authorization`, so the forwarded header wins over the deployment key.
-        let headers = vec![("Authorization".to_string(), "Bearer caller".to_string())];
+        let headers = litellm_http::request::header_map(&[("Authorization", "Bearer caller")]);
         let validated = OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG
             .validate_environment(
                 headers,
@@ -493,7 +490,13 @@ mod tests {
         // vllm-compatible endpoints require no api key; Python resolves `""` and
         // sends `Bearer `, so validation must not fail on the missing key.
         let validated = OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG
-            .validate_environment(vec![], None, "my-model", &params(json!({})), &no_env)
+            .validate_environment(
+                http::HeaderMap::new(),
+                None,
+                "my-model",
+                &params(json!({})),
+                &no_env,
+            )
             .expect("validates");
         let AuthScheme::Credential { secret, .. } = validated.auth else {
             panic!("expected a bearer credential");

@@ -1,3 +1,5 @@
+use http::{HeaderMap, header::AUTHORIZATION};
+use litellm_auth::{CredentialPlacement, http::apply_credential};
 use litellm_core_utils::{
     call_arguments::{CallArguments, parse_options},
     url_utils::ApiUrl,
@@ -96,7 +98,7 @@ pub struct CohereParseConfig;
 impl BaseOcrConfig for CohereParseConfig {
     type OcrParams = CohereOptions;
     type ProviderRequest = CohereRequest;
-    type Environment = Vec<(String, String)>;
+    type Environment = HeaderMap;
 
     fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
         &["output_format", "req_format"]
@@ -155,7 +157,7 @@ impl BaseOcrConfig for CohereParseConfig {
         model: &str,
         document: OcrDocument,
         optional_params: &CohereOptions,
-        _headers: &[(String, String)],
+        _headers: &HeaderMap,
     ) -> Result<CohereRequest, Error> {
         let image_url = image_url(document)?;
         Ok(build_request(model, image_url, optional_params))
@@ -180,8 +182,8 @@ impl CohereParseConfig {
         &self,
         connection: &OcrConnection,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-    ) -> Result<Vec<(String, String)>, Error> {
-        if litellm_http::request::has_header(&connection.extra_headers, "authorization") {
+    ) -> Result<HeaderMap, Error> {
+        if connection.extra_headers.contains_key(AUTHORIZATION) {
             return Ok(connection.extra_headers.clone());
         }
         let key = connection
@@ -199,11 +201,11 @@ impl CohereParseConfig {
                 provider: "Cohere",
                 environment_variable: COHERE_API_KEY_ENV,
             }))?;
-        Ok(
-            std::iter::once(("Authorization".into(), format!("Bearer {key}")))
-                .chain(connection.extra_headers.clone())
-                .collect(),
-        )
+        Ok(apply_credential(
+            connection.extra_headers.clone(),
+            &key,
+            CredentialPlacement::Bearer,
+        )?)
     }
 
     fn build_ocr_url(&self, api_base: &str) -> Result<String, Error> {
@@ -469,7 +471,7 @@ mod tests {
         )
         .unwrap();
         let body = CohereParseConfig
-            .transform_ocr_request("parse", document, &params, &[])
+            .transform_ocr_request("parse", document, &params, &http::HeaderMap::new())
             .unwrap();
         assert_eq!(
             serde_json::to_value(body).unwrap(),
@@ -697,7 +699,7 @@ mod tests {
                 }))
                 .unwrap(),
                 &serde_json::from_value(json!({})).unwrap(),
-                &[],
+                &http::HeaderMap::new(),
             )
             .unwrap();
         assert_eq!(
@@ -754,7 +756,7 @@ mod tests {
 
         assert_eq!(
             headers,
-            [("Authorization".to_string(), "Bearer env-key".to_string())]
+            litellm_http::request::header_map(&[("authorization", "Bearer env-key")])
         );
     }
 

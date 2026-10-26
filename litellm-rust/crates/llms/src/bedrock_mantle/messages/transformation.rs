@@ -1,13 +1,14 @@
 use std::sync::LazyLock;
 
+use http::{HeaderMap, header::AUTHORIZATION};
+
 use litellm_auth::{AwsParams, CredentialPlacement, SecretValue};
 use litellm_auth_aws::AwsCredentialSource;
 use litellm_auth_aws::bedrock_model_id_and_region;
 use litellm_core_utils::settings::resolve_non_empty;
-use litellm_http::request::{with_header, without_headers};
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest},
-    providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet, DEFAULT_HEADERS},
+    providers::anthropic::{AnthropicBeta, BETA_HEADER, BetaProvider, BetaSet, DEFAULT_HEADERS},
 };
 use litellm_router_types::LitellmParams;
 use serde_json::Value;
@@ -22,16 +23,17 @@ use crate::{
         },
     },
     base_llm::{
-        auth::AuthScheme,
+        auth::{AuthScheme, header_value},
         messages::{
             context::MessagesTransformContext,
-            transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
+            transformation::{BaseMessagesConfig, ValidatedEnvironment},
         },
     },
     bedrock::common_utils::validated_region,
 };
 
 const API_BASE_ENV: &str = "BEDROCK_MANTLE_API_BASE";
+const WORKSPACE_HEADER: &str = "anthropic-workspace-id";
 const REGION_ENVS: &[&str] = &[
     "BEDROCK_MANTLE_REGION",
     "AWS_REGION_NAME",
@@ -56,28 +58,22 @@ pub const BEDROCK_MANTLE_MESSAGES_CONFIG: BedrockMantleAnthropicMessagesConfig =
 impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
     fn validate_environment(
         &self,
-        headers: Headers,
+        mut headers: HeaderMap,
         api_key: Option<&str>,
         model: &str,
         _optional_params: &MessagesOptionalParams,
         params: &LitellmParams,
         env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
-        let headers: Headers = headers
-            .into_iter()
-            .filter(|(name, _)| {
-                !name.eq_ignore_ascii_case("authorization")
-                    && !name.eq_ignore_ascii_case("x-api-key")
-            })
-            .collect();
-        let headers = match params
+        headers.remove(AUTHORIZATION);
+        headers.remove("x-api-key");
+        if let Some(project) = params
             .extra
             .get("aws_bedrock_project_id")
             .and_then(Value::as_str)
         {
-            Some(project) => with_header(headers, "anthropic-workspace-id", project.to_string()),
-            None => headers,
-        };
+            headers.insert(WORKSPACE_HEADER, header_value(WORKSPACE_HEADER, project)?);
+        }
         let auth = match resolve_non_empty(api_key, env, KEY_ENVS) {
             Some(token) => AuthScheme::Credential {
                 placement: CredentialPlacement::Bearer,
@@ -178,7 +174,11 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
         DEFAULT_HEADERS
     }
 
-    fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
+    fn request_headers(
+        &self,
+        mut headers: HeaderMap,
+        request: &MessagesRequest,
+    ) -> Result<HeaderMap, Error> {
         let body_betas: BetaSet = request
             .params
             .extra
@@ -204,8 +204,9 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
             .then_some(AnthropicBeta::DangerousToolUse20260903)
             .into_iter()
             .collect();
+        headers.remove(BETA_HEADER);
         merge_beta_headers(
-            without_headers(headers, &["anthropic-beta"]),
+            headers,
             caller
                 .union(provider_feature_betas(request, BetaProvider::BedrockMantle))
                 .union(safeguards),
@@ -263,7 +264,8 @@ fn mantle_region(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use litellm_http::request::header_value;
+    use crate::base_llm::auth::header_str;
+    use litellm_http::request::header_map;
     use rstest::rstest;
     use serde_json::json;
 
@@ -319,7 +321,7 @@ mod tests {
         );
         let environment = BEDROCK_MANTLE_MESSAGES_CONFIG
             .validate_environment(
-                vec![],
+                http::HeaderMap::new(),
                 None,
                 model,
                 &MessagesOptionalParams::default(),
@@ -356,7 +358,7 @@ mod tests {
             .unwrap();
         let environment = BEDROCK_MANTLE_MESSAGES_CONFIG
             .validate_environment(
-                vec![],
+                http::HeaderMap::new(),
                 None,
                 "claude-test",
                 &MessagesOptionalParams::default(),
@@ -410,10 +412,7 @@ mod tests {
     ) {
         let environment = BEDROCK_MANTLE_MESSAGES_CONFIG
             .validate_environment(
-                vec![
-                    ("X-Api-Key".into(), "stale".into()),
-                    ("Authorization".into(), "stale".into()),
-                ],
+                header_map(&[("X-Api-Key", "stale"), ("Authorization", "stale")]),
                 key,
                 "claude-test",
                 &MessagesOptionalParams::default(),
@@ -478,14 +477,16 @@ mod tests {
     #[rstest]
     fn caller_betas_are_filtered_renamed_and_merged_with_feature_betas() {
         let request: MessagesRequest = serde_json::from_value(json!({"model": "claude-test", "max_tokens": 16, "messages": [], "safeguards": [{"type": "dangerous_tool_use"}]})).unwrap();
-        let headers = BEDROCK_MANTLE_MESSAGES_CONFIG.request_headers(
-            vec![(
-                "Anthropic-Beta".into(),
-                "advanced-tool-use-2025-11-20,code-execution-2025-08-25,custom-beta".into(),
-            )],
-            &request,
-        );
-        let actual: std::collections::BTreeSet<&str> = header_value(&headers, "anthropic-beta")
+        let headers = BEDROCK_MANTLE_MESSAGES_CONFIG
+            .request_headers(
+                header_map(&[(
+                    "Anthropic-Beta",
+                    "advanced-tool-use-2025-11-20,code-execution-2025-08-25,custom-beta",
+                )]),
+                &request,
+            )
+            .unwrap();
+        let actual: std::collections::BTreeSet<&str> = header_str(&headers, "anthropic-beta")
             .unwrap()
             .split(',')
             .collect();
@@ -502,7 +503,7 @@ mod tests {
     #[rstest]
     #[case::body_only(
         json!(["custom-beta", "advanced-tool-use-2025-11-20"]),
-        vec![],
+        &[],
         vec![
             AnthropicBeta::Other("custom-beta".into()),
             AnthropicBeta::ToolSearchTool20251019,
@@ -510,7 +511,7 @@ mod tests {
     )]
     #[case::header_and_body(
         json!(["custom-b"]),
-        vec![("Anthropic-Beta".into(), "custom-a".into())],
+        &[("Anthropic-Beta", "custom-a")],
         vec![
             AnthropicBeta::Other("custom-a".into()),
             AnthropicBeta::Other("custom-b".into()),
@@ -518,7 +519,7 @@ mod tests {
     )]
     fn body_betas_are_filtered_renamed_and_merged_with_headers(
         #[case] body_betas: Value,
-        #[case] headers: Headers,
+        #[case] headers: &[(&str, &str)],
         #[case] expected: Vec<AnthropicBeta>,
     ) {
         let request: MessagesRequest = serde_json::from_value(json!({
@@ -528,13 +529,50 @@ mod tests {
             "anthropic_beta": body_betas
         }))
         .unwrap();
-        let headers = BEDROCK_MANTLE_MESSAGES_CONFIG.request_headers(headers, &request);
-        let actual: BetaSet = header_value(&headers, "anthropic-beta")
+        let headers = BEDROCK_MANTLE_MESSAGES_CONFIG
+            .request_headers(header_map(headers), &request)
+            .unwrap();
+        let actual: BetaSet = header_str(&headers, "anthropic-beta")
             .unwrap()
             .parse()
             .unwrap();
         let expected: BetaSet = expected.into_iter().collect();
         assert_eq!(actual, expected);
+    }
+
+    #[rstest]
+    fn a_body_beta_that_cannot_be_a_header_value_is_the_callers_fault() {
+        let request: MessagesRequest = serde_json::from_value(json!({
+            "model": "claude-test",
+            "max_tokens": 16,
+            "messages": [],
+            "anthropic_beta": ["custom\r\nx-injected: 1"]
+        }))
+        .unwrap();
+        let error = BEDROCK_MANTLE_MESSAGES_CONFIG
+            .request_headers(HeaderMap::new(), &request)
+            .unwrap_err();
+        assert!(error.is_request(), "{error:?}");
+    }
+
+    #[rstest]
+    fn a_project_id_that_cannot_be_a_header_value_is_the_callers_fault() {
+        let params: LitellmParams = serde_json::from_value(json!({
+            "model": "claude-test",
+            "aws_bedrock_project_id": "project\nx-injected: 1",
+        }))
+        .unwrap();
+        let error = BEDROCK_MANTLE_MESSAGES_CONFIG
+            .validate_environment(
+                HeaderMap::new(),
+                Some("key"),
+                "claude-test",
+                &MessagesOptionalParams::default(),
+                &params,
+                &|_| None,
+            )
+            .unwrap_err();
+        assert!(error.is_request(), "{error:?}");
     }
 
     #[rstest]

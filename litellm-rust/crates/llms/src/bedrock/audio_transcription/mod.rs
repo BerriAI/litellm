@@ -1,3 +1,4 @@
+use http::HeaderMap;
 use litellm_auth::AwsParams;
 use litellm_auth_aws::{
     AwsCredentialSource, bedrock_model_id_and_region,
@@ -17,8 +18,7 @@ use crate::{
     Error, ErrorDetail,
     base_llm::{
         audio_transcription::transformation::{
-            AudioTranscriptionRequestData, BaseAudioTranscriptionConfig, Headers,
-            ValidatedEnvironment,
+            AudioTranscriptionRequestData, BaseAudioTranscriptionConfig, ValidatedEnvironment,
         },
         auth::AuthScheme,
     },
@@ -168,12 +168,12 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        &[("Content-Type", "application/json")]
+        &[("content-type", "application/json")]
     }
 
     fn validate_environment(
         &self,
-        headers: Headers,
+        headers: HeaderMap,
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,

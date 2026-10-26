@@ -1,3 +1,4 @@
+use http::HeaderMap;
 use litellm_auth::AwsParams;
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_auth_aws::{
@@ -26,7 +27,7 @@ use crate::{
         chat::{
             streaming::StreamShape,
             transformation::{
-                BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
+                BaseConfig, ProviderChatRequestData, ProviderChatResponseData,
                 ValidatedEnvironment, unsupported_message, unsupported_param,
             },
         },
@@ -221,7 +222,7 @@ impl BaseConfig for AmazonConverseConfig {
     /// principal instead, which is the identity swap this branch exists to prevent.
     fn validate_environment(
         &self,
-        headers: Headers,
+        headers: HeaderMap,
         api_key: Option<&str>,
         model: &str,
         optional_params: &Map<String, Value>,
@@ -254,7 +255,7 @@ impl BaseConfig for AmazonConverseConfig {
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        &[("Content-Type", "application/json")]
+        &[("content-type", "application/json")]
     }
 
     fn config_params(&self) -> &'static [&'static str] {
@@ -646,7 +647,7 @@ mod tests {
     fn signs_with_sigv4_in_the_resolved_region() {
         let validated = BEDROCK_CHAT_COMPLETIONS_CONFIG
             .validate_environment(
-                Vec::new(),
+                http::HeaderMap::new(),
                 None,
                 "eu-central-1/anthropic.claude-v2",
                 &Map::new(),
@@ -672,7 +673,7 @@ mod tests {
             bearer_or_region(
                 BEDROCK_CHAT_COMPLETIONS_CONFIG
                     .validate_environment(
-                        Vec::new(),
+                        http::HeaderMap::new(),
                         api_key,
                         "eu-central-1/anthropic.claude-v2",
                         &Map::new(),

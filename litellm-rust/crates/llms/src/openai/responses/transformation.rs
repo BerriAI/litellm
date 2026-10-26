@@ -1,3 +1,4 @@
+use http::HeaderMap;
 use litellm_llms_types::formats::responses::{
     ResponsesApiResponse, streaming::ResponsesStreamEvent,
 };
@@ -120,7 +121,7 @@ impl BaseResponsesApiConfig for OpenAiResponsesApiConfig {
 
     fn validate_environment(
         &self,
-        headers: Vec<(String, String)>,
+        headers: HeaderMap,
         api_key: Option<&str>,
         lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {

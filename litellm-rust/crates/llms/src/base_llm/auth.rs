@@ -5,12 +5,26 @@
 //! that split: `validate_environment` shapes the forwarded headers and names the credential
 //! as an [`AuthScheme`], and [`resolve_auth`] turns the scheme into headers and a signer.
 
+use http::{HeaderMap, HeaderValue, header::InvalidHeaderValue};
 use litellm_auth::{AuthServices, CredentialPlacement, SecretValue, TokenProviderHandle};
 use litellm_auth_aws::{AwsCredentialSource, SigV4Signer};
 use litellm_auth_gcp::VertexConfig;
-use litellm_http::request::with_header;
 
-pub type Headers = Vec<(String, String)>;
+use crate::{Error, ErrorDetail};
+
+/// A header value a config derives from the request or the deployment, which is the caller's
+/// fault when it cannot go on the wire.
+pub fn header_value<V>(subject: &'static str, value: V) -> Result<HeaderValue, Error>
+where
+    HeaderValue: TryFrom<V, Error = InvalidHeaderValue>,
+{
+    HeaderValue::try_from(value)
+        .map_err(|error| Error::InvalidRequest(ErrorDetail::invalid(subject, error)))
+}
+
+pub fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers.get(name).and_then(|value| value.to_str().ok())
+}
 
 #[derive(Clone, Debug)]
 pub enum AuthScheme {
@@ -41,13 +55,13 @@ pub enum AuthScheme {
 /// call authenticates.
 #[derive(Clone, Debug)]
 pub struct ValidatedEnvironment {
-    pub headers: Headers,
+    pub headers: HeaderMap,
     pub auth: AuthScheme,
 }
 
 #[derive(Debug)]
 pub struct Authenticated {
-    pub headers: Headers,
+    pub headers: HeaderMap,
     pub signer: Option<SigV4Signer>,
 }
 
@@ -63,7 +77,7 @@ pub async fn resolve_auth(
             signer: None,
         }),
         AuthScheme::Credential { placement, secret } => Ok(Authenticated {
-            headers: with_credential(headers, placement, secret.expose()),
+            headers: with_credential(headers, placement, secret.expose())?,
             signer: None,
         }),
         AuthScheme::Token { provider } => {
@@ -73,14 +87,14 @@ pub async fn resolve_auth(
                     headers,
                     CredentialPlacement::Bearer,
                     token.secret().expose(),
-                ),
+                )?,
                 signer: None,
             })
         }
         AuthScheme::GcpAccessToken { config } => {
             let token = services.gcp.access_token(&config, env_lookup).await?;
             Ok(Authenticated {
-                headers: with_credential(headers, CredentialPlacement::Bearer, &token),
+                headers: with_credential(headers, CredentialPlacement::Bearer, &token)?,
                 signer: None,
             })
         }
@@ -98,13 +112,14 @@ pub async fn resolve_auth(
     }
 }
 
-fn with_credential(headers: Headers, placement: CredentialPlacement, credential: &str) -> Headers {
-    let name = placement.header_name();
-    let value = match placement {
-        CredentialPlacement::Bearer => format!("Bearer {credential}"),
-        CredentialPlacement::Header(_) => credential.to_string(),
-    };
-    with_header(headers, name, value)
+fn with_credential(
+    mut headers: HeaderMap,
+    placement: CredentialPlacement,
+    credential: &str,
+) -> Result<HeaderMap, litellm_auth::Error> {
+    let (name, value) = placement.header(credential)?;
+    headers.insert(name, value);
+    Ok(headers)
 }
 
 #[cfg(test)]
@@ -113,6 +128,7 @@ mod tests {
 
     use litellm_auth::{AuthServices, ResolvedCredential, TokenFuture, TokenProvider};
     use litellm_auth_aws::Credentials;
+    use litellm_http::request::header_map as headers;
     use rstest::rstest;
 
     use super::*;
@@ -121,14 +137,7 @@ mod tests {
         None
     }
 
-    fn headers(pairs: &[(&str, &str)]) -> Headers {
-        pairs
-            .iter()
-            .map(|(name, value)| (name.to_string(), value.to_string()))
-            .collect()
-    }
-
-    async fn resolve(headers: Headers, auth: AuthScheme) -> Authenticated {
+    async fn resolve(headers: HeaderMap, auth: AuthScheme) -> Authenticated {
         resolve_auth(
             &AuthServices::default(),
             ValidatedEnvironment { headers, auth },

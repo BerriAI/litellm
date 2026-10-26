@@ -148,7 +148,7 @@ async fn headers_returned_by_before_send_are_sent() {
     let host = LocalOcrHost::new(ocr_request("mistral/model", &upstream.uri(), json!({})))
         .with_before_send(|mut wire, _| {
             wire.headers
-                .push(("x-core-callback".into(), "edited".into()));
+                .append("x-core-callback", http::HeaderValue::from_static("edited"));
             Ok(wire)
         });
 
@@ -255,29 +255,22 @@ impl litellm_host::interceptors::Interceptors<<Ocr as litellm_host::protocol::Pr
 {
     async fn before_provider_request(
         &self,
-        wire: WireRequest,
+        mut wire: WireRequest,
         _: RequestContext,
     ) -> Result<WireRequest, Error> {
-        let is_authorization = |name: &str| name.eq_ignore_ascii_case("authorization");
         let authorization = wire
             .headers
-            .iter()
-            .find(|(name, _)| is_authorization(name))
-            .map(|(_, value)| value.clone())
+            .get(http::header::AUTHORIZATION)
+            .map(|value| value.to_str().unwrap().to_string())
             .unwrap_or_default();
         self.trace
             .lock()
             .unwrap()
             .push(format!("before_provider_request:{authorization}"));
-        let headers = wire
-            .headers
-            .into_iter()
-            .map(|(name, value)| match is_authorization(&name) {
-                true => (name, "Bearer edited".to_string()),
-                false => (name, value),
-            })
-            .collect();
-        Ok(WireRequest { headers, ..wire })
+        if let Some(value) = wire.headers.get_mut(http::header::AUTHORIZATION) {
+            *value = http::HeaderValue::from_static("Bearer edited");
+        }
+        Ok(wire)
     }
     async fn after_provider_response(
         &self,
@@ -341,11 +334,11 @@ async fn direct_execution_uses_hooks_without_a_machine() {
             _: RequestContext,
         ) -> Result<WireRequest, Error> {
             Ok(WireRequest {
-                headers: wire
-                    .headers
-                    .into_iter()
-                    .chain([("x-direct-hook".into(), "called".into())])
-                    .collect(),
+                headers: {
+                    let mut headers = wire.headers;
+                    headers.append("x-direct-hook", http::HeaderValue::from_static("called"));
+                    headers
+                },
                 ..wire
             })
         }

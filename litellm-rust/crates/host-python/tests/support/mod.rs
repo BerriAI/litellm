@@ -114,7 +114,7 @@ impl Protocol for Synthetic {
 pub fn wire() -> WireRequest {
     WireRequest {
         url: "https://example.invalid".into(),
-        headers: Vec::new(),
+        headers: http::HeaderMap::new(),
         body: serde_json::json!({}),
     }
 }

@@ -1,3 +1,4 @@
+use http::HeaderMap;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use litellm_core_utils::call_arguments::{CallArguments, parse_options};
@@ -87,7 +88,7 @@ impl BaseOcrConfig for TextractAnalyzeDocumentConfig {
         _model: &str,
         document: OcrDocument,
         optional_params: &AnalyzeDocumentOptions,
-        _headers: &[(String, String)],
+        _headers: &HeaderMap,
     ) -> Result<AnalyzeDocumentRequest, Error> {
         Ok(AnalyzeDocumentRequest {
             document: document_bytes(&document)?,
@@ -103,7 +104,7 @@ impl BaseOcrConfig for TextractAnalyzeDocumentConfig {
         model: &str,
         document: OcrDocument,
         optional_params: &AnalyzeDocumentOptions,
-        headers: &[(String, String)],
+        headers: &HeaderMap,
         context: OcrRequestContext<'_>,
     ) -> Result<AnalyzeDocumentRequest, Error> {
         let document = inline_document(document, context).await?;
@@ -463,7 +464,7 @@ mod tests {
             .unwrap();
 
         let request = TextractAnalyzeDocumentConfig
-            .transform_ocr_request(MODEL, document, &params, &[])
+            .transform_ocr_request(MODEL, document, &params, &http::HeaderMap::new())
             .unwrap();
 
         assert_eq!(

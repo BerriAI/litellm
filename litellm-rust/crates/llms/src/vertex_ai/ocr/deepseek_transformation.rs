@@ -1,3 +1,4 @@
+use http::HeaderMap;
 use litellm_auth_gcp as vertex;
 use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
 use serde::{Deserialize, Serialize};
@@ -151,7 +152,7 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
         model: &str,
         document: OcrDocument,
         optional_params: &DeepSeekOcrParams,
-        headers: &[(String, String)],
+        headers: &HeaderMap,
         _context: OcrRequestContext<'_>,
     ) -> Result<DeepSeekOcrRequest, Error> {
         self.transform_ocr_request(model, document, optional_params, headers)
@@ -171,7 +172,7 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
         model: &str,
         document: OcrDocument,
         optional_params: &DeepSeekOcrParams,
-        _headers: &[(String, String)],
+        _headers: &HeaderMap,
     ) -> Result<DeepSeekOcrRequest, Error> {
         if document.source().is_empty() {
             return Err(Error::MissingDocumentUrl);
@@ -501,7 +502,12 @@ mod tests {
             serde_json::from_value(json!({name: value.clone(), "ignored": true})).unwrap();
         let result = serde_json::to_value(
             VertexAIDeepSeekOCRConfig
-                .transform_ocr_request("deepseek-ai/deepseek-ocr-maas", document(), &params, &[])
+                .transform_ocr_request(
+                    "deepseek-ai/deepseek-ocr-maas",
+                    document(),
+                    &params,
+                    &http::HeaderMap::new(),
+                )
                 .unwrap(),
         )
         .unwrap();
@@ -523,7 +529,7 @@ mod tests {
                         "deepseek-ai/deepseek-ocr-maas",
                         document(),
                         &params,
-                        &[],
+                        &http::HeaderMap::new(),
                     )
                     .unwrap(),
             )
@@ -546,7 +552,7 @@ mod tests {
                 "deepseek-ai/deepseek-ocr-maas",
                 document(),
                 &DeepSeekOcrParams::default(),
-                &[],
+                &http::HeaderMap::new(),
             )
             .unwrap();
         let composed =
@@ -568,7 +574,7 @@ mod tests {
                 "deepseek-ai/deepseek-ocr-maas",
                 serde_json::from_value(document).unwrap(),
                 &DeepSeekOcrParams::default(),
-                &[],
+                &http::HeaderMap::new(),
             )
             .unwrap();
         let result = serde_json::to_value(request).unwrap();

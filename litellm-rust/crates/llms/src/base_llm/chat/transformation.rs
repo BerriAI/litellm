@@ -1,3 +1,4 @@
+use http::HeaderMap;
 use litellm_core_utils::decline::Decline;
 use litellm_llms_types::formats::chat_completions::{
     ChatCompletionsResponse, ChatMessage, ChatMessageContent,
@@ -28,7 +29,7 @@ pub const STREAM_PARAM: &str = "stream";
 /// presence does not make a request untranslatable.
 const IGNORABLE_MESSAGE_FIELDS: &[&str] = &["name"];
 
-pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
+pub use crate::base_llm::auth::ValidatedEnvironment;
 
 pub trait BaseConfig: Sync {
     fn secret_names(&self) -> Vec<&'static str>;
@@ -67,7 +68,7 @@ pub trait BaseConfig: Sync {
     /// for every config.
     fn validate_environment(
         &self,
-        headers: Headers,
+        headers: HeaderMap,
         api_key: Option<&str>,
         model: &str,
         optional_params: &Map<String, Value>,

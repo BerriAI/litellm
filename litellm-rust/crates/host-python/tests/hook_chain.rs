@@ -287,7 +287,7 @@ fn transformations_feed_each_other_and_notifications_share_final_values(
         };
         let wire = Box::new(WireRequest {
             url: "url".into(),
-            headers: vec![],
+            headers: http::HeaderMap::new(),
             body: serde_json::Value::Null,
         });
         let step = hooks.before_provider_request(py, wire, &context).unwrap();

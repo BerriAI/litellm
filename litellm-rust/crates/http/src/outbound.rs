@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use reqwest::{
     Request,
-    header::{CONTENT_TYPE, HeaderMap},
+    header::{CONTENT_TYPE, HeaderMap, HeaderValue},
 };
 use serde::Serialize;
 
@@ -23,25 +23,17 @@ pub trait RequestSigner: Send + Sync {
 
 pub fn json(
     url: &str,
-    headers: &[(String, String)],
+    headers: HeaderMap,
     body: &impl Serialize,
     timeout: Option<Duration>,
 ) -> Result<Request, Error> {
     let body = serde_json::to_vec(body).map_err(Repr::RequestBody)?;
-    let with_headers = headers
-        .iter()
-        .fold(http::Request::post(url), |builder, (name, value)| {
-            builder.header(name, value)
-        });
-    let has_content_type = with_headers
-        .headers_ref()
-        .is_some_and(|headers| headers.contains_key(CONTENT_TYPE));
-    let builder = if has_content_type {
-        with_headers
-    } else {
-        with_headers.header(CONTENT_TYPE, "application/json")
-    };
-    let mut request = from_http(builder.body(body).map_err(Repr::Request)?)?;
+    let mut request = from_http(http::Request::post(url).body(body).map_err(Repr::Request)?)?;
+    *request.headers_mut() = headers;
+    request
+        .headers_mut()
+        .entry(CONTENT_TYPE)
+        .or_insert(HeaderValue::from_static("application/json"));
     *request.timeout_mut() = timeout;
     Ok(request)
 }
@@ -60,7 +52,6 @@ pub fn signed(mut request: Request, signer: &dyn RequestSigner) -> Result<Reques
 mod tests {
     use std::sync::Mutex;
 
-    use reqwest::header::HeaderValue;
     use serde_json::json;
 
     use super::*;
@@ -84,7 +75,7 @@ mod tests {
         let request = signed(
             json(
                 "https://provider.test/",
-                &[("x-caller".into(), "kept".into())],
+                crate::request::header_map(&[("x-caller", "kept")]),
                 &json!({"b": 1, "a": [true, null]}),
                 Some(Duration::from_secs(7)),
             )
@@ -116,7 +107,7 @@ mod tests {
         }
 
         let defaulted = signed(
-            json("https://u.test/", &[], &json!({}), None).unwrap(),
+            json("https://u.test/", HeaderMap::new(), &json!({}), None).unwrap(),
             &RequiresContentType,
         )
         .unwrap();
@@ -125,7 +116,7 @@ mod tests {
         let provider = signed(
             json(
                 "https://u.test/",
-                &[("Content-Type".into(), "application/x-amz-json-1.1".into())],
+                crate::request::header_map(&[("Content-Type", "application/x-amz-json-1.1")]),
                 &json!({}),
                 None,
             )
@@ -150,7 +141,7 @@ mod tests {
         }
 
         let error = signed(
-            json("https://u.test/", &[], &json!({}), None).unwrap(),
+            json("https://u.test/", HeaderMap::new(), &json!({}), None).unwrap(),
             &Refuses,
         )
         .unwrap_err();
@@ -160,16 +151,7 @@ mod tests {
     #[test]
     fn a_request_that_cannot_be_sent_fails_when_it_is_built() {
         assert!(matches!(
-            json("not a url", &[], &json!({}), None),
-            Err(error) if error.is_request()
-        ));
-        assert!(matches!(
-            json(
-                "https://u.test/",
-                &[("x-bad".into(), "\u{7f}".into())],
-                &json!({}),
-                None
-            ),
+            json("not a url", HeaderMap::new(), &json!({}), None),
             Err(error) if error.is_request()
         ));
     }

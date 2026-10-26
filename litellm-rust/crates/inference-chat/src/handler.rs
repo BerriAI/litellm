@@ -168,11 +168,11 @@ mod tests {
             let mut body = wire.body;
             body["system"] = json!("added by the host");
             Ok(WireRequest {
-                headers: wire
-                    .headers
-                    .into_iter()
-                    .chain([("x-host".to_string(), "seen".to_string())])
-                    .collect(),
+                headers: {
+                    let mut headers = wire.headers;
+                    headers.append("x-host", http::HeaderValue::from_static("seen"));
+                    headers
+                },
                 body,
                 ..wire
             })

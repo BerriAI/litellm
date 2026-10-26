@@ -1,3 +1,4 @@
+use http::HeaderMap;
 use litellm_auth::SecretValue;
 use litellm_core_utils::decline::Decline;
 use litellm_core_utils::{
@@ -24,7 +25,7 @@ use crate::{
         chat::{
             streaming::StreamShape,
             transformation::{
-                BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
+                BaseConfig, ProviderChatRequestData, ProviderChatResponseData,
                 ValidatedEnvironment, unsupported_message, unsupported_param,
             },
         },
@@ -171,7 +172,7 @@ impl BaseConfig for AnthropicConfig {
     /// the deployment's key, which Python writes last.
     fn validate_environment(
         &self,
-        headers: Headers,
+        headers: HeaderMap,
         api_key: Option<&str>,
         _model: &str,
         _optional_params: &Map<String, Value>,
@@ -689,7 +690,7 @@ mod tests {
         );
         let validated = config
             .validate_environment(
-                Vec::new(),
+                http::HeaderMap::new(),
                 Some("sk-x"),
                 "claude-sonnet-4-5",
                 &Map::new(),

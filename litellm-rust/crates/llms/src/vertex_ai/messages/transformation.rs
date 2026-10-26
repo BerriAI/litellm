@@ -1,9 +1,9 @@
+use http::{HeaderMap, header::AUTHORIZATION};
 use litellm_auth::VertexParams;
 use litellm_auth_gcp::{
     VertexConfig, get_vertex_ai_location, get_vertex_ai_project,
     get_vertex_ai_project_from_credentials, secret_names,
 };
-use litellm_http::request::has_header;
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest, MessagesTool, OutputConfig},
     providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet},
@@ -22,7 +22,7 @@ use crate::{
         },
     },
     base_llm::{
-        auth::{AuthScheme, Headers, ValidatedEnvironment},
+        auth::{AuthScheme, ValidatedEnvironment},
         messages::{
             context::MessagesTransformContext,
             normalization::{normalize_system_role_messages, strip_cache_control_scope},
@@ -111,14 +111,14 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
     /// then application default credentials) is acquired when the request is sent.
     fn validate_environment(
         &self,
-        headers: Headers,
+        headers: HeaderMap,
         _api_key: Option<&str>,
         _model: &str,
         _optional_params: &MessagesOptionalParams,
         litellm_params: &LitellmParams,
         _env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
-        if has_header(&headers, "authorization") {
+        if headers.contains_key(AUTHORIZATION) {
             return Ok(ValidatedEnvironment {
                 headers,
                 auth: AuthScheme::Forwarded,
@@ -132,7 +132,11 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         })
     }
 
-    fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
+    fn request_headers(
+        &self,
+        headers: HeaderMap,
+        request: &MessagesRequest,
+    ) -> Result<HeaderMap, Error> {
         merge_beta_headers(headers, vertex_feature_betas(request))
     }
 
@@ -434,10 +438,7 @@ mod tests {
     fn validated(forwarded: &[(&str, &str)]) -> ValidatedEnvironment {
         VERTEX_ANTHROPIC_MESSAGES_CONFIG
             .validate_environment(
-                forwarded
-                    .iter()
-                    .map(|(name, value)| (name.to_string(), value.to_string()))
-                    .collect(),
+                litellm_http::request::header_map(forwarded),
                 Some("ignored-api-key"),
                 "claude-sonnet-4-5",
                 &MessagesOptionalParams::default(),
@@ -637,10 +638,18 @@ mod tests {
         })
         .unwrap();
         VERTEX_ANTHROPIC_MESSAGES_CONFIG
-            .request_headers(Vec::new(), &request)
-            .into_iter()
-            .filter(|(name, _)| name == "anthropic-beta")
-            .flat_map(|(_, value)| value.split(',').map(str::to_string).collect::<Vec<_>>())
+            .request_headers(HeaderMap::new(), &request)
+            .unwrap()
+            .get_all("anthropic-beta")
+            .iter()
+            .flat_map(|value| {
+                value
+                    .to_str()
+                    .unwrap()
+                    .split(',')
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
             .collect()
     }
 

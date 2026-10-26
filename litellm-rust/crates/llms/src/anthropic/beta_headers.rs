@@ -1,7 +1,10 @@
-use litellm_http::request::{with_header, without_headers};
+use http::HeaderMap;
 use litellm_llms_types::providers::anthropic::{BETA_HEADER, BetaProvider, BetaSet};
 
-use crate::{anthropic::common_utils::existing_betas, base_llm::auth::Headers};
+use crate::{
+    Error,
+    anthropic::common_utils::{existing_betas, with_betas},
+};
 
 /// How the `anthropic-beta` header is treated before a request leaves for a host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,36 +18,33 @@ pub enum BetaPolicy {
 }
 
 impl BetaPolicy {
-    pub fn apply(self, headers: Headers) -> Headers {
+    pub fn apply(self, mut headers: HeaderMap) -> Result<HeaderMap, Error> {
         let provider = match self {
-            Self::Forward => return headers,
-            Self::Drop => return without_headers(headers, &[BETA_HEADER]),
+            Self::Forward => return Ok(headers),
+            Self::Drop => {
+                headers.remove(BETA_HEADER);
+                return Ok(headers);
+            }
             Self::Filter(provider) => provider,
         };
         let accepted: BetaSet = existing_betas(&headers)
             .iter()
             .filter_map(|beta| beta.on(provider))
             .collect();
-        let headers = without_headers(headers, &[BETA_HEADER]);
+        headers.remove(BETA_HEADER);
         if accepted.is_empty() {
-            return headers;
+            return Ok(headers);
         }
-        with_header(headers, BETA_HEADER, accepted.to_string())
+        with_betas(headers, &accepted)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::anthropic::beta_headers::BetaPolicy;
+    use litellm_http::request::header_map as headers;
     use litellm_llms_types::providers::anthropic::BetaProvider;
     use rstest::rstest;
-
-    fn headers(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-        pairs
-            .iter()
-            .map(|(name, value)| (name.to_string(), value.to_string()))
-            .collect()
-    }
 
     #[rstest]
     fn forward_keeps_headers_as_is() {
@@ -55,7 +55,7 @@ mod tests {
             ),
             ("x-api-key", "k"),
         ]);
-        assert_eq!(BetaPolicy::Forward.apply(input.clone()), input);
+        assert_eq!(BetaPolicy::Forward.apply(input.clone()), Ok(input));
     }
 
     #[rstest]
@@ -66,7 +66,7 @@ mod tests {
                 ("x-api-key", "k"),
                 ("ANTHROPIC-BETA", "b"),
             ])),
-            headers(&[("x-api-key", "k")])
+            Ok(headers(&[("x-api-key", "k")]))
         );
     }
 
@@ -91,7 +91,7 @@ mod tests {
                 ("Anthropic-Beta", "advanced-tool-use-2025-11-20"),
                 ("x-api-key", "k"),
             ])),
-            expected
+            Ok(expected)
         );
     }
 
@@ -108,7 +108,7 @@ mod tests {
                 ("x-api-key", "k"),
                 ("anthropic-beta", beta_value)
             ])),
-            headers(&[("x-api-key", "k")])
+            Ok(headers(&[("x-api-key", "k")]))
         );
     }
 
@@ -137,7 +137,10 @@ mod tests {
                 ("x-api-key", "k"),
                 ("anthropic-beta", second_beta),
             ])),
-            headers(&[("x-api-key", "k"), ("anthropic-beta", expected_beta)])
+            Ok(headers(&[
+                ("x-api-key", "k"),
+                ("anthropic-beta", expected_beta)
+            ]))
         );
     }
 
@@ -147,6 +150,6 @@ mod tests {
     #[case::filter(BetaPolicy::Filter(BetaProvider::Bedrock))]
     fn headers_without_a_beta_are_untouched(#[case] policy: BetaPolicy) {
         let input = headers(&[("x-api-key", "k"), ("anthropic-version", "2023")]);
-        assert_eq!(policy.apply(input.clone()), input);
+        assert_eq!(policy.apply(input.clone()), Ok(input));
     }
 }
