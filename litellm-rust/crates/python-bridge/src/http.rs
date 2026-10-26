@@ -107,7 +107,7 @@ pub(crate) fn call_config(
         HttpKeysPartial::from_env(&ProcessEnvironment)
             .map_err(|error| PyValueError::new_err(error.to_string()))?,
         match PythonSettings::Http.read_or_unset(py)? {
-            Some(snapshot) => configured(&snapshot)?,
+            Some(snapshot) => from_litellm_settings(&snapshot)?,
             None => HttpKeysPartial::default(),
         },
     ]))
@@ -212,7 +212,7 @@ fn for_call(call_ssl_verify: Option<SslVerify>, asynchronous: bool) -> HttpKeysP
     }
 }
 
-fn configured(snapshot: &Snapshot<'_>) -> PyResult<HttpKeysPartial> {
+fn from_litellm_settings(snapshot: &Snapshot<'_>) -> PyResult<HttpKeysPartial> {
     Ok(HttpKeysPartial {
         ssl_verify: snapshot.read(&SSL_VERIFY)?,
         ssl_cert_file: None,
@@ -280,7 +280,7 @@ settings = types.SimpleNamespace(**defaults)
     fn default_python_settings_resolve_to_default_settings_with_verification_on() {
         Python::initialize();
         Python::attach(|py| {
-            let layer = configured(&python_settings(py, "")).unwrap();
+            let layer = from_litellm_settings(&python_settings(py, "")).unwrap();
             assert_eq!(
                 stack([layer]),
                 HttpSettings {
@@ -323,7 +323,7 @@ settings = types.SimpleNamespace(**defaults)
     fn python_settings_flow_into_the_configured_layer() {
         Python::initialize();
         Python::attach(|py| {
-            let layer = configured(&python_settings(
+            let layer = from_litellm_settings(&python_settings(
                 py,
                 "
 ssl_verify='/etc/ssl/corp.pem',
@@ -365,7 +365,7 @@ user_agent='litellm/9.9.9',
             let settings = stack([
                 HttpKeysPartial::from_env(&Env::of(&[("LITELLM_USER_AGENT", "operator/1")]))
                     .unwrap(),
-                configured(&python_settings(py, "")).unwrap(),
+                from_litellm_settings(&python_settings(py, "")).unwrap(),
             ]);
             assert_eq!(settings.user_agent.as_deref(), Some("operator/1"));
         });
@@ -382,7 +382,7 @@ user_agent='litellm/9.9.9',
     ) {
         Python::initialize();
         Python::attach(|py| {
-            let layer = configured(&python_settings(py, overrides)).unwrap();
+            let layer = from_litellm_settings(&python_settings(py, overrides)).unwrap();
             let config = Resolution::from(&stack([layer])).config;
             assert_eq!(config.verify, expected);
         });
@@ -395,7 +395,7 @@ user_agent='litellm/9.9.9',
     fn invalid_http_configuration_is_terminal(#[case] overrides: &str) {
         Python::initialize();
         Python::attach(|py| {
-            let error = configured(&python_settings(py, overrides)).unwrap_err();
+            let error = from_litellm_settings(&python_settings(py, overrides)).unwrap_err();
             assert!(error.is_instance_of::<PyValueError>(py));
             assert!(error.to_string().contains("http_settings.ssl_"));
         });
@@ -417,7 +417,7 @@ user_agent='litellm/9.9.9',
     fn mutable_globals_use_their_consumer_operations() {
         Python::initialize();
         Python::attach(|py| {
-            let layer = configured(&python_settings(py,
+            let layer = from_litellm_settings(&python_settings(py,
                 "force_ipv4='yes', http2=1, disable_aiohttp_transport=1, aiohttp_trust_env=[1], disable_aiohttp_trust_env=[], ssl_security_level=1, ssl_ecdh_curve=[]"
             )).unwrap();
             assert_eq!(layer.force_ipv4, Some(true));
@@ -427,7 +427,7 @@ user_agent='litellm/9.9.9',
             assert_eq!(layer.disable_aiohttp_trust_env, Some(false));
             assert_eq!(layer.ssl_security_level, None);
             assert_eq!(layer.ssl_ecdh_curve, None);
-            let error = configured(&python_settings(py, "user_agent=1")).unwrap_err();
+            let error = from_litellm_settings(&python_settings(py, "user_agent=1")).unwrap_err();
             assert!(error.is_instance_of::<PyRuntimeError>(py));
         });
     }
