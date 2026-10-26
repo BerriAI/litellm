@@ -1,11 +1,14 @@
 import copy
 import json
+from typing import Final
 
 import httpx2
+from mcp import types
 from mcp.shared.exceptions import MCPError
+from pydantic import JsonValue
 import pytest
 
-from tests.unit.proxy.admin_mcp.conftest import SPEC, data, session_for
+from tests.unit.proxy.admin_mcp.conftest import SPEC, SessionOptions, StubGateway, connected, data, session_for
 from litellm.proxy.admin_mcp.catalog import OPERATIONS
 from litellm.proxy.admin_mcp.config import Config
 from litellm.proxy.admin_mcp.gateway import AdminError, Gateway, HELPERS, MAX_REDACTION_DEPTH, safe_result
@@ -13,7 +16,7 @@ from litellm.proxy.admin_mcp.schema import tool_schema
 from litellm.proxy.admin_mcp.server import create_http_app
 
 
-async def test_real_mcp_create_key_and_read_back(stub):
+async def test_real_mcp_create_key_and_read_back(stub: StubGateway) -> None:
     async with session_for(stub) as session:
         tools = (await session.list_tools()).tools
         assert {t.name for t in tools} == {
@@ -32,7 +35,7 @@ async def test_real_mcp_create_key_and_read_back(stub):
     assert all(r.headers["Authorization"] == "Bearer alice-admin" for r in stub.requests)
 
 
-async def test_real_mcp_add_model_verify_and_strip_provider_secrets(stub):
+async def test_real_mcp_add_model_verify_and_strip_provider_secrets(stub: StubGateway) -> None:
     body = {
         "model_name": "support",
         "litellm_params": {"model": "openai/gpt-6.1-sol", "litellm_credential_name": "production"},
@@ -49,14 +52,14 @@ async def test_real_mcp_add_model_verify_and_strip_provider_secrets(stub):
 
 
 @pytest.mark.parametrize("options", [{"read_only": True}, {"allowed_tools": frozenset({"list_keys"})}])
-async def test_policy_blocks_hidden_write_even_when_called_directly(stub, options):
+async def test_policy_blocks_hidden_write_even_when_called_directly(stub: StubGateway, options: SessionOptions) -> None:
     async with session_for(stub, **options) as session:
         assert "create_key" not in {t.name for t in (await session.list_tools()).tools}
         assert (await session.call_tool("create_key", {"body": {"key_alias": "forbidden"}})).is_error
     assert not stub.writes
 
 
-async def test_unverified_user_cannot_discover_or_call(stub):
+async def test_unverified_user_cannot_discover_or_call(stub: StubGateway) -> None:
     async with session_for(stub, api_key="viewer") as session:
         with pytest.raises(MCPError):
             await session.list_tools()
@@ -68,21 +71,25 @@ async def test_unverified_user_cannot_discover_or_call(stub):
     "arguments",
     [{}, {"body": {}}, {"body": {"key_alias": 7}}, {"body": {"key_alias": "a"}, "headers": {"Authorization": "spoof"}}],
 )
-async def test_invalid_arguments_do_not_reach_management_api(stub, arguments):
+async def test_invalid_arguments_do_not_reach_management_api(
+    stub: StubGateway, arguments: dict[str, JsonValue]
+) -> None:
     async with session_for(stub) as session:
         assert (await session.call_tool("create_key", arguments)).is_error
     assert not stub.writes
 
 
 @pytest.mark.parametrize("identifier", ["..", "a/b", "a\\b", "a\n", "a%2Fb", ""])
-async def test_path_parameters_cannot_escape_route(stub, identifier):
+async def test_path_parameters_cannot_escape_route(stub: StubGateway, identifier: str) -> None:
     async with session_for(stub) as session:
         assert (await session.call_tool("reset_key_spend", {"path": {"key": identifier}})).is_error
     assert not stub.writes
 
 
 @pytest.mark.parametrize("status,timeout", [(307, False), (403, False), (500, False), (200, True)])
-async def test_failed_write_is_not_retried_or_redirected_and_does_not_echo_body(stub, status, timeout):
+async def test_failed_write_is_not_retried_or_redirected_and_does_not_echo_body(
+    stub: StubGateway, status: int, timeout: bool
+) -> None:
     stub.status, stub.timeout = status, timeout
     async with session_for(stub) as session:
         result = await session.call_tool("create_key", {"body": {"key_alias": "one"}})
@@ -91,7 +98,27 @@ async def test_failed_write_is_not_retried_or_redirected_and_does_not_echo_body(
     assert len(stub.writes) == 1
 
 
-async def test_revocation_during_write_suppresses_returned_key(stub):
+async def test_successful_write_with_truncated_json_is_not_retried_or_exposed(stub: StubGateway) -> None:
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        response: Final = stub.handle(request)
+        if request.url.path == "/key/generate":
+            return httpx2.Response(200, content=response.content[:-1])
+        return response
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handle)) as client:
+        gateway: Final = Gateway(Config("https://gateway.example.com"), client)
+        async with connected(gateway) as session:
+            result: Final = await session.call_tool("create_key", {"body": {"key_alias": "one"}})
+    assert result.is_error
+    message: Final = result.content[0]
+    assert isinstance(message, types.TextContent)
+    assert message.text == (
+        "Gateway returned an invalid JSON response. Check gateway state before retrying this change."
+    )
+    assert len(stub.writes) == len(stub.keys) == 1
+
+
+async def test_revocation_during_write_suppresses_returned_key(stub: StubGateway) -> None:
     stub.revoke = True
     async with session_for(stub) as session:
         result = await session.call_tool("create_key", {"body": {"key_alias": "one"}})
@@ -99,7 +126,7 @@ async def test_revocation_during_write_suppresses_returned_key(stub):
     assert len(stub.writes) == 1
 
 
-async def test_operation_id_drift_fails_closed(stub):
+async def test_operation_id_drift_fails_closed(stub: StubGateway) -> None:
     stub.spec = copy.deepcopy(SPEC)
     stub.spec["paths"]["/model/new"]["post"]["operationId"] = "changed"
     async with session_for(stub) as session:
@@ -108,7 +135,7 @@ async def test_operation_id_drift_fails_closed(stub):
     assert not stub.writes
 
 
-def test_catalog_has_unique_stable_tools_and_preserves_existing_surface():
+def test_catalog_has_unique_stable_tools_and_preserves_existing_surface() -> None:
     assert len(OPERATIONS) == 65
     assert len({o.name for o in OPERATIONS}) == len(OPERATIONS)
     assert len({(o.method, o.path) for o in OPERATIONS}) == len(OPERATIONS)
@@ -124,12 +151,12 @@ def test_catalog_has_unique_stable_tools_and_preserves_existing_surface():
         "https://example.com:bad",
     ],
 )
-def test_gateway_must_be_a_fixed_trusted_origin(url):
+def test_gateway_must_be_a_fixed_trusted_origin(url: str) -> None:
     with pytest.raises(ValueError, match=r"gateway|HTTPS"):
         Config(url)
 
 
-async def test_http_server_requires_each_request_credential(stub, monkeypatch):
+async def test_http_server_requires_each_request_credential(stub: StubGateway, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_API_KEY", "alice-admin")
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(stub.handle)) as client:
         app = create_http_app(Gateway(Config("https://gateway.example.com"), client))
@@ -150,7 +177,7 @@ async def test_http_server_requires_each_request_credential(stub, monkeypatch):
     assert {request.headers["authorization"] for request in stub.requests} == {"Bearer alice-admin", "Bearer bob-admin"}
 
 
-def test_recursive_refs_and_overridden_parameters_have_valid_schema():
+def test_recursive_refs_and_overridden_parameters_have_valid_schema() -> None:
     import jsonschema
 
     spec = {
@@ -178,7 +205,7 @@ def test_recursive_refs_and_overridden_parameters_have_valid_schema():
         validator.validate({"query": {"limit": "wrong"}, "body": {}})
 
 
-def test_schema_names_with_json_pointer_escapes():
+def test_schema_names_with_json_pointer_escapes() -> None:
     import jsonschema
 
     spec = {"components": {"schemas": {"A/B~C": {"type": "integer"}}}}
@@ -194,12 +221,12 @@ def test_schema_names_with_json_pointer_escapes():
         jsonschema.Draft202012Validator(schema).validate({"body": "wrong"})
 
 
-async def test_shared_http_client_never_replays_another_callers_gateway_cookie(stub):
+async def test_shared_http_client_never_replays_another_callers_gateway_cookie(stub: StubGateway) -> None:
     from litellm.proxy.admin_mcp.gateway import Gateway
 
     original = stub.handle
 
-    def handle(request):
+    def handle(request: httpx2.Request) -> httpx2.Response:
         assert not request.headers.get("cookie")
         result = original(request)
         result.headers["set-cookie"] = "gateway-session=first-caller; Path=/"
@@ -213,7 +240,7 @@ async def test_shared_http_client_never_replays_another_callers_gateway_cookie(s
 
 
 @pytest.mark.parametrize("container", ["object", "array", "encoded"])
-def test_response_redaction_fails_closed_for_excessive_nesting(container):
+def test_response_redaction_fails_closed_for_excessive_nesting(container: str) -> None:
     value = {"echo": "personal-admin-credential", "password": "provider-secret"}
     for _ in range(MAX_REDACTION_DEPTH):
         value = [value] if container == "array" else {"metadata": value}
@@ -222,7 +249,7 @@ def test_response_redaction_fails_closed_for_excessive_nesting(container):
         safe_result(payload, "personal-admin-credential")
 
 
-def test_response_redaction_handles_encoded_secrets_and_preserves_other_values():
+def test_response_redaction_handles_encoded_secrets_and_preserves_other_values() -> None:
     credential = "personal-admin-credential"
     value = {"metadata": json.dumps({"nested": [{"echo": credential, "password": "provider-secret", "count": 7}]})}
     assert safe_result(value, credential) == {
@@ -238,6 +265,6 @@ def test_response_redaction_handles_encoded_secrets_and_preserves_other_values()
         '[{"password":"provider-secret"}',
     ],
 )
-def test_response_redaction_rejects_unparseable_json_containers(payload):
+def test_response_redaction_rejects_unparseable_json_containers(payload: str) -> None:
     with pytest.raises(AdminError, match="Inspect gateway state before retrying"):
         safe_result({"metadata": payload}, "personal-admin-credential")

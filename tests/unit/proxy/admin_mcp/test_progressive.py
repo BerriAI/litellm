@@ -1,19 +1,21 @@
+from collections.abc import AsyncIterator
 import copy
 import json
 import re
 
 import httpx2
 import jsonschema
+from pydantic import JsonValue
 import pytest
 
-from tests.unit.proxy.admin_mcp.conftest import SPEC, connected, data, session_for
+from tests.unit.proxy.admin_mcp.conftest import SPEC, SessionOptions, StubGateway, connected, data, session_for
 from litellm.proxy.admin_mcp.catalog import OPERATIONS
 from litellm.proxy.admin_mcp.config import Config
 from litellm.proxy.admin_mcp.gateway import AdminError, Gateway, HELPERS
 from litellm.proxy.admin_mcp.results import ResultStore
 
 
-async def test_discovery_keeps_named_tools_annotations_and_complete_validation(stub):
+async def test_discovery_keeps_named_tools_annotations_and_complete_validation(stub: StubGateway) -> None:
     async with session_for(stub, schema_mode="discovery") as session:
         listed = {t.name: t for t in (await session.list_tools()).tools}
         assert not listed["create_key"].annotations.read_only_hint
@@ -28,7 +30,7 @@ async def test_discovery_keeps_named_tools_annotations_and_complete_validation(s
         assert result["max_budget"] == 0
 
 
-async def test_full_schema_exposes_body_fields_without_losing_nested_definitions(stub):
+async def test_full_schema_exposes_body_fields_without_losing_nested_definitions(stub: StubGateway) -> None:
     async with session_for(stub) as session:
         tools = {t.name: t for t in (await session.list_tools()).tools}
         key_schema = tools["create_key"].input_schema
@@ -40,7 +42,7 @@ async def test_full_schema_exposes_body_fields_without_losing_nested_definitions
         assert "Deployment" not in model_schema["$defs"]
 
 
-async def test_schema_itself_can_be_paged_and_retrieved_in_full(stub):
+async def test_schema_itself_can_be_paged_and_retrieved_in_full(stub: StubGateway) -> None:
     stub.spec = copy.deepcopy(SPEC)
     stub.spec["components"]["schemas"]["Key"]["properties"]["key_alias"]["description"] = (
         "Long but useful documentation. " * 2000
@@ -62,13 +64,15 @@ async def test_schema_itself_can_be_paged_and_retrieved_in_full(stub):
         ({"type": "array", "items": {"type": "string"}}, ["uncommon", "argument"]),
     ],
 )
-async def test_discovery_preserves_non_object_body_shapes(stub, schema, value):
+async def test_discovery_preserves_non_object_body_shapes(
+    stub: StubGateway, schema: dict[str, JsonValue], value: JsonValue
+) -> None:
     stub.spec = copy.deepcopy(SPEC)
     stub.spec["components"]["schemas"]["Key"] = schema
     original = stub.handle
     seen = []
 
-    def handle(request):
+    def handle(request: httpx2.Request) -> httpx2.Response:
         if request.url.path == "/key/generate":
             seen.append(json.loads(request.content))
             return httpx2.Response(200, json={"accepted": seen[-1]})
@@ -82,14 +86,14 @@ async def test_discovery_preserves_non_object_body_shapes(stub, schema, value):
     assert seen == [value]
 
 
-async def test_post_reads_are_available_in_read_only_mode_but_health_is_not(stub):
+async def test_post_reads_are_available_in_read_only_mode_but_health_is_not(stub: StubGateway) -> None:
     stub.spec = copy.deepcopy(SPEC)
     for op in OPERATIONS:
         if op.name in {"get_budgets", "get_organization_legacy", "check_key_health"}:
             stub.spec["paths"][op.path] = {op.method.lower(): {"operationId": op.operation_id}}
     original = stub.handle
 
-    def handle(request):
+    def handle(request: httpx2.Request) -> httpx2.Response:
         if request.url.path in {"/budget/info", "/organization/info"}:
             return httpx2.Response(200, json=[])
         return original(request)
@@ -104,7 +108,7 @@ async def test_post_reads_are_available_in_read_only_mode_but_health_is_not(stub
             assert data(await session.call_tool(name, {})) == []
 
 
-async def test_full_mode_is_unchanged_and_compact_pages_do_not_refetch(stub):
+async def test_full_mode_is_unchanged_and_compact_pages_do_not_refetch(stub: StubGateway) -> None:
     stub.keys = [
         {"id": i, "max_budget": None, "spend": 0, "blocked": False, "extra": {"rare_setting": "z" * 8000}}
         for i in range(15)
@@ -121,7 +125,7 @@ async def test_full_mode_is_unchanged_and_compact_pages_do_not_refetch(stub):
         assert sum(r.url.path == "/key/list" for r in stub.requests) == count
 
 
-async def test_compact_default_keeps_small_results_and_full_override(stub):
+async def test_compact_default_keeps_small_results_and_full_override(stub: StubGateway) -> None:
     async with session_for(stub, response_view="compact") as session:
         assert data(await session.call_tool("list_keys", {})) == {"keys": []}
         stub.keys = [{"id": i, "metadata": "a" * 1000} for i in range(40)]
@@ -130,7 +134,7 @@ async def test_compact_default_keeps_small_results_and_full_override(stub):
 
 
 @pytest.mark.parametrize("name", ["list_models", "get_model"])
-async def test_model_catalog_identifiers_allow_lossless_paging(stub, name):
+async def test_model_catalog_identifiers_allow_lossless_paging(stub: StubGateway, name: str) -> None:
     operation = next(op for op in OPERATIONS if op.name == name)
     stub.spec = copy.deepcopy(SPEC)
     stub.spec["paths"][operation.path] = {"get": {"operationId": operation.operation_id}}
@@ -150,7 +154,7 @@ async def test_model_catalog_identifiers_allow_lossless_paging(stub, name):
     expected = {"data": models, "total_count": len(models), "current_page": 1, "total_pages": 1}
     original = stub.handle
 
-    def handle(request):
+    def handle(request: httpx2.Request) -> httpx2.Response:
         if request.url.path == operation.path:
             stub.requests.append(request)
             return httpx2.Response(200, json=expected)
@@ -177,11 +181,11 @@ async def test_model_catalog_identifiers_allow_lossless_paging(stub, name):
         assert data(await session.call_tool(name, {"response": {"view": "full"}})) == expected
 
 
-async def test_full_write_result_can_be_read_without_repeating_write(stub):
+async def test_full_write_result_can_be_read_without_repeating_write(stub: StubGateway) -> None:
     original_handler = stub.handle
     payload = {"status": "ok", "previous": {"spend": 20, "custom": "x" * 22000}}
 
-    def handle(request):
+    def handle(request: httpx2.Request) -> httpx2.Response:
         response = original_handler(request)
         return httpx2.Response(200, json=payload) if request.url.path.endswith("/reset_spend") else response
 
@@ -193,10 +197,10 @@ async def test_full_write_result_can_be_read_without_repeating_write(stub):
     assert len(stub.writes) == 1
 
 
-async def test_large_new_key_response_is_delivered_inline_and_never_cached(stub):
+async def test_large_new_key_response_is_delivered_inline_and_never_cached(stub: StubGateway) -> None:
     original = stub.handle
 
-    def handle(request):
+    def handle(request: httpx2.Request) -> httpx2.Response:
         response = original(request)
         if request.url.path == "/key/generate":
             return httpx2.Response(200, json={**response.json(), "metadata": "x" * 20000})
@@ -212,7 +216,7 @@ async def test_large_new_key_response_is_delivered_inline_and_never_cached(stub)
     assert len(stub.writes) == 1
 
 
-async def test_result_reads_require_same_credential_principal_and_current_role(stub):
+async def test_result_reads_require_same_credential_principal_and_current_role(stub: StubGateway) -> None:
     stub.keys = [{"data": "x" * 20000}]
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(stub.handle)) as client:
         gateway = Gateway(Config("https://gateway.example.com", response_view="compact"), client)
@@ -225,11 +229,11 @@ async def test_result_reads_require_same_credential_principal_and_current_role(s
             await gateway.call("read_admin_result", result["full_read"], "alice-admin")
 
 
-async def test_revocation_during_result_read_suppresses_snapshot(stub):
+async def test_revocation_during_result_read_suppresses_snapshot(stub: StubGateway) -> None:
     stub.keys = [{"data": "private" * 4000}]
     revoke = False
 
-    def clock():
+    def clock() -> float:
         if revoke:
             stub.revoked.add("alice-admin")
         return 0.0
@@ -244,7 +248,7 @@ async def test_revocation_during_result_read_suppresses_snapshot(stub):
             await gateway.call("read_admin_result", result["full_read"], "alice-admin")
 
 
-async def test_schema_helper_respects_allowlist_and_cannot_execute_hidden_operations(stub):
+async def test_schema_helper_respects_allowlist_and_cannot_execute_hidden_operations(stub: StubGateway) -> None:
     async with session_for(stub, allowed_tools=frozenset({"list_keys"}), schema_mode="discovery") as session:
         for name in ("create_key", "flush_everything", "read_admin_result"):
             assert (await session.call_tool("describe_admin_tool", {"name": name})).is_error
@@ -253,7 +257,7 @@ async def test_schema_helper_respects_allowlist_and_cannot_execute_hidden_operat
     assert not stub.writes
 
 
-async def test_warm_call_retains_pre_post_checks_without_discovery_auth(stub):
+async def test_warm_call_retains_pre_post_checks_without_discovery_auth(stub: StubGateway) -> None:
     async with session_for(stub) as session:
         await session.list_tools()
         stub.requests.clear()
@@ -261,11 +265,11 @@ async def test_warm_call_retains_pre_post_checks_without_discovery_auth(stub):
         assert [r.url.path for r in stub.requests] == ["/v2/user/info", "/key/list", "/v2/user/info"]
 
 
-async def test_identity_change_during_cold_discovery_prevents_write(stub):
+async def test_identity_change_during_cold_discovery_prevents_write(stub: StubGateway) -> None:
     original = stub.handle
     changed = False
 
-    def handle(request):
+    def handle(request: httpx2.Request) -> httpx2.Response:
         nonlocal changed
         result = original(request)
         if request.url.path == "/openapi.json":
@@ -284,11 +288,11 @@ async def test_identity_change_during_cold_discovery_prevents_write(stub):
     assert not stub.writes
 
 
-async def test_capacity_falls_back_to_full_write_response_without_retry(stub):
+async def test_capacity_falls_back_to_full_write_response_without_retry(stub: StubGateway) -> None:
     original = stub.handle
     payload = {"status": "ok", "previous": "x" * 20000}
 
-    def handle(request):
+    def handle(request: httpx2.Request) -> httpx2.Response:
         result = original(request)
         return httpx2.Response(200, json=payload) if request.url.path.endswith("/reset_spend") else result
 
@@ -300,21 +304,21 @@ async def test_capacity_falls_back_to_full_write_response_without_retry(stub):
     assert len(stub.writes) == 1
 
 
-async def test_views_support_large_results_and_stop_at_stream_limit(stub):
+async def test_views_support_large_results_and_stop_at_stream_limit(stub: StubGateway) -> None:
     original = stub.handle
 
     class Chunks(httpx2.AsyncByteStream):
-        def __init__(self):
+        def __init__(self) -> None:
             self.count = 0
 
-        async def __aiter__(self):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
             for _ in range(30):
                 self.count += 1
                 yield b"x" * 1_000_000
 
     stream = Chunks()
 
-    def handle(request):
+    def handle(request: httpx2.Request) -> httpx2.Response:
         if request.url.path == "/key/list":
             if request.url.params.get("page") == "2":
                 return httpx2.Response(200, stream=stream)
@@ -331,7 +335,7 @@ async def test_views_support_large_results_and_stop_at_stream_limit(stub):
     assert stream.count == 17
 
 
-async def test_full_schemas_support_compact_large_results(stub):
+async def test_full_schemas_support_compact_large_results(stub: StubGateway) -> None:
     config = Config("https://gateway.example.com")
     assert config.response_view == "compact" and config.schema_mode == "full"
     stub.keys = [{"data": "x" * 20000}]
@@ -342,7 +346,7 @@ async def test_full_schemas_support_compact_large_results(stub):
 
 
 @pytest.mark.parametrize("mode", ["full", "discovery"])
-async def test_every_reviewed_operation_retains_mapping_advanced_inputs_and_result(mode):
+async def test_every_reviewed_operation_retains_mapping_advanced_inputs_and_result(mode: str) -> None:
     spec = {
         "paths": {},
         "components": {
@@ -382,13 +386,11 @@ async def test_every_reviewed_operation_retains_mapping_advanced_inputs_and_resu
     calls = []
     result = {"budget": None, "spend": 0, "blocked": False, "metadata": {"unexpected_field": [1, "a", None]}}
 
-    def handle(request):
+    def handle(request: httpx2.Request) -> httpx2.Response:
         if request.url.path == "/openapi.json":
             return httpx2.Response(200, json=spec)
         if request.url.path == "/v2/user/info" and "litellm-changed-by" not in request.headers:
-            return httpx2.Response(
-                200, json={"user_id": "admin", "user_role": "proxy_admin"}
-            )
+            return httpx2.Response(200, json={"user_id": "admin", "user_role": "proxy_admin"})
         calls.append(request)
         return httpx2.Response(200, json=result)
 
@@ -425,6 +427,6 @@ async def test_every_reviewed_operation_retains_mapping_advanced_inputs_and_resu
 
 
 @pytest.mark.parametrize("config", [{"schema_mode": "unknown"}, {"response_view": "unknown"}])
-def test_unknown_modes_fail_instead_of_silently_changing_behavior(config):
+def test_unknown_modes_fail_instead_of_silently_changing_behavior(config: SessionOptions) -> None:
     with pytest.raises(ValueError, match="LITELLM_ADMIN_"):
         Config("https://gateway.example.com", **config)

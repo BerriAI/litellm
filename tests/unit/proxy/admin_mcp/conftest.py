@@ -1,18 +1,23 @@
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 import json
+from typing import Final
+from typing_extensions import ReadOnly, TypedDict
 
 import anyio
 import httpx2
-from mcp import ClientSession
+from mcp import ClientSession, types
 from mcp.shared.memory import create_client_server_memory_streams
+from pydantic import JsonValue
 import pytest
 
+from litellm.proxy.admin_mcp._types import JSON_OBJECT, JSON_VALUE, object_value
 from litellm.proxy.admin_mcp.config import Config
 from litellm.proxy.admin_mcp.gateway import Gateway
 from litellm.proxy.admin_mcp.server import create_server
 
 
-SPEC = {
+SPEC: Final[dict[str, JsonValue]] = {
     "openapi": "3.1.0",
     "paths": {
         "/key/generate": {
@@ -86,24 +91,24 @@ SPEC = {
 
 
 class StubGateway:
-    def __init__(self):
-        self.requests = []
-        self.writes = []
-        self.keys = []
-        self.models = []
+    def __init__(self) -> None:
+        self.requests: list[httpx2.Request] = []
+        self.writes: list[httpx2.Request] = []
+        self.keys: list[JsonValue] = []
+        self.models: list[JsonValue] = []
         self.status = 200
         self.timeout = False
         self.revoke = False
-        self.revoked = set()
+        self.revoked: set[str] = set()
         self.spec = SPEC
 
-    def handle(self, request):
+    def handle(self, request: httpx2.Request) -> httpx2.Response:
         self.requests.append(request)
-        token = request.headers.get("authorization", "").removeprefix("Bearer ")
+        token: Final = request.headers.get("authorization", "").removeprefix("Bearer ")
         if request.url.path == "/v2/user/info" and token == "team-key":
             return httpx2.Response(400, json={"error": {"message": "A user-bound key is required"}})
         if request.url.path == "/v2/user/info":
-            role = (
+            role: Final = (
                 "proxy_admin"
                 if token in {"alice-admin", "bob-admin"} and token not in self.revoked
                 else "internal_user"
@@ -124,19 +129,19 @@ class StubGateway:
                     self.status, json={"secret": "upstream-secret"}, headers={"Location": "https://untrusted.example"}
                 )
         if request.url.path == "/key/generate":
-            body = json.loads(request.content)
-            value = {**body, "key": "sk-created-for-" + token, "echo": token}
+            key_body: Final = JSON_OBJECT.validate_json(request.content)
+            value: Final[dict[str, JsonValue]] = {**key_body, "key": "sk-created-for-" + token, "echo": token}
             self.keys.append(value)
             return httpx2.Response(200, json=value)
         if request.url.path == "/key/list":
             return httpx2.Response(200, json={"keys": self.keys})
         if request.url.path == "/model/new":
-            body = json.loads(request.content)
-            model = {
-                **body,
+            model_body: Final = JSON_OBJECT.validate_json(request.content)
+            model: Final[dict[str, JsonValue]] = {
+                **model_body,
                 "model_info": {"id": "model-1"},
                 "litellm_params": {
-                    **body["litellm_params"],
+                    **object_value(model_body["litellm_params"]),
                     "api_key": "provider-secret",
                     "aws_session_token": "aws-secret",
                 },
@@ -152,14 +157,21 @@ class StubGateway:
         raise AssertionError("Unexpected gateway route")
 
 
+class SessionOptions(TypedDict, total=False):
+    read_only: ReadOnly[bool]
+    allowed_tools: ReadOnly[frozenset[str]]
+    response_view: ReadOnly[str]
+    schema_mode: ReadOnly[str]
+
+
 @pytest.fixture
-def stub():
+def stub() -> StubGateway:
     return StubGateway()
 
 
 @asynccontextmanager
-async def connected(gateway, api_key="alice-admin"):
-    server = create_server(gateway, lambda context: api_key)
+async def connected(gateway: Gateway, api_key: str = "alice-admin") -> AsyncGenerator[ClientSession, None]:
+    server: Final = create_server(gateway, lambda context: api_key)
     async with create_client_server_memory_streams() as (client_streams, server_streams):
         async with anyio.create_task_group() as group:
             group.start_soon(server.run, *server_streams, server.create_initialization_options())
@@ -170,13 +182,29 @@ async def connected(gateway, api_key="alice-admin"):
 
 
 @asynccontextmanager
-async def session_for(stub, api_key="alice-admin", **overrides):
-    config = Config("https://gateway.example.com", **overrides)
+async def session_for(
+    stub: StubGateway,
+    api_key: str = "alice-admin",
+    *,
+    read_only: bool = False,
+    allowed_tools: frozenset[str] = frozenset(),
+    response_view: str = "compact",
+    schema_mode: str = "full",
+) -> AsyncGenerator[ClientSession, None]:
+    config: Final = Config(
+        "https://gateway.example.com",
+        read_only=read_only,
+        allowed_tools=allowed_tools,
+        response_view=response_view,
+        schema_mode=schema_mode,
+    )
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(stub.handle)) as client:
         async with connected(Gateway(config, client), api_key) as session:
             yield session
 
 
-def data(result):
+def data(result: types.CallToolResult) -> JsonValue:
     assert not result.is_error, result.content
-    return json.loads(result.content[0].text)
+    content: Final = result.content[0]
+    assert isinstance(content, types.TextContent), content
+    return JSON_VALUE.validate_json(content.text)

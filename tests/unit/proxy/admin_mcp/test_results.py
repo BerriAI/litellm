@@ -1,14 +1,25 @@
 import json
+from typing import Final
 
+from pydantic import JsonValue
 import pytest
 
-from litellm.proxy.admin_mcp.results import ResultError, ResultStore, contains_credential, encode, page, select
+from litellm.proxy.admin_mcp._types import INTEGER, JSON_ARRAY, object_value, string_value
+from litellm.proxy.admin_mcp.results import (
+    ResultError,
+    ResultStore,
+    Snapshot,
+    contains_credential,
+    encode,
+    page,
+    select,
+)
 
 
-def rebuild(item, token, path=""):
+def rebuild(item: Snapshot, token: str, path: str = "") -> JsonValue:
     """Use only the public index/continuations, without knowing field names."""
-    first = page(item, token, path=path, limit=3, max_chars=257)
-    result = (
+    first: Final = object_value(page(item, token, path=path, limit=3, max_chars=257))
+    result: JsonValue = (
         {}
         if first["type"] == "object"
         else []
@@ -20,22 +31,37 @@ def rebuild(item, token, path=""):
     current = first
     while True:
         if first["type"] in {"object", "array"}:
-            for entry in current["entries"]:
-                value = entry["value"] if entry["complete"] else rebuild(item, token, entry["read"]["path"])
+            for raw_entry in JSON_ARRAY.validate_python(current["entries"]):
+                entry = object_value(raw_entry)
+                value = (
+                    entry["value"]
+                    if entry["complete"]
+                    else rebuild(item, token, string_value(object_value(entry["read"])["path"]))
+                )
                 if isinstance(result, dict):
-                    result[entry["key"]] = value
+                    result[string_value(entry["key"])] = value
                 else:
+                    assert isinstance(result, list), result
                     result.append(value)
         elif first["type"] == "string":
-            result += current["value"]
+            assert isinstance(result, str), result
+            result += string_value(current["value"])
         if not current.get("next"):
             return result
-        args = dict(current["next"])
-        args.pop("result_id")
-        current = page(item, token, **args)
+        args = object_value(current["next"])
+        current = object_value(
+            page(
+                item,
+                token,
+                path=string_value(args["path"]),
+                offset=INTEGER.validate_python(args["offset"], strict=True),
+                limit=INTEGER.validate_python(args["limit"], strict=True),
+                max_chars=INTEGER.validate_python(args["max_chars"], strict=True),
+            )
+        )
 
 
-def test_index_and_pages_reconstruct_every_value_without_prior_field_knowledge():
+def test_index_and_pages_reconstruct_every_value_without_prior_field_knowledge() -> None:
     original = {
         "user_info": {"role": "proxy_admin", "max_budget": None, "spend": 0, "blocked": False},
         "keys": [
@@ -55,7 +81,7 @@ def test_index_and_pages_reconstruct_every_value_without_prior_field_knowledge()
     assert len(encode(first)) < len(item.raw) / 4
 
 
-def test_record_previews_include_all_small_fields_including_uncommon_ones():
+def test_record_previews_include_all_small_fields_including_uncommon_ones() -> None:
     value = [
         {
             "id": "team-1",
@@ -75,7 +101,7 @@ def test_record_previews_include_all_small_fields_including_uncommon_ones():
     assert entry["omitted_fields"] == ["keys"]
 
 
-def test_page_boundary_moves_whole_records_to_next_page_instead_of_fragmenting():
+def test_page_boundary_moves_whole_records_to_next_page_instead_of_fragmenting() -> None:
     value = [{"id": n, "data": "x" * 7000} for n in range(7)]
     store = ResultStore()
     token = store.put("list_keys", value, "alice", "user-1")
@@ -93,7 +119,7 @@ def test_page_boundary_moves_whole_records_to_next_page_instead_of_fragmenting()
     assert seen == value and calls == 4
 
 
-def test_snapshot_is_immutable_and_bound_to_both_credential_and_principal():
+def test_snapshot_is_immutable_and_bound_to_both_credential_and_principal() -> None:
     value = {"data": [1, 2]}
     store = ResultStore()
     token = store.put("list_keys", value, "alice-key", "user-1")
@@ -104,7 +130,7 @@ def test_snapshot_is_immutable_and_bound_to_both_credential_and_principal():
             store.get(token, credential, principal)
 
 
-def test_expiration_capacity_and_clear_do_not_evict_unexpired_results():
+def test_expiration_capacity_and_clear_do_not_evict_unexpired_results() -> None:
     now = [100]
     store = ResultStore(ttl=10, max_bytes=100, max_per_owner=1, clock=lambda: now[0], wall_clock=lambda: 1000)
     token = store.put("get_user", {"a": 1}, "alice", "user-1")
@@ -140,7 +166,7 @@ def test_expiration_capacity_and_clear_do_not_evict_unexpired_results():
         ("list_request_logs", {"data": [{"model_info": {"key": "custom-secret"}}]}),
     ],
 )
-def test_credentials_are_not_retained_in_result_store(source, value):
+def test_credentials_are_not_retained_in_result_store(source: str, value: JsonValue) -> None:
     store = ResultStore()
     assert store.put(source, value, "alice", "user-1") is None
 
@@ -148,12 +174,12 @@ def test_credentials_are_not_retained_in_result_store(source, value):
 @pytest.mark.parametrize(
     "path", ["not-a-pointer", "/bad~2escape", "/array/-1", "/array/01", "/array/4", "/missing", "/scalar/x"]
 )
-def test_invalid_paths_fail_explicitly(path):
+def test_invalid_paths_fail_explicitly(path: str) -> None:
     with pytest.raises(ResultError):
         select({"array": [1], "scalar": 0}, path)
 
 
-def test_empty_values_and_pagination_edges():
+def test_empty_values_and_pagination_edges() -> None:
     store = ResultStore()
     for value in ([], {}, "", False, 0, None):
         token = store.put("get_user", value, "alice", "user-1")
@@ -164,7 +190,7 @@ def test_empty_values_and_pagination_edges():
             page(item, token, offset=1)
 
 
-def test_deep_result_paths_and_credential_scan_do_not_use_python_call_stack():
+def test_deep_result_paths_and_credential_scan_do_not_use_python_call_stack() -> None:
     value = {"password": "private-token"}
     for _ in range(1200):
         value = {"nested": value}
@@ -180,6 +206,6 @@ def test_deep_result_paths_and_credential_scan_do_not_use_python_call_stack():
         '[{"password":"provider-secret"}',
     ],
 )
-def test_unparseable_json_containers_are_never_retained(payload):
+def test_unparseable_json_containers_are_never_retained(payload: str) -> None:
     assert contains_credential({"metadata": payload})
     assert ResultStore().put("get_user", {"metadata": payload}, "alice", "user-1") is None
