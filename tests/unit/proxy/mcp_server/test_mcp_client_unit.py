@@ -186,16 +186,14 @@ class TestMCPClientUnitTests:
                 },
             )
         ]
-        mock_result = MagicMock()
-        mock_result.tools = mock_tools
-        mock_session_instance.list_tools.return_value = mock_result
+        mock_session_instance.send_request.return_value = ListToolsResult(tools=mock_tools)
 
         client = MCPClient("http://example.com")
         result = await client.list_tools()
 
         assert result == mock_tools
         mock_session_instance.initialize.assert_called_once()
-        mock_session_instance.list_tools.assert_called_once()
+        mock_session_instance.send_request.assert_awaited_once()
 
     @pytest.mark.asyncio
     @patch.object(mcp_client_module, "streamable_http_client")  # test-quality-ok: exercises MCPClient wiring; the walk itself is covered sessionless in test_tools.py
@@ -229,7 +227,7 @@ class TestMCPClientUnitTests:
             description="Tool 100",
             inputSchema={},
         )
-        mock_session_instance.list_tools.side_effect = [
+        mock_session_instance.send_request.side_effect = [
             ListToolsResult(tools=first_page_tools, nextCursor="page-2"),
             ListToolsResult(tools=[second_page_tool]),
         ]
@@ -238,8 +236,8 @@ class TestMCPClientUnitTests:
         result = await client.list_tools()
 
         assert result == [*first_page_tools, second_page_tool]
-        assert mock_session_instance.list_tools.call_count == 2
-        second_call_params = mock_session_instance.list_tools.call_args_list[1].kwargs["params"]
+        assert mock_session_instance.send_request.await_count == 2
+        second_call_params = mock_session_instance.send_request.await_args_list[1].args[0].params
         assert isinstance(second_call_params, PaginatedRequestParams)
         assert second_call_params.cursor == "page-2"
 
@@ -267,7 +265,7 @@ class TestMCPClientUnitTests:
         )
         mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session_instance)
 
-        mock_session_instance.list_tools.side_effect = [
+        mock_session_instance.send_request.side_effect = [
             ListToolsResult(
                 tools=[MCPTool(name="tool_0", description="Tool 0", inputSchema={})],
                 nextCursor="page-2",
@@ -279,7 +277,7 @@ class TestMCPClientUnitTests:
         result = await client.list_tools()
 
         assert result == []
-        assert mock_session_instance.list_tools.call_count == 2
+        assert mock_session_instance.send_request.await_count == 2
 
     @pytest.mark.asyncio
     @patch.object(mcp_client_module, "streamable_http_client")

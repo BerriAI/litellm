@@ -1616,7 +1616,7 @@ class TestListToolsRestAPI:
                 server_info=Implementation(name="stub", version="1"),
             )
         )
-        mock_session_instance.list_tools.side_effect = [
+        mock_session_instance.send_request.side_effect = [
             ListToolsResult(
                 tools=[
                     MCPTool(
@@ -1685,8 +1685,8 @@ class TestListToolsRestAPI:
         assert result["error"] is None
         assert result["message"] == "Successfully retrieved tools"
 
-        assert mock_session_instance.list_tools.call_count == 2
-        second_call_params = mock_session_instance.list_tools.call_args_list[1].kwargs["params"]
+        assert mock_session_instance.send_request.await_count == 2
+        second_call_params = mock_session_instance.send_request.await_args_list[1].args[0].params
         assert isinstance(second_call_params, PaginatedRequestParams)
         assert second_call_params.cursor == "page-2"
 
