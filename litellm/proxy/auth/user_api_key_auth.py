@@ -2664,6 +2664,21 @@ async def user_api_key_auth_builder(
                         code=status.HTTP_401_UNAUTHORIZED,
                         param=abbreviate_api_key(api_key=api_key),
                     )
+            # The admin shortcut below returns before Check 5, which is where
+            # non-admin keys enforce their own max_budget. Run that check here so
+            # a budgeted admin key is not usable after its spend limit is reached.
+            if RouteChecks.is_llm_api_route(route=route) and not _should_skip_budget_checks(
+                request_data=request_data,
+                route=route,
+                request=request,
+                llm_router=llm_router,
+                team_id=valid_token.team_id,
+            ):
+                await virtual_key_max_budget_check(
+                    valid_token=valid_token,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+
             valid_token = update_valid_token_with_end_user_params(
                 valid_token=valid_token, end_user_params=end_user_params
             )
