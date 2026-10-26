@@ -2306,7 +2306,11 @@ async def test_model_connection(
         selected_by_id: Final = deployment_by_id is not None
         reject_server_owned_wif_fields(
             MappingProxyType(
-                {key: value for key, value in request_litellm_params.items() if key != "chatgpt_auth_file"}
+                {
+                    key: value
+                    for key, value in _OBJECT_MAPPING.validate_python(request_litellm_params).items()
+                    if key != "chatgpt_auth_file"
+                }
             )
         )
         # Merge: config params (from proxy config) as base, request params override
