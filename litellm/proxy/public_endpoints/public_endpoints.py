@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.get_blog_posts import (
     get_blog_posts,
 )
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.proxy._types import (
     CommonProxyErrors,
 )
@@ -564,7 +565,7 @@ async def _resolve_autorouter_presets(
     url: str,
     fetch: Callable[[str], Awaitable[Mapping[str, AutoRouterPresetRecord]]],
 ) -> Mapping[str, AutoRouterPresetRecord]:
-    if os.getenv("LITELLM_LOCAL_AUTOROUTER_PRESETS", "").lower() == "true":
+    if is_offline_mode() or os.getenv("LITELLM_LOCAL_AUTOROUTER_PRESETS", "").lower() == "true":
         return _load_bundled_autorouter_presets()
     try:
         return await fetch(url)

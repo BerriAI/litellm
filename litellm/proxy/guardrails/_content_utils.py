@@ -9,7 +9,14 @@ every text fragment.
 """
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from typing import Any, Final
+from typing import Final
+
+from litellm.litellm_core_utils.core_helpers import iter_items
+from litellm.responses.litellm_completion_transformation.compaction_items import (
+    compaction_summary,
+    input_items,
+    with_visited_compaction_summary,
+)
 
 # Call types whose body carries free-form chat / prompt text that
 # text-content guardrails (banned keywords, content moderation, secret
@@ -95,12 +102,12 @@ def _coerce_input_to_messages(input_value: object) -> list[dict[str, object]]:
     """Coerce a Responses-API ``data["input"]`` value into chat-style messages."""
     if isinstance(input_value, str):
         return [{"role": "user", "content": input_value}]
-    if not isinstance(input_value, list):
-        return []
     messages: Final[list[dict[str, object]]] = []
-    for item in input_value:
+    for item in input_items(input_value):
         if isinstance(item, str):
             messages.append({"role": "user", "content": item})
+        elif (summary := compaction_summary(item)) is not None:
+            messages.append({"role": "user", "content": summary})
         elif isinstance(item, dict):
             if _part_text(item) is not None:
                 messages.append({"role": item.get("role") or "user", "content": [item]})
@@ -189,11 +196,14 @@ def walk_user_text(data: dict[str, object], visit: Callable[[str], str]) -> int:
             data["input"] = visit(input_value)
         return visited
     if isinstance(input_value, list):
-        for idx, item in enumerate(input_value):
+        for idx, item in enumerate(input_items(input_value)):
             if isinstance(item, str):
                 if item:
                     visited += 1
                     input_value[idx] = visit(item)
+            elif (compaction := with_visited_compaction_summary(item, visit)) is not None:
+                visited += 1
+                input_value[idx] = compaction
             elif isinstance(item, dict):
                 if _part_text(item) is not None:
                     visited += 1
@@ -222,7 +232,7 @@ def is_string_batch_input(data: Mapping[str, object]) -> bool:
     return isinstance(input_value, list) and bool(input_value) and all(isinstance(item, str) for item in input_value)
 
 
-def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequence[object]) -> bool:
+def apply_redacted_messages_back(data: dict[str, object], redacted_messages: Sequence[object]) -> bool:
     """Write redacted messages back to whichever field(s) the caller used.
 
     Mask/anonymize paths take a synthesised messages list (from
@@ -240,9 +250,9 @@ def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequen
     carry exactly one message per inspected element: a partial rewrite would
     forward the remaining originals unredacted. Callers must block on False.
     """
+    input_value: Final = data.get("input")
     if is_string_batch_input(data):
-        batch: Final = data["input"]
-        inspected_indices: Final = tuple(idx for idx, item in enumerate(batch) if item)
+        inspected_indices: Final = tuple(idx for idx, item in enumerate(iter_items(input_value)) if item)
         if len(redacted_messages) != len(inspected_indices):
             return False
         if any(not isinstance(message, Mapping) or message.get("content") is None for message in redacted_messages):
@@ -250,12 +260,12 @@ def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequen
         redacted_texts: Final = tuple(
             "\n".join(_iter_text_parts_in_content(message["content"])) for message in redacted_messages
         )
-        for idx, text in zip(inspected_indices, redacted_texts):
-            batch[idx] = text
+        if isinstance(input_value, list):
+            for idx, text in zip(inspected_indices, redacted_texts):
+                input_value[idx] = text
         return True
     if "messages" in data:
         data["messages"] = redacted_messages
-    input_value: Final = data.get("input")
     if isinstance(input_value, str):
         text_parts: Final[list[str]] = []
         for msg in redacted_messages:

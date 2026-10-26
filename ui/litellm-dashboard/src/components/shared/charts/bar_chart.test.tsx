@@ -81,6 +81,28 @@ describe("BarChart", () => {
     expect(screen.getAllByText("beta").length).toBeGreaterThan(0);
   });
 
+  it.each(["horizontal", "vertical"] as const)(
+    "should shorten category labels independently of numeric ticks in %s layout",
+    (layout) => {
+      const fullLabel = "primary-model-with-a-long-deployment-name";
+      render(
+        <BarChart
+          data={[{ model: fullLabel, spend: 12 }]}
+          index="model"
+          categories={["spend"]}
+          layout={layout}
+          indexFormatter={(label) => `${label.slice(0, 13)}…`}
+          valueFormatter={(value) => `${value} USD`}
+          showLegend={false}
+        />,
+      );
+
+      expect(screen.getByText("primary-model…")).toBeInTheDocument();
+      expect(screen.queryByText(fullLabel)).not.toBeInTheDocument();
+      expect(screen.getAllByText(/ USD$/).length).toBeGreaterThan(0);
+    },
+  );
+
   it("applies valueFormatter to the value axis ticks", () => {
     render(
       <BarChart
