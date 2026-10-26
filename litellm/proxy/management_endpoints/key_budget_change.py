@@ -9,6 +9,7 @@ from typing import Final, Literal, TypeAlias
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.duration_parser import normalize_duration
 from litellm.models.team import BudgetLimitEntry
 from litellm.models.verification_token import LiteLLM_VerificationToken
 from litellm.proxy._types import UpdateKeyRequest
@@ -99,6 +100,30 @@ def _budget_limits_change(data: UpdateKeyRequest, existing: LiteLLM_Verification
     return "tightened" if kept_or_lowered else "loosened"
 
 
+def _reset_schedule(budget_duration: str | None) -> str | None:
+    return None if budget_duration is None else normalize_duration(budget_duration)
+
+
+def _changes_budget_duration(data: UpdateKeyRequest, existing: LiteLLM_VerificationToken) -> bool:
+    return "budget_duration" in data.model_fields_set and _reset_schedule(data.budget_duration) != _reset_schedule(
+        existing.budget_duration
+    )
+
+
+def _changes_budget_id(data: UpdateKeyRequest, existing: LiteLLM_VerificationToken) -> bool:
+    return "budget_id" in data.model_fields_set and data.budget_id != existing.budget_id
+
+
+def _budget_duration_change(data: UpdateKeyRequest, existing: LiteLLM_VerificationToken) -> _FieldChange:
+    """
+    Any new `budget_duration` restarts the reset schedule from now, so only clearing it tightens the
+    stored `max_budget`. A key with no `max_budget` has no cap for the schedule to reset.
+    """
+    if existing.max_budget is None or not _changes_budget_duration(data, existing):
+        return "unchanged"
+    return "tightened" if data.budget_duration is None else "loosened"
+
+
 @dataclass(frozen=True, slots=True)
 class EffectiveKeyBudget:
     max_budget: float | None
@@ -122,12 +147,23 @@ def effective_key_budget(data: UpdateKeyRequest, existing: LiteLLM_VerificationT
 
 
 def classify_key_budget_change(data: UpdateKeyRequest, existing: LiteLLM_VerificationToken) -> KeyBudgetChange:
-    overrides_linked_budget: Final = (
-        existing.budget_id is not None and _max_budget_change(data, existing) != "unchanged"
+    overrides_linked_budget: Final = existing.budget_id is not None and (
+        _max_budget_change(data, existing) != "unchanged" or _changes_budget_duration(data, existing)
     )
-    if data.spend is not None or "soft_budget" in data.model_fields_set or overrides_linked_budget:
+    if (
+        data.spend is not None
+        or "soft_budget" in data.model_fields_set
+        or overrides_linked_budget
+        or _changes_budget_id(data, existing)
+    ):
         return KeyBudgetAdminOnly()
-    changes: Final = frozenset((_max_budget_change(data, existing), _budget_limits_change(data, existing)))
+    changes: Final = frozenset(
+        (
+            _max_budget_change(data, existing),
+            _budget_limits_change(data, existing),
+            _budget_duration_change(data, existing),
+        )
+    )
     if "loosened" in changes:
         return KeyBudgetLoosened()
     if "tightened" in changes:
