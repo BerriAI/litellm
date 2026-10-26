@@ -30,12 +30,12 @@ description: Add database queries, extract existing Prisma calls into repositori
 ## Asked to port a Prisma query to Rust or SQLx
 
 - Identify the existing inputs, outputs, errors, and transaction boundary
-- Check `crates/db` for an equivalent query and reuse it if its behavior matches
-- Otherwise follow `crates/db/AGENTS.md`
+- Check `litellm-rust/crates/db` for an equivalent query and reuse it if its behavior matches
+- Otherwise follow `litellm-rust/crates/db/AGENTS.md`
   - Put static SQL in `queries/` and compile-check it with SQLx
   - Keep typed inputs and reusable row projections in `src/`
   - Refresh SQLx query metadata after SQL changes
-- Keep Python conversion in the Python bridge, not in `crates/db`
+- Keep Python conversion in the Python bridge, not in `litellm-rust/crates/db`
 - When caller integration is requested, expose the Rust operation through the bridge and call it from the repository
   - A query-only port can land without switching callers
 - Verify behavior against real PostgreSQL before switching callers
