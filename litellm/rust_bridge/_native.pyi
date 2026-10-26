@@ -1,6 +1,6 @@
 from asyncio import Future
 from collections.abc import Mapping, Sequence
-from typing import Never, final
+from typing import Literal, Never, final
 
 import httpx
 from pydantic import JsonValue
@@ -12,6 +12,75 @@ class RustBridgeDeclined(Exception): ...
 class RustUpstreamError(Exception): ...
 class ForkedAfterNativeRuntimeStarted(RuntimeError): ...
 class ProcessReservedForForking(RuntimeError): ...
+
+RowErrorKind = Literal[
+    "json",
+    "empty",
+    "below_minimum",
+    "shrunk",
+    "not_an_object",
+    "invalid",
+    "unknown_block_key",
+    "missing_provider",
+    "unknown_timezone",
+    "alias_shadows_model",
+    "alias_taken",
+    "duplicate_price",
+    "suffix_inside_block",
+    "tier_range",
+    "tier_reversed",
+    "tier_gap",
+    "mixed_tier_basis",
+    "not_priced_by_results",
+    "bands_from_two_sources",
+    "not_an_off_peak_rate",
+    "no_off_peak_prices",
+    "no_off_peak_hours",
+    "empty_list",
+    "invalid_date",
+]
+
+@final
+class RowError:
+    @property
+    def key(self) -> str: ...
+    @property
+    def field(self) -> str | None: ...
+    @property
+    def kind(self) -> RowErrorKind: ...
+    @property
+    def rejects(self) -> bool: ...
+    @property
+    def message(self) -> str: ...
+
+@final
+class ModelRegistry:
+    @staticmethod
+    def parse(body: bytes) -> ModelRegistry: ...
+    @staticmethod
+    def bundled() -> ModelRegistry: ...
+    @staticmethod
+    def bundled_bytes() -> bytes: ...
+    def errors(self) -> list[RowError]: ...
+    def to_dict(self) -> dict[str, JsonValue]: ...
+    def served(self) -> dict[str, dict[str, JsonValue]]: ...
+    def fallback_rules(self) -> list[dict[str, JsonValue]] | None: ...
+    def without_rejected(self) -> tuple[ModelRegistry, list[RowError]]: ...
+    def check_size(self, reference: int) -> RowError | None: ...
+
+def model_row_errors(key: str, row: dict[str, JsonValue]) -> list[RowError]: ...
+def write_rows(target: dict[str, object], set: dict[str, object], remove: list[str]) -> None: ...
+
+@final
+class ModelCostLayers:
+    def __new__(cls) -> ModelCostLayers: ...
+    def record_registration(self, key: str, inherits_from: str | None, fields: dict[str, JsonValue]) -> None: ...
+    def diff(self, changed: dict[str, tuple[dict[str, JsonValue] | None, dict[str, JsonValue] | None]]) -> None: ...
+    def forget_writes(self) -> None: ...
+    def compose(self, base: ModelRegistry) -> list[tuple[str, dict[str, JsonValue], frozenset[str]]]: ...
+    def compose_keys(
+        self, base: ModelRegistry, keys: frozenset[str]
+    ) -> list[tuple[str, dict[str, JsonValue] | None, frozenset[str]]]: ...
 
 def trace_encode_error(message: str) -> bytes: ...
 
@@ -205,11 +274,15 @@ def reserve_process_for_forking() -> None: ...
 __all__ = [
     "ForkedAfterNativeRuntimeStarted",
     "HuggingFaceEncoding",
+    "ModelCostLayers",
+    "ModelRegistry",
     "NativeClickHouseSpendConfig",
     "NativeClickHouseSpendStorage",
     "NativeDiagnosticProcessor",
     "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
+    "RowError",
+    "RowErrorKind",
     "RustBridgeDeclined",
     "RustUpstreamError",
     "TokenCounter",
@@ -224,6 +297,7 @@ __all__ = [
     "embedding",
     "gil_stats",
     "messages",
+    "model_row_errors",
     "ocr",
     "ocr_health_check_document",
     "ocr_passthrough_response",
@@ -232,6 +306,7 @@ __all__ = [
     "responses",
     "trace_encode_error",
     "transcription",
+    "write_rows",
 ]
 
 @final

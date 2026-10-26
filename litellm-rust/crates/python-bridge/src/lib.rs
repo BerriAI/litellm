@@ -8,6 +8,7 @@ mod execution;
 mod http;
 mod logger;
 mod marshal;
+mod model_registry;
 mod preflight;
 mod python_settings;
 mod routes;
@@ -29,6 +30,10 @@ mod _native {
     use crate::errors::{RustBridgeDeclined, RustUpstreamError};
     #[pymodule_export]
     use crate::logger::NativeDiagnosticProcessor;
+    #[pymodule_export]
+    use crate::model_registry::{
+        ModelCostLayers, ModelRegistry, RowError, model_row_errors, write_rows,
+    };
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]
@@ -66,7 +71,17 @@ mod _native {
         dict.set_item(
             "_SecretManagerRuntime",
             py.get_type::<crate::secrets::runtime::NativeSecretManager>(),
-        )
+        )?;
+        let typing = py.import("typing")?;
+        let literal = typing.getattr("Literal")?;
+        let kinds = pyo3::types::PyTuple::new(
+            py,
+            <crate::model_registry::RowErrorKind as strum::VariantArray>::VARIANTS
+                .iter()
+                .map(|kind| literal.get_item(<&'static str>::from(*kind)))
+                .collect::<PyResult<Vec<_>>>()?,
+        )?;
+        module.add("RowErrorKind", typing.getattr("Union")?.get_item(kinds)?)
     }
 }
 
@@ -82,11 +97,34 @@ mod tests {
     use super::*;
 
     #[rstest::rstest]
+    fn registry_rows_install_without_replacing_the_live_dict() {
+        Python::initialize();
+        Python::attach(|py| {
+            let scope = pyo3::types::PyDict::new(py);
+            scope.set_item("native", native_module(py)).unwrap();
+            py.run(pyo3::ffi::c_str!(r#"
+registry = native.ModelRegistry.parse(b'{"model": {"litellm_provider": "openai", "input_cost_per_token": 0}}')
+live = {"old": {}}
+alias = live
+assert native.write_rows(live, registry.served(), ["old", "missing"]) is None
+assert live is alias
+assert live == {"model": {"litellm_provider": "openai", "input_cost_per_token": 0}}
+"#), Some(&scope), Some(&scope)).unwrap();
+        });
+    }
+
+    #[rstest::rstest]
     fn module_registration_preserves_the_public_surface() {
         Python::initialize();
         Python::attach(|py| {
             let mut expected = vec![
                 "NativeCacheHandle",
+                "ModelRegistry",
+                "ModelCostLayers",
+                "RowError",
+                "RowErrorKind",
+                "model_row_errors",
+                "write_rows",
                 "RustBridgeDeclined",
                 "RustUpstreamError",
                 "ForkedAfterNativeRuntimeStarted",

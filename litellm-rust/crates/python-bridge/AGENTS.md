@@ -116,6 +116,7 @@ GIL handling to `litellm-host-python`.
 
 ## Tests
 
+- The model catalog exports have no module-missing fallback, because `import litellm` needs the catalog
 - `cargo test --workspace` must compile this crate.
 - Python tests must cover bridge disabled, bridge enabled, and module-missing
   fallback behavior for every exposed route.

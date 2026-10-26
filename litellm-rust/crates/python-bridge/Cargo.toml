@@ -24,6 +24,7 @@ litellm-tracing.workspace = true
 litellm-spend-clickhouse.workspace = true
 litellm-storage-clickhouse.workspace = true
 litellm-host.workspace = true
+litellm-model-catalog.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
 litellm-cache.workspace = true
