@@ -46,7 +46,7 @@ type LiteAdminState = {
   toggle: () => void;
   show: () => void;
   access: LiteAdminSession["access"];
-  launcherRef: RefObject<HTMLButtonElement | null>;
+  triggerRef: RefObject<HTMLButtonElement | null>;
   homeContainer: HTMLDivElement | null;
   setHomeContainer: (container: HTMLDivElement | null) => void;
   usageContainer: HTMLDivElement | null;
@@ -79,12 +79,11 @@ function useLiteAdminSession() {
   };
 }
 
-/** Keeps one Aria conversation available from the dashboard and its floating launcher. */
 export function LiteAdminFrame({ children }: { children: ReactNode }) {
   const configured = useLiteAdminSession();
   const sessionKey = configured?.key ?? null;
   const [open, setOpen] = useState(false);
-  const launcherRef = useRef<HTMLButtonElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const [started, setStarted] = useState(false);
   const [homeContainer, setHomeContainer] = useState<HTMLDivElement | null>(null);
   const [usageContainer, updateUsageContainer] = useState<HTMLDivElement | null>(null);
@@ -129,7 +128,7 @@ export function LiteAdminFrame({ children }: { children: ReactNode }) {
               toggle,
               show,
               access: configured.session.access,
-              launcherRef,
+              triggerRef,
               homeContainer,
               setHomeContainer,
               usageContainer,
@@ -139,28 +138,10 @@ export function LiteAdminFrame({ children }: { children: ReactNode }) {
       }
     >
       {children}
-      {configured && !open && <AriaLauncher show={show} buttonRef={launcherRef} />}
       {configured && showPanel && (
         <AriaPopup key={configured.key} session={configured.session} open={open} close={() => setOpen(false)} />
       )}
     </LiteAdminContext.Provider>
-  );
-}
-
-function AriaLauncher({ show, buttonRef }: { show: () => void; buttonRef: RefObject<HTMLButtonElement | null> }) {
-  return (
-    <Button
-      ref={buttonRef}
-      variant="outline"
-      aria-label={`Launch ${ARIA_AGENT_LABEL}`}
-      aria-keyshortcuts="Meta+J Control+J"
-      aria-expanded={false}
-      onClick={show}
-      className="fixed bottom-4 right-4 z-floating h-11 gap-2 rounded-full border-blue-200 bg-background pl-2 pr-4 text-blue-700 shadow-md hover:bg-blue-50 hover:text-blue-800 dark:border-blue-400/30 dark:text-blue-300 dark:hover:bg-blue-400/10"
-    >
-      <AriaAvatar />
-      <span>{ARIA_AGENT_LABEL}</span>
-    </Button>
   );
 }
 
@@ -190,18 +171,20 @@ export function LiteAdminHome() {
 
 export default function LiteAdminTrigger() {
   const state = useContext(LiteAdminContext);
-  if (!state || state.access.mode !== "admin") return null;
+  if (!state) return null;
+  const { triggerRef, open, toggle } = state;
   return (
     <Button
       variant="ghost"
+      ref={triggerRef}
       aria-label={ARIA_AGENT_LABEL}
       aria-keyshortcuts="Meta+J Control+J"
-      aria-expanded={state.open}
-      onClick={state.toggle}
+      aria-expanded={open}
+      onClick={toggle}
       className="gap-2 rounded-full border border-blue-200/70 bg-blue-50/80 pl-1.5 pr-3 text-blue-700 hover:bg-blue-100 hover:text-blue-800 aria-expanded:bg-blue-100 dark:border-blue-400/20 dark:bg-blue-400/10 dark:text-blue-300 dark:hover:bg-blue-400/20"
     >
       <AriaAvatar />
-      <span className="md:hidden lg:inline">{ARIA_AGENT_LABEL}</span>
+      <span className="hidden lg:inline">{ARIA_AGENT_LABEL}</span>
       <kbd className="hidden rounded-full border border-info/30 px-1.5 font-sans text-xs lg:inline">⌘J</kbd>
     </Button>
   );
@@ -360,7 +343,7 @@ function Panel({
         initialFocus={() =>
           initialFocus?.current ?? ref.current?.querySelector<HTMLElement>("textarea:enabled") ?? ref.current
         }
-        finalFocus={state?.launcherRef}
+        finalFocus={state?.triggerRef}
         className="flex h-[min(48rem,calc(100dvh-2rem))] flex-col gap-0 overflow-hidden p-0 shadow-xl sm:max-w-4xl"
       >
         {children}
@@ -551,6 +534,7 @@ function ModelPicker({
       value={value}
       onValueChange={onChange}
       placeholder="Choose a chat model"
+      emptyText={models.data?.length ? "No matching models" : "No available models"}
       disabled={disabled}
       allowClear={false}
       className={compact ? "border-transparent shadow-none dark:bg-transparent" : undefined}
@@ -559,24 +543,16 @@ function ModelPicker({
 }
 
 function ModelStatus({ models }: { models: UseQueryResult<ModelGroup[]> }) {
+  if (!models.isError) return null;
   return (
-    <>
-      {models.isError && (
-        <Alert variant="destructive">
-          <AlertDescription>
-            Could not load models.{" "}
-            <Button variant="link" onClick={() => void models.refetch()}>
-              Retry
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
-      {models.isSuccess && models.data.length === 0 && (
-        <Alert role="status">
-          <AlertDescription>No chat models are available for your account.</AlertDescription>
-        </Alert>
-      )}
-    </>
+    <Alert variant="destructive">
+      <AlertDescription>
+        Could not load models.{" "}
+        <Button variant="link" onClick={() => void models.refetch()}>
+          Retry
+        </Button>
+      </AlertDescription>
+    </Alert>
   );
 }
 

@@ -119,6 +119,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
+from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.route_llm_request import (
     route_request,
@@ -1416,6 +1417,8 @@ async def open_sse_before_first_byte(
     if interval is None:
         return await produce_response
 
+    # Share admission state with stream cleanup before the producer copies this context.
+    get_or_create_request_stash()
     produce_task: Final = asyncio.ensure_future(produce_response)
     await asyncio.wait((produce_task,), timeout=interval)
     if produce_task.done():
@@ -4821,10 +4824,15 @@ class ProxyBaseLLMRequestProcessing:
                         model_info = metadata.get("model_info") or {}
                         model_id = model_info.get("id", None)
 
-        # 3. Final fallback to self.data["litellm_metadata"] (for routes like /v1/responses that populate data before error)
+        # 3. Final fallback to the request metadata the router updates in place with the selected deployment
         if not model_id:
-            litellm_metadata: Final = self.data.get("litellm_metadata", {}) or {}
-            model_info = litellm_metadata.get("model_info", {}) or {}
-            model_id = model_info.get("id", None)
+            model_id = self._metadata_model_id("litellm_metadata") or self._metadata_model_id("metadata")
 
         return model_id
+
+    def _metadata_model_id(self, metadata_key: str) -> str | None:
+        match self.data.get(metadata_key):
+            case {"model_info": {"id": str() as request_model_id}}:
+                return request_model_id
+            case _:
+                return None

@@ -1,10 +1,12 @@
 """`/management/v1/spend_logs` facets."""
 
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from functools import partial
-from typing import Annotated, Final, Literal
+from typing import Annotated, Final, Literal, Protocol
 
 from fastapi import APIRouter, Depends, Query, Request
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
@@ -19,6 +21,7 @@ from litellm.proxy.list_api.common import (
     reject_unknown_query_params,
 )
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
+from litellm.proxy.utils import PrismaClient
 from litellm.types.proxy.management_endpoints.management_v1 import (
     FacetListResponse,
     PageMeta,
@@ -31,6 +34,19 @@ router: Final = APIRouter(prefix=MANAGEMENT_V1_PREFIX)
 # SPEND_LOGS_PAGINATION_COUNT_CAP, the bound ui_view_spend_logs puts on its count
 # query, so both reads of the same table stop at the same depth.
 SPEND_LOGS_FACET_SCAN_CAP: Final = 10000
+
+
+class _FacetRow(TypedDict, total=False):
+    end_user: ReadOnly[str | None]
+    user: ReadOnly[str | None]
+
+
+class _FacetQuery(Protocol):
+    async def __call__(self, query: str, *args: object) -> Sequence[_FacetRow]: ...
+
+
+def _facet_query(prisma_client: PrismaClient) -> _FacetQuery:
+    return prisma_client.db.query_raw
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -125,8 +141,8 @@ async def _list_spend_log_facet(
             f" ORDER BY {column_sql} ASC"
             f" LIMIT ${scan_idx + 1} OFFSET ${scan_idx + 2}"
         )
-        rows: Final = await prisma_client.db.query_raw(facet_sql, *params)
-        values: Final[list[str]] = [row[column] for row in rows if row.get(column)]
+        rows: Final = await _facet_query(prisma_client)(facet_sql, *params)
+        values: Final[list[str]] = [value for row in rows if (value := row.get(column))]
         has_more: Final = len(values) > page_size
 
         return FacetListResponse(

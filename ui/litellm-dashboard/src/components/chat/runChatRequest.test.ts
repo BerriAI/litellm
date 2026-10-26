@@ -1,12 +1,16 @@
+import OpenAI from "openai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
-import { generateChatImages, toResponsesMessages } from "./imageHelpers";
+import { generateChatImages } from "./imageHelpers";
+import { toResponsesMessages } from "./attachmentHelpers";
 import { runChatRequest } from "./runChatRequest";
 import type { MCPEvent } from "./types";
 
 vi.mock("@/components/llm_calls/responses_api", () => ({ makeOpenAIResponsesRequest: vi.fn() }));
 vi.mock("./imageHelpers", () => ({
   generateChatImages: vi.fn(),
+}));
+vi.mock("./attachmentHelpers", () => ({
   toResponsesMessages: vi.fn((messages) => messages),
 }));
 
@@ -26,7 +30,10 @@ function requestOptions(overrides: Partial<Parameters<typeof runChatRequest>[0]>
   };
 }
 
-const event: MCPEvent = { type: "response.mcp_call.completed", item_id: "tool-call-1" };
+const event: MCPEvent = {
+  type: "response.output_item.done",
+  item: { type: "mcp_call", id: "tool-call-1", name: "lookup", arguments: "{}", output: "Saved result" },
+};
 
 describe("runChatRequest", () => {
   beforeEach(() => {
@@ -64,7 +71,7 @@ describe("runChatRequest", () => {
     expect(args[14]).toBe("previous-response");
   });
 
-  it("should preserve partial text on abort without persisting partial tools or late response ids", async () => {
+  it("should preserve completed tool results and partial text on abort without retaining late response ids", async () => {
     const controller = new AbortController();
     const options = requestOptions({ signal: controller.signal });
     vi.mocked(makeOpenAIResponsesRequest).mockImplementation(async (...args) => {
@@ -76,8 +83,8 @@ describe("runChatRequest", () => {
     });
 
     await runChatRequest(options);
-    expect(options.onUpdate).toHaveBeenLastCalledWith({ content: "Partial answer [stopped]" });
-    expect(options.onUpdate).not.toHaveBeenCalledWith({ mcpEvents: [event] });
+    expect(options.onUpdate).toHaveBeenCalledWith({ content: "Partial answer [stopped]" });
+    expect(options.onUpdate).toHaveBeenLastCalledWith({ mcpEvents: [event] });
     expect(options.onResponseId).toHaveBeenCalledExactlyOnceWith(null);
   });
 
@@ -89,8 +96,8 @@ describe("runChatRequest", () => {
       throw new Error("Provider unavailable");
     });
     await runChatRequest(options);
-    expect(options.onUpdate).toHaveBeenLastCalledWith({ content: "Partial answer" });
-    expect(options.onUpdate).not.toHaveBeenCalledWith({ mcpEvents: [event] });
+    expect(options.onUpdate).toHaveBeenCalledWith({ content: "Partial answer" });
+    expect(options.onUpdate).toHaveBeenLastCalledWith({ mcpEvents: [event] });
     expect(options.onResponseId).toHaveBeenCalledWith(null);
   });
 
@@ -101,6 +108,35 @@ describe("runChatRequest", () => {
     expect(options.onUpdate).toHaveBeenLastCalledWith({ content: "Provider unavailable" });
     expect(options.onResponseId).toHaveBeenCalledWith(null);
   });
+
+  it.each([400, 422, 401, 429, 500])(
+    "should suggest a supported model only when a file request is rejected with %i",
+    async (status) => {
+      const options = requestOptions({
+        messages: [
+          {
+            role: "user",
+            content: "Read the report",
+            attachments: [
+              {
+                id: "report",
+                kind: "file",
+                name: "report.pdf",
+                mimeType: "application/pdf",
+                url: "data:application/pdf;base64,JVBERg==",
+              },
+            ],
+          },
+        ],
+      });
+      const error = new OpenAI.APIError(status, { message: "Provider detail" }, "Provider detail", new Headers());
+      vi.mocked(makeOpenAIResponsesRequest).mockRejectedValue(error);
+      await runChatRequest(options);
+      const hint =
+        status === 400 || status === 422 ? " Try a model that supports file inputs, or paste the relevant text." : "";
+      expect(options.onUpdate).toHaveBeenLastCalledWith({ content: error.message + hint });
+    },
+  );
 
   it("should return generated images through the same message update callback", async () => {
     const options = requestOptions({ mode: "image", model: "image-model" });
@@ -116,6 +152,33 @@ describe("runChatRequest", () => {
       signal: options.signal,
     };
     expect(generateChatImages).toHaveBeenCalledWith(expectedRequest);
+  });
+
+  it("should not suggest file inputs for an image-generation rejection after a file message", async () => {
+    const options = requestOptions({
+      mode: "image",
+      messages: [
+        {
+          role: "user",
+          content: "Read the report",
+          attachments: [
+            {
+              id: "report",
+              kind: "file",
+              name: "report.pdf",
+              mimeType: "application/pdf",
+              url: "data:application/pdf;base64,JVBERg==",
+            },
+          ],
+        },
+      ],
+    });
+    const error = new OpenAI.APIError(400, { message: "Invalid image size" }, "Invalid image size", new Headers());
+    vi.mocked(generateChatImages).mockRejectedValue(error);
+
+    await runChatRequest(options);
+
+    expect(options.onUpdate).toHaveBeenLastCalledWith({ content: error.message });
   });
 
   it("should discard image results that arrive after the request was stopped", async () => {

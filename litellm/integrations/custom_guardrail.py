@@ -352,7 +352,7 @@ class CustomGuardrail(CustomLogger):
         self,
         violation_message: str,
         request_data: dict[str, Any],
-        detection_info: dict[str, Any] | None = None,
+        detection_info: Mapping[str, object] | None = None,
         original_response: object = None,
     ) -> None:
         """
@@ -1368,7 +1368,10 @@ class CustomGuardrail(CustomLogger):
         if event_type is not None:
             guardrail_mode = event_type
         elif isinstance(self.event_hook, Mode):
-            guardrail_mode = GuardrailMode(**dict(self.event_hook.model_dump()))
+            guardrail_mode = GuardrailMode(
+                tags=copy.deepcopy(self.event_hook.tags),
+                default=copy.deepcopy(self.event_hook.default),
+            )
         else:
             guardrail_mode = self.event_hook
 
