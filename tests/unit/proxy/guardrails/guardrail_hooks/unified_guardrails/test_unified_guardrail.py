@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import io
+import json
 import logging
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
 from types import SimpleNamespace
@@ -35,6 +36,7 @@ from litellm.llms.openai.chat.guardrail_translation.handler import (
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
 )
+from litellm.llms.pass_through.guardrail_translation.handler import PassThroughEndpointHandler
 from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import (
     MCPGuardrailTranslationHandler,
 )
@@ -3053,3 +3055,34 @@ async def test_pre_call_hook_skips_attachment_scan_when_guardrail_has_none():
     )
 
     assert len(guardrail.apply_calls) == 1
+
+
+@pytest.mark.parametrize("hook", ["async_pre_call_hook", "async_moderation_hook"])
+@pytest.mark.asyncio
+async def test_pass_through_guardrail_text_is_the_client_body_without_the_injected_key_metadata(
+    monkeypatch: pytest.MonkeyPatch, hook: str
+) -> None:
+    _patch_translation_mappings(monkeypatch, {CallTypes.pass_through: PassThroughEndpointHandler})
+    guardrail: Final = RecordingGuardrail()
+    body: Final = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Say hi in one word"}],
+        "guardrails": ["recording-guardrail"],
+    }
+    data: Final = {**body, "guardrail_to_apply": guardrail}
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        token="hashed-key", user_email="someone@example.com", team_id="team-1", user_role="proxy_admin"
+    )
+
+    if hook == "async_pre_call_hook":
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data, call_type=CallTypes.pass_through.value
+        )
+    else:
+        await UnifiedLLMGuardrails().async_moderation_hook(
+            data=data, user_api_key_dict=user_api_key_dict, call_type=CallTypes.pass_through.value
+        )
+
+    texts: Final = [call["inputs"]["texts"] for call in guardrail.apply_calls]
+    assert [[json.loads(text) for text in call_texts] for call_texts in texts] == [[body]], texts
+    assert data["litellm_metadata"]["user_api_key_user_email"] == "someone@example.com", data["litellm_metadata"]
