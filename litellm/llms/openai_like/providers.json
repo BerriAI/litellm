@@ -249,5 +249,15 @@
       "/v1/responses",
       "/v1/messages"
     ]
+  },
+  "liquid": {
+    "base_url": "https://router.inference.ai.exchange/v1",
+    "api_key_env": "LIQUID_API_KEY",
+    "api_base_env": "LIQUID_API_BASE",
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses",
+      "/v1/messages"
+    ]
   }
 }
