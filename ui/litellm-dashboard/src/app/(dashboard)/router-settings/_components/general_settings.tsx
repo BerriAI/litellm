@@ -79,6 +79,15 @@ const SettingValueEditor: React.FC<{
       />
     );
   }
+  if (setting.field_type === "String") {
+    return (
+      <Input
+        aria-label={setting.field_name}
+        value={setting.field_value ?? ""}
+        onChange={(event) => onChange(setting.field_name, event.target.value)}
+      />
+    );
+  }
   if (setting.field_type === "Boolean") {
     return (
       <Switch
