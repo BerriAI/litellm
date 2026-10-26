@@ -11,7 +11,7 @@ use litellm_model_catalog::{FetchRequest, Reply, SourceId};
 use reqwest::header::{ETAG, IF_NONE_MATCH, RETRY_AFTER};
 use url::Url;
 
-use crate::{SourceError, process_local::ProcessLocal};
+use crate::{S3Object, S3Source, SourceError, process_local::ProcessLocal};
 
 pub const DEFAULT_SOURCE: &str =
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
@@ -20,6 +20,7 @@ pub const DEFAULT_SOURCE: &str =
 pub enum Source {
     Http(Url),
     File(PathBuf),
+    S3(S3Object),
 }
 
 impl Source {
@@ -29,6 +30,7 @@ impl Source {
         })?;
         match url.scheme() {
             "http" | "https" => Ok(Self::Http(url)),
+            "s3" => S3Object::parse(value).map(Self::S3),
             "file" => url
                 .to_file_path()
                 .map(Self::File)
@@ -44,6 +46,7 @@ impl Source {
     pub fn id(&self) -> SourceId {
         SourceId(match self {
             Self::Http(url) => url.to_string(),
+            Self::S3(object) => return object.id(),
             Self::File(path) => Url::from_file_path(path).map_or_else(
                 |()| format!("file://{}", path.display()),
                 |url| url.to_string(),
@@ -55,6 +58,7 @@ impl Source {
         match self {
             Self::Http(url) => Ok(Arc::new(HttpSource::new(url.clone(), http)?)),
             Self::File(path) => Ok(Arc::new(FileSource::new(path.clone()))),
+            Self::S3(object) => Ok(Arc::new(S3Source::new(object.clone(), http)?)),
         }
     }
 }
@@ -272,12 +276,19 @@ mod tests {
     #[case::http("http://example.test/map", Ok("http"))]
     #[case::file("file:///etc/litellm/my.json", Ok("file"))]
     #[case::escaped_file("file:///etc/litellm/my%20map.json", Ok("file"))]
-    #[case::s3("s3://bucket/key", Err("s3"))]
+    #[case::s3("s3://bucket/key", Ok("s3"))]
+    #[case::s3_missing_key("s3://bucket", Err("s3-invalid"))]
+    #[case::s3_empty_key("s3://bucket/", Err("s3-invalid"))]
+    #[case::s3_missing_bucket("s3:///key", Err("s3-invalid"))]
     #[case::ftp("ftp://example.test/map", Err("ftp"))]
     #[case::invalid("not a URL", Err("invalid"))]
     #[case::missing_host("http://", Err("invalid"))]
     fn source_parsing(#[case] value: &str, #[case] expected: Result<&str, &str>) {
         match (Source::parse(value), expected) {
+            (Ok(source @ Source::S3(_)), Ok("s3")) => assert_eq!(source.id().0, value),
+            (Err(SourceError::Invalid { reason }), Err("s3-invalid")) => {
+                assert_eq!(reason, "expected s3://bucket/key")
+            }
             (Ok(Source::Http(url)), Ok("http")) => assert_eq!(url.as_str(), value),
             (Ok(source @ Source::File(_)), Ok("file")) => {
                 assert_eq!(Source::parse(&source.id().0).unwrap(), source);
@@ -289,6 +300,12 @@ mod tests {
             (Err(SourceError::Invalid { reason }), Err("invalid")) => assert!(!reason.is_empty()),
             result => panic!("unexpected parsing result: {result:?}"),
         }
+    }
+
+    #[rstest]
+    fn s3_source_is_accepted() {
+        let value = "s3://bucket/key";
+        assert_eq!(Source::parse(value).unwrap().id().0, value);
     }
 
     #[rstest]

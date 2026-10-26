@@ -7,8 +7,11 @@ repository.workspace = true
 
 [dependencies]
 async-trait = "0.1"
+aws-config = { version = "1.9.0", default-features = false, features = ["rt-tokio", "sso", "credentials-process"] }
+aws-sdk-s3 = { version = "1.146.1", default-features = false, features = ["rustls", "rt-tokio"] }
 litellm-http.workspace = true
 litellm-model-catalog.workspace = true
+litellm-s3.workspace = true
 reqwest.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs"] }
@@ -22,6 +25,7 @@ rcgen = "0.14.10"
 rstest.workspace = true
 rustls.workspace = true
 tempfile.workspace = true
+wiremock.workspace = true
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 
 [target.'cfg(unix)'.dev-dependencies]
