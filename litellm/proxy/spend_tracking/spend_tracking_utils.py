@@ -2,7 +2,6 @@ import ipaddress
 import json
 import os
 import re
-import secrets
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from datetime import datetime as dt
@@ -13,6 +12,7 @@ from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, runtime_checka
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 import litellm
+from litellm._auth.key import is_master_key as is_master_key  # noqa: PLC0414  # public re-export
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     BILLED_RETRY_ATTEMPT_METADATA_KEY,
@@ -115,16 +115,6 @@ def _get_max_string_length_prompt_in_db() -> int:
         return int(max_length_str)
     except (TypeError, ValueError):
         return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
-
-
-def is_master_key(api_key: str | None, _master_key: str | None) -> bool:
-    """
-    Raw-only constant-time master-key comparison. The hashed form is never
-    considered equivalent — only the raw master-key string matches.
-    """
-    if _master_key is None or api_key is None:
-        return False
-    return secrets.compare_digest(api_key, _master_key)
 
 
 _is_master_key: Final = is_master_key
