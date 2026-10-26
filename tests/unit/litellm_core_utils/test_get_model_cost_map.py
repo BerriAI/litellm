@@ -553,7 +553,9 @@ def test_register_url_uses_explicit_source_under_local_flag(tmp_path: Path, monk
 
 def test_failed_url_registration_is_a_single_logged_noop(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     before: Final = copy.deepcopy(litellm.model_cost)
-    registrations: Final = copy.deepcopy(litellm.utils._runtime_registered_model_cost)
+    registrations: Final = {
+        key: copy.deepcopy(dict(row)) for key, row in litellm.utils._runtime_registered_model_cost.items()
+    }
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         url: Final = (tmp_path / "missing.json").as_uri()
         assert litellm.register_model(url) == url

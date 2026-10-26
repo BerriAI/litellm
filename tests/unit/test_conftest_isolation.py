@@ -159,7 +159,10 @@ def test_aws_cache_reset_sees_a_replaced_module(monkeypatch: pytest.MonkeyPatch)
 
 @pytest.fixture(scope="module", autouse=True)
 def registered_collection_models() -> Iterator[None]:
-    original_registrations: Final = dict(litellm_utils_module._runtime_registered_model_cost)
+    from litellm._catalog import _install
+
+    original_layers: Final = _install.LAYERS
+    _install.LAYERS = _install.ModelCostLayers()
     original_routers: Final = frozenset(litellm_router_module._live_routers)
     litellm.register_model(
         {"collection-isolation-ledger": {"litellm_provider": "openai", "input_cost_per_token": 0.001}}
@@ -173,8 +176,7 @@ def registered_collection_models() -> Iterator[None]:
         ]
     )
     yield
-    litellm_utils_module._runtime_registered_model_cost.clear()
-    litellm_utils_module._runtime_registered_model_cost.update(original_registrations)
+    _install.LAYERS = original_layers
     litellm_router_module._live_routers.discard(collection_router)
     litellm_router_module._live_routers.update(original_routers)
 

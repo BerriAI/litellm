@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from itertools import groupby
@@ -101,39 +101,50 @@ def remember_written_rows(keys: frozenset[str]) -> None:
 
 
 def registration_write(
-    target: dict[str, Mapping[str, object]],  # mutable-ok: retain the live public dict and subclass write behavior
     key: str,
-    entry: Mapping[str, object],
-    registration: Mapping[str, object],
+    base: Mapping[str, object],
+    fields: Mapping[str, object],
     *,
     persist: bool,
     inherits_from: str | None,
-    replace: Callable[  # mutable-ok: legacy registration publishes into the live dict
-        [dict[str, Mapping[str, object]], str, Mapping[str, object], Mapping[str, object]], None
-    ],
-) -> None:
+    generation: int,
+) -> bool:
     from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
 
     with LOCK:
-        current: Final = dict[str, Mapping[str, object]].get(target, key)
+        target: Final = _live_rows()
+        current: Final = dict[str, object].get(target, key)
         names: Final = current.names if isinstance(current, AliasedCostEntry) else ()
         keys: Final = frozenset((key, *(name for name in names if target.get(name) is current)))
         record_pending_writes(keys)
-        generation: Final = STATE.generation
-        fields: Final = {name: entry.get(name) for name, value in registration.items() if value is not None}
-        erased: Final = {name: None for name, value in entry.items() if value is None}
-        overrides: Final = _ROW.validate_python({**fields, **erased})
-        replace(target, key, entry, registration)
-        if STATE.generation != generation:
-            refreshed: Final = {
-                alias: AliasedCostEntry({**STATE.rows.get(alias, {}), **overrides}, tuple(keys), frozenset(fields))
-                for alias in keys
-            }
-            write_rows(_live_rows(), dict(refreshed), [])
+        encoded: Final = _encoded_row(fields)
+        local: Final = ModelCostLayers()
+        local.diff({key: ({}, None)})
+        local.diff({key: (None, _encoded_row(base))})
+        local.record_registration(key, None, encoded)
+        registry: Final = STATE.registry or ModelRegistry.bundled()
+        composed: Final = local.compose_keys(registry, frozenset({key}))
+        entry: Final = composed[0][1]
+        if entry is None:
+            return True
+        previous_fields: Final[frozenset[str]] = (
+            current.registered_fields if isinstance(current, AliasedCostEntry) else frozenset()
+        )
+        published: Final = AliasedCostEntry(
+            {name: _decoded_value(value) for name, value in entry.items()},
+            tuple(keys),
+            previous_fields | frozenset(fields),
+        )
+        snapshot: Final = copy.deepcopy(dict(published))
+        if generation != STATE.generation:
+            return False
         if persist:
             for alias in keys:
-                LAYERS.record_registration(alias, inherits_from, _encoded_row(overrides))
-        remember_written_rows(keys)
+                LAYERS.record_registration(alias, inherits_from, encoded)
+        write_rows(target, dict.fromkeys(keys, published), [])
+        for alias in keys:
+            STATE.rows[alias] = snapshot
+        return True
 
 
 def accepted_catalog(catalog: LoadedCatalog) -> LoadedCatalog | None:

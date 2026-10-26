@@ -2258,6 +2258,166 @@ class TestProxyFunctionCalling:
         )
 
 
+@pytest.mark.parametrize(
+    ("key", "base_key", "provider", "mode"),
+    (
+        ("databricks/databricks-claude-opus-4-99", "databricks/databricks-claude-opus-4", "databricks", "chat"),
+        ("openai/o3-pro", "o3-pro", "openai", "responses"),
+        ("bedrock/anthropic.claude-sonnet-4-6-20260101", "bedrock/anthropic.claude-sonnet-4-6", "bedrock", "chat"),
+    ),
+)
+def test_register_model_preserves_caller_key_and_inherits_without_repricing_sibling(
+    key: str, base_key: str, provider: str, mode: str
+) -> None:
+    from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
+    from litellm.utils import model_cost_registration_row
+
+    base_row: Final = {
+        "litellm_provider": provider,
+        "mode": mode,
+        "max_input_tokens": 8000,
+        "input_cost_per_token": 0.001,
+        "supports_vision": True,
+    }
+    adopt_model_cost_map({base_key: base_row})
+    live: Final = litellm.model_cost
+    litellm.register_model(
+        {key: {"max_input_tokens": 32000, "input_cost_per_token": 0.005, "litellm_provider": provider}}
+    )
+
+    assert litellm.model_cost is live
+    assert litellm.model_cost[base_key] == base_row
+    assert litellm.model_cost[key] == {**base_row, "max_input_tokens": 32000, "input_cost_per_token": 0.005}
+    assert model_cost_registration_row(key, provider)["mode"] == mode
+
+    refreshed_row: Final = {**base_row, "supports_vision": False, "input_cost_per_token": 0.002}
+    adopt_model_cost_map({base_key: refreshed_row})
+
+    assert litellm.model_cost is live
+    assert litellm.model_cost[base_key] == refreshed_row
+    assert litellm.model_cost[key] == {**refreshed_row, "max_input_tokens": 32000, "input_cost_per_token": 0.005}
+
+
+def test_register_model_keeps_case_variant_fields_independent_after_reload() -> None:
+    from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
+
+    upper: Final = "hosted_vllm/Acme-Model"
+    lower: Final = "hosted_vllm/acme-model"
+    rows: Final = {
+        upper: {"max_input_tokens": 8000, "supports_vision": True, "litellm_provider": "hosted_vllm"},
+        lower: {"max_input_tokens": 32000, "litellm_provider": "hosted_vllm"},
+    }
+    base: Final = {"baseline-model": {"mode": "chat"}}
+    adopt_model_cost_map(base)
+    for key, row in rows.items():
+        litellm.register_model({key: row})
+
+    assert dict(litellm.model_cost) == {**base, **rows}
+    adopt_model_cost_map(base)
+    assert dict(litellm.model_cost) == {**base, **rows}
+
+
+@pytest.mark.parametrize("registration_last", (True, False))
+def test_register_model_and_direct_write_keep_last_writer_after_reload(registration_last: bool) -> None:
+    from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
+
+    key: Final = "gpt-4o"
+    row: Final = {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 0.001}
+    adopt_model_cost_map({key: row})
+    litellm.model_cost[key]["output_cost_per_token"] = 0.8
+    if registration_last:
+        litellm.model_cost[key]["input_cost_per_token"] = 0.7
+        litellm.register_model({key: {"input_cost_per_token": 0.5}})
+    else:
+        litellm.register_model({key: {"input_cost_per_token": 0.5}})
+        litellm.model_cost[key]["input_cost_per_token"] = 0.7
+    expected: Final = 0.5 if registration_last else 0.7
+    assert litellm.model_cost[key]["input_cost_per_token"] == expected
+    adopt_model_cost_map({key: {**row, "input_cost_per_token": 0.003}})
+    assert litellm.model_cost[key]["input_cost_per_token"] == expected
+    assert litellm.model_cost[key]["output_cost_per_token"] == 0.8
+
+
+def test_registration_provider_scope_replaces_an_exact_cross_provider_collision() -> None:
+    from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
+
+    key: Final = "opaque-deployment-id"
+    catalog: Final = {
+        key: {"litellm_provider": "bedrock", "input_cost_per_token": 0.1, "output_cost_per_token": 0.2}
+    }
+    adopt_model_cost_map(catalog)
+    expected: Final = {"mode": "chat", "input_cost_per_token": 0.5}
+    litellm.register_model({key: expected}, custom_llm_provider="openai", add_to_provider_model_sets=False)
+    assert litellm.model_cost[key] == expected
+    adopt_model_cost_map(catalog)
+    assert litellm.model_cost[key] == expected
+
+
+def test_register_model_nonpersistent_write_is_not_captured_as_a_direct_write() -> None:
+    from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
+
+    row: Final = {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 0.001}
+    adopt_model_cost_map({"gpt-4o": row})
+    litellm.register_model({"openai/gpt-4o": {"input_cost_per_token": 0.5}}, persist_across_reloads=False)
+    litellm.register_model({"opaque-request-id": {"max_tokens": 1234}}, persist_across_reloads=False)
+    assert litellm.model_cost["openai/gpt-4o"]["input_cost_per_token"] == 0.5
+    assert litellm.model_cost["opaque-request-id"]["max_tokens"] == 1234
+
+    adopt_model_cost_map({"gpt-4o": row})
+
+    assert dict(litellm.model_cost) == {"gpt-4o": row}
+
+
+def test_runtime_registration_view_is_sparse_detached_read_only_and_persistent() -> None:
+    from uuid import UUID
+
+    from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
+    from litellm.utils import _runtime_registered_model_cost
+
+    key: Final = "openai/registration-view"
+    row: Final = {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 1.0}
+    metadata: Final = UUID(int=17)
+    adopt_model_cost_map({key: row})
+    litellm.register_model({key: {"input_cost_per_token": 0, "supports_vision": False, "metadata": [metadata]}})
+    snapshot: Final = dict(_runtime_registered_model_cost.items())
+    expected: Final = {"input_cost_per_token": 0, "supports_vision": False, "metadata": [metadata]}
+    assert snapshot == {key: expected}
+    with pytest.raises(TypeError):
+        _runtime_registered_model_cost[key] = {}
+    with pytest.raises(TypeError):
+        snapshot[key]["input_cost_per_token"] = 7
+    snapshot[key]["metadata"].append(UUID(int=18))
+    assert dict(_runtime_registered_model_cost.items()) == {key: expected}
+    litellm.register_model({key: {"output_cost_per_token": 2}})
+    litellm.model_cost["direct-only"] = {"mode": "chat"}
+    litellm.register_model({"ephemeral-only": {"mode": "chat"}}, persist_across_reloads=False)
+    assert dict(_runtime_registered_model_cost.items()) == {key: {**expected, "output_cost_per_token": 2}}
+    assert "output_cost_per_token" not in snapshot[key]
+    adopt_model_cost_map({key: {**row, "input_cost_per_token": 9}})
+    assert litellm.model_cost[key] == {**row, **expected, "output_cost_per_token": 2}
+    assert litellm.model_cost["direct-only"] == {"mode": "chat"}
+    assert "ephemeral-only" not in litellm.model_cost
+
+
+@pytest.mark.parametrize("register_after_delete", [False, True])
+def test_registration_tombstone_order_survives_repeated_reload(register_after_delete: bool) -> None:
+    from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
+
+    key: Final = "openai/deleted-registration"
+    row: Final = {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 1.0}
+    adopt_model_cost_map({key: row})
+    litellm.register_model({key: {"input_cost_per_token": 2.0}})
+    del litellm.model_cost[key]
+    if register_after_delete:
+        litellm.register_model({key: {"output_cost_per_token": 3.0}})
+    expected: Final = {key: {"output_cost_per_token": 3.0}} if register_after_delete else {}
+    assert dict(litellm.model_cost) == expected
+    adopt_model_cost_map({key: row})
+    assert dict(litellm.model_cost) == expected
+    adopt_model_cost_map({key: row})
+    assert dict(litellm.model_cost) == expected
+
+
 @pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
 def test_register_model_price_is_used_for_completion_cost() -> None:
     model: Final = "migration-custom-pricing-model"
@@ -2328,8 +2488,10 @@ def test_completion_registers_test_owned_model_prices() -> None:
     )
 
     assert json.loads(route.calls[0].request.content) == {"model": model, "messages": messages}
-    assert litellm.model_cost[model]["input_cost_per_token"] == 0.001
-    assert litellm.model_cost[model]["output_cost_per_token"] == 0.002
+    assert litellm.model_cost[f"openai/{model}"]["input_cost_per_token"] == 0.001
+    assert litellm.model_cost[f"openai/{model}"]["output_cost_per_token"] == 0.002
+    assert litellm.model_cost[model]["input_cost_per_token"] == 0.0001
+    assert litellm.model_cost[model]["output_cost_per_token"] == 0.0002
     assert response._hidden_params["response_cost"] == pytest.approx(0.018)
 
 
@@ -2410,23 +2572,30 @@ def test_register_model_with_scientific_notation():
 
 
 @pytest.mark.usefixtures("isolated_openai_model_sets")
-@respx.mock
-def test_register_model_url_fetch_uses_single_attempt(monkeypatch):
+def test_register_model_url_fetch_uses_single_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import Mock
+
+    from litellm._catalog import _fetch
+    from litellm.rust_bridge._native import RegistryUnavailable
+
     monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
-    before = dict(litellm.model_cost)
-    threads_before = {thread.name for thread in threading.enumerate()}
-    route = respx.get("https://example.invalid/custom_pricing.json").mock(return_value=httpx.Response(503))
+    before: Final = dict(litellm.model_cost)
+    threads_before: Final = {thread.name for thread in threading.enumerate()}
+    fetch_once: Final = Mock(return_value=Mock(spec=RegistryUnavailable, reason="HTTP 503", retryable=True))
+    monkeypatch.setattr(_fetch, "fetch_once", fetch_once)
 
     litellm.register_model(model_cost="https://example.invalid/custom_pricing.json")
 
-    threads_after = {thread.name for thread in threading.enumerate()}
-    assert route.call_count == 1
+    threads_after: Final = {thread.name for thread in threading.enumerate()}
+    fetch_once.assert_called_once_with(
+        "https://example.invalid/custom_pricing.json", if_none_match=None, timeout_seconds=5.0
+    )
     assert not (threads_after - threads_before) & {"litellm-model-cost-map-retry"}
     assert not any(
         thread.name == "litellm-model-cost-map-retry" and thread.is_alive() for thread in threading.enumerate()
     )
-    assert litellm.model_cost.keys() >= before.keys()
+    assert litellm.model_cost == before
 
 
 def test_register_model_openrouter_without_slash():
@@ -4929,7 +5098,7 @@ async def test_builtin_string_callback_registers_when_subclass_already_active(
 @pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
 @pytest.mark.parametrize("rate", (0.0, 0.000123))
 @pytest.mark.parametrize("updated_rate", (None, 0.0, 0.000456))
-def test_reapply_runtime_registrations_replays_register_model_overrides(
+def test_install_preserves_register_model_overrides(
     monkeypatch: pytest.MonkeyPatch, rate: float, updated_rate: float | None
 ) -> None:
     """
@@ -4938,22 +5107,8 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(
     so without replaying those registrations the override is silently lost and
     the model reverts to upstream pricing.
     """
-    from litellm import utils as litellm_utils
-    from litellm.utils import (
-        _invalidate_model_cost_lowercase_map,
-        reapply_runtime_model_cost_registrations,
-    )
-
-    monkeypatch.setattr(
-        litellm_utils,
-        "_runtime_registered_model_cost",
-        dict(litellm_utils._runtime_registered_model_cost),
-    )
-    # Only the recorded half is under test here; the live-router rebuild is covered
-    # in test_router_model_cost_isolation.py. Routers built by earlier tests in this
-    # process stay in the weak set until they are collected, so leaving the callback
-    # installed would make this depend on when that happens.
-    monkeypatch.setattr(litellm_utils._LiveDeploymentReplay, "callback", None)
+    from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
+    from litellm.utils import _invalidate_model_cost_lowercase_map
 
     saved_model_cost: Final = litellm.model_cost
     monkeypatch.setattr(litellm, "model_cost", dict(saved_model_cost))
@@ -4974,16 +5129,16 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(
         )
         litellm.register_model({"openai/gpt-4o": {"supports_function_calling": False}})
 
-        litellm.model_cost = {
-            "openai/gpt-4o": {
-                "litellm_provider": "openai",
-                "mode": "chat",
-                "input_cost_per_token": 0.000999,
-                "max_input_tokens": 4242,
+        adopt_model_cost_map(
+            {
+                "openai/gpt-4o": {
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                    "input_cost_per_token": 0.000999,
+                    "max_input_tokens": 4242,
+                }
             }
-        }
-        _invalidate_model_cost_lowercase_map()
-        reapply_runtime_model_cost_registrations()
+        )
 
         expected_rate: Final = rate if updated_rate is None else updated_rate
         assert litellm.model_cost["openai/gpt-4o"]["input_cost_per_token"] == expected_rate
@@ -4995,24 +5150,15 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(
 
 
 @pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
-def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkeypatch):
+def test_install_drops_request_scoped_registrations(monkeypatch):
     """
     Per-request custom pricing describes one call, so it must not be re-asserted
     over every future catalog. Replaying it would let a one-off price outlive
     the catalog generation it was applied to and silently beat fresh upstream
     pricing forever, while a durable override registered alongside it survives.
     """
-    from litellm import utils as litellm_utils
-    from litellm.utils import (
-        _invalidate_model_cost_lowercase_map,
-        reapply_runtime_model_cost_registrations,
-    )
-
-    monkeypatch.setattr(
-        litellm_utils,
-        "_runtime_registered_model_cost",
-        dict(litellm_utils._runtime_registered_model_cost),
-    )
+    from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
+    from litellm.utils import _invalidate_model_cost_lowercase_map
 
     saved_model_cost = litellm.model_cost
     try:
@@ -5025,12 +5171,12 @@ def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkey
             persist_across_reloads=False,
         )
 
-        litellm.model_cost = {
-            "openai/gpt-4o": {"litellm_provider": "openai", "input_cost_per_token": 0.000999},
-            "openai/gpt-4o-mini": {"litellm_provider": "openai", "input_cost_per_token": 0.000888},
-        }
-        _invalidate_model_cost_lowercase_map()
-        reapply_runtime_model_cost_registrations()
+        adopt_model_cost_map(
+            {
+                "openai/gpt-4o": {"litellm_provider": "openai", "input_cost_per_token": 0.000999},
+                "openai/gpt-4o-mini": {"litellm_provider": "openai", "input_cost_per_token": 0.000888},
+            }
+        )
 
         assert litellm.model_cost["openai/gpt-4o"]["input_cost_per_token"] == 0.000111
         assert litellm.model_cost["openai/gpt-4o-mini"]["input_cost_per_token"] == 0.000888
@@ -7377,9 +7523,7 @@ async def test_router_resolves_an_oidc_api_key_only_on_a_proxy_level_deployment(
     try:
         with respx.mock(assert_all_called=True) as upstream:
             upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
-            await router.acompletion(
-                model="devstral", messages=_PING, metadata={"user_api_key_team_id": "team-1"}
-            )
+            await router.acompletion(model="devstral", messages=_PING, metadata={"user_api_key_team_id": "team-1"})
             sent: Final = upstream.calls.last.request.headers["Authorization"]
     finally:
         router.discard()
@@ -7447,7 +7591,9 @@ async def test_an_inline_oidc_api_key_reaches_the_endpoint_its_deployment_config
         with respx.mock(assert_all_called=False) as upstream:
             upstream.route().respond(200, json=_BEDROCK_REPLY)
             await router.acompletion(
-                model="claude", messages=_PING, aws_bedrock_runtime_endpoint="https://BEDROCK-runtime.us-east-1.amazonaws.com"
+                model="claude",
+                messages=_PING,
+                aws_bedrock_runtime_endpoint="https://BEDROCK-runtime.us-east-1.amazonaws.com",
             )
             sent: Final = tuple(
                 (call.request.url.host, call.request.headers["Authorization"]) for call in upstream.calls
@@ -7656,7 +7802,9 @@ async def test_a_team_row_naming_an_oidc_credential_reaches_only_the_credentials
         (
             lambda reference: LiteLLM_Params(
                 **litellm.Router(
-                    model_list=[{"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": reference}}]
+                    model_list=[
+                        {"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": reference}}
+                    ]
                 ).get_model_list(model_name="openai/*")[0]["litellm_params"]
             ),
             lambda reference: "Bearer listing-token",
@@ -8137,10 +8285,9 @@ def _vcr_outcome_gate(request, vcr):
 
 @pytest.fixture(scope="function")
 def setup_and_teardown():
-    """
-    This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
-    """
-    importlib.reload(litellm)
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap, adopt_model_cost_map
+
+    adopt_model_cost_map(GetModelCostMap.load_local_model_cost_map())
     loop = asyncio.get_event_loop_policy().new_event_loop()
     asyncio.set_event_loop(loop)
     print(litellm)
@@ -8308,15 +8455,12 @@ _SCALAR_DEFAULTS = {
 
 @pytest.fixture(scope="module")
 def setup_and_teardown_local_testing():
-    """
-    Module-scoped setup. Reloads litellm only in single-process mode
-    (skipped under xdist to avoid cross-worker interference).
-    """
     import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap, adopt_model_cost_map
 
     worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
     if worker_id is None:
-        importlib.reload(litellm)
+        adopt_model_cost_map(GetModelCostMap.load_local_model_cost_map())
         try:
             if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
                 import litellm.proxy.proxy_server
