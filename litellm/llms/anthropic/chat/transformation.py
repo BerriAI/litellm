@@ -116,6 +116,7 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import Message as LitellmMessage
 from litellm.utils import (
+    EXTRA_BODY_ROUTING_KEYS,
     ModelResponse,
     Usage,
     add_dummy_tool,
@@ -180,6 +181,7 @@ _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _RESPONSE_BLOCKS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _PENDING_WEB_SEARCH_RESULT: Final = MappingProxyType({"content": ()})
 _REQUEST_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_EXTRA_BODY_GUARDED_KEYS: Final = EXTRA_BODY_ROUTING_KEYS | frozenset({"messages", "system"})
 _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
     ("date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid")
 )
@@ -338,6 +340,7 @@ def _validated_defer_loading(value: object) -> bool:
 class _AnthropicUsageIteration(TypedDict, total=False):
     """One entry of the ``usage.iterations`` array on an Anthropic response."""
 
+    type: ReadOnly[str]
     input_tokens: ReadOnly[int | None]
     output_tokens: ReadOnly[int | None]
     cache_creation_input_tokens: ReadOnly[int | None]
@@ -2544,6 +2547,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         request_params: Final = cast(  # cast-ok: optional_params is the untyped dict of the shared transform signature
             dict[str, object], optional_params
         )
+        extra_body: Final = _REQUEST_PARAMS_ADAPTER.validate_python(request_params.pop("extra_body", None) or {})
         marked_tools: Final = tools_marked_for_a_tool_config_point(
             request_params.get("tools"), request_params.pop("cache_control_injection_points", None)
         )
@@ -2576,11 +2580,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ):
             request_params.pop("output_format")
 
-        data: Final = {
+        request_body: Final = {
             "model": model,
             "messages": anthropic_messages,
-            **optional_params,
+            **request_params,
             **({} if marked_tools is None else {"tools": list(marked_tools)}),
+        }
+        withheld_extra_body_keys: Final = request_body.keys() | _EXTRA_BODY_GUARDED_KEYS
+        data: Final = {
+            **request_body,
+            **{k: v for k, v in extra_body.items() if k not in withheld_extra_body_keys},
         }
 
         self._apply_output_config(data=data, model=model, optional_params=optional_params)
@@ -2855,8 +2864,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
     @staticmethod
+    def _summable_iterations(usage: Mapping[str, Any]) -> Sequence[_AnthropicUsageIteration] | None:
+        """``usage.iterations`` when every entry ran on the response's model. A server-side fallback chain spans
+        models, and its top-level usage already is the attempt that served the turn, so it is never summed."""
+        iterations: Final[Sequence[_AnthropicUsageIteration] | None] = usage.get("iterations")
+        if not iterations or any(iteration.get("type") == "fallback_message" for iteration in iterations):
+            return None
+        return iterations
+
+    @staticmethod
     def _resolve_cache_creation_token_details(usage: Mapping[str, Any]) -> CacheCreationTokenDetails | None:
-        iterations: Final = usage.get("iterations")
+        iterations: Final = AnthropicConfig._summable_iterations(usage)
         if iterations:
             aggregated: Final = AnthropicConfig._aggregate_cache_creation_token_details(iterations)
             if aggregated is not None:
@@ -2897,7 +2915,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         raw_speed: Final = _usage.get("speed")
         resolved_speed: Final = raw_speed if isinstance(raw_speed, str) else speed
 
-        iterations: Final[Sequence[_AnthropicUsageIteration] | None] = _usage.get("iterations")
+        iterations: Final = self._summable_iterations(_usage)
         if iterations:
             prompt_tokens = sum(it.get("input_tokens", 0) or 0 for it in iterations)
             completion_tokens = sum(it.get("output_tokens", 0) or 0 for it in iterations)
