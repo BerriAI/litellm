@@ -40,6 +40,7 @@ describe("edit root: transport gates", () => {
       "description",
       "transport",
       "max_concurrent_requests",
+      "rpm",
       "command",
       "args",
       "env_json",
@@ -210,7 +211,7 @@ describe("create root: where it diverges from edit", () => {
   });
 });
 
-const ALWAYS = ["server_name", "alias", "description", "transport", "max_concurrent_requests"];
+const ALWAYS = ["server_name", "alias", "description", "transport", "max_concurrent_requests", "rpm"];
 const PERMS = [
   "allow_all_keys",
   "available_on_public_internet",
@@ -262,7 +263,14 @@ describe("edit root: exact mounted set per auth configuration", () => {
           ...PERMS,
           "delegate_auth_to_upstream",
         ],
-        credentials: ["client_id", "client_secret", "token_endpoint_auth_method", "scopes", "upstream_resource"],
+        credentials: [
+          "client_id",
+          "client_secret",
+          "token_endpoint_auth_method",
+          "scopes",
+          "upstream_resource",
+          "upstream_token_header",
+        ],
       },
     );
   });
@@ -286,7 +294,14 @@ describe("edit root: exact mounted set per auth configuration", () => {
           ...PERMS,
           "delegate_auth_to_upstream",
         ],
-        credentials: ["client_id", "client_secret", "scopes", "upstream_resource", "token_endpoint_auth_method"],
+        credentials: [
+          "client_id",
+          "client_secret",
+          "scopes",
+          "upstream_resource",
+          "token_endpoint_auth_method",
+          "upstream_token_header",
+        ],
       },
     );
   });
@@ -306,7 +321,7 @@ describe("edit root: exact mounted set per auth configuration", () => {
           "env_vars",
           ...PERMS,
         ],
-        credentials: ["client_id", "client_secret", "scopes"],
+        credentials: ["client_id", "client_secret", "scopes", "upstream_token_header"],
       },
     );
   });
@@ -324,7 +339,7 @@ describe("edit root: exact mounted set per auth configuration", () => {
           "env_vars",
           ...PERMS,
         ],
-        credentials: ["client_id", "client_secret", "scopes"],
+        credentials: ["client_id", "client_secret", "scopes", "upstream_token_header"],
       },
     );
   });
@@ -344,6 +359,7 @@ describe("edit root: exact mounted set per auth configuration", () => {
           ...PERMS,
         ],
         credentials: [
+          "upstream_token_header",
           "id_jag_resource_token_endpoint",
           "client_id",
           "client_secret",
@@ -434,7 +450,14 @@ describe("create root: exact mounted set per configuration", () => {
           ...PERMS,
           "delegate_auth_to_upstream",
         ],
-        credentials: ["client_id", "client_secret", "scopes", "upstream_resource", "token_endpoint_auth_method"],
+        credentials: [
+          "client_id",
+          "client_secret",
+          "scopes",
+          "upstream_resource",
+          "token_endpoint_auth_method",
+          "upstream_token_header",
+        ],
       },
     );
   });
@@ -456,6 +479,7 @@ describe("projection shape", () => {
     expect("description" in projected).toBe(true);
     expect(projected.description).toBeUndefined();
     expect(Object.keys(projected)).toContain("max_concurrent_requests");
+    expect(Object.keys(projected)).toContain("rpm");
   });
 
   it("emits mounted-but-unset CREDENTIAL keys as undefined rather than omitting them", () => {

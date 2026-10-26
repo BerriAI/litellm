@@ -4,10 +4,12 @@ Pydantic models for Memory management endpoints.
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class LiteLLM_MemoryRow(BaseModel):
+class LiteLLM_MemoryRow(LiteLLMBaseModel):
     memory_id: str
     key: str
     value: str
@@ -20,7 +22,7 @@ class LiteLLM_MemoryRow(BaseModel):
     updated_by: str | None = None
 
 
-class MemoryCreateRequest(BaseModel):
+class MemoryCreateRequest(LiteLLMBaseModel):
     key: str = Field(..., description="Memory key (acts as the namespace in the URL).")
     value: str = Field(..., description="Memory content. Typically markdown/text for LLM context.")
     metadata: object | None = Field(
@@ -37,7 +39,7 @@ class MemoryCreateRequest(BaseModel):
     )
 
 
-class MemoryUpdateRequest(BaseModel):
+class MemoryUpdateRequest(LiteLLMBaseModel):
     value: str | None = None
     metadata: object | None = None
     # Only honored on create (when the row doesn't yet exist) and only for
@@ -47,11 +49,11 @@ class MemoryUpdateRequest(BaseModel):
     team_id: str | None = None
 
 
-class MemoryListResponse(BaseModel):
+class MemoryListResponse(LiteLLMBaseModel):
     memories: list[LiteLLM_MemoryRow]
     total: int
 
 
-class MemoryDeleteResponse(BaseModel):
+class MemoryDeleteResponse(LiteLLMBaseModel):
     key: str
     deleted: bool

@@ -8,6 +8,7 @@ import {
   ComboboxChip,
   ComboboxChips,
   ComboboxChipsInput,
+  ComboboxClear,
   ComboboxContent,
   ComboboxEmpty,
   ComboboxItem,
@@ -21,7 +22,7 @@ import { usePaginatedCombobox } from "./usePaginatedCombobox";
 
 interface PaginatedMultiSelectProps {
   options: SearchSelectOption[];
-  value?: string[];
+  value?: readonly string[];
   onValueChange: (value: string[]) => void;
   onSearchChange: (query: string) => void;
   onLoadMore: () => void;
@@ -32,6 +33,7 @@ interface PaginatedMultiSelectProps {
   emptyText?: string;
   errorText?: string;
   loadingText?: string;
+  clearAllLabel?: string;
   disabled?: boolean;
   className?: string;
   inputId?: string;
@@ -52,6 +54,7 @@ export function PaginatedMultiSelect({
   emptyText = "No results",
   errorText,
   loadingText = "Loading…",
+  clearAllLabel,
   disabled = false,
   className,
   inputId,
@@ -119,6 +122,7 @@ export function PaginatedMultiSelect({
           className="h-5 min-w-24 flex-1 border-0 bg-transparent py-0 text-sm"
           aria-label={placeholder}
         />
+        {clearAllLabel != null && value.length > 0 && <ComboboxClear aria-label={clearAllLabel} disabled={disabled} />}
       </ComboboxChips>
       <ComboboxContent anchor={anchor}>
         <ComboboxEmpty className={errorText == null ? undefined : "text-destructive"}>

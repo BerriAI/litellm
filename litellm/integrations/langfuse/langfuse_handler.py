@@ -1,5 +1,3 @@
-import os
-
 """
 This file contains the LangFuseHandler class
 
@@ -8,6 +6,7 @@ Used to get the LangFuseLogger for a given request
 Handles Key/Team Based Langfuse Logging
 """
 
+import os
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm.litellm_core_utils.litellm_logging import StandardCallbackDynamicParams
@@ -82,7 +81,7 @@ class LangFuseHandler:
             return globalLangfuseLogger
 
         credentials_dict: dict[
-            str, Any
+            str, object
         ] = {}  # the global langfuse logger uses Environment Variables, there are no dynamic credentials
         globalLangfuseLogger = in_memory_dynamic_logger_cache.get_cache(
             credentials=credentials_dict,
@@ -157,7 +156,11 @@ class LangFuseHandler:
         if raw is None:
             return None
         value = str(raw).strip()
-        if not value or value == os.getenv("LANGFUSE_TRACING_ENVIRONMENT"):
+        if (
+            not value
+            or value == os.getenv("LANGFUSE_TRACING_ENVIRONMENT")
+            or value == LangFuseLogger.resolve_deployment_environment()
+        ):
             return None
         return value
 

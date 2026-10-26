@@ -1,0 +1,1703 @@
+import json
+import os
+import subprocess
+import sys
+import uuid
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Final
+from urllib.parse import parse_qs, urlsplit, urlunsplit
+
+import httpx
+import psycopg
+import pytest
+from psycopg import sql
+from psycopg.types.json import Jsonb
+from pydantic import BaseModel, JsonValue, TypeAdapter
+
+from tests.integration._support.client import Gateway, eventually, object_value, string_value
+from tests.integration._support.database import read_rows, scratch_database
+from tests.integration._support.process import owned_proxy
+from tests.integration._support.wire import Reply, Request, Wire, wire_server
+
+pytestmark: Final = pytest.mark.shares_worker_state
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def model_identity(gateway: Gateway, alias: str) -> str:
+    entries: Final = gateway.get("/model/info")["data"]
+    assert isinstance(entries, list)
+    entry: Final = next(object_value(value) for value in entries if object_value(value)["model_name"] == alias)
+    return string_value(object_value(entry["model_info"])["id"])
+
+
+@dataclass(frozen=True, slots=True)
+class _ConfigCallbackRig:
+    first: Gateway
+    peer: Gateway
+    database_url: str
+    generic: Wire
+    langfuse: Wire
+    provider: Wire
+
+
+@contextmanager
+def _config_callback_rig(
+    gateway: Gateway,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: Callable[[Request], Reply],
+    *,
+    generic_flush_interval: str,
+) -> Iterator[_ConfigCallbackRig]:
+    def langfuse(request: Request) -> Reply:
+        if request.method == "GET":
+            assert request.target.startswith("/api/public/projects"), request.target
+            return Reply(body=b'{"data":[{"id":"integration-project","name":"integration"}]}')
+        assert request.method == "POST"
+        assert request.target.startswith("/api/public/otel/v1/traces"), request.target
+        return Reply(content_type="application/x-protobuf")
+
+    def generic(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.headers["authorization"] == "Bearer integration-generic-sink-secret"
+        return Reply()
+
+    with (
+        scratch_database() as database_url,
+        wire_server(provider) as provider_wire,
+        wire_server(langfuse) as langfuse_wire,
+        wire_server(generic) as generic_wire,
+    ):
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        environment: Final = {
+            "DATABASE_URL": database_url,
+            "DEFAULT_FLUSH_INTERVAL_SECONDS": generic_flush_interval,
+            "LANGFUSE_FLUSH_INTERVAL": "1",
+            "LITELLM_STORE_AUDIT_LOGS": "True",
+        }
+        removed: Final = (
+            "DATABASE_URL_READ_REPLICA",
+            "GENERIC_LOGGER_ENDPOINT",
+            "GENERIC_LOGGER_HEADERS",
+            "LANGFUSE_HOST",
+            "LANGFUSE_PUBLIC_KEY",
+            "LANGFUSE_SECRET_KEY",
+        )
+        with (
+            owned_proxy(gateway, tmp_path, environment, remove_environment=removed) as first,
+            owned_proxy(gateway, tmp_path, environment, remove_environment=removed) as peer,
+        ):
+            yield _ConfigCallbackRig(first, peer, database_url, generic_wire, langfuse_wire, provider_wire)
+
+
+def _config_section(database_url: str, section: str) -> dict[str, JsonValue]:
+    rows: Final = read_rows(
+        'SELECT param_value FROM "LiteLLM_Config" WHERE param_name = %s',
+        (section,),
+        database_url=database_url,
+    )
+    assert len(rows) == 1, rows
+    return object_value(rows[0]["param_value"])
+
+
+def _callback_entries(response: httpx.Response) -> dict[str, dict[str, JsonValue]]:
+    body: Final = object_value(response.json())
+    callbacks: Final = TypeAdapter(list[dict[str, JsonValue]]).validate_python(body["callbacks"])
+    return {string_value(callback["name"]): callback for callback in callbacks}
+
+
+def _callback_entries_match(response: httpx.Response, expected: dict[str, dict[str, JsonValue]]) -> bool:
+    entries: Final = _callback_entries(response)
+    return all(entries.get(name) == callback for name, callback in expected.items())
+
+
+def _completion_reply(text: str) -> Reply:
+    return Reply(
+        body=json.dumps(
+            {
+                "id": "chatcmpl-" + text,
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4o-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 11, "completion_tokens": 4, "total_tokens": 15},
+            }
+        ).encode()
+    )
+
+
+def test_multi_section_config_update_merges_sent_keys_normalizes_callbacks_and_applies_on_the_peer(
+    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker: Final = "config-update-" + uuid.uuid4().hex
+    provider_secret: Final = "provider-secret-" + marker
+    langfuse_public_key: Final = "public-key-" + marker
+    langfuse_secret_key: Final = "secret-key-" + marker
+    provider_requests: Final[list[Request]] = []  # mutable-ok: request count distinguishes the retry
+
+    def provider(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1/chat/completions"
+        assert request.headers["authorization"] == f"Bearer {provider_secret}"
+        body: Final = _JSON_OBJECT.validate_json(request.body)
+        content: Final = object_value(body["messages"][0])["content"]
+        assert body == {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": content}],
+        }, request.body
+        assert isinstance(content, str)
+        retry_attempts: Final = sum(marker + "-retry" in prior.body.decode() for prior in provider_requests)
+        provider_requests.append(request)
+        if marker + "-retry" in content and retry_attempts == 0:
+            return Reply(
+                status=500,
+                body=b'{"error":{"message":"retry control","type":"server_error","code":"retry_control"}}',
+            )
+        return _completion_reply(content)
+
+    with (
+        _config_callback_rig(gateway, tmp_path, monkeypatch, provider, generic_flush_interval="1") as rig,
+        rig.first.scenario() as scenario,
+    ):
+        seed: Final = rig.first.request(
+            "POST",
+            "/config/update",
+            {
+                "general_settings": {"alerting_threshold": 321},
+                "litellm_settings": {"success_callback": ["generic_api"], "drop_params": True},
+                "environment_variables": {
+                    "GENERIC_LOGGER_ENDPOINT": rig.generic.url,
+                    "GENERIC_LOGGER_HEADERS": "Authorization=Bearer integration-generic-sink-secret",
+                },
+                "router_settings": {"allowed_fails": 7},
+            },
+        )
+        assert seed.status_code == 200, seed.text
+        assert seed.json() == {"message": "Config updated successfully"}, seed.text
+        update: Final = rig.first.request(
+            "POST",
+            "/config/update",
+            {
+                "general_settings": {"store_prompts_in_spend_logs": True},
+                "litellm_settings": {"success_callback": ["Langfuse"]},
+                "environment_variables": {
+                    "LANGFUSE_HOST": rig.langfuse.url,
+                    "LANGFUSE_PUBLIC_KEY": langfuse_public_key,
+                    "LANGFUSE_SECRET_KEY": langfuse_secret_key,
+                },
+                "router_settings": {"num_retries": 1},
+            },
+        )
+        assert update.status_code == 200, update.text
+        assert update.json() == {"message": "Config updated successfully"}, update.text
+        assert _config_section(rig.database_url, "general_settings") == {
+            "alerting_threshold": 321,
+            "store_prompts_in_spend_logs": True,
+        }
+        litellm_settings: Final = _config_section(rig.database_url, "litellm_settings")
+        assert litellm_settings["drop_params"] is True
+        success_callbacks: Final = TypeAdapter(list[str]).validate_python(litellm_settings["success_callback"])
+        assert sorted(success_callbacks) == ["generic_api", "langfuse"]
+        assert _config_section(rig.database_url, "router_settings") == {"allowed_fails": 7, "num_retries": 1}
+        environment_values: Final = _config_section(rig.database_url, "environment_variables")
+        plain_environment: Final = {
+            "GENERIC_LOGGER_ENDPOINT": rig.generic.url,
+            "GENERIC_LOGGER_HEADERS": "Authorization=Bearer integration-generic-sink-secret",
+            "LANGFUSE_HOST": rig.langfuse.url,
+            "LANGFUSE_PUBLIC_KEY": langfuse_public_key,
+            "LANGFUSE_SECRET_KEY": langfuse_secret_key,
+        }
+        assert set(environment_values) == set(plain_environment), environment_values
+        assert all(
+            isinstance(environment_values[name], str) and environment_values[name] != value
+            for name, value in plain_environment.items()
+        ), environment_values
+        assert all(value not in json.dumps(environment_values) for value in plain_environment.values())
+
+        expected_callbacks: Final[dict[str, dict[str, JsonValue]]] = {
+            "generic_api": {
+                "name": "generic_api",
+                "variables": {
+                    "GENERIC_LOGGER_ENDPOINT": rig.generic.url,
+                    "GENERIC_LOGGER_HEADERS": "Authorization=Bearer integration-generic-sink-secret",
+                },
+                "type": "success",
+            },
+            "langfuse": {
+                "name": "langfuse",
+                "variables": {
+                    "LANGFUSE_HOST": rig.langfuse.url,
+                    "LANGFUSE_PUBLIC_KEY": langfuse_public_key,
+                    "LANGFUSE_SECRET_KEY": langfuse_secret_key,
+                },
+                "type": "success",
+            },
+        }
+        callbacks_first: Final = rig.first.request("GET", "/get/config/callbacks")
+        assert callbacks_first.status_code == 200, callbacks_first.text
+        assert _callback_entries_match(callbacks_first, expected_callbacks), callbacks_first.text
+        callbacks_peer: Final = eventually(
+            lambda: rig.peer.request("GET", "/get/config/callbacks"),
+            lambda response: response.status_code == 200 and _callback_entries_match(response, expected_callbacks),
+            seconds=20,
+        )
+        assert _callback_entries_match(callbacks_peer, expected_callbacks), callbacks_peer.text
+
+        model: Final = scenario.model(api_base=rig.provider.url + "/v1", api_key=provider_secret)
+        api_key: Final = scenario.key(models=[model])
+        chat: Final = rig.peer.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": marker}], "stream": False},
+            key=api_key,
+        )
+        assert chat.status_code == 200, chat.text
+        assert chat.json()["choices"][0]["message"]["content"] == marker
+        generic_batches: Final[list[Request]] = []  # mutable-ok: the sink queue is drained while waiting
+        langfuse_batches: Final[list[Request]] = []  # mutable-ok: the sink queue is drained while waiting
+
+        def collect_generic() -> tuple[Request, ...]:
+            generic_batches.extend(rig.generic.drain())
+            return tuple(generic_batches)
+
+        def collect_langfuse() -> tuple[Request, ...]:
+            langfuse_batches.extend(rig.langfuse.drain())
+            return tuple(langfuse_batches)
+
+        generic_deliveries: Final = eventually(
+            collect_generic,
+            lambda requests: marker.encode() in b"".join(request.body for request in requests),
+            seconds=15,
+        )
+        langfuse_deliveries: Final = eventually(
+            collect_langfuse,
+            lambda requests: marker.encode() in b"".join(request.body for request in requests),
+            seconds=15,
+        )
+        assert any(marker.encode() in request.body for request in generic_deliveries)
+        assert any(marker.encode() in request.body for request in langfuse_deliveries)
+
+        retry: Final = rig.peer.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": marker + "-retry"}], "stream": False},
+            key=api_key,
+        )
+        assert retry.status_code == 200, retry.text
+        assert sum(marker + "-retry" in request.body.decode() for request in provider_requests) == 2
+
+
+def test_deleted_callback_case_variant_stops_delivery_on_both_workers(
+    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert os.environ.get("LITELLM_LICENSE"), "LITELLM_LICENSE must be set: audit logs are an enterprise feature"
+    marker: Final = "callback-delete-" + uuid.uuid4().hex
+    provider_secret: Final = "provider-secret-" + marker
+
+    def provider(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1/chat/completions"
+        assert request.headers["authorization"] == f"Bearer {provider_secret}"
+        body: Final = _JSON_OBJECT.validate_json(request.body)
+        assert body == {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": object_value(body["messages"][0])["content"]}],
+        }, request.body
+        return _completion_reply(string_value(object_value(body["messages"][0])["content"]))
+
+    with (
+        _config_callback_rig(gateway, tmp_path, monkeypatch, provider, generic_flush_interval="3") as rig,
+        rig.first.scenario() as scenario,
+    ):
+        seed: Final = rig.first.request(
+            "POST",
+            "/config/update",
+            {
+                "litellm_settings": {
+                    "success_callback": ["langfuse", "generic_api"],
+                    "DEFAULT_FLUSH_INTERVAL_SECONDS": 3,
+                },
+                "environment_variables": {
+                    "GENERIC_LOGGER_ENDPOINT": rig.generic.url,
+                    "GENERIC_LOGGER_HEADERS": "Authorization=Bearer integration-generic-sink-secret",
+                    "LANGFUSE_HOST": rig.langfuse.url,
+                    "LANGFUSE_PUBLIC_KEY": "public-key-" + marker,
+                    "LANGFUSE_SECRET_KEY": "secret-key-" + marker,
+                },
+            },
+        )
+        assert seed.status_code == 200, seed.text
+        assert seed.json() == {"message": "Config updated successfully"}, seed.text
+        expected_callbacks: Final[dict[str, dict[str, JsonValue]]] = {
+            "generic_api": {
+                "name": "generic_api",
+                "variables": {
+                    "GENERIC_LOGGER_ENDPOINT": rig.generic.url,
+                    "GENERIC_LOGGER_HEADERS": "Authorization=Bearer integration-generic-sink-secret",
+                },
+                "type": "success",
+            },
+            "langfuse": {
+                "name": "langfuse",
+                "variables": {
+                    "LANGFUSE_HOST": rig.langfuse.url,
+                    "LANGFUSE_PUBLIC_KEY": "public-key-" + marker,
+                    "LANGFUSE_SECRET_KEY": "secret-key-" + marker,
+                },
+                "type": "success",
+            },
+        }
+        callbacks_first_before: Final = rig.first.request("GET", "/get/config/callbacks")
+        assert callbacks_first_before.status_code == 200, callbacks_first_before.text
+        assert _callback_entries_match(callbacks_first_before, expected_callbacks), callbacks_first_before.text
+        callbacks_peer_before: Final = eventually(
+            lambda: rig.peer.request("GET", "/get/config/callbacks"),
+            lambda response: response.status_code == 200 and _callback_entries_match(response, expected_callbacks),
+            seconds=20,
+        )
+        assert _callback_entries_match(callbacks_peer_before, expected_callbacks), callbacks_peer_before.text
+        model: Final = scenario.model(api_base=rig.provider.url + "/v1", api_key=provider_secret)
+        api_key: Final = scenario.key(models=[model])
+
+        for worker, proxy in (("first", rig.first), ("peer", rig.peer)):
+            positive: Final = proxy.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": model, "messages": [{"role": "user", "content": marker + "-" + worker}], "stream": False},
+                key=api_key,
+            )
+            assert positive.status_code == 200, positive.text
+
+        positive_generic: Final[list[Request]] = []  # mutable-ok: preserve batches while the async sinks flush
+        positive_langfuse: Final[list[Request]] = []  # mutable-ok: preserve batches while the async sinks flush
+
+        def collect_positive_generic() -> tuple[Request, ...]:
+            positive_generic.extend(rig.generic.drain())
+            return tuple(positive_generic)
+
+        def collect_positive_langfuse() -> tuple[Request, ...]:
+            positive_langfuse.extend(rig.langfuse.drain())
+            return tuple(positive_langfuse)
+
+        positive_markers: Final = (marker + "-first", marker + "-peer")
+        generic_before: Final = eventually(
+            collect_positive_generic,
+            lambda requests: all(
+                value.encode() in b"".join(request.body for request in requests) for value in positive_markers
+            ),
+            seconds=20,
+        )
+        langfuse_before: Final = eventually(
+            collect_positive_langfuse,
+            lambda requests: all(
+                value.encode() in b"".join(request.body for request in requests) for value in positive_markers
+            ),
+            seconds=20,
+        )
+        assert all(
+            marker_value.encode() in b"".join(request.body for request in generic_before)
+            for marker_value in positive_markers
+        )
+        assert all(
+            marker_value.encode() in b"".join(request.body for request in langfuse_before)
+            for marker_value in positive_markers
+        )
+
+        deleted: Final = rig.first.request("POST", "/config/callback/delete", {"callback_name": "Langfuse"})
+        assert deleted.status_code == 200, deleted.text
+        deleted_body: Final = object_value(deleted.json())
+        assert set(deleted_body) == {"message", "removed_callback", "remaining_callbacks", "deleted_at"}, deleted.text
+        assert deleted_body["message"] == "Successfully deleted callback: langfuse", deleted.text
+        assert deleted_body["removed_callback"] == "langfuse", deleted.text
+        assert deleted_body["remaining_callbacks"] == ["generic_api"], deleted.text
+        datetime.fromisoformat(string_value(deleted_body["deleted_at"]))
+        assert _config_section(rig.database_url, "litellm_settings") == {
+            "DEFAULT_FLUSH_INTERVAL_SECONDS": 3,
+            "success_callback": ["generic_api"],
+        }
+        expected_remaining_callbacks: Final = {"generic_api": expected_callbacks["generic_api"]}
+        callbacks_first: Final = rig.first.request("GET", "/get/config/callbacks")
+        assert callbacks_first.status_code == 200, callbacks_first.text
+        assert _callback_entries_match(callbacks_first, expected_remaining_callbacks), callbacks_first.text
+        assert "langfuse" not in _callback_entries(callbacks_first), callbacks_first.text
+        callbacks_peer: Final = eventually(
+            lambda: rig.peer.request("GET", "/get/config/callbacks"),
+            lambda response: (
+                response.status_code == 200
+                and _callback_entries_match(response, expected_remaining_callbacks)
+                and "langfuse" not in _callback_entries(response)
+            ),
+            seconds=20,
+        )
+        assert _callback_entries_match(callbacks_peer, expected_remaining_callbacks), callbacks_peer.text
+        assert "langfuse" not in _callback_entries(callbacks_peer), callbacks_peer.text
+
+        audit: Final = eventually(
+            lambda: read_rows(
+                'SELECT action, table_name, object_id, before_value, updated_values FROM "LiteLLM_AuditLog" '
+                "WHERE table_name = %s AND object_id = %s ORDER BY updated_at DESC LIMIT 1",
+                ("LiteLLM_Config", "litellm_settings"),
+                database_url=rig.database_url,
+            ),
+            lambda rows: bool(rows),
+            seconds=10,
+        )
+        assert len(audit) == 1, audit
+        audit_row: Final = object_value(audit[0])
+        assert set(audit_row) == {"action", "table_name", "object_id", "before_value", "updated_values"}, audit_row
+        assert audit_row["action"] == "deleted", audit_row
+        assert audit_row["table_name"] == "LiteLLM_Config", audit_row
+        assert audit_row["object_id"] == "litellm_settings", audit_row
+        before_value: Final = object_value(audit_row["before_value"])
+        assert set(before_value) == {"success_callback"}, audit_row
+        before_callbacks: Final = TypeAdapter(list[str]).validate_python(before_value["success_callback"])
+        assert sorted(before_callbacks) == ["generic_api", "langfuse"], audit_row
+        assert audit_row["updated_values"] == {"success_callback": ["generic_api"]}, audit_row
+
+        absence_markers: Final = (marker + "-after-first", marker + "-after-peer")
+        for worker, proxy, absence_marker in zip(
+            ("first", "peer"), (rig.first, rig.peer), absence_markers, strict=True
+        ):
+            absent: Final = proxy.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": model, "messages": [{"role": "user", "content": absence_marker}], "stream": False},
+                key=api_key,
+            )
+            assert absent.status_code == 200, absent.text
+
+        generic_after: Final[list[Request]] = []  # mutable-ok: preserve batches while the async sink flushes
+
+        def collect_after_generic() -> tuple[Request, ...]:
+            generic_after.extend(rig.generic.drain())
+            return tuple(generic_after)
+
+        generic_deliveries: Final = eventually(
+            collect_after_generic,
+            lambda requests: all(
+                value.encode() in b"".join(request.body for request in requests) for value in absence_markers
+            ),
+            seconds=25,
+        )
+        assert all(
+            value.encode() in b"".join(request.body for request in generic_deliveries) for value in absence_markers
+        )
+        langfuse_after: Final[list[Request]] = []  # mutable-ok: preserve batches while the async sink flushes
+
+        def collect_after_langfuse() -> tuple[Request, ...]:
+            langfuse_after.extend(rig.langfuse.drain())
+            return tuple(langfuse_after)
+
+        collect_after_langfuse()
+        readded: Final = rig.first.request(
+            "POST",
+            "/config/update",
+            {
+                "litellm_settings": {"success_callback": ["langfuse"]},
+                "environment_variables": {
+                    "LANGFUSE_HOST": rig.langfuse.url,
+                    "LANGFUSE_PUBLIC_KEY": "public-key-" + marker,
+                    "LANGFUSE_SECRET_KEY": "secret-key-" + marker,
+                },
+            },
+        )
+        assert readded.status_code == 200, readded.text
+        expected_readded_callback: Final = {"langfuse": expected_callbacks["langfuse"]}
+        callbacks_peer_readded: Final = eventually(
+            lambda: rig.peer.request("GET", "/get/config/callbacks"),
+            lambda response: (
+                response.status_code == 200 and _callback_entries_match(response, expected_readded_callback)
+            ),
+            seconds=20,
+        )
+        assert _callback_entries_match(callbacks_peer_readded, expected_readded_callback), callbacks_peer_readded.text
+        barrier_markers: Final = (marker + "-barrier-first", marker + "-barrier-peer")
+        for worker, proxy, barrier_marker in zip(
+            ("first", "peer"), (rig.first, rig.peer), barrier_markers, strict=True
+        ):
+            barrier: Final = proxy.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": model, "messages": [{"role": "user", "content": barrier_marker}], "stream": False},
+                key=api_key,
+            )
+            assert barrier.status_code == 200, barrier.text
+
+        langfuse_deliveries: Final = eventually(
+            collect_after_langfuse,
+            lambda requests: all(
+                value.encode() in b"".join(request.body for request in requests) for value in barrier_markers
+            ),
+            seconds=25,
+        )
+        langfuse_bodies: Final = b"".join(request.body for request in langfuse_deliveries)
+        assert all(value.encode() in langfuse_bodies for value in barrier_markers)
+        leaked_absence_markers: Final = tuple(value for value in absence_markers if value.encode() in langfuse_bodies)
+        assert leaked_absence_markers == (), leaked_absence_markers
+
+        missing: Final = rig.first.request("POST", "/config/callback/delete", {"callback_name": "not-a-callback"})
+        assert missing.status_code == 404, missing.text
+        assert missing.json() == {"detail": {"error": "Callback 'not-a-callback' not found in active configuration"}}, (
+            missing.text
+        )
+
+
+def test_dashboard_field_updates_preserve_plugin_key_and_apply_at_runtime(
+    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert os.environ.get("LITELLM_LICENSE"), (
+        "LITELLM_LICENSE must be set: max_request_size_mb enforcement is an enterprise feature"
+    )
+    plugin_key: Final = "plugin-key-" + uuid.uuid4().hex
+    plugin_body: Final = {"message": "plugin-" + uuid.uuid4().hex}
+    passthrough_body: Final = {"message": "passthrough-" + uuid.uuid4().hex}
+    passthrough_path: Final = "/integration-pt-" + uuid.uuid4().hex
+
+    def plugin(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/rpc"
+        assert request.headers["authorization"] == f"Bearer {plugin_key}"
+        assert _JSON_OBJECT.validate_json(request.body) == plugin_body, request.body
+        return Reply(body=json.dumps({"received": plugin_body}).encode())
+
+    def passthrough(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/echo"
+        assert request.headers["x-integration"] == "yes"
+        assert _JSON_OBJECT.validate_json(request.body) == passthrough_body, request.body
+        return Reply(body=json.dumps({"received": passthrough_body}).encode())
+
+    with (
+        scratch_database() as database_url,
+        wire_server(plugin) as plugin_wire,
+        wire_server(passthrough) as passthrough_wire,
+    ):
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        environment: Final = {
+            "DATABASE_URL": database_url,
+            "PROXY_CONFIG_RELOAD_INTERVAL_SECONDS": "600",
+        }
+        with (
+            owned_proxy(gateway, tmp_path, environment) as candidate,
+            owned_proxy(gateway, tmp_path, environment) as peer,
+        ):
+            plugin_value: Final = [
+                {
+                    "name": "integration-plugin",
+                    "display_name": "Integration",
+                    "url": plugin_wire.url,
+                    "plugin_key": plugin_key,
+                }
+            ]
+            plugin_update: Final = candidate.request(
+                "POST",
+                "/config/field/update",
+                {"field_name": "plugins", "field_value": plugin_value, "config_type": "general_settings"},
+            )
+            assert plugin_update.status_code == 200, plugin_update.text
+            assert object_value(plugin_update.json())["param_name"] == "general_settings", plugin_update.text
+            plugin_info: Final = object_value(candidate.get("/config/field/info?field_name=plugins"))
+            assert plugin_info["field_name"] == "plugins"
+            assert plugin_info["field_value"] == [
+                {
+                    "name": "integration-plugin",
+                    "display_name": "Integration",
+                    "url": plugin_wire.url,
+                    "plugin_key": "***",
+                }
+            ]
+            reposted_plugins: Final = [
+                {
+                    "name": "integration-plugin",
+                    "display_name": "Integration updated",
+                    "url": plugin_wire.url,
+                    "plugin_key": "***",
+                }
+            ]
+            repost: Final = candidate.request(
+                "POST",
+                "/config/field/update",
+                {"field_name": "plugins", "field_value": reposted_plugins, "config_type": "general_settings"},
+            )
+            assert repost.status_code == 200, repost.text
+            assert _config_section(database_url, "general_settings") == {
+                "plugins": [
+                    {
+                        "name": "integration-plugin",
+                        "display_name": "Integration updated",
+                        "url": plugin_wire.url,
+                        "plugin_key": plugin_key,
+                    }
+                ]
+            }
+            blank_key_plugins: Final = [
+                {
+                    "name": "integration-plugin",
+                    "display_name": "Integration updated",
+                    "url": plugin_wire.url,
+                    "plugin_key": "",
+                }
+            ]
+            blank_repost: Final = candidate.request(
+                "POST",
+                "/config/field/update",
+                {"field_name": "plugins", "field_value": blank_key_plugins, "config_type": "general_settings"},
+            )
+            assert blank_repost.status_code == 200, blank_repost.text
+            assert _config_section(database_url, "general_settings") == {
+                "plugins": [
+                    {
+                        "name": "integration-plugin",
+                        "display_name": "Integration updated",
+                        "url": plugin_wire.url,
+                        "plugin_key": plugin_key,
+                    }
+                ]
+            }
+            plugin_response: Final = candidate.request("POST", "/plugin-proxy/integration-plugin/rpc", plugin_body)
+            assert plugin_response.status_code == 200, plugin_response.text
+            assert plugin_response.json() == {"received": plugin_body}, plugin_response.text
+            peer_plugin_response: Final = eventually(
+                lambda: peer.request("POST", "/plugin-proxy/integration-plugin/rpc", plugin_body),
+                lambda response: response.status_code == 200 and response.json() == {"received": plugin_body},
+                seconds=20,
+            )
+            assert peer_plugin_response.json() == {"received": plugin_body}, peer_plugin_response.text
+
+            passthrough_value: Final = [
+                {
+                    "path": passthrough_path,
+                    "target": passthrough_wire.url + "/echo",
+                    "headers": {"x-integration": "yes"},
+                    "auth": True,
+                }
+            ]
+            passthrough_update: Final = candidate.request(
+                "POST",
+                "/config/field/update",
+                {
+                    "field_name": "pass_through_endpoints",
+                    "field_value": passthrough_value,
+                    "config_type": "general_settings",
+                },
+            )
+            assert passthrough_update.status_code == 200, passthrough_update.text
+            passthrough_response: Final = candidate.request("POST", passthrough_path, passthrough_body)
+            assert passthrough_response.status_code == 200, passthrough_response.text
+            assert passthrough_response.json() == {"received": passthrough_body}, passthrough_response.text
+            peer_passthrough_response: Final = eventually(
+                lambda: peer.request("POST", passthrough_path, passthrough_body),
+                lambda response: response.status_code == 200 and response.json() == {"received": passthrough_body},
+                seconds=20,
+            )
+            assert peer_passthrough_response.json() == {"received": passthrough_body}, peer_passthrough_response.text
+
+            alerting_args: Final = {
+                "daily_report_frequency": 43200,
+                "report_check_interval": 300,
+                "budget_alert_ttl": 86400,
+                "outage_alert_ttl": 60,
+                "region_outage_alert_ttl": 60,
+                "minor_outage_alert_threshold": 2,
+                "major_outage_alert_threshold": 5,
+                "max_outage_alert_list_size": 20,
+                "daily_spend_per_user_threshold": 25.0,
+                "monthly_spend_per_user_threshold": 500.0,
+                "spend_anomaly_multiplier": 3.5,
+                "spend_anomaly_baseline_days": 14,
+                "spend_anomaly_min_spend": 12.0,
+                "user_spend_check_interval": 3600,
+            }
+            alerting_update: Final = candidate.request(
+                "POST",
+                "/config/field/update",
+                {"field_name": "alerting_args", "field_value": alerting_args, "config_type": "general_settings"},
+            )
+            assert alerting_update.status_code == 200, alerting_update.text
+            assert _config_section(database_url, "general_settings") == {
+                "plugins": [
+                    {
+                        "name": "integration-plugin",
+                        "display_name": "Integration updated",
+                        "url": plugin_wire.url,
+                        "plugin_key": plugin_key,
+                    }
+                ],
+                "pass_through_endpoints": passthrough_value,
+                "alerting_args": alerting_args,
+            }
+            alerting_info: Final = object_value(candidate.get("/config/field/info?field_name=alerting_args"))
+            assert alerting_info["field_value"] == alerting_args
+
+            invalid: Final = candidate.request(
+                "POST",
+                "/config/field/update",
+                {
+                    "field_name": "alerting_args",
+                    "field_value": {"daily_spend_per_user_threshold": -1},
+                    "config_type": "general_settings",
+                },
+            )
+            assert invalid.status_code == 400, invalid.text
+            assert invalid.json() == {
+                "detail": {
+                    "error": "Invalid alerting_args: daily_spend_per_user_threshold: Input should be greater than 0"
+                }
+            }, invalid.text
+
+            max_size_update: Final = candidate.request(
+                "POST",
+                "/config/field/update",
+                {"field_name": "max_request_size_mb", "field_value": 1, "config_type": "general_settings"},
+            )
+            assert max_size_update.status_code == 200, max_size_update.text
+            expected_settings: Final = {
+                "plugins": [
+                    {
+                        "name": "integration-plugin",
+                        "display_name": "Integration updated",
+                        "url": plugin_wire.url,
+                        "plugin_key": plugin_key,
+                    }
+                ],
+                "pass_through_endpoints": passthrough_value,
+                "alerting_args": alerting_args,
+                "max_request_size_mb": 1,
+            }
+            assert _config_section(database_url, "general_settings") == expected_settings
+            max_size_info: Final = object_value(candidate.get("/config/field/info?field_name=max_request_size_mb"))
+            assert max_size_info["field_value"] == 1
+            list_after_size: Final = TypeAdapter(list[dict[str, JsonValue]]).validate_json(
+                candidate.request("GET", "/config/list", params={"config_type": "general_settings"}).content
+            )
+            max_size_listed: Final = next(
+                entry for entry in list_after_size if entry["field_name"] == "max_request_size_mb"
+            )
+            assert max_size_listed["field_value"] == 1 and max_size_listed["stored_in_db"] is True
+            oversized: Final = candidate.request(
+                "POST",
+                "/v1/chat/completions",
+                {
+                    "model": "openai/gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "x" * (1024 * 1024 + 1)}],
+                },
+            )
+            assert oversized.status_code == 413, oversized.text
+            assert oversized.text == '{"error":"Request size is too large. Max size is 1 MB"}'
+            peer_oversized: Final = eventually(
+                lambda: peer.request(
+                    "POST",
+                    "/v1/chat/completions",
+                    {
+                        "model": "openai/gpt-4o-mini",
+                        "messages": [{"role": "user", "content": "x" * (1024 * 1024 + 1)}],
+                    },
+                ),
+                lambda response: (
+                    response.status_code == 413
+                    and response.text == '{"error":"Request size is too large. Max size is 1 MB"}'
+                ),
+                seconds=20,
+            )
+            assert peer_oversized.text == '{"error":"Request size is too large. Max size is 1 MB"}', peer_oversized.text
+
+            plugin_requests: Final = plugin_wire.drain()
+            assert tuple((request.method, request.target) for request in plugin_requests) == (
+                ("POST", "/rpc"),
+                ("POST", "/rpc"),
+            ), plugin_requests
+            passthrough_requests: Final = passthrough_wire.drain()
+            assert tuple((request.method, request.target) for request in passthrough_requests) == (
+                ("POST", "/echo"),
+                ("POST", "/echo"),
+            ), passthrough_requests
+
+
+@pytest.mark.covers("mgmt.model.block.changes_serving_and_preserves_control")
+def test_model_block_changes_actual_route_and_leaves_other_route_working(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        other: Final = scenario.model()
+        identity: Final = model_identity(gateway, model)
+        gateway.chat(model)
+        gateway.chat(other)
+        gateway.post("/model/block", {"model_id": identity})
+        assert read_rows('SELECT blocked FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (identity,)) == [
+            {"blocked": True}
+        ]
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": "blocked deployment"}]},
+        )
+        assert response.status_code == 403, response.text
+        assert response.json()["error"]["type"] == "permission_error"
+        assert response.json()["error"]["message"] == "litellm.PermissionDeniedError: Model is blocked"
+        assert object_value(gateway.chat(other)["usage"])["total_tokens"] == 40
+        gateway.post("/model/unblock", {"model_id": identity})
+        assert read_rows('SELECT blocked FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (identity,)) == [
+            {"blocked": False}
+        ]
+        assert object_value(gateway.chat(model)["usage"])["total_tokens"] == 40
+
+
+@pytest.mark.covers("mgmt.router_settings.update.changes_observed_attempt_count")
+def test_saved_retry_setting_controls_real_attempts_and_restores(gateway: Gateway) -> None:
+    with (
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+        gateway.scenario() as scenario,
+    ):
+        original: Final = object_value(gateway.get("/router/settings")["current_values"])["num_retries"]
+        provider_model: Final = f"retry-{uuid.uuid4().hex}"
+        model: Final = scenario.model(model=f"openai/{provider_model}", input_cost_per_token=0, output_cost_per_token=0)
+
+        def remove_script() -> None:
+            response: Final = upstream.delete(f"/__scripts/{provider_model}")
+            assert response.status_code in (200, 404), response.text
+            assert upstream.get(f"/__scripts/{provider_model}").status_code == 404
+
+        scenario.cleanups.callback(remove_script)
+        try:
+            for generation, retries in enumerate((0, 1, original)):
+                gateway.post("/config/update", {"router_settings": {"num_retries": retries}})
+                assert object_value(gateway.get("/router/settings")["current_values"])["num_retries"] == retries
+                configured: Final = upstream.post(f"/__scripts/{provider_model}", json={"statuses": [500, 200]})
+                assert configured.status_code == 200, configured.text
+                upstream.delete("/__observations").raise_for_status()
+                response: Final = gateway.request(
+                    "POST",
+                    "/v1/chat/completions",
+                    {
+                        "model": model,
+                        "messages": [{"role": "user", "content": f"{provider_model} attempt {generation}"}],
+                    },
+                )
+                observed: Final = upstream.get("/__observations")
+                observed.raise_for_status()
+                requests: Final = observed.json()["requests"]
+                assert len(requests) == (1 if retries == 0 else 2), (response.status_code, response.text, requests)
+                assert all(value["body"]["model"] == provider_model for value in requests)
+                assert response.status_code == (500 if retries == 0 else 200), response.text
+                if retries != 0:
+                    assert response.json()["usage"]["total_tokens"] == 40
+                remaining: Final = upstream.delete(f"/__scripts/{provider_model}")
+                assert remaining.status_code == 200, remaining.text
+                assert remaining.json()["remaining"] == ([200] if retries == 0 else [])
+        finally:
+            gateway.post("/config/update", {"router_settings": {"num_retries": original}})
+            assert object_value(gateway.get("/router/settings")["current_values"])["num_retries"] == original
+
+
+class _MaskedCredential(BaseModel):
+    credential_name: str
+    credential_info: dict[str, JsonValue]
+    credential_values: dict[str, JsonValue]
+
+
+def _openai_reply(request: Request) -> Reply:
+    assert (request.method, request.target) == ("POST", "/v1/chat/completions"), request
+    return Reply(
+        body=json.dumps(
+            {
+                "id": "chatcmpl-credential-merge",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-4o-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+        ).encode()
+    )
+
+
+def _stored_credential_values(name: str) -> dict[str, object]:
+    rows: Final = read_rows(
+        'SELECT credential_values FROM "LiteLLM_CredentialsTable" WHERE credential_name = %s', (name,)
+    )
+    assert len(rows) == 1, rows
+    return object_value(rows[0]["credential_values"])
+
+
+def _masked_credential(gateway: Gateway, name: str) -> _MaskedCredential:
+    response: Final = gateway.request("GET", f"/credentials/by_name/{name}")
+    assert response.status_code == 200, response.text
+    return _MaskedCredential.model_validate_json(response.content)
+
+
+def _patch_credential(gateway: Gateway, name: str, body: dict[str, JsonValue]) -> None:
+    response: Final = gateway.request("PATCH", f"/credentials/{name}", {"credential_name": name, **body})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"success": True, "message": "Credential updated successfully"}, response.text
+
+
+def _provider_call(gateway: Gateway, model: str, text: str, *wires: Wire) -> tuple[tuple[Request, ...], ...]:
+    for wire in wires:
+        wire.drain()
+    response: Final = gateway.request(
+        "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": text}]}
+    )
+    assert response.status_code == 200, response.text
+    assert object_value(response.json()["usage"])["total_tokens"] == 2, response.text
+    return tuple(wire.drain() for wire in wires)
+
+
+def _sent_headers(request: Request) -> tuple[str, str | None]:
+    return request.headers["authorization"], request.headers.get("openai-organization")
+
+
+@pytest.mark.parametrize("contains_slash", (False, True), ids=("plain-name", "slash-name"))
+def test_partial_credential_patch_merges_values_and_deletes_only_the_named_field(
+    gateway: Gateway, contains_slash: bool
+) -> None:
+    api_key: Final = f"synthetic-merge-{uuid.uuid4().hex}"
+    with (
+        wire_server(_openai_reply) as original,
+        wire_server(_openai_reply) as moved,
+        gateway.scenario() as scenario,
+    ):
+        name: Final = (
+            f"team-{uuid.uuid4().hex}/cred-{uuid.uuid4().hex}" if contains_slash else f"credential-{uuid.uuid4().hex}"
+        )
+        gateway.post(
+            "/credentials",
+            {
+                "credential_name": name,
+                "credential_values": {
+                    "api_key": api_key,
+                    "api_base": f"{original.url}/v1",
+                    "organization": "org-merge",
+                },
+                "credential_info": {},
+            },
+        )
+        scenario.cleanups.callback(gateway.request, "DELETE", f"/credentials/{name}")
+        model: Final = scenario.model(api_key=None, api_base=None, litellm_credential_name=name)
+        first, untouched = _provider_call(gateway, model, "before patch", original, moved)
+        assert [_sent_headers(request) for request in first] == [(f"Bearer {api_key}", "org-merge")]
+        assert untouched == ()
+        stored: Final = _stored_credential_values(name)
+        assert sorted(stored) == ["api_base", "api_key", "organization"], stored
+
+        _patch_credential(gateway, name, {"credential_values": {"api_base": f"{moved.url}/v1"}, "credential_info": {}})
+        merged: Final = _stored_credential_values(name)
+        assert sorted(merged) == ["api_base", "api_key", "organization"], merged
+        assert (merged["api_key"], merged["organization"]) == (stored["api_key"], stored["organization"]), merged
+        assert merged["api_base"] != stored["api_base"], merged
+        assert _masked_credential(gateway, name) == _MaskedCredential(
+            credential_name=name,
+            credential_info={},
+            credential_values={
+                "api_key": "sy****" + api_key[-2:],
+                "api_base": f"{moved.url}/v1",
+                "organization": "org-merge",
+            },
+        )
+        old_base, new_base = _provider_call(gateway, model, "after api_base patch", original, moved)
+        assert old_base == ()
+        assert [(request.method, request.target) for request in new_base] == [("POST", "/v1/chat/completions")]
+        assert [_sent_headers(request) for request in new_base] == [(f"Bearer {api_key}", "org-merge")]
+
+        _patch_credential(gateway, name, {"credential_values_to_delete": ["organization"], "credential_info": {}})
+        pruned: Final = _stored_credential_values(name)
+        assert pruned == {"api_key": merged["api_key"], "api_base": merged["api_base"]}, pruned
+        assert _masked_credential(gateway, name) == _MaskedCredential(
+            credential_name=name,
+            credential_info={},
+            credential_values={"api_key": "sy****" + api_key[-2:], "api_base": f"{moved.url}/v1"},
+        )
+        old_base_after_delete, after_delete = _provider_call(gateway, model, "after field delete", original, moved)
+        assert old_base_after_delete == ()
+        assert [_sent_headers(request) for request in after_delete] == [(f"Bearer {api_key}", None)]
+
+
+def test_dashboard_credential_edit_keeps_the_stripped_secret_and_round_trips_credential_info(gateway: Gateway) -> None:
+    api_key: Final = f"synthetic-dashboard-{uuid.uuid4().hex}"
+    info: Final[dict[str, JsonValue]] = {"custom_llm_provider": "openai"}
+    with (
+        wire_server(_openai_reply) as original,
+        wire_server(_openai_reply) as moved,
+        gateway.scenario() as scenario,
+    ):
+        name: Final = f"credential-{uuid.uuid4().hex}"
+        gateway.post(
+            "/credentials",
+            {
+                "credential_name": name,
+                "credential_values": {"api_key": api_key, "api_base": f"{original.url}/v1", "organization": "org-dash"},
+                "credential_info": info,
+            },
+        )
+        scenario.cleanups.callback(gateway.request, "DELETE", f"/credentials/{name}")
+        model: Final = scenario.model(api_key=None, api_base=None, litellm_credential_name=name)
+        stored: Final = _stored_credential_values(name)
+
+        _patch_credential(
+            gateway,
+            name,
+            {
+                "credential_values": {"api_base": f"{moved.url}/v1", "organization": "org-dash"},
+                "credential_info": info,
+            },
+        )
+        edited: Final = _stored_credential_values(name)
+        assert sorted(edited) == ["api_base", "api_key", "organization"], edited
+        assert edited["api_key"] == stored["api_key"], edited
+        assert read_rows(
+            'SELECT credential_info FROM "LiteLLM_CredentialsTable" WHERE credential_name = %s', (name,)
+        ) == [{"credential_info": info}]
+        assert _masked_credential(gateway, name) == _MaskedCredential(
+            credential_name=name,
+            credential_info=info,
+            credential_values={
+                "api_key": "sy****" + api_key[-2:],
+                "api_base": f"{moved.url}/v1",
+                "organization": "org-dash",
+            },
+        )
+        old_base, new_base = _provider_call(gateway, model, "after dashboard edit", original, moved)
+        assert old_base == ()
+        assert [_sent_headers(request) for request in new_base] == [(f"Bearer {api_key}", "org-dash")]
+
+
+@pytest.mark.covers("mgmt.credential.update.saved_value_reaches_wire")
+def test_credential_value_update_and_model_reload_reach_provider(gateway: Gateway) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        name: Final = f"credential-{uuid.uuid4().hex}"
+        gateway.post(
+            "/credentials",
+            {
+                "credential_name": name,
+                "credential_values": {"api_key": "synthetic-credential-first"},
+                "credential_info": {},
+            },
+        )
+
+        def remove_credential() -> None:
+            response: Final = gateway.request("DELETE", f"/credentials/{name}")
+            assert response.status_code == 200, response.text
+            assert (
+                read_rows('SELECT credential_name FROM "LiteLLM_CredentialsTable" WHERE credential_name = %s', (name,))
+                == []
+            )
+
+        scenario.cleanups.callback(remove_credential)
+        model: Final = scenario.model(api_key=None, litellm_credential_name=name)
+        identity: Final = model_identity(gateway, model)
+        for value in ("synthetic-credential-first", "synthetic-credential-second"):
+            patched: Final = gateway.request(
+                "PATCH",
+                f"/credentials/{name}",
+                {"credential_name": name, "credential_values": {"api_key": value}, "credential_info": {}},
+            )
+            assert patched.status_code == 200, patched.text
+            rows: Final = read_rows(
+                'SELECT credential_values FROM "LiteLLM_CredentialsTable" WHERE credential_name = %s', (name,)
+            )
+            assert len(rows) == 1
+            stored: Final = object_value(rows[0]["credential_values"])
+            assert isinstance(stored["api_key"], str) and stored["api_key"] != value
+            for reload in (False, True):
+                if reload:
+                    response: Final = gateway.request(
+                        "PATCH", f"/model/{identity}/update", {"model_info": {"description": value}}
+                    )
+                    assert response.status_code == 200, response.text
+                upstream.delete("/__observations").raise_for_status()
+                assert (
+                    object_value(gateway.chat(model, text=f"{name} {value} reload={reload}")["usage"])["total_tokens"]
+                    == 40
+                )
+                observed: Final = upstream.get("/__observations")
+                observed.raise_for_status()
+                assert len(observed.json()["requests"]) == 1, (value, reload, observed.text)
+                assert observed.json()["requests"][0]["authorization"] == f"Bearer {value}"
+
+
+_ENVIRONMENT_VARIABLES_REVISION_MIGRATION: Final = (
+    "litellm-proxy-extras/litellm_proxy_extras/migrations/"
+    "20261015120000_add_environment_variables_revision_trigger/migration.sql"
+)
+
+
+def _prisma(*arguments: str) -> None:
+    subprocess.run((sys.executable, "-I", "-m", "prisma", *arguments), check=True, capture_output=True, text=True)
+
+
+def _push_schema() -> None:
+    _prisma("db", "push", "--schema", "litellm/proxy/schema.prisma", "--skip-generate")
+
+
+def _push_schema_with_environment_variables_revision_trigger() -> None:
+    _push_schema()
+    _prisma(
+        "db", "execute", "--schema", "litellm/proxy/schema.prisma", "--file", _ENVIRONMENT_VARIABLES_REVISION_MIGRATION
+    )
+
+
+def _provider_echoing_its_key(source: str) -> Callable[[Request], Reply]:
+    def provider(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1/chat/completions", request.target
+        return _completion_reply(f"{source} {request.headers['authorization']}")
+
+    return provider
+
+
+def _environment_variables_proxy_config(
+    directory: Path, gateway: Gateway, alias: str, config_file_provider: Wire
+) -> Path:
+    config: Final = directory / "environment-variables-proxy.yaml"
+    config.write_text(
+        json.dumps(
+            {
+                "model_list": [{"model_name": alias, "litellm_params": {"model": "openai/gpt-4o-mini"}}],
+                "general_settings": {"master_key": gateway.key, "store_model_in_db": True},
+                "environment_variables": {"OPENAI_BASE_URL": config_file_provider.url + "/v1"},
+            }
+        )
+    )
+    return config
+
+
+def _environment_variables_proxy_environment(database_url: str, process_key: str) -> dict[str, str]:
+    return {
+        "DATABASE_URL": database_url,
+        "DISABLE_SCHEMA_UPDATE": "true",
+        "LITELLM_CONFIG_PARAM_CACHE_TTL_SECONDS": "1",
+        "OPENAI_API_KEY": process_key,
+        "PROXY_CONFIG_RELOAD_INTERVAL_SECONDS": "2",
+    }
+
+
+def _chat_answer(proxy: Gateway, alias: str) -> str:
+    response: Final = proxy.request(
+        "POST", "/v1/chat/completions", {"model": alias, "messages": [{"role": "user", "content": "which key"}]}
+    )
+    assert response.status_code == 200, response.text
+    return string_value(object_value(object_value(response.json()["choices"][0])["message"])["content"])
+
+
+def test_removing_db_environment_variables_restores_process_and_config_file_values_on_every_proxy(
+    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    alias: Final = "environment-variables-" + marker
+    process_key: Final = "process-key-" + marker
+    database_key: Final = "database-key-" + marker
+
+    with (
+        scratch_database() as database_url,
+        wire_server(_provider_echoing_its_key("config-file")) as config_file_provider,
+        wire_server(_provider_echoing_its_key("database")) as database_provider,
+    ):
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        _push_schema_with_environment_variables_revision_trigger()
+        config: Final = _environment_variables_proxy_config(tmp_path, gateway, alias, config_file_provider)
+        environment: Final = _environment_variables_proxy_environment(database_url, process_key)
+        removed: Final = ("DATABASE_URL_READ_REPLICA", "OPENAI_API_BASE", "OPENAI_BASE_URL")
+        from_process_and_config_file: Final = f"config-file Bearer {process_key}"
+        from_database: Final = f"database Bearer {database_key}"
+        with owned_proxy(
+            gateway, tmp_path / "first", environment, config=config, database_setup=(), remove_environment=removed
+        ) as first:
+            assert _chat_answer(first, alias) == from_process_and_config_file
+
+            stored: Final = first.request(
+                "POST",
+                "/config/update",
+                {
+                    "environment_variables": {
+                        "OPENAI_API_KEY": database_key,
+                        "OPENAI_BASE_URL": database_provider.url + "/v1",
+                    }
+                },
+            )
+            assert stored.status_code == 200, stored.text
+            eventually(lambda: _chat_answer(first, alias), lambda value: value == from_database, seconds=30)
+
+            with owned_proxy(
+                gateway, tmp_path / "peer", environment, config=config, database_setup=(), remove_environment=removed
+            ) as peer_booted_with_the_row_stored:
+
+                def answers() -> tuple[str, str]:
+                    return (_chat_answer(first, alias), _chat_answer(peer_booted_with_the_row_stored, alias))
+
+                eventually(answers, lambda values: values == (from_database,) * 2, seconds=30)
+
+                unset: Final = first.request(
+                    "POST",
+                    "/config/update",
+                    {"environment_variables": {"OPENAI_API_KEY": None, "OPENAI_BASE_URL": None}},
+                )
+                assert unset.status_code == 200, unset.text
+                assert _config_section(database_url, "environment_variables") == {
+                    "OPENAI_API_KEY": None,
+                    "OPENAI_BASE_URL": None,
+                }
+                eventually(answers, lambda values: values == (from_process_and_config_file,) * 2, seconds=30)
+
+
+def test_a_proxy_that_pushes_its_own_schema_unsets_a_removed_db_environment_variable(
+    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    alias: Final = "environment-variables-db-push-" + marker
+    process_key: Final = "process-key-" + marker
+    database_key: Final = "database-key-" + marker
+
+    with (
+        scratch_database() as database_url,
+        wire_server(_provider_echoing_its_key("config-file")) as config_file_provider,
+        wire_server(_provider_echoing_its_key("database")) as database_provider,
+    ):
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        config: Final = _environment_variables_proxy_config(tmp_path, gateway, alias, config_file_provider)
+        environment: Final = {
+            **_environment_variables_proxy_environment(database_url, process_key),
+            "DISABLE_SCHEMA_UPDATE": "false",
+        }
+        from_process_and_config_file: Final = f"config-file Bearer {process_key}"
+        with owned_proxy(
+            gateway,
+            tmp_path / "proxy",
+            environment,
+            config=config,
+            remove_environment=("DATABASE_URL_READ_REPLICA", "OPENAI_API_BASE", "OPENAI_BASE_URL"),
+        ) as proxy:
+            assert _chat_answer(proxy, alias) == from_process_and_config_file
+            stored: Final = proxy.request(
+                "POST",
+                "/config/update",
+                {
+                    "environment_variables": {
+                        "OPENAI_API_KEY": database_key,
+                        "OPENAI_BASE_URL": database_provider.url + "/v1",
+                    }
+                },
+            )
+            assert stored.status_code == 200, stored.text
+            eventually(
+                lambda: _chat_answer(proxy, alias), lambda value: value == f"database Bearer {database_key}", seconds=30
+            )
+
+            unset: Final = proxy.request(
+                "POST",
+                "/config/update",
+                {"environment_variables": {"OPENAI_API_KEY": None, "OPENAI_BASE_URL": None}},
+            )
+            assert unset.status_code == 200, unset.text
+            eventually(
+                lambda: _chat_answer(proxy, alias), lambda value: value == from_process_and_config_file, seconds=30
+            )
+
+
+def _environment_variables_row(database_url: str) -> dict[str, JsonValue]:
+    return read_rows(
+        'SELECT param_value, reload_revision FROM "LiteLLM_Config" WHERE param_name = %s',
+        ("environment_variables",),
+        database_url=database_url,
+    )[0]
+
+
+def _load_environment_variables_row(replica_url: str, row: dict[str, JsonValue]) -> None:
+    with psycopg.connect(replica_url, autocommit=True) as replica:
+        replica.execute(
+            'INSERT INTO "LiteLLM_Config" (param_name, param_value, reload_revision) VALUES (%s, %s, %s) '
+            "ON CONFLICT (param_name) DO UPDATE "
+            "SET param_value = EXCLUDED.param_value, reload_revision = EXCLUDED.reload_revision",
+            ("environment_variables", Jsonb(row["param_value"]), row["reload_revision"]),
+        )
+
+
+def test_a_read_replica_back_on_an_older_row_does_not_bring_back_a_removed_db_environment_variable(
+    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    alias: Final = "environment-variables-replica-" + marker
+    process_key: Final = "process-key-" + marker
+    database_key: Final = "database-key-" + marker
+
+    with (
+        scratch_database() as writer_url,
+        scratch_database() as replica_url,
+        wire_server(_provider_echoing_its_key("config-file")) as config_file_provider,
+        wire_server(_provider_echoing_its_key("database")) as database_provider,
+        wire_server(_provider_echoing_its_key("writer")) as writer_provider,
+    ):
+        monkeypatch.setenv("DATABASE_URL", replica_url)
+        _push_schema()
+        monkeypatch.setenv("DATABASE_URL", writer_url)
+        _push_schema_with_environment_variables_revision_trigger()
+        config: Final = _environment_variables_proxy_config(tmp_path, gateway, alias, config_file_provider)
+        environment: Final = {
+            **_environment_variables_proxy_environment(writer_url, process_key),
+            "DATABASE_URL_READ_REPLICA": replica_url,
+        }
+        from_process_and_config_file: Final = f"config-file Bearer {process_key}"
+        with owned_proxy(
+            gateway,
+            tmp_path / "replica-reader",
+            environment,
+            config=config,
+            database_setup=(),
+            remove_environment=("OPENAI_API_BASE", "OPENAI_BASE_URL"),
+        ) as proxy:
+            assert _chat_answer(proxy, alias) == from_process_and_config_file
+
+            stored: Final = proxy.request(
+                "POST",
+                "/config/update",
+                {
+                    "environment_variables": {
+                        "OPENAI_API_KEY": database_key,
+                        "OPENAI_BASE_URL": database_provider.url + "/v1",
+                    }
+                },
+            )
+            assert stored.status_code == 200, stored.text
+            row_holding_the_key: Final = _environment_variables_row(writer_url)
+            _load_environment_variables_row(replica_url, row_holding_the_key)
+            eventually(
+                lambda: _chat_answer(proxy, alias),
+                lambda value: value == f"database Bearer {database_key}",
+                seconds=30,
+            )
+
+            unset: Final = proxy.request(
+                "POST", "/config/update", {"environment_variables": {"OPENAI_API_KEY": None, "OPENAI_BASE_URL": None}}
+            )
+            assert unset.status_code == 200, unset.text
+            _load_environment_variables_row(replica_url, _environment_variables_row(writer_url))
+            eventually(
+                lambda: _chat_answer(proxy, alias), lambda value: value == from_process_and_config_file, seconds=30
+            )
+
+            _load_environment_variables_row(replica_url, row_holding_the_key)
+            _save_environment_variables_as(writer_url, {"OPENAI_BASE_URL": writer_provider.url + "/v1"})
+            eventually(
+                lambda: _chat_answer(proxy, alias),
+                lambda value: value == f"writer Bearer {process_key}",
+                seconds=30,
+            )
+
+
+_CAPPED_WRITER_ROLE_PASSWORD: Final = "integration-capped-writer-password"
+
+
+@contextmanager
+def _database_owned_by_a_login_role() -> Iterator[tuple[str, str, str]]:
+    role: Final = f"integration_capped_writer_{uuid.uuid4().hex}"
+    with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as admin:
+        admin.execute(
+            sql.SQL("CREATE ROLE {} LOGIN PASSWORD {} NOSUPERUSER NOINHERIT").format(
+                sql.Identifier(role), sql.Literal(_CAPPED_WRITER_ROLE_PASSWORD)
+            )
+        )
+        try:
+            with scratch_database() as admin_url:
+                parsed: Final = urlsplit(admin_url)
+                admin.execute(
+                    sql.SQL("ALTER DATABASE {} OWNER TO {}").format(
+                        sql.Identifier(parsed.path.lstrip("/")), sql.Identifier(role)
+                    )
+                )
+                host: Final = parsed.netloc.rpartition("@")[2]
+                yield (
+                    role,
+                    admin_url,
+                    urlunsplit(parsed._replace(netloc=f"{role}:{_CAPPED_WRITER_ROLE_PASSWORD}@{host}")),
+                )
+        finally:
+            admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
+
+
+def _set_connection_limit(admin_url: str, role: str, limit: int) -> None:
+    with psycopg.connect(admin_url, autocommit=True) as admin:
+        admin.execute(sql.SQL("ALTER ROLE {} CONNECTION LIMIT {}").format(sql.Identifier(role), sql.Literal(limit)))
+
+
+def _open_connections(database_url: str, role: str) -> JsonValue:
+    return read_rows(
+        "SELECT count(*) AS connections FROM pg_stat_activity WHERE usename = %s",
+        (role,),
+        database_url=database_url,
+    )[0]["connections"]
+
+
+def test_a_writer_database_out_of_connections_keeps_the_applied_db_environment_variables(
+    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    alias: Final = "environment-variables-capped-writer-" + marker
+    process_key: Final = "process-key-" + marker
+    database_key: Final = "database-key-" + marker
+
+    with (
+        _database_owned_by_a_login_role() as (role, writer_admin_url, writer_url),
+        scratch_database() as replica_url,
+        wire_server(_provider_echoing_its_key("config-file")) as config_file_provider,
+        wire_server(_provider_echoing_its_key("database")) as database_provider,
+        wire_server(_provider_echoing_its_key("writer")) as writer_provider,
+    ):
+        monkeypatch.setenv("DATABASE_URL", replica_url)
+        _push_schema()
+        monkeypatch.setenv("DATABASE_URL", writer_url)
+        _push_schema_with_environment_variables_revision_trigger()
+        config: Final = _environment_variables_proxy_config(tmp_path, gateway, alias, config_file_provider)
+        parsed_writer_url: Final = urlsplit(writer_url)
+        writer_url_dropping_idle_connections: Final = urlunsplit(
+            parsed_writer_url._replace(
+                query="&".join(part for part in (parsed_writer_url.query, "max_idle_connection_lifetime=1") if part)
+            )
+        )
+        environment: Final = {
+            **_environment_variables_proxy_environment(writer_url_dropping_idle_connections, process_key),
+            "DATABASE_URL_READ_REPLICA": replica_url,
+        }
+        from_process_and_config_file: Final = f"config-file Bearer {process_key}"
+        with owned_proxy(
+            gateway,
+            tmp_path / "capped-writer",
+            environment,
+            config=config,
+            database_setup=(),
+            remove_environment=("OPENAI_API_BASE", "OPENAI_BASE_URL"),
+        ) as proxy:
+            stored: Final = proxy.request(
+                "POST",
+                "/config/update",
+                {
+                    "environment_variables": {
+                        "OPENAI_API_KEY": database_key,
+                        "OPENAI_BASE_URL": database_provider.url + "/v1",
+                    }
+                },
+            )
+            assert stored.status_code == 200, stored.text
+            row_holding_the_key: Final = _environment_variables_row(writer_admin_url)
+            _load_environment_variables_row(replica_url, row_holding_the_key)
+            eventually(
+                lambda: _chat_answer(proxy, alias),
+                lambda value: value == f"database Bearer {database_key}",
+                seconds=30,
+            )
+
+            unset: Final = proxy.request(
+                "POST", "/config/update", {"environment_variables": {"OPENAI_API_KEY": None, "OPENAI_BASE_URL": None}}
+            )
+            assert unset.status_code == 200, unset.text
+            _load_environment_variables_row(replica_url, _environment_variables_row(writer_admin_url))
+            eventually(
+                lambda: _chat_answer(proxy, alias), lambda value: value == from_process_and_config_file, seconds=30
+            )
+
+            _load_environment_variables_row(replica_url, row_holding_the_key)
+            _set_connection_limit(writer_admin_url, role, 0)
+            with pytest.raises(psycopg.OperationalError):
+                psycopg.connect(writer_url).close()
+            eventually(lambda: _open_connections(writer_admin_url, role), lambda count: count == 0, seconds=30)
+
+            config_read: Final = proxy.request("GET", "/get/config/callbacks")
+            assert config_read.status_code == 200, config_read.text
+            assert _chat_answer(proxy, alias) == from_process_and_config_file
+
+            _set_connection_limit(writer_admin_url, role, -1)
+            _save_environment_variables_as(writer_admin_url, {"OPENAI_BASE_URL": writer_provider.url + "/v1"})
+            eventually(
+                lambda: _chat_answer(proxy, alias),
+                lambda value: value == f"writer Bearer {process_key}",
+                seconds=30,
+            )
+
+
+def _sign_in_client_id(proxy: Gateway) -> str | None:
+    response: Final = httpx.get(
+        str(proxy.client.base_url).rstrip("/") + "/sso/key/generate",
+        follow_redirects=False,
+        trust_env=False,
+        timeout=30,
+    )
+    if not response.is_redirect:
+        assert response.status_code == 200, response.text
+        return None
+    return parse_qs(urlsplit(response.headers["location"]).query)["client_id"][0]
+
+
+def test_an_sso_client_removed_from_db_environment_variables_stops_sign_in_on_every_proxy(
+    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    environment_row_client: Final = "environment-row-client-" + marker
+    sso_table_client: Final = "sso-table-client-" + marker
+
+    with scratch_database() as database_url, wire_server(_provider_echoing_its_key("config-file")) as provider:
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        _push_schema_with_environment_variables_revision_trigger()
+        config: Final = _environment_variables_proxy_config(tmp_path, gateway, "sso-" + marker, provider)
+        environment: Final = _environment_variables_proxy_environment(database_url, "process-key-" + marker)
+        removed: Final = (
+            "DATABASE_URL_READ_REPLICA",
+            "GENERIC_CLIENT_ID",
+            "GOOGLE_CLIENT_ID",
+            "MICROSOFT_CLIENT_ID",
+            "MICROSOFT_CLIENT_SECRET",
+            "PROXY_BASE_URL",
+        )
+        with (
+            owned_proxy(
+                gateway, tmp_path / "first", environment, config=config, database_setup=(), remove_environment=removed
+            ) as first,
+            owned_proxy(
+                gateway, tmp_path / "peer", environment, config=config, database_setup=(), remove_environment=removed
+            ) as peer,
+        ):
+
+            def sign_in_clients() -> tuple[str | None, str | None]:
+                return (_sign_in_client_id(first), _sign_in_client_id(peer))
+
+            def store_environment_row_client(client_id: str | None, secret: str | None) -> None:
+                response: Final = first.request(
+                    "POST",
+                    "/config/update",
+                    {"environment_variables": {"MICROSOFT_CLIENT_ID": client_id, "MICROSOFT_CLIENT_SECRET": secret}},
+                )
+                assert response.status_code == 200, response.text
+
+            assert sign_in_clients() == (None, None)
+
+            store_environment_row_client(environment_row_client, "environment-row-secret")
+            eventually(sign_in_clients, lambda clients: clients == (environment_row_client,) * 2, seconds=30)
+
+            store_environment_row_client(None, None)
+            eventually(sign_in_clients, lambda clients: clients == (None, None), seconds=30)
+
+            store_environment_row_client(environment_row_client, "environment-row-secret")
+            eventually(sign_in_clients, lambda clients: clients == (environment_row_client,) * 2, seconds=30)
+            moved: Final = first.request(
+                "PATCH",
+                "/update/sso_settings",
+                {"microsoft_client_id": sso_table_client, "microsoft_client_secret": "sso-table-secret"},
+            )
+            assert moved.status_code == 200, moved.text
+            eventually(sign_in_clients, lambda clients: clients == (sso_table_client,) * 2, seconds=30)
+
+
+_TABLE_ONLY_ROLE_PASSWORD: Final = "integration-table-only-password"
+
+
+@contextmanager
+def _login_role_with_no_sequence_grants() -> Iterator[str]:
+    role: Final = f"integration_table_only_{uuid.uuid4().hex}"
+    with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as admin:
+        admin.execute(
+            sql.SQL("CREATE ROLE {} LOGIN PASSWORD {} NOSUPERUSER NOINHERIT").format(
+                sql.Identifier(role), sql.Literal(_TABLE_ONLY_ROLE_PASSWORD)
+            )
+        )
+        try:
+            yield role
+        finally:
+            admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
+
+
+def _save_environment_variables_as(database_url: str, values: dict[str, str]) -> None:
+    with psycopg.connect(database_url, autocommit=True) as writer:
+        writer.execute(
+            'INSERT INTO "LiteLLM_Config" (param_name, param_value) VALUES (%s, %s) '
+            "ON CONFLICT (param_name) DO UPDATE SET param_value = EXCLUDED.param_value",
+            ("environment_variables", Jsonb(values)),
+        )
+
+
+def _environment_variables_revision(database_url: str) -> JsonValue:
+    return read_rows(
+        'SELECT reload_revision FROM "LiteLLM_Config" WHERE param_name = %s',
+        ("environment_variables",),
+        database_url=database_url,
+    )[0]["reload_revision"]
+
+
+def test_a_database_role_with_no_sequence_grants_can_still_save_db_environment_variables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _login_role_with_no_sequence_grants() as role, scratch_database() as database_url:
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        _push_schema_with_environment_variables_revision_trigger()
+        with psycopg.connect(database_url, autocommit=True) as owner:
+            owner.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(sql.Identifier(role)))
+            owner.execute(
+                sql.SQL("GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO {}").format(
+                    sql.Identifier(role)
+                )
+            )
+        parsed: Final = urlsplit(database_url)
+        role_url: Final = urlunsplit(
+            parsed._replace(netloc=f"{role}:{_TABLE_ONLY_ROLE_PASSWORD}@{parsed.netloc.rpartition('@')[2]}")
+        )
+
+        _save_environment_variables_as(role_url, {"TABLE_ONLY_ROLE_KEY": "stored"})
+        first: Final = _environment_variables_revision(database_url)
+        _save_environment_variables_as(role_url, {})
+        second: Final = _environment_variables_revision(database_url)
+
+        assert isinstance(first, int) and isinstance(second, int)
+        assert 0 < first < second
+
+
+def test_db_environment_variables_revision_keeps_rising_after_its_sequence_falls_behind_the_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with scratch_database() as database_url:
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        _push_schema_with_environment_variables_revision_trigger()
+        for value in ("first", "second", "third"):
+            _save_environment_variables_as(database_url, {"SEQUENCE_BEHIND_KEY": value})
+        before_the_sequence_restarts: Final = _environment_variables_revision(database_url)
+        with psycopg.connect(database_url, autocommit=True) as owner:
+            owner.execute('ALTER SEQUENCE "litellm_environment_variables_revision_seq" RESTART WITH 1')
+
+        _save_environment_variables_as(database_url, {})
+        after_the_sequence_restarts: Final = _environment_variables_revision(database_url)
+
+        assert isinstance(before_the_sequence_restarts, int) and isinstance(after_the_sequence_restarts, int)
+        assert after_the_sequence_restarts > before_the_sequence_restarts
+
+
+def test_db_environment_variables_saved_from_a_session_outside_the_tables_schema_still_get_a_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schema: Final = "litellm_tenant"
+    table: Final = sql.SQL('{}."LiteLLM_Config"').format(sql.Identifier(schema))
+    with scratch_database() as database_url:
+        monkeypatch.setenv("DATABASE_URL", f"{database_url}?schema={schema}")
+        _push_schema_with_environment_variables_revision_trigger()
+
+        def save_and_read_revision(values: dict[str, str]) -> object:
+            with psycopg.connect(database_url, autocommit=True) as writer:
+                writer.execute(
+                    sql.SQL(
+                        "INSERT INTO {} (param_name, param_value) VALUES (%s, %s) "
+                        "ON CONFLICT (param_name) DO UPDATE SET param_value = EXCLUDED.param_value"
+                    ).format(table),
+                    ("environment_variables", Jsonb(values)),
+                )
+                row: Final = writer.execute(
+                    sql.SQL("SELECT reload_revision FROM {} WHERE param_name = %s").format(table),
+                    ("environment_variables",),
+                ).fetchone()
+            assert row is not None
+            return row[0]
+
+        first: Final = save_and_read_revision({"TENANT_SCHEMA_KEY": "stored"})
+        second: Final = save_and_read_revision({})
+
+        assert isinstance(first, int) and isinstance(second, int)
+        assert 0 < first < second

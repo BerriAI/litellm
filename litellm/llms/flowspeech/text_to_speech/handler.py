@@ -42,8 +42,8 @@ def validate_wav_structure(content: bytes) -> None:
     for header in iter(lambda: stream.read(8), b""):
         if len(header) != 8:
             raise ValueError("Truncated WAV chunk header")
-        size = int.from_bytes(header[4:], "little")  # rebind-ok: each RIFF chunk declares its own size
-        end = stream.tell() + size + size % 2  # rebind-ok: boundary belongs to the current chunk
+        size = int.from_bytes(header[4:], "little")
+        end = stream.tell() + size + size % 2
         if end > len(content):
             raise ValueError("Truncated WAV chunk")
         if header[:4] == b"fmt " and stream.read(min(size, 16))[2:] != struct.pack("<HIIHH", 1, 24000, 48000, 2, 16):
@@ -82,7 +82,7 @@ class FlowSpeechTTS:
         self.request_id = validate_uuid(self.headers["Idempotency-Key"])
         self.job_id: str | None = None
         serialized: Final = json.dumps(
-            dict(body),  # mutable-ok: JSON encoder requires a concrete dict
+            dict(body),
             ensure_ascii=False,
             separators=(",", ":"),
         )
@@ -160,7 +160,7 @@ class FlowSpeechTTS:
 
     def exchange(self, method: str, url: str, *, download: bool = False) -> Exchange:
         for attempt in range(self.max_retries + 1):
-            response = yield self.request(method, url, download)  # rebind-ok: one response per retry
+            response = yield self.request(method, url, download)
             self.remaining()
             if isinstance(response, httpx.TransportError):
                 if attempt == self.max_retries:
@@ -178,16 +178,16 @@ class FlowSpeechTTS:
             try:
                 payload = FlowSpeechErrorResponse.model_validate_json(
                     response.content
-                )  # rebind-ok: parse each retry response
+                )
             except ValueError:
-                payload = None  # rebind-ok: malformed server errors have no structured payload
-            retryable = response.status_code == 429 or (  # rebind-ok: evaluated for each retry response
+                payload = None
+            retryable = response.status_code == 429 or (
                 response.status_code >= 500 and (download or (payload is not None and payload.error.retryable))
             )
             if retryable and attempt < self.max_retries:
                 yield self.delay(response)
                 continue
-            detail = (  # rebind-ok: evaluated for each retry response
+            detail = (
                 f"{payload.error.code}: {payload.error.message}; traceId={payload.traceId or 'unknown'}"
                 if payload
                 else f"unexpected HTTP {response.status_code}"
@@ -203,8 +203,8 @@ class FlowSpeechTTS:
         response = yield from self.exchange("POST", self.url)  # rebind-ok: advances through job status responses
         while True:
             try:
-                job = FlowSpeechJob.model_validate_json(response.content)  # rebind-ok: validate each status response
-                job_id = job.id  # rebind-ok: model has normalized each status response's UUID
+                job = FlowSpeechJob.model_validate_json(response.content)
+                job_id = job.id
             except ValueError as exc:
                 raise self.error(502, "FlowSpeech returned an invalid job, ID, status or result") from exc
             if job.requestId != self.request_id:
@@ -215,7 +215,7 @@ class FlowSpeechTTS:
             if job.status in ("failed", "cancelled"):
                 detail = (
                     f"{job.error.code}: {job.error.message}" if job.error else job.status
-                )  # rebind-ok: terminal loop branch
+                )
                 raise self.error(422, f"FlowSpeech job {job.status}: {detail}")
             if job.status == "success":
                 if job.resultDeleted:
@@ -223,13 +223,13 @@ class FlowSpeechTTS:
                 if job.result is None:
                     raise self.error(502, "FlowSpeech successful job has no result")
                 try:
-                    audio_url = str(validate_url(job.result.url))  # rebind-ok: terminal loop branch
+                    audio_url = str(validate_url(job.result.url))
                 except ValueError as exc:
                     raise self.error(502, "FlowSpeech returned an unsafe audio URL") from exc
-                audio = yield from self.exchange("GET", audio_url, download=True)  # rebind-ok: terminal loop branch
+                audio = yield from self.exchange("GET", audio_url, download=True)
                 return self.completed_response(job, audio)
             yield self.delay(response)
-            response = yield from self.exchange("GET", f"{self.url}/{job_id}")  # rebind-ok: advance job polling
+            response = yield from self.exchange("GET", f"{self.url}/{job_id}")
 
     def completed_response(self, job: FlowSpeechJob, response: httpx.Response) -> HttpxBinaryResponseContent:
         result: Final = self.audio_response(response)
@@ -327,15 +327,15 @@ class FlowSpeechTTS:
                     self.sleep(action)
                 else:
                     try:
-                        result = self.read(client, action)  # rebind-ok: result feeds shared workflow
+                        result = self.read(client, action)
                     except httpx.TransportError as exc:
-                        result = exc  # rebind-ok: retry policy handles transport errors
-                action = flow.send(result)  # rebind-ok: advance shared workflow
+                        result = exc
+                action = flow.send(result)
         except StopIteration as done:
             value: Final[object] = done.value  # pyright: ignore[reportAny]  # StopIteration erases the typed generator return; checked below
             if not isinstance(value, HttpxBinaryResponseContent):
                 raise self.error(502, "FlowSpeech workflow did not return audio")
-            return value
+            return value  # pyright: ignore[reportUnknownVariableType]  # StopIteration erases the response generic
         finally:
             flow.close()
 
@@ -359,14 +359,14 @@ class FlowSpeechTTS:
                     await self.async_sleep(action)
                 else:
                     try:
-                        result = await self.aread(client, action)  # rebind-ok: result feeds shared workflow
+                        result = await self.aread(client, action)
                     except httpx.TransportError as exc:
-                        result = exc  # rebind-ok: retry policy handles transport errors
-                action = flow.send(result)  # rebind-ok: advance shared workflow
+                        result = exc
+                action = flow.send(result)
         except StopIteration as done:
             value: Final[object] = done.value  # pyright: ignore[reportAny]  # StopIteration erases the typed generator return; checked below
             if not isinstance(value, HttpxBinaryResponseContent):
                 raise self.error(502, "FlowSpeech workflow did not return audio")
-            return value
+            return value  # pyright: ignore[reportUnknownVariableType]  # StopIteration erases the response generic
         finally:
             flow.close()

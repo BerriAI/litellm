@@ -14,6 +14,8 @@ from itertools import groupby
 from types import MappingProxyType
 from typing import Final, Literal
 
+from pydantic import TypeAdapter
+
 DailySpendEntity = Literal["user", "team", "org", "tag", "end_user", "agent"]
 
 SqlValue = str | int | float | None
@@ -43,6 +45,36 @@ DAILY_SPEND_TABLES: Final[Mapping[DailySpendEntity, DailySpendTable]] = MappingP
     }
 )
 
+_ENTITY_INPUT_KEYS: Final[Mapping[DailySpendEntity, str]] = MappingProxyType(
+    {
+        "user": "user",
+        "team": "team_id",
+        "org": "organization_id",
+        "end_user": "end_user",
+        "agent": "agent_id",
+        "tag": "request_tags",
+    }
+)
+_TAGS: Final = TypeAdapter(tuple[str, ...])
+
+
+def daily_spend_entity_ids(payload: Mapping[str, object], entity: DailySpendEntity) -> tuple[str | None, ...]:
+    key: Final = _ENTITY_INPUT_KEYS[entity]
+    if key not in payload:
+        return ()
+    value: Final = payload[key]
+    if entity == "tag":
+        if value is None:
+            return ()
+        tags: Final = _TAGS.validate_json(value) if isinstance(value, str) else _TAGS.validate_python(value)
+        return tuple(dict.fromkeys(tags))
+    if value is None:
+        return (None,) if entity == "user" else ()
+    if not isinstance(value, str) or (entity == "end_user" and not value):
+        return ()
+    return (value,)
+
+
 # The unique constraint's columns after the entity id, in constraint order. A NULL can
 # never match itself in a unique index, so every one of these is normalized to '': the
 # conflict target has to be NULL-free or the row is re-inserted on every single flush.
@@ -57,11 +89,14 @@ _COUNTER_COLUMNS: Final = (
     "cache_read_input_tokens",
     "cache_creation_input_tokens",
     "compression_saved_tokens",
+    "total_response_time_ms",
+    "timed_requests",
 )
 _SPEND_COLUMNS: Final = (
     "spend",
     "compression_savings_spend",
     "prompt_caching_savings_spend",
+    "gateway_injected_caching_savings_spend",
     "autorouter_savings_spend",
 )
 

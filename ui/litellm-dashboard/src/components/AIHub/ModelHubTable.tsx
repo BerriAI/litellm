@@ -4,6 +4,7 @@ import MakeMCPPublicForm from "@/components/AIHub/forms/MakeMCPPublicForm";
 import MakeModelPublicForm from "@/components/AIHub/forms/MakeModelPublicForm";
 import { getMCPHubTableColumns, MCPServerData } from "@/components/AIHub/MCPHubTableColumns";
 import { getModelHubTableColumns, ModelHubData } from "@/components/AIHub/ModelHubTableColumns";
+import { modelUsageExample } from "@/components/AIHub/modelUsageExample";
 import UsefulLinksManagement from "@/components/AIHub/UsefulLinksManagement";
 import { getClaudeCodePluginsList } from "@/components/networking";
 import { Plugin } from "@/components/claude_code_plugins/types";
@@ -13,9 +14,12 @@ import { DataTable } from "@/components/shared/DataTable";
 import ModelFilters from "@/components/model_filters";
 import {
   fetchMCPServers,
+  getGatewayBaseUrl,
   getAgentsList,
   getConfigFieldSetting,
+  getGlobalLitellmHeaderName,
   getProxyBaseUrl,
+  getUiPageUrl,
   getUiConfig,
   modelHubCall,
   modelHubPublicModelsCall,
@@ -23,14 +27,15 @@ import {
 import PublicModelHub from "@/components/public_model_hub";
 import { copyToClipboard } from "@/utils/dataUtils";
 import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
+import { filterBySearchTerm } from "@/utils/searchUtils";
 import { SortingState } from "@tanstack/react-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Copy, Inbox } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { Copy, Inbox, Search as SearchIcon, X } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { prism } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -40,12 +45,45 @@ import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings"
 import { checkTokenValidity } from "@/utils/jwtUtils";
 import { getCookie } from "@/utils/cookieUtils";
 import { getLoginUrl } from "@/utils/returnUrlUtils";
+import { uiHref } from "@/utils/uiHref";
+import {
+  DECISIONS_DOCS_URL,
+  DECISIONS_MODE,
+  SYSTEM_ONE_PLAYGROUND_ROUTE,
+  displayMode,
+  isDecisionMode,
+} from "@/lib/decisionModels";
+import DecisionModelGarden from "@/components/AIHub/DecisionModelGarden";
+import { ModelCustomMetadata } from "./ModelCustomMetadata";
 
 interface ModelHubTableProps {
   accessToken: string | null;
   publicPage: boolean;
   premiumUser: boolean;
   userRole: string | null;
+  canOpenPlayground: boolean;
+  canAddModels: boolean;
+  variant?: "dashboard" | "chat";
+}
+
+function isMCPHubVisibilityDisabled(isLoading: boolean, servers: readonly MCPServerData[] | null): boolean {
+  return isLoading || servers === null;
+}
+
+function modelTableEmptyState(
+  models: readonly ModelHubData[],
+  showsDecisionGarden: boolean,
+  selectedMode: string,
+): { title: string; body: string } {
+  if (showsDecisionGarden && selectedMode === DECISIONS_MODE && !models.some((model) => isDecisionMode(model.mode))) {
+    return {
+      title: "No model on this proxy uses the decisions mode",
+      body: "The decision models LiteLLM supports are listed below.",
+    };
+  }
+  return models.length > 0
+    ? { title: "No matching models", body: "Adjust the filters to see more models." }
+    : { title: "No models yet", body: "Models added to this proxy will appear here." };
 }
 
 function HubEmptyState({ title, body }: { title: string; body: string }) {
@@ -60,19 +98,31 @@ function HubEmptyState({ title, body }: { title: string; body: string }) {
   );
 }
 
-const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, premiumUser, userRole }) => {
+const ModelHubTable: React.FC<ModelHubTableProps> = ({
+  accessToken,
+  publicPage,
+  premiumUser,
+  userRole,
+  canOpenPlayground,
+  canAddModels,
+  variant = "dashboard",
+}) => {
   const syntaxTheme = useSyntaxTheme(prism);
+  const isChat = variant === "chat";
   // Admin Viewer follows the read-parity rule: see the AI Hub catalog, but
   // cannot toggle public visibility (write).
-  const canModify = isProxyAdminRole(userRole || "");
+  const canModify = !isChat && isProxyAdminRole(userRole || "");
 
   const [publicPageAllowed, setPublicPageAllowed] = useState<boolean>(false);
   const [modelHubData, setModelHubData] = useState<ModelHubData[] | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [isModalVisible, setIsModalVisible] = useState(false);
-  const [isPublicPageModalVisible, setIsPublicPageModalVisible] = useState(false);
   const [selectedModel, setSelectedModel] = useState<null | ModelHubData>(null);
   const [filteredData, setFilteredData] = useState<ModelHubData[]>([]);
+  const [selectedMode, setSelectedMode] = useState<string>("");
+  const [selectedProvider, setSelectedProvider] = useState("");
+  const isDashboardCatalog = !isChat && !publicPage;
+  const showDecisionGarden = isDashboardCatalog && (selectedMode === "" || selectedMode === DECISIONS_MODE);
   const [isMakePublicModalVisible, setIsMakePublicModalVisible] = useState(false);
   // Agent Hub state
   const [agentHubData, setAgentHubData] = useState<AgentHubData[] | null>(null);
@@ -80,6 +130,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   const [agentLoading, setAgentLoading] = useState<boolean>(true);
   const [selectedAgent, setSelectedAgent] = useState<null | AgentHubData>(null);
   const [isAgentModalVisible, setIsAgentModalVisible] = useState(false);
+  const [agentSearchTerm, setAgentSearchTerm] = useState("");
   // MCP Hub state
   const [mcpHubData, setMcpHubData] = useState<MCPServerData[] | null>(null);
   const [mcpLoading, setMcpLoading] = useState<boolean>(true);
@@ -90,7 +141,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   const [skillHubData, setSkillHubData] = useState<Plugin[]>([]);
   const [skillLoading, setSkillLoading] = useState<boolean>(false);
   const [isMakeSkillPublicModalVisible, setIsMakeSkillPublicModalVisible] = useState(false);
-  const router = useRouter();
   const { data: uiSettings, isLoading: isUISettingsLoading } = useUISettings();
 
   // Check authentication requirement for public AI Hub
@@ -109,7 +159,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
 
       // If token is invalid, redirect to login
       if (!isTokenValid) {
-        window.location.replace(getLoginUrl(getProxyBaseUrl()));
+        window.location.replace(getUiPageUrl(getLoginUrl(getProxyBaseUrl())));
         return;
       }
     }
@@ -123,15 +173,17 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
         const _modelHubData = await modelHubCall(accessToken);
         setModelHubData(_modelHubData.data);
 
-        getConfigFieldSetting(accessToken, "enable_public_model_hub")
-          .then((data) => {
-            if (data.field_value == true) {
-              setPublicPageAllowed(true);
-            }
-          })
-          .catch((error) => {
-            // do nothing
-          });
+        if (!isChat) {
+          getConfigFieldSetting(accessToken, "enable_public_model_hub")
+            .then((data) => {
+              if (data.field_value == true) {
+                setPublicPageAllowed(true);
+              }
+            })
+            .catch((error) => {
+              // do nothing
+            });
+        }
       } catch (error) {
         console.error("There was an error fetching the model data", error);
       } finally {
@@ -163,7 +215,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
       }
     };
     fetchModelData();
-  }, [accessToken, publicPage]);
+  }, [accessToken, publicPage, isChat]);
 
   // Fetch Agent Hub data
   useEffect(() => {
@@ -190,10 +242,10 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
       }
     };
 
-    if (!publicPage) {
+    if (!publicPage && !isChat) {
       fetchAgentData();
     }
-  }, [publicPage, accessToken]);
+  }, [publicPage, accessToken, isChat]);
 
   // Fetch MCP Hub data
   useEffect(() => {
@@ -214,10 +266,10 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
       }
     };
 
-    if (!publicPage) {
+    if (!publicPage && !isChat) {
       fetchMcpData();
     }
-  }, [publicPage, accessToken]);
+  }, [publicPage, accessToken, isChat]);
 
   // Fetch Skill Hub data — all skills for admins, enabled-only for public page
   useEffect(() => {
@@ -235,8 +287,8 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
       }
     };
 
-    fetchSkillData();
-  }, [accessToken, publicPage]);
+    if (!isChat) fetchSkillData();
+  }, [accessToken, publicPage, isChat]);
 
   const showModal = useCallback((model: ModelHubData) => {
     setSelectedModel(model);
@@ -252,10 +304,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
     setSelectedMcpServer(server);
     setIsMcpModalVisible(true);
   }, []);
-
-  const goToPublicModelPage = () => {
-    router.replace(`/model_hub_table?key=${accessToken}`);
-  };
 
   const handleMakePublicPage = () => {
     if (!accessToken) {
@@ -286,7 +334,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
 
   const handleOk = () => {
     setIsModalVisible(false);
-    setIsPublicPageModalVisible(false);
     setSelectedModel(null);
     setIsAgentModalVisible(false);
     setSelectedAgent(null);
@@ -296,7 +343,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
 
   const handleCancel = () => {
     setIsModalVisible(false);
-    setIsPublicPageModalVisible(false);
     setSelectedModel(null);
     setIsAgentModalVisible(false);
     setSelectedAgent(null);
@@ -365,10 +411,14 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
     if (accessToken) {
       const fetchMcpData = async () => {
         try {
+          setMcpLoading(true);
           const response = await fetchMCPServers(accessToken);
           setMcpHubData(response);
         } catch (error) {
+          setMcpHubData(null);
           console.error("Error refreshing MCP server data:", error);
+        } finally {
+          setMcpLoading(false);
         }
       };
       fetchMcpData();
@@ -383,8 +433,15 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   const [agentSorting, setAgentSorting] = useState<SortingState>([{ id: "name", desc: false }]);
   const [mcpSorting, setMcpSorting] = useState<SortingState>([{ id: "server_name", desc: false }]);
 
-  const modelColumns = useMemo(() => getModelHubTableColumns({ onModelClick: showModal }), [showModal]);
+  const modelColumns = useMemo(
+    () => getModelHubTableColumns({ onModelClick: showModal, showProviderLogos: isChat }),
+    [showModal, isChat],
+  );
   const agentColumns = useMemo(() => getAgentHubTableColumns({ onAgentClick: showAgentModal }), [showAgentModal]);
+  const filteredAgentData = useMemo(
+    () => filterBySearchTerm(agentHubData ?? [], agentSearchTerm, (agent) => [agent.name, agent.description]),
+    [agentHubData, agentSearchTerm],
+  );
   const mcpColumns = useMemo(() => getMCPHubTableColumns({ onServerClick: showMcpModal }), [showMcpModal]);
 
   // If this is a public page, use the dedicated PublicModelHub component
@@ -393,37 +450,39 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   }
 
   return (
-    <div className="mx-4 h-[75vh]">
+    <div data-slot="model-hub" className={isChat ? "chat-model-hub-catalog" : "mx-4"}>
       {publicPage == false ? (
-        <div className="w-full m-2 mt-2 p-8">
+        <div className={isChat ? "chat-model-hub-content" : "w-full m-2 mt-2 p-8"}>
           {/* Header with Title, Description and URL */}
-          <div className="flex justify-between items-center mb-6">
-            <div className="flex flex-col items-start">
-              <h2 className="text-center text-xl font-semibold">AI Hub</h2>
-              {isAdminRole(userRole || "") ? (
-                <p className="text-sm text-muted-foreground">
-                  Make models, agents, and MCP servers public for developers to know what&apos;s available.
-                </p>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  A list of all public model names personally available to you.
-                </p>
-              )}
-            </div>
-            <div className="flex items-center space-x-4">
-              <p>Model Hub URL:</p>
-              <div className="flex items-center bg-border px-2 py-1 rounded-sm">
-                <p className="mr-2">{`${getProxyBaseUrl()}/ui/model_hub_table`}</p>
-                <button
-                  onClick={() => void copyToClipboard(`${getProxyBaseUrl()}/ui/model_hub_table`)}
-                  className="p-1 hover:bg-accent rounded-sm transition-colors"
-                  title="Copy URL"
-                >
-                  <Copy size={16} className="text-muted-foreground" />
-                </button>
+          {!isChat && (
+            <div className="flex justify-between items-center mb-6">
+              <div className="flex flex-col items-start">
+                <h2 className="text-center text-xl font-semibold">AI Hub</h2>
+                {isAdminRole(userRole || "") ? (
+                  <p className="text-sm text-muted-foreground">
+                    Make models, agents, and MCP servers public for developers to know what&apos;s available.
+                  </p>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    A list of all public model names personally available to you.
+                  </p>
+                )}
+              </div>
+              <div className="flex items-center space-x-4">
+                <p>Model Hub URL:</p>
+                <div className="flex items-center bg-border px-2 py-1 rounded-sm">
+                  <p className="mr-2">{getUiPageUrl(`${getProxyBaseUrl()}/ui/model_hub_table`)}</p>
+                  <button
+                    onClick={() => void copyToClipboard(getUiPageUrl(`${getProxyBaseUrl()}/ui/model_hub_table`))}
+                    className="p-1 hover:bg-accent rounded-sm transition-colors"
+                    title="Copy URL"
+                  >
+                    <Copy size={16} className="text-muted-foreground" />
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
+          )}
 
           {/* Useful Links Management Section for Admins */}
           {canModify && (
@@ -434,26 +493,36 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
 
           {/* Tab System for Model Hub, Agent Hub, MCP Hub, and Plugin Marketplace */}
           <Tabs defaultValue="models">
-            <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
-              <TabsTrigger value="models" className="flex-none rounded-none px-4 py-2">
-                Model Hub
-              </TabsTrigger>
-              <TabsTrigger value="agents" className="flex-none rounded-none px-4 py-2">
-                Agent Hub
-              </TabsTrigger>
-              <TabsTrigger value="mcp" className="flex-none rounded-none px-4 py-2">
-                MCP Hub
-              </TabsTrigger>
-              <TabsTrigger value="skills" className="flex-none rounded-none px-4 py-2">
-                Skill Hub
-              </TabsTrigger>
-            </TabsList>
+            {!isChat && (
+              <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
+                <TabsTrigger value="models" className="flex-none rounded-none px-4 py-2">
+                  Model Hub
+                </TabsTrigger>
+                <TabsTrigger value="agents" className="flex-none rounded-none px-4 py-2">
+                  Agent Hub
+                </TabsTrigger>
+                <TabsTrigger value="mcp" className="flex-none rounded-none px-4 py-2">
+                  MCP Hub
+                </TabsTrigger>
+                <TabsTrigger value="skills" className="flex-none rounded-none px-4 py-2">
+                  Skill Hub
+                </TabsTrigger>
+              </TabsList>
+            )}
 
             <div>
               {/* Model Hub Tab */}
               <TabsContent value="models" keepMounted>
                 {/* Model Filters and Table */}
-                <Card className="px-6">
+                <Card className={isChat ? "chat-model-hub-card" : "px-6"}>
+                  {isChat && (
+                    <div className="chat-model-section-heading">
+                      <h2>Models</h2>
+                      <span className="chat-model-section-count" aria-label={`${filteredData.length} models`}>
+                        {filteredData.length}
+                      </span>
+                    </div>
+                  )}
                   {/* Header with Make Public Button */}
                   {publicPage == false && canModify && (
                     <div className="flex justify-end mb-4">
@@ -462,11 +531,22 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   )}
 
                   {/* Filters */}
-                  <ModelFilters modelHubData={modelHubData || []} onFilteredDataChange={handleFilteredDataChange} />
+                  <ModelFilters
+                    variant={variant}
+                    modelHubData={modelHubData || []}
+                    className={isChat ? "chat-model-hub-filters" : undefined}
+                    showFiltersCard={!isChat}
+                    onFilteredDataChange={handleFilteredDataChange}
+                    extraModes={isDashboardCatalog ? [DECISIONS_MODE] : []}
+                    onModeChange={setSelectedMode}
+                    selectedProvider={isChat ? selectedProvider : undefined}
+                    onProviderChange={isChat ? setSelectedProvider : undefined}
+                  />
 
                   {/* Model Table */}
                   <DataTable
                     data={filteredData}
+                    paginationMode="client"
                     columns={modelColumns}
                     getRowId={(model, index) => model.model_group || String(index)}
                     sortingMode="client"
@@ -475,24 +555,21 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                     isLoading={loading}
                     loadingMessage="Loading models…"
                     noDataMessage={
-                      <HubEmptyState
-                        title={modelHubData?.length ? "No matching models" : "No models yet"}
-                        body={
-                          modelHubData?.length
-                            ? "Adjust the filters to see more models."
-                            : "Models added to this proxy will appear here."
-                        }
-                      />
+                      <HubEmptyState {...modelTableEmptyState(modelHubData ?? [], showDecisionGarden, selectedMode)} />
                     }
                     size="compact"
                   />
                 </Card>
 
-                <div className="mt-4 text-center space-y-2">
-                  <p className="text-sm text-muted-foreground">
-                    Showing {filteredData.length} of {modelHubData?.length || 0} models
-                  </p>
-                </div>
+                {!isChat && (
+                  <div className="mt-4 text-center space-y-2">
+                    <p className="text-sm text-muted-foreground">
+                      Showing {filteredData.length} of {modelHubData?.length || 0} models
+                    </p>
+                  </div>
+                )}
+
+                {showDecisionGarden && <DecisionModelGarden accessToken={accessToken} canAddModels={canAddModels} />}
               </TabsContent>
 
               {/* Agent Hub Tab */}
@@ -505,9 +582,35 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                     </div>
                   )}
 
+                  <div className="mb-4">
+                    <p className="text-sm font-medium mb-2">Search Agents:</p>
+                    <InputGroup className="max-w-sm">
+                      <InputGroupAddon>
+                        <SearchIcon className="size-4 text-muted-foreground" />
+                      </InputGroupAddon>
+                      <InputGroupInput
+                        placeholder="Search agent names or descriptions..."
+                        value={agentSearchTerm}
+                        onChange={(e) => setAgentSearchTerm(e.target.value)}
+                      />
+                      {agentSearchTerm && (
+                        <InputGroupAddon align="inline-end">
+                          <InputGroupButton
+                            size="icon-xs"
+                            aria-label="Clear search"
+                            onClick={() => setAgentSearchTerm("")}
+                          >
+                            <X />
+                          </InputGroupButton>
+                        </InputGroupAddon>
+                      )}
+                    </InputGroup>
+                  </div>
+
                   {/* Agent Table */}
                   <DataTable
-                    data={agentHubData || []}
+                    data={filteredAgentData}
+                    paginationMode="client"
                     columns={agentColumns}
                     getRowId={(agent, index) => agent.agent_id || agent.name || String(index)}
                     sortingMode="client"
@@ -516,7 +619,14 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                     isLoading={agentLoading}
                     loadingMessage="Loading agents…"
                     noDataMessage={
-                      <HubEmptyState title="No agents yet" body="Agents added to this proxy will appear here." />
+                      <HubEmptyState
+                        title={agentHubData?.length ? "No matching agents" : "No agents yet"}
+                        body={
+                          agentHubData?.length
+                            ? "Adjust the search to see more agents."
+                            : "Agents added to this proxy will appear here."
+                        }
+                      />
                     }
                     size="compact"
                   />
@@ -524,7 +634,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
 
                 <div className="mt-4 text-center space-y-2">
                   <p className="text-sm text-muted-foreground">
-                    Showing {agentHubData?.length || 0} agent{agentHubData?.length !== 1 ? "s" : ""}
+                    Showing {filteredAgentData.length} of {agentHubData?.length || 0} agents
                   </p>
                 </div>
               </TabsContent>
@@ -535,13 +645,19 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   {/* Header with Make Public Button */}
                   {publicPage == false && canModify && (
                     <div className="flex justify-end mb-4">
-                      <Button onClick={() => handleMakeMcpPublicPage()}>Select MCP Servers to Make Public</Button>
+                      <Button
+                        onClick={() => handleMakeMcpPublicPage()}
+                        disabled={isMCPHubVisibilityDisabled(mcpLoading, mcpHubData)}
+                      >
+                        Manage MCP Hub Visibility
+                      </Button>
                     </div>
                   )}
 
                   {/* MCP Server Table */}
                   <DataTable
                     data={mcpHubData || []}
+                    paginationMode="client"
                     columns={mcpColumns}
                     getRowId={(server, index) => server.server_id || String(index)}
                     sortingMode="client"
@@ -597,29 +713,11 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
         </Card>
       )}
 
-      {/* Public Page Modal */}
-      <Dialog open={isPublicPageModalVisible} onOpenChange={(open) => !open && handleCancel()}>
-        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[600px]">
-          <DialogHeader>
-            <DialogTitle>{"Public Model Hub"}</DialogTitle>
-          </DialogHeader>
-          <div className="pt-5 pb-5">
-            <div className="flex justify-between mb-4">
-              <p className="text-base mr-2">Shareable Link:</p>
-              <p className="max-w-sm ml-2 bg-border pr-2 pl-2 pt-1 pb-1 text-center rounded-sm">
-                {`${getProxyBaseUrl()}/ui/model_hub_table`}
-              </p>
-            </div>
-            <div className="flex justify-end">
-              <Button onClick={goToPublicModelPage}>See Page</Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
       {/* Model Details Modal */}
       <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleCancel()}>
-        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]">
+        <DialogContent
+          className={`${isChat ? "chat-theme chat-model-hub-dialog " : ""}max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]`}
+        >
           <DialogHeader>
             <DialogTitle>{selectedModel?.model_group || "Model Details"}</DialogTitle>
           </DialogHeader>
@@ -635,7 +733,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   </div>
                   <div>
                     <p className="font-medium">Mode:</p>
-                    <p>{selectedModel.mode || "Not specified"}</p>
+                    <p>{displayMode(selectedModel.mode) ?? "Not specified"}</p>
                   </div>
                   <div>
                     <p className="font-medium">Providers:</p>
@@ -647,6 +745,16 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                       ))}
                     </div>
                   </div>
+                  {selectedModel.description && (
+                    <div className="col-span-2">
+                      <p className="font-medium">Description:</p>
+                      <p className="mt-1">{selectedModel.description}</p>
+                    </div>
+                  )}
+                  <ModelCustomMetadata
+                    customTags={selectedModel.custom_tags}
+                    customMetadata={selectedModel.custom_metadata}
+                  />
                 </div>
               </div>
 
@@ -737,28 +845,32 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                 </div>
               )}
 
-              {/* Usage Example */}
               <div>
                 <p className="text-lg font-semibold mb-4">Usage Example</p>
+                {isDecisionMode(selectedModel.mode) && (
+                  <p className="mb-2 text-sm text-muted-foreground">
+                    Decision models answer on <code>/v1/decisions</code> and <code>/v1/systemone</code>, not{" "}
+                    <code>/chat/completions</code>.{" "}
+                    <a href={DECISIONS_DOCS_URL} target="_blank" rel="noopener noreferrer" className="underline">
+                      How to call decision models
+                    </a>
+                    {canOpenPlayground && (
+                      <>
+                        {" · "}
+                        <a href={uiHref(SYSTEM_ONE_PLAYGROUND_ROUTE)} className="underline">
+                          Try it in the Playground
+                        </a>
+                      </>
+                    )}
+                  </p>
+                )}
                 <SyntaxHighlighter language="python" className="text-sm" style={syntaxTheme}>
-                  {`import openai
-
-client = openai.OpenAI(
-    api_key="your_api_key",
-    base_url="${getProxyBaseUrl()}"  # Your LiteLLM Proxy URL
-)
-
-response = client.chat.completions.create(
-    model="${selectedModel.model_group}",
-    messages=[
-        {
-            "role": "user",
-            "content": "Hello, how are you?"
-        }
-    ]
-)
-
-print(response.choices[0].message.content)`}
+                  {modelUsageExample(
+                    selectedModel.mode,
+                    getGatewayBaseUrl(),
+                    selectedModel.model_group,
+                    getGlobalLitellmHeaderName(),
+                  )}
                 </SyntaxHighlighter>
               </div>
             </div>
@@ -1071,7 +1183,7 @@ config = {
         "${selectedMcpServer.server_name}": {
             "url": "${getProxyBaseUrl()}/${selectedMcpServer.server_name}/mcp",
             "headers": {
-                "x-litellm-api-key": "Bearer sk-1234"
+                "x-litellm-api-key": "Bearer <your-master-key>"
             }
         }
     }

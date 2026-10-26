@@ -3,16 +3,22 @@ Transformation logic for Hosted VLLM rerank
 """
 
 from collections.abc import Mapping
-from typing import Any, Final
+from types import MappingProxyType
+from typing import Final
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._uuid import uuid
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
+from litellm.llms.openai.common_utils import decoded_json_object
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.rerank import (
+    HostedVLLMRerankTruncationParams,
     OptionalRerankParams,
     RerankBilledUnits,
     RerankRequest,
@@ -23,6 +29,8 @@ from litellm.types.rerank import (
     RerankTokens,
 )
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
 
 class HostedVLLMRerankError(BaseLLMException):
     def __init__(
@@ -32,6 +40,13 @@ class HostedVLLMRerankError(BaseLLMException):
         headers: dict | httpx.Headers | None = None,
     ):
         super().__init__(status_code=status_code, message=message, headers=headers)
+
+
+def validated_truncation_params(non_default_params: Mapping[str, object] | None) -> HostedVLLMRerankTruncationParams:
+    try:
+        return HostedVLLMRerankTruncationParams.model_validate(non_default_params or MappingProxyType({}))
+    except ValidationError as error:
+        raise UnsupportedParamsError(status_code=400, message=f"hosted_vllm rerank: {error}") from error
 
 
 class HostedVLLMRerankConfig(BaseRerankConfig):
@@ -51,7 +66,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
             if api_base.endswith("/v1/rerank"):
                 api_base = api_base.replace("/v1/rerank", "/rerank")
             elif not api_base.endswith("/rerank"):
-                api_base = f"{api_base}/rerank"
+                api_base = join_api_base(api_base, "rerank")
             return api_base
         raise ValueError("api_base must be provided for Hosted VLLM rerank")
 
@@ -62,7 +77,11 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
             "top_n",
             "rank_fields",
             "return_documents",
+            "max_tokens_per_doc",
             "instruction",
+            "truncate_prompt_tokens",
+            "truncation_side",
+            "max_tokens_per_query",
         ]
 
     def map_cohere_rerank_params(
@@ -71,7 +90,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: list[str | dict[str, object]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,
@@ -100,7 +119,15 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         if instruction is not None:
             mapped_params["instruction"] = instruction
 
-        return dict(mapped_params)
+        truncation: Final = validated_truncation_params(non_default_params)
+        forwarded: Final[OptionalRerankParams] = {
+            **mapped_params,
+            "max_tokens_per_doc": max_tokens_per_doc,
+            "truncate_prompt_tokens": truncation.truncate_prompt_tokens,
+            "truncation_side": truncation.truncation_side,
+            "max_tokens_per_query": truncation.max_tokens_per_query,
+        }
+        return dict(forwarded)
 
     def validate_environment(
         self,
@@ -138,6 +165,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         if "documents" not in optional_rerank_params:
             raise ValueError("documents is required for Hosted VLLM rerank")
 
+        truncation: Final = HostedVLLMRerankTruncationParams.model_validate(optional_rerank_params)
         rerank_request: Final = RerankRequest(
             model=model,
             query=optional_rerank_params["query"],
@@ -146,6 +174,10 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
             rank_fields=optional_rerank_params.get("rank_fields", None),
             return_documents=optional_rerank_params.get("return_documents", None),
             instruction=optional_rerank_params.get("instruction", None),
+            max_tokens_per_doc=truncation.max_tokens_per_doc,
+            truncate_prompt_tokens=truncation.truncate_prompt_tokens,
+            truncation_side=truncation.truncation_side,
+            max_tokens_per_query=truncation.max_tokens_per_query,
         )
         return rerank_request.model_dump(exclude_none=True)
 
@@ -164,11 +196,11 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         Process response from Hosted VLLM rerank API
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise ValueError(f"Error parsing response: {raw_response.text}, status_code={raw_response.status_code}")
 
-        return self._transform_response(raw_response_json)
+        return self._transform_response(dict(decoded_json_object(raw_response_json)))
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return HostedVLLMRerankError(message=error_message, status_code=status_code, headers=headers)

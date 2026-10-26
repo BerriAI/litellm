@@ -107,7 +107,7 @@ class FlowSpeechTextToSpeechConfig(BaseTextToSpeechConfig):
     DEFAULT_VOICE = "Kore"
 
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: base provider interface
-        return ["voice", "response_format"]  # mutable-ok: base provider interface
+        return ["voice", "response_format"]
 
     def map_openai_params(
         self,
@@ -131,7 +131,7 @@ class FlowSpeechTextToSpeechConfig(BaseTextToSpeechConfig):
             raise ValueError("Unsupported FlowSpeech option; use voice or segments")
         if "segments" in supplied and voice is not None:
             raise ValueError("Use segment voiceName fields instead of voice for multi-speaker input")
-        return self._resolve_voice(voice), {  # mutable-ok: base provider interface
+        return self._resolve_voice(voice), {
             key: supplied[key] for key in ("segments", "request_id") if key in supplied
         }
 
@@ -156,8 +156,8 @@ class FlowSpeechTextToSpeechConfig(BaseTextToSpeechConfig):
             raise ValueError("FlowSpeech API key is required and must be a nonempty token. Set FLOWSPEECH_API_KEY.")
         if any(name.lower() in ("cookie", "proxy-authorization", "host", "content-length") for name in headers):
             raise ValueError("FlowSpeech does not accept cookie, proxy credential, host or content-length overrides")
-        return {  # mutable-ok: base provider interface
-            **{  # mutable-ok: headers are materialized once
+        return {
+            **{
                 name: value for name, value in headers.items() if name.lower() not in ("authorization", "content-type")
             },
             "Authorization": f"Bearer {key}",
@@ -186,13 +186,13 @@ class FlowSpeechTextToSpeechConfig(BaseTextToSpeechConfig):
                 not part.speaker.strip() or not part.text.strip() or not part.voiceName.strip() for part in segments
             ):
                 raise ValueError("FlowSpeech requires 1 to 1000 nonempty speaker turns")
-            return {  # mutable-ok: JSON body required by base interface
+            return {
                 "mode": "multi",
-                "segments": [part.model_dump() for part in segments],  # mutable-ok: JSON speaker array
+                "segments": [part.model_dump() for part in segments],
             }
         if not input.strip():
             raise ValueError("FlowSpeech input must contain text")
-        return {  # mutable-ok: JSON body required by base interface
+        return {
             "mode": "single",
             "text": input,
             "voiceName": self._resolve_voice(voice),
@@ -216,8 +216,8 @@ class FlowSpeechTextToSpeechConfig(BaseTextToSpeechConfig):
         if header_id is not None and validate_uuid(header_id) != request_id:
             raise ValueError("FlowSpeech request_id and Idempotency-Key must agree")
         return TextToSpeechRequestData(
-            dict_body={"input": body},  # mutable-ok: base request interface
-            headers={"Idempotency-Key": request_id},  # mutable-ok: base request interface
+            dict_body={"input": body},
+            headers={"Idempotency-Key": request_id},
         )
 
     def transform_text_to_speech_response(
