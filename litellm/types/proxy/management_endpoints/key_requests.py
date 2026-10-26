@@ -55,6 +55,8 @@ class LiteLLMKeyType(str, enum.Enum):
 
 
 class GenerateKeyRequest(KeyRequestBase):
+    tpm_limit: int | None = Field(default=None, ge=0)
+    rpm_limit: int | None = Field(default=None, ge=0)
     soft_budget: float | None = None
     send_invite_email: bool | None = None
     key_type: LiteLLMKeyType | None = Field(
@@ -82,6 +84,8 @@ def _is_mapping(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: 
 
 
 class UpdateKeyRequest(KeyRequestBase):
+    tpm_limit: int | None = Field(default=None, ge=0)
+    rpm_limit: int | None = Field(default=None, ge=0)
     # Note: the defaults of all Params here MUST BE NONE
     # else they will get overwritten
     duration: str | None = None
