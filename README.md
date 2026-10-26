@@ -1,25 +1,45 @@
-# Auto Router setup QA
+# Auto Router custom-model setup
 
-Real dashboard and proxy with an isolated local database and synthetic deployment records. No upstream inference requests were made.
+PR [#48451](https://github.com/BerriAI/litellm/pull/48451), source `daf79031e6dfc6ead6527db2059e8e3c61de8191`
 
-Before is main `b7a2226f438`. After is `6585496b7c5`. Comparison captures use the same URL, viewport, and solver fixtures. The after capture also has the newly saved router, so the generated name advances to `auto-router-2`. Red outlines mark the form for comparison only.
+Captured from the actual dashboard and proxy with disposable PostgreSQL storage. Two synthetic chat deployments, `custom-fast` and `custom-pro`, use the OpenAI adapter. No inference calls or real provider credentials were used
 
-| State | Evidence |
-| --- | --- |
-| Original setup | [Before](before-default.png) |
-| Goal-first setup | [After](after-default.png) |
-| Unannotated default | [Default](after-review.png) |
-| Only openai/* enabled | [Concrete Luna + Astra recommendations](wildcard-openai.png) |
-| UI save and list refresh | [Created wildcard-backed router](wildcard-saved.png) |
+## Before and after
 
-[Saved wildcard configuration](wildcard-saved-config.json) was read back from the real API after UI creation: SIMPLE/MEDIUM use openai/gpt-6-luna; COMPLEX/REASONING use openai/gpt-6-astra; classifier_type is heuristic (v1).
+The comparison uses the same page, viewport, and two custom deployments. Red outlines are temporary capture annotations and are absent from the committed code
 
-[Deployment fixtures](fixtures.json) contain model identities only. For the wildcard case, all 12 explicit fixtures were temporarily blocked, leaving only openai/* enabled. Wildcard expansion may use the LiteLLM catalog; it does not verify upstream account entitlements.
+Base `b7a2226f438499509730c9fe649beb026b7cb4fe` exposes classifier, frequency, and four tier controls
 
-## Validation
+![Base setup](custom-base.png)
 
-241 focused tests passed (133 resolver, 108 form integration), plus make check and the production build including TypeScript. Following a lint-only predicate extraction, the affected team-selection regression was rerun and passed. New alias and team-selection regressions failed before their fixes. Earlier review fixes cover Terra, equal-rank cross-family fallback, cached inventory after refetch errors, and Gemini/Grok recognition.
+Current tip `daf79031e6d` asks for only Everyday and Hard-task models when it cannot recommend a pair
 
-Catalog-driven coverage recognizes all 108 standard chat Opus entries, including all 19 Opus 5.5 variants. Latest selection compares numeric releases and prefers undated aliases within a release. Saved configurations remain explicit; there is no background model upgrade.
+![Current setup](custom-after.png)
 
-[Earlier edge-case gallery at 41cad716471](https://github.com/BerriAI/litellm/blob/46d1641c167a5a73e8a6d83f0c1b270299887bb8/README.md) covers Bedrock provider detection, cross-family fallback, one-model recovery, exhausted Heuristic v2 allowance, and narrow layouts. Those captures are historical, not recaptures of the final review fixes.
+The prior PR tip `ffb9cfd5d37` could not select unknown custom models in the simple flow. This supplemental capture had other blocked fixtures and an earlier saved router
+
+![Previous PR tip](custom-before.png)
+
+## Custom fallback
+
+![Empty fallback](custom-fallback-empty.png)
+
+![Deployed custom choices with provider labels](custom-options.png)
+
+![Selected pair](custom-fallback-selected.png)
+
+![Created router](custom-saved.png)
+
+## Verification
+
+1. Open `/models-and-endpoints?tab=auto-routers` and click Add Auto Router
+2. With only these two custom chat deployments, observe no goal or family decision
+3. Choose `custom-fast` for Everyday and `custom-pro` for Hard tasks. The other role excludes the already chosen model
+4. Click Add Auto Router and observe the saved router in the table
+5. Read `/v2/model/info`. The [sanitized saved configuration](custom-saved-config.json) confirms Heuristic v1, every-user-turn classification, SIMPLE/MEDIUM using custom-fast and COMPLEX/REASONING using custom-pro
+
+Advanced also received all four custom-model tier assignments and retained Every new user message in a live UI check before commit, with identical product source
+
+245 focused resolver/form tests pass. `make check` and production build pass. An initial test run hit a dropdown-animation race; the new case now uses the existing select helper and the final full focused run passes
+
+[Historical goal/family, provider, wildcard, and license screenshots](https://github.com/BerriAI/litellm/blob/e370ee816d4bee324136b9df68b1ad65662331ea/README.md) retain their original revision labels

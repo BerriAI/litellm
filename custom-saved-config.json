@@ -1,0 +1,29 @@
+{
+  "model_name": "auto-router",
+  "model": "auto_router/complexity_router",
+  "complexity_router_config": {
+    "tiers": {
+      "MEDIUM": [
+        "custom-fast"
+      ],
+      "SIMPLE": [
+        "custom-fast"
+      ],
+      "COMPLEX": [
+        "custom-pro"
+      ],
+      "REASONING": [
+        "custom-pro"
+      ]
+    },
+    "classifier_type": "heuristic",
+    "modality_routing": false,
+    "session_affinity": false,
+    "classification_mode": "user_turn",
+    "deployment_affinity": true,
+    "escalation_keywords": [
+      "LITELLM ESCALATE"
+    ],
+    "modality_pin_override": false
+  }
+}
