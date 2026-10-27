@@ -23244,10 +23244,14 @@ def test_spend_permission_enterprise_error_regression(
     assert CommonProxyErrors.not_premium_user.value in response.json()["error"]["message"].replace("\\n", "\n")
 
 
-@pytest.mark.parametrize("permissions", ({}, {"other": True}), ids=("empty", "unrelated"))
+@pytest.mark.parametrize(
+    "permissions",
+    ({}, {"other": True}, {"other": "get_spend_routes"}, {"get_spend_routes_extra": True}),
+    ids=("empty", "unrelated", "permission_in_value", "permission_in_other_key"),
+)
 def test_non_enterprise_permissions_guard(
     spend_permission_client: TestClient,
-    permissions: dict[str, bool],
+    permissions: dict[str, str | bool],
 ) -> None:
     response: Final = spend_permission_client.post("/key/generate", json={"permissions": permissions})
 
