@@ -3665,24 +3665,30 @@ class TestLangfuseDestinationFields:
         }
         assert not LANGFUSE_REQUEST_METADATA_ATTRIBUTES & received[None].keys()
 
+    @pytest.mark.parametrize("operator_keys", [False, True], ids=["no-operator-keys", "operator-keys"])
     @pytest.mark.parametrize(
         ("key_environment", "tracing_environment", "expected"),
         [
             ("prod", None, {"langfuse.environment": "prod"}),
             ("prod", "staging", {"langfuse.environment": "prod"}),
             (None, "staging", {"langfuse.environment": "staging"}),
+            (None, "Not Valid", {"langfuse.environment": "default"}),
             (None, None, {}),
         ],
-        ids=["key", "key-over-env", "env", "neither"],
+        ids=["key", "key-over-env", "env", "invalid-env", "neither"],
     )
-    def test_a_langfuse_destination_names_the_environment_the_legacy_logger_wrote(
+    def test_a_langfuse_destination_names_its_own_environment_else_the_proxys(
         self,
         monkeypatch: pytest.MonkeyPatch,
         key_environment: str | None,
         tracing_environment: str | None,
         expected: Mapping[str, str],
+        operator_keys: bool,
     ) -> None:
         credential_less_proxy(monkeypatch)
+        if operator_keys:
+            monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-operator")
+            monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-operator")
         if tracing_environment is None:
             monkeypatch.delenv("LANGFUSE_TRACING_ENVIRONMENT", raising=False)
         else:
@@ -3698,22 +3704,27 @@ class TestLangfuseDestinationFields:
         assert destination is not None
         assert dict(destination.resource_attributes) == expected
 
-    def test_a_langfuse_destination_on_a_proxy_with_langfuse_keys_names_no_environment(
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        ("tracing_environment", "expected"),
+        [("staging", "staging"), ("Not Valid", "default"), (None, None)],
+        ids=["env", "invalid-env", "unset"],
+    )
+    def test_the_langfuse_preset_names_the_proxys_environment_on_the_resource(
+        self, monkeypatch: pytest.MonkeyPatch, tracing_environment: str | None, expected: str | None
     ) -> None:
-        """With operator keys the older Langfuse logger never runs, so there is no environment of its to keep."""
         monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-operator")
         monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-operator")
+        if tracing_environment is None:
+            monkeypatch.delenv("LANGFUSE_TRACING_ENVIRONMENT", raising=False)
+        else:
+            monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", tracing_environment)
 
-        destination: Final = destination_for(
-            "langfuse_otel",
-            StandardCallbackDynamicParams(
-                langfuse_public_key="pk", langfuse_secret_key="sk", langfuse_environment="prod"
-            ),
+        config: Final = langfuse_preset(
+            config_overrides=OpenTelemetryV2Config(resource_attributes={"team": "platform"})
         )
 
-        assert destination is not None
-        assert dict(destination.resource_attributes) == {}
+        assert otel_providers.build_resource(config).attributes.get("langfuse.environment") == expected
+        assert config.resource_attributes["team"] == "platform"
 
     @pytest.mark.parametrize("operator_keys", [False, True], ids=["no-operator-keys", "operator-keys"])
     @pytest.mark.parametrize("configured", [None, "no_content", "span_only"])

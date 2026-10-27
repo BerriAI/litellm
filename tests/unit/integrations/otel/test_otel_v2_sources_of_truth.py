@@ -821,8 +821,8 @@ def test_responses_tool_calls_fold_into_the_assistant_message_with_tool_calls_fi
 
 
 def test_responses_claude_web_calls_lead_the_tool_calls_without_ending_the_turn_on_tool_calls():
-    claude_fetch: Final = (
-        build_web_search_call("srvtoolu_01", {"url": "https://example.com/"}, None, tool_name="web_fetch")
+    claude_fetch: Final = build_web_search_call(
+        "srvtoolu_01", {"url": "https://example.com/"}, None, tool_name="web_fetch"
     )
     openai_search: Final = {
         "type": "web_search_call",
@@ -1412,6 +1412,33 @@ def test_caller_trace_name_prefers_the_langfuse_header_over_body_metadata(reques
 def test_caller_trace_controls_carry_user_session_and_tags(request_data, expected):
     assert caller_trace_controls({"litellm_params": request_data}) == expected
     assert LLMCallEvent.from_dict({"litellm_params": request_data}).trace == expected
+
+
+@pytest.mark.parametrize(
+    ("request_data", "release", "version"),
+    [
+        ({"metadata": {"trace_release": "r-body", "trace_version": "v-body"}}, "r-body", "v-body"),
+        (
+            {
+                "proxy_server_request": {
+                    "headers": {"langfuse_trace_release": "r-header", "langfuse_trace_version": "v-header"}
+                },
+                "metadata": {"trace_release": "r-body", "trace_version": "v-body"},
+            },
+            "r-header",
+            "v-header",
+        ),
+        ({"litellm_metadata": {"trace_release": "r-anthropic", "version": "v-plain"}}, "r-anthropic", "v-plain"),
+        ({"metadata": {"trace_version": "v-trace", "version": "v-plain"}}, None, "v-trace"),
+        ({"proxy_server_request": {"headers": {"langfuse_version": "v-header-plain"}}}, None, "v-header-plain"),
+        ({"metadata": {"user_api_key_team_id": "t1"}}, None, None),
+    ],
+    ids=["body", "headers-beat-body", "anthropic-body", "trace-version-beats-version", "version-header", "neither"],
+)
+def test_caller_trace_controls_carry_release_and_version(request_data, release, version):
+    controls: Final = caller_trace_controls({"litellm_params": request_data})
+
+    assert (controls.release, controls.version) == (release, version)
 
 
 def test_llm_span_data_carries_the_caller_trace_controls():

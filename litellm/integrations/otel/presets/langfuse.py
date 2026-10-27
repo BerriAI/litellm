@@ -1,5 +1,6 @@
 """Langfuse-OTEL preset."""
 
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.integrations.langfuse.langfuse_otel import (
@@ -14,7 +15,16 @@ from litellm.integrations.otel.presets.utils import (
     credential_gated_exporters,
     ensure_mappers,
 )
+from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
 from litellm.types.utils import StandardCallbackDynamicParams
+
+
+def langfuse_environment_attributes() -> Mapping[str, str]:
+    """``langfuse.environment`` from ``LANGFUSE_TRACING_ENVIRONMENT``, which Langfuse reads off the resource."""
+    from litellm.integrations.langfuse.langfuse import LangFuseLogger
+
+    environment: Final = LangFuseLogger.resolve_deployment_environment()
+    return {LangfuseSpanAttributes.LANGFUSE_ENVIRONMENT.value: environment} if environment else {}
 
 
 def langfuse_preset(
@@ -48,6 +58,7 @@ def langfuse_preset(
                 ),
             ],
             "mapper_names": mappers,
+            "resource_attributes": {**base.resource_attributes, **langfuse_environment_attributes()},
         }
     )
 
