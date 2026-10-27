@@ -314,8 +314,10 @@ def test_gemini_rows_agree_on_supports_sampling_params_across_their_provider_twi
 
 
 BEDROCK_CLAUDE_ROW: Final = re.compile(
-    r"^(?:(?P<region>global|us|eu|apac|au|jp|us-gov)\.)?anthropic\.(?P<family>claude-[a-z0-9-]+?)(?:-v\d(?::\d+)?)?$"
+    r"^(?:(?P<region>global|us|eu|apac|au|jp|us-gov)\.)?(?P<vendor>anthropic\.)?(?P<family>claude-[a-z0-9-]+?)"
+    r"(?:-\d{8})?(?:-v\d+)?(?::\d+)?(?:@\d{8})?$"
 )
+BEDROCK_CLAUDE_PLATFORM_ROUTE: Final = "/claude_platform/"
 BEDROCK_GOVCLOUD_ROUTE_PREFIXES: Final = ("bedrock/us-gov-east-1/", "bedrock/us-gov-west-1/")
 BEDROCK_NATIVE_OUTPUT_FLAGS: Final = ("supports_native_structured_output", "supports_bedrock_native_structured_output")
 
@@ -328,7 +330,7 @@ class _BedrockClaudeRow(BaseModel):
 
 
 def _bedrock_claude_row(key: str, row: Mapping[str, JsonValue]) -> _BedrockClaudeRow | None:
-    if row.get("litellm_provider") not in ("bedrock", "bedrock_converse"):
+    if row.get("litellm_provider") not in ("bedrock", "bedrock_converse") or BEDROCK_CLAUDE_PLATFORM_ROUTE in key:
         return None
     match: Final = BEDROCK_CLAUDE_ROW.match(key.split("/")[-1])
     if match is None:
@@ -337,7 +339,9 @@ def _bedrock_claude_row(key: str, row: Mapping[str, JsonValue]) -> _BedrockClaud
     assert all(flag is None or isinstance(flag, bool) for flag in flags), key
     return _BedrockClaudeRow(
         family=match.group("family"),
-        govcloud=match.group("region") == "us-gov" or key.startswith(BEDROCK_GOVCLOUD_ROUTE_PREFIXES),
+        govcloud=match.group("region") == "us-gov"
+        or match.group("vendor") is None
+        or key.startswith(BEDROCK_GOVCLOUD_ROUTE_PREFIXES),
         native_output_flags=tuple(flag for flag in flags if flag is None or isinstance(flag, bool)),
     )
 
@@ -388,14 +392,15 @@ def test_bedrock_claude_rows_of_one_family_agree_on_native_structured_output_fla
 def test_bedrock_claude_fable_5_rows_do_not_advertise_native_structured_output(path: Path) -> None:
     """Bedrock Converse and Invoke reject outputConfig for claude-fable-5 with
     `output_config.format: Extra inputs are not permitted` (AWS Bedrock, verified live 2026-10-17 in #46870),
-    so every claude-fable-5 row routes json_schema through the json tool call instead"""
+    so every claude-fable-5 row routes json_schema through the json tool call instead, with or without thinking"""
     fable_5_rows: Final = {
-        key: row.native_output_flags[0]
+        key: row.native_output_flags
         for key, row in _bedrock_claude_rows(path).items()
         if row.family == "claude-fable-5"
     }
     assert len(fable_5_rows) >= 6, fable_5_rows
-    assert fable_5_rows == {key: False for key in fable_5_rows}
+    assert {key: flags[0] for key, flags in fable_5_rows.items()} == {key: False for key in fable_5_rows}
+    assert {key: flags for key, flags in fable_5_rows.items() if True in flags} == {}
 
 
 def test_bedrock_claude_backup_rows_match_the_main_catalog() -> None:
