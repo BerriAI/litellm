@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from typing import Final
@@ -10,36 +11,62 @@ guard: Final = importlib.util.module_from_spec(_SPEC)
 sys.modules["spend_logs_guard"] = guard
 _SPEC.loader.exec_module(guard)
 
+MIGRATION: Final = "litellm-proxy-extras/litellm_proxy_extras/migrations/20260101000000_x/migration.sql"
 
-def _diff(path: str, added: str, start: int = 10) -> str:
-    return f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -{start},0 +{start},1 @@\n+{added}\n"
+
+def _file(path: str, *lines: str, start: int = 10) -> dict[str, object]:
+    """An entry of `pulls/<n>/files`, with the lines as a hunk: a leading `-` removes, anything else adds."""
+    hunk: Final = "\n".join(line if line.startswith("-") else f"+{line}" for line in lines)
+    return {"filename": path, "changes": len(lines), "patch": f"@@ -{start},0 +{start},{len(lines)} @@\n{hunk}"}
+
+
+def _files(*entries: dict[str, object]) -> list[guard.ChangedFile]:
+    return guard._FILES.validate_json(json.dumps(entries))
 
 
 class TestSpendLogHits:
     def test_an_added_schema_line_naming_the_table_is_a_hit(self):
-        diff: Final = _diff(
-            "schema.prisma", '  @@index([api_key, startTime], map: "LiteLLM_SpendLogs_api_key_startTime_idx")', 740
-        )
-        assert guard.spend_log_hits(diff) == (
-            'schema.prisma: @@index([api_key, startTime], map: "LiteLLM_SpendLogs_api_key_startTime_idx")',
+        line: Final = '  @@index([api_key, startTime], map: "LiteLLM_SpendLogs_api_key_startTime_idx")'
+        assert guard.spend_log_hits(_files(_file("schema.prisma", line, start=740))) == (
+            f"schema.prisma: {line.strip()}",
         )
 
     def test_an_added_migration_line_is_a_hit_in_any_case(self):
-        path: Final = "litellm-proxy-extras/litellm_proxy_extras/migrations/20260101000000_x/migration.sql"
-        hits: Final = guard.spend_log_hits(_diff(path, 'CREATE INDEX "i" ON "litellm_spendlogs"("api_key");', 3))
-        assert hits == (f'{path}: CREATE INDEX "i" ON "litellm_spendlogs"("api_key");',)
+        files: Final = _files(_file(MIGRATION, 'CREATE INDEX "i" ON "litellm_spendlogs"("api_key");', start=3))
+        assert guard.spend_log_hits(files) == (f'{MIGRATION}: CREATE INDEX "i" ON "litellm_spendlogs"("api_key");',)
 
     def test_a_removed_line_or_another_table_or_an_unwatched_file_is_not_a_hit(self):
-        removed: Final = "--- a/schema.prisma\n+++ b/schema.prisma\n@@ -1,1 +1,0 @@\n-model LiteLLM_SpendLogs {\n"
-        other: Final = _diff("schema.prisma", "  team_id String  // LiteLLM_TeamTable, not MyLiteLLM_SpendLogs", 5)
-        elsewhere: Final = _diff("litellm/proxy/utils.py", 'table = "LiteLLM_SpendLogs"', 5)
-        assert guard.spend_log_hits(removed + other + elsewhere) == ()
-
-    def test_two_files_in_one_diff_are_attributed_to_their_own_path(self):
-        diff: Final = _diff("litellm/proxy/schema.prisma", "  a LiteLLM_SpendLogs", 1) + _diff(
-            "schema.prisma", "  b String", 1
+        files: Final = _files(
+            _file(
+                "schema.prisma",
+                "-model LiteLLM_SpendLogs {",
+                "  team_id String  // LiteLLM_TeamTable, MyLiteLLM_SpendLogs",
+            ),
+            _file("litellm/proxy/utils.py", 'table = "LiteLLM_SpendLogs"'),
+            {"filename": "docs/spend_logs.png", "changes": 0},
         )
-        assert guard.spend_log_hits(diff) == ("litellm/proxy/schema.prisma: a LiteLLM_SpendLogs",)
+        assert guard.spend_log_hits(files) == ()
+
+    def test_two_files_are_attributed_to_their_own_path(self):
+        files: Final = _files(
+            _file("litellm/proxy/schema.prisma", "  a LiteLLM_SpendLogs"), _file("schema.prisma", "  b")
+        )
+        assert guard.spend_log_hits(files) == ("litellm/proxy/schema.prisma: a LiteLLM_SpendLogs",)
+
+
+class TestUnreadable:
+    def test_a_watched_file_without_a_patch_is_unreadable_but_an_unwatched_or_unchanged_one_is_not(self):
+        files: Final = _files(
+            {"filename": MIGRATION, "changes": 900},
+            {"filename": "schema.prisma", "changes": 0},
+            {"filename": "ui/logo.png", "changes": 12},
+        )
+        assert guard.unreadable(files) == (MIGRATION,)
+
+    def test_a_file_list_at_the_api_cap_is_unreadable(self):
+        files: Final = _files(*(_file(f"litellm/f{i}.py", "x") for i in range(guard.FILES_API_CAP)))
+        assert guard.unreadable(files) == ("(file list truncated by the API)",)
+        assert guard.unreadable(files[:-1]) == ()
 
 
 class TestApprovedBy:
@@ -61,19 +88,26 @@ class TestApprovedBy:
         assert guard.approved_by((), "kerry-berri") is False
 
 
+def _run(tmp_path: Path, files: list[dict[str, object]], reviews: list[dict[str, object]]) -> int:
+    files_path: Final = tmp_path / "files.json"
+    reviews_path: Final = tmp_path / "reviews.json"
+    files_path.write_text(json.dumps(files))
+    reviews_path.write_text(json.dumps(reviews))
+    return guard.main(["--files", str(files_path), "--reviews", str(reviews_path), "--approver", "kerry-berri"])
+
+
 class TestExitCode:
-    def test_a_pull_request_without_spend_log_lines_passes_without_reviews(self, tmp_path, monkeypatch, capsys):
-        monkeypatch.setattr(guard, "added_diff", lambda base, head: _diff("schema.prisma", "  foo String", 1))
-        reviews: Final = tmp_path / "r.json"
-        reviews.write_text("[]")
-        assert guard.main(["--base", "a", "--head", "b", "--approver", "kerry-berri", "--reviews", str(reviews)]) == 0
+    def test_a_pull_request_without_spend_log_lines_passes_without_reviews(self, tmp_path, capsys):
+        assert _run(tmp_path, [_file("schema.prisma", "  foo String")], []) == 0
         assert "nothing to review" in capsys.readouterr().out
 
-    def test_a_spend_log_change_fails_until_the_approver_approves(self, tmp_path, monkeypatch, capsys):
-        monkeypatch.setattr(guard, "added_diff", lambda base, head: _diff("schema.prisma", "  x LiteLLM_SpendLogs", 7))
-        reviews: Final = tmp_path / "r.json"
-        reviews.write_text('[{"user": {"login": "someone-else"}, "state": "APPROVED"}]')
-        assert guard.main(["--base", "a", "--head", "b", "--approver", "kerry-berri", "--reviews", str(reviews)]) == 1
+    def test_a_spend_log_change_fails_until_the_approver_approves(self, tmp_path, capsys):
+        files: Final = [_file("schema.prisma", "  x LiteLLM_SpendLogs", start=7)]
+        assert _run(tmp_path, files, [{"user": {"login": "someone-else"}, "state": "APPROVED"}]) == 1
         assert "schema.prisma: x LiteLLM_SpendLogs" in capsys.readouterr().out
-        reviews.write_text('[{"user": {"login": "kerry-berri"}, "state": "APPROVED"}]')
-        assert guard.main(["--base", "a", "--head", "b", "--approver", "kerry-berri", "--reviews", str(reviews)]) == 0
+        assert _run(tmp_path, files, [{"user": {"login": "kerry-berri"}, "state": "APPROVED"}]) == 0
+
+    def test_a_withheld_patch_on_a_watched_file_fails_even_with_approval(self, tmp_path, capsys):
+        files: Final = [{"filename": MIGRATION, "changes": 2500}]
+        assert _run(tmp_path, files, [{"user": {"login": "kerry-berri"}, "state": "APPROVED"}]) == 1
+        assert MIGRATION in capsys.readouterr().out
