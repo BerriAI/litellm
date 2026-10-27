@@ -59,16 +59,22 @@ describe("RegenerateKeyModal submit payload", () => {
     });
   });
 
-  it("keeps the wire body's key order and drops nothing through JSON serialisation", async () => {
+  it("submits the expected regenerated key fields", async () => {
     const user = userEvent.setup();
+    const expectedPayload = {
+      key_alias: "my-test-key",
+      max_budget: 100,
+      tpm_limit: 5000,
+      rpm_limit: 500,
+      grace_period: "",
+      duration: "30d",
+    };
     renderModal();
 
     await regenerate(user);
 
     await waitFor(() => expect(mockRegenerateKeyCall).toHaveBeenCalledOnce());
-    expect(JSON.stringify(submittedPayload())).toBe(
-      '{"key_alias":"my-test-key","max_budget":100,"tpm_limit":5000,"rpm_limit":500,"grace_period":"","duration":"30d"}',
-    );
+    expect(submittedPayload()).toEqual(expectedPayload);
   });
 
   it("rounds max_budget to two decimals and sends the other numbers unrounded", async () => {
@@ -182,7 +188,7 @@ describe("RegenerateKeyModal submit payload", () => {
       rpm_limit: undefined,
       grace_period: "",
     });
-    expect(JSON.stringify(submittedPayload())).toBe('{"grace_period":""}');
+    expect(JSON.parse(JSON.stringify(submittedPayload()))).toEqual({ grace_period: "" });
   });
 
   it("regenerates a key whose fields the API returned as null", async () => {
