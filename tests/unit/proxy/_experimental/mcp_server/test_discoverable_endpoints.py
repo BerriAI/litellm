@@ -5599,12 +5599,13 @@ def _bridge_server(**overrides):
     return MCPServer(**fields)
 
 
-def _bridge_mock_request():
+def _bridge_mock_request(cookie: str | None = None) -> MagicMock:
     from fastapi import Request
 
-    mock_request = MagicMock(spec=Request)
+    mock_request: Final = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
+    mock_request.cookies = {"token": cookie} if cookie else {}
     return mock_request
 
 
@@ -6524,7 +6525,7 @@ async def test_interactive_bridge_gateway_code_for_another_server_is_rejected_40
 
 
 @pytest.mark.asyncio
-async def test_interactive_bridge_authorize_seals_sso_user_into_state():
+async def test_interactive_bridge_authorize_seals_sso_user_into_state(monkeypatch: pytest.MonkeyPatch) -> None:
     """On the short-circuit bridge oauth_delegate arm, authorize captures the SSO user from the UI
     session cookie and seals it (and the target server) into the encrypted OAuth state, so the
     callback can later mint a user-bound gateway code; it still proceeds to the upstream redirect.
@@ -6540,16 +6541,13 @@ async def test_interactive_bridge_authorize_seals_sso_user_into_state():
     admitted = UserAPIKeyAuth(user_id="sso-user-42")
     admitted.mcp_admitted_user_subject = True
     captured: dict = {}
+    cookie: Final = _browser_session_cookie(monkeypatch, "sso-user-42")
 
     def _capture(**kwargs):
         captured.update(kwargs)
         return "mocked_encrypted_state"
 
     with (
-        patch(
-            "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints.user_id_from_session_cookie",
-            return_value="sso-user-42",
-        ),
         patch(
             "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
             new=AsyncMock(return_value=admitted),
@@ -6565,7 +6563,7 @@ async def test_interactive_bridge_authorize_seals_sso_user_into_state():
         ),
     ):
         response = await authorize_with_server(
-            request=_bridge_mock_request(),
+            request=_bridge_mock_request(cookie),
             mcp_server=server,
             client_id="ignored",
             redirect_uri="http://127.0.0.1:60108/callback",
@@ -6581,7 +6579,9 @@ async def test_interactive_bridge_authorize_seals_sso_user_into_state():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("user_can_reach_server", [True, False])
-async def test_bridge_authorize_gates_on_the_egress_server_access_resolver(user_can_reach_server):
+async def test_bridge_authorize_gates_on_the_egress_server_access_resolver(
+    monkeypatch: pytest.MonkeyPatch, user_can_reach_server: bool
+) -> None:
     """The interactive dcr_bridge oauth_delegate authorize admits the signed-in user the way MCP
     egress will and refuses with an RFC 6749 access_denied redirect when that admitted subject
     cannot reach the target server, instead of minting an envelope whose every tool request would
@@ -6607,14 +6607,11 @@ async def test_bridge_authorize_gates_on_the_egress_server_access_resolver(user_
     mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
+    mock_request.cookies = {"token": _browser_session_cookie(monkeypatch, "bridge-user-1")}
 
     client_redirect = "http://127.0.0.1:60108/callback"
     try:
         with (
-            patch(
-                "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints.user_id_from_session_cookie",
-                return_value="bridge-user-1",
-            ),
             patch(
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
                 new=AsyncMock(return_value=admitted),
@@ -6660,7 +6657,9 @@ async def test_bridge_authorize_gates_on_the_egress_server_access_resolver(user_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reload_status,expect_denial", [(401, True), (500, False), (503, False)])
-async def test_bridge_authorize_reload_failure_denies_or_stays_retryable(reload_status, expect_denial):
+async def test_bridge_authorize_reload_failure_denies_or_stays_retryable(
+    monkeypatch: pytest.MonkeyPatch, reload_status: int, expect_denial: bool
+) -> None:
     """An unknown or deactivated signed-in user denies like a missing grant (fail closed); a DB
     outage keeps its retryable 503 instead of masquerading as an access denial."""
     from urllib.parse import parse_qs, urlparse
@@ -6679,13 +6678,10 @@ async def test_bridge_authorize_reload_failure_denies_or_stays_retryable(reload_
     mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
+    mock_request.cookies = {"token": _browser_session_cookie(monkeypatch, "bridge-user-1")}
 
     try:
         with (
-            patch(
-                "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints.user_id_from_session_cookie",
-                return_value="bridge-user-1",
-            ),
             patch(
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
                 new=AsyncMock(side_effect=HTTPException(status_code=reload_status, detail="x")),
@@ -6728,19 +6724,15 @@ async def test_interactive_bridge_authorize_without_session_redirects_to_login()
     from litellm.types.mcp import MCPAuth
 
     server = _bridge_server(auth_type=MCPAuth.oauth_delegate, client_id="admin-client", registration_url=None)
-    with patch(
-        "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints.user_id_from_session_cookie",
-        return_value=None,
-    ):
-        response = await authorize_with_server(
-            request=_bridge_mock_request(),
-            mcp_server=server,
-            client_id="ignored",
-            redirect_uri="http://127.0.0.1:60108/callback",
-            state="s",
-            code_challenge="chal",
-            code_challenge_method="S256",
-        )
+    response = await authorize_with_server(
+        request=_bridge_mock_request(),
+        mcp_server=server,
+        client_id="ignored",
+        redirect_uri="http://127.0.0.1:60108/callback",
+        state="s",
+        code_challenge="chal",
+        code_challenge_method="S256",
+    )
     assert "/sso/key/generate" in response.headers["location"]
 
 
@@ -11997,10 +11989,97 @@ def _s256(verifier: str) -> str:
 _NATIVE_CLIENT_MASTER_KEY = "sk-test-salt-for-LIT-5874"
 
 
+def _browser_session_cookie(
+    monkeypatch: pytest.MonkeyPatch,
+    user_id: str,
+    *,
+    signing_key: str = _NATIVE_CLIENT_MASTER_KEY,
+    session_key: str | None = None,
+    expired_session: bool = False,
+    expired_cookie: bool = False,
+) -> str:
+    import jwt
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import LITELLM_SESSION_TOKEN_PREFIX
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_bearer_token
+
+    monkeypatch.setattr(proxy_server, "master_key", signing_key)
+    if proxy_server.prisma_client is None:
+        monkeypatch.setattr(proxy_server, "prisma_client", object())
+    monkeypatch.setattr(proxy_server, "general_settings", {**proxy_server.general_settings, "supported_db_objects": []})
+    session: Final = UserAPIKeyAuth(
+        user_id=user_id,
+        expires=datetime(2000 if expired_session else 2099, 1, 1, tzinfo=timezone.utc),
+    )
+    key: Final = (
+        encrypt_bearer_token(session.model_dump_json(exclude_none=True), LITELLM_SESSION_TOKEN_PREFIX)
+        if session_key is None
+        else session_key
+    )
+    return jwt.encode(
+        {"user_id": user_id, "key": key, "login_method": "sso", "exp": 946684800 if expired_cookie else 9999999999},
+        signing_key,
+        algorithm="HS256",
+    )
+
+
+class _BrowserSessionDatabase:
+    def __init__(self) -> None:
+        from litellm.proxy._types import UserAPIKeyAuth, hash_token
+
+        self.row: UserAPIKeyAuth | None = UserAPIKeyAuth(
+            token=hash_token("sk-browser-session"),
+            user_id="u1",
+            expires=datetime(2099, 1, 1, tzinfo=timezone.utc),
+        )
+        self.litellm_deprecatedverificationtoken = self
+
+    def __call__(self, **kwargs: object) -> "_BrowserSessionDatabase":
+        return self
+
+    async def query_first(self, query: str, *args: object) -> dict[str, object] | None:
+        if self.row is None:
+            return None
+        return {
+            **self.row.model_dump(exclude={"last_refreshed_at"}),
+            "team_models": None,
+            "team_blocked": None,
+            "team_members_with_roles": None,
+        }
+
+    async def find_first(self, **kwargs: object) -> None:
+        return None
+
+
+@pytest.fixture
+def browser_session_database(monkeypatch: pytest.MonkeyPatch) -> _BrowserSessionDatabase:
+    import prisma
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import hash_token
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import PrismaClient
+
+    database: Final = _BrowserSessionDatabase()
+    monkeypatch.setattr(prisma, "Prisma", database)
+    for name in ("DATABASE_URL_READ_REPLICA", "IAM_TOKEN_DB_AUTH", "AZURE_POSTGRESQL_AUTH"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(
+        proxy_server,
+        "prisma_client",
+        PrismaClient("postgresql://local-test@localhost/browser-session", proxy_server.proxy_logging_obj),
+    )
+    cache: Final = UserApiKeyCache()
+    cache.set_cache(hash_token("sk-browser-session"), database.row)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    return database
+
+
 def _native_client_app(monkeypatch):
     """The unauthenticated discoverable router served over TestClient with a signed UI session
     cookie available, plus fakes for the two database-backed hooks the native-client flow calls."""
-    import jwt
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -12029,12 +12108,106 @@ def _native_client_app(monkeypatch):
     app = FastAPI()
     app.include_router(router)
     client = TestClient(app)
-    session_cookie = jwt.encode(
-        {"user_id": "u1", "login_method": "username_password", "exp": int(time.time()) + 600},
-        _NATIVE_CLIENT_MASTER_KEY,
-        algorithm="HS256",
-    )
+    session_cookie: Final = _browser_session_cookie(monkeypatch, "u1")
     return client, session_cookie, minted
+
+
+@pytest.mark.parametrize(
+    "authorize_path,resource",
+    [("/authorize", None), ("/authorize/mcp-session", None), ("/authorize", "http://testserver")],
+)
+@pytest.mark.parametrize(
+    "session_state", ["valid", "revoked", "blocked", "expired", "wrong_owner", "missing_key", "no_database"]
+)
+def test_gateway_authorize_requires_live_browser_session(
+    monkeypatch: pytest.MonkeyPatch,
+    browser_session_database: _BrowserSessionDatabase,
+    authorize_path: str,
+    resource: str | None,
+    session_state: str,
+) -> None:
+    from urllib.parse import urlparse
+
+    from litellm.proxy import proxy_server
+
+    client, _, _ = _native_client_app(monkeypatch)
+    database: Final = browser_session_database
+    assert database.row is not None
+    database.row = None if session_state == "revoked" else database.row.model_copy(
+        update={
+            "blocked": session_state == "blocked",
+            "expires": datetime(2000 if session_state == "expired" else 2099, 1, 1, tzinfo=timezone.utc),
+            "user_id": "another-user" if session_state == "wrong_owner" else "u1",
+        }
+    )
+    cookie: Final = _browser_session_cookie(
+        monkeypatch, "u1", session_key="" if session_state == "missing_key" else "sk-browser-session"
+    )
+    client.cookies.set("token", cookie)
+    if session_state == "no_database":
+        monkeypatch.setattr(proxy_server, "prisma_client", None)
+    registered: Final = client.post("/register", json={"redirect_uris": ["http://127.0.0.1/callback"]})
+    assert registered.status_code == 201, registered.text
+    response: Final = client.get(
+        authorize_path,
+        params={
+            "client_id": registered.json()["client_id"],
+            "redirect_uri": "http://127.0.0.1/callback",
+            "response_type": "code",
+            "code_challenge": _s256("v" * 43),
+            "code_challenge_method": "S256",
+            **({"resource": resource} if resource else {}),
+        },
+        follow_redirects=False,
+    )
+    if session_state == "valid" and resource:
+        assert response.status_code == 200 and 'name="decision"' in response.text, response.text
+    else:
+        assert response.status_code == 303, response.text
+        assert urlparse(response.headers["location"]).path == (
+            "/ui/connect" if session_state == "valid" else "/sso/key/generate"
+        )
+
+
+@pytest.mark.parametrize("endpoint", ["flow", "complete"])
+@pytest.mark.parametrize("revoked", [False, True])
+def test_gateway_connect_rechecks_session_after_authorize(
+    monkeypatch: pytest.MonkeyPatch,
+    browser_session_database: _BrowserSessionDatabase,
+    endpoint: str,
+    revoked: bool,
+) -> None:
+    from urllib.parse import parse_qs, urlparse
+
+    client, _, _ = _native_client_app(monkeypatch)
+    client.cookies.set("token", _browser_session_cookie(monkeypatch, "u1", session_key="sk-browser-session"))
+    registered: Final = client.post("/register", json={"redirect_uris": ["http://127.0.0.1/callback"]})
+    assert registered.status_code == 201, registered.text
+    authorized: Final = client.get(
+        "/authorize/mcp-session",
+        params={
+            "client_id": registered.json()["client_id"],
+            "redirect_uri": "http://127.0.0.1/callback",
+            "response_type": "code",
+            "code_challenge": _s256("v" * 43),
+            "code_challenge_method": "S256",
+        },
+        follow_redirects=False,
+    )
+    flow: Final = parse_qs(urlparse(authorized.headers["location"]).query)["connect_flow"][0]
+    if revoked:
+        browser_session_database.row = None
+    response: Final = (
+        client.get("/authorize/flow", params={"flow": flow})
+        if endpoint == "flow"
+        else client.post("/authorize/complete", data={"flow": flow}, follow_redirects=False)
+    )
+    assert response.status_code == (401 if revoked else 200 if endpoint == "flow" else 303), response.text
+    if revoked:
+        assert response.json()["error"] == "login_required"
+        assert "location" not in response.headers
+    elif endpoint == "complete":
+        assert parse_qs(urlparse(response.headers["location"]).query)["code"]
 
 
 @pytest.mark.parametrize("authorize_path", ["/authorize/mcp-session", "/authorize"])
@@ -13605,11 +13778,7 @@ async def test_identity_bound_authorize_preserves_presented_jwt_permissions(
             else "https://idp.example.test",
         )
     )
-    cookie: Final = jwt.encode(
-        {"user_id": "cookie-owner", "login_method": "sso", "exp": int(time.time()) + 300},
-        master,
-        algorithm="HS256",
-    )
+    cookie: Final = _browser_session_cookie(monkeypatch, "cookie-owner", signing_key=master)
     response: Final = await discoverable_endpoints.authorize_with_server(
         request=_token_request(
             {
@@ -13645,7 +13814,7 @@ async def test_identity_bound_authorize_preserves_presented_jwt_permissions(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("credential", ["none", "opaque", "foreign_jwt"])
-@pytest.mark.parametrize("cookie_state", ["allowed", "server_denied", "expired", "missing"])
+@pytest.mark.parametrize("cookie_state", ["allowed", "server_denied", "expired", "missing", "session_expired"])
 async def test_identity_bound_authorize_unrelated_bearer_uses_browser_session(
     jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
     monkeypatch: pytest.MonkeyPatch,
@@ -13653,8 +13822,6 @@ async def test_identity_bound_authorize_unrelated_bearer_uses_browser_session(
     cookie_state: str,
 ) -> None:
     from urllib.parse import parse_qs, urlparse
-
-    import jwt
 
     from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy import proxy_server
@@ -13694,14 +13861,12 @@ async def test_identity_bound_authorize_unrelated_bearer_uses_browser_session(
         if credential == "foreign_jwt"
         else "unrelated-upstream-bearer"
     )
-    cookie: Final = jwt.encode(
-        {
-            "user_id": "cookie-owner",
-            "login_method": "sso",
-            "exp": int(time.time()) + (-60 if cookie_state == "expired" else 300),
-        },
-        master,
-        algorithm="HS256",
+    cookie: Final = _browser_session_cookie(
+        monkeypatch,
+        "cookie-owner",
+        signing_key=master,
+        expired_cookie=cookie_state == "expired",
+        expired_session=cookie_state == "session_expired",
     )
     response: Final = await discoverable_endpoints.authorize_with_server(
         request=_token_request(

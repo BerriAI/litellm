@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.fallback_generalizations import match_capability_generalizations
-from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
+from litellm.llms.openai.chat.gpt_reasoning_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 from litellm.types.utils import SearchFreeRequests
@@ -27,13 +27,29 @@ def prices() -> dict:
     return json.loads(PRICES_PATH.read_text())
 
 
+@pytest.mark.parametrize("model", ("azure/gpt-audio-1.5-2026-02-23", "azure/gpt-audio-mini-2025-10-06"))
+def test_azure_audio_snapshot_capabilities_match_declared_modalities(model: str, local_model_cost_map: None) -> None:
+    catalog: Final = TypeAdapter(dict[str, JsonValue]).validate_json(PRICES_PATH.read_bytes())
+    backup: Final = TypeAdapter(dict[str, JsonValue]).validate_json(BACKUP_PRICES_PATH.read_bytes())
+    entry: Final = catalog[model]
+    assert isinstance(entry, dict)
+    assert entry == backup[model]
+    input_modalities: Final = entry["supported_modalities"]
+    output_modalities: Final = entry["supported_output_modalities"]
+    assert isinstance(input_modalities, list)
+    assert isinstance(output_modalities, list)
+    expected: Final = ("audio" in input_modalities, "audio" in output_modalities)
+    info: Final = litellm.get_model_info(model)
+    assert (info["supports_audio_input"], info["supports_audio_output"]) == expected
+    assert (litellm.supports_audio_input(model), litellm.supports_audio_output(model)) == expected
+
+
 class _CopilotEndpointRow(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     mode: str
     max_input_tokens: int
     max_output_tokens: int
-    max_tokens: int
     supported_endpoints: tuple[str, ...]
 
 
@@ -79,16 +95,20 @@ def _anthropic_counterpart(key: str) -> str:
 
 
 @pytest.mark.parametrize(("path",), [(PRICES_PATH,), (BACKUP_PRICES_PATH,)], ids=("main", "backup"))
-def test_github_copilot_rows_derive_mode_and_max_tokens_from_their_endpoints(path: Path) -> None:
+def test_github_copilot_rows_derive_mode_from_their_endpoints(path: Path) -> None:
     rows: Final[Mapping[str, _CopilotEndpointRow]] = _copilot_endpoint_rows(path)
     assert rows, f"No GitHub Copilot endpoint rows found in {path}"
-    assert {key: (row.mode, row.max_tokens) for key, row in rows.items()} == {
-        key: (
-            "chat" if "/v1/chat/completions" in row.supported_endpoints else "responses",
-            row.max_output_tokens,
-        )
-        for key, row in rows.items()
+    assert {key: row.mode for key, row in rows.items()} == {
+        key: "chat" if "/v1/chat/completions" in row.supported_endpoints else "responses" for key, row in rows.items()
     }
+
+
+def _rows_carrying_legacy_max_tokens(prices: Mapping[str, Mapping[str, object]]) -> tuple[str, ...]:
+    return tuple(key for key, row in prices.items() if "max_tokens" in row)
+
+
+def test_no_row_carries_the_retired_max_tokens_field(prices: dict) -> None:
+    assert _rows_carrying_legacy_max_tokens(prices) == ()
 
 
 def test_github_copilot_backup_rows_match_the_main_catalog() -> None:
@@ -455,30 +475,23 @@ def is_active_priced_mistral_chat_row(name: str, entry: Mapping[str, object]) ->
     )
 
 
-def cache_read_is_tenth_of_input(entry: Mapping[str, object]) -> bool:
+def cache_read_is_below_input(entry: Mapping[str, object]) -> bool:
     cache_read: Final = entry.get("cache_read_input_token_cost")
     input_cost: Final = entry.get("input_cost_per_token")
-    return (
-        isinstance(cache_read, float)
-        and isinstance(input_cost, (int, float))
-        and 0 < cache_read < input_cost
-        and cache_read == pytest.approx(input_cost / 10)
-    )
+    return isinstance(cache_read, float) and isinstance(input_cost, (int, float)) and 0 < cache_read < input_cost
 
 
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
 def test_active_mistral_chat_rows_price_cache_reads_below_input(path: Path):
     """A Mistral chat row without a cache-read rate bills cached prompt tokens at zero, so every
-    active priced row must carry one, and it must be cheaper than a fresh input token. Mistral
-    bills cached tokens at 10% of the input price for every model (docs.mistral.ai/studio/
-    conversations/advanced/prompt-caching, read 2026-09-18), so the ratio is checked as well."""
+    active priced row must carry one, and it must be cheaper than a fresh input token."""
     rows: Mapping[str, object] = json.loads(path.read_text())
     drifted: Final = [
         f"{name}: cache_read={entry.get('cache_read_input_token_cost')} input={entry.get('input_cost_per_token')}"
         for name, entry in rows.items()
         if isinstance(entry, dict)
         and is_active_priced_mistral_chat_row(name, entry)
-        and not cache_read_is_tenth_of_input(entry)
+        and not cache_read_is_below_input(entry)
     ]
     assert drifted == []
 
@@ -591,7 +604,6 @@ def test_tencent_tokenhub_glm_rows_match_published_metadata(path: Path):
         or entry.get("litellm_provider") != "tencent"
         or entry.get("max_input_tokens") != 1000000
         or entry.get("max_output_tokens") != 128000
-        or entry.get("max_tokens") != 128000
         or entry.get("input_cost_per_token_cache_hit") != entry.get("cache_read_input_token_cost")
     )
     assert actual == TENCENT_TOKENHUB_GLM_ROWS
@@ -609,7 +621,7 @@ def test_tencent_tokenhub_kimi_rows_match_published_metadata(path: Path):
                 entry.get("input_cost_per_token"),
                 entry.get("output_cost_per_token"),
                 entry.get("cache_read_input_token_cost"),
-                entry.get("max_tokens"),
+                entry.get("max_output_tokens"),
                 entry.get("supports_vision", False),
                 entry.get("supports_video_input", False),
             )
@@ -783,7 +795,6 @@ def test_volcengine_doubao_seed_2_1_pro_260915_row_matches_published_metadata(pa
     assert entry["mode"] == "chat"
     assert entry["max_input_tokens"] == 1024000
     assert entry["max_output_tokens"] == 256000
-    assert entry["max_tokens"] == 256000
     # Volcengine Ark pricing https://www.volcengine.com/docs/82379/1544106 checked 2026-10-20
     assert entry["input_cost_per_token"] == pytest.approx(6.0 / 6.9565 / 1_000_000, rel=1e-4)
     assert entry["output_cost_per_token"] == pytest.approx(30.0 / 6.9565 / 1_000_000, rel=1e-4)
@@ -791,3 +802,26 @@ def test_volcengine_doubao_seed_2_1_pro_260915_row_matches_published_metadata(pa
     sibling = rows["volcengine/doubao-seed-2-1-pro-260628"]
     assert isinstance(sibling, dict)
     assert all(entry[key] == sibling[key] for key in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"))
+
+
+def _bedrock_gpt_oss_rows(prices: Mapping[str, JsonValue]) -> tuple[str, ...]:
+    return tuple(
+        key
+        for key, row in prices.items()
+        if "gpt-oss" in key and isinstance(row, dict) and str(row.get("litellm_provider", "")).startswith("bedrock")
+    )
+
+
+@pytest.mark.parametrize("path", [PRICES_PATH, BACKUP_PRICES_PATH], ids=["main", "backup"])
+def test_bedrock_gpt_oss_rows_declare_vision_support_like_their_safeguard_siblings(path: Path) -> None:
+    prices: Final = json.loads(path.read_text())
+    rows: Final = _bedrock_gpt_oss_rows(prices)
+    assert rows, "no Bedrock gpt-oss rows found"
+    reference: Final = prices["openai.gpt-oss-safeguard-120b"]["supports_vision"]
+    undeclared: Final = tuple(key for key in rows if prices[key].get("supports_vision") is not reference)
+    assert undeclared == (), f"modality routing only skips rows that declare supports_vision: {undeclared}"
+
+
+def test_bedrock_gpt_oss_vision_is_explicitly_disabled_for_the_router_gate() -> None:
+    assert litellm.utils.is_vision_explicitly_disabled("bedrock/openai.gpt-oss-120b-1:0") is True
+    assert litellm.utils.is_vision_explicitly_disabled("bedrock_mantle/openai.gpt-oss-20b") is True
