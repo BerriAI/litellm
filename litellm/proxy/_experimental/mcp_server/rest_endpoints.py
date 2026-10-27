@@ -957,7 +957,7 @@ if MCP_AVAILABLE:
                 status_code=list_fault_http_status(fault),
                 detail={
                     "error": fault.tag,
-                    "message": f"Failed to list tools from server {get_server_prefix(server)}",
+                    "message": fault.public_message or f"Failed to list tools from server {get_server_prefix(server)}",
                 },
             ) from e
         except Exception as e:
