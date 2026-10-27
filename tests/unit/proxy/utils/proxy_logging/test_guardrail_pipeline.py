@@ -1171,13 +1171,13 @@ class _PipelineStepGuardrail(CustomGuardrail):
         self.calls = 0
 
     async def async_pre_call_hook(
-        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
-    ) -> dict:
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict[str, object], call_type: CallTypesLiteral
+    ) -> dict[str, object]:
         self.calls += 1
         return data
 
     async def async_post_call_success_hook(
-        self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
     ) -> None:
         self.calls += 1
 
@@ -1252,8 +1252,8 @@ class _RaisingPipelineStepGuardrail(_PipelineStepGuardrail):
         self.error = error
 
     async def async_pre_call_hook(
-        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
-    ) -> dict:
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict[str, object], call_type: CallTypesLiteral
+    ) -> dict[str, object]:
         self.calls += 1
         raise self.error
 
@@ -1312,8 +1312,8 @@ async def test_deployment_hook_still_runs_a_pipeline_step_that_raised(
 
 class _OpensLitellmMetadataGuardrail(_PipelineStepGuardrail):
     async def async_pre_call_hook(
-        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
-    ) -> dict:
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict[str, object], call_type: CallTypesLiteral
+    ) -> dict[str, object]:
         self.calls += 1
         data["litellm_metadata"] = {}
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
@@ -1366,7 +1366,7 @@ async def test_post_call_pipeline_steps_are_named_only_once_they_run(
 
 class _OpensLitellmMetadataOnResponseGuardrail(_PipelineStepGuardrail):
     async def async_post_call_success_hook(
-        self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
     ) -> None:
         self.calls += 1
         data["litellm_metadata"] = {"user_api_key_hash": "hashed"}
