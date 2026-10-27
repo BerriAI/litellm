@@ -13103,6 +13103,7 @@ class Router:
         self,
         model: str,
         request_deployments: Sequence[DeploymentTypedDict],
+        fail_open_policy_deployments: Sequence[DeploymentTypedDict],
         cooldown_deployments: Iterable[str],
         request_kwargs: Mapping[str, object],
         has_request_input: bool,
@@ -13110,7 +13111,8 @@ class Router:
         """
         Ids of the cooling deployments in `request_deployments` that region and tag routing would send this request
         to, each tag routing pick counted along with the picks it falls back to once that one is unavailable, judged
-        without recording a tag match on the request
+        without recording a tag match on the request. Tag routing reads the fail-open opt-in from
+        `fail_open_policy_deployments`, as the routing it judges does
         """
         cooled_ids: Final = frozenset(cooldown_deployments)
         metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(request_kwargs)
@@ -13136,7 +13138,7 @@ class Router:
                     healthy_deployments=remaining,
                     request_kwargs=tag_request,
                     metadata_variable_name=metadata_variable_name,
-                    request_deployments=request_deployments,
+                    request_deployments=fail_open_policy_deployments,
                 )
             except ValueError:  # tag routing sends this request to none of the rest
                 break
@@ -15003,6 +15005,10 @@ class Router:
         if verbose_router_logger.isEnabledFor(logging.DEBUG):
             verbose_router_logger.debug("healthy_deployments after team filter: %s", healthy_deployments)
 
+        team_scoped_deployments: Final = cast(  # cast-ok: router deployments are plain dicts
+            Sequence[DeploymentTypedDict] | DeploymentTypedDict, healthy_deployments
+        )
+
         healthy_deployments = filter_web_search_deployments(
             healthy_deployments=healthy_deployments,
             request_kwargs=request_kwargs,
@@ -15029,6 +15035,9 @@ class Router:
 
         request_deployments: Final = cast(  # cast-ok: router deployments are plain dicts
             Sequence[DeploymentTypedDict], healthy_deployments
+        )
+        fail_open_policy_deployments: Final = (
+            team_scoped_deployments if isinstance(team_scoped_deployments, list) else request_deployments
         )
 
         # Health-check-based filtering (before cooldown)
@@ -15101,7 +15110,7 @@ class Router:
             request_kwargs=request_kwargs,
             healthy_deployments=healthy_deployments,
             metadata_variable_name=self._get_metadata_variable_name_from_kwargs(request_kwargs),
-            request_deployments=request_deployments,
+            request_deployments=fail_open_policy_deployments,
         )
 
         # narrow to whatever `self.routing_plugins` left in candidate_models
@@ -15132,6 +15141,7 @@ class Router:
                 await self._async_routable_cooled_deployment_ids(
                     model=model,
                     request_deployments=request_deployments,
+                    fail_open_policy_deployments=fail_open_policy_deployments,
                     cooldown_deployments=cooldown_deployments,
                     request_kwargs=cast(Mapping[str, object], request_kwargs),  # cast-ok: str-keyed request kwargs
                     has_request_input=True,
@@ -15181,6 +15191,7 @@ class Router:
                 route_model_ids=await self._async_routable_cooled_deployment_ids(
                     model=model,
                     request_deployments=request_deployments,
+                    fail_open_policy_deployments=fail_open_policy_deployments,
                     cooldown_deployments=cooldown_deployments,
                     request_kwargs=cast(Mapping[str, object], request_kwargs),  # cast-ok: str-keyed request kwargs
                     has_request_input=messages is not None or input is not None,

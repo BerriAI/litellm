@@ -3318,6 +3318,7 @@ def test_routable_cooled_deployment_ids_skip_healthy_deployments_and_peel_tag_fa
         router._async_routable_cooled_deployment_ids(
             model="tenants",
             request_deployments=router.get_model_list(model_name="tenants") or [],
+            fail_open_policy_deployments=router.get_model_list(model_name="tenants") or [],
             cooldown_deployments=(TENANT_A["model_id"], SHARED["model_id"]),
             request_kwargs={"metadata": {}},
             has_request_input=True,

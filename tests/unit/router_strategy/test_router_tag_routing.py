@@ -3,16 +3,18 @@
 
 
 import logging
+from collections.abc import Iterator
 from typing import Final, Literal
 from unittest.mock import patch
 
 import pytest
+import respx
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
-from litellm.types.router import RouterErrors
+from litellm.types.router import RouterErrors, RouterRateLimitError
 
 
 async def _routed_model_ids(
@@ -3523,3 +3525,138 @@ async def test_without_tag_routing_prefix_unprefixed_caller_tags_still_route(tag
     )
 
     assert await _pool(router, {"tags": tags}) == expected
+
+
+def _capability_fail_open_router(allow_fail_open: bool = True, opt_in_team_id: str | None = None) -> litellm.Router:
+    """The opted-in deployment serves neither web search nor decisions; the remaining one serves both"""
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "chat",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5", "api_key": "unused", "tags": ["vision"]},
+                "model_info": {
+                    "id": "opted-in",
+                    "team_id": opt_in_team_id,
+                    "allow_fail_open": allow_fail_open,
+                    "supports_web_search": False,
+                },
+            },
+            {
+                "model_name": "chat",
+                "litellm_params": {
+                    "model": "openai/gpt-6-luna",
+                    "api_base": "https://api.openai.com/v1",
+                    "api_key": "unused",
+                    "tags": ["region:eu"],
+                },
+                "model_info": {"id": "remaining"},
+            },
+        ],
+        enable_tag_filtering=True,
+        num_retries=0,
+    )
+
+
+UNMATCHED_TAG_METADATA: Final = {"tags": ["component:chat-search"]}
+DECISIONS_RESPONSE: Final = {
+    "model": "gpt-6-luna",
+    "answers": [{"type": "predicate", "name": "damaged", "probability": 0.9}],
+    "usage": {
+        "input_tokens": 1,
+        "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+        "output_tokens": 1,
+        "output_tokens_details": {"reasoning_tokens": 0},
+        "total_tokens": 2,
+    },
+}
+
+
+async def _web_search_model_id(router: litellm.Router, caller_team_id: str | None = None) -> object:
+    response: Final = await router.acompletion(
+        model="chat",
+        messages=[{"role": "user", "content": "What changed today?"}],
+        tools=[{"type": "web_search_preview"}],
+        metadata={**UNMATCHED_TAG_METADATA, "user_api_key_team_id": caller_team_id},
+        mock_response="hi",
+    )
+    return response._hidden_params["model_id"]
+
+
+async def _decisions(router: litellm.Router) -> None:
+    await router.adecisions(
+        model="chat",
+        input=[{"role": "user", "content": "The package arrived with a broken screen."}],
+        questions=[{"type": "predicate", "name": "damaged", "instructions": "Does the customer report damage?"}],
+        litellm_metadata=dict(UNMATCHED_TAG_METADATA),
+    )
+
+
+@pytest.fixture
+def httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+@pytest.mark.asyncio()
+async def test_tag_fail_open_survives_the_web_search_filter() -> None:
+    assert await _web_search_model_id(_capability_fail_open_router()) == "remaining"
+
+
+@pytest.mark.asyncio()
+@pytest.mark.usefixtures("httpx_transport")
+async def test_tag_fail_open_survives_the_decisions_route_filter(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=DECISIONS_RESPONSE)
+    await _decisions(_capability_fail_open_router())
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio()
+async def test_tag_fail_open_without_a_capability_filter_is_unchanged() -> None:
+    with patch("random.choice", side_effect=lambda deployments: deployments[0]):
+        response: Final = await _capability_fail_open_router().acompletion(
+            model="chat",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata=dict(UNMATCHED_TAG_METADATA),
+            mock_response="hi",
+        )
+    assert response._hidden_params["model_id"] == "opted-in"
+
+
+@pytest.mark.asyncio()
+async def test_web_search_without_opt_in_still_rejects_unmatched_tags() -> None:
+    with pytest.raises(ValueError, match=RouterErrors.no_deployments_with_tag_routing.value):
+        await _web_search_model_id(_capability_fail_open_router(allow_fail_open=False))
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize("caller_team_id", ["team-b", None])
+async def test_web_search_does_not_use_another_teams_opt_in(caller_team_id: str | None) -> None:
+    with pytest.raises(ValueError, match=RouterErrors.no_deployments_with_tag_routing.value):
+        await _web_search_model_id(_capability_fail_open_router(opt_in_team_id="team-a"), caller_team_id=caller_team_id)
+
+
+@pytest.mark.asyncio()
+@pytest.mark.usefixtures("httpx_transport")
+async def test_decisions_without_opt_in_still_rejects_unmatched_tags(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=DECISIONS_RESPONSE)
+    with pytest.raises(ValueError, match=RouterErrors.no_deployments_with_tag_routing.value):
+        await _decisions(_capability_fail_open_router(allow_fail_open=False))
+    assert route.call_count == 0
+
+
+@pytest.mark.asyncio()
+async def test_cooled_fail_open_pick_after_the_web_search_filter_is_reported_as_cooling() -> None:
+    router: Final = _capability_fail_open_router()
+    with patch("time.time", return_value=1_700_000_000.0):
+        router.cooldown_cache.add_deployment_to_cooldown(
+            model_id="remaining",
+            original_exception=RuntimeError("unavailable"),
+            exception_status=500,
+            cooldown_time=60,
+        )
+        with pytest.raises(RouterRateLimitError) as refusal:
+            await _web_search_model_id(router)
+    assert refusal.value.cooldown_deployments is not None
+    assert [deployment["model_id"] for deployment in refusal.value.cooldown_deployments] == ["remaining"]
