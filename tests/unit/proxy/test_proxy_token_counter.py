@@ -2090,6 +2090,41 @@ async def test_anthropic_count_tokens_resolves_a_key_alias_before_counting(
 
 
 @pytest.mark.asyncio
+async def test_anthropic_count_tokens_chains_the_global_alias_into_the_key_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The global alias resolves first, then the key alias, matching the completion routes.
+
+    A request whose global alias points at a name the key then aliases to a served group is
+    counted, not rejected for the intermediate name.
+    """
+    monkeypatch.setattr(litellm, "model_alias_map", {"public-name": "intermediate"})
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "llm_router", Router(model_list=_NONEXISTENT_MODEL_ROUTER_MODEL_LIST)
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+
+    with patch.object(
+        litellm.proxy.proxy_server,
+        "_try_provider_token_count",
+        AsyncMock(
+            return_value=TokenCountResponse(
+                total_tokens=11,
+                request_model="public-name",
+                model_used="claude-counted",
+                tokenizer_type="openai_tokenizer",
+            )
+        ),
+    ):
+        response: Final = await _count_through_the_anthropic_route(
+            {"model": "public-name", "messages": [{"role": "user", "content": "Hello!"}]},
+            UserAPIKeyAuth(aliases={"intermediate": "claude-counted"}),
+        )
+
+    assert response == {"input_tokens": 11}
+
+
+@pytest.mark.asyncio
 async def test_anthropic_count_tokens_counts_a_served_model_whose_deployments_are_in_cooldown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

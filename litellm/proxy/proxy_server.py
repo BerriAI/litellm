@@ -14429,17 +14429,18 @@ def _count_route_team_id(user_api_key_dict: UserAPIKeyAuth | None) -> str | None
 
 
 def _resolve_count_route_model(requested: str, user_api_key_dict: UserAPIKeyAuth | None) -> str:
-    """Apply the caller's key alias, then the proxy-wide alias, as the completion routes do."""
+    """Apply the proxy-wide alias, then the caller's key alias, as the completion routes do."""
+    global_target: Final = litellm.model_alias_map.get(requested)
+    aliased: Final = global_target if isinstance(global_target, str) and global_target else requested
     if user_api_key_dict is None:
-        return requested
+        return aliased
     key_aliases: Final = as_str_mapping(
         cast(object, user_api_key_dict.aliases)  # cast-ok: the auth model's aliases field is declared as a bare dict
     )
-    if key_aliases is not None and requested in key_aliases:
-        target: Final = key_aliases[requested]
-        return target if isinstance(target, str) and target else requested
-    global_target: Final = litellm.model_alias_map.get(requested)
-    return global_target if isinstance(global_target, str) and global_target else requested
+    if key_aliases is not None and aliased in key_aliases:
+        target: Final = key_aliases[aliased]
+        return target if isinstance(target, str) and target else aliased
+    return aliased
 
 
 async def _raise_if_count_route_model_unserved(
