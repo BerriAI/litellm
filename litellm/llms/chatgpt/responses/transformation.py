@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
@@ -42,13 +42,13 @@ if TYPE_CHECKING:
 _CHATGPT_SERVICE_TIERS: Final = {"default": "default", "priority": "priority", "fast": "priority"}
 
 
-def _system_items_as_developer(input_items: list[Any]) -> list[Any]:
+def _system_items_as_developer(input_items: Sequence[object]) -> tuple[object, ...]:
     # The Codex backend 400s on {"type": "message", "role": "system"} items ("System messages are not
     # allowed") but accepts role=developer in the same position, which is what the Codex CLI sends.
-    return [
-        {**item, "role": "developer"} if isinstance(item, dict) and item.get("role") == "system" else item
+    return tuple(
+        {**item, "role": "developer"} if isinstance(item, Mapping) and item.get("role") == "system" else item
         for item in input_items
-    ]
+    )
 
 
 class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -123,7 +123,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         else:
             request["instructions"] = base_instructions
         if isinstance(request.get("input"), list):
-            request["input"] = _system_items_as_developer(request["input"])
+            request["input"] = list(_system_items_as_developer(request["input"]))
         request["store"] = False
         request["stream"] = True
         include: Final = list(request.get("include") or [])
