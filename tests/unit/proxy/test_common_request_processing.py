@@ -12132,6 +12132,22 @@ class TestPreCallHooksForUnroutableModel:
         assert logging_obj.standard_callback_dynamic_params.get("turn_off_message_logging") is not True
 
     @pytest.mark.asyncio
+    async def test_request_rejected_after_the_routing_check_passed_logs_the_request_as_sent(self, monkeypatch):
+        monkeypatch.setattr(litellm, "callbacks", [_ModelRewritingHook(), _CountingGuardrail(), _RejectingHook()])
+        processor: Final = ProxyBaseLLMRequestProcessing(data={})
+
+        with pytest.raises(HTTPException):
+            await self._run(monkeypatch, model="virtual-model", llm_router=self._router(), processor=processor)
+
+        snapshot: Final = processor.data["proxy_server_request"]["body"]
+        assert processor.data["model"] == "gpt-4o-mini"
+        assert (snapshot["model"], snapshot["messages"], "litellm_call_id" in snapshot) == (
+            "virtual-model",
+            [{"role": "user", "content": "email jane@example.com"}],
+            False,
+        ), snapshot
+
+    @pytest.mark.asyncio
     async def test_request_a_hook_replaced_with_another_unknown_model_is_the_one_rejected_and_redacted(
         self, monkeypatch
     ):

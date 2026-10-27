@@ -2562,13 +2562,16 @@ class ProxyBaseLLMRequestProcessing:
 
         async def raise_unless_routable(request: dict[str, object]) -> None:  # mutable-ok: request payload
             self.data = request
-            refresh_proxy_server_request_body_snapshot(request)
-            await raise_if_model_not_routable(
-                data=request,
-                llm_router=llm_router,
-                user_model=user_model,
-                route_type=call_type,
-            )
+            try:
+                await raise_if_model_not_routable(
+                    data=request,
+                    llm_router=llm_router,
+                    user_model=user_model,
+                    route_type=call_type,
+                )
+            except Exception:
+                refresh_proxy_server_request_body_snapshot(request)
+                raise
             passed_routing_check.append(True)
 
         try:
