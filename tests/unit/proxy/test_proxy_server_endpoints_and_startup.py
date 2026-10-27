@@ -31,9 +31,9 @@ import litellm.proxy.proxy_server as proxy_server_module
 from litellm._internal_context import current_service_target
 from litellm._logging import turn_on_json, verbose_proxy_logger
 from litellm.caching.caching import RedisCache
+from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
-from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
     AwsErrorTypeProxyException,
     LitellmUserRoles,
@@ -9338,8 +9338,8 @@ async def test_increment_spend_counters_reseeds_from_db_on_bad_reserved_counter(
     from the authoritative DB and adds this request's settled cost, which the
     async spend flush has not written yet, so budget gating continues."""
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import increment_spend_counters
     from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+    from litellm.proxy.proxy_server import increment_spend_counters
 
     counter_cache = DualCache()
     budget_reservation = {
@@ -12353,8 +12353,8 @@ def _config_field_info_client(monkeypatch, user_role):
     from fastapi.testclient import TestClient
 
     import litellm.proxy.proxy_server as ps
-    from litellm.proxy.config_resolvers import SettingsStore
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.config_resolvers import SettingsStore
     from litellm.proxy.proxy_server import app
 
     db_record = types.SimpleNamespace(
@@ -13745,11 +13745,11 @@ def test_startup_is_silent_when_mock_testing_params_disabled(caplog):
 def _window_spend_enqueue_env(cached_objects: dict):
     """Point increment_spend_counters at throwaway caches and a real
     WindowSpendUpdateQueue, and hand back the queue to inspect."""
+    import litellm.proxy.proxy_server as ps
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
         WindowSpendUpdateQueue,
     )
-    import litellm.proxy.proxy_server as ps
 
     user_api_key_cache = MagicMock()
     user_api_key_cache.async_get_cache = AsyncMock(side_effect=lambda key, **_: cached_objects.get(key))
@@ -13828,8 +13828,8 @@ async def test_team_window_spend_row_is_enqueued():
 async def test_window_spend_row_is_enqueued_even_when_the_counter_was_reserved():
     """A reservation only pre-charged the cache counter with an estimate; the
     row still owes the actual cost, so the enqueue must not be skipped."""
-    from litellm.proxy.proxy_server import increment_spend_counters
     import litellm.proxy.spend_tracking.budget_reservation as br
+    from litellm.proxy.proxy_server import increment_spend_counters
 
     reset_at = datetime.now(timezone.utc) + timedelta(days=10)
     key_obj = MagicMock()
@@ -15168,7 +15168,7 @@ async def test_update_general_settings_keeps_yaml_openai_websocket_passthrough()
 
 
 def test_settings_store_exposes_dashboard_saved_mcp_client_allowlist_to_the_mcp_gateway() -> None:
-    from litellm.proxy._experimental.mcp_server.client_allowlist import MCPClientAllowlist, load_mcp_client_allowlist
+    from litellm.proxy.mcp_server.client_allowlist import MCPClientAllowlist, load_mcp_client_allowlist
     from litellm.proxy.proxy_server import ProxyConfig
 
     settings: Final = ProxyConfig().settings
@@ -15254,9 +15254,8 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
 
 
 async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revision_and_token(monkeypatch):
-    from litellm.rust_bridge._native import Tokenizer
-
     from litellm import Router
+    from litellm.rust_bridge._native import Tokenizer
     from litellm.types.router import DeploymentTypedDict
 
     claude_tokenizer: Final[Tokenizer] = litellm.utils.select_tokenizer("claude-fable-5")["tokenizer"]
@@ -15309,13 +15308,13 @@ async def test_auth_cache_invalidation_subscriber_evicts_byok_credentials_cached
     """A peer worker's BYOK revocation broadcast must reach this worker's BYOK credential cache."""
     from redis.asyncio import Redis
 
-    from litellm.proxy._experimental.mcp_server.byok_credential_cache import (
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.mcp_server.byok_credential_cache import (
         byok_credential_cache,
         byok_credential_cache_key,
         cache_byok_credential,
         get_cached_byok_credential,
     )
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     class _QueuePubSub:
         def __init__(self, messages: list[object]) -> None:
