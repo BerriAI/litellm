@@ -2303,21 +2303,18 @@ def _websocket_authorized_by(sent: list[Message], authorization: str) -> WebSock
     )
 
 
-DEEPGRAM_SDK_SCHEMES: Final = ("Bearer", "Token")
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("authorization", "accepted_schemes"),
+    "authorization",
     [
-        pytest.param("Bearer {key}", ("Bearer",), id="bearer by default"),
-        pytest.param("Bearer {key}", DEEPGRAM_SDK_SCHEMES, id="bearer where token is also accepted"),
-        pytest.param("Token {key}", DEEPGRAM_SDK_SCHEMES, id="token where the route accepts it"),
-        pytest.param("Token {key} ", DEEPGRAM_SDK_SCHEMES, id="token with trailing space"),
+        pytest.param("Bearer {key}", id="bearer"),
+        pytest.param("bearer {key}", id="deepgram sdk access_token mode"),
+        pytest.param("Token {key}", id="deepgram sdk api_key mode"),
+        pytest.param("Token {key} ", id="token with trailing space"),
     ],
 )
-async def test_websocket_auth_finds_the_virtual_key_under_each_accepted_scheme(
-    monkeypatch: pytest.MonkeyPatch, authorization: str, accepted_schemes: tuple[str, ...]
+async def test_websocket_auth_finds_the_virtual_key_under_each_scheme_http_auth_accepts(
+    monkeypatch: pytest.MonkeyPatch, authorization: str
 ) -> None:
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket_for_model
     from litellm.proxy.proxy_server import hash_token
@@ -2327,9 +2324,7 @@ async def test_websocket_auth_finds_the_virtual_key_under_each_accepted_scheme(
     sent: Final[list[Message]] = []
 
     authorized: Final = await user_api_key_auth_websocket_for_model(
-        _websocket_authorized_by(sent, authorization.format(key=user_key)),
-        "nova-3",
-        accepted_authorization_schemes=accepted_schemes,
+        _websocket_authorized_by(sent, authorization.format(key=user_key)), "nova-3"
     )
 
     assert authorized.token == hash_token(user_key)
@@ -2338,16 +2333,15 @@ async def test_websocket_auth_finds_the_virtual_key_under_each_accepted_scheme(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("authorization", "accepted_schemes"),
+    "authorization",
     [
-        pytest.param("Token {key}", ("Bearer",), id="token where the route did not opt in"),
-        pytest.param("token {key}", DEEPGRAM_SDK_SCHEMES, id="scheme is case sensitive like bearer"),
-        pytest.param("Token{key}", DEEPGRAM_SDK_SCHEMES, id="no space after the scheme"),
-        pytest.param("Basic {key}", DEEPGRAM_SDK_SCHEMES, id="scheme not in the list"),
+        pytest.param("Token{key}", id="no space after the scheme"),
+        pytest.param("Digest {key}", id="unknown scheme"),
+        pytest.param("Token ", id="scheme without a key"),
     ],
 )
-async def test_websocket_auth_refuses_other_schemes_with_a_policy_close(
-    monkeypatch: pytest.MonkeyPatch, authorization: str, accepted_schemes: tuple[str, ...]
+async def test_websocket_auth_refuses_an_unparseable_authorization_with_a_policy_close(
+    monkeypatch: pytest.MonkeyPatch, authorization: str
 ) -> None:
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket_for_model
     from litellm.proxy.proxy_server import hash_token
@@ -2358,11 +2352,25 @@ async def test_websocket_auth_refuses_other_schemes_with_a_policy_close(
 
     with pytest.raises(HTTPException) as refusal:
         await user_api_key_auth_websocket_for_model(
-            _websocket_authorized_by(sent, authorization.format(key=user_key)),
-            "nova-3",
-            accepted_authorization_schemes=accepted_schemes,
+            _websocket_authorized_by(sent, authorization.format(key=user_key)), "nova-3"
         )
 
     assert refusal.value.status_code == 403
     assert refusal.value.detail == "Invalid Authorization header format"
     assert sent == [{"type": "websocket.close", "code": status.WS_1008_POLICY_VIOLATION, "reason": ""}]
+
+
+@pytest.mark.asyncio
+async def test_http_auth_finds_the_virtual_key_in_a_token_authorization(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import Request as HTTPRequest
+
+    from litellm.proxy.proxy_server import hash_token
+
+    user_key: Final = "sk-http-key-for-nova"
+    _serve_virtual_key(monkeypatch, user_key, UserAPIKeyAuth(token=hash_token(user_key)))
+    request: Final = HTTPRequest(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
+    request._url = URL(url="/chat/completions")  # pyright: ignore[reportPrivateUsage]  # Starlette caches the URL here
+
+    authorized: Final = await user_api_key_auth(request=request, api_key=f"Token {user_key}")
+
+    assert authorized.token == hash_token(user_key)

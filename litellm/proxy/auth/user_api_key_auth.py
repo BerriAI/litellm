@@ -1122,6 +1122,8 @@ def _should_route_jwt_to_oauth2_override(token: str, jwt_handler: JWTHandler) ->
 def get_bearer_token(
     api_key: str,
 ) -> str:
+    if api_key.startswith("Token "):
+        return api_key[len("Token ") :]
     if api_key.startswith("Bearer "):  # ensure Bearer token passed in
         api_key = api_key.replace("Bearer ", "")  # extract the token
     elif api_key.startswith("Basic "):
@@ -1202,14 +1204,8 @@ def _has_required_baggage_tag_mapping() -> bool:
 
 
 async def user_api_key_auth_websocket_for_model(
-    websocket: WebSocket,
-    model: str | None,
-    *,
-    close_on_auth_error: bool = True,
-    accepted_authorization_schemes: tuple[str, ...] = ("Bearer",),
+    websocket: WebSocket, model: str | None, *, close_on_auth_error: bool = True
 ) -> UserAPIKeyAuth:
-    """``accepted_authorization_schemes`` are the ``Authorization`` schemes that may carry the LiteLLM key. A route
-    adds one only when a provider's own SDK sends it to the same path"""
     ws_scope: Final = websocket.scope or {}
     scope_headers: Final = list(ws_scope.get("headers") or [])
     # ``get_request_route`` falls back to ``request.url.path`` when
@@ -1252,15 +1248,10 @@ async def user_api_key_auth_websocket_for_model(
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             raise HTTPException(status_code=403, detail="No API key provided")
     else:
-        scheme_prefix: Final = next(
-            (f"{scheme} " for scheme in accepted_authorization_schemes if authorization.startswith(f"{scheme} ")),
-            None,
-        )
-        if scheme_prefix is None:
+        api_key = get_bearer_token(authorization).strip()
+        if not api_key:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             raise HTTPException(status_code=403, detail="Invalid Authorization header format")
-
-        api_key = authorization[len(scheme_prefix) :].strip()
 
     # Call user_api_key_auth with the extracted API key
     # Note: You'll need to modify this to work with WebSocket context if needed

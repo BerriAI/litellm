@@ -4648,7 +4648,7 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         assert self.VKEY not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("scheme", ["Bearer", "bearer", "Basic"])
+    @pytest.mark.parametrize("scheme", ["Bearer", "bearer", "Basic", "Token"])
     async def test_virtual_key_echoed_in_authorization_with_any_scheme_is_stripped(self, monkeypatch, scheme):
         raised, forwarded = await self._run(
             monkeypatch,

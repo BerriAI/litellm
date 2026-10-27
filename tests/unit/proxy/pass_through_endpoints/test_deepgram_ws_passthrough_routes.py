@@ -504,17 +504,3 @@ def test_deepgram_listen_accepts_the_litellm_key_in_a_deepgram_sdk_token_header(
     assert [(call.target, call.custom_headers) for call in relay.calls] == [
         ("wss://api.deepgram.com/v1/listen?model=nova-3", MappingProxyType({"Authorization": "Token dg-provider-key"}))
     ]
-
-
-def test_a_non_deepgram_websocket_route_still_refuses_a_token_header() -> None:
-    relay: Final = _FakeRelay()
-    client: Final = TestClient(_app_with_relay(relay))
-
-    with pytest.raises(WebSocketDisconnect) as disconnect:
-        with client.websocket_connect(
-            "/openai/v1/realtime?model=gpt-4o-realtime-preview", headers={"Authorization": "Token sk-litellm"}
-        ):
-            pass
-
-    assert disconnect.value.code == 1008
-    assert relay.calls == []
