@@ -56,11 +56,11 @@ def _megapixel_cost(prices: ModelInfo, image_response: ImageResponse) -> float |
         return None
     first_rate: Final = get_cost_per_unit(prices, "output_cost_per_first_megapixel", default_value=None)
     input_rate: Final = get_cost_per_unit(prices, "input_cost_per_megapixel") or 0.0
-    return (
-        (output_rate if first_rate is None else first_rate)
-        + output_rate * (math.ceil(usage.output_mp) - 1)
-        + input_rate * math.ceil(usage.input_mp or 0)
-    )
+    images: Final = max(len(image_response.data or ()), 1)
+    output_mp_per_image: Final = usage.output_mp / images
+    return images * (
+        (output_rate if first_rate is None else first_rate) + output_rate * (math.ceil(output_mp_per_image) - 1)
+    ) + input_rate * math.ceil(usage.input_mp or 0)
 
 
 def _input_cost_per_pixel(resolved: ModelInfo) -> float:

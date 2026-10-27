@@ -262,10 +262,10 @@ def _flux2_route(provider_path: str) -> str:
     return rf"https://flux-billing\.services\.ai\.azure\.com/providers/blackforestlabs/v1/{provider_path}\?.*"
 
 
-def _metered_body(output_mp: float, input_mp: float) -> Mapping[str, object]:
+def _metered_body(output_mp: float, input_mp: float, num_images: int = 1) -> Mapping[str, object]:
     return {
         "created": 1,
-        "data": [{"b64_json": "aW1n"}],
+        "data": [{"b64_json": "aW1n"} for _ in range(num_images)],
         "request_meta": {"cost": 999.0, "input_mp": input_mp, "output_mp": output_mp, "total_pixels": 1},
     }
 
@@ -305,6 +305,32 @@ def test_flux2_pro_generation_bills_the_reported_megapixels_rounded_up(
         _price("azure_ai/flux.2-pro", "output_cost_per_first_megapixel")
         + additional_output_megapixels * _price("azure_ai/flux.2-pro", "output_cost_per_megapixel")
         + input_megapixels * _price("azure_ai/flux.2-pro", "input_cost_per_megapixel")
+    )
+
+
+@pytest.mark.parametrize(
+    ("output_mp", "additional_output_megapixels"),
+    [(3.0, 1), (0.5, 0)],
+)
+@respx.mock
+def test_flux2_pro_generation_bills_first_megapixel_per_returned_image(
+    output_mp: float, additional_output_megapixels: int
+) -> None:
+    respx.post(url__regex=_flux2_route("flux-2-pro")).mock(
+        return_value=httpx.Response(200, json=_metered_body(output_mp, 0.25, num_images=2))
+    )
+
+    response: Final = litellm.image_generation(
+        model="azure_ai/flux.2-pro", prompt="A red fox", api_base=FOUNDRY_BASE, api_key="test-key"
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        2
+        * (
+            _price("azure_ai/flux.2-pro", "output_cost_per_first_megapixel")
+            + additional_output_megapixels * _price("azure_ai/flux.2-pro", "output_cost_per_megapixel")
+        )
+        + _price("azure_ai/flux.2-pro", "input_cost_per_megapixel")
     )
 
 
@@ -349,9 +375,11 @@ def test_flux2_flex_generation_bills_every_reported_megapixel_at_one_rate() -> N
     [
         (
             {},
-            lambda price: price("output_cost_per_first_megapixel")
-            + price("output_cost_per_megapixel")
-            + price("input_cost_per_megapixel"),
+            lambda price: (
+                price("output_cost_per_first_megapixel")
+                + price("output_cost_per_megapixel")
+                + price("input_cost_per_megapixel")
+            ),
         ),
         ({"output_cost_per_image": 0.05}, lambda _: 0.05),
         (
@@ -359,7 +387,11 @@ def test_flux2_flex_generation_bills_every_reported_megapixel_at_one_rate() -> N
             lambda price: price("output_cost_per_first_megapixel") + 0.02 + price("input_cost_per_megapixel"),
         ),
         (
-            {"output_cost_per_first_megapixel": 0.04, "output_cost_per_megapixel": 0.02, "input_cost_per_megapixel": 0.01},
+            {
+                "output_cost_per_first_megapixel": 0.04,
+                "output_cost_per_megapixel": 0.02,
+                "input_cost_per_megapixel": 0.01,
+            },
             lambda _: 0.04 + 0.02 + 0.01,
         ),
     ],
