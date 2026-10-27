@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from typing import Any, Literal, TypeAlias
+from typing import Literal, TypeAlias
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -9,6 +9,7 @@ from litellm.types.llms.anthropic import (
     AnthropicStopDetails,
     CompactionBlock,
     ContextManagementResponse,
+    SafeguardResult,
     ServerToolUsage,
     UsageIteration,
 )
@@ -19,7 +20,7 @@ class AnthropicResponseTextBlock(TypedDict, total=False):
     Anthropic Response Text Block: https://docs.anthropic.com/en/api/messages
     """
 
-    citations: list[dict[str, Any]] | None
+    citations: list[dict[str, object]] | None
     text: str
     type: Literal["text"]
 
@@ -104,4 +105,4 @@ class AnthropicMessagesResponse(TypedDict, total=False):
     type: Literal["message"] | None
     usage: AnthropicUsage | None
     context_management: NotRequired[ContextManagementResponse]
-    safeguard_results: NotRequired[ReadOnly[list[dict[str, object]]]]
+    safeguard_results: NotRequired[ReadOnly[Sequence[SafeguardResult]]]

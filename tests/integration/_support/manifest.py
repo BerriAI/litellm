@@ -10,11 +10,15 @@ OWNED_DIRECTORIES: Final = frozenset(
         "routing",
         "providers",
         "streaming",
+        "messages_endpoint",
+        "translation",
         "configuration",
         "mcp",
         "observability",
         "compatibility",
         "sdk",
         "cost_calculation",
+        "caching",
+        "security",
     }
 )

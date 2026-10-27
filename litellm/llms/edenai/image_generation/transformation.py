@@ -5,7 +5,7 @@ for every image model in the catalog with the real per-request cost at the top l
 Docs: https://www.edenai.co/docs/v3/llms/image-generation
 """
 
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol, cast
 
 import httpx
 
@@ -36,11 +36,19 @@ _SUPPORTED_PARAMS: Final[tuple[OpenAIImageGenerationOptionalParams, ...]] = (
 )
 
 
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
+
+
 class EdenAIImageGenerationConfig(BaseImageGenerationConfig):
     def get_supported_openai_params(
         self, model: str
     ) -> list[OpenAIImageGenerationOptionalParams]:  # mutable-ok: inherited contract
-        return list(_SUPPORTED_PARAMS)  # mutable-ok: inherited contract
+        return list(_SUPPORTED_PARAMS)
 
     def map_openai_params(
         self,
@@ -49,7 +57,7 @@ class EdenAIImageGenerationConfig(BaseImageGenerationConfig):
         model: str,
         drop_params: bool,
     ) -> dict[str, object]:  # mutable-ok: inherited contract
-        return {**optional_params, **pick(non_default_params, _SUPPORTED_PARAMS)}  # mutable-ok: inherited contract
+        return {**optional_params, **pick(non_default_params, _SUPPORTED_PARAMS)}
 
     def get_complete_url(
         self,
@@ -82,7 +90,7 @@ class EdenAIImageGenerationConfig(BaseImageGenerationConfig):
         litellm_params: dict[str, object],  # mutable-ok: inherited contract
         headers: dict[str, object],  # mutable-ok: inherited contract
     ) -> dict[str, object]:  # mutable-ok: inherited contract
-        return {"model": model, "prompt": prompt, **optional_params}  # mutable-ok: inherited contract
+        return {"model": model, "prompt": prompt, **optional_params}
 
     def transform_image_generation_response(
         self,
@@ -97,10 +105,14 @@ class EdenAIImageGenerationConfig(BaseImageGenerationConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
-        body: Final = raw_response.json()
+        body: Final = _json_body(raw_response)
         logging_obj.post_call(original_response=body)
         response: Final[ImageResponse] = convert_to_model_response_object(
-            response_object=body, model_response_object=model_response, response_type="image_generation"
+            response_object=cast(  # cast-ok: the body passes through unvalidated, as before it was typed
+                dict[str, object], body
+            ),
+            model_response_object=model_response,
+            response_type="image_generation",
         )
         set_response_cost_in_hidden_params(response, reported_cost(body))
         return response

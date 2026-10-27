@@ -29,6 +29,8 @@ pub struct HttpClientPool {
     media_resolver: Arc<dyn Resolve>,
     ttl: Duration,
     clients: Mutex<Clients>,
+    #[cfg(feature = "mcp")]
+    mcp: crate::mcp::Pool,
 }
 
 impl HttpClientPool {
@@ -41,7 +43,17 @@ impl HttpClientPool {
             media_resolver,
             ttl,
             clients: Mutex::default(),
+            #[cfg(feature = "mcp")]
+            mcp: crate::mcp::Pool::default(),
         }
+    }
+
+    #[cfg(feature = "mcp")]
+    pub fn mcp_client(
+        &self,
+        config: &HttpClientConfig,
+    ) -> Result<impl rmcp::transport::streamable_http_client::StreamableHttpClient, Error> {
+        self.mcp.client(config, self.ttl)
     }
 
     pub fn client(
@@ -377,5 +389,57 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+    #[cfg(feature = "mcp")]
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn mcp_clients_reuse_connections_and_apply_proxy_headers_without_redirects() {
+        let (address, connections, requests) = serve("HTTP/1.1 302 Found").await;
+        let pool = pool();
+        let config = HttpClientConfig {
+            proxies: proxied_through(&format!("http://{address}")),
+            ..config("mcp-pool-test")
+        };
+        for _ in 0..2 {
+            let response = pool
+                .mcp
+                .client(&config, pool.ttl)
+                .unwrap()
+                .get("http://upstream.invalid/mcp")
+                .timeout(Duration::from_secs(2))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 302);
+            response.bytes().await.unwrap();
+        }
+        assert_eq!(connections.load(Ordering::SeqCst), 1);
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.starts_with("GET http://upstream.invalid/mcp HTTP/1.1"))
+        );
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.contains("user-agent: mcp-pool-test"))
+        );
+    }
+
+    #[cfg(feature = "mcp")]
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn mcp_client_uses_host_tls_configuration() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = HttpClientConfig {
+            verify: Verify::CaBundle(directory.path().join("missing.pem")),
+            ..config("mcp-test")
+        };
+        assert!(matches!(
+            pool().mcp_client(&config),
+            Err(Error::Read { .. })
+        ));
     }
 }

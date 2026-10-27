@@ -3,10 +3,10 @@ CompactifAI chat completion transformation
 """
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import httpx
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.common_utils import OpenAIError
@@ -25,11 +25,32 @@ else:
     LiteLLMLoggingObj = Any
 
 
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
+
+
+class _CompactifAIToolCall(TypedDict):
+    function: ReadOnly[Mapping[str, str]]
+
+
+class _CompactifAIMessage(TypedDict, total=False):
+    content: str | None  # writable-ok: json mode moves a lone tool call's arguments into the content in place
+    tool_calls: Sequence[_CompactifAIToolCall] | None  # writable-ok: json mode clears the tool call it moved
+
+
+class _CompactifAIChoice(TypedDict, total=False):
+    message: ReadOnly[_CompactifAIMessage]
+
+
 class CompactifAIResponseFields(TypedDict, total=False):
     """The chat completion fields of a CompactifAI response body."""
 
     id: ReadOnly[str]
-    choices: ReadOnly[Sequence[Mapping[str, object]]]
+    choices: ReadOnly[Required[Sequence[_CompactifAIChoice]]]
     created: ReadOnly[int]
     model: ReadOnly[str]
     system_fingerprint: ReadOnly[str | None]
@@ -82,22 +103,19 @@ class CompactifAIChatConfig(OpenAIGPTConfig):
         )
 
         ## RESPONSE OBJECT
-        response_json: Final = raw_response.json()
+        response_json: Final = cast(  # cast-ok: the body passes through unvalidated, as before it was typed
+            CompactifAIResponseFields, _json_body(raw_response)
+        )
 
         # Handle JSON mode if needed
         if json_mode:
             for choice in response_json["choices"]:
                 message = choice.get("message")
-                if message and message.get("tool_calls"):
-                    # Convert tool calls to content for JSON mode
-                    tool_calls = message.get("tool_calls", [])
-                    if len(tool_calls) == 1:
-                        message["content"] = tool_calls[0]["function"].get("arguments", "")
-                        message["tool_calls"] = None
+                if message and (tool_calls := message.get("tool_calls")) and len(tool_calls) == 1:
+                    message["content"] = tool_calls[0]["function"].get("arguments", "")
+                    message["tool_calls"] = None
 
-        response_fields: Final[CompactifAIResponseFields] = response_json
-
-        returned_response: Final = ModelResponse(**response_fields)
+        returned_response: Final = ModelResponse(**response_json)
 
         # Set model name with provider prefix
         returned_response.model = f"compactifai/{model}"

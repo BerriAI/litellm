@@ -689,9 +689,8 @@ def test_exclude_only_hardcoded_label_drops_all_labels(reset_prometheus_exclude_
 
 
 def test_exclude_labels_does_not_touch_unrelated_metrics(reset_prometheus_exclude_settings):
-    """A metric that never declares the excluded label is left as a plain prometheus metric,
-    not wrapped, so no behavior changes for it."""
-    from litellm.integrations.prometheus import _ExcludedLabelMetric
+    """A metric that never declares the excluded label keeps every one of its own labels in the scrape."""
+    from prometheus_client import generate_latest
 
     clear_prometheus_registry()
     litellm.prometheus_metrics_config = None
@@ -699,10 +698,15 @@ def test_exclude_labels_does_not_touch_unrelated_metrics(reset_prometheus_exclud
     litellm.prometheus_exclude_labels = ["guardrail_name"]
 
     logger = PrometheusLogger()
+    spend_labels = {name: f"{name}-value" for name in PrometheusMetricLabels.get_labels("litellm_spend_metric")}
+    logger.litellm_spend_metric.labels(**spend_labels).inc(1.5)
+    logger.litellm_provider_remaining_budget_metric.labels("anthropic").set(5.0)
 
-    assert not isinstance(logger.litellm_spend_metric, _ExcludedLabelMetric)
-    assert not isinstance(logger.litellm_provider_remaining_budget_metric, _ExcludedLabelMetric)
-    assert isinstance(logger.litellm_guardrail_latency_metric, _ExcludedLabelMetric)
+    scrape = generate_latest(REGISTRY).decode()
+    spend_line = next(line for line in scrape.splitlines() if line.startswith("litellm_spend_metric_total{"))
+    assert all(f'{name}="{value}"' in spend_line for name, value in spend_labels.items())
+    assert spend_line.endswith(" 1.5")
+    assert 'litellm_provider_remaining_budget_metric{api_provider="anthropic"} 5.0' in scrape
 
 
 # ==============================================================================

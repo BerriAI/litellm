@@ -1,7 +1,7 @@
 """Path allowlist for the gateway component.
 
 The gateway exposes the LLM data-plane surface: chat/completions, embeddings,
-audio, batches, files, fine-tuning, rerank, ocr, rag, video, search, image,
+audio, batches, files, fine-tuning, rerank, decisions, extraction, ocr, rag, video, search, image,
 responses, vector stores, passthrough providers, realtime websockets, MCP
 tool-call endpoints, and operational endpoints (/health, /metrics, and the
 /debug/memory/summary read of the serving worker's RSS).
@@ -60,6 +60,12 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/v1/rerank",
     "/v2/rerank",
     "/rerank",
+    "/v1/decisions",
+    "/decisions",
+    "/v1/systemone",
+    "/systemone",
+    "/v1/extraction",
+    "/extraction",
     "/v1/ocr",
     "/ocr",
     "/v1/rag/",
@@ -73,6 +79,8 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/v1/containers",
     "/containers",
     "/v1/evals",
+    "/v1/traces",
+    "/v1/logs",
     "/v1/memory",
     "/queue/chat/",
     # Google data plane (v1beta is the Google AI Studio version)
@@ -115,6 +123,8 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     # Realtime / streaming
     "/v1/realtime",
     "/realtime",
+    "/v1/live/sessions",
+    "/live/sessions",
     # Health & ops
     "/health",
     "/metrics",

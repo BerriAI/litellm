@@ -3,11 +3,17 @@ Tests for BaseModelResponseIterator - specifically testing that empty SSE lines 
 and non-string objects (e.g. Pydantic BaseModel events from the Responses API) pass through.
 """
 
+import json
+from collections.abc import AsyncIterator
+from typing import Final
+
+import httpx
 import pytest
 from pydantic import BaseModel
 
-from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
-from litellm.types.utils import GenericStreamingChunk
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator, convert_model_response_to_streaming
+from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
+from litellm.types.utils import Choices, GenericStreamingChunk, Message, ModelResponse
 
 
 class TestBaseModelResponseIterator:
@@ -256,3 +262,77 @@ async def test_aclose_is_noop_without_http_response():
     )
 
     await iterator.aclose()
+
+
+_PREFIXED_BYTE_FRAMES: Final = (
+    b"event: completion\ndata: "
+    + json.dumps(
+        {
+            "id": "chatcmpl-bytes",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-5.5",
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Hello"}, "finish_reason": None}],
+        }
+    ).encode(),
+    b"data: [DONE]",
+)
+
+
+async def _aiter_frames(frames: tuple[bytes, ...]) -> AsyncIterator[bytes]:
+    for frame in frames:
+        yield frame
+
+
+async def _collect_prefixed_byte_frames(sync_mode: bool) -> list[object]:
+    if sync_mode:
+        return list(
+            OpenAIChatCompletionStreamingHandler(streaming_response=iter(_PREFIXED_BYTE_FRAMES), sync_stream=True)
+        )
+    return [
+        chunk
+        async for chunk in OpenAIChatCompletionStreamingHandler(
+            streaming_response=_aiter_frames(_PREFIXED_BYTE_FRAMES), sync_stream=False
+        )
+    ]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_bytes_chunk_with_text_before_data_prefix_is_parsed(sync_mode: bool) -> None:
+    chunks: Final = await _collect_prefixed_byte_frames(sync_mode)
+
+    assert len(chunks) == 2
+    assert chunks[0].id == "chatcmpl-bytes"
+    assert chunks[0].choices[0].delta.content == "Hello"
+    assert chunks[1]["is_finished"] is True
+
+
+def test_close_releases_the_attached_http_response():
+    response: Final = httpx.Response(200, stream=httpx.ByteStream(b"data: [DONE]\n\n"))
+    iterator: Final = BaseModelResponseIterator(streaming_response=iter(()), sync_stream=True)
+    iterator.http_response = response
+    iterator.close()
+    assert response.is_closed
+
+
+def test_fake_stream_chunk_indexes_thinking_blocks_by_position_without_touching_the_response():
+    """The OpenAI SDK's `.stream()` accumulator merges streamed `thinking_blocks` entries by `index`, so a fake stream
+    numbers them the way a real stream does, redacted blocks included"""
+    thinking_blocks: Final = [
+        {"type": "thinking", "thinking": "Step 1.", "signature": "sig-a"},
+        {"type": "redacted_thinking", "data": "opaque"},
+        {"type": "thinking", "thinking": "Step 2.", "signature": "sig-b"},
+    ]
+    response: Final = ModelResponse(
+        choices=[Choices(message=Message(content="Paris", thinking_blocks=thinking_blocks), finish_reason="stop")]
+    )
+
+    chunk: Final = convert_model_response_to_streaming(response)
+
+    assert chunk.choices[0].delta.thinking_blocks == [
+        {"type": "thinking", "thinking": "Step 1.", "signature": "sig-a", "index": 0},
+        {"type": "redacted_thinking", "data": "opaque", "index": 1},
+        {"type": "thinking", "thinking": "Step 2.", "signature": "sig-b", "index": 2},
+    ]
+    assert [block.get("index") for block in response.choices[0].message.thinking_blocks] == [None, None, None]

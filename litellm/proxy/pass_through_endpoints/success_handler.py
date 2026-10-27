@@ -117,9 +117,9 @@ class PassThroughEndpointLogging:
 
     @property
     def _log_dispatch(self) -> PassThroughLogDispatch:
-        return self._injected_log_dispatch if self._injected_log_dispatch is not None else self._handle_logging
+        return self._injected_log_dispatch if self._injected_log_dispatch is not None else self.handle_logging
 
-    async def _handle_logging(
+    async def handle_logging(
         self,
         logging_obj: LiteLLMLoggingObj,
         standard_logging_response_object: StandardPassThroughResponseObject
@@ -130,7 +130,7 @@ class PassThroughEndpointLogging:
         end_time: datetime,
         cache_hit: bool,
         **kwargs,
-    ):
+    ) -> None:
         """Log pass-through success via the shared async dispatch path."""
         # Always reached from pass_through_async_success_handler, which runs in
         # an async context. call_type is "pass_through_endpoint" here, so the
@@ -147,6 +147,8 @@ class PassThroughEndpointLogging:
             prefer_async_handlers=True,
             **kwargs,
         )
+
+    _handle_logging = handle_logging
 
     def normalize_llm_passthrough_logging_payload(
         self,
@@ -334,8 +336,10 @@ class PassThroughEndpointLogging:
             )
             standard_logging_response_object = transcribe_handler_result["result"]  # rebind-ok: elif-chain
             kwargs = transcribe_handler_result["kwargs"]  # rebind-ok: elif-chain contract
-        elif self.is_typesafe_route(custom_llm_provider) or self.is_openrouter_decisions_route(
-            url_route, custom_llm_provider
+        elif (
+            self.is_typesafe_route(custom_llm_provider)
+            or custom_llm_provider in ("laya", "bespoke")
+            or self.is_openrouter_decisions_route(url_route, custom_llm_provider)
         ):
             from .llm_provider_handlers.typesafe_passthrough_logging_handler import (
                 TypeSafePassthroughLoggingHandler,
@@ -365,7 +369,9 @@ class PassThroughEndpointLogging:
             vertex_ai_live_handler: Final = VertexAILivePassthroughLoggingHandler()
 
             # For WebSocket responses, response_body should be a list of messages
-            websocket_messages: Final[list[dict[str, Any]]] = response_body if isinstance(response_body, list) else []
+            websocket_messages: Final[list[dict[str, object]]] = (
+                response_body if isinstance(response_body, list) else []
+            )
 
             vertex_ai_live_handler_result: Final = vertex_ai_live_handler.vertex_ai_live_passthrough_handler(
                 websocket_messages=websocket_messages,
@@ -441,7 +447,7 @@ class PassThroughEndpointLogging:
                 )
                 return
         if self.is_assemblyai_route(url_route) and not self.is_azure_speech_route(custom_llm_provider):
-            if AssemblyAIPassthroughLoggingHandler._should_log_request(httpx_response.request.method) is not True:
+            if AssemblyAIPassthroughLoggingHandler.should_log_request(httpx_response.request.method) is not True:
                 return
             self.assemblyai_passthrough_logging_handler.assemblyai_passthrough_logging_handler(
                 httpx_response=httpx_response,
@@ -602,10 +608,10 @@ class PassThroughEndpointLogging:
         if not url_route:
             return False
         from .llm_provider_handlers.openai_passthrough_logging_handler import (
-            _is_openai_compatible_url,
+            is_openai_compatible_url,
         )
 
-        return _is_openai_compatible_url(url_route)
+        return is_openai_compatible_url(url_route)
 
     def is_gemini_route(self, url_route: str, custom_llm_provider: str | None = None):
         """Check if the URL route is a Gemini API route."""
