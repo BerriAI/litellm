@@ -760,7 +760,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
             <MCPToolsetsTab accessToken={accessToken} userRole={userRole} />
           </TabsContent>
           <TabsContent value="connect" keepMounted>
-            <MCPConnect />
+            <MCPConnect accessToken={accessToken} />
           </TabsContent>
           {isAdminRole(userRole) && (
             <>

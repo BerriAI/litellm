@@ -20,6 +20,7 @@ import {
   Zap,
 } from "lucide-react";
 import { getGatewayBaseUrl, getProxyBaseUrl } from "@/components/networking";
+import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 
 interface CodeBlockProps {
@@ -127,12 +128,14 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
 };
 
 interface MCPConnectProps {
+  accessToken: string | null;
   currentServerAccessGroups?: string[];
 }
 
-const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] }) => {
-  const proxyBaseUrl = getProxyBaseUrl();
-  const gatewayBaseUrl = getGatewayBaseUrl();
+const MCPConnect: React.FC<MCPConnectProps> = ({ accessToken, currentServerAccessGroups = [] }) => {
+  const docBaseUrl = useProxySettings(accessToken).LITELLM_UI_API_DOC_BASE_URL?.trim().replace(/\/+$/, "");
+  const proxyBaseUrl = docBaseUrl || getProxyBaseUrl();
+  const gatewayBaseUrl = docBaseUrl || getGatewayBaseUrl();
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [currentServer] = useState("Zapier_MCP"); // This should match the current server being viewed
 
