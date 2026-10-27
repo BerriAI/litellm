@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 
 import inspect
 
@@ -106,6 +106,28 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
 )
 
 client = TestClient(app)
+
+
+def test_key_request_models_reject_expires() -> None:
+    for request_model, request_values in (
+        (GenerateKeyRequest, {"expires": "2026-01-01T00:00:00Z"}),
+        (UpdateKeyRequest, {"key": "sk-x", "expires": "2026-01-01T00:00:00Z"}),
+        (RegenerateKeyRequest, {"expires": "2026-01-01T00:00:00Z"}),
+        (GenerateKeyRequest, {"expires": None}),
+    ):
+        with pytest.raises(ValidationError) as exc_info:
+            request_model.model_validate(request_values)
+        assert "duration" in str(exc_info.value)
+
+
+def test_generate_key_response_preserves_expires() -> None:
+    expires: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    assert GenerateKeyResponse(key="sk-x", expires=expires).expires == expires
+
+
+def test_generate_key_request_accepts_duration_without_expires() -> None:
+    assert GenerateKeyRequest.model_validate({"duration": "1h"}).duration == "1h"
 
 
 @pytest.mark.asyncio
@@ -23304,6 +23326,4 @@ def test_key_info_database_not_connected_sanitized_500(
         assert "Database not connected" in caplog.text
     finally:
         proxy_server.app.dependency_overrides.pop(user_api_key_auth, None)
-
-
 
