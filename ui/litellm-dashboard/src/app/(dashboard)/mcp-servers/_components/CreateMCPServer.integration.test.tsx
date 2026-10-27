@@ -1932,7 +1932,7 @@ describe("CreateMCPServer", () => {
   });
 
   describe("when prefillData is provided", () => {
-    it("should populate form fields from discovery data", async () => {
+    it("should sanitize the server name from discovery data", async () => {
       const prefillData = {
         name: "github-mcp",
         title: "GitHub MCP",
@@ -1945,9 +1945,28 @@ describe("CreateMCPServer", () => {
       render(<CreateMCPServer {...defaultProps} prefillData={prefillData} />);
 
       await waitFor(() => {
-        // Server name should be sanitized (hyphens replaced with underscores)
-        const nameInput = getServerNameInput();
-        expect(nameInput).toHaveValue("github_mcp");
+        expect(getServerNameInput()).toHaveValue("github_mcp");
+      });
+    });
+
+    it("should populate URL and auth type from discovery data", async () => {
+      const prefillData = {
+        name: "nimble",
+        title: "Nimble",
+        description: "Nimble search server",
+        category: "Search",
+        transport: "http",
+        url: "https://mcp.nimbleway.com/mcp",
+        auth_type: "bearer_token",
+      };
+
+      render(<CreateMCPServer {...defaultProps} prefillData={prefillData} />);
+
+      await waitFor(() => {
+        expect(getServerNameInput()).toHaveValue("nimble");
+        expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toHaveValue("https://mcp.nimbleway.com/mcp");
+        expect(screen.getByText("Bearer Token")).toBeInTheDocument();
+        expect(screen.getByText("Authentication Value")).toBeInTheDocument();
       });
     });
 
