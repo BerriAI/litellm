@@ -260,7 +260,7 @@ async def convert_to_streaming_response_async(
             index=idx,
             delta=delta,
             logprobs=logprobs,
-            **_choice_provider_extras(choice, _CACHED_CHOICE_RESERVED_KEYS),
+            **_choice_provider_extras(_FIELD_MAP.validate_python(choice), _CACHED_CHOICE_RESERVED_KEYS),
         )
         choice_list.append(choice)
 
@@ -353,7 +353,7 @@ def convert_to_streaming_response(
             delta=delta,
             logprobs=logprobs,
             enhancements=enhancements,
-            **_choice_provider_extras(choice, _CACHED_CHOICE_RESERVED_KEYS),
+            **_choice_provider_extras(_FIELD_MAP.validate_python(choice), _CACHED_CHOICE_RESERVED_KEYS),
         )
 
         choice_list.append(choice)
@@ -858,7 +858,9 @@ def convert_to_model_response_object(
                     logprobs=logprobs,
                     enhancements=enhancements,
                     provider_specific_fields=provider_specific_fields,
-                    **_choice_provider_extras(provider_specific_fields, _CHOICES_EXPLICIT_KWARGS),
+                    **_choice_provider_extras(
+                        _FIELD_MAP.validate_python(provider_specific_fields), _CHOICES_EXPLICIT_KWARGS
+                    ),
                 )
                 if provider_sent_logprobs and logprobs is None:
                     choice.logprobs = None

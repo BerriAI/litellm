@@ -17,7 +17,7 @@ import httpx
 from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, TypedDict
 
 import litellm
@@ -71,6 +71,7 @@ TOOL_CALLS_ATTRIBUTE: Final = "tool_calls"
 FUNCTION_CALL_ATTRIBUTE: Final = "function_call"
 
 _SYNC_ITER_EXHAUSTED: Final = object()
+_STREAM_OPTIONS: Final = TypeAdapter(Mapping[str, object] | None)
 
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
 _CompleteStreamingResponse = ModelResponse | TextCompletionResponse | ModelResponseStream | None
@@ -375,8 +376,8 @@ class CustomStreamWrapper:
         self.received_model_id: str | None = None
         self.logging_loop = None
         self.rules = Rules()
-        self.stream_options: Mapping[str, object] | None = stream_options or getattr(
-            logging_obj, "stream_options", None
+        self.stream_options: Mapping[str, object] | None = _STREAM_OPTIONS.validate_python(
+            stream_options or getattr(logging_obj, "stream_options", None)
         )
         self.messages = getattr(logging_obj, "messages", None)
         self.sent_stream_usage = False

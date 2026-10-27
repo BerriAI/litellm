@@ -10086,7 +10086,7 @@ def _fast_serialize_simple_model_response_stream(
     choice: Final = choices[0]
     if getattr(choice, "logprobs", None) is not None or getattr(choice, "enhancements", None) is not None:
         return None
-    if _streaming_choice_carries_provider_extras(choice):
+    if _streaming_choice_carries_provider_extras(chunk.choices[0]):
         return None
 
     delta: Final[object] = getattr(choice, "delta", None)

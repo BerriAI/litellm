@@ -57,6 +57,7 @@ from litellm.litellm_core_utils.bug_report import (
     strip_bug_report_notice,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     get_or_create_metadata_bucket,
     independent_snapshot,
     is_expected_client_error,
@@ -568,6 +569,7 @@ def stream_usage_tracking_updates(
         return scrub
     always_include: Final = general_settings.get("always_include_stream_usage")
     stream_options: Final = data.get("stream_options")
+    stream_options_fields: Final = as_str_mapping(stream_options)
     if always_include is True:
         if "stream_options" not in data:
             return {**scrub, "stream_options": {"include_usage": True}, STREAM_USAGE_INJECTED_FIELD: True}
@@ -587,8 +589,8 @@ def stream_usage_tracking_updates(
     if not supports_stream_options():
         return scrub
     merged_stream_options: Final = (
-        {k: v for k, v in stream_options.items() if k != "continuous_usage_stats"}
-        if isinstance(stream_options, dict)
+        {key: value for key, value in stream_options_fields.items() if key != "continuous_usage_stats"}
+        if isinstance(stream_options, dict) and stream_options_fields is not None
         else {}
     )
     return {
