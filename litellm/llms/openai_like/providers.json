@@ -132,6 +132,12 @@
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
   },
+  "kenari": {
+    "base_url": "https://kenari.id/v1",
+    "api_key_env": "KENARI_API_KEY",
+    "api_base_env": "KENARI_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions"]
+  },
   "tensormesh": {
     "base_url": "https://serverless.tensormesh.ai/v1",
     "api_key_env": "TENSORMESH_INFERENCE_API_KEY",
