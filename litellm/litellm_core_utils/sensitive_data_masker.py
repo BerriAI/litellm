@@ -1,9 +1,9 @@
 from collections.abc import ItemsView, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
-from typing import Any, Final, cast
+from typing import Any, Final
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
 from litellm.litellm_core_utils.secret_redaction import REDACTED
@@ -274,6 +274,7 @@ _REQUEST_LOG_HEADER_NAMES: Final = frozenset(
         "x-correlation-id",
     )
 )
+_REQUEST_LOG_HEADER_ADAPTER: Final = TypeAdapter(Mapping[object, object])
 
 
 def _redact_request_headers(value: object) -> object:
@@ -281,7 +282,7 @@ def _redact_request_headers(value: object) -> object:
         return None
     if not isinstance(value, Mapping):
         return REDACTED
-    headers: Final = cast(Mapping[object, object], value)  # cast-ok: Mapping checked above, keys remain untrusted
+    headers: Final = _REQUEST_LOG_HEADER_ADAPTER.validate_python(value)
     if any(
         not isinstance(name, str) or name.lower() not in _REQUEST_LOG_HEADER_NAMES or not isinstance(item, str)
         for name, item in headers.items()
