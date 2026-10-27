@@ -1027,6 +1027,39 @@ async def test_jev_state_within_the_budget_is_sent_unchanged(system_prompt: str)
 
 
 @pytest.mark.asyncio
+async def test_jev_oversized_operator_instructions_use_fallback_without_sending_a_request() -> None:
+    recorder: Final = _StateRecorder()
+    router: Final = _budget_router(recorder, jev_config={"instructions": _words("rubric", 30_000)})
+    outcome: Final = await router.aclassify("summarize this document")
+    assert outcome.cause == "heuristic_scorer"
+    assert outcome.classifier_failure_reason == "classifier_error"
+    assert recorder.states == ()
+
+
+@pytest.mark.asyncio
+async def test_jev_oversized_fixed_history_uses_fallback_without_sending_a_request() -> None:
+    recorder: Final = _StateRecorder()
+    router: Final = _budget_router(
+        recorder,
+        model_list=[
+            {
+                "model_name": "decision",
+                "litellm_params": {"model": "azure_ai/decision-1"},
+                "model_info": {"max_input_tokens": 512},
+            }
+        ],
+        jev_config={"deployment_name": "decision"},
+    )
+    outcome: Final = await router.aclassify(
+        "summarize this document",
+        messages=[{"role": "user", "content": _words("history", 2000)}],
+    )
+    assert outcome.cause == "heuristic_scorer"
+    assert outcome.classifier_failure_reason == "classifier_error"
+    assert recorder.states == ()
+
+
+@pytest.mark.asyncio
 async def test_jev_oversized_current_ask_is_cut_to_the_budget_keeping_both_ends() -> None:
     recorder: Final = _StateRecorder()
     ask: Final = f"ASK-HEAD {_words('ask', 60_000)} ASK-TAIL"
