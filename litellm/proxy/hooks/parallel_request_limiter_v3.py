@@ -643,7 +643,7 @@ class ReservationAwareIncrementOperation(RedisPipelineIncrementOperation):
 class OpenWindowIncrementOperation(RedisPipelineIncrementOperation):
     """A token increment Redis applies only while ``open_window_key`` holds its scope's rate limit window."""
 
-    open_window_key: str
+    open_window_key: ReadOnly[str]
 
 
 class RateLimitResponseWithDescriptors(TypedDict):

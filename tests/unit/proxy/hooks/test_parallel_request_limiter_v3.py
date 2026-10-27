@@ -3,10 +3,11 @@ Unit Tests for the max parallel request limiter v3 for the proxy
 """
 
 import asyncio
+import itertools
 import logging
 import sys
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Final, List, Optional
@@ -8802,46 +8803,107 @@ async def _admit_scoped_request(handler: _PROXY_MaxParallelRequestsHandler, auth
     )
 
 
-def _charged_windows(handler: _PROXY_MaxParallelRequestsHandler, kwargs: dict[str, object]) -> dict[str, object]:
-    operations: Final = handler._build_success_event_pipeline_operations(
+class _WindowStateRedis:
+    """Keeps the windows admission opens and applies reservations and token increments the way the Redis scripts do"""
+
+    def __init__(self) -> None:
+        self.scripted: Final = _ScriptedRedis()
+        self.window_starts: Final[dict[str, str]] = {}
+        self.counters: Final[dict[str, float]] = {}
+
+    def _charge(self, counter_key: str, increment: object) -> float:
+        self.counters[counter_key] = self.counters.get(counter_key, 0.0) + float(str(increment))
+        return self.counters[counter_key]
+
+    def _settle(
+        self, window_key: str, counter_key: str, expected_window_start: object, increment: object
+    ) -> tuple[int, float]:
+        if self.window_starts.get(window_key) == str(expected_window_start):
+            return 1, self._charge(counter_key, increment)
+        return 0, self.counters.get(counter_key, 0.0)
+
+    def async_register_script(self, script: str) -> Callable[[Sequence[str], Sequence[object]], Awaitable[object]]:
+        from litellm.proxy.hooks import parallel_request_limiter_v3 as v3
+
+        scripted: Final[Callable[[Sequence[str], Sequence[object]], Awaitable[object]]] = (
+            self.scripted.async_register_script(script)
+        )
+
+        async def run(keys: Sequence[str], args: Sequence[object]) -> object:
+            if script == v3.TOKEN_INCREMENT_SCRIPT:
+                return [self._charge(key, increment) for key, increment in zip(keys, args[::2], strict=True)]
+            pairs: Final = list(zip(keys[::2], keys[1::2], strict=True))
+            if script == v3.CHECK_AND_INCREMENT_BY_N_SCRIPT:
+                starts: Final = [self.window_starts.setdefault(window, str(int(time.time()))) for window, _ in pairs]
+                return [
+                    0,
+                    *itertools.chain.from_iterable(
+                        (self._charge(counter, increment), start)
+                        for (_, counter), increment, start in zip(pairs, args[1::4], starts, strict=True)
+                    ),
+                ]
+            if script == v3.WINDOW_GUARDED_TOKEN_INCREMENT_SCRIPT:
+                return list(
+                    itertools.chain.from_iterable(
+                        self._settle(window, counter, expected, increment)
+                        for (window, counter), expected, increment in zip(pairs, args[::3], args[1::3], strict=True)
+                    )
+                )
+            if script == v3.OPEN_WINDOW_TOKEN_INCREMENT_SCRIPT:
+                applied: Final = [
+                    self._charge(counter, increment)
+                    for (window, counter), increment in zip(pairs, args[::2], strict=True)
+                    if window == counter or window in self.window_starts
+                ]
+                return len(applied)
+            if script == v3.BATCH_RATE_LIMITER_SCRIPT:
+                self.window_starts.update({window: str(args[0]) for window, _ in pairs if window.endswith(":window")})
+            return await scripted(keys, args)
+
+        return run
+
+
+async def _charged_counters(
+    handler: _PROXY_MaxParallelRequestsHandler, redis: _WindowStateRedis, kwargs: dict[str, object]
+) -> dict[str, float]:
+    await handler.async_log_success_event(
         kwargs=kwargs,
         response_obj=ModelResponse(usage=Usage(prompt_tokens=2, completion_tokens=1, total_tokens=3)),
-        rate_limit_type="total",
+        start_time=datetime.now(),
+        end_time=datetime.now(),
     )
-    return {operation["key"]: operation.get("open_window_key") for operation in operations}
+    return {key: value for key, value in redis.counters.items() if key.endswith(":tokens")}
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "limits, reserved",
+    "limits, charged",
     [
         ({}, frozenset()),
-        ({"rpm_limit": 100}, frozenset()),
-        ({"user_rpm_limit": 100}, frozenset()),
-        ({"tpm_limit": 1000}, frozenset({"{api_key:key-hash}:tokens"})),
-        ({"team_tpm_limit": 1000}, frozenset({"{team:t}:tokens"})),
+        ({"rpm_limit": 100}, frozenset({"{api_key:key-hash}:tokens"})),
+        ({"user_rpm_limit": 100}, frozenset({"{user:u}:tokens"})),
+        ({"tpm_limit": 1000, "user_rpm_limit": 100}, frozenset({"{api_key:key-hash}:tokens", "{user:u}:tokens"})),
+        ({"team_tpm_limit": 1000, "rpm_limit": 100}, frozenset({"{team:t}:tokens", "{api_key:key-hash}:tokens"})),
     ],
     ids=["no_limits", "key_rpm", "user_rpm", "key_tpm_reserved", "team_tpm_reserved"],
 )
 async def test_success_charges_every_unreserved_scope_only_while_its_rate_limit_window_is_open(
-    limits: dict[str, object], reserved: frozenset[str]
+    limits: dict[str, object], charged: frozenset[str]
 ) -> None:
-    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    redis: Final = _WindowStateRedis()
+    handler: Final = _handler_with_redis(redis)
     await _admit_scoped_request(handler, UserAPIKeyAuth(api_key="key-hash", user_id="u", team_id="t", **limits))
 
-    assert _charged_windows(handler, _scoped_success_kwargs()) == {
-        key: None if key in reserved else key.removesuffix(":tokens") + ":window" for key in _SCOPE_TOKEN_KEYS
-    }
+    assert await _charged_counters(handler, redis, _scoped_success_kwargs()) == dict.fromkeys(charged, 3.0)
 
 
 @pytest.mark.asyncio
 async def test_success_charges_a_numeric_body_user_to_the_window_its_admission_opened() -> None:
-    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
-    await _admit_scoped_request(
-        handler, UserAPIKeyAuth(api_key="key-hash", end_user_id="123", end_user_rpm_limit=100)
-    )
+    redis: Final = _WindowStateRedis()
+    handler: Final = _handler_with_redis(redis)
+    await _admit_scoped_request(handler, UserAPIKeyAuth(api_key="key-hash", end_user_id="123", end_user_rpm_limit=100))
 
-    assert _charged_windows(handler, _scoped_success_kwargs(user=123))["{end_user:123}:tokens"] == "{end_user:123}:window"
+    assert await _charged_counters(handler, redis, _scoped_success_kwargs(user=123)) == {"{end_user:123}:tokens": 3.0}
 
 
 @pytest.mark.asyncio
@@ -8849,7 +8911,8 @@ async def test_success_charges_a_numeric_body_user_to_the_window_its_admission_o
 async def test_success_of_a_call_that_skipped_admission_charges_every_scope_without_waiting_for_a_window(
     parent_admitted: bool,
 ) -> None:
-    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    redis: Final = _WindowStateRedis()
+    handler: Final = _handler_with_redis(redis)
     if parent_admitted:
         await handler.async_pre_call_hook(
             user_api_key_dict=UserAPIKeyAuth(api_key="key-hash", user_id="u", team_id="t"),
@@ -8862,6 +8925,6 @@ async def test_success_of_a_call_that_skipped_admission_charges_every_scope_with
             call_type="acompletion",
         )
 
-    assert _charged_windows(handler, _scoped_success_kwargs(litellm_call_id="sub-call")) == dict.fromkeys(
-        _SCOPE_TOKEN_KEYS
+    assert await _charged_counters(handler, redis, _scoped_success_kwargs(litellm_call_id="sub-call")) == dict.fromkeys(
+        _SCOPE_TOKEN_KEYS, 3.0
     )
