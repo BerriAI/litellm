@@ -131,6 +131,23 @@ describe("duration", () => {
   });
 });
 
+describe("absolute expiration", () => {
+  it.each(["", "   "])("omits a cleared expiration from the request (%j)", (expires) => {
+    const payload = payloadOf(build({ key_alias: "my-key", expires }));
+    expect(JSON.parse(JSON.stringify(payload))).toStrictEqual(aliasOnly());
+  });
+
+  it.each(["2030-01-01T10:30:00+05:30", null])("preserves an explicit expiration (%j)", (expires) => {
+    const payload = payloadOf(build({ key_alias: "my-key", expires }));
+    expect(JSON.parse(JSON.stringify(payload))).toStrictEqual(aliasOnly({ expires }));
+  });
+
+  it("omits an untouched expiration without turning it into an explicit null", () => {
+    const payload = payloadOf(build({ key_alias: "my-key", expires: undefined }));
+    expect(JSON.parse(JSON.stringify(payload))).toStrictEqual(aliasOnly());
+  });
+});
+
 describe("key ownership", () => {
   it("overwrites user_id with the signed-in user when the key is owned by you", () => {
     expect(payloadOf(build({ key_alias: "my-key", user_id: "someone-else" }))).toStrictEqual(

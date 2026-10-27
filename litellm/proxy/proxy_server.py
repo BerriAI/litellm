@@ -18942,6 +18942,7 @@ async def _generate_onboarding_ui_session_token(user_obj: _UserTableRow) -> str:
 
     response: Final = await generate_key_helper_fn(
         llm_router=llm_router,
+        expires=None,
         request_type="key",
         **{
             "user_role": user_obj.user_role,

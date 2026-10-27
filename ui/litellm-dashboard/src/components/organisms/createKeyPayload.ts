@@ -202,6 +202,7 @@ export const buildKeyCreatePayload = (input: KeyCreateInput): KeyPayloadResult =
     endpoint: input.keyOwner === "service_account" ? "service_account" : "standard",
     payload: {
       ...withoutKeys(values, dropped),
+      ...(typeof values.expires === "string" && values.expires.trim() === "" && { expires: undefined }),
       ...(values.organization_id === null && { organization_id: undefined }),
       ...(values.project_id === null && { project_id: undefined }),
       ...(input.keyOwner === "you" && { user_id: input.userID }),

@@ -13,7 +13,7 @@ import pytest
 import yaml
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 
 import litellm
 from litellm.constants import PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
@@ -101,7 +101,9 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyRequest,
     BulkUpdateKeyResponse,
     CustomKeyPolicyRequest,
+    KeyUpdateFields,
 )
+from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
 
 client = TestClient(app)
 
@@ -23372,3 +23374,185 @@ def test_key_info_database_not_connected_sanitized_500(
         assert "Database not connected" in caplog.text
     finally:
         proxy_server.app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+_EXPIRATION_NOW: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
+_EXPIRATION_OFFSET: Final = "2030-01-01T05:30:00.123456+02:00"
+_EXPIRATION_INSTANT: Final = datetime.fromisoformat(_EXPIRATION_OFFSET).astimezone(timezone.utc)
+_EXPIRATION_BOUNDARY: Final = _EXPIRATION_NOW + timedelta(days=1)
+
+
+@pytest.mark.parametrize("request_type", (GenerateKeyRequest, UpdateKeyRequest, RegenerateKeyRequest))
+@pytest.mark.parametrize("expires", ("not-a-date", "2030-01-01T05:30:00", datetime(2030, 1, 1)))
+def test_key_expiration_rejects_malformed_or_naive_input(
+    request_type: type[GenerateKeyRequest] | type[UpdateKeyRequest], expires: str | datetime
+) -> None:
+    with pytest.raises(ValidationError, match="expires"):
+        request_type.model_validate({"key": "sk-expiration", "expires": expires})
+
+
+def test_key_expiration_response_still_accepts_legacy_naive_datetime() -> None:
+    naive: Final = datetime(2030, 1, 1)
+    response: Final = GenerateKeyResponse(key="sk-expiration", expires=naive)
+    assert response.expires == naive
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "default_duration", "member", "expected", "rejected"),
+    (
+        ({"expires": _EXPIRATION_OFFSET, "duration": "30d"}, "1d", None, _EXPIRATION_INSTANT, False),
+        ({"expires": None, "duration": "30d"}, "1d", None, None, False),
+        ({}, "1d", None, _EXPIRATION_BOUNDARY, False),
+        ({"duration": "1h"}, None, None, _EXPIRATION_NOW + timedelta(hours=1), False),
+        ({}, None, None, None, False),
+        ({"expires": _EXPIRATION_NOW - timedelta(seconds=1)}, None, None,
+         _EXPIRATION_NOW - timedelta(seconds=1), False),
+        ({"expires": _EXPIRATION_BOUNDARY}, None, True, _EXPIRATION_BOUNDARY, False),
+        ({"duration": "2h"}, None, True, _EXPIRATION_BOUNDARY, False),
+        ({"expires": _EXPIRATION_BOUNDARY + timedelta(microseconds=1)}, None, True, None, True),
+        ({"expires": None}, None, True, None, True),
+        ({"expires": None}, None, False, None, False),
+        ({"expires": _EXPIRATION_NOW + timedelta(days=2)}, None, False,
+         _EXPIRATION_NOW + timedelta(days=2), False),
+    ),
+    ids=("absolute-overrides-duration-and-default", "null-overrides-duration-and-default",
+         "default-duration", "relative-duration", "no-expiration", "already-expired",
+         "member-at-limit", "legacy-member-duration", "member-over-limit", "member-cannot-clear",
+         "service-account-can-clear", "service-account-exempt"),
+)
+async def test_key_expiration_generation_policy_storage_and_response_agree(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: dict[str, object],
+    default_duration: str | None,
+    member: bool | None,
+    expected: datetime | None,
+    rejected: bool,
+) -> None:
+    insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+    policy: Final = AsyncMock(return_value={"decision": True})
+    monkeypatch.setattr(
+        litellm, "default_key_generate_params",
+        {"duration": default_duration} if default_duration is not None else None,
+    )
+    monkeypatch.setattr(
+        litellm, "upperbound_key_generate_params", LiteLLM_UpperboundKeyGenerateParams(max_budget=10)
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_key_policy", policy)
+    team: Final = (
+        LiteLLM_TeamTableCachedObj(team_id="expiry-team", metadata={"team_member_key_duration": "1d"})
+        if member is not None else None
+    )
+    request: Final = GenerateKeyRequest.model_validate(
+        {
+            **payload,
+            "user_id": "expiry-member" if member else None,
+            "team_id": team.team_id if team is not None else None,
+        }
+    )
+    caller: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="expiry-admin")
+    if rejected:
+        with pytest.raises(HTTPException, match="team_member_key_duration") as exc:
+            await _common_key_generation_helper(
+                data=request,
+                user_api_key_dict=caller,
+                litellm_changed_by=None,
+                team_table=team,
+                now=_EXPIRATION_NOW,
+            )
+        assert exc.value.status_code == 400
+        insert_data.assert_not_awaited()
+        policy.assert_not_awaited()
+        return
+    response: Final = await _common_key_generation_helper(
+        data=request,
+        user_api_key_dict=caller,
+        litellm_changed_by=None,
+        team_table=team,
+        now=_EXPIRATION_NOW,
+    )
+    saved: Final = next(
+        call.kwargs["data"] for call in insert_data.await_args_list if call.kwargs["table_name"] == "key"
+    )
+    policy.assert_awaited_once()
+    policy_request: Final = CustomKeyPolicyRequest.model_validate(policy.await_args.args[0])
+    assert policy_request.effective_key.expires == saved["expires"] == response.expires == expected
+    assert policy_request.effective_key.max_budget == saved["max_budget"] == response.max_budget == 10
+
+
+@pytest.mark.parametrize("request_type", (UpdateKeyRequest, RegenerateKeyRequest))
+@pytest.mark.parametrize(
+    ("payload", "expected", "writes_expiration"),
+    (
+        ({"expires": _EXPIRATION_OFFSET, "duration": "not-a-duration"}, _EXPIRATION_INSTANT, True),
+        ({"expires": None, "duration": "1h"}, None, True),
+        ({}, _EXPIRATION_BOUNDARY, False),
+        ({"duration": None}, None, True),
+        ({"duration": ""}, _EXPIRATION_BOUNDARY, False),
+    ),
+    ids=("absolute-precedence", "null-precedence", "omitted", "relative-clear", "blank-duration"),
+)
+@pytest.mark.asyncio
+async def test_key_expiration_update_and_regenerate_preserve_intent(
+    request_type: type[UpdateKeyRequest] | type[RegenerateKeyRequest],
+    payload: dict[str, object],
+    expected: datetime | None,
+    writes_expiration: bool,
+) -> None:
+    existing: Final = LiteLLM_VerificationToken(token="expiry-token", expires=_EXPIRATION_BOUNDARY)
+    request: Final = request_type.model_validate({"key": "expiry-token", **payload})
+    prepared: Final = await prepare_key_update_data(data=request, existing_key_row=existing)
+    effective: Final = _effective_key_after_update(existing_key_row=existing, non_default_values=prepared)
+    assert ("expires" in prepared) is writes_expiration
+    assert "duration" not in prepared
+    assert effective.expires == expected
+    assert existing.expires == _EXPIRATION_BOUNDARY
+
+
+@pytest.mark.parametrize("request_type", (GenerateKeyRequest, UpdateKeyRequest, RegenerateKeyRequest))
+@pytest.mark.parametrize(
+    ("payload", "rejected"),
+    (
+        ({"expires": _EXPIRATION_BOUNDARY.astimezone(timezone(timedelta(hours=5, minutes=30))),
+          "duration": "30d"}, False),
+        ({"expires": _EXPIRATION_BOUNDARY + timedelta(microseconds=1)}, True),
+        ({"expires": None, "duration": "1h"}, True),
+        ({}, False),
+        ({"duration": None}, False),
+    ),
+    ids=("same-instant-boundary-and-precedence", "over-limit", "explicit-clear", "omitted", "relative-clear"),
+)
+def test_key_expiration_upperbound_checks_effective_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+    request_type: type[GenerateKeyRequest] | type[UpdateKeyRequest],
+    payload: dict[str, object],
+    rejected: bool,
+) -> None:
+    monkeypatch.setattr(
+        litellm, "upperbound_key_generate_params", LiteLLM_UpperboundKeyGenerateParams(duration="1d")
+    )
+    request: Final = request_type.model_validate({"key": "sk-expiration", **payload})
+    fill_defaults: Final = request_type is GenerateKeyRequest
+    if rejected:
+        with pytest.raises(HTTPException) as exc:
+            _enforce_upperbound_key_params(request, fill_defaults=fill_defaults, now=_EXPIRATION_NOW)
+        assert exc.value.status_code == 400
+        return
+    _enforce_upperbound_key_params(request, fill_defaults=fill_defaults, now=_EXPIRATION_NOW)
+    if "expires" in payload:
+        assert request.expires == _EXPIRATION_BOUNDARY
+    elif fill_defaults:
+        assert request.duration == "1d"
+    elif "duration" in payload:
+        assert "duration" in request.model_fields_set
+        assert request.duration is None
+    else:
+        assert "duration" not in request.model_fields_set
+
+
+@pytest.mark.parametrize("expires", (_EXPIRATION_OFFSET, None))
+def test_key_expiration_bulk_requests_do_not_silently_discard_input(expires: str | None) -> None:
+    with pytest.raises(ValidationError, match="/key/update"):
+        BulkUpdateKeyRequest.model_validate({"keys": [{"key": "expiry-token", "expires": expires}]})
+    with pytest.raises(ValidationError, match="expires"):
+        KeyUpdateFields.model_validate({"expires": expires})
