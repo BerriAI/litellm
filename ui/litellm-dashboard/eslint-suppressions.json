@@ -1730,9 +1730,6 @@
   "src/components/model_group_alias_settings.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
     }
   },
   "src/components/model_info_view.tsx": {
@@ -2172,11 +2169,6 @@
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/utils/dataUtils.test.ts": {
-    "max-nested-callbacks": {
       "count": 1
     }
   },

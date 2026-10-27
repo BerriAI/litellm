@@ -250,6 +250,14 @@
       "/v1/messages"
     ]
   },
+  "refuseless": {
+    "base_url": "https://api.refuseless.com/v1",
+    "api_key_env": "REFUSELESS_API_KEY",
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses"
+    ]
+  },
   "synthorai": {
     "base_url": "https://synthorai.io/v1",
     "api_key_env": "SYNTHORAI_API_KEY",
