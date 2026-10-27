@@ -67,12 +67,23 @@ _NON_STRICT_TOOL = [
         "bedrock/us.anthropic.claude-sonnet-5",
         "bedrock/eu.anthropic.claude-sonnet-5",
         "bedrock/jp.anthropic.claude-sonnet-5",
+        "anthropic.claude-fable-5",
+        "bedrock/us.anthropic.claude-fable-5",
+        "bedrock/eu.anthropic.claude-fable-5",
+        "bedrock/global.anthropic.claude-fable-5",
+        "bedrock/apac.anthropic.claude-fable-5",
+        "bedrock/au.anthropic.claude-fable-5",
+        "anthropic.claude-fable-5-1",
+        "bedrock/us.anthropic.claude-fable-5-1",
+        "bedrock/eu.anthropic.claude-fable-5-1",
+        "bedrock/global.anthropic.claude-fable-5-1",
+        "bedrock/us-gov.anthropic.claude-fable-5-1",
     ],
 )
 def test_bedrock_tools_pt_strict_dropped_for_strict_unsupported_models(
     model_id: str,
 ) -> None:
-    """Opus 4.7/4.8, Sonnet 4 and Sonnet 5 reject toolSpec.strict and additionalProperties."""
+    """Opus 4.7/4.8, Sonnet 4, Sonnet 5, and Fable 5 reject toolSpec.strict and additionalProperties."""
     result = _bedrock_tools_pt(_STRICT_TOOL, model=model_id)
     tool_spec = result[0]["toolSpec"]
     assert (

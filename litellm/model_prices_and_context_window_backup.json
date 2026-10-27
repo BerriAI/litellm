@@ -1623,6 +1623,7 @@
         }
     },
     "anthropic.claude-fable-5": {
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
         "cache_read_input_token_cost": 1e-06,
@@ -1665,6 +1666,7 @@
         }
     },
     "anthropic.claude-fable-5-1": {
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
         "cache_read_input_token_cost": 2.5e-07,
@@ -1703,6 +1705,7 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "global.anthropic.claude-fable-5": {
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
         "cache_read_input_token_cost": 1e-06,
@@ -1745,6 +1748,7 @@
         }
     },
     "global.anthropic.claude-fable-5-1": {
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
         "cache_read_input_token_cost": 2.5e-07,
@@ -1783,6 +1787,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-fable-5": {
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.375e-05,
         "cache_creation_input_token_cost_above_1hr": 2.2e-05,
         "cache_read_input_token_cost": 1.1e-06,
@@ -1825,6 +1830,7 @@
         }
     },
     "us.anthropic.claude-fable-5-1": {
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.375e-05,
         "cache_creation_input_token_cost_above_1hr": 2.2e-05,
         "cache_read_input_token_cost": 2.75e-07,
@@ -1863,6 +1869,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.anthropic.claude-fable-5": {
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.375e-05,
         "cache_creation_input_token_cost_above_1hr": 2.2e-05,
         "cache_read_input_token_cost": 1.1e-06,
@@ -1900,6 +1907,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.anthropic.claude-fable-5-1": {
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.375e-05,
         "cache_creation_input_token_cost_above_1hr": 2.2e-05,
         "cache_read_input_token_cost": 2.75e-07,
@@ -47858,6 +47866,7 @@
         }
     },
     "us-gov.anthropic.claude-fable-5-1": {
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.5e-05,
         "cache_creation_input_token_cost_above_1hr": 2.4e-05,
         "cache_read_input_token_cost": 3e-07,
@@ -71046,6 +71055,7 @@
         }
     },
     "apac.anthropic.claude-fable-5": {
+        "bedrock_converse_supports_strict_tools": false,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -71078,6 +71088,7 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "au.anthropic.claude-fable-5": {
+        "bedrock_converse_supports_strict_tools": false,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
