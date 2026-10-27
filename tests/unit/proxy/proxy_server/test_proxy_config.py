@@ -190,6 +190,46 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
 
 
 @pytest.mark.asyncio
+async def test_trace_read_pool_pressure_cannot_drop_spend_records(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.tracing_runtime import manage_tracing
+    from litellm.tracing.exporter import LensExporter
+    from litellm.tracing.generated.types import TraceScope
+    from litellm.tracing.remote import LensConnection
+
+    monkeypatch.setenv("LITELLM_LENS_URL", "https://lens.example.com")
+    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "dummy-service-token-with-32-characters")
+    received: Final = asyncio.Queue[httpx.Request]()
+
+    def client(connection: LensConnection) -> httpx.AsyncClient:
+        congested: Final = asyncio.Event()
+
+        def accept(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/internal/read":
+                congested.set()
+            if congested.is_set():
+                raise httpx.PoolTimeout("fixture read pool occupied")
+            received.put_nowait(request)
+            return httpx.Response(204)
+
+        return httpx.AsyncClient(base_url=connection.url, transport=httpx.MockTransport(accept))
+
+    async with manage_tracing(enabled=True, client_factory=client) as tracing:
+        assert tracing is not None
+        with pytest.raises(RuntimeError, match="storage is unavailable"):
+            await tracing.list_traces(TraceScope(all_teams=0, user_id="fixture-user", team_ids=()), 0, 1)
+        logger: Final = next(
+            callback for callback in litellm._async_success_callback if isinstance(callback, LensExporter)
+        )
+        await logger.async_log_success_event(
+            {"standard_logging_object": {"id": "isolated-spend", "response_cost": 0.25}}, None, None, None
+        )
+
+    assert logger.rows_written == 1
+    assert logger.rows_dropped == 0
+    assert received.get_nowait().url.path == "/internal/spend"
+
+
+@pytest.mark.asyncio
 async def test_tracing_logs_an_error_naming_the_store_when_lens_is_misconfigured(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

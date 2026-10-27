@@ -22,7 +22,7 @@ from litellm.integrations.clickhouse.schema import SPEND_LOGS_TABLE
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.tracing.types import SpendLogPayload, SpendLogRecord
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import StandardLoggingPayload, StandardLoggingUserAPIKeyMetadata
 
 # litellm_logging.py rewrites cache-hit ids as f"{id}_cache_hit{time.time()}"
 MILLISECONDS_PER_SECOND: Final = 1000
@@ -37,6 +37,24 @@ _METADATA_VALUE: Final = TypeAdapter(JsonValue)
 _INTERNAL_METADATA_KEYS: Final = frozenset(
     ("user_api_key", "user_api_key_auth", "user_api_key_budget_reservation", "proxy_server_request")
 )
+_CUSTOM_METADATA_KEYS: Final = frozenset(
+    ("spend_logs_metadata", "requester_metadata", "requester_custom_headers", "user_api_key_auth_metadata")
+)
+_BILLING_METADATA_KEYS: Final = frozenset(StandardLoggingUserAPIKeyMetadata.__annotations__) - _CUSTOM_METADATA_KEYS
+
+
+def _safe_payload_metadata(metadata: Mapping[str, object], private: bool) -> Mapping[str, object]:
+    retained: Final = {
+        key: value for key, value in metadata.items() if not (private and key in _CUSTOM_METADATA_KEYS)
+    }
+    return {
+        **redact_credentials_in_payload(retained),
+        **{
+            key: value
+            for key, value in retained.items()
+            if key in _BILLING_METADATA_KEYS and (value is None or isinstance(value, (str, int, float, bool)))
+        },
+    }
 
 
 def _request_metadata_fields(value: object) -> Iterator[tuple[str, JsonValue]]:
@@ -198,7 +216,7 @@ def spend_log_row_from_payload(
             MappingProxyType(
                 {
                     **request_metadata,
-                    **metadata,
+                    **_safe_payload_metadata(metadata, redact),
                     "litellm_lens_internal": is_lens_analysis(),
                     **({} if track_end_user else {"user_api_key_end_user_id": None}),
                 }

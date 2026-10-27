@@ -313,10 +313,41 @@ async def test_turn_off_message_logging_omits_all_custom_request_metadata() -> N
     metadata: Final = _JSON_OBJECT_ADAPTER.validate_json(metadata_json)
     standard_metadata: Final = cast(Mapping[str, object], payload["metadata"])
     assert metadata == {
-        **standard_metadata,
+        **{
+            key: value
+            for key, value in standard_metadata.items()
+            if key not in (
+                "spend_logs_metadata", "requester_metadata", "requester_custom_headers", "user_api_key_auth_metadata"
+            )
+        },
         "litellm_lens_internal": False,
     }
     assert {"project", "api_key", "auth", "prompt"}.isdisjoint(metadata)
+
+
+@pytest.mark.parametrize("private", (False, True))
+@pytest.mark.parametrize("carrier", ("spend_logs_metadata", "requester_metadata", "requester_custom_headers"))
+def test_standard_metadata_carriers_cannot_restore_credentials(
+    monkeypatch: pytest.MonkeyPatch, private: bool, carrier: str
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", private)
+    payload: Final = cast(
+        StandardLoggingPayload,
+        _payload(metadata={
+            **_payload()["metadata"],
+            carrier: {"authorization": "dummy-bearer-credential", "nested": [{"api_key": "dummy-provider-key"}]},
+        }),
+    )
+    row: Final = spend_log_row_from_payload(payload, {})
+    metadata: Final = json.loads(row["metadata"])
+    assert "dummy-bearer-credential" not in row["metadata"]
+    assert "dummy-provider-key" not in row["metadata"]
+    assert metadata["user_api_key_team_id"] == "team-1"
+    if private:
+        assert carrier not in metadata
+    else:
+        assert metadata[carrier]["authorization"] == REDACTED
+        assert metadata[carrier]["nested"][0]["api_key"] == REDACTED
 
 
 def test_anthropic_cache_fields_are_used_as_fallback():

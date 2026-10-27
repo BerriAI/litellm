@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict
 from starlette.responses import JSONResponse
 
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth, hash_token
 from litellm.proxy.auth.authorization import OwnedRows, resolve_trace_read_scope
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -85,6 +85,7 @@ async def delegated_identity(
     return Identity.model_validate(
         {
             **auth.model_dump(include={"user_id", "team_id", "org_id", "token", "models"}),
+            "token": auth.token if auth.via_virtual_key or auth.token is None else hash_token(auth.token),
             "user_role": auth.user_role or LitellmUserRoles.INTERNAL_USER,
             "log_team_ids": scope.team_ids if isinstance(scope, OwnedRows) else (),
         }

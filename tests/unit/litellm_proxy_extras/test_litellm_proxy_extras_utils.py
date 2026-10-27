@@ -693,7 +693,10 @@ class TestResolveAllMigrationsLedger:
             return _FakeCompleted()
 
         monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", fake_run)
-        ProxyExtrasDBManager._resolve_all_migrations(str(tmp_path), "schema.prisma")
+        ProxyExtrasDBManager._resolve_all_migrations(
+            str(tmp_path), "schema.prisma",
+            lens_connect=lambda *args, **kwargs: _FakePsycopgConn([], legacy=False),
+        )
         return calls
 
     def _resolved(self, calls):
@@ -753,13 +756,17 @@ class TestPartitionedSpendLogsPushGuard:
 
 
 class _FakeCursor:
+    def __init__(self, legacy=True):
+        self.legacy = legacy
+
     def fetchone(self):
-        return (1,)
+        return (1,) if self.legacy else None
 
 
 class _FakePsycopgConn:
-    def __init__(self, executed):
+    def __init__(self, executed, legacy=True):
         self._executed = executed
+        self.legacy = legacy
 
     def __enter__(self):
         return self
@@ -769,11 +776,27 @@ class _FakePsycopgConn:
 
     def execute(self, query, params):
         self._executed.append((query, params))
-        return _FakeCursor()
+        return _FakeCursor(self.legacy)
 
 
 class TestLensRenamePendingCheck:
     _DATABASE_URL: Final = "postgresql://litellm:hunter2@localhost:5432/litellm"
+
+    def test_legacy_drift_recovery_refuses_to_drop_unrenamed_lens_tables(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("DATABASE_URL", "postgresql://example:fake-password@localhost/example")
+        executed: Final[list[tuple[str, tuple[str]]]] = []
+
+        def legacy_tables_present(conninfo: str, *, connect_timeout: int, autocommit: bool) -> _FakePsycopgConn:
+            return _FakePsycopgConn(executed)
+
+        with pytest.raises(RuntimeError, match="Legacy Lens tables exist"):
+            ProxyExtrasDBManager._resolve_all_migrations(
+                str(tmp_path), "schema.prisma", lens_connect=legacy_tables_present
+            )
+        assert executed[0][1] == ("public",)
+        assert not tuple(tmp_path.iterdir())
 
     def test_database_failure_text_reaches_the_raised_message(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import psycopg

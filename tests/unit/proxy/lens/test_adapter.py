@@ -7,7 +7,7 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth, hash_token
 from litellm.proxy.lens.adapter import (
     Connection,
     Identity,
@@ -116,12 +116,41 @@ async def test_delegated_identity_preserves_authenticated_lens_scope_and_log_per
         user_id="user",
         team_id="credential-team",
         org_id="org",
-        token="token-hash",
+        token=hash_token("token-hash"),
         models=("model",),
         log_team_ids=()
         if role in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
         else ("permitted-team",),
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_id", (None, "oauth-user"))
+@pytest.mark.parametrize("credential", ("opaque-fixture-credential", "a" * 64))
+async def test_opaque_oauth_credentials_never_leave_in_delegated_claims(
+    connection: Connection, user_id: str | None, credential: str
+) -> None:
+    async def lookup(auth: UserAPIKeyAuth) -> tuple[str, ...]:
+        return ()
+
+    identity: Final = await delegated_identity(UserAPIKeyAuth(user_id=user_id, api_key=credential), lookup)
+    token: Final = connection.identity_token(identity, 1000)
+    assert token is not None
+    claims: Final = jwt.decode(token, options={"verify_signature": False})
+    assert claims["identity"]["token"] == hash_token(credential)
+    assert claims["sub"] == (user_id or hash_token(credential))
+    assert credential not in str(claims)
+
+
+@pytest.mark.asyncio
+async def test_verified_virtual_key_keeps_its_trace_scope() -> None:
+    async def lookup(auth: UserAPIKeyAuth) -> tuple[str, ...]:
+        return ()
+
+    auth: Final = UserAPIKeyAuth(token=hash_token("sk-fixture-key"))
+    auth.via_virtual_key = True
+    identity: Final = await delegated_identity(auth, lookup)
+    assert identity.token == auth.token
 
 
 @pytest.mark.asyncio

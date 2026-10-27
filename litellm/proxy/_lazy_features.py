@@ -455,7 +455,12 @@ def _route_table(
     lazy_routes: Mapping[str, tuple[BaseRoute, ...]],
     features: tuple[LazyFeature, ...],
 ) -> list[BaseRoute]:  # mutable-ok: assigned to Router.routes, a list
-    ordered: Final = _in_registry_order(routes, lazy_routes, features, _lazy_slots(app))
+    allowed: Final[Callable[[BaseRoute], bool] | None] = getattr(app.state, "component_route_filter", None)
+    ordered: Final = tuple(
+        route
+        for route in _in_registry_order(routes, lazy_routes, features, _lazy_slots(app))
+        if allowed is None or allowed(route)
+    )
     if builtin_pass_through_routes_first():
         return hot_routes_first(ordered)
     return hot_routes_first(

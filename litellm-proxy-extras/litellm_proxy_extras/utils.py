@@ -501,7 +501,11 @@ class ProxyExtrasDBManager:
 
     @staticmethod
     def _resolve_all_migrations(
-        migrations_dir: str, schema_path: str, mark_all_applied: bool = True
+        migrations_dir: str,
+        schema_path: str,
+        mark_all_applied: bool = True,
+        *,
+        lens_connect: LensCheckConnect | None = None,
     ):
         """
         1. Compare the current database state to schema.prisma and generate a migration for the diff.
@@ -512,6 +516,7 @@ class ProxyExtrasDBManager:
         if not database_url:
             logger.error("DATABASE_URL not set")
             return
+        ProxyExtrasDBManager.raise_if_lens_rename_pending(connect=lens_connect)
         # Prefer DIRECT_URL for schema introspection — pooler URLs (e.g. neon -pooler)
         # do not support the extended query protocol required by prisma migrate diff.
         diff_url = os.getenv("DIRECT_URL") or database_url

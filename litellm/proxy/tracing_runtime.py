@@ -50,13 +50,13 @@ async def manage_tracing(
         verbose_proxy_logger.error("Agent tracing store lens failed to start, tracing is disabled: %s", error)
         yield None
         return
-    async with client_factory(connection) as client:
+    async with client_factory(connection) as client, client_factory(connection) as export_client:
         tracing: Final = (
             receiver_factory()
             if receiver_factory
             else TraceReceiver(storage=LensTraceStorage(RemoteTraceStore(client)))
         )
-        async with _export_requests(LensExporter(client)):
+        async with _export_requests(LensExporter(export_client)):
             yield tracing
 
 
