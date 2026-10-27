@@ -56,7 +56,8 @@ class TestGitHubCopilotAuthenticator:
             patch("os.makedirs") as mock_makedirs,
         ):
             auth = Authenticator()
-            mock_makedirs.assert_called_once_with(auth.token_dir, exist_ok=True)
+            # credentials dir must not be group/world-accessible
+            mock_makedirs.assert_called_once_with(auth.token_dir, mode=0o700, exist_ok=True)
 
     def test_get_github_headers(self, authenticator):
         """Test that GitHub headers are correctly generated."""
