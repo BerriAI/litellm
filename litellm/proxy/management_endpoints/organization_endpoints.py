@@ -1662,13 +1662,20 @@ async def add_member_to_organization(
 
         if existing_user_id_row is None and member.user_email is not None:
             try:
-                existing_user_email_row = await UserRepository(prisma_client).table.find_unique(
-                    where={"user_email": member.user_email}
+                matching_users: Final = await UserRepository(prisma_client).table.find_many(
+                    where={"user_email": {"equals": member.user_email, "mode": "insensitive"}},
+                    take=2,
                 )
             except Exception as e:
                 raise ValueError(
                     f"Potential NON-Existent or Duplicate user email in DB: Error finding a unique instance of user_email={member.user_email} in LiteLLM_UserTable.: {e}"
                 )
+            if len(matching_users) > 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": "Multiple users with this email found in db. Please use 'user_id' instead."},
+                )
+            existing_user_email_row = next(iter(matching_users), None)
 
         ## If user does not exist, create a new user
         if existing_user_id_row is None and existing_user_email_row is None:
@@ -1682,14 +1689,6 @@ async def add_member_to_organization(
             _returned_user = await prisma_client.insert_data(data=new_user_defaults, table_name="user")
             if _returned_user is not None:
                 user_object = LiteLLM_UserTable.model_validate(_returned_user.model_dump())
-        elif existing_user_email_row is not None and (
-            len(existing_user_email_row)  # pyright: ignore[reportArgumentType]  # find_unique yields a row, not a list
-            > 1
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "Multiple users with this email found in db. Please use 'user_id' instead."},
-            )
         elif existing_user_email_row is not None:
             user_object = LiteLLM_UserTable.model_validate(existing_user_email_row.model_dump())
         elif existing_user_id_row is not None:
@@ -1718,5 +1717,7 @@ async def add_member_to_organization(
         )
         return user_object, organization_membership
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise ValueError(f"Error adding member={member} to organization={organization_id}: {e}")

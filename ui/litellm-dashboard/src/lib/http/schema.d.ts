@@ -18648,11 +18648,12 @@ export interface paths {
          *     Behaviour depends on the ``scope_user_search_to_org`` UI-setting flag
          *     (stored in the ``litellm_uisettings`` table):
          *
-         *     * **Flag OFF (default):** any authenticated user can search all users.
-         *     * **Flag ON:**
+         *     * **Flag OFF:** any authenticated user can search all users.
+         *     * **Flag ON (default):**
          *       - Proxy admins see all users.
-         *       - Org admins see only users in their org(s).
-         *       - Team admins for an org-bound team see users in that org.
+         *       - A team or organization admin searching for a selected team's members
+         *         sees users in that team's org, or all users if the team has no org.
+         *       - Without a selected team, org members see users in their org(s).
          *       - Others receive a 403.
          */
         get: operations["ui_view_users_user_filter_ui_get"];

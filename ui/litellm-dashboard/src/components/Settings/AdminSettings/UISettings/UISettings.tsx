@@ -504,7 +504,7 @@ export default function UISettings() {
               label="Scope user search to organization"
               description={
                 scopeUserSearchProperty?.description ??
-                "If enabled, the user search endpoint restricts results by organization. When off, any authenticated user can search all users."
+                "Enabled by default. User search is restricted by organization. Proxy admins and verified admins searching for members of teams without organizations can search all users. Disabling this allows any authenticated user to search all users."
               }
             />
 

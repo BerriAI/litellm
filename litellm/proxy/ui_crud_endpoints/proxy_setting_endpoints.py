@@ -337,8 +337,8 @@ class UISettings(LiteLLMBaseModel):
     )
 
     scope_user_search_to_org: bool = Field(
-        default=False,
-        description="If enabled, the user search endpoint (/user/filter/ui) restricts results by organization. When off, any authenticated user can search all users.",
+        default=True,
+        description="Enabled by default. User search (/user/filter/ui) is restricted by organization. Proxy admins and verified admins searching for members of teams without organizations can search all users. Disabling this allows any authenticated user to search all users.",
     )
 
     disable_custom_api_keys: bool = Field(

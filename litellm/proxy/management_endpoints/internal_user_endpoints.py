@@ -55,7 +55,8 @@ from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
-from litellm.proxy.management.teams.authz import is_team_admin
+from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN, is_team_admin
+from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_daily_activity import (
     DailySpendRecord,
     ScopeDenied,
@@ -2657,11 +2658,20 @@ async def _resolve_org_filter_for_user_search(
     )
 
     ui_settings: Final = await get_ui_settings_cached()
-    if not ui_settings.get("scope_user_search_to_org", False):
+    if ui_settings.get("scope_user_search_to_org") is False:
         return None  # flag OFF — no filtering
 
     if user_api_key_has_admin_view(user_api_key_dict):
         return None  # proxy admin — see everything
+
+    if team_id is not None:
+        return await _resolve_team_org_filter(
+            user_api_key_dict,
+            team_id,
+            prisma_client,
+            user_api_key_cache,
+            proxy_logging_obj,
+        )
 
     # Try to resolve org admin memberships
     caller_user = None
@@ -2686,12 +2696,10 @@ async def _resolve_org_filter_for_user_search(
     if member_org_ids:
         return member_org_ids
 
-    # Fall back to resolving via team_id (query param or from the caller's API key)
-    resolved_team_id: Final = team_id or user_api_key_dict.team_id
-    if resolved_team_id is not None:
+    if user_api_key_dict.team_id is not None:
         return await _resolve_team_org_filter(
             user_api_key_dict,
-            resolved_team_id,
+            user_api_key_dict.team_id,
             prisma_client,
             user_api_key_cache,
             proxy_logging_obj,
@@ -2700,7 +2708,7 @@ async def _resolve_org_filter_for_user_search(
     raise HTTPException(
         status_code=403,
         detail={
-            "error": "scope_user_search_to_org is enabled. Only proxy admins, organization admins, or team admins can search users."
+            "error": "scope_user_search_to_org is enabled. Only proxy admins, organization members, or team admins can search users."
         },
     )
 
@@ -2711,14 +2719,14 @@ async def _resolve_team_org_filter(
     prisma_client: "PrismaClient | None",
     user_api_key_cache: "UserApiKeyCache",
     proxy_logging_obj: "ProxyLogging | None",
-) -> list[str]:
-    """Look up the team and return its org as a filter list, or raise 403."""
+) -> list[str] | None:
     try:
         team_obj: Final = await get_team_object(
             team_id=team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
+            check_db_only=True,
         )
     except HTTPException:
         raise HTTPException(
@@ -2726,21 +2734,15 @@ async def _resolve_team_org_filter(
             detail={"error": f"scope_user_search_to_org is enabled but team '{team_id}' was not found."},
         )
 
-    if not is_team_admin(user_api_key_dict, team_obj):
+    if not await get_team_access().allows(user_api_key_dict, team_obj, TEAM_OR_ORG_ADMIN):
         raise HTTPException(
             status_code=403,
-            detail={"error": "scope_user_search_to_org is enabled. You must be an admin of this team to search users."},
+            detail={
+                "error": "scope_user_search_to_org is enabled. You must manage this team to search its candidates."
+            },
         )
 
-    if team_obj.organization_id:
-        return [team_obj.organization_id]
-
-    raise HTTPException(
-        status_code=403,
-        detail={
-            "error": "scope_user_search_to_org is enabled and this team is not part of an organization. Contact your proxy admin to adjust this setting."
-        },
-    )
+    return [team_obj.organization_id] if team_obj.organization_id else None
 
 
 @router.get(
@@ -2773,11 +2775,12 @@ async def ui_view_users(
     Behaviour depends on the ``scope_user_search_to_org`` UI-setting flag
     (stored in the ``litellm_uisettings`` table):
 
-    * **Flag OFF (default):** any authenticated user can search all users.
-    * **Flag ON:**
+    * **Flag OFF:** any authenticated user can search all users.
+    * **Flag ON (default):**
       - Proxy admins see all users.
-      - Org admins see only users in their org(s).
-      - Team admins for an org-bound team see users in that org.
+      - A team or organization admin searching for a selected team's members
+        sees users in that team's org, or all users if the team has no org.
+      - Without a selected team, org members see users in their org(s).
       - Others receive a 403.
     """
     from litellm.proxy.proxy_server import (
