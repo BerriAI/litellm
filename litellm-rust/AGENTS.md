@@ -11,10 +11,11 @@ Use the derived conversions directly (`<&'static str>::from(x)` / `.into()`, `st
 ## Test placement
 
 - Never create a `tests.rs` (or `test.rs`) file under `src/`, and never `#[path = "tests.rs"] mod tests;`
-- A test that reaches private items lives inline, in a `#[cfg(test)] mod tests { ... }` at the bottom of the file that owns those items
-- A test that only uses the crate's public API lives in `crates/<crate>/tests/<subject>.rs`, next to `src/`
-- Split a mixed test file along that line instead of widening visibility to move it
+- Tests live inline by default, in a `#[cfg(test)] mod tests { ... }` at the bottom of the file that owns the code under test, whether or not they touch private items
+- `crates/<crate>/tests/` is only for tests that drive several modules together end to end, such as a full request through a route. A test of one type or function never goes there
+- A helper shared by several inline test modules goes in a `#[cfg(test)] mod test_support;` at the crate root, and only once a second module needs it
 - A test for another crate's item belongs in that crate, not in a downstream one
+- Tests that call a real provider go in `crates/<crate>/tests/live/<provider>.rs` behind a `tests/live/main.rs`. Each reads the provider's key from the environment through an `Option` fixture and returns early when it is unset, never `#[ignore]`, so `cargo test` stays offline until the key is exported
 - Never set `autotests = false` or hand-list `[[test]]` targets. Every file directly under `tests/` is discovered by cargo, and a shared helper goes in `tests/<name>/mod.rs` or `tests/<subject>/support.rs` so it is not picked up as a test crate of its own
 
 ## Test fixtures and cases

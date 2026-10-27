@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import subprocess
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, ModuleType
 from typing import Final
 
 GROUPS: Final = MappingProxyType(
@@ -24,8 +26,19 @@ GROUPS: Final = MappingProxyType(
     }
 )
 GITHUB_FILES: Final = frozenset(
-    {"tests/integration/database/test_roi_observed.py", "tests/integration/mcp/test_interactions.py"}
+    {
+        "tests/integration/database/test_roi_observed.py",
+        "tests/integration/database/image/test_component_image_serves_offline.py",
+        "tests/integration/database/image/test_image_admin_mcp.py",
+        "tests/integration/database/image/test_image_bedrock_realtime_extra.py",
+        "tests/integration/database/image/test_offline_image_migration.py",
+        "tests/integration/database/image/test_ui_image_serves_offline.py",
+    }
 )
+
+
+PEER_GROUPS: Final = frozenset({"management", "mcp", "accounting"})
+COST_MAP_GROUPS: Final = frozenset({"cost"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +64,32 @@ def uncollected(nodes: tuple[str, ...], collected: frozenset[str]) -> tuple[str,
     return tuple(node for node in nodes if file_of(node) not in collected_files)
 
 
+def _without_provider_api_keys(environment: Mapping[str, str]) -> dict[str, str]:
+    return {name: value for name, value in environment.items() if not name.endswith("_API_KEY")}
+
+
+def worker_settings(group: str, workers: int) -> Mapping[str, str]:
+    if workers < 2:
+        return MappingProxyType({})
+    return MappingProxyType(
+        {
+            "INTEGRATION_WORKER_ISOLATION": "1",
+            "INTEGRATION_WORKER_PEER": "1" if group in PEER_GROUPS else "",
+            "INTEGRATION_WORKER_COST_MAP": "1" if group in COST_MAP_GROUPS else "",
+        }
+    )
+
+
+def _budget() -> ModuleType:
+    specification: Final = importlib.util.spec_from_file_location(
+        "integration_budget", Path(__file__).with_name("_support") / "budget.py"
+    )
+    assert specification is not None and specification.loader is not None
+    module: Final = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module
+
+
 def main() -> int:
     parser: Final = argparse.ArgumentParser()
     parser.add_argument("group", choices=tuple(GROUPS))
@@ -58,7 +97,10 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=int(os.environ.get("INTEGRATION_SEED", "4106601")))
     parser.add_argument("--order-seed", type=int, default=int(os.environ.get("INTEGRATION_ORDER_SEED", "0")))
     parser.add_argument("--workers", type=int, default=int(os.environ.get("INTEGRATION_WORKERS", "1")))
-    parser.add_argument("--list", action="store_true", help="print the group's test files and exit")
+    parser.add_argument("--shards", type=int, default=int(os.environ.get("INTEGRATION_CASE_SHARDS", "1")))
+    parser.add_argument("--shard-index", type=int, default=int(os.environ.get("INTEGRATION_CASE_SHARD_INDEX", "0")))
+    parser.add_argument("--shard-files", type=Path)
+    parser.add_argument("--list", action="store_true", help="print selected candidate files and exit")
     parser.add_argument("files", nargs="*", help="run only these files, or pytest node ids inside them, of the group")
     options: Final = parser.parse_intermixed_args()
     root: Final = Path(__file__).resolve().parents[2]
@@ -68,22 +110,31 @@ def main() -> int:
         for path in sorted((root / "tests/integration" / folder).rglob("test_*.py"))
         if str(path.relative_to(root)) not in GITHUB_FILES
     )
-    if options.list:
-        print("\n".join(group_files))
-        return 0
     selection: Final = select(tuple(options.files), group_files)
     if selection.foreign:
         parser.error(f"Not in the {options.group} group: {', '.join(selection.foreign)}")
     if not selection.nodes:
         parser.error(f"No integration test files selected for {options.group}")
+    if options.list:
+        sys.stdout.write("\n".join(sorted({file_of(node) for node in selection.nodes})) + "\n")
+        return 0
     output: Final = options.results.resolve()
     output.mkdir(parents=True, exist_ok=True)
     environment: Final = {
-        **os.environ,
+        **_without_provider_api_keys(os.environ),
         "PYTHONPATH": os.pathsep.join((str(root), str(root / "tests"), str(root / "tests/e2e"))),
         "INTEGRATION_RESULTS_DIR": str(output),
         "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+        "LITELLM_MODE": "PRODUCTION",
+        "PYTHON_DOTENV_DISABLED": "1",
+        **worker_settings(options.group, options.workers),
     }
+    budget: Final = _budget()
+    proxy_root: Final = Path(os.environ.get("INTEGRATION_PROXY_ROOT") or root)
+    imported: Final = float(
+        os.environ.get(budget.IMPORT_SECONDS_VARIABLE) or budget.measure_import_seconds(proxy_root, environment)
+    )
+    (output / "boot-calibration.json").write_text(budget.calibration(imported) + "\n")
     result: Final = subprocess.call(
         [
             sys.executable,
@@ -97,23 +148,27 @@ def main() -> int:
             "no:pytest-retry",
             "-p",
             "no:rerunfailures",
-            "--timeout=90",
+            f"--timeout={int(budget.case_timeout_for(imported))}",
             "--durations=15",
             "--tb=short",
             f"--hypothesis-seed={options.seed}",
             f"--integration-order-seed={options.order_seed}",
+            f"--integration-shard-count={options.shards}",
+            f"--integration-shard-index={options.shard_index}",
+            *(("--integration-shard-files", str(options.shard_files)) if options.shard_files is not None else ()),
             f"--junitxml={output / 'junit.xml'}",
             "-o",
             "junit_family=xunit1",
             *(("-n", str(options.workers)) if options.workers > 1 else ()),
+            *(("--dist=loadgroup",) if options.workers > 1 else ()),
         ],
         cwd=root,
-        env=environment,
+        env={**environment, budget.IMPORT_SECONDS_VARIABLE: str(imported)},
     )
     if result != 0:
         return result
     evidence: Final = json.loads((output / "execution.json").read_text())
-    empty: Final = uncollected(selection.nodes, frozenset(evidence["collected"]))
+    empty: Final = uncollected(selection.nodes, frozenset(evidence["inventory"]))
     if empty:
         sys.stderr.write(f"Selected integration files collected zero tests: {', '.join(empty)}\n")
         return 1

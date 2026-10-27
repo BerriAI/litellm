@@ -27,11 +27,11 @@ describe("hydrateOssClassifier", () => {
 });
 
 describe("jevClassifierConfigSchema", () => {
-  it("starts a Databricks classifier with an empty endpoint name that does not pass until typed", () => {
+  it("starts a Databricks classifier on ai_decide and still takes a typed serving endpoint name", () => {
     const fresh = defaultJevClassifierConfig("databricks");
 
-    expect(fresh).toEqual({ provider: "databricks", model: "", timeout_ms: 3000 });
-    expect(jevClassifierConfigSchema.safeParse(fresh).success).toBe(false);
+    expect(fresh).toEqual({ provider: "databricks", model: "ai_decide", timeout_ms: 3000 });
+    expect(jevClassifierConfigSchema.safeParse(fresh).success).toBe(true);
     expect(jevClassifierConfigSchema.safeParse({ ...fresh, model: "my-openjev" }).success).toBe(true);
   });
 
@@ -41,4 +41,25 @@ describe("jevClassifierConfigSchema", () => {
       expect(jevClassifierConfigSchema.safeParse({ provider: "databricks", model }).success).toBe(false);
     },
   );
+});
+
+it("preserves legacy classifier tuning when the backend returns a null deployment reference", () => {
+  const legacyConfig = {
+    deployment_name: null,
+    provider: "laya",
+    model: "english",
+    timeout_ms: 4100,
+  };
+  const parsed = jevClassifierConfigSchema.parse(legacyConfig);
+  expect(parsed).toMatchObject({ provider: "laya", model: "english", timeout_ms: 4100 });
+  expect(parsed.deployment_name).toBeUndefined();
+});
+
+it("preserves a deployment alias independently of legacy provider model validation", () => {
+  const parsed = jevClassifierConfigSchema.parse({
+    deployment_name: "decider",
+    provider: "databricks",
+    timeout_ms: 4100,
+  });
+  expect(parsed.deployment_name).toBe("decider");
 });

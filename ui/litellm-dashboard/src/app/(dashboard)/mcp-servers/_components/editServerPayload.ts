@@ -214,6 +214,21 @@ const buildCredentials = (credentialValues: unknown): Readonly<Record<string, un
   return Object.fromEntries(kept);
 };
 
+const unmountedOauth2Endpoints = (authType: string | undefined) =>
+  isClientForwardedTokenMode(authType) ? {} : { authorization_url: null, token_url: null };
+
+const scopesCleared = (credentialValues: unknown): boolean => {
+  if (!credentialValues || typeof credentialValues !== "object") return false;
+  const scopes: unknown = (credentialValues as { scopes?: unknown }).scopes;
+  return Array.isArray(scopes) && scopes.every((scope: unknown) => scope == null || scope === "");
+};
+
+const withClearedScopes = (
+  credentials: Readonly<Record<string, unknown>> | undefined,
+  credentialValues: unknown,
+): Readonly<Record<string, unknown>> | undefined =>
+  scopesCleared(credentialValues) ? { ...(credentials ?? {}), scopes: null } : credentials;
+
 interface CredentialsEntryInput {
   readonly dcrClient?: McpDcrCredentials | null;
   readonly oauthFlow?: string;
@@ -239,7 +254,7 @@ const resolveCredentialsEntry = ({
     return { credentials: { ...credentials, ...dcrClient } };
   }
   if (removeStoredApp && isClientForwardedTokenMode(authType)) {
-    return { credentials: { client_id: null, client_secret: null } };
+    return { credentials: { ...(credentials ?? {}), client_id: null, client_secret: null } };
   }
   if (includeCredentials && credentials && Object.keys(credentials).length > 0) {
     return { credentials };
@@ -334,7 +349,7 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
   // Client-forwarded rows persist ONLY the declared app; strip any token material lingering in the
   // form (e.g. from a prior oauth2 authorize this session) so it can never reach the row.
   const submitCredentials = isClientForwardedTokenMode(restValues.auth_type)
-    ? preservedAdminCredentials(credentialsPayload)
+    ? withClearedScopes(preservedAdminCredentials(credentialsPayload), credentialValues)
     : credentialsPayload;
   const includeCredentials = restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
 
@@ -355,7 +370,7 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
     stdio_config: undefined,
     env_json: undefined,
     ...(mcpServer.auth_type === AUTH_TYPE.OAUTH2 && restValues.auth_type !== AUTH_TYPE.OAUTH2
-      ? { issuer: null, authorization_url: null, token_url: null, registration_url: null }
+      ? { issuer: null, ...unmountedOauth2Endpoints(restValues.auth_type), registration_url: null }
       : {}),
     ...(mcpServer.auth_type === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE &&
     restValues.auth_type !== AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE

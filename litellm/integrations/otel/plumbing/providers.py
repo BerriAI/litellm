@@ -1,13 +1,14 @@
 """Provider / exporter factory + the Baggage span processor."""
 
 import queue
-import random
 import threading
 import time
+import weakref
 from collections import OrderedDict
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from hashlib import sha256
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from opentelemetry import _logs, baggage, metrics, trace
 from opentelemetry._logs import Logger, LoggerProvider, NoOpLoggerProvider
@@ -40,8 +41,19 @@ from opentelemetry.util.types import Attributes, AttributeValue
 
 from litellm._logging import verbose_logger
 from litellm._version import version as litellm_version
-from litellm.integrations.otel.mappers.langfuse import LANGFUSE_TRACE_NAME
-from litellm.integrations.otel.model.config import ExporterOwner, ExporterSpec, OpenTelemetryV2Config
+from litellm.integrations.otel.mappers.langfuse import (
+    LANGFUSE_OBSERVATION_INPUT,
+    LANGFUSE_OBSERVATION_OUTPUT,
+    LANGFUSE_TRACE_NAME,
+)
+from litellm.integrations.otel.model.config import (
+    CaptureMessageContent,
+    ExporterOwner,
+    ExporterSpec,
+    OpenTelemetryV2Config,
+    capture_message_content_from_env,
+    captures_span_content,
+)
 from litellm.integrations.otel.model.semconv import (
     DB,
     MCP,
@@ -385,6 +397,26 @@ _CAPTURED_HEADER_PREFIXES: Final = ("http.request.header.", "http.response.heade
 # ``?key=`` query parameter.
 _URL_KEYS: Final = frozenset({"http.url", "http.target", "url.full"})
 _URL_QUERY_KEY: Final = "url.query"
+# Prompt and response content, in every vocabulary the mappers write it in once the
+# global capture policy collects it: GenAI semconv (MCP tool-call arguments and results
+# included), Langfuse, OpenInference's blobs and per-index messages, Langtrace, Weave.
+_MESSAGE_CONTENT_KEYS: Final = frozenset(
+    {
+        GenAI.INPUT_MESSAGES,
+        GenAI.OUTPUT_MESSAGES,
+        GenAI.SYSTEM_INSTRUCTIONS,
+        GenAI.TOOL_CALL_ARGUMENTS,
+        GenAI.TOOL_CALL_RESULT,
+        LANGFUSE_OBSERVATION_INPUT,
+        LANGFUSE_OBSERVATION_OUTPUT,
+        "input.value",
+        "output.value",
+        "llm.prompts",
+        "llm.completions",
+        "weave.output",
+    }
+)
+_INDEXED_MESSAGE_PREFIXES: Final = ("llm.input_messages.", "llm.output_messages.")
 
 
 class _SpanView(ReadableSpan):
@@ -415,6 +447,19 @@ class _SpanView(ReadableSpan):
         )
 
 
+def _is_message_content(key: str) -> bool:
+    return key in _MESSAGE_CONTENT_KEYS or key.startswith(_INDEXED_MESSAGE_PREFIXES)
+
+
+def without_message_content(span: ReadableSpan) -> ReadableSpan:
+    """``span`` without its prompt and response content, everything else left as it was."""
+    attributes: Final = span.attributes or _NO_ATTRIBUTES
+    if not any(_is_message_content(key) for key in attributes):
+        return span
+    kept: Final = MappingProxyType({key: value for key, value in attributes.items() if not _is_message_content(key)})
+    return _SpanView(span, span.resource, kept, span.events, span.status, parent=span.parent)
+
+
 def _is_database_span(attributes: Mapping[str, AttributeValue]) -> bool:
     return any(key in attributes for key in _DB_SYSTEM_KEYS)
 
@@ -442,15 +487,15 @@ def is_llm_call_span(span: ReadableSpan) -> bool:
     return GenAI.OPERATION_NAME in attributes and MCP.METHOD_NAME not in attributes
 
 
-#: Request trees held back for a sampled destination until the last span of the trace
+#: Request trees held back for a sampled destination until the last span of the request
 #: still open ends, the verdicts kept for the spans that start after that (a post-call
-#: database write), and the spans in flight per trace. All bounded, so a span that never
-#: ends, or a flood of requests, cannot hold spans for ever: the oldest tree is decided
-#: on what it has.
+#: database write), the spans in flight per request, and the request each open span
+#: belongs to. All bounded, so a span that never ends, or a flood of requests, cannot
+#: hold spans for ever: the oldest tree is decided on what it has.
 _MAX_PENDING_TREES: Final = 1024
 _MAX_PENDING_SPANS_PER_TREE: Final = 512
 _MAX_REMEMBERED_VERDICTS: Final = 4096
-_MAX_OPEN_TRACES: Final = 16384
+_MAX_OPEN_REQUESTS: Final = 16384
 
 
 class _PendingTree:
@@ -468,25 +513,35 @@ def _is_sampled(destination: "OtelDestination") -> bool:
     return destination.success_sampling_rate is not None or destination.error_sampling_rate is not None
 
 
-#: A verdict is one request tree's draw for one destination at its rates: the exporter
+#: A request is its trace id and the id of its root, the span of it whose parent is
+#: remote or missing. Calls sharing a caller's trace are separate requests, each decided
+#: on its own outcome.
+_RequestKey: TypeAlias = tuple[int, int]
+
+#: A verdict is one request's keep or drop for one destination at its rates: the exporter
 #: ``cache_key`` leaves the rates out, so two destinations sharing an exporter with
-#: different rates would otherwise share one draw.
-_VerdictKey = tuple[int, object, float | None, float | None]
+#: different rates would otherwise share one verdict.
+_VerdictKey: TypeAlias = tuple[int, int, object, float | None, float | None]
 
 
-def _verdict_key(trace_id: int, destination: "OtelDestination") -> _VerdictKey:
-    return (trace_id, destination.cache_key(), destination.success_sampling_rate, destination.error_sampling_rate)
+def _verdict_key(request: _RequestKey, destination: "OtelDestination") -> _VerdictKey:
+    return (*request, destination.cache_key(), destination.success_sampling_rate, destination.error_sampling_rate)
 
 
-def _keeps_tree(destination: "OtelDestination", failed: bool, draw: Callable[[], float]) -> bool:
-    """Whether one draw against the destination's rate keeps a request tree, read the
-    way the legacy Arize callback reads ``arize_success_sampling_rate`` /
-    ``arize_error_sampling_rate``: a tree with a failed span answers to the error
-    rate, an unset rate keeps everything and ``0.0`` keeps nothing."""
+def _keeps_tree(destination: "OtelDestination", failed: bool, trace_id: int) -> bool:
+    """Whether the destination's rate keeps a request tree of ``trace_id``: a tree with
+    a failed span answers to ``arize_error_sampling_rate``, the rest to
+    ``arize_success_sampling_rate``, an unset rate keeps everything and ``0.0`` keeps
+    nothing.
+
+    The first eight bytes of a SHA-256 of the trace id are read against the rate, so
+    every process deciding a request of the trace with the same outcome reaches the same
+    verdict."""
     rate: Final = destination.error_sampling_rate if failed else destination.success_sampling_rate
     if rate is None:
         return True
-    return rate > 0.0 and draw() <= rate
+    digest: Final = sha256(trace_id.to_bytes(16, "big")).digest()
+    return int.from_bytes(digest[:8], "big") < round(rate * 2**64)
 
 
 def _in_scope(span: ReadableSpan, scope: "OtelSpanScope") -> bool:
@@ -553,7 +608,11 @@ def _tenant_resource(resource: Resource, defaults: Mapping[str, str], extra: Map
     return filled.merge(Resource(extra)) if extra else filled
 
 
-def _for_destination(span: ReadableSpan, destination: "OtelDestination") -> ReadableSpan:
+def _for_destination(
+    span: ReadableSpan,
+    destination: "OtelDestination",
+    default_capture: str,
+) -> ReadableSpan:
     """The view of ``span`` a tenant destination receives.
 
     A span the tenant's own call produced keeps its error text. Every other span is
@@ -564,8 +623,10 @@ def _for_destination(span: ReadableSpan, destination: "OtelDestination") -> Read
     exception it raised and names the operator's guardrail endpoint. Stack traces walk
     the operator's install and come off every span, as do the headers the operator
     captures on the server span, whose request side holds the caller's bearer token,
-    and the query string of the request URL, which can hold the same key. The span
-    itself stays, so the tenant still gets the whole trace tree.
+    and the query string of the request URL, which can hold the same key. A
+    destination whose effective setting disables span content loses the prompt and
+    response content too. The span itself stays, so the tenant still gets the whole
+    trace tree.
     """
     extra: Final = destination.resource_attributes
     defaults: Final = destination.resource_defaults
@@ -573,11 +634,12 @@ def _for_destination(span: ReadableSpan, destination: "OtelDestination") -> Read
     database: Final = _is_database_span(attributes)
     owned: Final = _is_tenant_owned_span(attributes)
     unreachable: Final = _guardrail_unreachable(attributes)
+    redacted: Final = not destination.captures_content(default_capture)
     kept: Final = MappingProxyType(
         {
             key: _without_query(key, value)
             for key, value in attributes.items()
-            if _tenant_visible(key, database, owned, unreachable)
+            if _tenant_visible(key, database, owned, unreachable) and not (redacted and _is_message_content(key))
         }
     )
     recorded: Final = span.events
@@ -612,13 +674,15 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         shutdown_drain_seconds: float = _SHUTDOWN_DRAIN_SECONDS,
         operator_sinks: 'Mapping[_SinkKey, "OtelSpanScope"]' = MappingProxyType({}),
         excluded_db_systems: frozenset[str] = frozenset(),
+        default_capture: str = CaptureMessageContent.NO_CONTENT,
+        default_capture_by_backend: Mapping[str, str] = MappingProxyType({}),
         pending_drains: int = _MAX_PENDING_DRAINS,
         drain_pool: _DrainPool | None = None,
-        sampling_draw: Callable[[], float] | None = None,
     ) -> None:
         self._operator_sinks: Final = operator_sinks
-        self._draw: Final = sampling_draw if sampling_draw is not None else random.random
         self._excluded_db_systems: Final = excluded_db_systems
+        self._default_capture: Final = default_capture
+        self._default_capture_by_backend: Final = default_capture_by_backend
         self._drain_seconds: Final = shutdown_drain_seconds
         self._lock: Final = threading.Condition()
         self._closed = False  # guarded by ``_lock``: an unlocked read races the teardown it gates
@@ -627,60 +691,104 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         self._processors: OrderedDict[object, SpanProcessor] = OrderedDict()  # mutable-ok: bounded LRU
         self._retired: OrderedDict[int, SpanProcessor] = OrderedDict()  # mutable-ok: drains as exports finish
         self._exporting: dict[int, int] = {}  # mutable-ok: per-processor in-flight export count
-        self._pending: OrderedDict[int, _PendingTree] = OrderedDict()  # mutable-ok: bounded, by trace id
-        self._open: OrderedDict[int, int] = OrderedDict()  # mutable-ok: bounded, spans in flight by trace id
+        self._pending: OrderedDict[_RequestKey, _PendingTree] = OrderedDict()  # mutable-ok: bounded, by request
+        self._open: OrderedDict[_RequestKey, set[int]] = OrderedDict()  # mutable-ok: bounded, open span ids by request
+        self._roots: dict[int, _RequestKey] = {}  # mutable-ok: holds only the spans ``_open`` holds, request by span id
+        self._span_roots: weakref.WeakKeyDictionary[SDKSpan, int] = weakref.WeakKeyDictionary()
         self._verdicts: OrderedDict[_VerdictKey, bool] = OrderedDict()  # mutable-ok: bounded LRU
         self._drain: Final = drain_pool if drain_pool is not None else _DrainPool(capacity=pending_drains)
 
     def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
         context: Final = span.context
-        trace_id: Final = context.trace_id if context is not None else 0
         with self._lock:
-            self._open[trace_id] = self._open.get(trace_id, 0) + 1
-            while len(self._open) > _MAX_OPEN_TRACES:
-                self._open.popitem(last=False)
+            request: Final = self._request_of(span, trace.get_current_span(parent_context))
+            if context is not None:
+                self._span_roots[span] = request[1]
+                self._roots[context.span_id] = request
+                self._open.setdefault(request, set()).add(context.span_id)
+            while len(self._open) > _MAX_OPEN_REQUESTS:
+                for forgotten in self._open.popitem(last=False)[1]:
+                    self._roots.pop(forgotten, None)
 
     def on_end(self, span: ReadableSpan) -> None:
         suppressed: Final = suppressed_backends()
         attributes: Final = span.attributes or _NO_ATTRIBUTES
-        context: Final = span.context
-        trace_id: Final = context.trace_id if context is not None else 0
+        with self._lock:
+            request: Final = self._request_of(span)
+            if span.context is not None:
+                self._roots.pop(span.context.span_id, None)
         failed: Final = span.status.status_code is StatusCode.ERROR
         for destination in request_destinations():
             if (
                 self._operator_already_writes(span, destination, suppressed)
                 or not _in_scope(span, destination.span_scope)
-                or _is_excluded_database_span(attributes, self._excluded_db_systems)
+                or _is_excluded_database_span(
+                    attributes,
+                    self._excluded_db_systems
+                    if destination.excluded_db_systems is None
+                    else destination.excluded_db_systems,
+                )
             ):
                 continue
             if not _is_sampled(destination):
                 self._forward(span, destination)
                 continue
-            for held_span, held_destination in self._route(trace_id, span, destination, failed):
+            for held_span, held_destination in self._route(request, span, destination, failed):
                 self._forward(held_span, held_destination)
-        for held_span, held_destination in self._settle(trace_id, failed):
+        for held_span, held_destination in self._settle(request, span, failed):
             self._forward(held_span, held_destination)
+
+    def _request_of(self, span: ReadableSpan, parent_span: Span | None = None) -> _RequestKey:
+        """The request ``span`` belongs to, read under ``_lock``: the request recorded while
+        it is open, else the span itself when its parent is remote or missing, else its
+        parent's request, recorded while the parent is open or on ``parent_span`` for a
+        child starting under a parent that has ended, else the parent itself."""
+        context: Final = span.context
+        if context is None:
+            return (0, 0)
+        recorded: Final = self._roots.get(context.span_id)
+        if recorded is not None:
+            return recorded
+        parent: Final = span.parent
+        if parent is None or parent.is_remote:
+            return (context.trace_id, context.span_id)
+        parent_request: Final = self._roots.get(parent.span_id)
+        if parent_request is not None:
+            return parent_request
+        if isinstance(parent_span, SDKSpan):
+            return (context.trace_id, self._span_roots.get(parent_span, parent.span_id))
+        return (context.trace_id, parent.span_id)
+
+    def _default_capture_for(self, destination: "OtelDestination") -> str:
+        backend: Final = destination.callback_name
+        return (
+            self._default_capture_by_backend.get(backend, self._default_capture) if backend else self._default_capture
+        )
 
     def _forward(self, span: ReadableSpan, destination: "OtelDestination") -> None:
         processor: Final = self._acquire(destination)
         if processor is None:
             return
         try:
-            processor.on_end(_scoped(_for_destination(span, destination), destination.span_scope))
+            processor.on_end(
+                _scoped(
+                    _for_destination(span, destination, self._default_capture_for(destination)), destination.span_scope
+                )
+            )
         except Exception as exc:  # noqa: BLE001  # one destination's failure must not cost the others their span
             verbose_logger.debug("OTel V2 fan-out: forwarding to %s failed: %s", destination.endpoint, exc)
         finally:
             self._release(processor)
 
     def _route(
-        self, trace_id: int, span: ReadableSpan, destination: "OtelDestination", failed: bool
+        self, request: _RequestKey, span: ReadableSpan, destination: "OtelDestination", failed: bool
     ) -> "tuple[tuple[ReadableSpan, OtelDestination], ...]":
         """The spans to forward now for ``span`` on a sampled ``destination``: the span
         itself when its tree's verdict is already known and keeps it, nothing while the
-        tree is held for the rest of its trace, or what the bounds made the fan-out decide
+        tree is held for the rest of its request, or what the bounds made the fan-out decide
         early (a tree that outgrew its cap is decided on what it has, and so is the oldest
         tree once too many are waiting, so a span that never ends holds nothing back for
-        ever). A failed span marks its tree before any such early draw. Once shutdown
+        ever). A failed span marks its tree before any such early decision. Once shutdown
         has started flushing, nothing is held: a span ending then is decided at once,
         since no later flush would reach it.
 
@@ -688,58 +796,62 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         another thread between the two would leave this span in a fresh tree.
         """
         with self._lock:
-            verdict: Final = self._verdicts.get(_verdict_key(trace_id, destination))
+            verdict: Final = self._verdicts.get(_verdict_key(request, destination))
             if verdict is not None:
                 return ((span, destination),) if verdict else ()
-            tree: Final = self._pending.setdefault(trace_id, _PendingTree())
+            tree: Final = self._pending.setdefault(request, _PendingTree())
             tree.held.append((span, destination))
             if failed:
                 tree.failed = True
             if self._draining or len(tree.held) >= _MAX_PENDING_SPANS_PER_TREE:
-                return self._decide_locked(trace_id)
+                return self._decide_locked(request)
             if len(self._pending) > _MAX_PENDING_TREES:
                 oldest: Final = next(iter(self._pending))
                 return self._decide_locked(oldest)
             return ()
 
-    def _decide(self, trace_id: int) -> "tuple[tuple[ReadableSpan, OtelDestination], ...]":
+    def _decide(self, request: _RequestKey) -> "tuple[tuple[ReadableSpan, OtelDestination], ...]":
         with self._lock:
-            return self._decide_locked(trace_id)
+            return self._decide_locked(request)
 
-    def _settle(self, trace_id: int, failed: bool) -> "tuple[tuple[ReadableSpan, OtelDestination], ...]":
-        """What the trace's held tree exports once the span that just ended was the last
-        of its trace still open. The model-call span ends in the post-call callback,
-        after the server span, so a tree is decided when its trace goes quiet rather than
+    def _settle(
+        self, request: _RequestKey, span: ReadableSpan, failed: bool
+    ) -> "tuple[tuple[ReadableSpan, OtelDestination], ...]":
+        """What the request's held tree exports once the span that just ended was the last
+        of its request still open. The model-call span ends in the post-call callback,
+        after the server span, so a tree is decided when its request goes quiet rather than
         when its root ends, and a model call that fails late still answers to the error
-        rate. A trace whose starts this fan-out never saw (attached mid-flight, or forgotten
-        by the bound) is decided as each of its spans ends.
+        rate. A request whose starts this fan-out never saw (attached mid-flight, or
+        forgotten by the bound) is decided as each of its spans ends.
         """
         with self._lock:
-            tree: Final = self._pending.get(trace_id)
+            tree: Final = self._pending.get(request)
             if tree is not None and failed:
                 tree.failed = True
-            still_open: Final = self._open.pop(trace_id, 1) - 1
-            if still_open > 0:
-                self._open[trace_id] = still_open
+            still_open: Final = self._open.pop(request, set())
+            if span.context is not None:
+                still_open.discard(span.context.span_id)
+            if still_open:
+                self._open[request] = still_open
                 return ()
-            return self._decide_locked(trace_id)
+            return self._decide_locked(request)
 
-    def _decide_locked(self, trace_id: int) -> "tuple[tuple[ReadableSpan, OtelDestination], ...]":
-        """Draw once per destination for the held tree; the spans the draws keep, and a
-        verdict remembered for the spans of this trace that start later."""
-        tree: Final = self._pending.pop(trace_id, None)
+    def _decide_locked(self, request: _RequestKey) -> "tuple[tuple[ReadableSpan, OtelDestination], ...]":
+        """Decide once per destination for the held tree; the spans the verdicts keep, and
+        a verdict remembered for the spans of this request that start later."""
+        tree: Final = self._pending.pop(request, None)
         if tree is None:
             return ()
-        verdicts: dict[_VerdictKey, bool] = {}  # mutable-ok: one draw per destination of this tree
+        verdicts: dict[_VerdictKey, bool] = {}  # mutable-ok: one verdict per destination of this tree
         for _, destination in tree.held:
-            key = _verdict_key(trace_id, destination)
+            key = _verdict_key(request, destination)
             if key not in verdicts:
-                verdicts[key] = _keeps_tree(destination, tree.failed, self._draw)
+                verdicts[key] = _keeps_tree(destination, tree.failed, request[0])
                 self._verdicts[key] = verdicts[key]
         while len(self._verdicts) > _MAX_REMEMBERED_VERDICTS:
             self._verdicts.popitem(last=False)
         return tuple(
-            (span, destination) for span, destination in tree.held if verdicts[_verdict_key(trace_id, destination)]
+            (span, destination) for span, destination in tree.held if verdicts[_verdict_key(request, destination)]
         )
 
     def _operator_already_writes(
@@ -780,8 +892,8 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         with self._lock:
             self._draining = True
             undecided: Final = tuple(self._pending)
-        for trace_id in undecided:
-            for held_span, held_destination in self._decide(trace_id):
+        for request in undecided:
+            for held_span, held_destination in self._decide(request):
                 self._forward(held_span, held_destination)
         deadline: Final = time.monotonic() + self._drain_seconds
         with self._lock:
@@ -963,14 +1075,15 @@ class _OverriddenBackendFilter(SpanProcessor):
     Wrapping is the only place this works: ``SynchronousMultiSpanProcessor.on_end``
     ignores return values, so a sibling processor can never veto the export.
 
-    Under ``additive`` mode nothing is suppressed, so the wrapper passes every span
-    straight through and the operator keeps its copy.
+    Under ``additive`` mode spans are not suppressed, though global content policy
+    still strips message content when disabled.
 
     ``scope`` narrows what the exporter receives independently of that: under
     ``llm_only`` the model-call spans go through as trace roots and the rest of the
     tree is held back, unless a destination of the request names ``sink``, the account
     this exporter writes to, with a wider scope: the fan-out then delivers the rest of
-    the tree there and the model call keeps its place in it.
+    the tree there and the model call keeps its place in it. A destination naming
+    ``sink`` sets this exporter's content policy; otherwise it follows global capture.
     """
 
     def __init__(
@@ -979,11 +1092,15 @@ class _OverriddenBackendFilter(SpanProcessor):
         owner: str | None,
         scope: "OtelSpanScope" = "full",
         sink: _SinkKey | None = None,
+        global_captures: bool = True,
+        filter_content: bool = True,
     ) -> None:
         self._inner: Final = inner
         self._owner: Final = owner
         self._scope: Final = scope
         self._sink: Final = sink
+        self._global_captures: Final = global_captures
+        self._filter_content: Final = filter_content
 
     def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
         self._inner.on_start(span, parent_context)
@@ -991,7 +1108,28 @@ class _OverriddenBackendFilter(SpanProcessor):
     def on_end(self, span: ReadableSpan) -> None:
         if self._owner in suppressed_backends() or not _in_scope(span, self._scope):
             return
-        self._inner.on_end(_scoped(span, self._account_scope()))
+        scoped: Final = _scoped(span, self._account_scope())
+        self._inner.on_end(
+            without_message_content(scoped) if self._filter_content and not self._account_captures_content() else scoped
+        )
+
+    def _account_captures_content(self) -> bool:
+        """Whether a destination of this request that names ``sink`` captures content.
+
+        The fan-out skips a destination this exporter already writes to, so this copy is
+        the one that account gets and has to honor the destination's content mode.
+        """
+        explicit: Final = next(
+            (
+                destination.capture_message_content
+                for destination in request_destinations()
+                if self._sink is not None
+                and destination.capture_message_content is not None
+                and _sink_key(destination.endpoint, destination.headers) == self._sink
+            ),
+            None,
+        )
+        return captures_span_content(explicit) if explicit is not None else self._global_captures
 
     def _account_scope(self) -> "OtelSpanScope":
         if self._scope == "full" or self._sink is None:
@@ -1002,6 +1140,25 @@ class _OverriddenBackendFilter(SpanProcessor):
             if _sink_key(destination.endpoint, destination.headers) == self._sink
         )
         return _widest((self._scope, *shared))
+
+    def shutdown(self) -> None:
+        self._inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self._inner.force_flush(timeout_millis)
+
+
+class _MessageContentFilter(SpanProcessor):
+    """Strip prompt and response content from every span before ``inner`` exports it."""
+
+    def __init__(self, inner: SpanProcessor) -> None:
+        self._inner: Final = inner
+
+    def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
+        self._inner.on_start(span, parent_context)
+
+    def on_end(self, span: ReadableSpan) -> None:
+        self._inner.on_end(without_message_content(span))
 
     def shutdown(self) -> None:
         self._inner.shutdown()
@@ -1261,12 +1418,23 @@ def build_resource(config: OpenTelemetryV2Config) -> Resource:
     return Resource.create(attributes)
 
 
+def _spec_processor(
+    spec: ExporterSpec, use_simple_processor: bool | None, strip_message_content: bool
+) -> SpanProcessor:
+    exporting: Final = _processor_for(
+        _exporter_from_spec(spec),
+        (spec.use_simple_processor if spec.use_simple_processor is not None else use_simple_processor),
+    )
+    return _MessageContentFilter(exporting) if strip_message_content else exporting
+
+
 def build_tracer_provider(
     config: OpenTelemetryV2Config,
     exporter: SpanExporter | None = None,
     baggage_processor: SpanProcessor | None = None,
     use_simple_processor: bool | None = None,
     tenant_overrides: bool = False,
+    strip_message_content: bool = False,
 ) -> TracerProvider:
     """Build the shared :class:`TracerProvider`.
 
@@ -1285,6 +1453,9 @@ def build_tracer_provider(
 
     ``config.langfuse_span_scope`` narrows the exporter owned by ``langfuse_otel``
     alone; a collector or any other backend in the same config keeps the full tree.
+    ``strip_message_content`` removes prompt and response content before every
+    exporter, for a routed provider whose spans can carry content another
+    destination asked for.
     """
     provider: Final = TracerProvider(resource=build_resource(config))
     if baggage_processor is None:
@@ -1300,17 +1471,23 @@ def build_tracer_provider(
     for spec in config.exporters:
         if spec.requires_headers and not spec.headers:
             continue
-        exp = _exporter_from_spec(spec)
-        processor = _processor_for(
-            exp,
-            (spec.use_simple_processor if spec.use_simple_processor is not None else use_simple_processor),
-        )
+        processor = _spec_processor(spec, use_simple_processor, strip_message_content)
         owner = spec.owner.value if tenant_overrides and spec.owner is not None else None
         scope = _operator_scope(config, spec)
         sink = _sink_key(spec.endpoint, parse_headers(spec.headers)) if _exports_to_the_wire(spec) else None
         provider.add_span_processor(
-            _OverriddenBackendFilter(processor, owner, scope, sink)
-            if owner is not None or scope != "full"
+            _OverriddenBackendFilter(
+                processor,
+                owner,
+                scope,
+                sink,
+                config.capture_span_content,
+                tenant_overrides,
+            )
+            if owner is not None
+            or scope != "full"
+            or sink is not None
+            or (tenant_overrides and not config.capture_span_content)
             else processor
         )
     return provider
@@ -1340,8 +1517,27 @@ def attach_tenant_fan_out(
             TenantFanOutSpanProcessor(
                 operator_sinks=operator_sink_scopes(*configs),
                 excluded_db_systems=excluded_db_systems,
+                default_capture=_operator_capture_mode(configs),
+                default_capture_by_backend=MappingProxyType(dict(_owned_capture_modes(configs))),
             )
         )
+
+
+def _operator_capture_mode(configs: Sequence[OpenTelemetryV2Config]) -> str:
+    """The mode of the operator's generic ``otel`` callback, so ``callback_settings.otel`` counts as the global default"""
+    return next(
+        (config.capture_message_content for config in configs if any(spec.owner is None for spec in config.exporters)),
+        capture_message_content_from_env(),
+    )
+
+
+def _owned_capture_modes(
+    configs: Sequence[OpenTelemetryV2Config],
+) -> Iterator[tuple[str, str]]:
+    for config in configs:
+        for spec in config.exporters:
+            if spec.owner is not None:
+                yield spec.owner.value, config.capture_message_content
 
 
 def deliverable_destinations(

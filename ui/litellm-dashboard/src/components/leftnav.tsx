@@ -40,6 +40,7 @@ import {
   FlaskConical,
   Folder,
   HeartPulse,
+  House,
   KeyRound,
   LayoutGrid,
   Network,
@@ -76,6 +77,7 @@ import {
   isUserTeamAdminForAnyTeam,
   rolesAllowedToViewWriteScopedPages,
   rolesWithWriteAccess,
+  proxyAdminTierRoles,
 } from "../utils/roles";
 import BetaBadge from "./BetaBadge";
 import SidebarAccountMenu from "./SidebarAccountMenu/SidebarAccountMenu";
@@ -207,6 +209,7 @@ const menuGroups: MenuGroup[] = [
   {
     groupLabel: "AI GATEWAY",
     items: [
+      { key: "home", page: "home", label: "Home", icon: <House {...ICON} /> },
       { key: "api-keys", page: "api-keys", label: "Virtual Keys", icon: <KeyRound {...ICON} /> },
       {
         key: "llm-playground",
@@ -462,13 +465,20 @@ const menuGroups: MenuGroup[] = [
             roles: all_admin_roles,
           },
           { key: "ui-theme", page: "ui-theme", label: "UI Theme", icon: <Palette {...ICON} />, roles: all_admin_roles },
+          {
+            key: "telemetry",
+            page: "telemetry",
+            label: "Telemetry",
+            icon: <Activity {...ICON} />,
+            roles: proxyAdminTierRoles,
+          },
         ],
       },
     ],
   },
 ];
 
-const HOME_ROUTE = "api-keys";
+const HOME_ROUTE = "home";
 
 export const routeOf = (item: MenuItem): string => item.route ?? item.page;
 

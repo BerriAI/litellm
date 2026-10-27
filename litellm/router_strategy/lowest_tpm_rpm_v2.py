@@ -26,7 +26,7 @@ from .base_routing_strategy import BaseRoutingStrategy
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
 
