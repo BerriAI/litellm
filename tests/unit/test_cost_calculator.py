@@ -24,6 +24,8 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.llm_response_utils.response_metadata import update_response_metadata
+from litellm.responses.streaming_iterator import stamp_responses_usage_cost
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     convert_to_model_response_object,
 )
@@ -10683,6 +10685,106 @@ def test_a_zero_bill_is_stamped_over_the_provider_reported_usage_cost_on_a_strea
     assert isinstance(response, ModelResponse)
     assert response.usage is not None and response.usage.cost == 0.0
     assert logging_obj.response_cost_calculator(result=response) == 0.0
+
+
+_PRICED_DEPLOYMENT_ID: Final = "reported-cost-deployment-priced-by-the-operator"
+_PRICED_LITELLM_PARAMS: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 6e-6,
+        "metadata": {"model_info": {"id": _PRICED_DEPLOYMENT_ID}},
+    }
+)
+
+
+def _reported_cost_usage() -> Usage:
+    return Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120, cost=0.037)
+
+
+def _priced_logging(stream: bool, call_type: str) -> Logging:
+    """The logging object the proxy hands a priced deployment's call, the deployment under metadata.model_info."""
+    logging_obj: Final = _reported_cost_logging(stream, _PRICED_LITELLM_PARAMS)
+    logging_obj.call_type = call_type
+    return logging_obj
+
+
+def _reported_cost_responses_response() -> ResponsesAPIResponse:
+    return ResponsesAPIResponse(
+        id="resp_reported",
+        created_at=1,
+        status="completed",
+        model="reported-cost-fixture",
+        object="response",
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=100, output_tokens=20, total_tokens=120, cost=0.037),
+    )
+
+
+def _client_visible_reply(route: str) -> tuple[object, Logging]:
+    """The object a client of the given route reads usage.cost from, after litellm priced it."""
+    match route:
+        case "chat":
+            logging_obj: Logging = _priced_logging(False, "completion")
+            response: object = ModelResponse(
+                id="chatcmpl-reported",
+                model="reported-cost-fixture",
+                choices=[Choices(index=0, message=Message(role="assistant", content="hi"), finish_reason="stop")],
+                usage=_reported_cost_usage(),
+            )
+            update_response_metadata(
+                result=response,
+                logging_obj=logging_obj,
+                model=_REPORTED_COST_FIXTURE_MODEL,
+                kwargs={},
+                start_time=datetime.datetime(2026, 1, 1),
+                end_time=datetime.datetime(2026, 1, 1, 0, 0, 1),
+            )
+        case "chat-stream":
+            logging_obj = _priced_logging(True, "completion")
+            response = litellm.stream_chunk_builder(
+                [
+                    _reported_cost_stream_chunk("hi", None, None),
+                    _reported_cost_stream_chunk(None, "stop", None),
+                    _reported_cost_stream_chunk(None, None, _reported_cost_usage()),
+                ],
+                messages=[{"role": "user", "content": "hi"}],
+                logging_obj=logging_obj,
+            )
+        case "responses":
+            logging_obj = _priced_logging(False, "aresponses")
+            response = _reported_cost_responses_response()
+            update_response_metadata(
+                result=response,
+                logging_obj=logging_obj,
+                model=_REPORTED_COST_FIXTURE_MODEL,
+                kwargs={},
+                start_time=datetime.datetime(2026, 1, 1),
+                end_time=datetime.datetime(2026, 1, 1, 0, 0, 1),
+            )
+        case _:
+            logging_obj = _priced_logging(True, "aresponses")
+            response = _reported_cost_responses_response()
+            stamp_responses_usage_cost(response, logging_obj)
+    return response, logging_obj
+
+
+@pytest.mark.parametrize("route", ["chat", "chat-stream", "responses", "responses-stream"])
+def test_the_client_reads_what_litellm_billed_from_usage_cost_on_every_route(
+    monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    """A priced deployment showed its bill on chat streams only; the other three routes still showed the upstream's number."""
+    monkeypatch.setitem(
+        litellm.model_cost,
+        _PRICED_DEPLOYMENT_ID,
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 2e-6, "output_cost_per_token": 6e-6},
+    )
+    bill: Final = 100 * 2e-6 + 20 * 6e-6
+
+    response, logging_obj = _client_visible_reply(route)
+
+    usage: Final = getattr(response, "usage", None)
+    assert usage is not None and usage.cost == pytest.approx(bill)
+    assert logging_obj.response_cost_calculator(result=response, ignore_stamped_cost=True) == pytest.approx(bill)
 
 
 def test_provider_reported_usage_cost_splits_input_and_output_by_the_token_math_ratio(

@@ -13,7 +13,7 @@ from typing_extensions import ReadOnly, Required
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import chunk_usage, provider_reported_usage_cost
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params, stamp_billed_usage_cost
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params, stamp_billable_usage_cost
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,  # pyright: ignore[reportUnknownVariableType]  # response param accepts an untyped dict
 )
@@ -1413,13 +1413,10 @@ def _set_stream_builder_response_cost(
 def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
     if logging_obj is None:
         return
-    computed_cost: Final = logging_obj.response_cost_calculator(result=response)
-    if not isinstance(computed_cost, (int, float)) or computed_cost < 0:
+    billed: Final = stamp_billable_usage_cost(response, usage, logging_obj.response_cost_calculator(result=response))
+    if billed is None:
         return
-    if computed_cost == 0 and getattr(usage, "cost", None) is None:
-        return
-    stamp_billed_usage_cost(response, usage, computed_cost)
-    _set_hidden_response_cost(response, float(computed_cost))
+    _set_hidden_response_cost(response, billed)
 
 
 def _field_of(value: object, name: str) -> object:

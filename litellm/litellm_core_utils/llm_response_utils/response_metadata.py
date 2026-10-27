@@ -8,13 +8,16 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm.constants import LITELLM_DETAILED_TIMING
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs, process_response_headers
+from litellm.litellm_core_utils.hidden_params import stamp_billable_usage_cost
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.logging_utils import LiteLLMLoggingObject
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import (
     EmbeddingResponse,
     HiddenParams,
     ModelResponse,
     TranscriptionResponse,
+    Usage,
 )
 
 
@@ -159,16 +162,18 @@ class ResponseMetadata:
         ## ADD OTHER HIDDEN PARAMS
         model_info: Final = kwargs.get("model_info", {}) or {}
         model_id: Final = model_info.get("id", None)
+        response_cost: Final = logging_obj.response_cost_calculator(
+            result=self.result,
+            litellm_model_name=model,
+            router_model_id=model_id,
+            cache_hit=cache_hit,
+        )
+        self._stamp_billed_usage_cost(response_cost)
         new_params: Final = {
             "litellm_call_id": getattr(logging_obj, "litellm_call_id", None),
             "api_base": get_api_base(model=model or "", optional_params=kwargs),
             "model_id": model_id,
-            "response_cost": logging_obj.response_cost_calculator(
-                result=self.result,
-                litellm_model_name=model,
-                router_model_id=model_id,
-                cache_hit=cache_hit,
-            ),
+            "response_cost": response_cost,
             "additional_headers": process_response_headers(
                 self._get_additional_headers_from_hidden_params() or {},
                 preserve_litellm_internal_headers=True,
@@ -178,6 +183,15 @@ class ResponseMetadata:
             or _provider_response_model(self.result),
         }
         self._update_hidden_params(new_params)
+
+    def _stamp_billed_usage_cost(self, response_cost: object) -> None:
+        """A client reads what litellm billed from usage.cost, streamed or not, priced deployment or not."""
+        if not isinstance(self.result, (ModelResponse, ResponsesAPIResponse)):
+            return
+        usage: Final = getattr(self.result, "usage", None)
+        if not isinstance(usage, (Usage, ResponseAPIUsage)):
+            return
+        stamp_billable_usage_cost(self.result, usage, response_cost)
 
     def _update_hidden_params(self, new_params: Mapping[str, object]) -> None:
         """

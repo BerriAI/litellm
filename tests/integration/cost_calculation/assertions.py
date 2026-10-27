@@ -55,6 +55,18 @@ def assert_streamed_usage_cost(case_name: str, endpoint: str, response_text: str
         assert approx_equal(seen, spend), f"{case_name}: streamed usage.cost {seen} != spend {spend}"
 
 
+def assert_json_usage_cost(case_name: str, endpoint: str, response: httpx.Response, spend: float) -> None:
+    """A JSON reply's usage.cost is what the row billed, the upstream's own figure included, so a client and the
+    spend log never disagree on a priced deployment."""
+    if endpoint not in STREAMED_COST_ENDPOINTS:
+        return
+    usage: Final = JSON_OBJECT.validate_json(response.text).get("usage")
+    cost: Final = usage.get("cost") if isinstance(usage, dict) else None
+    if not isinstance(cost, (int, float)) or isinstance(cost, bool):
+        return
+    assert approx_equal(float(cost), spend), f"{case_name}: usage.cost {cost} != spend {spend}"
+
+
 def assert_breakdown(
     case_name: str,
     response_content_type: str,
@@ -160,6 +172,8 @@ def assert_exact(
         assert_total_is_sum_of_components(row, breakdown, case_name)
     if response is not None and response_content_type == "text/event-stream":
         assert_streamed_usage_cost(case_name, response.request.url.path, response.text, expected.spend)
+    if response is not None and response_content_type == "application/json":
+        assert_json_usage_cost(case_name, response.request.url.path, response, expected.spend)
 
 
 def assert_recount(
@@ -201,3 +215,5 @@ def assert_recount(
     assert_total_is_sum_of_components(row, row.breakdown, case_name)
     if response is not None and response_content_type == "text/event-stream":
         assert_streamed_usage_cost(case_name, response.request.url.path, response.text, row.spend)
+    if response is not None and response_content_type == "application/json":
+        assert_json_usage_cost(case_name, response.request.url.path, response, row.spend)

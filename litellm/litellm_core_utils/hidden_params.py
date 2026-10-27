@@ -147,6 +147,16 @@ def stamp_billed_usage_cost(obj: object, usage: object, cost: float) -> None:
     setattr(usage, "cost", cost)
 
 
+def stamp_billable_usage_cost(obj: object, usage: object, cost: object) -> float | None:
+    """Stamp a priced bill, a $0 one included once the provider put a number there; an unpriceable reply keeps its usage."""
+    if isinstance(cost, bool) or not isinstance(cost, (int, float)) or cost < 0:
+        return None
+    if cost == 0 and getattr(usage, "cost", None) is None:
+        return None
+    stamp_billed_usage_cost(obj, usage, float(cost))
+    return float(cost)
+
+
 def provider_stated_usage_cost(obj: object, usage_cost: object) -> object:
     """What the provider itself put in usage.cost, looking past a bill litellm stamped there."""
     hidden_params: Final = get_hidden_params(obj)

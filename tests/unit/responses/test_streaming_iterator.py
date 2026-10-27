@@ -851,17 +851,36 @@ def test_stamp_responses_usage_cost_stamps_computed_cost():
     logging_obj.response_cost_calculator.assert_called_once_with(result=response)
 
 
-def test_stamp_responses_usage_cost_keeps_provider_reported_cost():
+def test_stamp_responses_usage_cost_puts_the_bill_over_the_provider_reported_cost():
+    from litellm.litellm_core_utils.hidden_params import USAGE_COST_BEFORE_LITELLM_STAMP, provider_stated_usage_cost
     from litellm.responses.streaming_iterator import stamp_responses_usage_cost
 
     response = _responses_api_response_with_usage()
     setattr(response.usage, "cost", 0.5)
     logging_obj = Mock(spec=LiteLLMLoggingObj)
+    logging_obj.response_cost_calculator.return_value = 0.00032
 
     stamp_responses_usage_cost(response, logging_obj)
 
-    assert getattr(response.usage, "cost", None) == pytest.approx(0.5)
-    logging_obj.response_cost_calculator.assert_not_called()
+    assert getattr(response.usage, "cost", None) == pytest.approx(0.00032)
+    assert provider_stated_usage_cost(response, response.usage.cost) == pytest.approx(0.5)
+    assert response._hidden_params[USAGE_COST_BEFORE_LITELLM_STAMP] == pytest.approx(0.5)
+
+
+def test_stamp_responses_usage_cost_stamps_a_zero_bill_only_over_a_provider_reported_cost():
+    from litellm.responses.streaming_iterator import stamp_responses_usage_cost
+
+    unpriced = _responses_api_response_with_usage()
+    reported = _responses_api_response_with_usage()
+    setattr(reported.usage, "cost", 0.5)
+    logging_obj = Mock(spec=LiteLLMLoggingObj)
+    logging_obj.response_cost_calculator.return_value = 0.0
+
+    stamp_responses_usage_cost(unpriced, logging_obj)
+    stamp_responses_usage_cost(reported, logging_obj)
+
+    assert getattr(unpriced.usage, "cost", None) is None
+    assert getattr(reported.usage, "cost", None) == 0.0
 
 
 def _unvalidated_response_with_dict_usage(usage: dict) -> ResponsesAPIResponse:
@@ -889,13 +908,13 @@ def test_stamp_responses_usage_cost_keeps_provider_cost_from_dict_usage():
         }
     )
     logging_obj = Mock(spec=LiteLLMLoggingObj)
+    logging_obj.response_cost_calculator.return_value = 3e-05
 
     stamp_responses_usage_cost(response, logging_obj)
 
     assert isinstance(response.usage, ResponseAPIUsage)
     assert response.usage.cost == pytest.approx(3e-05)
     assert response.usage.output_tokens_details.reasoning_tokens == 117
-    logging_obj.response_cost_calculator.assert_not_called()
 
 
 def test_stamp_responses_usage_cost_computes_cost_for_dict_usage_without_cost():

@@ -41,7 +41,7 @@ from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_api_base
-from litellm.litellm_core_utils.hidden_params import USAGE_COST_BEFORE_LITELLM_STAMP, stamp_billed_usage_cost
+from litellm.litellm_core_utils.hidden_params import USAGE_COST_BEFORE_LITELLM_STAMP, stamp_billable_usage_cost
 from litellm.litellm_core_utils.internal_call_metadata import without_budget_reservation
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1758,14 +1758,11 @@ def stamp_responses_usage_cost(
     if usage_obj is None:
         return
     response_obj.usage = usage_obj  # rebind-ok: the stamped cost has to ride on the response the client receives
-    if isinstance(getattr(usage_obj, "cost", None), (int, float)):
-        return
     try:
         cost: Final[float | None] = logging_obj.response_cost_calculator(result=response_obj)
     except Exception:
         return
-    if isinstance(cost, (int, float)) and cost > 0:
-        stamp_billed_usage_cost(response_obj, usage_obj, cost)
+    stamp_billable_usage_cost(response_obj, usage_obj, cost)
 
 
 def opening_item_payload(payload: Mapping[str, object]) -> Mapping[str, object]:

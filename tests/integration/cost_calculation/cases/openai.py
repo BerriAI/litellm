@@ -2,6 +2,7 @@
 
 PARITY pairs the streamed case with its plain twin where both bill the same row."""
 
+from collections.abc import Mapping
 from typing import Final, cast
 
 from integration.cost_calculation.cost_tracking_case import (
@@ -11956,11 +11957,85 @@ GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM: Final = GATEWAY_REPORTED_COST_STRE
     }
 )
 
+_GATEWAY_RESPONSES_USAGE: Final[Mapping[str, JsonValue]] = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "cost": 0.037}
+_GATEWAY_RESPONSES_ITEM: Final[Mapping[str, JsonValue]] = {
+    "id": "msg_gateway",
+    "type": "message",
+    "role": "assistant",
+    "status": "completed",
+    "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+}
+_GATEWAY_RESPONSES_BODY: Final[Mapping[str, JsonValue]] = {
+    "id": "resp_$REQUEST_ID",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "gateway-reported-cost-fixture",
+    "output": [_GATEWAY_RESPONSES_ITEM],
+    "usage": _GATEWAY_RESPONSES_USAGE,
+}
+
+GATEWAY_REPORTED_COST_RESPONSES: Final = CostTrackingTestCase(
+    name="gateway-reported-cost-responses",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gateway-reported-cost-fixture",
+    endpoint="/v1/responses",
+    request={"model": "$MODEL", "input": "reported cost", "cache": {"no-cache": True}},
+    response=JsonResponse(content_type="application/json", body=_GATEWAY_RESPONSES_BODY),
+    expected=_GATEWAY_REPORTED_EXPECTED,
+)
+
+GATEWAY_REPORTED_COST_RESPONSES_STREAM: Final = GATEWAY_REPORTED_COST_RESPONSES.model_copy(
+    update={
+        "name": "gateway-reported-cost-responses-stream",
+        "request": {**GATEWAY_REPORTED_COST_RESPONSES.request, "stream": True},
+        "response": SseResponse(
+            content_type="text/event-stream",
+            frames=sse_frames(
+                {
+                    "type": "response.created",
+                    "sequence_number": 0,
+                    "response": {**_GATEWAY_RESPONSES_BODY, "status": "in_progress", "output": [], "usage": None},
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "sequence_number": 1,
+                    "item_id": "msg_gateway",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": "ok",
+                },
+                {"type": "response.completed", "sequence_number": 2, "response": _GATEWAY_RESPONSES_BODY},
+            ),
+        ),
+    }
+)
+
+GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED: Final = GATEWAY_REPORTED_COST_RESPONSES.model_copy(
+    update={
+        "name": "gateway-reported-cost-responses-operator_priced",
+        "deployment": _GATEWAY_OPERATOR_PRICED,
+        "expected": _GATEWAY_OPERATOR_PRICED_EXPECTED,
+    }
+)
+
+GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED_STREAM: Final = GATEWAY_REPORTED_COST_RESPONSES_STREAM.model_copy(
+    update={
+        "name": "gateway-reported-cost-responses-operator_priced-stream",
+        "deployment": _GATEWAY_OPERATOR_PRICED,
+        "expected": _GATEWAY_OPERATOR_PRICED_EXPECTED,
+    }
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GATEWAY_REPORTED_COST,
     GATEWAY_REPORTED_COST_STREAM,
     GATEWAY_REPORTED_COST_OPERATOR_PRICED,
     GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM,
+    GATEWAY_REPORTED_COST_RESPONSES,
+    GATEWAY_REPORTED_COST_RESPONSES_STREAM,
+    GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED,
+    GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED_STREAM,
     GPT_5_6_SLASH_ALIAS,
     GPT_5_6_SLASH_ALIAS_STREAM,
     GPT_6_SOL_RESPONSES_DEPLOYMENT_JSON,
@@ -12205,6 +12280,11 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=GATEWAY_REPORTED_COST, streamed=GATEWAY_REPORTED_COST_STREAM),
     StreamParityTestCase(
         plain=GATEWAY_REPORTED_COST_OPERATOR_PRICED, streamed=GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM
+    ),
+    StreamParityTestCase(plain=GATEWAY_REPORTED_COST_RESPONSES, streamed=GATEWAY_REPORTED_COST_RESPONSES_STREAM),
+    StreamParityTestCase(
+        plain=GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED,
+        streamed=GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED_STREAM,
     ),
     StreamParityTestCase(plain=GPT_5_3_CODEX_INPUT_TEXT, streamed=GPT_5_3_CODEX_STREAM),
     StreamParityTestCase(plain=GPT_5_3_CODEX_INPUT_TEXT, streamed=GPT_5_3_CODEX_STREAM_INCOMPLETE),
