@@ -131,11 +131,11 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_none_reasoning_effort": false,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": false,
         "reasoning_effort_levels": [
-            "none",
             "minimal",
             "low",
             "medium",
