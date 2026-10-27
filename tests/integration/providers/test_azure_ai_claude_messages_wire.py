@@ -264,8 +264,6 @@ def test_azure_ai_claude_messages_filters_auto_injected_betas_by_azure_support(g
 
 
 def test_azure_ai_claude_messages_forwards_supported_beta(gateway: Gateway) -> None:
-    pytest.skip(f"BUG: Azure AI Claude drops the supported beta header {_SUPPORTED_BETA}")
-
     identity: Final = "msg_azure_claude_supported_beta"
     reply_body: Final = cc.message_reply(identity, _BACKEND, _CONTENT, _USAGE)
     request_body: Final = {
