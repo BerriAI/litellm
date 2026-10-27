@@ -23,6 +23,12 @@ class RustUpstreamError(Exception):
     pass
 
 
+class RustUpstreamErrorWithHeaders(RustUpstreamError):
+    def __init__(self, status: object, body: object, headers: object) -> None:
+        super().__init__(status, body)
+        self.headers: Final = headers
+
+
 @pytest.fixture(autouse=True)
 def native_exceptions(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
     native: Final = SimpleNamespace(
@@ -332,6 +338,31 @@ def test_upstream_error_maps_to_api_error_without_fallback() -> None:
         run(Rollout.RUST_OPT_OUT, calls)
 
     assert caught.value.status_code == 429
+    assert calls.calls == (RUST,)
+
+
+@pytest.mark.parametrize(
+    ("failure", "status", "message"),
+    (
+        (RustUpstreamErrorWithHeaders(429, "rate limited", [("retry-after", "7")]), 429, "rate limited"),
+        (RustUpstreamErrorWithHeaders(0, "connection reset", []), 500, "connection reset"),
+        (RustUpstreamErrorWithHeaders(429, "rate limited", "not headers"), 500, "(429, 'rate limited')"),
+        (RustUpstreamError("no status"), 500, "no status"),
+    ),
+)
+def test_upstream_error_agrees_with_the_native_failure_decoder(
+    failure: RustUpstreamError, status: int, message: str
+) -> None:
+    calls: Final = recorder(failure)
+
+    with pytest.raises(APIError) as caught:
+        run(Rollout.RUST_OPT_OUT, calls)
+
+    assert caught.value.status_code == status
+    assert caught.value.message == f"litellm.APIError: litellm rust messages: {message}"
+    assert caught.value.llm_provider == "anthropic"
+    assert caught.value.model == "model"
+    assert caught.value.__cause__ is failure
     assert calls.calls == (RUST,)
 
 
