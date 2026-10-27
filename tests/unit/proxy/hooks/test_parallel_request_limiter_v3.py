@@ -7,7 +7,7 @@ import contextvars
 import logging
 import sys
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import AsyncGenerator, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Final, List, Optional
@@ -4642,6 +4642,140 @@ async def test_success_event_releases_parallel_slot_v3(monkeypatch):
         data={"model": "gpt-3.5-turbo"},
         call_type="",
     )
+
+
+_SSE_KEEPALIVE_CALLBACK_TIME: Final = datetime(2026, 1, 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("after_ping", [False, True], ids=["fast", "pinged"])
+@pytest.mark.parametrize("fails", [False, True], ids=["success", "failure"])
+@pytest.mark.parametrize("preadmitted", [False, True], ids=["producer-admission", "existing-admission"])
+async def test_sse_keepalive_releases_parallel_capacity(
+    after_ping: bool, fails: bool, preadmitted: bool
+) -> None:
+    from fastapi.responses import StreamingResponse
+
+    from litellm.proxy.common_request_processing import open_sse_before_first_byte
+    from litellm.proxy.common_utils.sse_keepalive import SSE_COMMENT_PING_BYTES
+
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    api_key: Final = hash_token("sk-keepalive-release")
+    auth: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1)
+    counter: Final = f"{{api_key:{api_key}}}:max_parallel_requests"
+
+    async def request(call_id: str) -> None:
+        data: Final = {"model": "test-model", "litellm_call_id": call_id}
+        upstream_answers: Final = asyncio.Event()
+        if not after_ping:
+            upstream_answers.set()
+
+        async def admit() -> None:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=auth, cache=cache, data=data, call_type="acompletion"
+            )
+
+        async def failure(exc: Exception) -> None:
+            await handler.async_post_call_failure_hook(
+                request_data=data, original_exception=exc, user_api_key_dict=auth
+            )
+
+        async def stream() -> AsyncGenerator[bytes, None]:
+            yield b"data: [DONE]\n\n"
+            await handler.async_log_success_event(
+                kwargs={
+                    "litellm_call_id": call_id,
+                    "standard_logging_object": {"metadata": {"user_api_key_hash": api_key}},
+                },
+                response_obj=ModelResponse(usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)),
+                start_time=_SSE_KEEPALIVE_CALLBACK_TIME,
+                end_time=_SSE_KEEPALIVE_CALLBACK_TIME,
+            )
+
+        async def produce() -> StreamingResponse:
+            if not preadmitted:
+                await admit()
+            await upstream_answers.wait()
+            if fails:
+                raise HTTPException(status_code=502, detail="upstream failed")
+            return StreamingResponse(stream())
+
+        if preadmitted:
+            await admit()
+        response_call: Final = open_sse_before_first_byte(
+            produce(), 0.001 if after_ping else 60.0, on_late_failure=failure
+        )
+        if fails and not after_ping:
+            with pytest.raises(HTTPException) as rejected:
+                await response_call
+            assert rejected.value.status_code == 502
+            await failure(rejected.value)
+            return
+        response: Final = await response_call
+        first: Final = await anext(response.body_iterator)
+        if after_ping:
+            upstream_answers.set()
+        rest: Final = tuple([chunk async for chunk in response.body_iterator])
+        assert first == (SSE_COMMENT_PING_BYTES if after_ping else b"data: [DONE]\n\n")
+        if fails:
+            error_frame: Final = rest[-2]
+            assert isinstance(error_frame, bytes) and b"upstream failed" in error_frame
+            assert rest[-1] == b"data: [DONE]\n\n"
+        elif after_ping:
+            assert rest[-1] == b"data: [DONE]\n\n"
+        else:
+            assert rest == ()
+
+    for index in range(3):
+        await contextvars.Context().run(asyncio.create_task, request(f"keepalive-{index}"))
+        assert handler._gauge_in_flight_from_cache_value(await cache.async_get_cache(counter)) == 0
+
+
+@pytest.mark.asyncio
+async def test_sse_keepalive_rejects_overlap_and_reuses_completed_capacity() -> None:
+    from fastapi.responses import StreamingResponse
+
+    from litellm.proxy.common_request_processing import open_sse_before_first_byte
+
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    api_key: Final = hash_token("sk-keepalive-overlap")
+    auth: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1)
+    admitted: Final = asyncio.Event()
+    finish: Final = asyncio.Event()
+
+    async def request(call_id: str) -> None:
+        async def stream() -> AsyncGenerator[bytes, None]:
+            await finish.wait()
+            yield b"data: [DONE]\n\n"
+            await handler.async_post_call_success_hook(
+                data={"litellm_call_id": call_id}, user_api_key_dict=auth, response=ModelResponse()
+            )
+
+        async def produce() -> StreamingResponse:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=auth,
+                cache=cache,
+                data={"model": "test-model", "litellm_call_id": call_id},
+                call_type="acompletion",
+            )
+            admitted.set()
+            return StreamingResponse(stream())
+
+        response: Final = await open_sse_before_first_byte(produce(), 60.0)
+        assert tuple([chunk async for chunk in response.body_iterator]) == (b"data: [DONE]\n\n",)
+
+    first: Final = contextvars.Context().run(asyncio.create_task, request("first"))
+    await admitted.wait()
+    try:
+        with pytest.raises(HTTPException) as rejected:
+            await contextvars.Context().run(asyncio.create_task, request("overlapping"))
+        assert rejected.value.status_code == 429
+    finally:
+        finish.set()
+        await first
+    await contextvars.Context().run(asyncio.create_task, request("after-completion"))
 
 
 @pytest.mark.asyncio

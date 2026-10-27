@@ -198,6 +198,26 @@ from litellm.utils import (
 )
 
 
+def _merge_headers_case_insensitive(
+    headers: Mapping[str, object], extra_headers: Mapping[str, object] | None
+) -> dict[str, str]:  # mutable-ok: legacy HTTP handler methods require a dict of headers
+    overridden: Final = frozenset(name.lower() for name in extra_headers or {})
+    return {
+        **{name: str(value) for name, value in headers.items() if name.lower() not in overridden},
+        **{name: str(value) for name, value in (extra_headers or {}).items()},
+    }
+
+
+def _client_request_headers(
+    response_api_optional_request_params: Mapping[str, object],
+    extra_headers: Mapping[str, object] | None,
+) -> dict[str, str]:  # mutable-ok: provider validate_environment methods require a dict
+    from litellm.litellm_core_utils.core_helpers import as_str_mapping
+
+    optional_headers: Final = as_str_mapping(response_api_optional_request_params.get("extra_headers"))
+    return _merge_headers_case_insensitive(optional_headers or {}, extra_headers)
+
+
 def _rust_responses_websocket_enabled(
     custom_llm_provider: str | None,
 ) -> bool:
@@ -2906,14 +2926,18 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers = responses_api_provider_config.validate_environment(
-            headers=response_api_optional_request_params.get("extra_headers", {}) or {},
-            model=model,
-            litellm_params=litellm_params,
-        )
-
-        if extra_headers:
-            headers.update(extra_headers)
+        headers = {  # rebind-ok: validation replaces the method's incoming headers
+            **responses_api_provider_config.validate_environment(
+                headers=(
+                    _client_request_headers(response_api_optional_request_params, extra_headers)
+                    if custom_llm_provider == "chatgpt"
+                    else response_api_optional_request_params.get("extra_headers", {}) or {}
+                ),
+                model=model,
+                litellm_params=litellm_params,
+            ),
+            **((extra_headers or {}) if custom_llm_provider != "chatgpt" else {}),
+        }
 
         # Check if streaming is requested
         stream = response_api_optional_request_params.get("stream", False)
@@ -3104,11 +3128,15 @@ class BaseLLMHTTPHandler:
         validated_headers: Final = {
             **await asyncio.to_thread(
                 responses_api_provider_config.validate_environment,
-                headers=response_api_optional_request_params.get("extra_headers", {}) or {},
+                headers=(
+                    _client_request_headers(response_api_optional_request_params, extra_headers)
+                    if custom_llm_provider == "chatgpt"
+                    else response_api_optional_request_params.get("extra_headers", {}) or {}
+                ),
                 model=model,
                 litellm_params=litellm_params,
             ),
-            **(extra_headers or {}),
+            **((extra_headers or {}) if custom_llm_provider != "chatgpt" else {}),
         }
 
         # Check if streaming is requested
