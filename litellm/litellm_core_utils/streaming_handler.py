@@ -324,6 +324,7 @@ class CustomStreamWrapper:
         self._openai_handler_receives_chat_chunks = False
         self._failure_logging: asyncio.Task[None] | None = None
         self._closed = False
+        self._abandonment_logged: bool = False
         self._stream_created_time: float = time.time()
 
         litellm_params: Final[GenericLiteLLMParams] = GenericLiteLLMParams.model_validate(
@@ -430,13 +431,88 @@ class CustomStreamWrapper:
         return self
 
     def __exit__(self, *exc_info: object) -> None:
-        self.close()
+        self.close_stream()
 
     async def __aenter__(self) -> "CustomStreamWrapper":
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:
         await self.aclose()
+
+    def close_stream(self) -> None:
+        """Deterministically end a stream the consumer stopped reading early.
+
+        A stream abandoned without reaching its final chunk would otherwise
+        never emit its terminal success log (spans, spend, custom callbacks
+        all miss the call). ``close_stream()`` flushes that log from the chunks
+        received so far and then closes the underlying provider stream; safe to
+        call after the stream has been fully consumed (it is a no-op then).
+
+        Deliberately *not* the same entry point as ``close()``: ``Router``
+        closes every response in a ``finally`` block, so treating that
+        internal teardown as "the consumer abandoned this stream" would
+        assemble a response and submit a success log on behalf of every
+        fallback and shadow stream. ``close()`` therefore stays a pure
+        teardown, and a caller that abandons a stream has to say so, through
+        this method or the context manager above.
+        """
+        self._flush_abandoned_stream_logging()
+        self.close()
+
+    def _flush_abandoned_stream_logging(self) -> None:
+        """Emit a terminal success log for a stream the consumer abandoned.
+
+        A stream the caller stops reading early (break, drop, aclose) never
+        reaches the final-chunk branch that assembles
+        ``complete_streaming_response`` and submits the terminal success log,
+        so every success callback (tracing, spend, ...) silently misses the
+        call even though tokens were served. Assemble the response from the
+        chunks received so far and submit the same logging once, mirroring how
+        the proxy bills a partial stream on client disconnect.
+
+        Only reachable through ``close_stream()`` / the context manager. It is
+        deliberately not wired into either of the other two hooks this class
+        already had:
+
+        - ``__del__`` runs at an arbitrary point on an arbitrary thread,
+          possibly during interpreter shutdown or after the event loop it
+          needs is gone, so submitting logging from there is neither reliable
+          nor testable. It also races the success callbacks of a stream that is
+          still being drained.
+        - ``aclose()`` is litellm's own cleanup path. `Router` calls it on
+          fallback and shutdown paths (`hasattr(model_response, "aclose")`), so
+          treating it as "the consumer abandoned this stream" would assemble a
+          response and submit a success log on behalf of every internal
+          teardown. Measured cost: with the flush in ``aclose()`` the
+          ``tests/unit/test_router`` suite went from 150s to over 25 minutes,
+          because each one runs `stream_chunk_builder` (token counting)
+          synchronously.
+
+        So a caller that abandons a stream has to say so, through
+        ``close_stream()``.
+        """
+        if self._abandonment_logged or self.sent_last_chunk:
+            return
+        if not self.chunks:  # pyright: ignore[reportUnknownMemberType]  # chunks is a loosely-typed accumulator
+            return
+        self._abandonment_logged = True
+        try:
+            complete_streaming_response: Final = litellm.stream_chunk_builder(  # pyright: ignore[reportUnknownMemberType]  # stream_chunk_builder is exposed on the package root
+                chunks=self.chunks,  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # chunks is a loosely-typed accumulator
+                messages=self.messages,
+                logging_obj=self.logging_obj,
+                count_prompt_tokens=self.count_prompt_tokens,
+            )
+        except Exception as e:  # noqa: BLE001  # an abandoned stream must still emit whatever telemetry was built; the failure is logged, not raised
+            verbose_logger.warning(
+                "stream_chunk_builder raised for an abandoned stream (%s); the partial call is not logged.",
+                str(e),
+            )
+            return
+        if complete_streaming_response is None:
+            return
+        self.logging_obj.model_call_details["async_complete_streaming_response"] = complete_streaming_response
+        self.run_success_logging_and_cache_storage(complete_streaming_response, cache_hit=False)  # pyright: ignore[reportUnknownMemberType]  # resolved dynamically on the logging object
 
     def _restore_consumer_correlation_context(self, *, guarded: bool = False) -> None:
         """Restore trace_id/session_id in the *consuming* thread/task/context.
