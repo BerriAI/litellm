@@ -69,6 +69,8 @@ litellm-token-counter-huggingface = { path = "crates/token-counter-huggingface" 
 litellm-token-counter-tiktoken = { path = "crates/token-counter-tiktoken" }
 litellm-host-python = { path = "crates/host-python" }
 litellm-python-compat = { path = "crates/python-compat" }
+litellm-redis-client = { path = "crates/redis-client" }
+litellm-redis-testing = { path = "crates/redis-testing" }
 
 askama = { version = "0.16.1", default-features = false, features = ["derive", "std"] }
 tracing = "0.1"
@@ -88,6 +90,9 @@ rand = "0.8"
 macro_rules_attribute = "0.2.3"
 schemars = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "http2", "stream"] }
+redis = "1.8.0"
+redis-test = "1.0.4"
+testcontainers-modules = "0.15.0"
 qdrant-client = { version = "1.19.0", default-features = false }
 uuid = { version = "1", features = ["v4"] }
 rstest = "0.26.1"
