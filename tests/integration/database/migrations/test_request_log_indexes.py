@@ -15,7 +15,7 @@ from typing import Final
 
 import psycopg
 import pytest
-from litellm_proxy_extras import db_preflight, request_log_indexes
+from litellm_proxy_extras import migration_data_checks, request_log_indexes
 from litellm_proxy_extras.migration_lock import MIGRATION_LOCK_KEY, migration_lock
 from litellm_proxy_extras.migration_recovery import roll_back_failed_inert_migration
 from litellm_proxy_extras.request_log_indexes import (
@@ -976,7 +976,10 @@ def test_the_migration_job_refuses_before_the_first_migration_when_spend_log_key
         ProxyExtrasDBManager.run_migration_job(use_migrate=True, use_v2_resolver=use_v2_resolver)
 
     refusal: Final = str(refused.value)
-    assert '"LiteLLM_SpendLogs".api_key: 2 row(s) longer than 2704 bytes, longest 3207 bytes' in refusal, refusal
+    assert (
+        '"LiteLLM_SpendLogs".api_key, startTime: 2 row(s) with an index entry over 2704 bytes, largest 3232 bytes '
+        "(api_key up to 3207 bytes)"
+    ) in refusal, refusal
     assert f'blocks: CREATE INDEX "{API_KEY_INDEX}"' in refusal, refusal
     assert _ledger(scratch_database) == ledger_before, "a refused job must not apply a single migration"
     assert API_KEY_INDEX not in _index_validity(scratch_database, "api_key_startTime_idx")
@@ -1002,7 +1005,9 @@ def test_a_serving_proxy_index_build_that_meets_too_long_keys_reports_the_rows_i
 
     assert built is False
     assert f"Not building index {API_KEY_INDEX}" in caplog.text, caplog.text
-    assert '"LiteLLM_SpendLogs".api_key: 1 row(s) longer than 2704 bytes' in caplog.text, caplog.text
+    assert '"LiteLLM_SpendLogs".api_key, startTime: 1 row(s) with an index entry over 2704 bytes' in caplog.text, (
+        caplog.text
+    )
     assert "exceeds btree version 4 maximum" not in caplog.text, caplog.text
     assert API_KEY_INDEX not in _index_validity(scratch_database, "api_key_startTime_idx")
 
@@ -1028,15 +1033,17 @@ def test_each_check_kind_counts_exactly_the_rows_postgres_would_reject(scratch_d
             ("ok", "ok", "bad", "bad", secrets.token_hex(1400)),
         )
         checks: Final = tuple(
-            check for statement in _PROBE_STATEMENTS for check in db_preflight.checks_for_statement(statement, "probe")
+            check
+            for statement in _PROBE_STATEMENTS
+            for check in migration_data_checks.checks_for_statement(statement, "probe")
         )
-        findings: Final = db_preflight.find_blockers(conn, "public", checks)
+        findings: Final = migration_data_checks.find_blockers(conn, "public", checks)
         for statement in _PROBE_STATEMENTS:
             with conn.transaction(force_rollback=True), pytest.raises(psycopg.Error):
                 conn.execute(statement)  # pyright: ignore[reportArgumentType]  # test SQL
 
     counted: Final = {
-        (f.check.kind, f.check.columns): f.rows for f in findings if isinstance(f, db_preflight.BlockedChange)
+        (f.check.kind, f.check.columns): f.rows for f in findings if isinstance(f, migration_data_checks.BlockedChange)
     }
     assert counted == {
         ("duplicates", ("b",)): 1,
@@ -1049,16 +1056,67 @@ def test_each_check_kind_counts_exactly_the_rows_postgres_would_reject(scratch_d
 
 
 @requires_db
+@pytest.mark.parametrize(
+    ("index_columns", "s_value", "t_value", "longest_fitting_key", "described_as"),
+    (
+        (("k", "t"), None, "2025-06-03 14:02:11", 2684, "k up to 2685 bytes"),
+        (("s", "k"), "q" * 20, None, 2668, "s up to 20 bytes, k up to 2669 bytes"),
+        (("s", "k"), None, None, 2684, "k up to 2685 bytes"),
+    ),
+    ids=("key then timestamp", "20-byte text then key", "NULL then key"),
+)
+def test_the_entry_size_check_draws_the_line_exactly_where_postgres_does(
+    scratch_database: str,
+    index_columns: tuple[str, ...],
+    s_value: str | None,
+    t_value: str | None,
+    longest_fitting_key: int,
+    described_as: str,
+) -> None:
+    """One row's key is the longest that still fits the index entry, the other's is one byte
+    longer. Where that line falls depends on the other indexed column, its alignment and the
+    null bitmap, so the same two rows go through the check and through Postgres."""
+    create_index: Final = sql.SQL('CREATE INDEX "entry_probe_idx" ON "entry_probe" ({})').format(
+        sql.SQL(", ").join(sql.Identifier(column) for column in index_columns)
+    )
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        conn.execute('CREATE TABLE "entry_probe" ("s" TEXT, "k" TEXT, "t" TIMESTAMP(3))')
+        conn.execute(
+            'INSERT INTO "entry_probe" ("s", "k", "t") VALUES (%s, %s, %s), (%s, %s, %s)',
+            (
+                s_value,
+                secrets.token_hex(longest_fitting_key)[:longest_fitting_key],
+                t_value,
+                s_value,
+                secrets.token_hex(longest_fitting_key)[: longest_fitting_key + 1],
+                t_value,
+            ),
+        )
+        findings: Final = migration_data_checks.find_blockers(
+            conn, "public", migration_data_checks.checks_for_statement(create_index.as_string(conn), "probe")
+        )
+        with pytest.raises(psycopg.errors.ProgramLimitExceeded, match="exceeds btree version 4 maximum 2704"):
+            conn.execute(create_index)
+        conn.execute('DELETE FROM "entry_probe" WHERE octet_length("k") > %s', (longest_fitting_key,))
+        conn.execute(create_index)
+
+    (finding,) = findings
+    assert isinstance(finding, migration_data_checks.BlockedChange)
+    assert finding.rows == 1, "the check must count the row one byte over the line and not the row on it"
+    assert finding.detail == f"with an index entry over 2704 bytes, largest 2712 bytes ({described_as})"
+
+
+@requires_db
 def test_a_scan_that_cannot_finish_in_time_is_reported_as_unverified_rather_than_passed(scratch_database: str) -> None:
     with psycopg.connect(scratch_database, autocommit=True) as conn:
         conn.execute('CREATE TABLE "preflight_slow" ("a" INTEGER)')
         conn.execute('INSERT INTO "preflight_slow" SELECT generate_series(1, 50)')
-        (check,) = db_preflight.checks_for_statement(
+        (check,) = migration_data_checks.checks_for_statement(
             'ALTER TABLE "preflight_slow" ADD CONSTRAINT "slow" CHECK (pg_sleep(0.1) IS NULL)', "probe"
         )
-        findings: Final = db_preflight.find_blockers(conn, "public", (check,), timeout_seconds=0.5)
+        findings: Final = migration_data_checks.find_blockers(conn, "public", (check,), timeout_seconds=0.5)
         timeout_afterwards: Final = conn.execute("SHOW statement_timeout").fetchone()
 
-    assert findings == (db_preflight.CouldNotVerify(check, 0.5),)
+    assert findings == (migration_data_checks.CouldNotVerify(check, 0.5),)
     assert timeout_afterwards == ("0",), "the preflight must hand the session back with the timeout it found"
-    assert "could not be checked within 0.5 s" in db_preflight.report(findings)
+    assert "could not be checked within 0.5 s" in migration_data_checks.report(findings)

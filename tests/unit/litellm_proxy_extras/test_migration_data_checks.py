@@ -2,17 +2,17 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-from litellm_proxy_extras.db_preflight import (
-    BTREE_MAX_ENTRY_BYTES,
-    DB_PREFLIGHT_TIMEOUT_ENV_VAR,
-    DEFAULT_DB_PREFLIGHT_TIMEOUT_SECONDS,
+from litellm_proxy_extras.migration_data_checks import (
+    DEFAULT_MIGRATION_DATA_CHECK_TIMEOUT_SECONDS,
+    MIGRATION_DATA_CHECK_TIMEOUT_ENV_VAR,
     BlockedChange,
     Check,
     CouldNotVerify,
+    btree_max_entry_bytes,
     checks_for_index,
     checks_for_migration,
     checks_for_statement,
-    preflight_timeout_seconds,
+    migration_data_check_timeout_seconds,
     report,
     statements,
 )
@@ -30,11 +30,11 @@ def _shape(checks: tuple[Check, ...]) -> tuple[tuple[str, str, tuple[str, ...]],
     (
         (
             API_KEY_INDEX_AS_SHIPPED_IN_V1_103_0,
-            (("too_long", "LiteLLM_SpendLogs", ("api_key",)), ("too_long", "LiteLLM_SpendLogs", ("startTime",))),
+            (("too_long", "LiteLLM_SpendLogs", ("api_key", "startTime")),),
         ),
         (
             'CREATE UNIQUE INDEX CONCURRENTLY "T_a_b_key" ON "public"."T" USING btree ("a", "b" DESC)',
-            (("too_long", "T", ("a",)), ("too_long", "T", ("b",)), ("duplicates", "T", ("a", "b"))),
+            (("too_long", "T", ("a", "b")), ("duplicates", "T", ("a", "b"))),
         ),
         ('CREATE INDEX "T_a_idx" ON "T" USING gin ("a")', ()),
         ('CREATE INDEX "T_a_idx" ON "T" (lower("a"))', ()),
@@ -95,27 +95,35 @@ def test_every_shipped_migration_is_readable_and_the_later_indexes_on_text_colum
         if folder.is_dir()
     }
     assert len(derived) > 200
-    indexed_columns: Final = frozenset(
-        (check.table, check.columns[0]) for checks in derived.values() for check in checks if check.kind == "too_long"
+    everywhere: Final = tuple(check for checks in derived.values() for check in checks)  # comprehension-ok: flattening
+    assert any(
+        check.kind == "too_long" and check.table == "LiteLLM_SpendLogs" and "session_id" in check.columns
+        for check in everywhere
     )
-    assert ("LiteLLM_SpendLogs", "session_id") in indexed_columns
 
 
-def test_a_request_log_index_gets_a_length_check_per_column() -> None:
+def test_a_request_log_index_gets_one_entry_size_check_over_all_its_columns() -> None:
     assert _shape(
         checks_for_index("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_api_key_startTime_idx", ("api_key", "startTime"))
-    ) == (
-        ("too_long", "LiteLLM_SpendLogs", ("api_key",)),
-        ("too_long", "LiteLLM_SpendLogs", ("startTime",)),
-    )
+    ) == (("too_long", "LiteLLM_SpendLogs", ("api_key", "startTime")),)
+
+
+def test_the_btree_entry_limit_on_the_default_page_is_the_number_in_postgres_error() -> None:
+    # "index row size 2976 exceeds btree version 4 maximum 2704", Postgres 14, 8 KB page (BTMaxItemSize, nbtree.h)
+    assert btree_max_entry_bytes(8192) == 2704
 
 
 def test_the_report_names_the_rows_the_statement_and_the_fix_and_says_nothing_was_applied() -> None:
-    (check, _) = checks_for_index(
+    (check,) = checks_for_index(
         "LiteLLM_SpendLogs", "LiteLLM_SpendLogs_api_key_startTime_idx", ("api_key", "startTime")
     )
-    text: Final = report((BlockedChange(check, 2, f"longer than {BTREE_MAX_ENTRY_BYTES} bytes, longest 3207 bytes"),))
-    assert '"LiteLLM_SpendLogs".api_key: 2 row(s) longer than 2704 bytes, longest 3207 bytes' in text
+    text: Final = report(
+        (BlockedChange(check, 2, "with an index entry over 2704 bytes, largest 3232 bytes (api_key up to 3207 bytes)"),)
+    )
+    assert (
+        '"LiteLLM_SpendLogs".api_key, startTime: 2 row(s) with an index entry over 2704 bytes, largest 3232 bytes '
+        "(api_key up to 3207 bytes)"
+    ) in text
     assert 'blocks: CREATE INDEX "LiteLLM_SpendLogs_api_key_startTime_idx" (request-log index)' in text
     assert 'UPDATE "LiteLLM_SpendLogs" SET api_key = encode(sha256(' in text
     assert text.startswith("Existing rows would make a pending schema change fail:")
@@ -127,18 +135,22 @@ def test_a_scan_that_timed_out_is_reported_as_unverified_with_the_knob_to_turn()
     text: Final = report((CouldNotVerify(check, 600.0),))
     assert '"T".a: could not be checked within 600 s, refusing rather than guessing' in text
     assert 'blocks: ALTER TABLE "T" ALTER COLUMN "a" SET NOT NULL (migration 20270101000000_x)' in text
-    assert DB_PREFLIGHT_TIMEOUT_ENV_VAR in text
+    assert MIGRATION_DATA_CHECK_TIMEOUT_ENV_VAR in text
 
 
 @pytest.mark.parametrize(
     ("raw", "expected"),
-    ((None, DEFAULT_DB_PREFLIGHT_TIMEOUT_SECONDS), ("30", 30.0), ("nope", DEFAULT_DB_PREFLIGHT_TIMEOUT_SECONDS)),
+    (
+        (None, DEFAULT_MIGRATION_DATA_CHECK_TIMEOUT_SECONDS),
+        ("30", 30.0),
+        ("nope", DEFAULT_MIGRATION_DATA_CHECK_TIMEOUT_SECONDS),
+    ),
 )
 def test_the_scan_timeout_comes_from_the_environment_and_falls_back_on_garbage(
     monkeypatch: pytest.MonkeyPatch, raw: str | None, expected: float
 ) -> None:
     if raw is None:
-        monkeypatch.delenv(DB_PREFLIGHT_TIMEOUT_ENV_VAR, raising=False)
+        monkeypatch.delenv(MIGRATION_DATA_CHECK_TIMEOUT_ENV_VAR, raising=False)
     else:
-        monkeypatch.setenv(DB_PREFLIGHT_TIMEOUT_ENV_VAR, raw)
-    assert preflight_timeout_seconds() == expected
+        monkeypatch.setenv(MIGRATION_DATA_CHECK_TIMEOUT_ENV_VAR, raw)
+    assert migration_data_check_timeout_seconds() == expected
