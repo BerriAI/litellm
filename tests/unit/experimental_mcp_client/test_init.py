@@ -1,6 +1,5 @@
 import importlib
 import sys
-from collections.abc import Mapping
 
 import pytest
 
@@ -24,6 +23,9 @@ def test_old_package_warns_and_deep_imports_resolve_to_mcp_client(monkeypatch: p
     assert old.call_openai_tool is litellm.mcp_client.call_openai_tool
     assert importlib.import_module(f"{OLD_PACKAGE}.client") is litellm.mcp_client.client
     assert importlib.import_module(f"{OLD_PACKAGE}.tools") is litellm.mcp_client.tools
-    attrs: Mapping[str, object] = vars(old)
-    assert attrs["tools"] is litellm.mcp_client.tools
-    assert attrs["client"] is litellm.mcp_client.client
+    assert getattr(old, "tools") is litellm.mcp_client.tools
+    assert getattr(old, "client") is litellm.mcp_client.client
+    assert litellm.mcp_client.tools.__spec__ is not None
+    assert litellm.mcp_client.tools.__spec__.name == "litellm.mcp_client.tools"
+    with pytest.raises(AttributeError):
+        getattr(old, "no_such_module")
