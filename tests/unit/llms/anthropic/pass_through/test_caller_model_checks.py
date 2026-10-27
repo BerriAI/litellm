@@ -430,3 +430,41 @@ async def test_a_team_read_that_fails_mid_turn_denies_for_now(proxy_auth_state: 
     caller: Final = UserAPIKeyAuth(api_key="sk-team-key", team_id="team-not-in-cache")
 
     assert await caller_model_verdict(caller, CLASSIFIER, llm_router=None) == "denied_for_now"
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_verdict_hands_the_team_model_counter_to_the_limiter_once() -> None:
+    """The team per-model descriptor reaches the read-only check exactly once.
+
+    ``create_rate_limit_descriptors`` appends it itself, so assembling it a
+    second time here hands the limiter one counter as two descriptors. That is
+    harmless while the check runs ``read_only=True``, but every counter consumer
+    charges a request once per descriptor it is given, so a repeat is one
+    refactor away from halving the team's configured per-model limit.
+    """
+    limiter: Final = _limiter()
+    captured: list[list[RateLimitDescriptor]] = []
+
+    async def _capture(**kwargs: object) -> RateLimitResponse:
+        descriptors = kwargs.get("descriptors") or []
+        captured.append(list(descriptors))  # type: ignore[arg-type]
+        return {"overall_code": "OK", "statuses": []}
+
+    limiter.should_rate_limit = _capture  # type: ignore[assignment,method-assign]
+
+    caller: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-team-model-dedup"),
+        team_id="team-1",
+        team_metadata={"model_rpm_limit": {CLASSIFIER: 2}},
+    )
+
+    verdict: Final = await rate_limit_verdict(
+        user_api_key_auth=caller, model=CLASSIFIER, limiter=limiter, unverifiable=RateLimitUnverifiableError
+    )
+
+    assert verdict == "allowed"
+    assert captured, "the read-only rate-limit check never ran"
+    team_descriptors: Final = [d for d in captured[0] if d["key"] == "model_per_team"]
+    assert len(team_descriptors) == 1, (
+        f"expected one model_per_team descriptor, got {len(team_descriptors)}: {team_descriptors}"
+    )
