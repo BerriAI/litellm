@@ -208,6 +208,7 @@ async def test_pre_call_hook_runs_once_with_model_level_guardrails():
         await guardrail.async_pre_call_deployment_hook(data, CallTypes.acompletion)
 
     assert guardrail.pre_call_count == 1
+    assert "litellm_metadata" not in data
 
 
 @pytest.mark.asyncio
@@ -298,6 +299,88 @@ async def test_deployment_hook_runs_pre_call_without_proxy_loop():
     await guardrail.async_pre_call_deployment_hook(data, CallTypes.acompletion)
 
     assert guardrail.pre_call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_messages_user_id_metadata_runs_pre_call_guardrail_once():
+    """
+    Anthropic metadata.user_id sits beside litellm_metadata that already records
+    another guardrail. After this guardrail records that it ran,
+    translate_anthropic_to_openai keeps the masked text, the user id, and the
+    other guardrail's marker, and neither deployment hook scans again.
+    """
+    from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.llms.anthropic.pass_through.adapters.transformation import (
+        LiteLLMAnthropicMessagesAdapter,
+    )
+    from litellm.proxy._types import CallTypes
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class MaskingGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="masking-guardrail",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=True,
+            )
+            self.pre_call_count = 0
+
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            self.pre_call_count += 1
+            for message in data["messages"]:
+                content = message.get("content")
+                if isinstance(content, str):
+                    message["content"] = content.replace("raw-pii-token", "masked-pii-token")
+            return data
+
+    class PriorGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="prior-guardrail",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=True,
+            )
+            self.pre_call_count = 0
+
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            self.pre_call_count += 1
+            return data
+
+    prior = PriorGuardrail()
+    prior_metadata: dict[str, object] = {}
+    prior.mark_pre_call_hook_ran({"litellm_metadata": prior_metadata})
+    prior_executed = prior_metadata[PRE_CALL_EXECUTED_GUARDRAILS_KEY]
+    assert isinstance(prior_executed, list) and prior_executed
+    prior_marker = prior_executed[0]
+
+    guardrail = MaskingGuardrail()
+    data = {
+        "model": "gpt-4o",
+        "max_tokens": 16,
+        "messages": [{"role": "user", "content": "repeat raw-pii-token"}],
+        "metadata": {"user_id": "test-user"},
+        "litellm_metadata": {PRE_CALL_EXECUTED_GUARDRAILS_KEY: [prior_marker]},
+    }
+
+    await guardrail.async_pre_call_hook(None, None, data, "anthropic_messages")
+    guardrail.mark_pre_call_hook_ran(data)
+    translated = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request=data,
+    )[0]
+    translated["guardrails"] = ["prior-guardrail", "masking-guardrail"]
+    await prior.async_pre_call_deployment_hook(translated, CallTypes.acompletion)
+    await guardrail.async_pre_call_deployment_hook(translated, CallTypes.acompletion)
+
+    surviving = translated["metadata"][PRE_CALL_EXECUTED_GUARDRAILS_KEY]
+    content = translated["messages"][0]["content"]
+    assert isinstance(surviving, list)
+    assert prior_marker in surviving
+    assert any(isinstance(item, str) and item.endswith(":masking-guardrail") for item in surviving)
+    assert prior.pre_call_count == 0
+    assert guardrail.pre_call_count == 1
+    assert content == "repeat masked-pii-token"
+    assert translated["user"] == "test-user"
 
 
 # ---------------------------------------------------------------------------

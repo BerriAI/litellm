@@ -45,10 +45,12 @@ from guardrails_client import GuardrailMode, GuardrailsClient, PiiAction, PiiEnt
 from lifecycle import ResourceManager
 from models import (
     AnthropicMessagesResponse,
+    AnthropicRequestMetadata,
     ChatResponse,
     GuardrailEntityMatch,
     GuardrailRunRecord,
     SpendLogRow,
+    SpendLogsParams,
 )
 
 pytestmark = pytest.mark.e2e
@@ -213,7 +215,7 @@ def _messages_text(response: AnthropicMessagesResponse) -> str:
 
 def _assert_eventually_masked[R: BaseModel](
     fetch: Callable[[], Result[R]], extract: Callable[[R], str], *, email: str
-) -> None:
+) -> R:
     """Retry the call until the response comes back masked, to the propagation
     deadline. An unmasked early response is in-flight guardrail propagation, not
     a failure, and neither is a transient non-Success (a replica that has not
@@ -233,7 +235,7 @@ def _assert_eventually_masked[R: BaseModel](
                         f"the raw phone number must be masked before the model sees it, but the "
                         f"response echoed it: {content[:300]!r}"
                     )
-                    return
+                    return data
             case _:
                 last = f"<non-Success result: {result}>"
         if time.monotonic() >= deadline:
@@ -289,16 +291,34 @@ class TestPresidioPreCallMasking:
     def test_pre_call_masks_pii_on_messages(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
+        """metadata.user_id must not make the same pre_call guardrail evaluate twice."""
         name = f"e2e-presidio-pre-msg-{unique_marker()}"
         _register_presidio(client, resources, name=name)
 
         email = _fake_email()
         prompt = _pii_prompt(unique_marker(), email)
+        user_id = f"messages-user-{unique_marker()}"
 
-        _assert_eventually_masked(
-            lambda: client.messages(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=128),
+        response = _assert_eventually_masked(
+            lambda: client.messages(
+                scoped_key,
+                MODEL,
+                prompt,
+                guardrails=[name],
+                max_tokens=128,
+                metadata=AnthropicRequestMetadata(user_id=user_id),
+            ),
             _messages_text,
             email=email,
+        )
+        request_id = response.id
+        assert request_id, f"the served messages response must carry an id to look the spend log up by: {response}"
+
+        pre_call_runs = _pre_call_runs_after_settle(client, request_id, name)
+        assert pre_call_runs, f"no pre_call record appeared for request {request_id}"
+        assert len(pre_call_runs) == 1, (
+            "metadata.user_id must not record a second pre_call evaluation of the same guardrail, "
+            f"got {len(pre_call_runs)}"
         )
 
 
@@ -752,6 +772,43 @@ def _guardrail_records(row: SpendLogRow) -> tuple[GuardrailRunRecord, ...]:
     if metadata is None:
         return ()
     return tuple(metadata.guardrail_information or ())
+
+
+def _named_pre_call_runs(rows: list[SpendLogRow], guardrail_name: str) -> tuple[GuardrailRunRecord, ...]:
+    if not rows:
+        return ()
+    return tuple(
+        entry
+        for entry in _guardrail_records(rows[0])
+        if entry.guardrail_name == guardrail_name and entry.guardrail_mode == "pre_call"
+    )
+
+
+def _pre_call_runs_after_settle(
+    client: GuardrailsClient, request_id: str, guardrail_name: str
+) -> tuple[GuardrailRunRecord, ...]:
+    """Re-read the spend log until the pre_call count is the same twice.
+
+    The first row can show up before a second evaluation is appended to it.
+    """
+    seen: Final = client.proxy.poll_logs_for_request_id(
+        request_id,
+        predicate=lambda logged: len(_named_pre_call_runs(logged, guardrail_name)) >= 1,
+    )
+    if not seen:
+        return ()
+    deadline: Final = time.monotonic() + GUARDRAIL_PROPAGATION_DEADLINE_SECONDS
+    current = _named_pre_call_runs(seen, guardrail_name)
+    while time.monotonic() < deadline:
+        time.sleep(GUARDRAIL_PROPAGATION_POLL_INTERVAL_SECONDS)
+        nxt = _named_pre_call_runs(
+            client.proxy.spend_logs(SpendLogsParams(request_id=request_id)),
+            guardrail_name,
+        )
+        if len(nxt) == len(current):
+            return nxt
+        current = nxt
+    return current
 
 
 def _poll_until_guardrail_applied(
