@@ -51,6 +51,7 @@ class InMemoryCache(BaseCache):
         self.ttl_dict: dict = {}
         self.expiration_heap: list[tuple[float, str]] = []
         self._increment_lock = threading.Lock()
+        self._write_lock = threading.Lock()
         self._clock = clock if clock is not None else lambda: time.time()
 
     def check_value_size(self, value: Any):
@@ -94,7 +95,13 @@ class InMemoryCache(BaseCache):
         """
         Check if a specific key is expired
         """
-        return key in self.ttl_dict and self._clock() > self.ttl_dict[key]
+        try:
+            return self._clock() > self.ttl_dict[key]
+        except KeyError:
+            return False
+
+    def _cache_keys(self) -> tuple[str, ...]:
+        return tuple(self.cache_dict)  # pyright: ignore[reportUnknownVariableType]  # cache_dict is untyped legacy state
 
     def _remove_key(self, key: str) -> None:
         """
@@ -133,12 +140,22 @@ class InMemoryCache(BaseCache):
                 # Case 3: Entry is valid and not expired
                 break
 
+        if len(self.expiration_heap) > 2 * self.max_size_in_memory:
+            self.expiration_heap = [entry for entry in self.expiration_heap if self.ttl_dict.get(entry[1]) == entry[0]]
+            heapq.heapify(self.expiration_heap)
+
         # Step 2: Evict if cache is still full
-        while len(self.cache_dict) >= self.max_size_in_memory:
+        while self.expiration_heap and len(self.cache_dict) >= self.max_size_in_memory:
             expiration_time, key = heapq.heappop(self.expiration_heap)
             # Skip if key was removed or updated
             if self.ttl_dict.get(key) == expiration_time:
                 self._remove_key(key)
+
+        if not self.expiration_heap:
+            untracked_keys: Final = self._cache_keys()
+            overflow: Final = len(untracked_keys) - self.max_size_in_memory + 1
+            for untracked_key in untracked_keys[: max(overflow, 0)]:
+                self._remove_key(untracked_key)
 
         # de-reference the removed item
         # https://www.geeksforgeeks.org/diagnosing-and-fixing-memory-leaks-in-python/
@@ -150,7 +167,7 @@ class InMemoryCache(BaseCache):
         Check if ttl is set for a key
         """
         ttl_time: Final = self.ttl_dict.get(key)
-        if ttl_time is None or float(ttl_time) < self._clock():  # if ttl is not set, allow override
+        if ttl_time is None or ttl_time < self._clock():  # if ttl is not set, allow override
             return True
         else:
             return False
@@ -160,21 +177,22 @@ class InMemoryCache(BaseCache):
         if self.max_size_in_memory == 0:
             return  # Don't cache anything if max size is 0
 
-        # Always prune expired/outdated heap roots before inserting.
-        # This keeps expiration_heap bounded even when the live cache stays
-        # below max_size_in_memory and keys are reinserted after TTL expiry.
-        self.evict_cache()
-        if not self.check_value_size(value):
-            return
+        with self._write_lock:
+            # Always prune expired/outdated heap roots before inserting.
+            # This keeps expiration_heap bounded even when the live cache stays
+            # below max_size_in_memory and keys are reinserted after TTL expiry.
+            self.evict_cache()
+            if not self.check_value_size(value):
+                return
 
-        self.cache_dict[key] = value
-        if self.allow_ttl_override(key):  # if ttl is not set, set it to default ttl
-            if "ttl" in kwargs and kwargs["ttl"] is not None:
-                self.ttl_dict[key] = self._clock() + float(kwargs["ttl"])
-                heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
-            else:
-                self.ttl_dict[key] = self._clock() + self.default_ttl
-                heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
+            self.cache_dict[key] = value
+            if self.allow_ttl_override(key):  # if ttl is not set, set it to default ttl
+                if "ttl" in kwargs and kwargs["ttl"] is not None:
+                    self.ttl_dict[key] = self._clock() + float(kwargs["ttl"])
+                    heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
+                else:
+                    self.ttl_dict[key] = self._clock() + self.default_ttl
+                    heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
 
     async def async_set_cache(self, key, value, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
@@ -212,7 +230,10 @@ class InMemoryCache(BaseCache):
         if key in self.cache_dict:
             if self.evict_element_if_expired(key):
                 return None
-            original_cached_response: Final = self.cache_dict[key]
+            try:
+                original_cached_response: Final = self.cache_dict[key]
+            except KeyError:
+                return None
             try:
                 cached_response = json.loads(original_cached_response)
             except Exception:
@@ -258,14 +279,15 @@ class InMemoryCache(BaseCache):
         return results
 
     def flush_cache(self):
-        self.cache_dict.clear()
-        self.ttl_dict.clear()
-        self.expiration_heap.clear()
+        with self._write_lock:
+            self.cache_dict.clear()
+            self.ttl_dict.clear()
+            self.expiration_heap.clear()
 
     async def disconnect(self):
         pass
 
-    def delete_cache(self, key):
+    def delete_cache(self, key: str) -> None:
         self._remove_key(key)
 
     async def async_get_ttl(self, key: str) -> int | None:

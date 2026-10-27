@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import (
     Annotated,
     Final,
+    Literal,
     NamedTuple,
     Protocol,
     cast,  # noqa: TID251  # prisma types Json columns as fields.Json but de-serializes them to plain python on read
@@ -61,6 +62,8 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 )
 
 router: Final = APIRouter()
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 JsonSchemaItems: Final = TypedDict(
@@ -231,6 +234,9 @@ class DefaultTeamSettingsResponse(SettingsResponse):
 class UIThemeSettingsResponse(SettingsResponse):
     """Response model for UI theme settings"""
 
+    logo_url_via_proxy: bool = False
+    logo_url_dark_via_proxy: bool = False
+
 
 _TEAM_ADMIN_FIELD_ENUM: Final = tuple(sorted(SUPPORTED_TEAM_ADMIN_PERMISSIONS))
 
@@ -253,6 +259,11 @@ class UISettings(LiteLLMBaseModel):
     """Configuration for UI-specific flags"""
 
     model_config = ConfigDict(extra="allow")
+
+    usage_default_time_range: Literal["today", "last_7_days", "last_30_days", "month_to_date", "year_to_date"] = Field(
+        default="last_7_days",
+        description="Default date range when opening Usage without an explicit URL range. Calendar ranges use the browser timezone.",
+    )
 
     disable_model_add_for_internal_users: bool = Field(
         default=False,
@@ -341,7 +352,7 @@ class UISettings(LiteLLMBaseModel):
     )
 
     enable_chat_ui: bool = Field(
-        default=False,
+        default=True,
         description="If true, shows the Chat page in the UI sidebar, letting users chat with an LLM and connect their own MCP server credentials via OAuth.",
     )
 
@@ -365,6 +376,8 @@ class UISettings(LiteLLMBaseModel):
             "removes the cap. "
             "Include 'projects' to let team admins create and update projects for those teams. "
             "Include 'member_key_budgets' to let team admins update budget fields on keys owned by other members of those teams. "
+            "Include 'create_member_keys' to let team admins create team keys owned by other members of those teams. "
+            "Those keys can only call LLM API routes, and the member must be an internal user. "
             "Empty means team admins cannot edit team settings or manage projects at all. "
             "Proxy admins and org admins are not affected."
         ),
@@ -382,6 +395,7 @@ class UISettingsResponse(SettingsResponse):
 
 # Allowlist of UI settings that can be stored
 ALLOWED_UI_SETTINGS_FIELDS: Final = {
+    "usage_default_time_range",
     "disable_model_add_for_internal_users",
     "disable_team_admin_delete_team_user",
     "enabled_ui_pages_internal_users",
@@ -1265,7 +1279,7 @@ async def update_sso_settings(
     if existing_sso_record and existing_sso_record.sso_settings:
         stored = existing_sso_record.sso_settings
         if isinstance(stored, str):
-            stored = json.loads(stored)
+            stored = _DECODED_JSON.validate_python(json.loads(stored))
         if isinstance(stored, dict):
             before_sso_data = (  # rebind-ok: pre-existing rebinding on a rename-only line
                 proxy_config.decrypt_db_variables(stored)
@@ -1322,7 +1336,7 @@ async def update_sso_settings(
 
     # Remove SSO-related env vars from config.environment_variables
     try:
-        env_var_entry: Final = await _config_param_db(ConfigRepository(prisma_client)).find_unique(
+        env_var_entry: Final = await _config_param_db(ConfigRepository(prisma_client, use_writer=True)).find_unique(
             where={"param_name": "environment_variables"}
         )
 
@@ -1366,7 +1380,7 @@ async def update_sso_settings(
     tags=["UI Theme Settings"],
     response_model=UIThemeSettingsResponse,
 )
-async def get_ui_theme_settings():
+async def get_ui_theme_settings() -> UIThemeSettingsResponse:
     """
     Get UI theme configuration from the litellm_settings.
     Returns current logo settings for UI customization.
@@ -1379,18 +1393,23 @@ async def get_ui_theme_settings():
     # Load existing config
     config: Final = await proxy_config.get_config()
 
-    result: Final = await _get_settings_with_schema(
-        settings_key="ui_theme_config",
-        settings_class=UIThemeConfig,
-        config=config,
+    result: Final = _SettingsWithSchema.model_validate(
+        await _get_settings_with_schema(
+            settings_key="ui_theme_config",
+            settings_class=UIThemeConfig,
+            config=config,
+        )
     )
-
-    stored_values: Final = result.get("values", {})
-    result["values"] = {
-        **stored_values,
-        **{field: _resolve_ui_theme_field(stored_values, field) for field in _UI_THEME_FIELD_ENV_VARS},
+    values: Final = {
+        **result.values,
+        **{field: _resolve_ui_theme_field(result.values, field) for field in _UI_THEME_FIELD_ENV_VARS},
     }
-    return result
+    return UIThemeSettingsResponse(
+        values=values,
+        field_schema=result.field_schema,
+        logo_url_via_proxy=values["logo_url"] is None and bool(os.getenv("UI_LOGO_PATH", "").strip()),
+        logo_url_dark_via_proxy=values["logo_url_dark"] is None and bool(os.getenv("UI_LOGO_PATH_DARK", "").strip()),
+    )
 
 
 def _validate_public_image_url(value: str | None, field_name: str) -> None:
@@ -1718,7 +1737,7 @@ async def get_ui_settings_cached() -> dict[str, JsonValue]:
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     # 1. Try cache
-    cached: Final = await user_api_key_cache.async_get_cache(key=UI_SETTINGS_CACHE_KEY)
+    cached: Final = _DECODED_JSON.validate_python(await user_api_key_cache.async_get_cache(key=UI_SETTINGS_CACHE_KEY))
     if cached is not None and isinstance(cached, dict):
         return cached
 
@@ -1744,6 +1763,10 @@ async def get_ui_settings_cached() -> dict[str, JsonValue]:
 
 
 _UI_SETTINGS_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def _json_settings(settings: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    return settings
 
 
 def model_creation_disabled_for_internal_users(settings: Mapping[str, object]) -> bool:
@@ -1952,7 +1975,7 @@ async def update_ui_settings(
         )
 
     # Only include fields the caller actually sent (not Pydantic defaults).
-    settings_dict: Final[Mapping[str, JsonValue]] = settings.model_dump(exclude_unset=True)
+    settings_dict: Final = _json_settings(settings.model_dump(exclude_unset=True))
 
     # Reject enterprise-only settings up front so the caller gets a clear
     # signal instead of a silent drop.

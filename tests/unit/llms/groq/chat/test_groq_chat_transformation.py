@@ -1,4 +1,5 @@
 import logging
+from typing import Final
 from unittest.mock import patch
 
 import httpx
@@ -483,3 +484,108 @@ class TestGroqReasoning:
             parsed_chunk.choices[0].delta.tool_calls[0]["function"]["name"]
             == "test_function"
         )
+
+
+def test_tool_search_reply_sent_to_groq_drops_litellm_response_fields():
+    tool_search_reply = {
+        "role": "assistant",
+        "content": "",
+        "reasoning_items": [{"type": "reasoning", "id": "rs_1", "summary": []}],
+        "provider_specific_fields": {"tool_search_items": [{"type": "tool_search_call", "id": "ts_1"}]},
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                "provider_specific_fields": {"namespace": "weather"},
+            }
+        ],
+    }
+    request = GroqChatConfig().transform_request(
+        model="openai/gpt-oss-120b",
+        messages=[
+            {"role": "user", "content": "Weather in Paris?"},
+            tool_search_reply,
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][1] == {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+            }
+        ],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("with_tool_call", [False, True])
+async def test_streamed_reasoning_reply_can_be_replayed(is_async: bool, with_tool_call: bool) -> None:
+    tool_calls: Final = [
+        {
+            "index": 0,
+            "id": "call_weather",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+        }
+    ]
+    handler: Final = GroqChatCompletionStreamingHandler(streaming_response=iter(()), sync_stream=True)
+    chunk: Final = handler.chunk_parser(
+        {
+            "id": "chatcmpl-reasoning",
+            "object": "chat.completion.chunk",
+            "created": 1769511767,
+            "model": "openai/gpt-oss-20b",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "reasoning": "I should check the weather.",
+                        "content": "" if with_tool_call else "Hello there!",
+                        **({"tool_calls": tool_calls} if with_tool_call else {}),
+                    },
+                    "finish_reason": "tool_calls" if with_tool_call else "stop",
+                }
+            ],
+        }
+    )
+    reply: Final = litellm.stream_chunk_builder([chunk]).choices[0].message
+    assert reply.reasoning_content == "I should check the weather."
+    history: Final = [reply.model_dump(exclude_none=True)]
+    config: Final = GroqChatConfig()
+
+    if is_async:
+        replayed = await config._transform_messages(messages=history, model="openai/gpt-oss-20b", is_async=True)
+    else:
+        replayed = config._transform_messages(messages=history, model="openai/gpt-oss-20b", is_async=False)
+
+    assert replayed == [
+        {
+            "role": "assistant",
+            "content": "" if with_tool_call else "Hello there!",
+            **(
+                {
+                    "tool_calls": [
+                        {
+                            "id": "call_weather",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+                        }
+                    ]
+                }
+                if with_tool_call
+                else {}
+            ),
+        }
+    ]
+    assert reply.reasoning_content == "I should check the weather."

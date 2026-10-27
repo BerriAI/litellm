@@ -30,12 +30,12 @@ vi.mock("@/components/Navbar/CommunityEngagementButtons/CommunityEngagementButto
 }));
 vi.mock("@/components/Navbar/NotificationsBell/NotificationsBell", () => ({ NotificationsBell: () => null }));
 vi.mock("@/components/Navbar/WorkerDropdown/WorkerDropdown", () => ({ default: () => null }));
-vi.mock("@/components/liteadmin/LiteAdmin", () => ({ default: () => <button>LiteAdmin</button> }));
+vi.mock("@/components/liteadmin/LiteAdmin", () => ({ default: () => <button>Aria Agent</button> }));
 
 const renderDashboardHeader = () =>
   render(
     <CommandPaletteProvider>
-      <DashboardHeader />
+      <DashboardHeader accessToken={null} />
     </CommandPaletteProvider>,
   );
 
@@ -107,22 +107,25 @@ describe("DashboardHeader breadcrumb", () => {
     expect(separators[0].className).toContain("data-vertical:self-center");
   });
 
-  it("places LiteAdmin in the header tools ahead of Docs", () => {
+  it("should place Aria Agent in the header tools ahead of Docs", () => {
     renderDashboardHeader();
 
-    const liteAdmin = within(screen.getByRole("banner")).getByRole("button", { name: "LiteAdmin" });
+    const liteAdmin = within(screen.getByRole("banner")).getByRole("button", { name: "Aria Agent" });
     expect(liteAdmin.compareDocumentPosition(screen.getByRole("link", { name: "Docs" }))).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
   });
 
-  it("keeps the gateway selector and tools available from the compact header menu", async () => {
+  it("should keep the gateway selector and tools available from the compact header menu", async () => {
     renderDashboardHeader();
-    fireEvent.click(screen.getByRole("button", { name: "More options" }));
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "More options" }));
+    });
     const tools = await screen.findByRole("dialog", { name: "Gateway tools" });
-    expect(within(tools).getByRole("button", { name: "AI Gateway" })).toBeInTheDocument();
+    expect(within(tools).getByRole("button", { name: "Switch workspace, current: AI Gateway" })).toBeInTheDocument();
     expect(within(tools).getByRole("link", { name: "Docs" })).toBeInTheDocument();
-    expect(within(tools).getByRole("button", { name: "LiteAdmin" })).toBeInTheDocument();
+    expect(within(screen.getByRole("banner")).getByRole("button", { name: "Aria Agent" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Aria Agent" })).toHaveLength(1);
   });
 
   it("closes mobile tools when switching to desktop and keeps them closed when returning", async () => {
@@ -133,7 +136,7 @@ describe("DashboardHeader breadcrumb", () => {
     state.isDesktop = true;
     rerender(
       <CommandPaletteProvider>
-        <DashboardHeader />
+        <DashboardHeader accessToken={null} />
       </CommandPaletteProvider>,
     );
     expect(screen.queryByRole("dialog", { name: "Gateway tools" })).not.toBeInTheDocument();
@@ -141,7 +144,7 @@ describe("DashboardHeader breadcrumb", () => {
     state.isDesktop = false;
     rerender(
       <CommandPaletteProvider>
-        <DashboardHeader />
+        <DashboardHeader accessToken={null} />
       </CommandPaletteProvider>,
     );
     expect(screen.queryByRole("dialog", { name: "Gateway tools" })).not.toBeInTheDocument();

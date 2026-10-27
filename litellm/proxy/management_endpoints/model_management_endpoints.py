@@ -17,6 +17,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequen
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
+from functools import partial
 from json import JSONDecodeError
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
@@ -27,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError,
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.constants import LITELLM_PROXY_ADMIN_NAME, TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.ptu_pricing import (
@@ -37,6 +38,7 @@ from litellm.litellm_core_utils.ptu_pricing import (
     PTU_ZEROED_PRICING_FIELDS,
     PTU_ZEROED_TABLE_FIELDS,
     SEARCH_CONTEXT_SIZES,
+    parsed_ptu_shares,
     ptu_config_error,
 )
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
@@ -105,6 +107,7 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import (
     is_ptu_cost_attribution_enabled,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -142,6 +145,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import AwsSessionTag
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     AutoRouterClassifierDefaultPromptResponse,
+    PatchModelRequest,
     UpdateUsefulLinksRequest,
 )
 from litellm.types.router import (
@@ -154,8 +158,10 @@ from litellm.types.router import (
 )
 from litellm.types.utils import (
     COST_MAP_LOOKUP_KEY,
+    OIDC_SECRET_REFERENCE_PREFIX,
     echoed_cost_map_fields,
     echoed_cost_map_pricing_fields,
+    is_server_derived_pricing_key,
     without_server_derived_pricing,
 )
 from litellm.utils import get_utc_datetime
@@ -165,6 +171,19 @@ if TYPE_CHECKING:
     from prisma import types as prisma_types
 
 router: Final = APIRouter()
+
+
+class KubernetesPodsResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model_id: str
+    service_host: str
+    port: int | None
+    pod_ips: tuple[str, ...]
+    pod_count: int
+    error: str | None
+
+
 CLEARABLE_LITELLM_PARAMS: Final = frozenset({"cache_control_injection_points", "litellm_credential_name"})
 NULL_CLEARABLE_LITELLM_PARAMS: Final = frozenset((*SPECIAL_MODEL_INFO_PARAMS, *CLEARABLE_LITELLM_PARAMS))
 
@@ -267,6 +286,9 @@ class _ExistingModelRow(Protocol):
 
 class _TeamRow(Protocol):
     @property
+    def team_id(self) -> str: ...
+
+    @property
     def models(self) -> Sequence[str]: ...
 
     def model_dump(self) -> Mapping[str, object]: ...
@@ -274,6 +296,8 @@ class _TeamRow(Protocol):
 
 class _TeamLookupTable(Protocol):
     def find_unique(self, *, where: Mapping[str, object]) -> Awaitable[_TeamRow | None]: ...
+
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_TeamRow]: ...
 
 
 class _TeamTable(_TeamLookupTable, Protocol):
@@ -840,6 +864,21 @@ def _validate_ptu_model_info(model_info: Mapping[str, object]) -> None:
         raise HTTPException(status_code=400, detail=error)
 
 
+async def _raise_if_ptu_share_teams_missing(
+    model_info: Mapping[str, object], team_table: Callable[[], _TeamLookupTable]
+) -> None:
+    """Hold every team named in ``ptu_shares`` to the existence check ``team_id`` already gets."""
+    shares: Final = parsed_ptu_shares(model_info.get("ptu_shares"))
+    if shares is None:
+        return
+    rows: Final = await find_many_in(team_table(), "team_id", shares.keys())
+    found: Final = frozenset(row.team_id for row in rows)
+    missing: Final = tuple(team_id for team_id in shares if team_id not in found)
+    if not missing:
+        return
+    raise HTTPException(status_code=400, detail={"error": f"Team id={', '.join(missing)} does not exist in db"})
+
+
 # The mirrored per-token pricing fields plus the remaining rates the public cost map or a
 # provider default would otherwise supply (the cache back-fills, the Maps grounding rate). An
 # unset field falls back to those sources, so a field left out here is one a PTU deployment
@@ -958,6 +997,7 @@ def _ptu_zeroed_pricing(
 def _ptu_pricing_delta(
     *,
     stored_model_info: Mapping[str, object],
+    stored_litellm_params: Mapping[str, object],
     model_info: Mapping[str, object],
     litellm_params: Mapping[str, object],
     patch: updateDeployment,
@@ -977,6 +1017,24 @@ def _ptu_pricing_delta(
     supplied: Final = patch.litellm_params.model_dump(exclude_none=True) if patch.litellm_params else _EMPTY_MODEL_INFO
     zeroed: Final = _ptu_zeroed_pricing(model_info=model_info, litellm_params=litellm_params, supplied=supplied)
     if zeroed:
+        retains_ptu: Final = all(stored_model_info.get(field) is not None for field in _PTU_PRICED_PAIR)
+        protected_pricing: Final = frozenset(
+            field
+            for field in _CUSTOM_PRICING_FIELDS
+            if retains_ptu
+            and (stored_litellm_params.get(field) is not None or stored_model_info.get(field) is not None)
+        ).union(zeroed)
+        removed_ptu_pricing: Final = tuple(
+            field for field in _param_keys_to_remove(patch) if field in protected_pricing
+        )
+        if removed_ptu_pricing:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"PTU billing requires {', '.join(removed_ptu_pricing)}, so these pricing parameters cannot be removed. "
+                    "Keep them when enabling PTU, or clear ptu_count and cost_per_ptu_per_hour together to disable it."
+                ),
+            )
         return zeroed, frozenset()
     was_ptu: Final = any(stored_model_info.get(field) is not None for field in _PTU_PRICED_PAIR)
     if not was_ptu or not _explicitly_cleared_ptu_fields(patch.model_info) & _PTU_PRICED_PAIR:
@@ -1032,6 +1090,10 @@ def _loaded_catalog_entry(
     return loaded_catalog().get(catalog_key, MappingProxyType({}))
 
 
+def _param_keys_to_remove(patch: updateDeployment) -> tuple[str, ...]:
+    return patch.litellm_params_to_remove if isinstance(patch, PatchModelRequest) else ()
+
+
 def update_db_model(
     db_model: Deployment,
     updated_patch: updateDeployment,
@@ -1040,7 +1102,8 @@ def update_db_model(
     if updated_patch.model_info is not None:
         _raise_if_ptu_cost_attribution_disabled(updated_patch.model_info.model_dump(exclude_none=True))
     merged_model_name: Final = updated_patch.model_name or db_model.model_name
-    merged_litellm_params: Final = db_model.litellm_params.model_dump(exclude_none=True)
+    stored_litellm_params: Final = db_model.litellm_params.model_dump(exclude_none=True, exclude_unset=True)
+    merged_litellm_params: Final = dict(stored_litellm_params)
     stored_model_info: Final = _dump_without_none(db_model.model_info)
     echoed_pricing: Final = echoed_cost_map_pricing_fields(stored_model_info)
     merged_model_info: Final[dict[str, object]] = {
@@ -1056,7 +1119,7 @@ def update_db_model(
                 if k == "complexity_router_config"
                 else encrypt_value_helper(v)
             )
-            for k, v in updated_patch.litellm_params.model_dump(exclude_none=True).items()
+            for k, v in updated_patch.litellm_params.model_dump(exclude_none=True, exclude_unset=True).items()
         }
 
         merged_litellm_params.update(encrypted_params)
@@ -1069,14 +1132,9 @@ def update_db_model(
             _cost_map_entry(db_model, incoming_model_info),
             _loaded_catalog_entry(incoming_model_info, loaded_catalog),
         )
+        stored_model_info_fields: Final[Mapping[str, object]] = without_server_derived_pricing(incoming_model_info)
         merged_model_info.update(
-            MappingProxyType(
-                dict(
-                    (k, v)
-                    for k, v in without_server_derived_pricing(incoming_model_info).items()
-                    if k not in echoed_fields
-                )
-            )
+            MappingProxyType(dict((k, v) for k, v in stored_model_info_fields.items() if k not in echoed_fields))
         )
         for k in echoed_fields:
             if k in merged_model_info and merged_model_info[k] != incoming_model_info[k]:
@@ -1112,11 +1170,17 @@ def update_db_model(
         for field in _explicitly_cleared_ptu_fields(updated_patch.model_info):
             merged_model_info.pop(field, None)
 
+    for field in _param_keys_to_remove(updated_patch):
+        merged_litellm_params.pop(field, None)
+        if is_server_derived_pricing_key(field):
+            merged_model_info.pop(field, None)
+
     _validate_ptu_model_info(merged_model_info)
     ptu_pricing, ptu_released = _ptu_pricing_delta(
         stored_model_info=db_model.model_info.model_dump(exclude_none=True)
         if db_model.model_info
         else _EMPTY_MODEL_INFO,
+        stored_litellm_params=stored_litellm_params,
         model_info=merged_model_info,
         litellm_params=merged_litellm_params,
         patch=updated_patch,
@@ -1145,6 +1209,77 @@ def update_db_model(
     return prisma_compatible_model_dict
 
 
+@router.get(
+    "/model/{model_id}/kubernetes_pods",
+    response_model=KubernetesPodsResponse,
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_kubernetes_pods(
+    model_id: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> KubernetesPodsResponse:
+    if user_api_key_dict.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ):
+        raise ProxyException(
+            message="Only proxy admins can view Kubernetes pods",
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param=None,
+        )
+
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        raise ProxyException(
+            message=CommonProxyErrors.no_llm_router.value,
+            type=ProxyErrorTypes.internal_server_error.value,
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            param=None,
+        )
+
+    deployment: Final[Mapping[str, object] | None] = _OPTIONAL_JSON_OBJECT.validate_python(
+        llm_router.get_model_info(id=model_id)  # pyright: ignore[reportUnknownMemberType]  # validated below
+    )
+    if deployment is None:
+        raise ProxyException(
+            message=f"Model with id {model_id} not found",
+            type=ProxyErrorTypes.not_found_error.value,
+            code=status.HTTP_404_NOT_FOUND,
+            param="model_id",
+        )
+
+    lookup: Final = await llm_router.kubernetes_pod_discovery.async_lookup_pods(deployment)
+    if lookup is None:
+        raw_litellm_params: Final = deployment.get("litellm_params")
+        litellm_params: Final[Mapping[str, object] | None] = (
+            _JSON_OBJECT.validate_python(raw_litellm_params) if isinstance(raw_litellm_params, Mapping) else None
+        )
+        discovery_enabled: Final = litellm_params is not None and litellm_params.get("kubernetes_pod_discovery") is True
+        raise ProxyException(
+            message=(
+                "Kubernetes pod discovery is enabled for this model, but its api_base is not an http:// "
+                "service hostname, so no pods are resolved"
+                if discovery_enabled
+                else "Kubernetes pod discovery is not enabled for this model"
+            ),
+            type=ProxyErrorTypes.bad_request_error.value,
+            code=status.HTTP_400_BAD_REQUEST,
+            param="model_id",
+        )
+
+    return KubernetesPodsResponse(
+        model_id=model_id,
+        service_host=lookup.service_host,
+        port=lookup.port,
+        pod_ips=tuple(lookup.pod_ips),
+        pod_count=len(lookup.pod_ips),
+        error=lookup.error,
+    )
+
+
 @router.patch(
     "/model/{model_id}/update",
     tags=["model management"],
@@ -1152,7 +1287,7 @@ def update_db_model(
 )
 async def patch_model(
     model_id: str,  # Get model_id from path parameter
-    patch_data: updateDeployment,  # Create a specific schema for PATCH operations
+    patch_data: PatchModelRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1216,18 +1351,34 @@ async def patch_model(
                 param=None,
             )
 
+        removals: Final = _param_keys_to_remove(patch_data)
+        incoming_params: Final = (
+            updateLiteLLMParams.model_validate(
+                {
+                    **(patch_data.litellm_params.model_dump(exclude_unset=True) if patch_data.litellm_params else {}),
+                    **dict.fromkeys(removals),
+                }
+            )
+            if removals
+            else patch_data.litellm_params
+        )
+        remaining_params: Final = db_model.litellm_params.model_copy(update=dict.fromkeys(removals))
         write_authorization: Final = await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=db_model,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
-            incoming_params=submitted_litellm_params(patch_data.litellm_params),
+            incoming_params=submitted_litellm_params(incoming_params),
             member_operation="update",
             incoming_model_params=patch_data,
         )
         member_write: Final = write_authorization if isinstance(write_authorization, MemberAutoRouterWrite) else None
-        member_marker: Final = _member_auto_router_marker_for_update(
-            incoming_params=patch_data.litellm_params, existing=db_model, member_write=member_write
+        member_marker: Final = (
+            False
+            if db_model.model_info.member_auto_router and STRATEGY_ROUTER_PARAM_FIELDS.intersection(removals)
+            else _member_auto_router_marker_for_update(
+                incoming_params=incoming_params, existing=db_model, member_write=member_write
+            )
         )
         marker_info: Final = (
             ModelInfo(id=db_model.model_info.id)
@@ -1264,27 +1415,26 @@ async def patch_model(
             )
 
         ModelManagementAuthChecks.can_user_attach_credential(
-            litellm_params=patch_data.litellm_params,
+            litellm_params=incoming_params,
             user_api_key_dict=user_api_key_dict,
             existing_litellm_params=db_model.litellm_params,
             null_detaches=True,
         )
-        await _raise_on_invalid_credential_name(patch_data.litellm_params, db_model.litellm_params, prisma_client)
+        await _raise_on_invalid_credential_name(incoming_params, db_model.litellm_params, prisma_client)
 
         ModelManagementAuthChecks.can_user_set_aws_session_tags(
-            litellm_params=patch_data.litellm_params,
+            litellm_params=incoming_params,
             user_api_key_dict=user_api_key_dict,
             existing_litellm_params=db_model.litellm_params,
+            null_detaches="aws_session_tags" in removals,
         )
 
         _raise_on_strategy_router_write_violation(
-            incoming_params=patch_data.litellm_params,
-            existing_params=db_model.litellm_params,
+            incoming_params=incoming_params,
+            existing_params=remaining_params,
         )
 
-        effective_params: Final = _effective_complexity_router_params(
-            patch_data.litellm_params, db_model.litellm_params
-        )
+        effective_params: Final = _effective_complexity_router_params(incoming_params, remaining_params)
         requested_model_name: Final = patch_data.model_name
         stored_model_name: str | None = None
 
@@ -1692,8 +1842,10 @@ async def _update_team_model_in_db(
     # raising the rate on a configured model carries no ptu_effective_from, which the
     # stored row supplies.
     if patch_data.model_info is not None:
-        _raise_if_ptu_cost_attribution_disabled(patch_data.model_info.model_dump(exclude_none=True))
+        incoming_model_info: Final = patch_data.model_info.model_dump(exclude_none=True)
+        _raise_if_ptu_cost_attribution_disabled(incoming_model_info)
         _validate_ptu_model_info(_merged_ptu_model_info(db_model=db_model, patch_data=patch_data))
+        await _raise_if_ptu_share_teams_missing(incoming_model_info, partial(_repo_team_table, prisma_client))
     _raise_if_ptu_deployment_is_priced(
         model_info=_merged_ptu_model_info(db_model=db_model, patch_data=patch_data),
         supplied=(
@@ -1713,20 +1865,20 @@ async def _update_team_model_in_db(
         db_model=db_model,
     )
 
-    # Ensure model_info exists and set team_public_model_name
-    if patch_data.model_info is None:
-        from litellm.types.router import ModelInfo
-
-        patch_data.model_info = ModelInfo()
-    patch_data.model_info.team_public_model_name = public_model_name
-
     # Check if team assignment is new or changed
     db_team_id: Final = db_model.model_info.team_id if db_model.model_info else None
     is_new_team_assignment: Final = db_team_id != patch_team_id
 
     # Team rows keep their internal UUID-based model_name; the public name lives in model_info
-    patch_data.model_name = f"model_name_{patch_team_id}_{uuid.uuid4()}" if is_new_team_assignment else None
-    row: Final = await write_row(update_db_model(db_model=db_model, updated_patch=patch_data))
+    team_patch: Final = patch_data.model_copy(
+        update={
+            "model_name": f"model_name_{patch_team_id}_{uuid.uuid4()}" if is_new_team_assignment else None,
+            "model_info": (patch_data.model_info or ModelInfo()).model_copy(
+                update={"team_public_model_name": public_model_name}
+            ),
+        }
+    )
+    row: Final = await write_row(update_db_model(db_model=db_model, updated_patch=team_patch))
 
     if is_new_team_assignment:
         await _setup_new_team_model_assignment(
@@ -1861,7 +2013,7 @@ async def delete_team_models(
     """
     deleted_model_ids: Final[list[str]] = []
     transaction_client: Final = _ModelTransactionClient.model_validate(prisma_client.db)
-    async with transaction_client.tx() as tx:
+    async with transaction_client.tx(timeout=datetime.timedelta(seconds=TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS)) as tx:
         for team_id in team_ids:
             rows = await _get_team_deployments(team_id, prisma_client, table=tx.litellm_proxymodeltable)
             model_ids = [row.model_id for row in rows]
@@ -2123,14 +2275,16 @@ class ModelManagementAuthChecks:
         litellm_params: GenericLiteLLMParams | None,
         user_api_key_dict: UserAPIKeyAuth,
         existing_litellm_params: GenericLiteLLMParams | None = None,
+        *,
+        null_detaches: bool = False,
     ) -> Literal[True]:
-        if litellm_params is None or litellm_params.aws_session_tags is None:
+        if litellm_params is None or (litellm_params.aws_session_tags is None and not null_detaches):
             return True
         if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
             return True
         existing_tags: Final = existing_litellm_params.aws_session_tags if existing_litellm_params is not None else None
         if existing_tags is not None and _canonical_session_tags(existing_tags) == _canonical_session_tags(
-            litellm_params.aws_session_tags
+            litellm_params.aws_session_tags or ()
         ):
             return True
         raise ProxyException(
@@ -2194,7 +2348,8 @@ class ModelManagementAuthChecks:
             raise ProxyException(
                 message=(
                     f"Only proxy admins can change the credentials of a deployment configured for "
-                    f"workload identity federation or OAuth token exchange ({wif_fields[0]!r})."
+                    f"workload identity federation or OAuth token exchange, or holding an oidc/ api_key secret "
+                    f"reference ({wif_fields[0]!r})."
                 ),
                 type=ProxyErrorTypes.auth_error.value,
                 code=status.HTTP_403_FORBIDDEN,
@@ -2210,6 +2365,33 @@ class ModelManagementAuthChecks:
                 code=status.HTTP_400_BAD_REQUEST,
                 param="litellm_credential_name",
             )
+
+    @staticmethod
+    def _reject_team_inline_api_key_secret_reference(
+        *,
+        model_params: Deployment,
+        incoming_params: Mapping[str, object] | None,
+        incoming_model_params: updateDeployment | None,
+    ) -> None:
+        api_key: Final = None if incoming_params is None else incoming_params.get("api_key")
+        incoming_model_info: Final = None if incoming_model_params is None else incoming_model_params.model_info
+        team_id: Final = (
+            incoming_model_info.team_id
+            if incoming_model_info is not None and incoming_model_info.team_id is not None
+            else model_params.model_info.team_id
+        )
+        if team_id is None or not isinstance(api_key, str) or not api_key.startswith(OIDC_SECRET_REFERENCE_PREFIX):
+            return
+        raise ProxyException(
+            message=(
+                "A team model cannot hold an oidc/ api_key secret reference, because LiteLLM resolves one only on a "
+                "proxy-level model or in a stored credential. Store the reference in a credential and set "
+                "litellm_credential_name on this model."
+            ),
+            type=ProxyErrorTypes.bad_request_error.value,
+            code=status.HTTP_400_BAD_REQUEST,
+            param="api_key",
+        )
 
     @staticmethod
     async def can_user_make_model_call(
@@ -2228,6 +2410,9 @@ class ModelManagementAuthChecks:
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
         ):
             raise HTTPException(status_code=403, detail="View-only users cannot manage models.")
+        ModelManagementAuthChecks._reject_team_inline_api_key_secret_reference(
+            model_params=model_params, incoming_params=incoming_params, incoming_model_params=incoming_model_params
+        )
         # Federation fields choose which server-side secret is read and where the org-scoped token
         # it buys is sent, so only a proxy admin may point a federated deployment somewhere else.
         # Evaluated on the RESULTING deployment: a patch attaching a credential by name inherits
@@ -2599,6 +2784,7 @@ async def add_new_model(
         incoming_model_info: Final = model_params.model_info.model_dump(exclude_none=True)
         _raise_if_ptu_cost_attribution_disabled(incoming_model_info)
         _validate_ptu_model_info(incoming_model_info)
+        await _raise_if_ptu_share_teams_missing(incoming_model_info, partial(_repo_team_table, prisma_client))
         priced_model_params: Final = _ptu_priced_deployment(model_params)
 
         if store_model_in_db is True:
@@ -3080,12 +3266,13 @@ async def update_useful_links(
         )
 
 
-def _validated_labeled_tiers(
-    tier_labels: dict[ComplexityTier, str],  # mutable-ok: Pydantic materializes JSON object fields as dicts
-) -> tuple[tuple[ComplexityTier, str], ...]:
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _validated_labeled_tiers(tier_labels: object) -> tuple[tuple[ComplexityTier, str], ...]:
     """Validate tier labels once for both prompt-preview transports."""
     try:
-        return ComplexityRouterConfig(tier_labels=tier_labels).labeled_tiers()
+        return ComplexityRouterConfig.model_validate({"tier_labels": tier_labels}).labeled_tiers()
     except (TypeError, ValidationError) as e:
         raise ProxyException(
             message=f"tier_labels must be a JSON object of tier name to display name: {e}",
@@ -3100,7 +3287,7 @@ def _labeled_tiers_from_query(tier_labels: str | None) -> tuple[tuple[Complexity
     if not tier_labels:
         return None
     try:
-        parsed: Final = json.loads(tier_labels)
+        parsed: Final = _DECODED_JSON.validate_python(json.loads(tier_labels))
     except JSONDecodeError as e:
         raise ProxyException(
             message=f"tier_labels must be a JSON object of tier name to display name: {e}",
@@ -3236,6 +3423,10 @@ _deduplicate_litellm_router_models: Final = deduplicate_litellm_router_models
 
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_OPTIONAL_JSON_OBJECT: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(
+    Mapping[str, object] | None,
+    config=ConfigDict(hide_input_in_errors=True),
+)
 
 
 def model_info_as_mapping(model_info: object) -> Mapping[str, object] | None:

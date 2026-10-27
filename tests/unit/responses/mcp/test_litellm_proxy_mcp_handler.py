@@ -420,20 +420,16 @@ async def test_execute_tool_calls_logs_failure_via_post_call_failure_hook(monkey
 
 
 @pytest.mark.asyncio
-async def test_execute_tool_calls_passes_litellm_call_id_and_trace_id_to_function_setup(
+async def test_execute_tool_calls_logs_each_tool_call_under_its_own_id_on_the_request_trace(
     monkeypatch,
 ):
-    """
-    Regression test for ae4d92ad...:
-    Ensure litellm_call_id / litellm_trace_id are forwarded into function_setup kwargs.
-    """
     _setup_proxy_logging(monkeypatch)
     call_tool_mock = _setup_mcp_call_environment(monkeypatch)
 
-    captured = {}
+    captured: list[dict[str, object]] = []
 
     def fake_function_setup(*_args, **kwargs):
-        captured.update(kwargs)
+        captured.append(kwargs)
         return None, None
 
     # NOTE: Don't patch via dotted string path here because `litellm.responses`
@@ -443,7 +439,10 @@ async def test_execute_tool_calls_passes_litellm_call_id_and_trace_id_to_functio
     monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
 
     tool_name = "deepwiki-read_wiki_structure"
-    tool_calls = [{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}]
+    tool_calls = [
+        {"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}},
+        {"id": "call-2", "function": {"name": tool_name, "arguments": "{}"}},
+    ]
 
     await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
         tool_server_map={tool_name: "deepwiki"},
@@ -453,11 +452,13 @@ async def test_execute_tool_calls_passes_litellm_call_id_and_trace_id_to_functio
         litellm_trace_id="tid",
     )
 
-    # Ensure the tool call was attempted (sanity)
-    assert call_tool_mock.await_count == 1
-
-    assert captured.get("litellm_call_id") == "cid"
-    assert captured.get("litellm_trace_id") == "tid"
+    assert call_tool_mock.await_count == 2
+    tool_call_ids: Final = [kwargs.get("litellm_call_id") for kwargs in captured]
+    assert len(tool_call_ids) == 2
+    assert "cid" not in tool_call_ids
+    assert len(set(tool_call_ids)) == 2
+    assert all(isinstance(tool_call_id, str) and tool_call_id.startswith("cid") for tool_call_id in tool_call_ids)
+    assert [kwargs.get("litellm_trace_id") for kwargs in captured] == ["tid", "tid"]
 
 
 @pytest.mark.asyncio

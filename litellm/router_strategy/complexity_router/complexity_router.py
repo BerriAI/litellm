@@ -22,7 +22,7 @@ import json
 import random
 import re
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from itertools import accumulate, chain, islice, takewhile
 from threading import Lock
 from types import MappingProxyType
@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError, create_model
 from pydantic_core import ErrorDetails
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
@@ -411,9 +412,19 @@ def _append_custom_keywords(base_keywords: list[str], custom_keywords: list[str]
     return [*base_keywords, *deduped_custom.values()]
 
 
-def _parent_session_kwargs(request_kwargs: Mapping[str, object] | None) -> Mapping[str, Any]:
+class _ParentSessionKwargs(TypedDict, total=False):
+    litellm_session_id: ReadOnly[object]
+    litellm_trace_id: ReadOnly[object]
+
+
+def _parent_session_kwargs(request_kwargs: Mapping[str, object] | None) -> _ParentSessionKwargs:
     kwargs: Final = request_kwargs or {}
-    return {k: kwargs[k] for k in ("litellm_session_id", "litellm_trace_id") if kwargs.get(k) is not None}
+    session_id: Final = kwargs.get("litellm_session_id")
+    trace_id: Final = kwargs.get("litellm_trace_id")
+    return _ParentSessionKwargs(
+        **({"litellm_session_id": session_id} if session_id is not None else {}),
+        **({"litellm_trace_id": trace_id} if trace_id is not None else {}),
+    )
 
 
 def _response_cost_or_none(response: object) -> float | None:
@@ -1952,9 +1963,9 @@ class ComplexityRouter(CustomLogger):
         self,
         prompt: str,
         system_prompt: str | None = None,
-        request_kwargs: dict[str, Any] | None = None,
+        request_kwargs: dict[str, object] | None = None,
         messages: Sequence[Mapping[str, object]] | None = None,
-        raw_messages: list[dict[str, Any]] | None = None,  # mutable-ok: same shape _run_routing_plugins receives
+        raw_messages: list[dict[str, object]] | None = None,  # mutable-ok: same shape _run_routing_plugins receives
     ) -> ClassificationOutcome:
         """
         Classify a prompt by complexity, using the LLM classifier when configured.
@@ -2828,7 +2839,7 @@ class ComplexityRouter(CustomLogger):
             "originating_request_masked": masked_originating_request(request_kwargs),
             "body": {"model": llm_config.model, **payload},
         }
-        classify: Final = (
+        classify: Final[Callable[..., Awaitable[ModelResponse | ResponsesAPIResponse]]] = (
             self.litellm_router_instance.aresponses
             if encrypted_task is not None
             else self.litellm_router_instance.acompletion
@@ -3115,17 +3126,14 @@ class ComplexityRouter(CustomLogger):
 
         model_to_prefs: Final[dict[str, AdaptiveRouterPreferences]] = {}
         model_to_cost: Final[dict[str, float]] = {}
-        model_list: Final = getattr(self.litellm_router_instance, "model_list", None) or []
-        name_to_indices: Final = getattr(self.litellm_router_instance, "model_name_to_deployment_indices", {}) or {}
         for name in available_models:
-            indices = name_to_indices.get(name, [])
-            if not indices:
+            deployments = self.litellm_router_instance.deployments_named(name)
+            if not deployments:
                 model_to_prefs[name] = AdaptiveRouterPreferences(quality_tier=2, strengths=[])
                 model_to_cost[name] = 0.0
                 continue
-            deployment = model_list[indices[0]]
-            mi = deployment.get("model_info") if isinstance(deployment, dict) else deployment.model_info
-            mi_dict: dict[str, Any] = mi if isinstance(mi, dict) else (mi.model_dump() if mi else {})
+            deployment = deployments[0]
+            mi_dict: dict[str, Any] = deployment.get("model_info") or {}
             prefs_raw = mi_dict.get("adaptive_router_preferences")
             if prefs_raw is not None:
                 model_to_prefs[name] = AdaptiveRouterPreferences(**prefs_raw)
@@ -3133,9 +3141,7 @@ class ComplexityRouter(CustomLogger):
                 model_to_prefs[name] = AdaptiveRouterPreferences(quality_tier=2, strengths=[])
 
             # model_info is the conventional pricing location elsewhere in LiteLLM; litellm_params wins if set.
-            lp = deployment.get("litellm_params") if isinstance(deployment, dict) else deployment.litellm_params
-            lp_dict: dict[str, Any] = lp if isinstance(lp, dict) else (lp.model_dump() if lp else {})
-            cost = lp_dict.get("input_cost_per_token")
+            cost = deployment.get("litellm_params", {}).get("input_cost_per_token")
             if cost is None:
                 cost = mi_dict.get("input_cost_per_token")
             model_to_cost[name] = float(cost) if cost is not None else 0.0
@@ -4331,7 +4337,7 @@ class ComplexityRouter(CustomLogger):
         self,
         model: str,
         request_kwargs: dict,
-        messages: list[dict[str, Any]] | None = None,
+        messages: list[dict[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
     ) -> PreRoutingHookResponse | None:
