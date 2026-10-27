@@ -10814,6 +10814,38 @@ def test_a_plain_reply_without_an_upstream_usage_cost_keeps_none_after_pricing(m
     assert response._hidden_params["response_cost"] == pytest.approx(100 * 2e-6 + 20 * 6e-6)
 
 
+def test_include_cost_in_streaming_usage_puts_the_bill_on_a_plain_reply_without_an_upstream_usage_cost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The switch that injects the bill into streamed usage gives plain replies the same key."""
+    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        _PRICED_DEPLOYMENT_ID,
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 2e-6, "output_cost_per_token": 6e-6},
+    )
+    response: Final = ModelResponse(
+        id="chatcmpl-unreported",
+        model="reported-cost-fixture",
+        choices=[Choices(index=0, message=Message(role="assistant", content="hi"), finish_reason="stop")],
+        usage=Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120),
+    )
+    logging_obj: Final = _priced_logging(False, "completion")
+
+    update_response_metadata(
+        result=response,
+        logging_obj=logging_obj,
+        model=_REPORTED_COST_FIXTURE_MODEL,
+        kwargs={},
+        start_time=datetime.datetime(2026, 1, 1),
+        end_time=datetime.datetime(2026, 1, 1, 0, 0, 1),
+    )
+
+    bill: Final = 100 * 2e-6 + 20 * 6e-6
+    assert response.usage is not None and response.usage.cost == pytest.approx(bill)
+    assert logging_obj.response_cost_calculator(result=response, ignore_stamped_cost=True) == pytest.approx(bill)
+
+
 def test_provider_reported_usage_cost_splits_input_and_output_by_the_token_math_ratio(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -4,6 +4,8 @@ from functools import reduce
 from typing import Final
 
 import httpx
+
+import litellm
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.constants import LITELLM_DETAILED_TIMING
@@ -186,11 +188,15 @@ class ResponseMetadata:
 
     def _stamp_billed_usage_cost(self, response_cost: object) -> None:
         """A usage.cost the upstream reported becomes what litellm billed, so a client and the spend log agree on a
-        priced deployment; a reply without one keeps its usage as the upstream sent it."""
+        priced deployment. A reply without one keeps its usage as the upstream sent it unless the operator asked for
+        the bill in every usage block with ``litellm.include_cost_in_streaming_usage``, the same switch that puts it
+        into streamed usage."""
         if not isinstance(self.result, (ModelResponse, ResponsesAPIResponse)):
             return
         usage: Final = getattr(self.result, "usage", None)
-        if not isinstance(usage, (Usage, ResponseAPIUsage)) or getattr(usage, "cost", None) is None:
+        if not isinstance(usage, (Usage, ResponseAPIUsage)):
+            return
+        if getattr(usage, "cost", None) is None and not litellm.include_cost_in_streaming_usage:
             return
         stamp_billable_usage_cost(self.result, usage, response_cost)
 
