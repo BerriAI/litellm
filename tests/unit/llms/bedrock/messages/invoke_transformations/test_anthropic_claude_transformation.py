@@ -37,7 +37,7 @@ from litellm.llms.bedrock.common_utils import (
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
 )
-from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
     AmazonAnthropicClaudeMessagesStreamDecoder,
 )
