@@ -8,6 +8,7 @@ import threading
 import weakref
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from itertools import chain
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -16,6 +17,8 @@ import httpx
 import pytest
 import respx
 from aiohttp import ClientSession, TCPConnector
+from cryptography import x509
+from cryptography.x509.oid import NameOID
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
@@ -296,10 +299,7 @@ def test_get_ssl_configuration():
     when no environment variables are set."""
     from litellm.llms.custom_httpx.http_handler import _ssl_context_cache
 
-    # Clear cache to ensure ssl.create_default_context is called
-    _ssl_context_cache.clear()
-
-    with patch.dict(os.environ, clear=True):
+    with patch.dict(_ssl_context_cache, clear=True), patch.dict(os.environ, clear=True):
         with patch("ssl.create_default_context") as mock_create_context:
             # Mock the return value
             mock_ssl_context = MagicMock(spec=ssl.SSLContext)
@@ -329,6 +329,29 @@ def test_get_ssl_configuration_integration():
     # Verify it has basic SSL context properties
     assert ssl_context.protocol is not None
     assert ssl_context.verify_mode is not None
+
+
+EMSIGN_ROOTS_REMOVED_FROM_CERTIFI: Final = frozenset({"emSign Root CA - C1", "emSign ECC Root CA - C3"})
+EMSIGN_ROOTS_REMOVED_FROM_CERTIFI_SOURCE: Final = "certifi 2026.10.23 dropped both roots, certifi/python-certifi#445"
+
+
+def _trusted_common_names(ssl_context: ssl.SSLContext) -> frozenset[str]:
+    certificates: Final = (x509.load_der_x509_certificate(der) for der in ssl_context.get_ca_certs(binary_form=True))
+    common_names: Final = chain.from_iterable(
+        certificate.subject.get_attributes_for_oid(NameOID.COMMON_NAME) for certificate in certificates
+    )
+    return frozenset(str(attribute.value) for attribute in common_names)
+
+
+def test_default_ssl_context_does_not_trust_emsign_roots_removed_from_certifi(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    ssl_context: Final = get_ssl_configuration(ssl_verify=True)
+    assert isinstance(ssl_context, ssl.SSLContext)
+    trusted: Final = _trusted_common_names(ssl_context)
+    assert trusted, "the default SSL context loaded no CA certificates"
+    assert trusted.isdisjoint(EMSIGN_ROOTS_REMOVED_FROM_CERTIFI), EMSIGN_ROOTS_REMOVED_FROM_CERTIFI_SOURCE
 
 
 # Session Reuse Tests
@@ -526,10 +549,7 @@ def test_ssl_ecdh_curve(env_curve, litellm_curve, expected_curve, should_call, m
     """Test SSL ECDH curve configuration with valid curves and precedence"""
     from litellm.llms.custom_httpx.http_handler import _ssl_context_cache
 
-    # Clear cache to ensure fresh SSL context creation
-    _ssl_context_cache.clear()
-
-    with patch.dict(os.environ, clear=True):
+    with patch.dict(_ssl_context_cache, clear=True), patch.dict(os.environ, clear=True):
         if env_curve:
             monkeypatch.setenv("SSL_ECDH_CURVE", env_curve)
 
