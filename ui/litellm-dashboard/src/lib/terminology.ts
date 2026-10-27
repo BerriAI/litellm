@@ -9,6 +9,8 @@ const THIRD_PARTY_NAMES: readonly string[] = [
   "DeepKeep AI Firewall",
   "Defend AI",
   "Prisma AI Runtime Security",
+  "XecGuard AI",
+  "Airia AI",
 ];
 
 const THIRD_PARTY_NAME_PATTERN = new RegExp(`(${THIRD_PARTY_NAMES.join("|")})`);
