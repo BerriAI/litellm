@@ -32,6 +32,7 @@ from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
+    TeamNotFoundError,
     delete_cache_key_objects,
     forget_missing_user,
     get_jwt_key_mapping_cache_keys_for_tokens,
@@ -80,9 +81,11 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     handle_update_object_permission_common,
     set_object_permission,
+    validate_user_mcp_grants_against_teams,
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy, hash_password
+from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
@@ -459,6 +462,73 @@ async def _fetch_user_team_ids(user_id: str, prisma_client: "PrismaClient") -> t
     return tuple(user_row.teams) if user_row is not None else ()
 
 
+async def _load_user_mcp_grant_teams(
+    team_ids: Sequence[str],
+    prisma_client: "PrismaClient",
+    user_api_key_cache: "UserApiKeyCache",
+) -> tuple["LiteLLM_TeamTableCachedObj", ...]:
+    async def _load_team(team_id: str) -> "LiteLLM_TeamTableCachedObj | None":
+        try:
+            return await get_team_object(
+                team_id=team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                check_db_only=True,
+            )
+        except TeamNotFoundError:
+            return None
+
+    return tuple(
+        team_obj
+        for team_obj in await asyncio.gather(*(_load_team(team_id) for team_id in team_ids))
+        if team_obj is not None
+    )
+
+
+async def _validate_user_mcp_grants(
+    object_permission: object,
+    team_ids: Sequence[str],
+    existing_object_permission_id: str | None,
+    prisma_client: "PrismaClient",
+    user_api_key_cache: "UserApiKeyCache",
+    *,
+    is_proxy_admin: bool,
+) -> None:
+    validated_object_permission: Final[ObjectPermissionDict | None] = TypeAdapter[ObjectPermissionDict | None](
+        ObjectPermissionDict | None
+    ).validate_python(object_permission)
+    if validated_object_permission is None or (not team_ids and is_proxy_admin):
+        return
+
+    team_objs: Final = (
+        await _load_user_mcp_grant_teams(
+            team_ids=team_ids,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+        if team_ids
+        else ()
+    )
+    existing_object_permission_row: Final = (
+        await ObjectPermissionRepository(prisma_client).table.find_unique(
+            where={"object_permission_id": existing_object_permission_id},
+        )
+        if existing_object_permission_id is not None
+        else None
+    )
+    existing_object_permission: Final[LiteLLM_ObjectPermissionTable | None] = (
+        LiteLLM_ObjectPermissionTable.model_validate(existing_object_permission_row.model_dump())
+        if existing_object_permission_row is not None
+        else None
+    )
+    await validate_user_mcp_grants_against_teams(
+        object_permission=validated_object_permission,
+        team_objs=team_objs,
+        prisma_client=prisma_client,
+        existing_user_object_permission=existing_object_permission,
+    )
+
+
 @router.post(
     "/user/new",
     tags=["Internal User management"],
@@ -535,7 +605,7 @@ async def new_user(
     ```
     """
     try:
-        from litellm.proxy.proxy_server import _license_check, prisma_client
+        from litellm.proxy.proxy_server import _license_check, prisma_client, user_api_key_cache
 
         if prisma_client is None:
             raise HTTPException(status_code=400, detail=CommonProxyErrors.db_not_connected_error.value)
@@ -582,6 +652,22 @@ async def new_user(
 
         data_json = data.json()
         data_json = _update_internal_new_user_params(data_json, data)
+        teams: Final = data.teams if data.teams is not None else check_if_default_team_set()
+        team_ids: Final = (
+            (data.team_id,)
+            if data.team_id is not None
+            else tuple(team if isinstance(team, str) else team.team_id for team in teams or ())
+        )
+        await _validate_user_mcp_grants(
+            object_permission=TypeAdapter[dict[str, object]](dict[str, object])
+            .validate_python(data_json)
+            .get("object_permission"),
+            team_ids=team_ids,
+            existing_object_permission_id=None,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value,
+        )
         # Persist the requested grants as their own row and link it, mirroring key/team creation.
         # generate_key_helper_fn only forwards object_permission_id, so without this the entitlement
         # the caller sent would be dropped on the floor.
@@ -589,9 +675,6 @@ async def new_user(
             data_json=data_json, prisma_client=prisma_client
         )
         data_json.pop("password", None)
-        teams = data.teams
-        if teams is None:
-            teams = check_if_default_team_set()
         organization_ids: Final = cast(list[str] | None, data_json.pop("organizations", None))
 
         response: Final = await generate_key_helper_fn(request_type="user", **data_json, llm_router=None)
@@ -1539,6 +1622,20 @@ async def _update_single_user_helper(
     # Upsert the grants into their own row and link it, mirroring /key/update and /team/update.
     # This also removes object_permission from the payload, which is not a column on the user table.
     if "object_permission" in non_default_values:
+        await _validate_user_mcp_grants(
+            object_permission=TypeAdapter[dict[str, object]](dict[str, object]).validate_python(non_default_values)[
+                "object_permission"
+            ],
+            team_ids=TypeAdapter[tuple[str, ...]](tuple[str, ...]).validate_python(
+                getattr(existing_user_row, "teams", ()) or ()
+            ),
+            existing_object_permission_id=TypeAdapter[str | None](str | None).validate_python(
+                getattr(existing_user_row, "object_permission_id", None)
+            ),
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value,
+        )
         object_permission_id: Final = await handle_update_object_permission_common(
             data_json=non_default_values,
             existing_object_permission_id=getattr(existing_user_row, "object_permission_id", None),
