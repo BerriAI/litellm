@@ -118,6 +118,7 @@ from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy modul
     _key_or_team_allows_client_pricing_override,  # pyright: ignore[reportPrivateUsage]  # reuse the proxy's pricing trust policy
     _strip_client_pricing_overrides,  # pyright: ignore[reportPrivateUsage]  # sanitize before trusted hooks add guardrail costs
     get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
+    redact_credential_headers,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.route_priority import (
@@ -161,6 +162,12 @@ pass_through_endpoint_logging: Final = PassThroughEndpointLogging()
 _METADATA_KEYS: Final = frozenset(("litellm_metadata", "metadata"))
 _DECODED_JSON: Final = TypeAdapter(object)
 _KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
+_PRICING_MODEL_OVERRIDE_PARAMS: Final = frozenset(("base_model",))
+
+
+def _is_mergeable_client_metadata(key: str, value: object) -> bool:
+    return not key.startswith("user_api_key_") and (key != "model_info" or isinstance(value, Mapping))
+
 
 # Global registry to track registered pass-through routes and prevent memory leaks
 _registered_pass_through_routes: Final[dict[str, dict[str, str | bool | list[str] | Mapping[str, object]]]] = {}
@@ -403,6 +410,8 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
     @staticmethod
     def get_endpoint_type(url: str, custom_llm_provider: str | None = None) -> EndpointType:
         parsed_url: Final = urlparse(url)
+        if custom_llm_provider == "chatgpt":
+            return EndpointType.OPENAI
         if custom_llm_provider in ("typesafe", "laya", "bespoke") and parsed_url.path.removesuffix("/").endswith(
             "/v1/systemone"
         ):
@@ -633,8 +642,13 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         litellm_keys_in_body: Final = MappingProxyType(
             {k: _parsed_body.pop(k) for k in types_utils.all_litellm_params if k in _parsed_body}
         )
+        kept_out_of_litellm_params: Final = (
+            _KEPT_OUT_OF_LITELLM_PARAMS
+            if _key_or_team_allows_client_pricing_override(user_api_key_dict)
+            else _KEPT_OUT_OF_LITELLM_PARAMS | _PRICING_MODEL_OVERRIDE_PARAMS
+        )
         litellm_params_in_body: Final = MappingProxyType(
-            {k: v for k, v in litellm_keys_in_body.items() if k not in _KEPT_OUT_OF_LITELLM_PARAMS}
+            {k: v for k, v in litellm_keys_in_body.items() if k not in kept_out_of_litellm_params}
         )
 
         _metadata = dict(
@@ -645,7 +659,13 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         metadata: Final = litellm_keys_in_body.get("metadata")
         for client_metadata in (litellm_metadata, metadata):
             if isinstance(client_metadata, dict):
-                _metadata.update({k: v for k, v in client_metadata.items() if not k.startswith("user_api_key_")})
+                _metadata.update(
+                    {
+                        k: v
+                        for k, v in cast(Mapping[str, object], client_metadata).items()  # cast-ok: json
+                        if _is_mergeable_client_metadata(k, v)
+                    }
+                )
 
         _metadata = _apply_key_team_project_controls(user_api_key_dict=user_api_key_dict, metadata=_metadata)
         _metadata = _update_metadata_with_tags_in_header(
@@ -706,7 +726,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                     "url": str(request.url),
                     "method": request.method,
                     "body": copy.copy(_parsed_body),  # use copy instead of deepcopy
-                    "headers": request.headers,
+                    "headers": redact_credential_headers(request.headers),
                 },
             },
             "call_type": "pass_through_endpoint",
@@ -863,8 +883,8 @@ def _build_passthrough_failure_request_payload(
 
 @dataclass(frozen=True, slots=True)
 class _TeamCallbackWiring:
-    success_callbacks: "list[str | Callable | CustomLogger] | None" = None  # mutable-ok: Logging.__init__ arg
-    failure_callbacks: "list[str | Callable | CustomLogger] | None" = None  # mutable-ok: Logging.__init__ arg
+    success_callbacks: "list[str | Callable[..., object] | CustomLogger] | None" = None  # mutable-ok: Logging init arg
+    failure_callbacks: "list[str | Callable[..., object] | CustomLogger] | None" = None  # mutable-ok: Logging init arg
     logging_kwargs: dict[str, str | dict[str, str]] | None = None  # mutable-ok: Logging.__init__ arg
 
 
@@ -1087,6 +1107,10 @@ from litellm.passthrough.timeout_utils import (
 )
 
 
+def _unfiltered_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
+    return headers
+
+
 async def pass_through_request(
     request: Request,
     target: str,
@@ -1102,6 +1126,7 @@ async def pass_through_request(
     custom_llm_provider: str | None = None,
     guardrails_config: dict | None = None,
     timeout: float | None = None,
+    upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -1122,6 +1147,7 @@ async def pass_through_request(
         guardrails_config: Optional field - guardrails configuration for passthrough endpoint
         timeout: Optional per-endpoint timeout in seconds. Falls back to
             general_settings.pass_through_request_timeout, then 600s.
+        upstream_headers_filter: Optional last rewrite of the headers sent upstream, after x-pass- expansion
     """
     from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1149,13 +1175,15 @@ async def pass_through_request(
     #########################################################
     try:
         url = httpx.URL(target)
-        headers = custom_headers
-        headers = HttpPassThroughEndpointHelpers.forward_headers_from_request(
+        forwarded_headers: Final = HttpPassThroughEndpointHelpers.forward_headers_from_request(
             request_headers=safe_get_request_headers(request).copy(),
-            headers=headers,
+            headers=custom_headers,
             forward_headers=forward_headers,
         )
-        upstream_headers: Final = _with_trace_context(headers, parent_span=user_api_key_dict.parent_otel_span)
+        upstream_headers: Final = _with_trace_context(
+            upstream_headers_filter(forwarded_headers),
+            parent_span=user_api_key_dict.parent_otel_span,
+        )
 
         requested_query_params: dict | None = query_params or dict(request.query_params) or None
 
@@ -1465,7 +1493,7 @@ async def pass_through_request(
             additional_args={
                 "complete_input_dict": _parsed_body,
                 "api_base": str(logging_url),
-                "headers": upstream_headers,
+                "headers": redact_credential_headers(upstream_headers),
             },
         )
         stream = HttpPassThroughEndpointHelpers.update_stream_param_based_on_request_body(
@@ -1536,7 +1564,7 @@ async def pass_through_request(
                 data=_parsed_body or {},
                 user_api_key_dict=user_api_key_dict,
                 response=relay_response,
-                request_headers=dict(request.headers),
+                request_headers=dict(redact_credential_headers(request.headers)),
             )
             if callback_headers:
                 _response_headers.update(callback_headers)
@@ -1628,7 +1656,7 @@ async def pass_through_request(
                 data=_parsed_body or {},
                 user_api_key_dict=user_api_key_dict,
                 response=detected_relay_response,
-                request_headers=dict(request.headers),
+                request_headers=dict(redact_credential_headers(request.headers)),
             )
             if callback_headers:
                 _response_headers.update(callback_headers)
@@ -1678,7 +1706,7 @@ async def pass_through_request(
                 data=_parsed_body or {},
                 user_api_key_dict=user_api_key_dict,
                 response=response,
-                request_headers=dict(request.headers),
+                request_headers=dict(redact_credential_headers(request.headers)),
             )
             if relay_callback_headers:
                 relay_custom_headers.update(relay_callback_headers)
@@ -1853,7 +1881,7 @@ async def pass_through_request(
             data=_parsed_body or {},
             user_api_key_dict=user_api_key_dict,
             response=response,
-            request_headers=dict(request.headers),
+            request_headers=dict(redact_credential_headers(request.headers)),
         )
         if callback_headers:
             custom_headers.update(callback_headers)
@@ -1996,6 +2024,9 @@ def _apply_key_team_project_controls(
     )
 
 
+_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
 def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> dict:
     """
     If tags are in the request headers, add them to the metadata
@@ -2021,7 +2052,12 @@ def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> di
             tags_to_add=tags_to_add,
         )
 
-    return metadata
+    restored_metadata: Final = _METADATA_ADAPTER.validate_python(metadata)
+    request_data: Final[dict[str, object]] = {  # mutable-ok: legacy enrichment writes this wrapper
+        "metadata": restored_metadata
+    }
+    LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, request_data)
+    return restored_metadata
 
 
 class _PassThroughRequestEnvelope(TypedDict, total=False):
@@ -2105,6 +2141,7 @@ def create_pass_through_route(
     guardrails: dict[str, object] | None = None,
     config_file_path: str | None = None,
     timeout: float | None = None,
+    upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -2244,6 +2281,7 @@ def create_pass_through_route(
                         custom_llm_provider=custom_llm_provider,
                         guardrails_config=cast(dict | None, param_guardrails),
                         timeout=cast(float | None, param_timeout),
+                        upstream_headers_filter=upstream_headers_filter,
                     )
                 finally:
                     if hasattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY):

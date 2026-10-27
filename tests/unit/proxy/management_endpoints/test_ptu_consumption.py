@@ -232,14 +232,10 @@ def test_rows_keyed_by_a_name_a_wildcard_route_serves_are_sized_by_its_shared_de
     assert attached.results[0].breakdown.model_groups["ptu-chat"].metrics.ptu_hours == pytest.approx(1.0)
 
 
-@pytest.mark.parametrize(
-    ("catch_all_routes", "expected_ptu_hours"), [(False, 1.0), (True, 0.0)], ids=["team-wildcard", "behind-catch-all"]
-)
-def test_a_teams_wildcard_reservation_reads_ptu_hours_only_while_the_router_serves_from_it(
-    monkeypatch, catch_all_routes, expected_ptu_hours
-):
-    """The router tries the proxy-wide wildcards before a team's own, so a team's `ptu-*`
-    reservation behind an open `*` route never serves `ptu-chat`, and its row reads no PTU-hours."""
+@pytest.mark.parametrize("catch_all_routes", [False, True], ids=["team-wildcard", "beside-catch-all"])
+def test_a_teams_wildcard_reservation_reads_ptu_hours_even_beside_a_proxy_wide_catch_all(monkeypatch, catch_all_routes):
+    """The router tries a team's own wildcard before the proxy-wide ones, so a team's `ptu-*`
+    reservation serves `ptu-chat` whether or not an open `*` route exists, and its row reads its PTU-hours."""
     monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
     reservation: Final = {
         "model_name": "ptu-team-r",
@@ -264,9 +260,7 @@ def test_a_teams_wildcard_reservation_reads_ptu_hours_only_while_the_router_serv
 
     attached: Final = with_ptu_consumption(_response(_day("2026-09-23", {"ptu-chat": one_hour})), router, "team-r")
 
-    assert attached.results[0].breakdown.model_groups["ptu-chat"].metrics.ptu_hours == pytest.approx(
-        expected_ptu_hours
-    )
+    assert attached.results[0].breakdown.model_groups["ptu-chat"].metrics.ptu_hours == pytest.approx(1.0)
 
 
 def _mixed_ptu_router() -> Router:

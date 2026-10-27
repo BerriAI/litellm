@@ -5,7 +5,9 @@ login assertion on ID-JAG leg 1. It presents a refresh token that the IdP issued
 one RFC 8693 exchange (``requested_token_type`` refresh_token), which is how a SAML requesting app works at
 an IdP whose ID-JAG exchange does not take a ``saml2`` subject directly. That exchange has to happen at
 login: a SAML assertion is valid for minutes, the first MCP call that needs it can come hours later, and
-the refresh token outlives the assertion by as long as the IdP decides.
+the refresh token outlives the assertion by as long as the IdP decides. An OIDC login signed in through the very
+IdP client the ID-JAG server uses already holds such a refresh token: it is bound to that client, so it is
+presented as is and no further exchange is posted, which Okta refuses for an id_token subject anyway.
 
 The servers consulted are the two configuration authorities, the pod-local config declaration and the DB
 rows, like the retention gate, not the in-memory registry, which is a per-process snapshot that can lag a
@@ -19,12 +21,17 @@ the ID-JAG call reports the missing refresh token as the precondition it is.
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Final, Protocol
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok, Result
+from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_refresher import (
+    SSOClientConfig,
+    sso_client_config,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
     SSOIdentityAssertion,
     with_login_refresh_token,
@@ -123,12 +130,31 @@ async def exchange_login_assertion_for_refresh_token(
     token_endpoint: TokenExchangeEndpoint,
     now: datetime,
     deadline_seconds: float = _LOGIN_EXCHANGE_DEADLINE_SECONDS,
+    sso_client: SSOClientConfig | None = None,
 ) -> SSOIdentityAssertion:
     """The assertion as captured when no server wants a refresh token, otherwise the assertion plus the
-    refresh token the first target's IdP client exchanged it for. An OIDC login's own SSO refresh token
-    does not count, it is bound to the SSO client and the ID-JAG client cannot redeem it."""
+    refresh token one target's IdP client can redeem. An OIDC login's own refresh token is that token
+    when the SSO client that received it is the target's client at the same token endpoint; otherwise it
+    is bound to a client the ID-JAG client is not, and the assertion is exchanged for one at the first
+    target's client."""
     if not targets or assertion.exchanged_refresh_token is not None:
         return assertion
+    reusable: Final = _target_redeeming_the_login_refresh_token(assertion, targets, sso_client)
+    if reusable is not None and assertion.refresh_token is not None:
+        verbose_proxy_logger.info(
+            "ID-JAG: the refresh token issued at OIDC login belongs to client_id=%s at %s, the IdP client of a server "
+            "with id_jag_subject_source: refresh_token, so it is kept as that subject and no further exchange is posted",
+            reusable.client_id,
+            reusable.org_token_endpoint,
+        )
+        return with_login_refresh_token(
+            assertion,
+            assertion.refresh_token.get_secret_value(),
+            None,
+            now,
+            endpoint=reusable.org_token_endpoint,
+            client_id=reusable.client_id,
+        )
     config: Final = targets[0]
     if len(targets) > 1:
         verbose_proxy_logger.warning(
@@ -185,6 +211,24 @@ async def exchange_login_assertion_for_refresh_token(
             )
 
 
+def _target_redeeming_the_login_refresh_token(
+    assertion: SSOIdentityAssertion, targets: tuple[IdJagConfig, ...], sso_client: SSOClientConfig | None
+) -> IdJagConfig | None:
+    """The target whose IdP client is the SSO client the login's refresh token was issued to. A refresh
+    token is redeemable only by the client that received it at the endpoint that issued it, so both have
+    to match exactly before the login token is presented anywhere."""
+    if assertion.refresh_token is None or sso_client is None:
+        return None
+    return next(
+        (
+            config
+            for config in targets
+            if config.org_token_endpoint == sso_client.token_endpoint and config.client_id == sso_client.client_id
+        ),
+        None,
+    )
+
+
 async def exchange_login_assertion_if_configured(
     assertion: SSOIdentityAssertion | None,
 ) -> SSOIdentityAssertion | None:
@@ -209,7 +253,11 @@ async def exchange_login_assertion_if_configured(
         servers: Final = await login_exchange_servers(global_mcp_server_manager, db_rows)
         targets: Final = refresh_token_exchange_targets(to_server_spec(server) for server in servers)
         return await exchange_login_assertion_for_refresh_token(
-            assertion, targets, TokenEndpointClient(), datetime.now(timezone.utc)
+            assertion,
+            targets,
+            TokenEndpointClient(),
+            datetime.now(timezone.utc),
+            sso_client=sso_client_config(os.environ),
         )
     except Exception as exc:  # noqa: BLE001  # the login itself must not fail on an egress-side exchange
         verbose_proxy_logger.warning("ID-JAG: the login-time refresh token exchange failed unexpectedly: %s", exc)

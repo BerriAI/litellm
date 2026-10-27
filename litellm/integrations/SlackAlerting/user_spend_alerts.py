@@ -56,8 +56,9 @@ async def fetch_user_spend_rows(
     today_str: Final = today.strftime("%Y-%m-%d")
     month_start_str: Final = today.replace(day=1).strftime("%Y-%m-%d")
     baseline_start_str: Final = (today - datetime.timedelta(days=max(baseline_days, 1))).strftime("%Y-%m-%d")
-    raw: Final = await prisma_client.db.query_raw(USER_SPEND_QUERY, today_str, month_start_str, baseline_start_str)
-    return USER_SPEND_ROWS_ADAPTER.validate_python(raw)
+    return USER_SPEND_ROWS_ADAPTER.validate_python(
+        await prisma_client.db.query_raw(USER_SPEND_QUERY, today_str, month_start_str, baseline_start_str)
+    )
 
 
 def _daily_threshold_event(row: UserSpendRow, args: SlackAlertingArgs, today_str: str) -> UserSpendAlertEvent | None:

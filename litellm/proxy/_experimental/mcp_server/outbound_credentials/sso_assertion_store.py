@@ -229,10 +229,19 @@ def carry_exchanged_refresh_token(
 ) -> SSOIdentityAssertion:
     """The renewed OIDC assertion still carrying the refresh token the ID-JAG client exchanged at login.
     Renewal only replaces the id_token and the SSO refresh token, the exchanged one is unrelated to
-    them and stays valid for as long as the IdP said."""
+    them and stays valid for as long as the IdP said. When the login's own refresh token was kept as
+    that subject (the SSO client is the ID-JAG client), a rotation the renewal just received replaces
+    it too, since the IdP has retired the token the row held."""
+    login_token_reused: Final = (
+        previous.refresh_token is not None
+        and previous.exchanged_refresh_token is not None
+        and previous.exchanged_refresh_token.get_secret_value() == previous.refresh_token.get_secret_value()
+    )
     return renewed.model_copy(
         update={
-            "exchanged_refresh_token": previous.exchanged_refresh_token,
+            "exchanged_refresh_token": renewed.refresh_token
+            if login_token_reused
+            else previous.exchanged_refresh_token,
             "exchanged_refresh_token_expires_at": previous.exchanged_refresh_token_expires_at,
             "exchanged_refresh_token_endpoint": previous.exchanged_refresh_token_endpoint,
             "exchanged_refresh_token_client_id": previous.exchanged_refresh_token_client_id,

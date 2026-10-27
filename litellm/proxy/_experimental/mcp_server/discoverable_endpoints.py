@@ -472,15 +472,15 @@ def redeem_passthrough_authorization_code(
     return sealed
 
 
-def _session_cookie_user_id(request: Request) -> str | None:
+async def _session_cookie_user_id(request: Request) -> str | None:
     """The signed-in litellm user for a browser request, or ``None``. Thin wrapper so the
     aggregate DCR flow's verbs receive the identity as a plain value instead of parsing
     cookies themselves."""
     from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (  # noqa: PLC0415  # circular import at module load
-        user_id_from_session_cookie,
+        get_authenticated_browser_user_id,
     )
 
-    return user_id_from_session_cookie(request)
+    return await get_authenticated_browser_user_id(request)
 
 
 def _redirect_to_litellm_login(request: Request) -> RedirectResponse:
@@ -701,7 +701,7 @@ async def _store_per_user_token_server_side(
         expires_in = None
 
     refresh_token: Final[str | None] = token_response.get("refresh_token") or None
-    raw_scope: Final[object] = token_response.get("scope", requested_scope)
+    raw_scope: Final[object] = _DECODED_JSON.validate_python(token_response.get("scope", requested_scope))
     scopes: Final[list[str] | None] = raw_scope.split() if isinstance(raw_scope, str) else None
 
     try:
@@ -862,12 +862,17 @@ def _raise_unless_oauth2_discovery_server(
 
 def _dcr_bridge_relays_client_registration(mcp_server: MCPServer) -> bool:
     """True when a DCR-bridge server relays client registration to the upstream authorization
-    server instead of short-circuiting to an admin-configured OAuth client. In the relay arm the
+    server instead of short-circuiting to the server's own OAuth client. In the relay arm the
     upstream holds each client's own registration, so the authorize and token relays pass the
     client's ``client_id`` and ``redirect_uri`` through verbatim and the authorization code
     returns directly to the client's redirect URI without transiting the gateway. Gateway-side
     redirect trust and the ``/callback`` state relay therefore only apply to the short-circuit
-    arm, where the upstream only knows the gateway's own callback."""
+    arm, where the upstream only knows the gateway's own callback.
+
+    Authorize and token decide per request from the server's current client: once the gateway
+    holds its shared client (registered at ``/register`` under ``PROXY_BASE_URL``, or entered by an
+    admin) every caller runs the gateway-callback arm, while a server that still has none keeps
+    relaying, so clients registered before the shared client existed keep their own binding."""
     return bool(
         mcp_server.is_dcr_bridge
         and mcp_server.effective_registration_url
@@ -878,6 +883,27 @@ def _dcr_bridge_relays_client_registration(mcp_server: MCPServer) -> bool:
             )
         )
     )
+
+
+def _register_relays_bridge_client(mcp_server: MCPServer) -> bool:
+    """``/register`` relays the caller's own registration only when the gateway cannot keep a shared
+    client: with ``PROXY_BASE_URL`` set it registers one client bound to its own ``/callback`` and
+    keeps it as the server's client, so an upstream that restricts redirect domains (Atlassian)
+    never sees a laptop loopback redirect. Without a database the shared client would live only in
+    this process, so a database-free gateway keeps relaying as well."""
+    return _dcr_bridge_relays_client_registration(mcp_server) and (
+        configured_proxy_base_url() is None or not _shared_client_store_available()
+    )
+
+
+def _shared_client_store_available() -> bool:
+    from litellm.proxy.utils import get_prisma_client_or_throw  # noqa: PLC0415  # avoids circular import
+
+    try:
+        get_prisma_client_or_throw("Database not connected. Cannot keep the shared MCP OAuth client.")
+    except HTTPException:
+        return False
+    return True
 
 
 def _require_s256_pkce(
@@ -970,17 +996,13 @@ async def _resolve_oauth_authorization_user(
     enforce_binding: bool,
 ) -> str | RedirectResponse:
     """Resolve the authorization subject without replacing denied credentials with cookie grants."""
-    from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (  # noqa: PLC0415  # proxy import cycle
-        user_id_from_session_cookie,
-    )
-
     use_gateway_credential: Final = enforce_binding and await oauth_authorization_uses_gateway_credential(request)
     request_user_id: Final = (
         await authorize_oauth_credential_request(request, mcp_server.server_id) if use_gateway_credential else None
     )
     if use_gateway_credential and request_user_id is None:
         return _bridge_access_denied_redirect(redirect_uri, state, mcp_server)
-    user_id: Final = request_user_id or user_id_from_session_cookie(request)
+    user_id: Final = request_user_id or await _session_cookie_user_id(request)
     if user_id is None:
         return _redirect_to_litellm_login(request)
     if not await _user_can_reach_mcp_server(user_id, mcp_server.server_id):
@@ -998,7 +1020,7 @@ async def _managed_authorization_scope(
         request
     )
     session_user: Final = (
-        _session_cookie_user_id(request) if authorized_user_id is None and not gateway_credential else None
+        await _session_cookie_user_id(request) if authorized_user_id is None and not gateway_credential else None
     )
     scope_user_id: Final = authorized_user_id or (
         await authorize_oauth_credential_request(request, server.server_id)
@@ -1026,6 +1048,17 @@ async def _managed_authorization_scope(
         else None
     )
     return selected_scope, scope_user_id
+
+
+async def _hydrate_bridge_shared_client(mcp_server: MCPServer, request: Request) -> None:
+    """Whichever worker served ``/register`` persisted the bridge's shared gateway client; a worker
+    whose catalog snapshot predates that write still holds no ``client_id``, so the gateway-callback
+    arms load the persisted client before presenting one upstream. Callers that carry their own
+    client (a gateway-minted ephemeral client sealed into the state or the code) skip this, since the
+    upstream bound their code to that client."""
+    if not mcp_server.is_dcr_bridge or mcp_server.client_id:
+        return
+    await _reuse_persisted_dcr_client_if_available(mcp_server, f"{get_request_base_url(request)}/callback")
 
 
 async def authorize_with_server(
@@ -1069,6 +1102,8 @@ async def authorize_with_server(
         # calling this for its enforcement side effect, then falls through to the gateway
         # /callback flow below, which reads the original code_challenge names.
         bridge_challenge, bridge_method = _require_s256_pkce(code_challenge, code_challenge_method)
+        if ephemeral_dcr_client is None:
+            await _hydrate_bridge_shared_client(resolved_server, request)
         # A gateway-minted ephemeral client is registered against {base}/callback, so its
         # flow must run the short-circuit arm; the relay arm is only for clients that
         # registered themselves through the front door and hold their own redirect binding.
@@ -1233,6 +1268,7 @@ async def exchange_token_with_server(
     refresh_token: str | None = None,
     scope: str | None = None,
     client_token_endpoint_auth_method: MCPTokenEndpointAuthMethod | None = None,
+    sealed_client: bool = False,
 ):
     raise_if_not_oauth2(mcp_server)
     if grant_type not in ("authorization_code", "refresh_token"):
@@ -1282,11 +1318,14 @@ async def exchange_token_with_server(
     # recovered from a sealed code) must authenticate the way its own registration was granted,
     # not the way the server row is configured; callers that carry no method keep the row's method
     # as before.
-    resolved_client_id: Final = resolved_server.client_id if resolved_server.client_id else client_id
-    resolved_client_secret: Final = resolved_server.client_secret if resolved_server.client_id else client_secret
+    if not sealed_client:
+        await _hydrate_bridge_shared_client(resolved_server, request)
+    server_client_wins: Final = bool(resolved_server.client_id) and not sealed_client
+    resolved_client_id: Final = resolved_server.client_id if server_client_wins else client_id
+    resolved_client_secret: Final = resolved_server.client_secret if server_client_wins else client_secret
     resolved_auth_method: Final = (
         resolved_server.token_endpoint_auth_method
-        if resolved_server.client_id
+        if server_client_wins
         else (client_token_endpoint_auth_method or resolved_server.token_endpoint_auth_method)
     )
     try:
@@ -1830,10 +1869,13 @@ async def _persist_dcr_client_registration(
     empty and otherwise adopts whatever a concurrent registration persisted first.
 
     The client-forwarded token modes (``true_passthrough`` / ``oauth_delegate``) are skipped
-    unconditionally: the caller holds the upstream token and the gateway must hold no OAuth
-    client identity for these servers. Persisting here would stamp ``oauth2_flow`` and a
-    ``client_id`` onto a server whose mode promises the gateway stores nothing, making a
-    fresh pass-through server read as gateway-authorized.
+    unless the server is a DCR bridge: the caller holds the upstream token and the gateway holds
+    no OAuth client identity for these servers, so persisting would stamp ``oauth2_flow`` and a
+    ``client_id`` onto a server whose mode promises the gateway stores nothing. A DCR bridge is
+    the exception by design: its gateway-hosted sign-in registers one shared client bound to the
+    gateway ``/callback`` (the same app an admin may enter by hand), and that client must survive
+    for every later caller's authorize and token exchange. ``oauth2_flow`` is still never stamped
+    on a client-forwarded row.
 
     ``redirect_uris`` records what the client is bound to so a later origin change can be
     detected as a positive mismatch and trigger re-registration instead of stranding the
@@ -1842,7 +1884,7 @@ async def _persist_dcr_client_registration(
     ``update_mcp_server`` merges credential blobs: a re-registered public client must not
     inherit the previous client's secret or auth method.
     """
-    if mcp_server.is_client_forwarded_token:
+    if mcp_server.is_client_forwarded_token and not mcp_server.is_dcr_bridge:
         return "skipped"
 
     try:
@@ -1910,20 +1952,23 @@ async def _persist_dcr_client_registration(
         ):
             await _refresh_persisted_dcr_server(stored)
             return "reused"
+        stamped_flow: Final[Literal["authorization_code"] | None] = (
+            None if mcp_server.is_client_forwarded_token else "authorization_code"
+        )
         updated_row: Final = await update_mcp_server(
             prisma_client=prisma_client,
             data=(
                 UpdateMCPServerRequest(
                     server_id=mcp_server.server_id,
                     credentials=credentials,
-                    oauth2_flow="authorization_code",
+                    oauth2_flow=stamped_flow,
                     token_url=mcp_server.token_url,
                 )
                 if mcp_server.token_url
                 else UpdateMCPServerRequest(
                     server_id=mcp_server.server_id,
                     credentials=credentials,
-                    oauth2_flow="authorization_code",
+                    oauth2_flow=stamped_flow,
                 )
             ),
             touched_by="mcp_oauth_dcr",
@@ -2211,7 +2256,7 @@ async def register_client_with_server(
             )
         return dummy_return
 
-    bridge_relay: Final = _dcr_bridge_relays_client_registration(resolved_server)
+    bridge_relay: Final = _register_relays_bridge_client(resolved_server)
     if bridge_relay and not client_redirect_uris:
         raise HTTPException(
             status_code=400,
@@ -2310,7 +2355,7 @@ async def authorize_mcp_session(
         code_challenge=code_challenge,
         code_challenge_method=code_challenge_method,
         response_type=response_type,
-        session_user_id=_session_cookie_user_id(request),
+        session_user_id=await _session_cookie_user_id(request),
         resource=resource,
         scope=scope,
     )
@@ -2342,7 +2387,7 @@ async def authorize(
                 code_challenge=code_challenge,
                 code_challenge_method=code_challenge_method,
                 response_type=response_type,
-                session_user_id=_session_cookie_user_id(request),
+                session_user_id=await _session_cookie_user_id(request),
                 lookup_consent_teams=lookup_consent_teams,
             )
         return aggregate_authorize(
@@ -2353,7 +2398,7 @@ async def authorize(
             code_challenge=code_challenge,
             code_challenge_method=code_challenge_method,
             response_type=response_type,
-            session_user_id=_session_cookie_user_id(request),
+            session_user_id=await _session_cookie_user_id(request),
             resource=resource,
             scope=scope,
         )
@@ -2511,7 +2556,7 @@ async def authorize_flow(request: Request, flow: str) -> Response:
     return await describe_connect_flow(
         request=request,
         flow_handle=flow,
-        session_user_id=_session_cookie_user_id(request),
+        session_user_id=await _session_cookie_user_id(request),
         lookup_vendor_credential=_vendor_credential_state,
         lookup_server_reachability=_user_can_reach_mcp_server,
     )
@@ -2537,7 +2582,7 @@ async def authorize_complete(
     return await complete_connect_flow(
         request=request,
         flow_handle=flow,
-        session_user_id=_session_cookie_user_id(request),
+        session_user_id=await _session_cookie_user_id(request),
         cache=user_api_key_cache,
         delivery=delivery,
         team_id=team_id,

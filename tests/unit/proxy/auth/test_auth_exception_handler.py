@@ -1,5 +1,7 @@
 import asyncio
 import json
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -29,6 +31,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INVALID_VIRTUAL_KEY_ERROR_MARKER
 from litellm.exceptions import BudgetExceededError
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import (
     ModelAccessDeniedProxyException,
     ProxyErrorTypes,
@@ -810,6 +813,65 @@ def _http_request(client_host: str | None = "10.1.2.3", headers: dict[str, str] 
             "headers": [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()],
         }
     )
+
+
+class _AuthFailureRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.data: dict[str, object] | None = None
+        self.error: Exception | None = None
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict[str, object],
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> HTTPException | None:
+        self.data = dict(request_data)
+        self.error = original_exception
+        return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_data", [[], None, "metadata", 1, True])
+@pytest.mark.parametrize("error_kind", ["auth", "budget", "database"])
+async def test_auth_error_preserves_classification_with_non_object_context(
+    monkeypatch: pytest.MonkeyPatch, request_data: object, error_kind: str
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(litellm, "budget_exceeded_status_code", 429)
+    errors: Final = {
+        "auth": HTTPException(status_code=401, detail="Invalid API key"),
+        "budget": BudgetExceededError(current_cost=2, max_budget=1),
+        "database": httpx.ConnectError("Database unavailable"),
+    }
+    error: Final = errors[error_kind]
+    expected: Final = _as_proxy_exception(error)
+    recorder: Final = _AuthFailureRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(proxy_server, "general_settings", {"allow_requests_on_db_unavailable": False})
+
+    with pytest.raises(ProxyException) as exc_info:
+        await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
+            error,
+            _http_request(headers={"user-agent": "shape-regression"}),
+            request_data,
+            "/key/info",
+            None,
+            "sk-test",
+        )
+
+    assert exc_info.value.code == expected.code
+    assert exc_info.value.type == expected.type
+    assert exc_info.value.message == expected.message
+    assert recorder.error is error
+    assert recorder.data is not None
+    metadata: Final = recorder.data["metadata"]
+    assert isinstance(metadata, Mapping)
+    assert metadata["requester_ip_address"] == "10.1.2.3"
+    assert metadata["user_agent"] == "shape-regression"
 
 
 @pytest.mark.asyncio

@@ -1,9 +1,12 @@
+import json
 from collections.abc import Mapping
 from typing import Final
 
+import httpx
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
     ir_to_systemone_request,
     ir_to_systemone_response,
@@ -15,10 +18,13 @@ from litellm.types.decisions import (
     MAX_DECISION_QUESTIONS,
     DecisionsIRRefusal,
     DecisionsIRRequest,
+    DecisionsIRScoreAnswer,
     DecisionsRequestBody,
     OpenAIDecisionRequestBody,
     UnsupportedDecisionsRequest,
 )
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 
 _SYSTEMONE_BODY: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
 _OPENAI_BODY: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAdapter(OpenAIDecisionRequestBody)
@@ -191,6 +197,28 @@ def test_missing_or_mismatched_systemone_answers_are_refusals_left_out_of_the_re
     assert tuple(ir_to_systemone_response(parsed, ir).answers) == ("damaged",)
 
 
+@pytest.mark.parametrize(
+    ("payload", "field"),
+    [
+        ({"model": "jev-latest", "usage": {"input_tokens": 10, "output_tokens": 1}}, ("answers",)),
+        (
+            {"model": "jev-latest", "answers": {"damaged": None}, "usage": {"input_tokens": 10, "output_tokens": 1}},
+            ("answers", "damaged"),
+        ),
+    ],
+    ids=["missing_answers", "null_answer"],
+)
+def test_a_malformed_systemone_response_names_the_field_at_fault(
+    payload: Mapping[str, object], field: tuple[str, ...]
+) -> None:
+    ir: Final = systemone_request_to_ir(_SYSTEMONE_BODY.validate_python(_SYSTEMONE_REQUEST))
+
+    with pytest.raises(ValidationError) as error:
+        parse_systemone_response(payload, ir)
+
+    assert [item["loc"] for item in error.value.errors()] == [field]
+
+
 def test_each_media_kind_is_gated_by_its_own_support_flag() -> None:
     audio: Final = ["data:audio/wav;base64,YQ=="]
     videos: Final = ["data:video/mp4;base64,YQ=="]
@@ -264,3 +292,112 @@ def test_a_box_answer_without_confidence_reaches_the_caller_unchanged() -> None:
     response: Final = ir_to_systemone_response(parse_systemone_response(payload, ir), ir)
 
     assert response.model_dump(mode="json") == payload
+
+
+@pytest.mark.parametrize("provider", ("nace", "openrouter", "fireworks_ai", "typesafe"))
+@pytest.mark.parametrize("legend", (["low", "high"], {"0": "low", "1": "high"}))
+def test_score_legends_preserve_labels_probabilities_and_metadata(provider: str, legend: object) -> None:
+    config: Final = ProviderConfigManager.get_provider_decisions_config("drex-v2.0", LlmProviders(provider))
+    assert config is not None
+    request: Final = systemone_request_to_ir(
+        DecisionsRequestBody.model_validate(
+            {
+                "state": {"text": "The order arrived damaged"},
+                "questions": {"severity": {"type": "score", "criteria": ["low", "high"]}},
+            }
+        )
+    )
+    payload: Final = {
+        "model": "drex-v2.0",
+        "answers": {
+            "severity": {
+                "type": "score",
+                "score": 0.75,
+                "confidence": 0.8,
+                "legend": legend,
+                "probabilities": {"0": 0.25, "1": 0.75},
+            }
+        },
+        "usage": {"input_tokens": 20, "output_tokens": 30},
+        "request_id": "test-request",
+        "evaluation_time_ms": 8.5,
+    }
+    original: Final = json.dumps(payload)
+    response: Final = config.parse_response(payload, request)
+    answer: Final = response.answers[0]
+    assert isinstance(answer, DecisionsIRScoreAnswer)
+    assert (answer.score, answer.confidence) == (0.75, 0.8)
+    assert tuple((item.value, item.label, item.probability) for item in answer.probabilities) == (
+        (0, "low", 0.25),
+        (1, "high", 0.75),
+    )
+    assert response.model == payload["model"]
+    assert (response.usage.input_tokens, response.usage.output_tokens) == (20, 30)
+    assert response.extra == {"request_id": "test-request", "evaluation_time_ms": 8.5}
+    assert json.dumps(payload) == original
+
+
+@pytest.mark.parametrize(
+    "payload", ([], {"answers": []}, {"answers": {"a": None}}, {"answers": {"a": {"type": "score", "legend": [1]}}})
+)
+@pytest.mark.parametrize("provider", ("nace", "openrouter", "fireworks_ai", "typesafe"))
+def test_invalid_provider_response_is_an_api_error(payload: object, provider: str) -> None:
+    config: Final = ProviderConfigManager.get_provider_decisions_config("drex-v2.0", LlmProviders(provider))
+    assert config is not None
+    request: Final = systemone_request_to_ir(
+        DecisionsRequestBody.model_validate(
+            {
+                "state": "text",
+                "questions": {"a": {"type": "score", "criteria": ["low", "high"]}},
+            }
+        )
+    )
+    with pytest.raises(BaseLLMException, match="unexpected response") as error:
+        config.transform_decisions_response("drex-v2.0", provider, httpx.Response(200, json=payload), request)
+    assert error.value.status_code == 500
+
+
+@pytest.mark.parametrize(
+    ("probabilities", "expected"),
+    (
+        ({}, ()),
+        ({"1": 0.8}, ((1, "medium", 0.8),)),
+        ({"0": 0.0, "1": 0.8}, ((0, "low", 0.0), (1, "medium", 0.8))),
+        ({"2": 0.0}, ((2, "high", 0.0),)),
+    ),
+    ids=("empty", "missing", "explicit_zero", "only_zero"),
+)
+def test_score_probabilities_preserve_missing_entries_and_explicit_zeros(
+    probabilities: Mapping[str, float], expected: tuple[tuple[int, str, float], ...]
+) -> None:
+    ir: Final = systemone_request_to_ir(
+        _SYSTEMONE_BODY.validate_python(
+            {
+                "state": "Classify the fixture.",
+                "questions": {"score": {"type": "score", "criteria": ["low", "medium", "high"]}},
+            }
+        )
+    )
+    payload: Final = {
+        "model": "fixture",
+        "answers": {
+            "score": {
+                "type": "score",
+                "score": 1,
+                "confidence": 0.8,
+                "legend": {"0": "low", "1": "medium", "2": "high"},
+                "probabilities": probabilities,
+            }
+        },
+        "usage": {"input_tokens": 0, "output_tokens": 0},
+    }
+
+    response: Final = parse_systemone_response(payload, ir)
+    answer: Final = response.answers[0]
+
+    assert isinstance(answer, DecisionsIRScoreAnswer)
+    assert tuple((item.value, item.label, item.probability) for item in answer.probabilities) == expected
+    assert (
+        ir_to_systemone_response(response, ir).model_dump(mode="json")["answers"]["score"]["probabilities"]
+        == probabilities
+    )

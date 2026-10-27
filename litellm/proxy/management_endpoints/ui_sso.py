@@ -55,6 +55,7 @@ from litellm.constants import (
     CLI_SSO_CLAIM_MAX_SCALAR_LENGTH,
     CLI_SSO_SESSION_CACHE_KEY_PREFIX,
     CLI_SSO_SESSION_TTL_SECONDS,
+    CP_RETURN_TO_COOKIE_PREFIX,
     LITELLM_CLI_SOURCE_IDENTIFIER,
     LITELLM_UI_SESSION_DURATION,
     MAX_SPENDLOG_ROWS_TO_QUERY,
@@ -89,6 +90,7 @@ from litellm.proxy._types import (
     Member,
     NewTeamRequest,
     NewUserRequest,
+    NewUserRequestTeam,
     NewUserResponse,
     ProxyErrorTypes,
     ProxyException,
@@ -118,7 +120,11 @@ from litellm.proxy.common_utils.html_forms.jwt_display_template import (
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
-from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+from litellm.proxy.management_endpoints.internal_user_endpoints import (
+    add_new_user_to_default_team,
+    check_if_default_team_set,
+    new_user,
+)
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO, LiteLLMGoogleSSO, create_generic_sso_provider
 from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
     id_jag_assertion_capture_gap,
@@ -146,7 +152,7 @@ from litellm.proxy.utils import (
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SSOConfigRepository
 from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.user_repository import UserRepository
+from litellm.repositories.user_repository import UserRepository, free_sso_user_creation
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.ui_sso import *  # noqa: F403
@@ -270,6 +276,12 @@ _TEAMLESS_CLI_SSO_TEAM_DETAIL: Final = CliSsoTeamDetail(team_models=())
 
 class _CustomSsoCall(Protocol):
     async def __call__(self, sso_response: object) -> SSOUserDefinedValues | None: ...
+
+
+def _configured_custom_sso() -> _CustomSsoCall | None:
+    from litellm.proxy.proxy_server import user_custom_sso
+
+    return user_custom_sso
 
 
 class _ServicePrincipalAssignment(Protocol):
@@ -1045,6 +1057,11 @@ class _UserinfoFallbackCapableSSO(Protocol):
     ) -> CustomOpenID | None: ...
 
 
+class _GenericSSOClient(_UserinfoFallbackCapableSSO, Protocol):
+    @property
+    def refresh_token(self) -> str | None: ...
+
+
 async def _verify_generic_sso_or_fall_back_to_id_token(
     generic_sso: _UserinfoFallbackCapableSSO,
     request: Request,
@@ -1068,25 +1085,8 @@ async def _verify_generic_sso_or_fall_back_to_id_token(
         )
 
 
-async def _raise_if_sso_exceeds_free_user_limit(premium_user: bool, prisma_client: PrismaClient | None) -> None:
-    """Free tier allows SSO for up to 5 billable users; beyond that requires an Enterprise license."""
-    if premium_user is True:
-        return
-    if prisma_client is None:
-        raise ProxyException(
-            message=CommonProxyErrors.db_not_connected_error.value,
-            type=ProxyErrorTypes.auth_error,
-            param="premium_user",
-            code=status.HTTP_403_FORBIDDEN,
-        )
-    billable_users: Final = await UserRepository(prisma_client).count_billable_users()
-    if billable_users and billable_users > 5:
-        raise ProxyException(
-            message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You configured SSO (one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, `GENERIC_CLIENT_ID`, or SAML) in your env. Please unset it",
-            type=ProxyErrorTypes.auth_error,
-            param="premium_user",
-            code=status.HTTP_403_FORBIDDEN,
-        )
+class _SSOUserAdmissionError(ProxyException):
+    pass
 
 
 @router.get("/sso/key/generate", tags=["experimental"], include_in_schema=False)
@@ -1106,8 +1106,6 @@ async def google_login(
     from litellm.proxy.proxy_server import (
         cli_sso_session_cache,
         general_settings,
-        premium_user,
-        prisma_client,
         saml_sso_cache,
         user_custom_ui_sso_sign_in_handler,
     )
@@ -1121,15 +1119,6 @@ async def google_login(
     is_cli_sso_login: Final = source == LITELLM_CLI_SOURCE_IDENTIFIER
     if admin_ui_is_disabled and not is_cli_sso_login:
         return admin_ui_disabled()
-
-    ####### Check if user is a Enterprise / Premium User #######
-    if (
-        microsoft_client_id is not None
-        or google_client_id is not None
-        or generic_client_id is not None
-        or SAMLAuthHandler.is_saml_configured()
-    ):
-        await _raise_if_sso_exceeds_free_user_limit(premium_user, prisma_client)
 
     ####### Detect DB + MASTER KEY in .env #######
     missing_env_vars: Final = show_missing_vars_in_env()
@@ -1600,7 +1589,7 @@ async def get_generic_sso_response(
     team_mappings: Final = await _setup_team_mappings()
     generic_include_token_claims: Final = os.getenv("GENERIC_INCLUDE_TOKEN_CLAIMS", "false").lower() == "true"
 
-    def response_convertor(response: Mapping[str, object], httpx_session: object):
+    def response_convertor(response: Mapping[str, object], httpx_session: object) -> CustomOpenID:
         nonlocal received_response  # return for user debugging
         response_id_token: Final = response.get("id_token")
         response_access_token: Final = response.get("access_token")
@@ -1635,7 +1624,7 @@ async def get_generic_sso_response(
         discovery_document=discovery,
         response_convertor=response_convertor,
     )
-    generic_sso: Final = SSOProvider(
+    generic_sso: Final[_GenericSSOClient] = SSOProvider(
         client_id=generic_client_id,
         client_secret=generic_client_secret,
         redirect_uri=redirect_url,
@@ -1734,9 +1723,7 @@ async def get_generic_sso_response(
             access_token_str: str | None = combined_response.get("access_token")
         else:
             result = await _verify_generic_sso_or_fall_back_to_id_token(
-                generic_sso=cast(  # cast-ok: fastapi-sso builds the provider class dynamically via create_provider
-                    _UserinfoFallbackCapableSSO, generic_sso
-                ),
+                generic_sso=generic_sso,
                 request=request,
                 token_exchange_params=token_exchange_params,
                 additional_headers=additional_generic_sso_headers_dict,
@@ -1957,6 +1944,8 @@ async def get_user_info_from_db(
         )
 
         return user_info
+    except _SSOUserAdmissionError:
+        raise
     except Exception as e:
         if resolved_by_database_only and PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e):
             verbose_proxy_logger.exception("SSO login failed: the database could not resolve the account: %s", e)
@@ -2280,9 +2269,7 @@ async def auth_callback(request: Request, state: str | None = None):
             sso_assertion=sso_assertion,
         )
 
-    # Control-plane cross-origin: read return_to from cookie.
-    # Starlette's cookie_parser already handles RFC 2109 unquoting.
-    cp_return_to: Final[str | None] = request.cookies.get("litellm_cp_return_to")
+    cp_return_to: Final[str | None] = read_return_to_cookie(request)
 
     return await SSOAuthenticationHandler.get_redirect_response_from_openid(
         result=result,
@@ -2324,7 +2311,6 @@ async def saml_callback(request: Request):
         general_settings,
         jwt_handler,
         master_key,
-        premium_user,
         prisma_client,
         saml_sso_cache,
     )
@@ -2347,8 +2333,6 @@ async def saml_callback(request: Request):
         raise HTTPException(status_code=400, detail="Missing SAMLResponse in callback request.")
 
     user, retained = await SAMLAuthHandler.handle_acs(request=request, cache=saml_sso_cache, post_data=post_data)
-
-    await _raise_if_sso_exceeds_free_user_limit(premium_user, prisma_client)
 
     ui_access_mode: Final = general_settings.get("ui_access_mode", None)
     relay_state: Final = post_data.get("RelayState")
@@ -2375,9 +2359,7 @@ async def _build_cli_sso_user_defined_values(
     result: OpenID | dict,
     parsed_openid_result: ParsedOpenIDResult,
 ) -> SSOUserDefinedValues | None:
-    from litellm.proxy.proxy_server import user_custom_sso
-
-    custom_sso_handler: Final[_CustomSsoCall | None] = user_custom_sso
+    custom_sso_handler: Final = _configured_custom_sso()
     user_id: Final = parsed_openid_result.get("user_id")
     if custom_sso_handler is not None:
         if inspect.iscoroutinefunction(custom_sso_handler):
@@ -2463,10 +2445,8 @@ async def _complete_cli_sso_callback_session(
 ):
     from fastapi.responses import HTMLResponse
 
-    from litellm.proxy.proxy_server import user_custom_sso
-
     user_id: Final = parsed_openid_result.get("user_id")
-    if user_custom_sso is None:
+    if _configured_custom_sso() is None:
         _require_sso_user_id(user_id)
     user_email: Final = parsed_openid_result.get("user_email")
     user_info: Final = await get_user_info_from_db(
@@ -2817,12 +2797,66 @@ async def insert_sso_user(
     if result_openid and hasattr(result_openid, "provider"):
         new_user_request.metadata = {"auth_provider": getattr(result_openid, "provider")}
 
-    response: Final = await new_user(
-        data=new_user_request,
+    from litellm.proxy.proxy_server import premium_user
+
+    with free_sso_user_creation(new_user_request.user_id, enabled=premium_user is not True):
+        try:
+            return await new_user(
+                data=new_user_request,
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+        except ProxyException as error:
+            if premium_user is True:
+                raise
+            raise _SSOUserAdmissionError(
+                message=error.message, type=error.type, param=error.param, code=error.code
+            ) from error
+
+
+DefaultTeamJoin: TypeAlias = Callable[
+    [LiteLLM_UserTable, Sequence[str | NewUserRequestTeam], PrismaClient], Awaitable[None]
+]
+
+
+async def _join_default_teams_as_admin(
+    user: LiteLLM_UserTable, teams: Sequence[str | NewUserRequestTeam], prisma_client: PrismaClient
+) -> None:
+    await add_new_user_to_default_team(
+        user_id=user.user_id,
+        user_email=user.user_email,
         user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        teams=teams,
+        prisma_client=prisma_client,
     )
 
-    return response
+
+def _default_teams_not_joined(user: LiteLLM_UserTable) -> tuple[str | NewUserRequestTeam, ...]:
+    joined: Final = frozenset(user.teams)
+    return tuple(
+        team
+        for team in check_if_default_team_set() or ()
+        if (team if isinstance(team, str) else team.team_id) not in joined
+    )
+
+
+async def _insert_sso_user_or_find_concurrent_insert(
+    insert: Awaitable[NewUserResponse],
+    user_id: str | None,
+    prisma_client: PrismaClient,
+    join_default_teams: DefaultTeamJoin = _join_default_teams_as_admin,
+) -> NewUserResponse | LiteLLM_UserTable:
+    try:
+        return await insert
+    except Exception:
+        users: Final = UserRepository(prisma_client, use_writer=True)
+        concurrent_insert: Final = None if user_id is None else await users.find_by_id(user_id)
+        if concurrent_insert is None:
+            raise
+        unjoined: Final = _default_teams_not_joined(concurrent_insert)
+        if not unjoined:
+            return concurrent_insert
+        await join_default_teams(concurrent_insert, unjoined, prisma_client)
+        return await users.find_by_id(concurrent_insert.user_id) or concurrent_insert
 
 
 @router.get(
@@ -3039,15 +3073,55 @@ def _persist_return_to_cookie(response: Response, return_to: str | None, request
         safe: Final = _is_same_origin_return_path(return_to) or SSOAuthenticationHandler.validate_return_to(return_to)
     except HTTPException:
         return  # a non-matching absolute return_to is ignored, never blocks sign-in
-    if safe:
+    sealed: Final = _seal_return_to(return_to) if safe else None
+    if sealed is not None:
         response.set_cookie(
             key="litellm_cp_return_to",
-            value=return_to,
+            value=sealed,
             max_age=600,
             httponly=True,
             samesite="lax",
             secure=IPAddressUtils.is_request_https(request),
         )
+
+
+def _seal_return_to(return_to: str) -> str | None:
+    """``return_to`` sealed under the salt key as an opaque cookie value. The plaintext URL carries the
+    client's loopback ``redirect_uri`` (``http://127.0.0.1:<port>/...`` for Codex or Claude Code), which
+    edge firewalls read as an SSRF probe and block before the proxy sees the request. None when there
+    is no salt or master key yet, so the login entrypoint still renders."""
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_bearer_token
+
+    try:
+        return encrypt_bearer_token(return_to, prefix=CP_RETURN_TO_COOKIE_PREFIX)
+    except ValueError:
+        return None
+
+
+def _clear_rejected_return_to_cookie(response: Response, request: Request) -> None:
+    """Expire a ``litellm_cp_return_to`` that ``read_return_to_cookie`` rejected (plaintext, stale, or sealed
+    under another key) so the browser stops replaying it until it expires on its own."""
+    if "litellm_cp_return_to" in request.cookies:
+        response.delete_cookie("litellm_cp_return_to")
+
+
+def _dashboard_redirect_response(request: Request, jwt_token: str, litellm_dashboard_ui: str) -> RedirectResponse:
+    """The post-SSO dashboard landing, used when there is no honored ``return_to``. Sets the session
+    cookie and expires a ``litellm_cp_return_to`` the reader rejected."""
+    verbose_proxy_logger.info("Redirecting to %s", litellm_dashboard_ui)
+    redirect_response: Final = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
+    set_session_token_cookie(redirect_response, request, jwt_token)
+    _clear_rejected_return_to_cookie(redirect_response, request)
+    return redirect_response
+
+
+def read_return_to_cookie(request: Request) -> str | None:
+    """The ``return_to`` this proxy sealed into ``litellm_cp_return_to``, or None when the cookie is
+    missing, was not sealed here, or was tampered with."""
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_bearer_token
+
+    sealed: Final = request.cookies.get("litellm_cp_return_to")
+    return None if sealed is None else decrypt_bearer_token(sealed, prefix=CP_RETURN_TO_COOKIE_PREFIX)
 
 
 def _is_blank_sso_user_id(user_id: object) -> bool:
@@ -3471,11 +3545,14 @@ class SSOAuthenticationHandler:
             else:
                 verbose_proxy_logger.info("user not in DB, inserting user into LiteLLM DB")
                 # user not in DB, insert User into LiteLLM DB
-                user_info = await insert_sso_user(
-                    result_openid=result,
-                    user_defined_values=user_defined_values,
+                user_info = await _insert_sso_user_or_find_concurrent_insert(
+                    insert=insert_sso_user(result_openid=result, user_defined_values=user_defined_values),
+                    user_id=None if user_defined_values is None else user_defined_values.get("user_id"),
+                    prisma_client=prisma_client,
                 )
             return user_info
+        except _SSOUserAdmissionError:
+            raise
         except Exception as e:
             if (
                 user_info is None
@@ -3735,7 +3812,6 @@ class SSOAuthenticationHandler:
             proxy_logging_obj,
             redis_usage_cache,
             user_api_key_cache,
-            user_custom_sso,
         )
         from litellm.proxy.utils import get_prisma_client_or_throw
         from litellm.types.proxy.ui_sso import ReturnedUITokenObject
@@ -3760,7 +3836,7 @@ class SSOAuthenticationHandler:
         # But if it is, we want their models preferences
         user_defined_values: SSOUserDefinedValues | None = None
 
-        custom_sso_handler: Final[_CustomSsoCall | None] = user_custom_sso
+        custom_sso_handler: Final = _configured_custom_sso()
         if custom_sso_handler is not None:
             if inspect.iscoroutinefunction(custom_sso_handler):
                 user_defined_values = await custom_sso_handler(result)
@@ -3924,10 +4000,7 @@ class SSOAuthenticationHandler:
 
         if user_id is not None and isinstance(user_id, str):
             litellm_dashboard_ui += "?login=success"
-        verbose_proxy_logger.info("Redirecting to %s", litellm_dashboard_ui)
-        redirect_response: Final = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
-        set_session_token_cookie(redirect_response, request, jwt_token)
-        return redirect_response
+        return _dashboard_redirect_response(request, jwt_token, litellm_dashboard_ui)
 
     @staticmethod
     @with_service_target(SSO_SESSIONS_TARGET)
