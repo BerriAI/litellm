@@ -28,6 +28,34 @@ if TYPE_CHECKING:
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
+def copilot_cache_token_counts(usage: Mapping) -> tuple[int, int]:
+    copilot_usage: Final = usage.get("copilot_usage")
+    if not isinstance(copilot_usage, Mapping):
+        return 0, 0
+    token_details: Final = copilot_usage.get("token_details")
+    if not isinstance(token_details, list):
+        return 0, 0
+    cache_read: Final = sum(
+        entry["token_count"]
+        for entry in token_details
+        if isinstance(entry, Mapping)
+        and entry.get("token_type") == "cache_read"
+        and isinstance(entry.get("token_count"), int)
+        and not isinstance(entry.get("token_count"), bool)
+        and entry["token_count"] >= 0
+    )
+    cache_write: Final = sum(
+        entry["token_count"]
+        for entry in token_details
+        if isinstance(entry, Mapping)
+        and entry.get("token_type") == "cache_write"
+        and isinstance(entry.get("token_count"), int)
+        and not isinstance(entry.get("token_count"), bool)
+        and entry["token_count"] >= 0
+    )
+    return cache_read, cache_write
+
+
 class GithubCopilotConfig(OpenAIConfig):
     def __init__(
         self,
@@ -231,6 +259,17 @@ class GithubCopilotConfig(OpenAIConfig):
             normalized["completion_tokens"] = usage["output_tokens"]
         if "total_tokens" not in normalized:
             normalized["total_tokens"] = normalized.get("prompt_tokens", 0) + normalized.get("completion_tokens", 0)
+        cache_read, cache_write = copilot_cache_token_counts(usage)
+        if cache_read and "cache_read_input_tokens" not in normalized:
+            normalized["cache_read_input_tokens"] = cache_read
+        if cache_write and "cache_creation_input_tokens" not in normalized:
+            normalized["cache_creation_input_tokens"] = cache_write
+        if cache_read:
+            existing_details: Final = normalized.get("prompt_tokens_details")
+            details: Final = dict(existing_details) if isinstance(existing_details, Mapping) else {}
+            if not details.get("cached_tokens"):
+                details["cached_tokens"] = cache_read
+            normalized["prompt_tokens_details"] = details
         return normalized
 
     @classmethod
@@ -296,7 +335,11 @@ class GithubCopilotConfig(OpenAIConfig):
         Repair the OpenAI-SDK-parsed response on the handler path that bypasses
         transform_response. See: https://github.com/BerriAI/litellm/issues/30927
         """
-        return self._synthesize_choices_for_anthropic_native(parsed_response)
+        repaired: Final = self._synthesize_choices_for_anthropic_native(parsed_response)
+        usage: Final = repaired.get("usage")
+        if repaired.get("choices") and isinstance(usage, dict) and "copilot_usage" in usage:
+            return {**repaired, "usage": self._normalize_anthropic_usage(usage)}
+        return repaired
 
     def transform_response(
         self,
@@ -337,6 +380,15 @@ class GithubCopilotConfig(OpenAIConfig):
                 headers=raw_response.headers,
                 content=json.dumps(synthesized).encode(),
             )
+        else:
+            usage: Final = response_json.get("usage")
+            if isinstance(usage, dict) and "copilot_usage" in usage:
+                rewritten: Final = {**response_json, "usage": self._normalize_anthropic_usage(usage)}
+                raw_response = httpx.Response(  # rebind-ok: replaces the raw body with the normalized usage payload
+                    status_code=raw_response.status_code,
+                    headers=raw_response.headers,
+                    content=json.dumps(rewritten).encode(),
+                )
 
         return super().transform_response(
             model=model,
