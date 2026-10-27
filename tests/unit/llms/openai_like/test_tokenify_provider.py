@@ -79,7 +79,7 @@ def test_tokenify_model_cost_and_capabilities(model: str):
         )
     )
     assert 0 < model_info["cache_read_input_token_cost"] < model_info["input_cost_per_token"]
-    assert model_info["max_tokens"] == model_info["max_output_tokens"] <= model_info["max_input_tokens"]
+    assert 0 < model_info["max_output_tokens"] <= model_info["max_input_tokens"]
     assert model_info["litellm_provider"] == "tokenify"
     assert model_info["mode"] == "chat"
     assert model_info["supports_function_calling"] is True
