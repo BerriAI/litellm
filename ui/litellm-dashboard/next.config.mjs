@@ -8,14 +8,17 @@ const __dirname = path.dirname(__filename);
 const devProxyUrl = process.env.LENS_DEV_PROXY_URL;
 
 const nextConfig = {
+  transpilePackages: ["@litellm/lens-ui"],
   ...(devProxyUrl
     ? {
         async rewrites() {
           return {
             beforeFiles: [
+              // Every dashboard HTTP client sends Accept: application/json; page loads and RSC
+              // fetches do not. That is what keeps GET /lens (API) apart from /lens (page) in dev.
               {
                 source: "/:path*",
-                has: [{ type: "header", key: "content-type", value: "application/json.*" }],
+                has: [{ type: "header", key: "accept", value: "application/json.*" }],
                 destination: `${devProxyUrl}/:path*`,
               },
               { source: "/ui/:path*", destination: "/:path*" },

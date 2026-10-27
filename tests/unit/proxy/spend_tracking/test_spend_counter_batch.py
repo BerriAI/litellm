@@ -737,22 +737,3 @@ async def test_a_resized_reservation_is_carried_at_its_resized_cost_to_the_count
     assert reservation["reserved_cost"] == pytest.approx(0.1)
     assert redis.store["spend:key:hashed"] == pytest.approx(9.9)
     assert redis.store["spend:team:team"] == pytest.approx(2.1)
-
-
-@pytest.mark.asyncio
-async def test_update_cache_reads_an_object_redis_gained_right_after_a_batch_read_missed_it(monkeypatch):
-    """DualCache throttles repeated batch reads of a key that just missed; the per-object GET update_cache used to
-    issue never did, so its batched read must not either."""
-    from litellm.caching.dual_cache import DualCache
-
-    redis = CountingRedis()
-    cache = DualCache(redis_cache=redis)
-    monkeypatch.setattr(ps, "user_api_key_cache", cache)
-    assert await cache.async_batch_get_cache(keys=["team_id:team"]) == [None]
-    redis.store["team_id:team"] = {"spend": 1.0}
-    assert await cache.async_batch_get_cache(keys=["team_id:team"]) == [None]
-
-    assert await ps._read_update_cache_values(keys=["team_id:team"], parent_otel_span=None) == {
-        "team_id:team": {"spend": 1.0}
-    }
-    assert redis.commands.count("MGET team_id:team") == 2

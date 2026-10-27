@@ -46,13 +46,11 @@ class TestJSONProviderLoader:
         config = config_class()
 
         # Test API info resolution
-        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        api_base, api_key = config.get_openai_compatible_provider_info(None, None)
         assert api_base == "https://api.publicai.co/v1"
 
         # Test with custom base
-        api_base, api_key = config._get_openai_compatible_provider_info(
-            "https://custom.api.com", "test-key"
-        )
+        api_base, api_key = config.get_openai_compatible_provider_info("https://custom.api.com", "test-key")
         assert api_base == "https://custom.api.com"
         assert api_key == "test-key"
 
@@ -213,12 +211,10 @@ class TestPinstripes:
         config_class = create_config_class(provider)
         config = config_class()
 
-        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        api_base, api_key = config.get_openai_compatible_provider_info(None, None)
         assert api_base == "https://pinstripes.io/v1"
 
-        api_base, api_key = config._get_openai_compatible_provider_info(
-            "https://custom.pinstripes.io/v1", "test-key"
-        )
+        api_base, api_key = config.get_openai_compatible_provider_info("https://custom.pinstripes.io/v1", "test-key")
         assert api_base == "https://custom.pinstripes.io/v1"
         assert api_key == "test-key"
 
@@ -277,12 +273,10 @@ class TestDarkbloom:
         config_class = create_config_class(provider)
         config = config_class()
 
-        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        api_base, api_key = config.get_openai_compatible_provider_info(None, None)
         assert api_base == "https://api.darkbloom.dev/v1"
 
-        api_base, api_key = config._get_openai_compatible_provider_info(
-            "https://custom.darkbloom.dev/v1", "test-key"
-        )
+        api_base, api_key = config.get_openai_compatible_provider_info("https://custom.darkbloom.dev/v1", "test-key")
         assert api_base == "https://custom.darkbloom.dev/v1"
         assert api_key == "test-key"
 

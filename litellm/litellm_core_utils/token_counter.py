@@ -2,10 +2,11 @@
 ## Helper utilities for token counting
 import base64
 import io
+import math
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from itertools import accumulate
-from typing import Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 import anyio
 import anyio.lowlevel
@@ -15,8 +16,11 @@ from typing_extensions import ParamSpec, TypeVar
 
 import litellm
 from litellm import verbose_logger
-from litellm._lazy_imports import _get_default_encoding
+from litellm._lazy_imports import get_default_encoding
 from litellm.constants import (
+    ANTHROPIC_IMAGE_MAX_LONG_EDGE_PX,
+    ANTHROPIC_IMAGE_MAX_PIXELS,
+    ANTHROPIC_IMAGE_PIXELS_PER_TOKEN,
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,
     DEFAULT_IMAGE_WIDTH,
@@ -25,14 +29,22 @@ from litellm.constants import (
     MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES,
     MAX_TILE_HEIGHT,
     MAX_TILE_WIDTH,
+    PDF_DATA_URL_PREFIX,
     TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
     TOKEN_COUNTER_MAX_CONCURRENT_COUNTS,
     TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, HuggingFaceTokenizer, OpenAIEncoding
+from litellm.litellm_core_utils.prompt_templates.chat_template_tools import (
+    ChatTemplateToolSection,
+    chat_template_tool_section,
+)
+from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer, OpenAIEncoding
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace
 from litellm.litellm_core_utils.url_utils import safe_get
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import get_httpx_client, header_value
 from litellm.rust_bridge.tokenizer import get_encoding
 from litellm.types.llms.anthropic import (
     AnthropicContentParamSource,
@@ -232,10 +244,10 @@ def get_image_dimensions(
     img_data = None
     if data.startswith(("http://", "https://")):
         try:
-            client: Final = _get_httpx_client()
+            client: Final = get_httpx_client()
             response: Final[httpx.Response] = safe_get(client, data)
             max_bytes: Final = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
-            content_length: Final[str | None] = response.headers.get("Content-Length")
+            content_length: Final[str | None] = header_value(response.headers, "Content-Length")
             if content_length is not None and int(content_length) > max_bytes:
                 pass  # skip download; img_data stays None
             else:
@@ -249,6 +261,10 @@ def get_image_dimensions(
         _header, encoded = data.split(",", 1)
         img_data = base64.b64decode(encoded)
 
+    return _image_dimensions_from_bytes(img_data)
+
+
+def _image_dimensions_from_bytes(img_data: bytes) -> tuple[int, int]:
     img_type: Final = get_image_type(img_data)
 
     if img_type == "png":
@@ -295,8 +311,37 @@ def get_image_dimensions(
     return DEFAULT_IMAGE_WIDTH, DEFAULT_IMAGE_HEIGHT
 
 
+def _auto_image_dimensions(data: str) -> tuple[int, int] | None:
+    """Read bounded inline image data without fetching caller-supplied URLs."""
+    if not data.startswith("data:image/"):
+        return None
+    max_bytes: Final = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
+    max_encoded_length: Final = 4 * ((max_bytes + 2) // 3)
+    # Bound allocations before splitting or decoding the data URL, including its header.
+    if max_bytes <= 0 or len(data) > max_encoded_length + 128:
+        return None
+    header, separator, encoded = data.partition(",")
+    if not separator or len(header) > 128 or not header.endswith(";base64") or len(encoded) > max_encoded_length:
+        return None
+    try:
+        image_data: Final = base64.b64decode(encoded, validate=True)
+        if len(image_data) > max_bytes or get_image_type(image_data) not in (
+            "png",
+            "gif",
+            "jpeg",
+            "webp",
+        ):
+            return None
+        width, height = _image_dimensions_from_bytes(image_data)
+    except (ValueError, TypeError, struct.error):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+
 def calculate_img_tokens(
-    data,
+    data: str,
     mode: Literal["low", "high", "auto"] = "auto",
     base_tokens: int = 85,  # openai default - https://openai.com/pricing
     use_default_image_token_count: bool = False,
@@ -306,7 +351,8 @@ def calculate_img_tokens(
 
     Args:
         data (str): The URL or base64 encoded string of the image.
-        mode (Literal["low", "high", "auto"]): The mode to use for calculating the number of tokens.
+        mode (Literal["low", "high", "auto"]): Auto uses high-detail tiles for readable inline images;
+            URLs and unreadable images keep the base estimate without network I/O.
         base_tokens (int): The base number of tokens for an image.
         use_default_image_token_count (bool): When True, will NOT make a GET request to the image URL and instead return the default image dimensions.
 
@@ -316,18 +362,19 @@ def calculate_img_tokens(
     if use_default_image_token_count:
         verbose_logger.debug("Using default image token count: %s", DEFAULT_IMAGE_TOKEN_COUNT)
         return DEFAULT_IMAGE_TOKEN_COUNT
-    if mode == "low" or mode == "auto":
+    if mode == "low":
         return base_tokens
-    elif mode == "high":
-        # Run the async function using the helper
-        width, height = get_image_dimensions(
-            data=data,
-        )
-        resized_width, resized_height = resize_image_high_res(width=width, height=height)
-        tiles_needed_high_res = calculate_tiles_needed(resized_width=resized_width, resized_height=resized_height)
-        tile_tokens: Final = (base_tokens * 2) * tiles_needed_high_res
-        total_tokens: Final = base_tokens + tile_tokens
-        return total_tokens
+    if mode not in ("auto", "high"):
+        return None
+    dimensions: Final = _auto_image_dimensions(data) if mode == "auto" else get_image_dimensions(data=data)
+    if dimensions is None:
+        return base_tokens
+    width, height = dimensions
+    resized_width, resized_height = resize_image_high_res(width=width, height=height)
+    tiles_needed_high_res = calculate_tiles_needed(resized_width=resized_width, resized_height=resized_height)
+    tile_tokens: Final = (base_tokens * 2) * tiles_needed_high_res
+    total_tokens: Final = base_tokens + tile_tokens
+    return total_tokens
 
 
 TokenCounterFunction = Callable[[str], int]
@@ -339,6 +386,9 @@ EXTRAPOLATION_SAMPLES: Final = 16
 T_ParamSpec: Final = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
 _COUNT_OFFLOAD_LIMITER: Final = anyio.lowlevel.RunVar[anyio.CapacityLimiter]("litellm_count_offload_limiter")
+_ANTHROPIC_TOOL_KEYS_MAPPED_BY_BRIDGE: Final = frozenset(
+    ("name", "input_schema", "description", "cache_control", "strict", "type", "eager_input_streaming")
+)
 
 
 def _count_offload_limiter_for_this_loop() -> anyio.CapacityLimiter:
@@ -396,6 +446,7 @@ class _MessageCountParams:
             self.tokens_per_message = 3
             self.tokens_per_name = 1
         self.count_function = _get_count_function(model, custom_tokenizer)
+        self.tool_section = chat_template_tool_section(model)
 
 
 def token_counter(
@@ -459,7 +510,9 @@ def token_counter(
         num_tokens = _count_messages(params, new_messages, use_default_image_token_count, default_token_count)
         if count_response_tokens is False:
             includes_system_message: Final = any(message.get("role", None) == "system" for message in new_messages)
-            num_tokens += _count_extra(params.count_function, tools, tool_choice, includes_system_message)
+            num_tokens += _count_extra(
+                params.count_function, tools, tool_choice, includes_system_message, params.tool_section
+            )
 
     else:
         raise ValueError("Either text or messages must be provided")
@@ -493,7 +546,8 @@ def messages_reach_token_count(
         _count_messages(params, [message], use_default_image_token_count, None) for message in new_messages
     )
     running_totals: Final = accumulate(
-        per_message_counts, initial=_count_extra(params.count_function, tools, None, includes_system_message)
+        per_message_counts,
+        initial=_count_extra(params.count_function, tools, None, includes_system_message, params.tool_section),
     )
     return any(total >= threshold for total in running_totals)
 
@@ -584,6 +638,7 @@ def _count_extra(
     tools: list[ChatCompletionToolParam] | None,
     tool_choice: ChatCompletionNamedToolChoiceParam | None,
     includes_system_message: bool,
+    tool_section: ChatTemplateToolSection | None,
 ) -> int:
     """Count extra tokens for function definitions and tool choices.
     Args:
@@ -591,26 +646,56 @@ def _count_extra(
         tools (Optional[List[ChatCompletionToolParam]]): The available tools.
         tool_choice (Optional[ChatCompletionNamedToolChoiceParam]): The tool choice.
         includes_system_message (bool): Whether the messages include a system message.
+        tool_section (Optional[ChatTemplateToolSection]): How the model's chat template renders tools, if known.
     """
+    reply_primer_tokens: Final = 3
+    tool_choice_tokens: Final = 0 if tool_section is not None else _count_tool_choice(count_function, tool_choice)
+    return (
+        reply_primer_tokens
+        + _count_tool_definitions(count_function, tools, includes_system_message, tool_section)
+        + tool_choice_tokens
+    )
 
-    num_tokens = 3  # every reply is primed with <|start|>assistant<|message|>
 
-    if tools:
-        num_tokens += count_function(_format_function_definitions(tools))
-        num_tokens += 9  # Additional tokens for function definition of tools
-    # If there's a system message and tools are present, subtract four tokens
-    if tools and includes_system_message:
-        num_tokens -= 4
-    # If tool_choice is 'none', add one token.
-    # If it's an object, add 4 + the number of tokens in the function name.
-    # If it's undefined or 'auto', don't add anything.
+def _count_tool_definitions(
+    count_function: TokenCounterFunction,
+    tools: Sequence[object] | None,
+    includes_system_message: bool,
+    tool_section: ChatTemplateToolSection | None,
+) -> int:
+    if not tools:
+        return 0
+    if tool_section is not None:
+        return _count_chat_template_tools(count_function, tools, includes_system_message, tool_section)
+    system_message_discount: Final = 4 if includes_system_message else 0
+    return count_function(_format_function_definitions(tools)) + 9 - system_message_discount
+
+
+def _count_tool_choice(
+    count_function: TokenCounterFunction,
+    tool_choice: ChatCompletionNamedToolChoiceParam | None,
+) -> int:
     if tool_choice == "none":
-        num_tokens += 1
-    elif isinstance(tool_choice, dict):
-        num_tokens += 7
-        num_tokens += count_function(str(tool_choice["function"]["name"]))
+        return 1
+    if isinstance(tool_choice, dict):
+        return 7 + count_function(str(tool_choice["function"]["name"]))
+    return 0
 
-    return num_tokens
+
+def _count_chat_template_tools(
+    count_function: TokenCounterFunction,
+    tools: Sequence[object],
+    includes_system_message: bool,
+    tool_section: ChatTemplateToolSection,
+) -> int:
+    functions: Final = tuple(
+        function for function in _function_definitions(_tools_sent_as_functions(tools)) if function.get("name")
+    )
+    if not functions:
+        return 0
+    system_turn_tokens: Final = 0 if includes_system_message else tool_section.implicit_system_turn_tokens
+    schemas: Final = tool_section.render_tool_schemas(functions)
+    return tool_section.preamble_tokens + system_turn_tokens + count_function(schemas)
 
 
 def _get_extrapolating_count_function(
@@ -650,44 +735,43 @@ def _get_exact_count_function(
 ) -> TokenCounterFunction:
     """
     Get the function to count tokens based on the model and custom tokenizer."""
-    from litellm.utils import _select_tokenizer
+    from litellm.utils import select_tokenizer
 
     if model is not None or custom_tokenizer is not None:
-        tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model)
-        if tokenizer_json["type"] == "huggingface_tokenizer":
-            tokenizer: Final[HuggingFace] = tokenizer_json["tokenizer"]
-
-            def count_tokens(text: str) -> int:
-                if isinstance(tokenizer, HuggingFaceTokenizer):
-                    return tokenizer.count(text)
-                return len(tokenizer.encode_batch_fast([text])[0])
-
-            return count_tokens
-        elif tokenizer_json["type"] == "openai_tokenizer":
-            encoding: Final = openai_tokenizer_encoding(model)
-
-            def encode_length(text: str) -> int:
-                return _encoding_count(encoding, text)
-
-            return _get_tiktoken_count_function(encode_length)
-        else:
-            raise ValueError("Unsupported tokenizer type")
+        tokenizer_json: Final = custom_tokenizer or select_tokenizer(model)
     else:
-        default_encoding: Final = _get_default_encoding()
+        default_encoding: Final = get_default_encoding()
 
         def encode_length(text: str) -> int:
             return _encoding_count(default_encoding, text)
 
         return _get_tiktoken_count_function(encode_length)
+    if tokenizer_json["type"] == "huggingface_tokenizer":
+        tokenizer: Final[HuggingFace] = tokenizer_json["tokenizer"]
+
+        def count_tokens(text: str) -> int:
+            if isinstance(tokenizer, HuggingFaceTokenizer):
+                return tokenizer.count(text)
+            return len(tokenizer.encode_batch_fast([text])[0])
+
+        return count_tokens
+    if tokenizer_json["type"] == "openai_tokenizer":
+        encoding: Final = openai_tokenizer_encoding(model)
+
+        def encode_length(text: str) -> int:
+            return _encoding_count(encoding, text)
+
+        return _get_tiktoken_count_function(encode_length)
+    raise ValueError("Unsupported tokenizer type")
 
 
-def _encoding_count(encoding: Encoding, text: str) -> int:
+def _encoding_count(encoding: "Encoding", text: str) -> int:
     if isinstance(encoding, OpenAIEncoding):
         return encoding.count(text)
     return len(encoding.encode(text, disallowed_special=()))
 
 
-def openai_tokenizer_encoding(model: str) -> Encoding:
+def openai_tokenizer_encoding(model: str) -> "Encoding":
     """The encoding `token_counter` uses for a model on the `openai_tokenizer` path."""
     return get_encoding(openai_tokenizer_encoding_name(model))
 
@@ -803,6 +887,49 @@ def _anthropic_image_source_data(
     return ""
 
 
+def _anthropic_rendered_page_image_tokens(width: float, height: float) -> int:
+    """A PDF page is rasterized within Anthropic's image limits, then billed by its pixel area."""
+    if width <= 0 or height <= 0:
+        return 0
+    area_at_max_edge: Final = ANTHROPIC_IMAGE_MAX_LONG_EDGE_PX**2 * min(width, height) / max(width, height)
+    return math.ceil(min(float(ANTHROPIC_IMAGE_MAX_PIXELS), area_at_max_edge) / ANTHROPIC_IMAGE_PIXELS_PER_TOKEN)
+
+
+def _count_inline_pdf_tokens(data_url: str, count_function: TokenCounterFunction) -> int | None:
+    if not data_url.startswith(PDF_DATA_URL_PREFIX):
+        return None
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        verbose_logger.debug("pypdf is not installed, so the PDF document is priced like one image")
+        return None
+    try:
+        reader: Final = PdfReader(io.BytesIO(base64.b64decode(data_url[len(PDF_DATA_URL_PREFIX) :])))
+        return sum(
+            count_function(page.extract_text() or "")
+            + _anthropic_rendered_page_image_tokens(float(page.mediabox.width), float(page.mediabox.height))
+            for page in reader.pages
+        )
+    except Exception as e:
+        verbose_logger.debug("Could not read the PDF document's pages (%s), so it is priced like one image", e)
+        return None
+
+
+def _count_opaque_document_tokens(
+    data_url: str,
+    count_function: TokenCounterFunction,
+    use_default_image_token_count: bool,
+) -> int:
+    pdf_tokens: Final = _count_inline_pdf_tokens(data_url, count_function)
+    if pdf_tokens is not None:
+        return pdf_tokens
+    return calculate_img_tokens(
+        data=data_url,
+        mode="auto",
+        use_default_image_token_count=use_default_image_token_count,
+    )
+
+
 def _count_document_tokens(
     document: ChatCompletionDocumentObject | AnthropicMessagesDocumentParam,
     count_function: TokenCounterFunction,
@@ -822,10 +949,8 @@ def _count_document_tokens(
         return metadata_tokens + _count_content_list(
             count_function, content, use_default_image_token_count, default_token_count
         )
-    return metadata_tokens + calculate_img_tokens(
-        data=_anthropic_image_source_data(source),
-        mode="auto",
-        use_default_image_token_count=use_default_image_token_count,
+    return metadata_tokens + _count_opaque_document_tokens(
+        _anthropic_image_source_data(source), count_function, use_default_image_token_count
     )
 
 
@@ -842,11 +967,7 @@ def _count_file_tokens(
     name_tokens: Final = count_function(filename) if isinstance(filename, str) and filename else 0
     if not isinstance(file_data, str) or not file_data:
         return name_tokens
-    return name_tokens + calculate_img_tokens(
-        data=file_data,
-        mode="auto",
-        use_default_image_token_count=use_default_image_token_count,
-    )
+    return name_tokens + _count_opaque_document_tokens(file_data, count_function, use_default_image_token_count)
 
 
 def _count_anthropic_content(
@@ -990,13 +1111,29 @@ def _format_function_definitions(tools: Sequence[object]) -> str:
     lines: Final = []
     lines.append("namespace functions {")
     lines.append("")
-    for tool in tools:
-        if not isinstance(tool, Mapping):
-            continue
-        for function in _function_definitions_for_tool(cast(Mapping[str, object], tool)):
-            lines.extend(_format_single_function_definition(function))
+    for function in _function_definitions(tools):
+        lines.extend(_format_single_function_definition(function))
     lines.append("} // namespace functions")
     return "\n".join(lines)
+
+
+def _tools_sent_as_functions(tools: Sequence[object]) -> tuple[Mapping[str, object], ...]:
+    return tuple(tool for tool in _tool_mappings(tools) if not _is_anthropic_web_search_tool(tool))
+
+
+def _is_anthropic_web_search_tool(tool: Mapping[str, object]) -> bool:
+    return tool.get("name") == "web_search" and "input_schema" not in tool and tool.get("type") != "function"
+
+
+def _tool_mappings(tools: Sequence[object]) -> Iterable[Mapping[str, object]]:
+    for tool in tools:
+        if isinstance(tool, Mapping):
+            yield cast(Mapping[str, object], tool)
+
+
+def _function_definitions(tools: Sequence[object]) -> Iterable[Mapping[str, object]]:
+    for tool in _tool_mappings(tools):
+        yield from _function_definitions_for_tool(tool)
 
 
 def _function_definitions_for_tool(tool: Mapping[str, object]) -> Iterable[Mapping[str, object]]:
@@ -1010,12 +1147,21 @@ def _function_definitions_for_tool(tool: Mapping[str, object]) -> Iterable[Mappi
             if isinstance(declaration, Mapping):
                 yield declaration
         return
-    parameters: Final = tool.get("input_schema") or tool.get("parameters") or {}
+    input_schema: Final = tool.get("input_schema")
+    parameters: Final = input_schema or tool.get("parameters") or {}
     normalized_parameters: Final = parameters if isinstance(parameters, Mapping) else {}
+    unmapped_anthropic_keys: Final = (
+        {key: value for key, value in tool.items() if key not in _ANTHROPIC_TOOL_KEYS_MAPPED_BY_BRIDGE}
+        if input_schema is not None
+        else {}
+    )
+    description: Final = tool.get("description")
+    strict: Final = tool.get("strict")
     yield {
         "name": tool.get("name"),
-        "description": tool.get("description"),
-        "parameters": normalized_parameters,
+        "parameters": {**normalized_parameters, **unmapped_anthropic_keys},
+        **({"description": description} if description is not None else {}),
+        **({"strict": bool(strict)} if strict is not None else {}),
     }
 
 

@@ -67,9 +67,10 @@ def _fake_proxy_logging(capture: dict, *, guardrail_effect=None):
     way a blocking guardrail does).
     """
     plo = mock.MagicMock()
-    plo._create_mcp_request_object_from_kwargs.return_value = mock.MagicMock()
+    plo.enforce_mcp_server_rate_limits = mock.AsyncMock()
+    plo.create_mcp_request_object_from_kwargs.return_value = mock.MagicMock()
     # Mirror the real conversion's metadata bucket so a test can prove it survives.
-    plo._convert_mcp_to_llm_format.side_effect = lambda *_a, **_k: {
+    plo.convert_mcp_to_llm_format.side_effect = lambda *_a, **_k: {
         "metadata": {"headers": {"x-forwarded-for": "1.2.3.4"}}
     }
 

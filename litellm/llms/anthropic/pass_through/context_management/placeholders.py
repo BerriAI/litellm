@@ -1,12 +1,10 @@
 """Placeholder content for cleared ``tool_result`` blocks (string or block list)."""
 
-from typing import Any
-
 from .constants import CLEARED_TOOL_RESULT_PLACEHOLDER
 
 
 def build_cleared_tool_result_content(
-    original_content: Any,
+    original_content: object,
 ) -> str | list[dict]:
     """Return a string or single text block list, matching ``original_content`` shape."""
     if isinstance(original_content, list):

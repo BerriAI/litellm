@@ -1,4 +1,4 @@
-import { type FieldClause, languageFields, parseQuery, type QueryLanguage } from "./language";
+import { type FieldClause, languageFields, languageOps, parseQuery, type QueryLanguage } from "./language";
 import type { FieldValues } from "./valueSource";
 
 export interface Suggestion<F extends string> {
@@ -47,7 +47,7 @@ function target<F extends string>(language: QueryLanguage<F>, text: string, curs
   }
   if (clause.kind === "field") return { kind: "value", clause };
   const raw = text.slice(clause.from, clause.to);
-  const negated = raw.startsWith("-");
+  const negated = language.ops.negation && raw.startsWith("-");
   const prefix = negated ? raw.slice(1) : raw;
   if (/[:"]/.test(prefix)) return null;
   return { kind: "field", prefix, negated, from: clause.from, to: clause.to };
@@ -59,10 +59,13 @@ export function completingField<F extends string>(language: QueryLanguage<F>, te
   return found?.kind === "value" && language.fields[found.clause.field].suggestValues ? found.clause.field : null;
 }
 
+const literalPart = <F extends string>(language: QueryLanguage<F>, value: string): string =>
+  language.ops.wildcard ? value.replaceAll("*", "") : value;
+
 /** The substring typed so far for the value at the cursor, wildcards stripped. */
 export function completingPrefix<F extends string>(language: QueryLanguage<F>, text: string, cursor: number): string {
   const found = target(language, text, cursor);
-  return found?.kind === "value" ? found.clause.value.replaceAll("*", "") : "";
+  return found?.kind === "value" ? literalPart(language, found.clause.value) : "";
 }
 
 function fieldMenu<F extends string>(
@@ -89,12 +92,13 @@ function fieldMenu<F extends string>(
 }
 
 function valueMenu<F extends string>(
+  language: QueryLanguage<F>,
   clause: FieldClause<F>,
   text: string,
   { values, loading }: FieldValues,
 ): SuggestionMenu<F> | null {
   const from = clause.keyTo + 1;
-  const needle = clause.value.replaceAll("*", "").toLowerCase();
+  const needle = literalPart(language, clause.value).toLowerCase();
   const trailing = clause.to === text.length ? " " : "";
   const suggestions = values
     .filter((value) => value.toLowerCase().includes(needle))
@@ -108,7 +112,7 @@ function valueMenu<F extends string>(
       insert: quoteIfNeeded(value) + trailing,
       completesClause: true,
     }));
-  const showOperators = clause.value === "";
+  const showOperators = clause.value === "" && languageOps(language).length > 1;
   if (suggestions.length === 0 && !showOperators && !loading) return null;
   return { groups: suggestions.length ? [{ heading: clause.field, items: suggestions }] : [], showOperators, loading };
 }
@@ -125,6 +129,7 @@ export function suggest<F extends string>(
   if (found.kind === "field") return fieldMenu(language, found);
   const { field } = found.clause;
   return valueMenu(
+    language,
     found.clause,
     text,
     language.fields[field].suggestValues ? lookup(field) : { values: [], loading: false },

@@ -13,7 +13,7 @@ Model name format:
 from typing import Final
 
 import litellm
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -122,7 +122,7 @@ class RAGFlowConfig(OpenAIConfig):
         if not path.startswith("/"):
             path = "/" + path
 
-        return f"{api_base}{path}"
+        return join_api_base(api_base, path)
 
     def _get_openai_compatible_provider_info(
         self,
@@ -156,6 +156,15 @@ class RAGFlowConfig(OpenAIConfig):
         dynamic_api_key: Final = api_key or litellm.api_key or get_secret_str("RAGFLOW_API_KEY")
 
         return dynamic_api_base, dynamic_api_key, custom_llm_provider
+
+    def get_openai_compatible_provider_info(
+        self,
+        model: str,
+        api_base: str | None,
+        api_key: str | None,
+        custom_llm_provider: str,
+    ) -> tuple[str | None, str | None, str]:
+        return self._get_openai_compatible_provider_info(model, api_base, api_key, custom_llm_provider)
 
     def validate_environment(
         self,

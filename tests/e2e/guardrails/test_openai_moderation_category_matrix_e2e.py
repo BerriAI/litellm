@@ -7,14 +7,21 @@ body that names moderation; a refine-wrapper bypass must also be blocked.
 
 from __future__ import annotations
 
+from typing import Final
+
 import pytest
 from e2e_config import unique_marker
 from e2e_http import Result, UnknownApiError
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from guardrails_client import GuardrailsClient, OpenAIModerationParamsBody
 from lifecycle import ResourceManager
 from models import AnthropicMessagesResponse, ChatResponse
 
 pytestmark = pytest.mark.e2e
+
+GEMINI_BACKEND: Final = "gemini/gemini-2.5-flash"
+ANTHROPIC_BACKEND: Final = "anthropic/claude-haiku-4-5"
+OPENAI_BACKEND: Final = "openai/gpt-4o-mini"
 
 CATEGORY_PROMPTS: tuple[tuple[str, str], ...] = (
     (
@@ -79,6 +86,15 @@ class TestOpenAIModerationCategoryMatrix:
         "guardrail.openai_moderations.pre_call.blocks",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.GEMINI,),
+            models=(GEMINI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_chat_blocks_category(
         self,
         client: GuardrailsClient,
@@ -89,7 +105,7 @@ class TestOpenAIModerationCategoryMatrix:
             client,
             resources,
             prefix="e2e-mod-cat-chat",
-            backend="gemini/gemini-2.5-flash",
+            backend=GEMINI_BACKEND,
             api_key="os.environ/GEMINI_API_KEY",
         )
         for category, prompt in CATEGORY_PROMPTS:
@@ -98,6 +114,15 @@ class TestOpenAIModerationCategoryMatrix:
     @pytest.mark.covers(
         "guardrail.openai_moderations.pre_call.blocks",
         exercised_on=["messages"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_messages_blocks_category(
         self,
@@ -109,7 +134,7 @@ class TestOpenAIModerationCategoryMatrix:
             client,
             resources,
             prefix="e2e-mod-cat-msg",
-            backend="anthropic/claude-haiku-4-5",
+            backend=ANTHROPIC_BACKEND,
             api_key="os.environ/ANTHROPIC_API_KEY",
         )
         for category, prompt in CATEGORY_PROMPTS:
@@ -118,6 +143,15 @@ class TestOpenAIModerationCategoryMatrix:
     @pytest.mark.covers(
         "guardrail.openai_moderations.pre_call.blocks",
         exercised_on=["responses"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_responses_blocks_category(
         self,
@@ -129,7 +163,7 @@ class TestOpenAIModerationCategoryMatrix:
             client,
             resources,
             prefix="e2e-mod-cat-resp",
-            backend="openai/gpt-4o-mini",
+            backend=OPENAI_BACKEND,
             api_key="os.environ/OPENAI_API_KEY",
         )
         for category, prompt in CATEGORY_PROMPTS:

@@ -20,6 +20,7 @@ interface CallbackConfig {
   supports_key_team_logging: boolean;
   dynamic_params: Record<string, "text" | "password" | "select" | "upload" | "number">;
   dynamic_param_options?: Record<string, readonly string[]>;
+  success_event_params?: string[];
   description: string;
 }
 
@@ -34,7 +35,12 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       arize_space_id: "password",
       arize_success_sampling_rate: "number",
       arize_error_sampling_rate: "number",
+      arize_otlp_protocol: "select",
     },
+    dynamic_param_options: {
+      arize_otlp_protocol: ["grpc", "http/protobuf"],
+    },
+    success_event_params: ["arize_otlp_protocol"],
     description: "Arize Logging Integration",
   },
   {

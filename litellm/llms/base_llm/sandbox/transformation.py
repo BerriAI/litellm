@@ -6,7 +6,8 @@ returns whatever the sandbox produced. The lifecycle is create container ->
 run code -> delete container; `code_interpreter_tool` combines all three.
 """
 
-from typing import Any, Final
+import builtins
+from typing import Final
 
 import httpx
 from pydantic import Field, PrivateAttr
@@ -27,20 +28,36 @@ class ContainerHandle(LiteLLMPydanticObjectBase):
 
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
 
 class CodeExecutionResult(LiteLLMPydanticObjectBase):
     """Passthrough of the sandbox's own execution output."""
 
     stdout: str = ""
     stderr: str = ""
-    results: list[dict[str, Any]] = Field(default_factory=list)
-    error: dict[str, Any] | None = None
+    results: list[dict[str, object]] = Field(default_factory=list)
+    error: dict[str, object] | None = None
     execution_count: int | None = None
     object: str = "code_execution"
 
     model_config = {"extra": "allow"}
 
     _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
 
 class BaseSandboxConfig:

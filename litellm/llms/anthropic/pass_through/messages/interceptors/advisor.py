@@ -15,7 +15,7 @@ How it works:
 """
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
@@ -27,6 +27,7 @@ from litellm.types.llms.anthropic import ANTHROPIC_ADVISOR_TOOL_TYPE
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
+from litellm.types.utils import API_KEY_SECRET_REFERENCE_REJECTION, OIDC_SECRET_REFERENCE_PREFIX
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -47,7 +48,7 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
 
     def can_handle(
         self,
-        tools: list[dict] | None,
+        tools: Sequence[Mapping[str, object]] | None,
         custom_llm_provider: str | None,
     ) -> bool:
         if not tools:
@@ -226,6 +227,8 @@ def _resolve_advisor_credentials(advisor_tool: dict) -> tuple[str | None, str | 
         return None, None
     api_key: Final[str | None] = advisor_tool.get("api_key")
     api_base: Final[str | None] = advisor_tool.get("api_base")
+    if isinstance(api_key, str) and api_key.startswith(OIDC_SECRET_REFERENCE_PREFIX):
+        raise litellm.BadRequestError(message=API_KEY_SECRET_REFERENCE_REJECTION, model=None, llm_provider=None)
     if api_base is None:
         return api_key, None
     if not api_key:

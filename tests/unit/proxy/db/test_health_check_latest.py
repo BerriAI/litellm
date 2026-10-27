@@ -7,8 +7,10 @@ import pytest
 from litellm.proxy.db.health_check_latest import (
     LATEST_HEALTH_CHECKS_FOR_MODELS_SQL,
     LATEST_HEALTH_CHECKS_SQL,
+    LatestHealthCheckRow,
     fetch_latest_health_checks,
     fetch_latest_health_checks_for_models,
+    latest_by_model_name,
     query_latest_health_checks,
 )
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
@@ -129,3 +131,36 @@ async def test_the_latest_health_check_read_renders_a_postgres_select_span(
 ) -> None:
     assert await fetch_latest_health_checks(_prisma([])) == ()
     assert await postgres_span_names() == ("postgres.select LiteLLM_HealthCheckTable",)
+
+
+def _latest_row(**overrides) -> LatestHealthCheckRow:
+    return LatestHealthCheckRow.model_validate(_raw_row(**overrides))
+
+
+@pytest.mark.parametrize("reverse", [False, True], ids=["sql-order", "reversed"])
+def test_latest_by_model_name_keeps_each_groups_newest_row_whatever_its_model_id(reverse):
+    """model_id ASC puts a name probe's NULL row, or a deleted deployment's larger id, after the fresh rows."""
+    fresh = _latest_row(health_check_id="hc-a", model_id="deployment-a", checked_at="2026-10-16T11:10:00+00:00")
+    deleted = _latest_row(
+        health_check_id="hc-z", model_id="deployment-z", status="unhealthy", checked_at="2026-09-04T11:00:00+00:00"
+    )
+    name_probe = _latest_row(
+        health_check_id="hc-null", model_id=None, status="unhealthy", checked_at="2026-09-04T11:20:04+00:00"
+    )
+    other_group = _latest_row(health_check_id="hc-c", model_name="claude", model_id="deployment-c")
+    rows = (other_group, fresh, deleted, name_probe)
+
+    latest = latest_by_model_name(rows[::-1] if reverse else rows)
+
+    assert latest == {"gpt-4": fresh, "claude": other_group}
+
+
+def test_latest_by_model_name_lets_a_newer_name_probe_speak_for_the_group():
+    per_deployment = _latest_row(
+        health_check_id="hc-a", model_id="deployment-a", checked_at="2026-10-16T11:10:00+00:00"
+    )
+    name_probe = _latest_row(
+        health_check_id="hc-null", model_id=None, status="unhealthy", checked_at="2026-10-16T12:00:00+00:00"
+    )
+
+    assert latest_by_model_name((per_deployment, name_probe))["gpt-4"] is name_probe

@@ -19,7 +19,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
 
@@ -84,7 +84,7 @@ class CooldownCache:
 
             # Store the cooldown information for the deployment separately
             cooldown_data: Final = CooldownCacheValue(
-                exception_received=self.exception_masker._mask_value(str(original_exception)),
+                exception_received=self.exception_masker.mask_value(str(original_exception)),
                 status_code=str(exception_status),
                 timestamp=current_time,
                 cooldown_time=cooldown_time,

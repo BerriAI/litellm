@@ -6,13 +6,14 @@ from typing import Final, TypeVar
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import ConfigDict, Field, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared client factory has untyped params
 )
 from litellm.proxy.roi_calculator.analytics import normalize_email
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.roi_calculator import ROIPullCommit, ROIPullEvidence, ROIPullFile, ROISettings
 from litellm.types.roi_observed import ObservedIssue
@@ -24,7 +25,7 @@ class SourceError(Exception):
     pass
 
 
-class _GitHubModel(BaseModel):
+class _GitHubModel(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
@@ -333,7 +334,7 @@ class _Issue(_GitHubModel):
     pull_request: object | None = None
 
 
-class GitHubIssueSettings(BaseModel):
+class GitHubIssueSettings(LiteLLMBaseModel):
     has_issues: bool
 
 

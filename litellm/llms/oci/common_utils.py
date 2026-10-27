@@ -13,10 +13,11 @@ from typing import Final, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, field_validator
+from pydantic import ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, field_validator
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.llms.base import LiteLLMBaseModel
 
 try:
     from cryptography.hazmat.primitives import hashes, serialization
@@ -214,7 +215,7 @@ _OCI_REALM_DOMAINS: Final = MappingProxyType(
 )
 
 
-class OCIRegionMetadata(BaseModel):
+class OCIRegionMetadata(LiteLLMBaseModel):
     """One entry of the OCI SDK's region metadata schema, as found in
     ``~/.oci/regions-config.json`` (a JSON array) or ``OCI_REGION_METADATA`` (one object).
     Values are lowercased before validation, as the SDK does."""

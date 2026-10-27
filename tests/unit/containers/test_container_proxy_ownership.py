@@ -1,6 +1,7 @@
 import json
 import sys
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -10,6 +11,7 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.container_endpoints import ownership
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.containers.main import ContainerListResponse, ContainerObject
+from tests.unit.litellm_core_utils.attribute_forwarder import AttributeForwarder
 
 
 @pytest.fixture(autouse=True)
@@ -95,6 +97,23 @@ async def test_should_not_mutate_dict_container_response_when_recording_owner(
     file_obj = json.loads(data["file_object"])
     assert file_obj["custom_llm_provider"] == "openai"
     assert file_obj["provider_container_id"] == "cntr_provider"
+
+
+@pytest.mark.asyncio
+async def test_should_store_the_full_container_of_a_response_that_forwards_its_fields(monkeypatch):
+    table: Final = AsyncMock()
+    table.find_unique.return_value = None
+    prisma_client: Final = SimpleNamespace(db=SimpleNamespace(litellm_managedobjecttable=table))
+    monkeypatch.setattr(ownership, "_get_prisma_client", AsyncMock(return_value=prisma_client))
+
+    await ownership.record_container_owner(
+        response=AttributeForwarder(_container("cntr_provider")),
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+        custom_llm_provider="openai",
+    )
+
+    file_obj: Final = json.loads(table.create.await_args.kwargs["data"]["file_object"])
+    assert file_obj["status"] == "active"
 
 
 @pytest.mark.asyncio
@@ -425,7 +444,7 @@ async def test_should_validate_owner_and_forward_decoded_id_for_multipart_upload
         async def base_process_llm_request(self, **kwargs):
             return captured["data"]
 
-        async def _handle_llm_api_exception(self, **kwargs):
+        async def handle_llm_api_exception(self, **kwargs):
             raise kwargs["e"]
 
     monkeypatch.setattr(
@@ -449,7 +468,7 @@ async def test_should_validate_owner_and_forward_decoded_id_for_multipart_upload
         "convert_upload_files_to_file_data",
         AsyncMock(return_value={"file": ["file-data"]}),
     )
-    encoded_id = ResponsesAPIRequestUtils._build_container_id(
+    encoded_id = ResponsesAPIRequestUtils.build_container_id(
         custom_llm_provider="azure",
         model_id="router-gpt",
         container_id="cntr_provider",
@@ -499,7 +518,7 @@ async def test_should_forward_decoded_container_id_for_proxy_retrieve(monkeypatc
         async def base_process_llm_request(self, **kwargs):
             return captured["data"]
 
-        async def _handle_llm_api_exception(self, **kwargs):
+        async def handle_llm_api_exception(self, **kwargs):
             raise kwargs["e"]
 
     monkeypatch.setattr(endpoints, "ProxyBaseLLMRequestProcessing", FakeProcessor)
@@ -508,7 +527,7 @@ async def test_should_forward_decoded_container_id_for_proxy_retrieve(monkeypatc
         "assert_user_can_access_container",
         AsyncMock(return_value=("cntr_provider", "azure")),
     )
-    encoded_id = ResponsesAPIRequestUtils._build_container_id(
+    encoded_id = ResponsesAPIRequestUtils.build_container_id(
         custom_llm_provider="azure",
         model_id="router-gpt",
         container_id="cntr_provider",
@@ -554,7 +573,7 @@ async def test_should_record_container_owner_inside_create_endpoint(monkeypatch)
         async def base_process_llm_request(self, **kwargs):
             return response
 
-        async def _handle_llm_api_exception(self, **kwargs):
+        async def handle_llm_api_exception(self, **kwargs):
             raise kwargs["e"]
 
     record_owner = AsyncMock(return_value=response)
@@ -608,7 +627,7 @@ async def test_should_not_route_owner_record_errors_through_llm_error_handler(
         async def base_process_llm_request(self, **kwargs):
             return _container("cntr_provider")
 
-        async def _handle_llm_api_exception(self, **kwargs):
+        async def handle_llm_api_exception(self, **kwargs):
             raise AssertionError("ownership errors should not use LLM error handler")
 
     monkeypatch.setattr(endpoints, "ProxyBaseLLMRequestProcessing", FakeProcessor)
@@ -668,7 +687,7 @@ async def test_should_return_response_when_owner_recording_raises_unexpected(
         async def base_process_llm_request(self, **kwargs):
             return created
 
-        async def _handle_llm_api_exception(self, **kwargs):
+        async def handle_llm_api_exception(self, **kwargs):
             raise AssertionError("upstream-create errors only")
 
     monkeypatch.setattr(endpoints, "ProxyBaseLLMRequestProcessing", FakeProcessor)
@@ -772,7 +791,7 @@ async def test_should_forward_decoded_container_id_for_proxy_delete(monkeypatch)
         async def base_process_llm_request(self, **kwargs):
             return captured["data"]
 
-        async def _handle_llm_api_exception(self, **kwargs):
+        async def handle_llm_api_exception(self, **kwargs):
             raise kwargs["e"]
 
     monkeypatch.setattr(endpoints, "ProxyBaseLLMRequestProcessing", FakeProcessor)
@@ -781,7 +800,7 @@ async def test_should_forward_decoded_container_id_for_proxy_delete(monkeypatch)
         "assert_user_can_access_container",
         AsyncMock(return_value=("cntr_provider", "azure")),
     )
-    encoded_id = ResponsesAPIRequestUtils._build_container_id(
+    encoded_id = ResponsesAPIRequestUtils.build_container_id(
         custom_llm_provider="azure",
         model_id="router-gpt",
         container_id="cntr_provider",
