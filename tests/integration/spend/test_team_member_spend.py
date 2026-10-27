@@ -506,7 +506,7 @@ def test_member_update_temp_budget_increase_readmits_a_blocked_member(
         else:
             assert default_budget_id is not None
             assert state[0].budget_id != default_budget_id, state
-            assert state[0].max_budget is None, state
+            assert state[0].max_budget == 0.05, state
             default_budget_after: Final = _budget_record(default_budget_id)
             assert default_budget_after == default_budget_before, repr(default_budget_after)
             assert default_budget_after[0].max_budget == 0.05, default_budget_after
