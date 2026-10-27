@@ -2062,11 +2062,19 @@ class LiteLLMCompletionResponsesConfig:
         - ItemReference
         """
         if input_item.get("type") == "web_search_call":
-            search: Final = (
-                ResponseFunctionWebSearch.model_validate(input_item)
-                if "action" in input_item
-                else ResponseFunctionWebSearch.model_construct(None, **input_item)
-            )
+            try:
+                search: Final = ResponseFunctionWebSearch.model_validate(input_item)
+            except ValidationError as exc:
+                errors: Final = exc.errors(include_url=False, include_input=False)
+                if len(errors) != 1 or errors[0]["type"] != "missing" or errors[0]["loc"] != ("action",):
+                    raise
+                replay: Final = ResponseFunctionWebSearch.model_construct(None, **input_item)
+                return [
+                    GenericChatCompletionMessage(
+                        role="assistant",
+                        content="Hosted web search: " + replay.model_dump_json(exclude_none=True),
+                    )
+                ]
             return [
                 GenericChatCompletionMessage(
                     role="assistant",

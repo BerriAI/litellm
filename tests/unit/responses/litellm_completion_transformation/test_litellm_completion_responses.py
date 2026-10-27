@@ -14,7 +14,7 @@ from openai.types.responses.response_function_web_search import (
     ActionSearchSource,
     ResponseFunctionWebSearch,
 )
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import CALLER_SESSION_ID_METADATA_KEY
@@ -5076,6 +5076,35 @@ class TestHostedWebSearchReplay:
         content: Final = messages[0].get("content")
         assert isinstance(content, str)
         assert json.loads(content[content.index("{") :]) == input_item
+
+    @pytest.mark.parametrize(
+        "fields",
+        (
+            {"status": "completed"},
+            {"id": "ws_invalid"},
+            {"id": 42, "status": "completed"},
+            {"id": "ws_invalid", "status": "invalid"},
+            {"id": "ws_invalid", "status": "completed", "action": None},
+            {"id": "ws_invalid", "status": "completed", "action": 42},
+            {"id": "ws_invalid", "status": "completed", "action": {"type": "invalid"}},
+            {"id": "ws_invalid", "status": "completed", "action": {"type": "find_in_page"}},
+        ),
+        ids=(
+            "missing-id",
+            "missing-status",
+            "invalid-id",
+            "invalid-status",
+            "null-action",
+            "invalid-action-type",
+            "unknown-action",
+            "incomplete-action",
+        ),
+    )
+    def test_rejects_search_with_other_invalid_fields(self, fields: Mapping[str, object]) -> None:
+        with pytest.raises(ValidationError):
+            LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=[{"type": "web_search_call", **fields}], responses_api_request={}
+            )
 
     @pytest.mark.parametrize("order", ((0, 1, 2, 3), (1, 0, 3, 2), (1, 3, 0, 2)))
     @pytest.mark.parametrize("modify_params", (False, True))
