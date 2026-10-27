@@ -118,9 +118,11 @@ def test_broken_streams_through_a_redis_stall_log_once_and_the_budget_holds_on_e
                 seconds=30,
                 return_last_on_timeout=True,
             )
-        # The cold counter is seeded from the database, and a spend flush during the stall can land these rows
-        # there first, so it may count them twice, as completed streams held past a flush do
-        assert spent - 1e-9 <= landed <= 2 * spent + 1e-9, f"one broken stream costs {cost}"
+        assert spent - 1e-9 <= landed <= 2 * spent + 1e-9, (
+            f"one broken stream costs {cost}. The cold counter is seeded from the database, and a spend flush"
+            " during the stall can land these rows there first, so up to twice their cost is expected, as for"
+            " completed streams held past a flush"
+        )
 
         budgeted: Final = scenario.key(models=[model], max_budget=cost / 2)
         broken_stream(candidate, model, budgeted)
