@@ -75,6 +75,7 @@ from litellm.responses.litellm_completion_transformation.custom_tools import wit
 from litellm.responses.litellm_completion_transformation.tool_search import is_server_tool_search_tool
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
+    with_compaction_items_as_params,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
@@ -636,9 +637,12 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         Handles both string input and list of message objects.
         """
-        input_data: Final[str | ResponseInputParam | None] = data.get("input")
-        if not isinstance(input_data, (str, list)):
+        raw_input_data: Final[str | ResponseInputParam | None] = data.get("input")
+        if not isinstance(raw_input_data, (str, list)):
             return data
+        input_data: Final = with_compaction_items_as_params(raw_input_data)
+        if input_data is not raw_input_data:
+            data["input"] = input_data  # rebind-ok: materializes SDK output models and iterators in place
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         structured_messages: Final = self.get_structured_messages(data)
         scoped_indices: Final = scoped_structured_message_indices(

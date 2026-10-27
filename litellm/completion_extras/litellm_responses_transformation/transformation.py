@@ -1572,9 +1572,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             result = [self._convert_content_str_to_input_text(content, role)]
             verbose_logger.debug("Chat provider: String content -> %s", result)
             return result
-        elif isinstance(content, list):
+        elif isinstance(content, Iterable) and not isinstance(content, (bytes, bytearray, Mapping)):
             result = []
-            for i, item in enumerate(content):
+            for i, raw_item in enumerate(content):
+                item = raw_item.model_dump(exclude_none=True) if isinstance(raw_item, BaseModel) else raw_item
                 verbose_logger.debug("Chat provider: Processing content item %s: %s = %s", i, type(item), item)
                 if isinstance(item, str):
                     converted = self._convert_content_str_to_input_text(item, role)
