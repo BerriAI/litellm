@@ -94,7 +94,7 @@ jobs:
       - name: Deploy Prisma migrations
         working-directory: .
         run: |
-          uv run --no-sync python -m litellm_proxy_extras.migration_sources /tmp/litellm-prisma
+          uv run --no-sync python litellm-proxy-extras/litellm_proxy_extras/migration_sources.py /tmp/litellm-prisma
           uv run --no-sync prisma migrate deploy --schema /tmp/litellm-prisma/schema.prisma
 
       - name: Install SQLx CLI
