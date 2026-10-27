@@ -93,3 +93,13 @@ def test_output_format_block_shapes_only_its_schema():
 
 def test_output_format_block_without_schema_is_returned_unchanged():
     assert shape_claude_output_format({"type": "json_schema"}) == {"type": "json_schema"}
+
+
+def test_nullable_object_enum_keeps_its_type_dropped_instead_of_forcing_object() -> None:
+    """``enum: [null]`` on an ``["object", "null"]`` node conflicts with the declared type, so the type
+    is dropped. Re-adding ``type: object`` would make the node impossible to satisfy."""
+    shaped = shape_claude_output_schema(
+        {"type": ["object", "null"], "properties": {"a": {"type": "string"}}, "enum": [None]}
+    )
+
+    assert shaped == {"properties": {"a": {"type": "string"}}, "enum": [None]}

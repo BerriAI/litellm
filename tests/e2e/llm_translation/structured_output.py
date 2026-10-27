@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 SENTIMENT_PROMPT: Final = "Classify the sentiment of this review: 'The battery died after two days.'"
 SENTIMENT_LABELS: Final = frozenset({"positive", "negative", "neutral"})
@@ -35,8 +35,8 @@ class _ConstrainedSentiment(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     sentiment: str
-    confidence: float
-    reasons: tuple[str, ...]
+    confidence: float = Field(ge=0, le=1)
+    reasons: tuple[str, ...] = Field(max_length=3)
 
 
 def assert_sentiment_json(text: str) -> None:

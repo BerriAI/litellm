@@ -191,7 +191,7 @@ def shape_claude_output_schema(schema: Mapping[str, object]) -> dict[str, object
     """Return a new schema that Claude's structured-output API accepts. Idempotent."""
     drops_type: Final = _enum_conflicts_with_declared_type(schema)
     declared_type: Final = None if drops_type else schema.get("type")
-    object_fields: Final = _object_fields(declared_type, schema)
+    object_fields: Final = {} if drops_type else _object_fields(declared_type, schema)
     unsupported_format: Final = _unsupported_format(schema, declared_type)
     notes: Final = (
         *_constraint_notes(schema),
