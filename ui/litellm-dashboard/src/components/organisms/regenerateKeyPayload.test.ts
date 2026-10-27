@@ -62,6 +62,13 @@ describe("buildRegenerateKeyPayload", () => {
     });
   });
 
+  it.each(["", "  "])("omits blank duration %j from the payload and JSON body", (duration) => {
+    const payload = buildRegenerateKeyPayload(values({ duration }));
+
+    expect(payload).not.toHaveProperty("duration");
+    expect(JSON.stringify(payload)).not.toContain('"duration"');
+  });
+
   it.each([
     ["null", null],
     ["undefined", undefined],
@@ -82,7 +89,7 @@ describe("buildRegenerateKeyPayload", () => {
       duration: "30d",
       grace_period: "",
     });
-    expect(JSON.stringify(payload)).toBe('{"duration":"30d","grace_period":""}');
+    expect(JSON.stringify(payload)).toBe('{"grace_period":"","duration":"30d"}');
   });
 
   it("preserves the field order the proxy request body is serialised in", () => {
@@ -91,8 +98,8 @@ describe("buildRegenerateKeyPayload", () => {
       "max_budget",
       "tpm_limit",
       "rpm_limit",
-      "duration",
       "grace_period",
+      "duration",
     ]);
   });
 

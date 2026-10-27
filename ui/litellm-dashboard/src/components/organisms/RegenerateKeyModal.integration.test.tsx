@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import { RegenerateKeyModal } from "./RegenerateKeyModal";
@@ -66,7 +67,7 @@ describe("RegenerateKeyModal submit payload", () => {
 
     await waitFor(() => expect(mockRegenerateKeyCall).toHaveBeenCalledOnce());
     expect(JSON.stringify(submittedPayload())).toBe(
-      '{"key_alias":"my-test-key","max_budget":100,"tpm_limit":5000,"rpm_limit":500,"duration":"30d","grace_period":""}',
+      '{"key_alias":"my-test-key","max_budget":100,"tpm_limit":5000,"rpm_limit":500,"grace_period":"","duration":"30d"}',
     );
   });
 
@@ -138,7 +139,7 @@ describe("RegenerateKeyModal submit payload", () => {
     expect(submittedPayload()[key]).toBe(12.7);
   });
 
-  it("sends null for cleared numbers and an empty string for a cleared duration", async () => {
+  it("omits a cleared duration while sending null for cleared numbers", async () => {
     const user = userEvent.setup();
     renderModal();
 
@@ -155,7 +156,6 @@ describe("RegenerateKeyModal submit payload", () => {
       max_budget: null,
       tpm_limit: null,
       rpm_limit: null,
-      duration: "",
       grace_period: "",
     });
   });
@@ -180,10 +180,9 @@ describe("RegenerateKeyModal submit payload", () => {
       max_budget: undefined,
       tpm_limit: undefined,
       rpm_limit: undefined,
-      duration: "",
       grace_period: "",
     });
-    expect(JSON.stringify(submittedPayload())).toBe('{"duration":"","grace_period":""}');
+    expect(JSON.stringify(submittedPayload())).toBe('{"grace_period":""}');
   });
 
   it("regenerates a key whose fields the API returned as null", async () => {
@@ -206,9 +205,19 @@ describe("RegenerateKeyModal submit payload", () => {
       max_budget: null,
       tpm_limit: null,
       rpm_limit: null,
-      duration: "",
       grace_period: "",
     });
+  });
+
+  it("sends a typed duration when the original key has no stored duration", async () => {
+    const user = userEvent.setup();
+    renderModal(makeToken({ duration: undefined }));
+
+    fireEvent.change(screen.getByPlaceholderText("e.g. 30s, 30h, 30d"), { target: { value: "30d" } });
+    await regenerate(user);
+
+    await waitFor(() => expect(mockRegenerateKeyCall).toHaveBeenCalledOnce());
+    expect(submittedPayload()).toHaveProperty("duration", "30d");
   });
 
   it("targets the key by its token hash", async () => {
