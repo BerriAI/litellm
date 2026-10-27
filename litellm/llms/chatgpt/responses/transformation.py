@@ -42,6 +42,15 @@ if TYPE_CHECKING:
 _CHATGPT_SERVICE_TIERS: Final = {"default": "default", "priority": "priority", "fast": "priority"}
 
 
+def _system_items_as_developer(input_items: list[Any]) -> list[Any]:
+    # The Codex backend 400s on {"type": "message", "role": "system"} items ("System messages are not
+    # allowed") but accepts role=developer in the same position, which is what the Codex CLI sends.
+    return [
+        {**item, "role": "developer"} if isinstance(item, dict) and item.get("role") == "system" else item
+        for item in input_items
+    ]
+
+
 class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def __init__(self, authenticator: Authenticator | None = None) -> None:
         super().__init__()
@@ -113,6 +122,8 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 request["instructions"] = f"{base_instructions}\n\n{existing_instructions}"
         else:
             request["instructions"] = base_instructions
+        if isinstance(request.get("input"), list):
+            request["input"] = _system_items_as_developer(request["input"])
         request["store"] = False
         request["stream"] = True
         include: Final = list(request.get("include") or [])
