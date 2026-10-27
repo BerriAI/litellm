@@ -41,10 +41,7 @@ pub(crate) fn plan(config: &Config, lookup: Lookup<'_>) -> Result<Plan, Error> {
     let coordination = match &config.general_settings.coordination_redis {
         Some(settings) => Some(Target::Configured(settings.resolve(lookup)?)),
         None => match (&response_cache, config.litellm_settings.cache == Some(true)) {
-            (Some(cache), _) => Some(Target::Configured(ResolvedRedis {
-                namespace: None,
-                ..cache.clone()
-            })),
+            (Some(cache), _) => Some(Target::Configured(cache.clone())),
             (None, true) => environment(lookup)?.map(Target::Configured),
             (None, false) => optional_environment(lookup).map(Target::Environment),
         },
@@ -331,7 +328,7 @@ mod tests {
     }
 
     #[rstest]
-    fn redis_migration_regression_preserves_response_cache_namespace() {
+    fn redis_migration_regression_preserves_borrowed_cache_namespace() {
         let yaml = "litellm_settings:\n  cache: true\n  cache_params:\n    type: redis\n    host: cache\n    namespace: responses\n    ttl: 600";
         let cache = Params {
             namespace: Some("responses".to_owned()),
@@ -340,8 +337,70 @@ mod tests {
 
         assert_eq!(
             resolved(yaml, &[]).unwrap(),
-            configured(host("cache", 6379), Some(cache))
+            configured(cache.clone(), Some(cache))
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn borrowed_coordination_and_transaction_buffer_share_the_cache_namespace() {
+        let server = RedisServer::start().await.unwrap();
+        let config = Config::from_yaml(&format!(
+            "litellm_settings:\n  cache: true\n  cache_params:\n    type: redis\n    host: 127.0.0.1\n    port: {}\n    namespace: responses",
+            port_of(&server)
+        ))
+        .unwrap();
+        let clients = connect(&config, &|_| None).await.unwrap();
+        let coordination = clients.coordination.unwrap();
+        let buffer = clients.transaction_buffer.unwrap();
+        let cache = clients.response_cache.unwrap();
+        let unnamespaced = connect(&coordination_config(&server), &|_| None)
+            .await
+            .unwrap()
+            .coordination
+            .unwrap();
+
+        coordination
+            .set("rate-limit", "1", Duration::from_secs(60))
+            .await
+            .unwrap();
+        buffer
+            .set("spend", "2", Duration::from_secs(60))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            cache.get::<String>("rate-limit").await.unwrap().as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            cache.get::<String>("spend").await.unwrap().as_deref(),
+            Some("2")
+        );
+        assert_eq!(
+            unnamespaced
+                .get::<String>("responses:rate-limit")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            unnamespaced
+                .get::<String>("responses:spend")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("2")
+        );
+        assert!(
+            unnamespaced
+                .get::<String>("rate-limit")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(unnamespaced.get::<String>("spend").await.unwrap().is_none());
     }
 
     #[rstest]
