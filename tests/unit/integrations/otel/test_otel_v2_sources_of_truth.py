@@ -4,7 +4,7 @@ and the typed StandardLoggingPayload adapter. These need no OTel SDK."""
 import json
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Final
 
@@ -47,6 +47,11 @@ from litellm.integrations.otel.model.spans import (
     validate_registry,
 )
 from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
+from litellm.integrations.otel.plumbing.metrics import GenAIMetricRecorder, create_genai_metrics
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from datetime import datetime
+from itertools import chain
 
 
 @pytest.fixture(autouse=True)
@@ -146,6 +151,99 @@ def test_registry_hierarchy_shape():
 def test_llm_call_span_name():
     data = LLMCallSpanData.from_standard_logging_payload(_sample_payload())
     assert spans_mod.llm_call_span_name(data) == "chat gpt-4o"
+
+
+@pytest.mark.parametrize(
+    ("header", "path", "inferred", "expected"),
+    [
+        ("retrieval", "/embeddings", "embeddings", "retrieval"),
+        (" EMBEDDINGS ", "/v1/messages", "chat", "embeddings"),
+        ("vendor.custom", "/responses", "chat", "vendor.custom"),
+        (None, "/embeddings", "embeddings", "embeddings"),
+        ("bad/value", "/v1/messages", "chat", "chat"),
+        (None, "/completions", "text_completion", "text_completion"),
+        (None, "/unknown", "litellm.pass_through", "litellm.pass_through"),
+        (None, "", "litellm.pass_through", "litellm.pass_through"),
+        *[
+            (None, path, "chat", "chat")
+            for path in (
+                "/chat/completions",
+                "/responses",
+                "/models/x:generateContent",
+                "/models/x:streamGenerateContent",
+                "/converse",
+                "/converse-stream",
+                "/chat",
+            )
+        ],
+        *[
+            (None, path, "embeddings", "embeddings")
+            for path in ("/models/x:embedContent", "/models/x:batchEmbedContents", "/embed")
+        ],
+    ],
+)
+def test_passthrough_operation_agrees_in_v2_span_name_attributes_and_metrics(
+    header: str | None, path: str, inferred: str, expected: str
+) -> None:
+    payload: Final = _sample_payload(
+        call_type="pass_through_endpoint",
+        passthrough_operation_name=header,
+        passthrough_inferred_operation=inferred,
+    )
+    kwargs: Final = {
+        "call_type": "pass_through_endpoint",
+        "model": "gpt-4o",
+        "passthrough_operation_name": header,
+        "passthrough_logging_payload": {"url": f"https://upstream{path}"},
+        "standard_logging_object": payload,
+    }
+    data: Final = LLMCallSpanData.from_standard_logging_payload(payload)
+    assert GenAIMapper().map(data)[GenAI.OPERATION_NAME] == expected
+    assert spans_mod.llm_call_span_name(data) == f"{expected} gpt-4o"
+    assert LLMCallEvent.from_dict(kwargs).provisional_span_name == f"{expected} gpt-4o"
+    reader: Final = InMemoryMetricReader()
+    provider: Final = MeterProvider(metric_readers=[reader])
+    recorder: Final = GenAIMetricRecorder(create_genai_metrics(provider.get_meter(__name__)))
+    now: Final = datetime(2026, 1, 1)
+    recorder.record(kwargs, None, now, now)
+    metrics: Final = reader.get_metrics_data()
+    assert metrics is not None
+    scopes: Final = chain.from_iterable(resource.scope_metrics for resource in metrics.resource_metrics)
+    instruments: Final = chain.from_iterable(scope.metrics for scope in scopes)
+    points: Final = chain.from_iterable(metric.data.data_points for metric in instruments)
+    operations: Final = tuple(point.attributes[GenAI.OPERATION_NAME] for point in points)
+    assert operations
+    assert set(operations) == {expected}
+    provider.shutdown()
+
+
+@pytest.mark.parametrize(
+    "call_type",
+    ["acompletion", "aembedding", "text_completion", "allm_passthrough_route", "passthrough_image_generation"],
+)
+def test_upstream_operation_does_not_override_other_v2_call_types(call_type: str) -> None:
+    baseline: Final = LLMCallSpanData.from_standard_logging_payload(_sample_payload(call_type=call_type))
+    overridden: Final = LLMCallSpanData.from_standard_logging_payload(
+        _sample_payload(
+            call_type=call_type, passthrough_operation_name="retrieval", passthrough_inferred_operation="embeddings"
+        )
+    )
+    assert GenAIMapper().map(overridden) == GenAIMapper().map(baseline)
+    assert spans_mod.llm_call_span_name(overridden) == spans_mod.llm_call_span_name(baseline)
+
+
+def test_non_passthrough_operation_does_not_read_upstream_data() -> None:
+    class UnreadableOperationData(Mapping[str, object]):
+        def __getitem__(self, key: str) -> object:
+            raise AssertionError("non-pass-through calls must not read upstream data")
+
+        def __iter__(self) -> Iterator[str]:
+            raise AssertionError("non-pass-through calls must not copy upstream data")
+
+        def __len__(self) -> int:
+            raise AssertionError("non-pass-through calls must not inspect upstream data")
+
+    assert resolve_operation("acompletion", UnreadableOperationData()) is GenAIOperation.CHAT
 
 
 # --- semconv (source of truth #1) ------------------------------------------- #

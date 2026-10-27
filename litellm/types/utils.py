@@ -3789,6 +3789,8 @@ class ClassifierAudit(TypedDict, total=False):
 
 
 class StandardLoggingPayload(ClassifierAudit):
+    passthrough_operation_name: NotRequired[ReadOnly[str | None]]
+    passthrough_inferred_operation: NotRequired[ReadOnly[str | None]]
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
     session_id: str  # End-user/conversation session id (litellm_session_id), independent of trace_id

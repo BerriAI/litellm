@@ -35,6 +35,10 @@ from enum import Enum
 from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm.integrations.otel.mappers.utils import drop_none
+from litellm.litellm_core_utils.passthrough_operation import (
+    PASSTHROUGH_OPERATION_DATA,
+    resolve_passthrough_operation,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
 if TYPE_CHECKING:
@@ -151,6 +155,8 @@ class OTELGenAISemconvMixin:
         ``chat``.
         """
         call_type: Final = kwargs.get("call_type", "") or ""
+        if call_type == "pass_through_endpoint":
+            return resolve_passthrough_operation(PASSTHROUGH_OPERATION_DATA.validate_python(kwargs))
         match call_type:
             case s if "embedding" in s:
                 return "embeddings"

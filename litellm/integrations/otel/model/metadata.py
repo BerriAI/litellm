@@ -266,7 +266,7 @@ class LLMCallEvent:
     def from_dict(cls, kwargs: Mapping[str, object]) -> LLMCallEvent:
         raw_payload: Final = kwargs.get("standard_logging_object")
         payload: Final = cast("StandardLoggingPayload", raw_payload) if raw_payload else None
-        operation: Final = resolve_operation(as_str(kwargs.get("call_type")))
+        operation: Final = resolve_operation(as_str(kwargs.get("call_type")), kwargs)
         model: Final = as_str(kwargs.get("model")) or ""
         trace: Final = caller_trace_controls(kwargs)
         return cls(

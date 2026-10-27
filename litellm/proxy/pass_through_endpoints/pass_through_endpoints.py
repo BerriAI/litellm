@@ -150,6 +150,7 @@ from .streaming_handler import PassThroughStreamingHandler
 from .success_handler import PassThroughEndpointLogging
 from .upstream_usage_headers import (
     UpstreamReportedUsage,
+    apply_upstream_operation_name,
     apply_upstream_reported_usage,
 )
 
@@ -1539,6 +1540,7 @@ async def pass_through_request(
 
                 response = await async_client.send(req, stream=stream)
 
+            apply_upstream_operation_name(logging_obj, response.headers)
             upstream_usage = apply_upstream_reported_usage(
                 logging_obj=logging_obj,
                 headers=response.headers,
@@ -1627,6 +1629,7 @@ async def pass_through_request(
             )
         verbose_proxy_logger.debug("response.headers= %s", response.headers)
 
+        apply_upstream_operation_name(logging_obj, response.headers)
         upstream_usage = apply_upstream_reported_usage(
             logging_obj=logging_obj,
             headers=response.headers,

@@ -120,6 +120,10 @@ from litellm.litellm_core_utils.logging_utils import (
     truncate_base64_in_messages_async,
 )
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
+from litellm.litellm_core_utils.passthrough_operation import (
+    infer_passthrough_operation,
+    normalize_passthrough_operation,
+)
 from litellm.litellm_core_utils.ptu_pricing import is_spilled_over_ptu_request
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
@@ -7564,6 +7568,16 @@ def get_standard_logging_object_payload(
                 litellm_params=litellm_params,
             ),
             call_type=call_type or "",
+            passthrough_operation_name=(
+                normalize_passthrough_operation(logging_obj.model_call_details.get("passthrough_operation_name"))
+                if call_type == "pass_through_endpoint"
+                else None
+            ),
+            passthrough_inferred_operation=(
+                infer_passthrough_operation(logging_obj.model_call_details)
+                if call_type == "pass_through_endpoint"
+                else None
+            ),
             cache_hit=cache_hit,
             stream=stream,
             status=status,

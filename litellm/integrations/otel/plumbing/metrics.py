@@ -280,7 +280,7 @@ class GenAIMetricRecorder:
     def _common_attributes(self, kwargs: Mapping[str, Any]) -> dict:
         params: Final = kwargs.get("litellm_params") or {}
         common_attrs: Final[dict] = {
-            GenAI.OPERATION_NAME: resolve_operation(kwargs.get("call_type")).value,
+            GenAI.OPERATION_NAME: resolve_operation(kwargs.get("call_type"), kwargs).value,
             **_provider_attributes(params.get("custom_llm_provider")),
             GenAI.REQUEST_MODEL: kwargs.get("model"),
             "gen_ai.framework": "litellm",

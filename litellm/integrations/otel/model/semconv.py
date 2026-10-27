@@ -4,11 +4,13 @@ without a semconv equivalent lives under the ``litellm.*`` vendor namespace.
 """
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
-from typing import Final
+from typing import Final, overload
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.passthrough_operation import resolve_passthrough_operation
 
 
 class GenAIOperation(str, Enum):
@@ -34,6 +36,7 @@ class GenAIOperation(str, Enum):
     LITELLM_VECTOR_STORE_FILE_MANAGEMENT = "litellm.vector_store_file_management"
     LITELLM_RESPONSES_MANAGEMENT = "litellm.responses_management"
     LITELLM_MODERATION = "litellm.moderation"
+    LITELLM_PASS_THROUGH = "litellm.pass_through"
 
 
 class GenAIOutputType(str, Enum):
@@ -482,7 +485,22 @@ def resolve_provider(custom_llm_provider: str | None) -> str:
     return mapped.value if mapped is not None else custom_llm_provider
 
 
-def resolve_operation(call_type: str | None) -> GenAIOperation:
+@dataclass(frozen=True, slots=True)
+class UpstreamOperation:
+    value: str
+
+
+@overload
+def resolve_operation(call_type: str | None, data: None = None) -> GenAIOperation: ...
+
+
+@overload
+def resolve_operation(call_type: str | None, data: Mapping[str, object]) -> GenAIOperation | UpstreamOperation: ...
+
+
+def resolve_operation(
+    call_type: str | None, data: Mapping[str, object] | None = None
+) -> GenAIOperation | UpstreamOperation:
     """Map a litellm ``call_type`` to a ``gen_ai.operation.name`` value.
 
     An unmapped call type still falls back to ``chat`` so every series keeps an
@@ -490,6 +508,14 @@ def resolve_operation(call_type: str | None) -> GenAIOperation:
     a new call type mislabelled as ``chat`` mixes its latency and cost into
     everyone's chat charts, which is invisible until someone reads the numbers.
     """
+    if call_type == "pass_through_endpoint":
+        if data is None:
+            return GenAIOperation.LITELLM_PASS_THROUGH
+        passthrough: Final = resolve_passthrough_operation(data)
+        try:
+            return GenAIOperation(passthrough)
+        except ValueError:
+            return UpstreamOperation(passthrough)
     if not call_type:
         return GenAIOperation.CHAT
     mapped: Final = _OPERATION_BY_CALL_TYPE.get(call_type.lower())

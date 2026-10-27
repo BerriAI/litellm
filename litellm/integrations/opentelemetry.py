@@ -36,6 +36,10 @@ from litellm.integrations.otel.model.semconv import LiteLLM, Metric
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 from litellm.integrations.otel.routing import routing_decision_attributes
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
+from litellm.litellm_core_utils.passthrough_operation import (
+    PASSTHROUGH_OPERATION_DATA,
+    passthrough_header_operation,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.service_tier_utils import (
@@ -1707,9 +1711,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         provider: Final = _provider_label(params.get("custom_llm_provider"))
 
         common_attrs = {
-            "gen_ai.operation.name": (
-                self._gen_ai_operation_name(kwargs) if self._gen_ai_semconv_latest_experimental else "chat"
-            ),
+            "gen_ai.operation.name": self._gen_ai_operation_name(kwargs),
             "gen_ai.system": provider,
             "gen_ai.request.model": kwargs.get("model"),
             "gen_ai.framework": "litellm",
@@ -2687,14 +2689,23 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         value=safe_dumps(transformed_system_instructions),
                     )
 
-            if self._gen_ai_semconv_latest_experimental:
-                operation_name = self._gen_ai_operation_name(kwargs)
-            else:
-                operation_name = (
+            operation_name: Final = (
+                self._gen_ai_operation_name(kwargs)
+                if self._gen_ai_semconv_latest_experimental
+                else (
+                    passthrough_header_operation(PASSTHROUGH_OPERATION_DATA.validate_python(kwargs))
+                    or passthrough_header_operation(
+                        PASSTHROUGH_OPERATION_DATA.validate_python(standard_logging_payload)
+                    )
+                    or "pass_through_endpoint"
+                )
+                if standard_logging_payload["call_type"] == "pass_through_endpoint"
+                else (
                     "chat"
                     if standard_logging_payload.get("call_type") == "completion"
                     else standard_logging_payload.get("call_type") or "chat"
                 )
+            )
             self.safe_set_attribute(
                 span=span,
                 key=SpanAttributes.GEN_AI_OPERATION_NAME.value,

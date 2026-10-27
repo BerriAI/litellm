@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
+from itertools import chain
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -58,6 +59,72 @@ from litellm.constants import KUBERNETES_POD_ROUTING_KEY, LOGGING_WORKER_MAX_TIM
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import ChatCompletionMessageToolCall, Function
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+
+@pytest.mark.parametrize("experimental", [False, True])
+@pytest.mark.parametrize(
+    ("call_type", "header", "path", "resolved", "legacy"),
+    [
+        ("pass_through_endpoint", "retrieval", "/embeddings", "retrieval", "retrieval"),
+        ("pass_through_endpoint", " EMBEDDINGS ", "/v1/messages", "embeddings", "embeddings"),
+        ("pass_through_endpoint", None, "/embeddings", "embeddings", "pass_through_endpoint"),
+        ("pass_through_endpoint", "bad/value", "/v1/messages", "chat", "pass_through_endpoint"),
+        ("pass_through_endpoint", None, "/completions", "text_completion", "pass_through_endpoint"),
+        ("pass_through_endpoint", None, "/chunks", "litellm.pass_through", "pass_through_endpoint"),
+        ("aembedding", "retrieval", "/chat", "embeddings", "aembedding"),
+        ("acompletion", "retrieval", "/embeddings", "chat", "acompletion"),
+        ("text_completion", "retrieval", "/chat", "text_completion", "text_completion"),
+        ("allm_passthrough_route", "retrieval", "/embeddings", "chat", "allm_passthrough_route"),
+        ("passthrough_image_generation", "retrieval", "/embeddings", "chat", "passthrough_image_generation"),
+    ],
+)
+def test_passthrough_operation_v1_span_metrics_and_name(
+    experimental: bool,
+    call_type: str,
+    header: str | None,
+    path: str,
+    resolved: str,
+    legacy: str,
+) -> None:
+    reader: Final = InMemoryMetricReader()
+    meter: Final = MeterProvider(metric_readers=[reader])
+    provider: Final = TracerProvider()
+    otel: Final = OpenTelemetry(
+        config=OpenTelemetryConfig(
+            exporter="console",
+            enable_metrics=True,
+            semconv_stability_opt_in=({OTELSemconvCategory.GEN_AI_LATEST_EXPERIMENTAL} if experimental else set()),
+        ),
+        tracer_provider=provider,
+        meter_provider=meter,
+    )
+    kwargs: Final = {
+        "call_type": call_type,
+        "model": "test-model",
+        "optional_params": {},
+        "litellm_params": {},
+        "passthrough_operation_name": header,
+        "passthrough_logging_payload": {"url": f"https://upstream{path}"},
+        "standard_logging_object": {"call_type": call_type, "model": "test-model", "metadata": {}},
+        **({} if call_type == "pass_through_endpoint" else {1: "not a string key"}),
+    }
+    with provider.get_tracer(__name__).start_as_current_span("test") as span:
+        otel.set_attributes(span, kwargs, {})
+        assert span.attributes["gen_ai.operation.name"] == (resolved if experimental else legacy)
+    assert otel._gen_ai_operation_name(kwargs) == resolved
+    assert otel._get_span_name(kwargs) == (f"{resolved} test-model" if experimental else "litellm_request")
+    now: Final = datetime(2026, 1, 1)
+    otel._record_metrics(kwargs, {}, now, now)
+    metrics: Final = reader.get_metrics_data()
+    assert metrics is not None
+    scopes: Final = chain.from_iterable(resource.scope_metrics for resource in metrics.resource_metrics)
+    instruments: Final = chain.from_iterable(scope.metrics for scope in scopes)
+    points: Final = chain.from_iterable(metric.data.data_points for metric in instruments)
+    operations: Final = tuple(point.attributes["gen_ai.operation.name"] for point in points)
+    assert operations
+    assert set(operations) == {resolved}
+    meter.shutdown()
+    provider.shutdown()
+
 
 exporter = InMemorySpanExporter()
 

@@ -15,10 +15,28 @@ import httpx
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.passthrough_operation import normalize_passthrough_operation
 from litellm.types.utils import Usage
 
 UPSTREAM_RESPONSE_COST_HEADER: Final = "x-litellm-response-cost"
 UPSTREAM_TOTAL_TOKENS_HEADER: Final = "x-litellm-total-tokens"
+UPSTREAM_OPERATION_NAME_HEADER: Final = "x-litellm-operation-name"
+
+
+def apply_upstream_operation_name(logging_obj: LiteLLMLoggingObj, headers: httpx.Headers) -> None:
+    raw: Final = headers.get(UPSTREAM_OPERATION_NAME_HEADER)
+    if raw is None:
+        return
+    operation: Final = normalize_passthrough_operation(raw)
+    if operation is None:
+        verbose_proxy_logger.warning(
+            "pass_through_endpoint: upstream sent invalid %s=%r; ignoring operation name",
+            UPSTREAM_OPERATION_NAME_HEADER,
+            raw,
+        )
+        return
+    logging_obj.model_call_details["passthrough_operation_name"] = operation  # rebind-ok: request callback state
+
 
 # model_call_details key holding what the upstream reported, so later stages of
 # the success path can tell an upstream-reported cost apart from one LiteLLM

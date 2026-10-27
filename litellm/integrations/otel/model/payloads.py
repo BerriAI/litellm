@@ -17,6 +17,7 @@ from litellm.integrations.otel.model.semconv import (
     GenAIOperation,
     GenAIOutputType,
     MCPMethod,
+    UpstreamOperation,
     resolve_operation,
     resolve_output_type,
     resolve_provider,
@@ -405,7 +406,7 @@ class EmbeddingOutput:
 
 @dataclass(frozen=True)
 class LLMCallSpanData:
-    operation: GenAIOperation
+    operation: GenAIOperation | UpstreamOperation
     provider: str
     request_model: str
     response_model: str | None
@@ -479,7 +480,7 @@ class LLMCallSpanData:
         # no prompt/response text.
         finish_reasons: Final = _finish_reasons(choices_out)
         call_type: Final = as_str(payload.get("call_type"))
-        operation: Final = resolve_operation(call_type)
+        operation: Final = resolve_operation(call_type, payload)
         embedding_output: Final = (
             EmbeddingOutput.from_response(response) if operation is GenAIOperation.EMBEDDINGS else None
         )

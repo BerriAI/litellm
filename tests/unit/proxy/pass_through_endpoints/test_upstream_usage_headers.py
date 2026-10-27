@@ -1,15 +1,63 @@
-
 import httpx
 import pytest
+from datetime import datetime
+from typing import Final
 
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
 from litellm.proxy.pass_through_endpoints.upstream_usage_headers import (
     UpstreamReportedUsage,
     apply_upstream_reported_usage,
+    apply_upstream_operation_name,
     parse_upstream_reported_usage,
 )
 from litellm.types.utils import Usage
+
+
+@pytest.mark.parametrize(
+    ("url", "inferred"),
+    [
+        ("https://upstream/models/x:generateContent?key=sentinel-secret", "chat"),
+        ("https://user:sentinel-secret@upstream/embeddings?key=sentinel-secret", "embeddings"),
+        ("https://upstream/vectordb/chunks?key=sentinel-secret", "litellm.pass_through"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("retrieval", "retrieval"),
+        (" EMBEDDINGS ", "embeddings"),
+        ("vendor.op_1", "vendor.op_1"),
+        ("", None),
+        (" ", None),
+        ("bad/name", None),
+        ("1chat", None),
+        ("a" * 65, None),
+        ("a" * 64, "a" * 64),
+    ],
+)
+def test_upstream_operation_reaches_provider_built_payload(
+    raw: str, expected: str | None, url: str, inferred: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    logging_obj: Final = _logging_obj()
+    logging_obj.model_call_details["passthrough_logging_payload"] = {"url": url}
+    apply_upstream_operation_name(logging_obj, httpx.Headers({"x-litellm-operation-name": raw}))
+    now: Final = datetime(2026, 1, 1)
+    payload: Final = get_standard_logging_object_payload(
+        kwargs={"call_type": "pass_through_endpoint", "model": "unknown"},
+        init_response_obj={"chunks": []},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+    assert payload is not None
+    assert payload["passthrough_operation_name"] == expected
+    assert payload["passthrough_inferred_operation"] == inferred
+    assert "passthrough_url" not in payload
+    assert "sentinel-secret" not in str(payload)
+    assert ("invalid x-litellm-operation-name" in caplog.text) == (expected is None)
 
 
 def _headers(**values: str) -> httpx.Headers:
