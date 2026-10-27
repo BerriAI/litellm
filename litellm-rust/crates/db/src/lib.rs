@@ -13,6 +13,7 @@ mod failure;
 mod spend;
 #[cfg(test)]
 mod test_support;
+mod user_banner;
 
 pub use daily_spend::{DailyEndUserRow, DailyTeamRow, DailyUserRow};
 pub use end_user::{EndUser, RateLimits, find_end_user};
@@ -24,3 +25,4 @@ pub use spend::{
     begin, insert_spend_logs, lock_team, upsert_daily_end_user_spend, upsert_daily_spend,
     upsert_daily_team_spend, upsert_daily_user_spend,
 };
+pub use user_banner::{find_user_banner, save_user_banner};

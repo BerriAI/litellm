@@ -5,14 +5,20 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
+    from litellm.rust_bridge.database import NativeDatabase
 
 
 @dataclass(frozen=True, slots=True)
 class Database:
     prisma: "PrismaClient"
+    native: "NativeDatabase | None" = None
 
     async def aclose(self) -> None:
-        await self.prisma.disconnect()
+        try:
+            if self.native is not None:
+                await self.native.close()
+        finally:
+            await self.prisma.disconnect()
 
 
 @asynccontextmanager

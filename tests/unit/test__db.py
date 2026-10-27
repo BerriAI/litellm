@@ -34,3 +34,17 @@ async def test_lifespan_without_database_preserves_owner_error():
 
     with pytest.raises(RuntimeError, match="owner failed"):
         await fail()
+
+
+@pytest.mark.asyncio
+async def test_closing_disconnects_prisma_even_when_the_native_pool_fails_to_close():
+    prisma: Final = MagicMock()
+    prisma.disconnect = AsyncMock()
+    native: Final = MagicMock()
+    native.close = AsyncMock(side_effect=RuntimeError("native close failed"))
+
+    with pytest.raises(RuntimeError, match="native close failed"):
+        async with _db.lifespan(_db.Database(prisma=prisma, native=native)):
+            pass
+    native.close.assert_awaited_once()
+    prisma.disconnect.assert_awaited_once()

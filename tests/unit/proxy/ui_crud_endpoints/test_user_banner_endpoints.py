@@ -229,3 +229,44 @@ class TestUpdateUserBanner:
         response = client.patch("/update/user_banner", json=payload)
         assert response.status_code == 422
         mock_prisma.db.litellm_uisettings.upsert.assert_not_awaited()
+
+
+class _NativeDatabase:
+    def __init__(self, stored=None):
+        self.stored = stored
+
+    async def find_user_banner(self):
+        return self.stored
+
+    async def save_user_banner(self, settings):
+        self.stored = settings
+
+
+class TestNativeUserBannerBackend:
+    @pytest.fixture
+    def backends(self, monkeypatch):
+        prisma = MagicMock()
+        banners = _NativeDatabase()
+        monkeypatch.setitem(app.dependency_overrides, get_database, lambda: _db.Database(prisma=prisma, native=banners))
+        return prisma, banners
+
+    def test_published_banner_round_trips_through_the_native_backend(self, admin_auth, mock_audit_log, backends):
+        prisma, banners = backends
+        published = client.patch("/update/user_banner", json=PUBLISH_BODY).json()["banner"]
+
+        assert banners.stored == published
+        assert client.get("/get/user_banner").json() == published
+        assert prisma.mock_calls == []
+
+    @pytest.mark.parametrize(
+        "stored", [json.dumps(PUBLISHED_BANNER), PUBLISHED_BANNER], ids=["prisma-string", "object"]
+    )
+    def test_native_backend_reads_rows_written_by_either_backend(self, admin_auth, backends, stored):
+        _, banners = backends
+        banners.stored = stored
+        assert client.get("/get/user_banner").json() == PUBLISHED_BANNER
+
+    def test_native_backend_treats_invalid_stored_banner_as_disabled(self, admin_auth, backends):
+        _, banners = backends
+        banners.stored = {"enabled": True, "message": ""}
+        assert client.get("/get/user_banner").json() == DISABLED_BANNER

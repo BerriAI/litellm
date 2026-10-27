@@ -4229,6 +4229,7 @@ dependencies = [
  "litellm-cache-response",
  "litellm-callbacks-legacy-python",
  "litellm-core-utils",
+ "litellm-db",
  "litellm-host",
  "litellm-host-python",
  "litellm-http",

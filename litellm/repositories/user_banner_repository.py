@@ -1,4 +1,5 @@
 import json
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import ValidationError
@@ -8,6 +9,8 @@ from litellm.repositories.table_repositories import PrismaTableRepository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models  # noqa: F401  # resolved only from the quoted base-class subscript below
+
+    from litellm.rust_bridge.database import NativeDatabase
 
 USER_BANNER_ROW_ID: Final = "user_banner"
 
@@ -26,6 +29,17 @@ def parse_user_banner(raw_settings: object) -> UserBanner:
         return UserBanner.model_validate(parsed)
     except (json.JSONDecodeError, ValidationError):
         return UserBanner()
+
+
+@dataclass(frozen=True, slots=True)
+class NativeUserBannerRepository:
+    native: "NativeDatabase"
+
+    async def get_banner(self) -> UserBanner:
+        return parse_user_banner(await self.native.find_user_banner())
+
+    async def save_banner(self, banner: UserBanner) -> None:
+        await self.native.save_user_banner(banner.model_dump())
 
 
 class UserBannerRepository(PrismaTableRepository["prisma_models.LiteLLM_UISettings"]):

@@ -86,6 +86,7 @@ from litellm.constants import (
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
     LITELLM_UI_ALLOW_HEADERS,
     LITELLM_UI_SESSION_DURATION,
+    NATIVE_DATABASE_MAX_CONNECTIONS,
     OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
 )
@@ -214,6 +215,7 @@ if TYPE_CHECKING:
 
     from litellm.integrations.opentelemetry import OpenTelemetry
     from litellm.proxy.health_check_utils.shared_health_check_manager import SharedHealthCheckManager
+    from litellm.rust_bridge.database import NativeDatabase
 
     Span = _Span | Any
 else:
@@ -1420,6 +1422,15 @@ async def _connect_to_count_stored_values() -> SupportsRawQueries:
     return client.writer_db
 
 
+async def _connect_native_database() -> "NativeDatabase | None":
+    database_url: Final = get_secret_str("DATABASE_URL")
+    if database_url is None or get_secret_bool("LITELLM_NATIVE_DATABASE") is not True:
+        return None
+    from litellm.rust_bridge.database import connect_native_database
+
+    return await connect_native_database(database_url, NATIVE_DATABASE_MAX_CONNECTIONS)
+
+
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
     async with AsyncExitStack() as resources, _proxy_lifespan(app, resources) as state:
@@ -1552,7 +1563,11 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         )
 
     database: Final = await resources.enter_async_context(
-        _db.lifespan(None if prisma_client is None else _db.Database(prisma=prisma_client))
+        _db.lifespan(
+            None
+            if prisma_client is None
+            else _db.Database(prisma=prisma_client, native=await _connect_native_database())
+        )
     )
 
     await migrate_if_requested(
