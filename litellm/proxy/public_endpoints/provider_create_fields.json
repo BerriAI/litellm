@@ -4144,5 +4144,33 @@
       }
     ],
     "default_model_placeholder": "cursor/claude-4-sonnet"
+  },
+  {
+    "provider": "BIGMODEL",
+    "provider_display_name": "BigModel (Zhipu AI)",
+    "litellm_provider": "bigmodel",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "BigModel (Zhipu AI) API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://open.bigmodel.cn",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": "https://open.bigmodel.cn"
+      }
+    ],
+    "default_model_placeholder": "bigmodel/glm-5.3"
   }
 ]

@@ -9,9 +9,18 @@ import CredentialModal from "./CredentialModal";
 
 vi.mock("../networking", async () => {
   const actual = await vi.importActual("../networking");
+  const { readFileSync } = await import("node:fs");
+  const { resolve } = await import("node:path");
+  const metadata = JSON.parse(
+    readFileSync(
+      resolve(__dirname, "../../../../../litellm/proxy/public_endpoints/provider_create_fields.json"),
+      "utf8",
+    ),
+  ) as { provider: string }[];
   return {
     ...actual,
     getProviderCreateMetadata: vi.fn().mockResolvedValue([
+      ...metadata.filter((provider) => provider.provider === "BIGMODEL"),
       {
         provider: "OpenAI",
         provider_display_name: Providers.OpenAI,
@@ -156,6 +165,39 @@ const chooseProvider = async (user: ReturnType<typeof userEvent.setup>, provider
   const options = await screen.findAllByRole("option");
   await user.click(options.find((option) => option.textContent === provider) ?? options[0]);
 };
+
+describe("CredentialModal with BigModel metadata", () => {
+  it("requires a masked API key and shows the default base", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal();
+    await chooseProvider(user, Providers.BIGMODEL);
+    expect(await screen.findByLabelText("API Base")).toHaveValue("https://open.bigmodel.cn");
+    expect(screen.getByLabelText("BigModel (Zhipu AI) API Key")).toHaveAttribute("type", "password");
+    fill("Credential Name:", "bigmodel-key");
+    await user.click(screen.getByRole("button", { name: "Add Credential" }));
+    expect(await screen.findByText("Required")).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("saves the key and an explicit base for BigModel", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal();
+    await chooseProvider(user, Providers.BIGMODEL);
+    await screen.findByLabelText("BigModel (Zhipu AI) API Key");
+    fill("Credential Name:", "bigmodel-key");
+    fill("BigModel (Zhipu AI) API Key", "synthetic-bigmodel-key");
+    fill("API Base", "https://bigmodel-proxy.example");
+    await user.click(screen.getByRole("button", { name: "Add Credential" }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      {
+        credential_name: "bigmodel-key",
+        custom_llm_provider: "BIGMODEL",
+        credential_values: { api_key: "synthetic-bigmodel-key", api_base: "https://bigmodel-proxy.example" },
+      },
+      [],
+    );
+  });
+});
 
 describe("CredentialModal with Anthropic workload identity federation", () => {
   it("deletes stored exchange fields when switching to a static token", async () => {
