@@ -1,10 +1,11 @@
 import importlib
 import sys
+from typing import Final
 
 import pytest
 
-OLD_PACKAGE = "litellm.llms.anthropic.pass_through"
-NEW_PACKAGE = "litellm.llms.anthropic.messages"
+OLD_PACKAGE: Final = "litellm.llms.anthropic.pass_through"
+NEW_PACKAGE: Final = "litellm.llms.anthropic.messages"
 
 
 def _forget_old_package(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -20,10 +21,11 @@ def test_old_deep_import_is_the_new_module_object_and_warns(monkeypatch: pytest.
     from litellm.llms.anthropic.messages.native import handler as new_handler
 
     assert old_handler is new_handler
-    assert (
-        sys.modules[f"{OLD_PACKAGE}.adapters.transformation"] is sys.modules[f"{NEW_PACKAGE}.adapters.transformation"]
+    assert sys.modules[f"{OLD_PACKAGE}.messages.handler"] is new_handler
+    assert importlib.import_module(f"{OLD_PACKAGE}.adapters.transformation") is importlib.import_module(
+        f"{NEW_PACKAGE}.adapters.transformation"
     )
-    assert sys.modules[f"{OLD_PACKAGE}.safeguards"] is sys.modules[f"{NEW_PACKAGE}.safeguards"]
+    assert importlib.import_module(f"{OLD_PACKAGE}.safeguards") is importlib.import_module(f"{NEW_PACKAGE}.safeguards")
 
 
 def test_old_package_attribute_access_reaches_renamed_subpackage(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -31,4 +33,17 @@ def test_old_package_attribute_access_reaches_renamed_subpackage(monkeypatch: py
     with pytest.warns(DeprecationWarning, match=NEW_PACKAGE):
         old_package = importlib.import_module(OLD_PACKAGE)
 
-    assert old_package.messages.handler is sys.modules[f"{NEW_PACKAGE}.native.handler"]  # pyright: ignore[reportAny]  # module attributes are untyped
+    assert old_package.messages is importlib.import_module(f"{NEW_PACKAGE}.native")  # pyright: ignore[reportAny]  # module attributes are untyped
+    assert old_package.messages.handler is importlib.import_module(f"{NEW_PACKAGE}.native.handler")  # pyright: ignore[reportAny]  # module attributes are untyped
+    with pytest.raises(AttributeError, match="no attribute 'nope'"):
+        _ = old_package.nope  # pyright: ignore[reportAny]  # module attributes are untyped
+
+
+def test_old_transformation_import_loads_only_its_new_counterpart(monkeypatch: pytest.MonkeyPatch) -> None:
+    _forget_old_package(monkeypatch)
+    monkeypatch.delitem(sys.modules, f"{NEW_PACKAGE}.native.streaming_iterator", raising=False)
+    with pytest.warns(DeprecationWarning, match=NEW_PACKAGE):
+        old_transformation = importlib.import_module(f"{OLD_PACKAGE}.messages.transformation")
+
+    assert old_transformation is sys.modules[f"{NEW_PACKAGE}.native.transformation"]
+    assert f"{NEW_PACKAGE}.native.streaming_iterator" not in sys.modules, "shim imported the streaming iterator"

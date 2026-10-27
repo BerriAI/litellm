@@ -1,56 +1,84 @@
 import importlib
 import sys
 import warnings
-from collections.abc import Iterator
-from itertools import chain
-from pathlib import Path
+from collections.abc import Callable, Sequence
+from importlib.abc import Loader, MetaPathFinder
+from importlib.machinery import ModuleSpec
+from importlib.util import spec_from_loader
 from types import ModuleType
 from typing import Final
 
 
-def _old_name_for(new_module_name: str, renames: tuple[tuple[str, str], ...]) -> str:
-    for old_prefix, new_prefix in renames:
-        if new_module_name == new_prefix or new_module_name.startswith(new_prefix + "."):
-            return old_prefix + new_module_name[len(new_prefix) :]
-    return new_module_name
+class _AliasLoader(Loader):
+    """Hand the import system the module already loaded under its new name instead of executing a copy."""
+
+    def __init__(self, target: ModuleType) -> None:
+        self._target: Final = target
+        self._spec: Final = target.__spec__
+
+    def create_module(self, spec: ModuleSpec) -> ModuleType:
+        return self._target
+
+    def exec_module(self, module: ModuleType) -> None:
+        module.__spec__ = self._spec
 
 
-def _module_parts(path: Path, root: str) -> tuple[str, ...]:
-    relative: Final = path.relative_to(root).with_suffix("")
-    return relative.parts[:-1] if relative.name == "__init__" else relative.parts
+class _RenamedPackageFinder(MetaPathFinder):
+    def __init__(self, old_name: str, renames: tuple[tuple[str, str], ...]) -> None:
+        self._prefix: Final = old_name + "."
+        self._renames: Final = renames
+
+    def new_name_for(self, old_module_name: str) -> str | None:
+        if not old_module_name.startswith(self._prefix):
+            return None
+        for old_prefix, new_prefix in self._renames:
+            if old_module_name == old_prefix or old_module_name.startswith(old_prefix + "."):
+                return new_prefix + old_module_name[len(old_prefix) :]
+        return None
+
+    def find_spec(
+        self,
+        fullname: str,
+        path: Sequence[str] | None = None,
+        target: ModuleType | None = None,
+    ) -> ModuleSpec | None:
+        new_name: Final = self.new_name_for(fullname)
+        if new_name is None:
+            return None
+        module: Final = importlib.import_module(new_name)
+        return spec_from_loader(fullname, _AliasLoader(module), is_package=hasattr(module, "__path__"))
 
 
-def _module_names_under(root: str, package_name: str) -> Iterator[str]:
-    for path in Path(root).rglob("*.py"):
-        parts = _module_parts(path, root)
-        for depth in range(1, len(parts) + 1):
-            yield ".".join((package_name, *parts[:depth]))
+def alias_renamed_package(
+    old_name: str,
+    new_name: str,
+    *,
+    nested_renames: tuple[tuple[str, str], ...] = (),
+) -> Callable[[str], ModuleType]:
+    """Make every module of the package now at ``new_name`` importable under its old dotted name.
 
-
-def _submodule_names(package: ModuleType) -> tuple[str, ...]:
-    per_root: Final = (_module_names_under(root, package.__name__) for root in package.__path__)
-    return tuple(sorted(frozenset(chain.from_iterable(per_root))))
-
-
-def _register_alias(new_module_name: str, renames: tuple[tuple[str, str], ...], shim: ModuleType) -> None:
-    module: Final = importlib.import_module(new_module_name)
-    alias: Final = _old_name_for(new_module_name, renames)
-    sys.modules[alias] = module
-    parent_name, _, child_name = alias.rpartition(".")
-    setattr(sys.modules.get(parent_name, shim), child_name, module)
-
-
-def alias_renamed_package(old_name: str, new_name: str, *, nested_renames: tuple[tuple[str, str], ...] = ()) -> None:
-    """Register every module of the package now at ``new_name`` in ``sys.modules`` under its old dotted name.
-
-    ``nested_renames`` lists (old, new) dotted prefixes for sub-packages that changed name inside the move, longest
-    first, so a deep import of the old path resolves to the very same module object as the new path.
+    Nothing is imported up front: a meta path finder resolves ``old_name.x.y`` to the module object at
+    ``new_name.x.y`` the moment something imports it, so a deep import of the old path is the very same object
+    as the new path and importing one old module loads no more than importing its new counterpart would.
+    ``nested_renames`` lists (old, new) dotted prefixes for sub-packages that changed name inside the move,
+    longest first. The returned function is the shim package's module ``__getattr__``, so attribute access on
+    the old package reaches the renamed sub-packages too.
     """
     warnings.warn(
         f"{old_name} moved to {new_name}; update imports, the old path will be removed in a future release",
         DeprecationWarning,
         stacklevel=3,
     )
-    renames: Final = (*nested_renames, (old_name, new_name))
-    for new_module_name in _submodule_names(importlib.import_module(new_name)):
-        _register_alias(new_module_name, renames, sys.modules[old_name])
+    finder: Final = _RenamedPackageFinder(old_name, (*nested_renames, (old_name, new_name)))
+    if not any(
+        isinstance(entry, _RenamedPackageFinder) and entry.new_name_for(old_name + ".x") for entry in sys.meta_path
+    ):
+        sys.meta_path.insert(0, finder)
+
+    def getattr_(name: str) -> ModuleType:
+        try:
+            return importlib.import_module(f"{old_name}.{name}")
+        except ModuleNotFoundError as error:
+            raise AttributeError(f"module {old_name!r} has no attribute {name!r}") from error
+
+    return getattr_
