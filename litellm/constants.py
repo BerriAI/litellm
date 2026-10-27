@@ -1134,6 +1134,7 @@ openai_compatible_providers: Final[list[str]] = [
     "openinfer",
     "darkbloom",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
+    "runinfra",
     "cognition",
     "coralbricks",
     "cortecs",
