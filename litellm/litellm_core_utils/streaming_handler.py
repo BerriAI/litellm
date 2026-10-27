@@ -1928,6 +1928,13 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason = "tool_calls"
         return model_response
 
+    def _missing_required_finish_reason_error(self) -> httpx.RemoteProtocolError | None:
+        if self.custom_llm_provider != "hosted_vllm":
+            return None
+        if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
+            return None
+        return httpx.RemoteProtocolError("Upstream hosted_vllm stream ended before a finish_reason was received")
+
     def _record_usage_only_chunk(self, model_response: "ModelResponseStream") -> None:
         """
         Keep provider usage-only chunks (e.g. OpenRouter's post-finish chunk, which carries a
@@ -2104,6 +2111,16 @@ class CustomStreamWrapper:
                     return response
 
         except StopIteration:
+            incomplete_stream_error: Final = self._missing_required_finish_reason_error()
+            if incomplete_stream_error is not None:
+                incomplete_traceback: Final = traceback.format_exc()
+                if self.logging_obj is not None:
+                    self._record_partial_usage_for_failure()
+                    threading.Thread(
+                        target=self.logging_obj.failure_handler,
+                        args=(incomplete_stream_error, incomplete_traceback),
+                    ).start()
+                self._handle_stream_fallback_error(incomplete_stream_error)
             if self.sent_last_chunk is True:
                 complete_streaming_response: Final = self._build_complete_streaming_response()
                 response = self._new_usage_chunk()
@@ -2307,6 +2324,9 @@ class CustomStreamWrapper:
                             continue
                         return usage_free_chunk
         except (StopAsyncIteration, StopIteration):
+            incomplete_stream_error: Final = self._missing_required_finish_reason_error()
+            if incomplete_stream_error is not None:
+                self._log_stream_failure_and_raise(incomplete_stream_error)
             return await self._finalize_completed_stream(cache_hit=cache_hit)
         except httpx.TimeoutException as e:  # if httpx read timeout error occues
             traceback_exception = traceback.format_exc()
