@@ -18,9 +18,11 @@
 
 ## Commands
 - One typed method per command, built with `redis::cmd`. Empty batches (MGET, DEL) return without a round trip, since Redis rejects an empty MGET
+- On cluster, redis-rs splits MGET and DEL by slot and returns MGET values in input order. Other multi-key commands are not split, so a new one needs a cross-slot test
 - TTLs are `Duration` and are sent in milliseconds (`PX`, `PEXPIRE`, `PTTL`)
 
 ## Tests
 - Against real Redis from `litellm-redis-testing`, never a mocked wire or asserted command bytes
+- Every command test runs on each topology through `#[values(Topology::Standalone, Topology::Cluster)]`. A test is single-topology only when the behavior exists on one (a `db` number has no cluster meaning)
 - Assert values and Redis state. Outages come from the container (`restart`, `freeze` / `thaw`), not `DEBUG`, which the official image disables
 - Use a short client timeout in outage tests so they stay fast. Never sleep to wait for a state; poll with a deadline

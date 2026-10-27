@@ -15,6 +15,7 @@ pub struct RedisConfig {
 pub enum Endpoint {
     Url(String),
     Host(HostEndpoint),
+    Cluster(ClusterEndpoint),
 }
 
 pub struct HostEndpoint {
@@ -26,26 +27,28 @@ pub struct HostEndpoint {
     pub db: i64,
 }
 
-impl Endpoint {
-    pub(crate) fn connection_info(&self) -> RedisResult<ConnectionInfo> {
-        match self {
-            Self::Url(url) => url.as_str().into_connection_info(),
-            Self::Host(host) => host.connection_info(),
-        }
+pub struct ClusterEndpoint {
+    pub nodes: Vec<ClusterNode>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub tls: bool,
+}
+
+pub struct ClusterNode {
+    pub host: String,
+    pub port: u16,
+}
+
+impl ClusterEndpoint {
+    pub(crate) fn addrs(&self) -> impl Iterator<Item = ConnectionAddr> + '_ {
+        self.nodes
+            .iter()
+            .map(|node| addr(&node.host, node.port, self.tls))
     }
 }
 
 impl HostEndpoint {
-    fn connection_info(&self) -> RedisResult<ConnectionInfo> {
-        let addr = match self.tls {
-            true => ConnectionAddr::TcpTls {
-                host: self.host.clone(),
-                port: self.port,
-                insecure: false,
-                tls_params: None,
-            },
-            false => ConnectionAddr::Tcp(self.host.clone(), self.port),
-        };
+    pub(crate) fn connection_info(&self) -> RedisResult<ConnectionInfo> {
         let settings = RedisConnectionInfo::default().set_db(self.db);
         let settings = match &self.username {
             Some(username) => settings.set_username(username),
@@ -55,6 +58,20 @@ impl HostEndpoint {
             Some(password) => settings.set_password(password),
             None => settings,
         };
-        Ok(addr.into_connection_info()?.set_redis_settings(settings))
+        Ok(addr(&self.host, self.port, self.tls)
+            .into_connection_info()?
+            .set_redis_settings(settings))
+    }
+}
+
+fn addr(host: &str, port: u16, tls: bool) -> ConnectionAddr {
+    match tls {
+        true => ConnectionAddr::TcpTls {
+            host: host.to_owned(),
+            port,
+            insecure: false,
+            tls_params: None,
+        },
+        false => ConnectionAddr::Tcp(host.to_owned(), port),
     }
 }
