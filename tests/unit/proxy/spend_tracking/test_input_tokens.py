@@ -30,6 +30,32 @@ async def test_large_input_is_still_counted() -> None:
     assert isinstance(counts, MappingProxyType)
 
 
+def test_count_input_tokens_for_model_counts_anthropic_auto_tool_choice() -> None:
+    model: Final = "claude-sonnet-5-5"
+    body_without_tool_choice: Final = {
+        "model": model,
+        "messages": [{"role": "user", "content": "weather in pune?"}],
+        "tools": [
+            {
+                "name": "get_weather",
+                "description": "Get the weather for a location",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            }
+        ],
+    }
+    body_with_tool_choice: Final = body_without_tool_choice | {"tool_choice": {"type": "auto"}}
+
+    expected: Final = count_input_tokens_for_model(request_body=body_without_tool_choice, model=model)
+    actual: Final = count_input_tokens_for_model(request_body=body_with_tool_choice, model=model)
+
+    assert isinstance(expected, int)
+    assert actual == expected
+
+
 _COMPACTION_ITEM: Final = {
     "type": "compaction",
     "id": "cmp_1",

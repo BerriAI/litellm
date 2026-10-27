@@ -737,7 +737,7 @@ def _anthropic_stream_forwards_ping_live(chunk: object, has_generated_content: b
     """A `ping` keepalive reaches the client live whenever the stream has not committed: it carries no
     lifecycle, so it cannot create overlapping lifecycles on the wire, and it keeps the connection alive
     while lifecycle frames sit buffered for a possible fallback during a long thinking pass."""
-    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import is_anthropic_ping_chunk
+    from litellm.llms.anthropic.messages.native.streaming_iterator import is_anthropic_ping_chunk
 
     return not has_generated_content and is_anthropic_ping_chunk(chunk)
 
@@ -753,7 +753,7 @@ def _without_line_breaks(value: object) -> str:
 def _anthropic_stream_error_is_gateway_verdict(chunk: object) -> bool:
     """AgenticAnthropicStreamingIterator's own retrieval-failure frame is the gateway's verdict, not a provider
     failure: another deployment would rerun the same failed hook, so it reaches the client instead of falling back."""
-    from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator import (
+    from litellm.llms.anthropic.messages.native.agentic_streaming_iterator import (
         is_server_fulfilled_tool_leak_error,
     )
 
@@ -917,7 +917,7 @@ def _stream_commits_now(chunk: object, has_generated_content: bool, buffered_chu
     pre-content buffer cap was hit) rather than keep buffering lifecycle
     frames toward a possible fallback.
     """
-    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+    from litellm.llms.anthropic.messages.native.streaming_iterator import (
         is_anthropic_content_delta_chunk,
     )
 
@@ -6307,7 +6307,7 @@ class Router:
                 response=response,
                 kwargs=kwargs,
             ):
-                from litellm.llms.anthropic.pass_through.messages.utils import (
+                from litellm.llms.anthropic.messages.native.utils import (
                     safeguard_refusal_error,
                 )
 
@@ -6424,16 +6424,16 @@ class Router:
         including pings and provider error frames, is forwarded live and
         verbatim instead.
         """
-        from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
+        from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
             FakeAnthropicMessagesStreamIterator,
         )
-        from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+        from litellm.llms.anthropic.messages.native.streaming_iterator import (
             aclose_if_supported,
             aclose_superseded_attempt,
             parse_anthropic_error_event,
             parse_anthropic_refusal_stop_details,
         )
-        from litellm.llms.anthropic.pass_through.messages.utils import (
+        from litellm.llms.anthropic.messages.native.utils import (
             safeguard_refusal_error,
         )
 
@@ -6797,7 +6797,7 @@ class Router:
         A retry stamps the retry headers async_function_with_retries would have for a pre-stream retry;
         a later hop the recovered stream makes replaces them with its own, the way a fallback's do.
         """
-        from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+        from litellm.llms.anthropic.messages.native.streaming_iterator import (
             aclose_if_supported,
             anthropic_messages_response_as_sse_events,
         )
@@ -9931,7 +9931,7 @@ class Router:
         when a content-policy fallback is configured; a plain refusal without stop_details, or
         any response with nothing configured, is returned to the client unchanged.
         """
-        from litellm.llms.anthropic.pass_through.messages.utils import (
+        from litellm.llms.anthropic.messages.native.utils import (
             get_safeguard_refusal_stop_details,
         )
 
@@ -14148,7 +14148,7 @@ class Router:
         `tools` (Chat Completions, Responses and Anthropic Messages shapes) and the
         Anthropic Messages top-level `system` block.
         """
-        from litellm.llms.anthropic.pass_through.messages.utils import (
+        from litellm.llms.anthropic.messages.native.utils import (
             anthropic_system_to_openai_message,
         )
 

@@ -368,7 +368,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         from starlette.datastructures import Headers
 
-        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
         )
 

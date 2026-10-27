@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from itertools import accumulate, chain
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 from unittest.mock import MagicMock, sentinel
 
 import anyio.to_thread
@@ -41,7 +41,8 @@ from litellm.litellm_core_utils.token_counter import (
     offload_token_count,
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
-from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from tests.large_text import text
 from tests.unit.litellm_core_utils.event_loop_lag import (
     assert_loop_stayed_free,
@@ -656,6 +657,37 @@ def test_token_counter_tool_choice_adds_nothing_for_deepseek_v4(tool_choice: obj
     assert token_counter_new(
         model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice
     ) == token_counter_new(model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools)
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "expected_tool_choice"),
+    [
+        pytest.param({"type": "auto"}, None, id="anthropic-auto"),
+        pytest.param({"type": "any"}, None, id="anthropic-any"),
+        pytest.param({"type": "none"}, "none", id="anthropic-none"),
+        pytest.param(
+            {"type": "tool", "name": "get_weather"},
+            {"type": "function", "function": {"name": "get_weather"}},
+            id="anthropic-tool",
+        ),
+        pytest.param(
+            {"type": "function", "name": "get_weather"},
+            {"type": "function", "function": {"name": "get_weather"}},
+            id="responses-function",
+        ),
+    ],
+)
+def test_token_counter_counts_anthropic_tool_choices_like_openai_choices(
+    tool_choice: Mapping[str, object], expected_tool_choice: str | Mapping[str, object] | None
+) -> None:
+    messages: Final = cast(list[AllMessageValues], list(_USER_MESSAGES))
+    tools: Final = cast(list[ChatCompletionToolParam], [_openai_tool(_WEATHER_FUNCTION)])
+
+    assert token_counter_new(
+        model="gpt-4", messages=messages, tools=tools, tool_choice=tool_choice
+    ) == token_counter_new(
+        model="gpt-4", messages=messages, tools=tools, tool_choice=expected_tool_choice
+    )
 
 
 @pytest.mark.parametrize("model", ["DeepSeek-V4-Flash-0731", "databricks-qwen35-122b-a10b"])
