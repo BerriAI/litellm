@@ -525,8 +525,6 @@ class CatalogSnapshots:
                 self.manager.invalidate_oauth_discovery_state(server_id)
         self._database_identity = database_identity
         self.manager.registry = registered_registry
-        if not reuse_unchanged:
-            self.manager.clear_initialize_instructions()
         warn_on_shared_identifier_prefixes(registered_registry.values())
         # A discovery task may have published into ``previous_registry`` while
         # this replacement was being staged. Reconcile every published entry

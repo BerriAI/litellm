@@ -10461,29 +10461,82 @@ class TestMCPServerManagerUpstreamInstructionsCache:
         manager = MCPServerManager()
         assert manager._upstream_initialize_instructions_by_server_id.get("nonexistent") is None
 
-    def test_remember_stores_stripped_value(self):
-        """_remember_upstream_initialize_instructions stores a stripped string."""
-        manager = MCPServerManager()
-        fake_server = MagicMock(server_id="srv")
-        fake_client = MagicMock(_last_initialize_instructions="  hello \n")
-        manager._remember_upstream_initialize_instructions(fake_server, fake_client)
-        assert manager._upstream_initialize_instructions_by_server_id.get("srv") == "hello"
+    @pytest.mark.parametrize(
+        ("answered", "cached"),
+        [("  hello \n", "hello"), ("", None), ("   ", None), (None, "previous text")],
+        ids=["replaces_with_stripped_text", "drops_when_upstream_sent_none", "drops_blank", "keeps_without_initialize"],
+    )
+    def test_remember_applies_the_last_completed_initialize(self, answered: str | None, cached: str | None) -> None:
+        manager: Final = MCPServerManager()
+        manager._upstream_initialize_instructions_by_server_id["srv"] = "previous text"
+        manager._remember_upstream_initialize_instructions(
+            MagicMock(server_id="srv"),
+            MagicMock(_last_initialize_instructions=answered),
+            manager.initialize_instructions_generation("srv"),
+        )
+        assert manager._upstream_initialize_instructions_by_server_id.get("srv") == cached
 
-    def test_remember_ignores_empty_string(self):
-        """Whitespace-only instructions are not stored."""
-        manager = MCPServerManager()
-        fake_server = MagicMock(server_id="srv")
-        fake_client = MagicMock(_last_initialize_instructions="   ")
-        manager._remember_upstream_initialize_instructions(fake_server, fake_client)
-        assert manager._upstream_initialize_instructions_by_server_id.get("srv") is None
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("writer", ["prefetch", "health_check", "tools_list", "tool_call"])
+    @pytest.mark.parametrize(
+        ("mid_flight", "cached"),
+        [("nothing", "upstream text"), ("discovery_refresh", "upstream text"), ("server_edit", None)],
+        ids=["unchanged", "discovery_refresh_mid_flight", "edited_mid_flight"],
+    )
+    async def test_writer_skips_instructions_from_a_session_that_outlived_a_server_edit(
+        self, writer: str, mid_flight: str, cached: str | None
+    ) -> None:
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(
+            server_id="srv",
+            name="srv",
+            url="https://srv.example/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+        )
+        manager.registry = {server.server_id: server}
 
-    def test_remember_ignores_none(self):
-        """None instructions are not stored."""
-        manager = MCPServerManager()
-        fake_server = MagicMock(server_id="srv")
-        fake_client = MagicMock(_last_initialize_instructions=None)
-        manager._remember_upstream_initialize_instructions(fake_server, fake_client)
-        assert manager._upstream_initialize_instructions_by_server_id.get("srv") is None
+        def upstream(result: object) -> AsyncMock:
+            async def respond(*args: object, **kwargs: object) -> object:
+                match mid_flight:
+                    case "server_edit":
+                        manager.invalidate_server_definition_caches(server.server_id)
+                    case "discovery_refresh":
+                        manager.invalidate_discovery_lists(server.server_id)
+                return result
+
+            return AsyncMock(side_effect=respond)
+
+        manager.create_mcp_client = AsyncMock(
+            return_value=SimpleNamespace(
+                _last_initialize_instructions="upstream text",
+                run_with_session=upstream("ok"),
+                list_tools_page=upstream(ListToolsResult(tools=[])),
+                call_tool=upstream(CallToolResult(content=[], isError=False)),
+            )
+        )
+
+        match writer:
+            case "prefetch":
+                await manager.ensure_upstream_initialize_instructions_cached(server)
+            case "health_check":
+                await manager.health_check_server(server.server_id)
+            case "tools_list":
+                await manager.get_tools_page(server, params=PaginatedRequestParams())
+            case _:
+                await manager._call_regular_mcp_tool(
+                    mcp_server=server,
+                    original_tool_name="tool",
+                    arguments={},
+                    tasks=[],
+                    mcp_auth_header=None,
+                    mcp_server_auth_headers=None,
+                    oauth2_headers=None,
+                    raw_headers=None,
+                    proxy_logging_obj=None,
+                )
+
+        assert manager._upstream_initialize_instructions_by_server_id.get(server.server_id) == cached
 
     @pytest.mark.asyncio
     async def test_load_servers_from_config_clears_cache(self, config_only_mcp_manager_factory):
@@ -18730,16 +18783,40 @@ async def test_catalog_failed_openapi_row_does_not_publish_partial_handlers(monk
 
 
 @pytest.mark.asyncio
-async def test_catalog_unchanged_read_preserves_derived_initialize_instructions(monkeypatch):
-    read_rows = AsyncMock(return_value=[_catalog_row()])
+@pytest.mark.parametrize("full_reload", [False, True], ids=["request_path_refresh", "scheduled_reload"])
+async def test_catalog_refresh_drops_initialize_instructions_only_for_changed_servers(
+    monkeypatch: pytest.MonkeyPatch, full_reload: bool
+) -> None:
+    def row(server_id: str, updated_day: int) -> LiteLLM_MCPServerTable:
+        return LiteLLM_MCPServerTable(
+            server_id=server_id,
+            server_name=server_id,
+            transport=MCPTransport.http,
+            url=f"https://{server_id}.example/mcp",
+            created_at=datetime(2026, 1, 1),
+            updated_at=datetime(2026, 1, updated_day),
+        )
+
+    read_rows: Final = AsyncMock(return_value=[row("unchanged", 1), row("edited", 1), row("deleted", 1)])
     _catalog_database(monkeypatch, read_rows)
-    manager = MCPServerManager()
+    manager: Final = MCPServerManager()
     await manager.catalog.list()
-    manager._upstream_initialize_instructions_by_server_id = {"catalog-server": "cached instructions"}
-    manager._upstream_initialize_instructions_probed_at = {"catalog-server": 123.0}
-    await manager.catalog.list()
-    assert manager._upstream_initialize_instructions_by_server_id == {"catalog-server": "cached instructions"}
-    assert manager._upstream_initialize_instructions_probed_at == {"catalog-server": 123.0}
+    manager._upstream_initialize_instructions_by_server_id = {
+        "unchanged": "unchanged text",
+        "edited": "stale edited text",
+        "deleted": "stale deleted text",
+        "not-in-db": "config server text",
+    }
+    manager._upstream_initialize_instructions_probed_at = {"unchanged": 1.0, "edited": 2.0, "deleted": 3.0}
+    read_rows.return_value = [row("unchanged", 1), row("edited", 2)]
+
+    await (manager.reload_servers_from_database() if full_reload else manager.catalog.list())
+
+    assert manager._upstream_initialize_instructions_by_server_id == {
+        "unchanged": "unchanged text",
+        "not-in-db": "config server text",
+    }
+    assert manager._upstream_initialize_instructions_probed_at == {"unchanged": 1.0}
 
 
 @pytest.mark.asyncio
