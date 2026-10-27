@@ -57,9 +57,7 @@ def get_hf_task_embedding_for_model(
     return pipeline_tag
 
 
-async def async_get_hf_task_embedding_for_model(
-    model: str, task_type: str | None, api_base: str, timeout: float | httpx.Timeout | None = None
-) -> object:
+async def async_get_hf_task_embedding_for_model(model: str, task_type: str | None, api_base: str) -> object:
     if task_type is not None:
         if task_type in get_args(hf_tasks_embeddings):
             return task_type
@@ -69,7 +67,7 @@ async def async_get_hf_task_embedding_for_model(
         llm_provider=litellm.LlmProviders.HUGGINGFACE,
     )
 
-    model_info: Final = await http_client.get(url=f"{api_base}/api/models/{model}", timeout=timeout)
+    model_info: Final = await http_client.get(url=f"{api_base}/api/models/{model}")
 
     model_info_dict: Final = decoded_json_object(_DECODED_JSON.validate_python(model_info.json()))
 
@@ -111,11 +109,8 @@ class HuggingFaceEmbedding(BaseLLM):
         embed_url: str,
         input: list,
         optional_params: dict,
-        timeout: float | httpx.Timeout | None = None,
     ) -> dict:
-        hf_task = await async_get_hf_task_embedding_for_model(
-            model=model, task_type=task_type, api_base=HF_HUB_URL, timeout=timeout
-        )
+        hf_task = await async_get_hf_task_embedding_for_model(model=model, task_type=task_type, api_base=HF_HUB_URL)
 
         data: Final = self._transform_input_on_pipeline_tag(input=input, pipeline_tag=hf_task)
 
@@ -177,9 +172,7 @@ class HuggingFaceEmbedding(BaseLLM):
                     model=model, task_type=task_type, api_base=HF_HUB_URL, timeout=timeout
                 )
             elif call_type == "async":
-                return self._async_transform_input(
-                    model=model, task_type=task_type, embed_url=embed_url, input=input, timeout=timeout
-                )
+                return self._async_transform_input(model=model, task_type=task_type, embed_url=embed_url, input=input)
 
             data = self._transform_input_on_pipeline_tag(input=input, pipeline_tag=hf_task)
 
