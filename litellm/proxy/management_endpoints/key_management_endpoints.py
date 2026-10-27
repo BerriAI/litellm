@@ -5261,7 +5261,11 @@ async def generate_key_helper_fn(
             saved_token["metadata"] = json.loads(saved_token["metadata"])
         if isinstance(saved_token["permissions"], str):
             saved_token["permissions"] = json.loads(saved_token["permissions"])
-        if "get_spend_routes" in saved_token["permissions"] and premium_user is not True:
+        if (
+            isinstance(saved_token["permissions"], dict)
+            and "get_spend_routes" in saved_token["permissions"]
+            and premium_user is not True
+        ):
             require_enterprise_license("get_spend_routes")
         if isinstance(saved_token["model_max_budget"], str):
             saved_token["model_max_budget"] = json.loads(saved_token["model_max_budget"])
