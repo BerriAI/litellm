@@ -1,5 +1,7 @@
 from typing import TYPE_CHECKING, Final
 
+import httpx
+
 import litellm
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 
@@ -20,7 +22,9 @@ def _normalize_event_hook(
     return mode
 
 
-def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> TrendAIGuardrail:
+def initialize_guardrail(
+    litellm_params: "LitellmParams", guardrail: "Guardrail", *, async_handler: httpx.AsyncClient | None = None
+) -> TrendAIGuardrail:
     settings: Final = TrendAISettings.model_validate(litellm_params.model_dump(mode="python", exclude_none=True))
     guardrail_name: Final = guardrail["guardrail_name"]
     callback: Final = TrendAIGuardrail(
@@ -31,6 +35,8 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         timeout=settings.timeout,
         stream_overlap_size=settings.stream_overlap_size,
         response_content_chunk_size_bytes=settings.response_content_chunk_size_bytes,
+        streaming_buffer_until_moderated=settings.streaming_buffer_until_moderated,
+        async_handler=async_handler,
         guardrail_name=guardrail_name,
         event_hook=_normalize_event_hook(litellm_params.mode),
         default_on=litellm_params.default_on is True,

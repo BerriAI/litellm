@@ -1,5 +1,7 @@
+import asyncio
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from contextlib import aclosing
 from copy import deepcopy
 from functools import reduce
 from typing import Final, Literal
@@ -26,14 +28,19 @@ from litellm.proxy.guardrails.guardrail_hooks.trendai.trendai import (
     OPENAI_CHAT_COMPLETION_RESPONSE_V1,
     PLUGIN_VERSION,
 )
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.utils import (
     CallTypes,
     Choices,
+    Delta,
     GenericGuardrailAPIInputs,
     Message,
     ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
 )
 
 
@@ -816,6 +823,108 @@ def test_utf8_windows_respect_byte_limits_and_character_overlap(
 
     assert [window.text for window in windows] == list(expected)
     assert all(content[window.start : window.start + len(window.text)] == window.text for window in windows)
+
+
+async def _streaming_response(fragments: Sequence[str]) -> AsyncIterator[ModelResponseStream]:
+    for text in fragments:
+        yield ModelResponseStream(
+            id="chatcmpl-trendai-stream",
+            created=0,
+            model="test-model",
+            choices=[StreamingChoices(index=0, delta=Delta(content=text))],
+        )
+    yield ModelResponseStream(
+        id="chatcmpl-trendai-stream",
+        created=0,
+        model="test-model",
+        choices=[StreamingChoices(index=0, delta=Delta(content=None), finish_reason="stop")],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("config", "buffered"),
+    [
+        ({}, True),
+        ({"streaming_buffer_until_moderated": None}, True),
+        ({"streaming_buffer_until_moderated": True}, True),
+        ({"streaming_buffer_until_moderated": False}, False),
+    ],
+    ids=["omitted", "null", "enabled", "disabled"],
+)
+async def test_initialized_stream_waits_for_moderation_unless_buffering_is_disabled(
+    config: Mapping[str, bool | None], buffered: bool
+) -> None:
+    moderated: Final = asyncio.Event()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        moderated.set()
+        return httpx.Response(200, json={"action": "allow"})
+
+    params: Final = LitellmParams.model_validate(
+        {
+            "guardrail": "trendai",
+            "mode": "post_call",
+            "api_key": "test-key",
+            "api_base": "https://guard.example.com",
+            **config,
+        }
+    )
+    fragments: Final = ("first ", "second ", "last")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        callback: Final = initialize_guardrail(params, {"guardrail_name": "trendai-buffering"}, async_handler=client)
+        try:
+            async with aclosing(
+                UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+                    response=_streaming_response(fragments),
+                    request_data={"metadata": {"guardrails": ["trendai-buffering"]}},
+                    guardrail_to_apply=callback,
+                )
+            ) as stream:
+                first: Final = ModelResponseStream.model_validate(await anext(stream))
+                assert moderated.is_set() is buffered
+                remaining: Final = tuple([ModelResponseStream.model_validate(item) async for item in stream])
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_all_lists(callback)
+
+    chunks: Final = (first, *remaining)
+    contents: Final = (chunk.choices[0].delta.content or "" for chunk in chunks)
+    assert "".join(contents) == "".join(fragments)
+    assert chunks[-1].choices[0].finish_reason == "stop"
+    assert moderated.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verdict", ["block", "provider_failure"])
+async def test_default_buffering_withholds_all_chunks_when_a_later_window_fails(
+    verdict: Literal["block", "provider_failure"],
+) -> None:
+    respond, scanned = _engine(
+        block_on="zzzzz" if verdict == "block" else None,
+        fail_on="zzzzz" if verdict == "provider_failure" else None,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        callback: Final = _guardrail(
+            async_handler=client,
+            event_hook=GuardrailEventHooks.post_call,
+            response_content_chunk_size_bytes=5,
+            stream_overlap_size=0,
+        )
+        async with aclosing(
+            UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+                response=_streaming_response(("aaaaa", "bbbbb", "zzzzz", "ccccc")),
+                request_data={"metadata": {"guardrails": ["trendai"]}},
+                guardrail_to_apply=callback,
+            )
+        ) as stream:
+            with pytest.raises(GuardrailRaisedException) as raised:
+                await anext(stream)
+
+    assert raised.value.status_code == (400 if verdict == "block" else 503)
+    assert raised.value.blocked_content is (verdict == "block")
+    assert scanned == ["aaaaa", "bbbbb", "zzzzz"]
 
 
 def _logged_call(user_text: str, assistant_text: str) -> tuple[dict[str, object], ModelResponse]:

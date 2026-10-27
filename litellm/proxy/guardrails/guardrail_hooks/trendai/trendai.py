@@ -87,6 +87,7 @@ class TrendAIGuardrail(CustomGuardrail):
             GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None
         ) = None,
         default_on: bool = False,
+        streaming_buffer_until_moderated: bool = True,
     ) -> None:
         resolved_api_key: Final = api_key or os.environ.get("TMV1_API_KEY")
         if not resolved_api_key:
@@ -116,6 +117,7 @@ class TrendAIGuardrail(CustomGuardrail):
         self.timeout = timeout
         self.stream_overlap_size: int = stream_overlap_size
         self.response_content_chunk_size_bytes: int = response_content_chunk_size_bytes
+        self.streaming_buffer_until_moderated: bool = streaming_buffer_until_moderated
         self.async_handler: _AsyncHTTPClient = async_handler or get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
