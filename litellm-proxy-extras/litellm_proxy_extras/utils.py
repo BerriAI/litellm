@@ -16,6 +16,13 @@ from typing import TYPE_CHECKING, Final, Optional, Protocol, Union
 from litellm_proxy_extras import prisma_toolchain
 from litellm_proxy_extras._logging import logger
 from litellm_proxy_extras._redaction import _redact_credentials
+from litellm_proxy_extras.migration_data_checks import (
+    Finding,
+    find_blockers,
+    migration_data_check_timeout_seconds,
+    pending_change_checks,
+    report,
+)
 from litellm_proxy_extras.migration_lock import held_migration_lock
 from litellm_proxy_extras.prisma_toolchain import (
     PRISMA_COMMAND_TIMEOUT_ENV_VAR,
@@ -28,7 +35,11 @@ from litellm_proxy_extras.replica_identity import (
     REPLICA_IDENTITY_FULL_ENV_VAR,
     apply_replica_identity_full,
 )
-from litellm_proxy_extras.request_log_indexes import ensure_request_log_indexes, filter_request_log_index_diff
+from litellm_proxy_extras.request_log_indexes import (
+    REQUEST_LOG_INDEXES,
+    ensure_request_log_indexes,
+    filter_request_log_index_diff,
+)
 
 if TYPE_CHECKING:
     import psycopg
@@ -53,9 +64,7 @@ def _get_prisma_env() -> dict:
     if str_to_bool(os.getenv("PRISMA_OFFLINE_MODE")):
         # These env vars prevent Prisma from attempting downloads
         prisma_env["NPM_CONFIG_PREFER_OFFLINE"] = "true"
-        prisma_env["NPM_CONFIG_CACHE"] = os.getenv(
-            "NPM_CONFIG_CACHE", "/app/.cache/npm"
-        )
+        prisma_env["NPM_CONFIG_CACHE"] = os.getenv("NPM_CONFIG_CACHE", "/app/.cache/npm")
     return prisma_env
 
 
@@ -85,6 +94,7 @@ class _InvalidIndex:
     schema: str
     name: str
     table_size: str
+
 
 MAX_MIGRATE_DEPLOY_ATTEMPTS = 4
 LIBPQ_URL_PARAMS: Final = frozenset(
@@ -135,9 +145,7 @@ class _MigrateAttemptBudget:
 
 
 _SPEND_LOGS_ALTER_RE = re.compile(r'^ALTER\s+TABLE\s+"LiteLLM_SpendLogs"\s', re.IGNORECASE)
-_SPEND_LOGS_ARTIFACT_DROP_RE = re.compile(
-    r'^DROP\s+TABLE\s+"LiteLLM_SpendLogs_[^"]*"', re.IGNORECASE
-)
+_SPEND_LOGS_ARTIFACT_DROP_RE = re.compile(r'^DROP\s+TABLE\s+"LiteLLM_SpendLogs_[^"]*"', re.IGNORECASE)
 _SPEND_LOGS_PK_CLAUSE_RE = re.compile(
     r'^(?:DROP\s+CONSTRAINT\s+"[^"]*_pkey"'
     r'|ADD\s+(?:CONSTRAINT\s+"[^"]*"\s+)?PRIMARY\s+KEY\s*\([^)]*\))$',
@@ -146,9 +154,9 @@ _SPEND_LOGS_PK_CLAUSE_RE = re.compile(
 
 PARTITIONED_SPEND_LOGS_PUSH_ERROR = (
     "LiteLLM_SpendLogs is a partitioned table (see db_scripts/partition_spend_logs.sql), "
-    "so its primary key must include the partition key (\"startTime\"). `prisma db push` "
+    'so its primary key must include the partition key ("startTime"). `prisma db push` '
     "reconciles the database against schema.prisma, which declares the unpartitioned "
-    "primary key (\"request_id\"), and Postgres rejects that rewrite with: unique "
+    'primary key ("request_id"), and Postgres rejects that rewrite with: unique '
     "constraint on partitioned table must include all partitioning columns. Start the "
     "proxy without --use_prisma_db_push so it uses `prisma migrate deploy`, which only "
     "applies shipped migrations and leaves the partitioned primary key alone."
@@ -157,9 +165,7 @@ PARTITIONED_SPEND_LOGS_PUSH_ERROR = (
 
 def _without_sql_comments(statement: str) -> str:
     return "\n".join(
-        line
-        for line in statement.splitlines()
-        if line.strip() and not line.strip().startswith("--")
+        line for line in statement.splitlines() if line.strip() and not line.strip().startswith("--")
     ).strip()
 
 
@@ -169,7 +175,7 @@ def _without_spend_logs_pk_clauses(statement: str) -> Optional[str]:
         return statement
     kept = tuple(
         clause.strip()
-        for clause in statement[prefix_match.end():].split(",\n")
+        for clause in statement[prefix_match.end() :].split(",\n")
         if not _SPEND_LOGS_PK_CLAUSE_RE.match(clause.strip())
     )
     if not kept:
@@ -243,8 +249,7 @@ def _get_prisma_command() -> str:
 
         # If not found, log warning and fall back
         logger.warning(
-            f"Prisma CLI not found at {default_cli_path}. "
-            "Falling back to Python wrapper (may attempt downloads)"
+            f"Prisma CLI not found at {default_cli_path}. Falling back to Python wrapper (may attempt downloads)"
         )
 
     # Fall back to the Python wrapper (will work in online mode)
@@ -331,9 +336,7 @@ class ProxyExtrasDBManager:
 
             return True
         except subprocess.TimeoutExpired:
-            logger.warning(
-                "Migration timed out - the database might be under heavy load."
-            )
+            logger.warning("Migration timed out - the database might be under heavy load.")
             return False
         except subprocess.CalledProcessError as e:
             logger.warning(
@@ -386,10 +389,12 @@ class ProxyExtrasDBManager:
         except ImportError:
             return None
 
+        from psycopg import sql
+
         cleaned_url: Final = ProxyExtrasDBManager._strip_prisma_query_params(database_url)
-        ledger_table: Final = psycopg.sql.SQL("{}.{}").format(
-            psycopg.sql.Identifier(ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"),
-            psycopg.sql.Identifier("_prisma_migrations"),
+        ledger_table: Final = sql.SQL("{}.{}").format(
+            sql.Identifier(ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"),
+            sql.Identifier("_prisma_migrations"),
         )
         try:
             with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
@@ -500,9 +505,7 @@ class ProxyExtrasDBManager:
         return filter_partitioned_spend_logs_diff(without_indexes)
 
     @staticmethod
-    def _resolve_all_migrations(
-        migrations_dir: str, schema_path: str, mark_all_applied: bool = True
-    ):
+    def _resolve_all_migrations(migrations_dir: str, schema_path: str, mark_all_applied: bool = True):
         """
         1. Compare the current database state to schema.prisma and generate a migration for the diff.
         2. Run prisma migrate deploy to apply any pending migrations.
@@ -571,9 +574,7 @@ class ProxyExtrasDBManager:
                     )
                     logger.info(f"Applied migration: {mig_file.parent.name}")
                 except subprocess.CalledProcessError as e:
-                    logger.warning(
-                        f"Failed to apply migration {mig_file.parent.name}: {e.stderr}"
-                    )
+                    logger.warning(f"Failed to apply migration {mig_file.parent.name}: {e.stderr}")
                 except subprocess.TimeoutExpired:
                     logger.warning(f"Migration {mig_file.parent.name} timed out.")
             return
@@ -645,9 +646,7 @@ class ProxyExtrasDBManager:
                 logger.debug(f"Resolved migration: {migration_name}")
             except subprocess.CalledProcessError as e:
                 if "is already recorded as applied in the database." not in e.stderr:
-                    logger.warning(
-                        f"Failed to resolve migration {migration_name}: {e.stderr}"
-                    )
+                    logger.warning(f"Failed to resolve migration {migration_name}: {e.stderr}")
 
     @staticmethod
     def raise_if_lens_rename_pending(connect: LensCheckConnect | None = None) -> None:
@@ -707,9 +706,7 @@ class ProxyExtrasDBManager:
 
         cleaned_url = ProxyExtrasDBManager._strip_prisma_query_params(database_url)
         try:
-            with psycopg.connect(
-                cleaned_url, connect_timeout=10, autocommit=True
-            ) as conn:
+            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
                 row = conn.execute(
                     "SELECT 1 "
                     "FROM pg_partitioned_table pt "
@@ -717,10 +714,7 @@ class ProxyExtrasDBManager:
                     "JOIN pg_namespace n ON n.oid = c.relnamespace "
                     "WHERE c.relname = 'LiteLLM_SpendLogs' "
                     "  AND n.nspname = %s",
-                    (
-                        ProxyExtrasDBManager._prisma_schema_param(database_url)
-                        or "public",
-                    ),
+                    (ProxyExtrasDBManager._prisma_schema_param(database_url) or "public",),
                 ).fetchone()
         except (psycopg.OperationalError, psycopg.DatabaseError):
             return False
@@ -815,9 +809,7 @@ class ProxyExtrasDBManager:
             # it, psycopg3's `with conn` calls COMMIT on clean exit — which
             # fails after `UndefinedTable` (fresh DB) leaves the transaction
             # in an aborted state.
-            with psycopg.connect(
-                cleaned_url, connect_timeout=10, autocommit=True
-            ) as conn:
+            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
                 try:
                     rows = conn.execute(
                         "SELECT migration_name FROM _prisma_migrations "
@@ -838,9 +830,7 @@ class ProxyExtrasDBManager:
             return
 
         head_newest_ts = _max_migration_timestamp(known)
-        hostile = {
-            name for name in unknown if _migration_timestamp(name) > head_newest_ts
-        }
+        hostile = {name for name in unknown if _migration_timestamp(name) > head_newest_ts}
         if not hostile:
             return
 
@@ -931,8 +921,7 @@ class ProxyExtrasDBManager:
                 if not found:
                     return True
                 logger.warning(
-                    "Found %d invalid index(es) left by an interrupted CREATE INDEX "
-                    "CONCURRENTLY, rebuilding: %s",
+                    "Found %d invalid index(es) left by an interrupted CREATE INDEX CONCURRENTLY, rebuilding: %s",
                     len(found),
                     ", ".join(f"{index.name} (table size {index.table_size})" for index in found),
                 )
@@ -1403,8 +1392,7 @@ class ProxyExtrasDBManager:
             prisma_env = _get_prisma_env()
         except OSError as e:
             logger.error(
-                "Could not resolve the migrations directory for the REPLICA "
-                "IDENTITY FULL step, skipping it. Error: %s",
+                "Could not resolve the migrations directory for the REPLICA IDENTITY FULL step, skipping it. Error: %s",
                 e,
             )
             return False
@@ -1435,17 +1423,56 @@ class ProxyExtrasDBManager:
         Returns:
             bool: True if setup was successful, False otherwise
         """
-        ensure_prisma_toolchain(
-            prisma_command=_get_prisma_command(), prisma_env=_get_prisma_env()
-        )
-        migrated = ProxyExtrasDBManager._run_migrations(
-            use_migrate=use_migrate, use_v2_resolver=use_v2_resolver
-        )
+        ensure_prisma_toolchain(prisma_command=_get_prisma_command(), prisma_env=_get_prisma_env())
+        ProxyExtrasDBManager.raise_if_rows_block_pending_changes(use_migrate=use_migrate)
+        migrated = ProxyExtrasDBManager._run_migrations(use_migrate=use_migrate, use_v2_resolver=use_v2_resolver)
         if not migrated:
             return False
         ProxyExtrasDBManager.repair_invalid_indexes()
         ProxyExtrasDBManager.apply_replica_identity_full_if_requested()
         return True
+
+    @staticmethod
+    def migration_data_check_findings(use_migrate: bool = True) -> tuple[Finding, ...]:
+        """What in the existing rows would make a pending migration or request-log index
+        fail, read with count queries only: no write, no table lock. Empty when nothing
+        blocks, when no database is configured, or when it cannot be reached, so the
+        migration step that follows reports the connection problem the way it does today."""
+        import psycopg
+
+        database_url: Final = os.environ.get("DATABASE_URL")
+        if not database_url:
+            return ()
+        direct_url: Final = ProxyExtrasDBManager._strip_prisma_query_params(
+            os.environ.get("DIRECT_URL") or database_url
+        )
+        schema: Final = ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"
+        migrations_dir: Final = Path(ProxyExtrasDBManager._get_prisma_dir()) / "migrations" if use_migrate else None
+        indexes: Final = tuple((index.table, index.name, index.columns) for index in REQUEST_LOG_INDEXES)
+        try:
+            with psycopg.connect(direct_url, connect_timeout=10, autocommit=True) as connection:
+                checks: Final = pending_change_checks(connection, schema, migrations_dir, indexes)
+                return find_blockers(connection, schema, checks, migration_data_check_timeout_seconds())
+        except psycopg.OperationalError as exc:
+            logger.warning(
+                "Could not reach the database for the pre-migration row check: %s", _redact_credentials(str(exc))
+            )
+            return ()
+
+    @staticmethod
+    def migration_data_check_report(use_migrate: bool = True) -> Optional[str]:
+        """The operator-facing refusal for `migration_data_check_findings`, None when nothing blocks."""
+        findings: Final = ProxyExtrasDBManager.migration_data_check_findings(use_migrate=use_migrate)
+        return report(findings) if findings else None
+
+    @staticmethod
+    def raise_if_rows_block_pending_changes(use_migrate: bool) -> None:
+        """Refuse to run migrations that the existing rows would make fail, before any is
+        applied. The RuntimeError carries the report and reaches the operator through the
+        proxy's "Database migration cannot proceed" exit."""
+        refusal: Final = ProxyExtrasDBManager.migration_data_check_report(use_migrate=use_migrate)
+        if refusal is not None:
+            raise RuntimeError(refusal)
 
     @staticmethod
     def build_request_log_indexes(build: Callable[[str, str], bool] = ensure_request_log_indexes) -> bool:
@@ -1513,9 +1540,7 @@ class ProxyExtrasDBManager:
                         # Skip sanity check when deploy reports no pending migrations —
                         # DB already matches schema, no drift to correct.
                         if "No pending migrations to apply" in result.stdout:
-                            logger.info(
-                                "No pending migrations — skipping post-migration sanity check"
-                            )
+                            logger.info("No pending migrations — skipping post-migration sanity check")
                             return True
 
                         # Run sanity check to ensure DB matches schema
@@ -1530,9 +1555,7 @@ class ProxyExtrasDBManager:
                         logger.info(f"prisma db error: {stderr}, e: {e.stdout}")
                         if "P3009" in stderr:
                             # Extract the failed migration name from the error message
-                            migration_match = re.search(
-                                r"`(\d+_.*)` migration", stderr
-                            )
+                            migration_match = re.search(r"`(\d+_.*)` migration", stderr)
                             if migration_match:
                                 failed_migration = migration_match.group(1)
                                 if ProxyExtrasDBManager._is_idempotent_error(stderr):
@@ -1540,9 +1563,7 @@ class ProxyExtrasDBManager:
                                         f"Migration {failed_migration} failed due to idempotent error (e.g., column already exists), resolving as applied"
                                     )
                                     try:
-                                        ProxyExtrasDBManager._roll_back_migration(
-                                            failed_migration
-                                        )
+                                        ProxyExtrasDBManager._roll_back_migration(failed_migration)
                                     except (
                                         subprocess.CalledProcessError,
                                         subprocess.TimeoutExpired,
@@ -1552,9 +1573,7 @@ class ProxyExtrasDBManager:
                                             f"It may already be in a rolled-back state."
                                         )
                                     try:
-                                        ProxyExtrasDBManager._resolve_specific_migration(
-                                            failed_migration
-                                        )
+                                        ProxyExtrasDBManager._resolve_specific_migration(failed_migration)
                                         logger.info(
                                             f"✅ Migration {failed_migration} resolved, retrying to apply remaining migrations"
                                         )
@@ -1562,9 +1581,7 @@ class ProxyExtrasDBManager:
                                         subprocess.CalledProcessError,
                                         subprocess.TimeoutExpired,
                                     ) as resolve_err:
-                                        logger.warning(
-                                            f"Failed to resolve migration {failed_migration}: {resolve_err}"
-                                        )
+                                        logger.warning(f"Failed to resolve migration {failed_migration}: {resolve_err}")
                                     # Apply any schema drift not covered by the marked-as-applied migration
                                     ProxyExtrasDBManager._resolve_all_migrations(
                                         migrations_dir,
@@ -1572,9 +1589,7 @@ class ProxyExtrasDBManager:
                                         mark_all_applied=False,
                                     )
                                 else:
-                                    logger.info(
-                                        f"Found failed migration: {failed_migration}, marking as rolled back"
-                                    )
+                                    logger.info(f"Found failed migration: {failed_migration}, marking as rolled back")
                                     # Mark the failed migration as rolled back
                                     prisma_toolchain.run_prisma(
                                         [
@@ -1587,23 +1602,14 @@ class ProxyExtrasDBManager:
                                         timeout=prisma_command_timeout(),
                                         env=_get_prisma_env(),
                                     )
-                                    logger.info(
-                                        f"✅ Migration {failed_migration} marked as rolled back... retrying"
-                                    )
-                        elif (
-                            "P3005" in stderr
-                            and "database schema is not empty" in stderr
-                        ):
+                                    logger.info(f"✅ Migration {failed_migration} marked as rolled back... retrying")
+                        elif "P3005" in stderr and "database schema is not empty" in stderr:
                             logger.info(
                                 "Database schema is not empty, creating baseline migration. In read-only file system, please set an environment variable `LITELLM_MIGRATION_DIR` to a writable directory to enable migrations. Learn more - https://docs.litellm.ai/docs/proxy/prod#read-only-file-system"
                             )
                             ProxyExtrasDBManager._create_baseline_migration(schema_path)
-                            logger.info(
-                                "Baseline migration created, resolving all migrations"
-                            )
-                            ProxyExtrasDBManager._resolve_all_migrations(
-                                migrations_dir, schema_path
-                            )
+                            logger.info("Baseline migration created, resolving all migrations")
+                            ProxyExtrasDBManager._resolve_all_migrations(migrations_dir, schema_path)
                             logger.info("✅ All migrations resolved.")
                             return True
                         elif "P3018" in stderr:
@@ -1611,14 +1617,8 @@ class ProxyExtrasDBManager:
                             if ProxyExtrasDBManager._is_permission_error(stderr):
                                 # Permission errors should NOT be marked as applied
                                 # Extract migration name for logging
-                                migration_match = re.search(
-                                    r"Migration name: (\d+_.*)", stderr
-                                )
-                                migration_name = (
-                                    migration_match.group(1)
-                                    if migration_match
-                                    else "unknown"
-                                )
+                                migration_match = re.search(r"Migration name: (\d+_.*)", stderr)
+                                migration_name = migration_match.group(1) if migration_match else "unknown"
 
                                 logger.error(
                                     f"❌ Migration {migration_name} failed due to insufficient permissions. "
@@ -1628,16 +1628,10 @@ class ProxyExtrasDBManager:
                                 # Mark as rolled back and exit with error
                                 if migration_match:
                                     try:
-                                        ProxyExtrasDBManager._roll_back_migration(
-                                            migration_name
-                                        )
-                                        logger.info(
-                                            f"Migration {migration_name} marked as rolled back"
-                                        )
+                                        ProxyExtrasDBManager._roll_back_migration(migration_name)
+                                        logger.info(f"Migration {migration_name} marked as rolled back")
                                     except Exception as rollback_error:
-                                        logger.warning(
-                                            f"Failed to mark migration as rolled back: {rollback_error}"
-                                        )
+                                        logger.warning(f"Failed to mark migration as rolled back: {rollback_error}")
 
                                 # Re-raise the error to prevent silent failures
                                 raise RuntimeError(
@@ -1652,18 +1646,12 @@ class ProxyExtrasDBManager:
                                     "resolving as applied"
                                 )
                                 # Extract the migration name from the error message
-                                migration_match = re.search(
-                                    r"Migration name: (\d+_.*)", stderr
-                                )
+                                migration_match = re.search(r"Migration name: (\d+_.*)", stderr)
                                 if migration_match:
                                     migration_name = migration_match.group(1)
                                     try:
-                                        logger.info(
-                                            f"Rolling back migration {migration_name}"
-                                        )
-                                        ProxyExtrasDBManager._roll_back_migration(
-                                            migration_name
-                                        )
+                                        logger.info(f"Rolling back migration {migration_name}")
+                                        ProxyExtrasDBManager._roll_back_migration(migration_name)
                                     except (
                                         subprocess.CalledProcessError,
                                         subprocess.TimeoutExpired,
@@ -1677,9 +1665,7 @@ class ProxyExtrasDBManager:
                                             f"Resolving migration {migration_name} that failed "
                                             f"due to existing schema objects"
                                         )
-                                        ProxyExtrasDBManager._resolve_specific_migration(
-                                            migration_name
-                                        )
+                                        ProxyExtrasDBManager._resolve_specific_migration(migration_name)
                                         logger.info(
                                             f"✅ Migration {migration_name} resolved, "
                                             f"retrying to apply remaining migrations"
@@ -1688,9 +1674,7 @@ class ProxyExtrasDBManager:
                                         subprocess.CalledProcessError,
                                         subprocess.TimeoutExpired,
                                     ) as resolve_err:
-                                        logger.warning(
-                                            f"Failed to resolve migration {migration_name}: {resolve_err}"
-                                        )
+                                        logger.warning(f"Failed to resolve migration {migration_name}: {resolve_err}")
                                     # Apply any schema drift not covered by the marked-as-applied migration
                                     ProxyExtrasDBManager._resolve_all_migrations(
                                         migrations_dir,
@@ -1732,14 +1716,8 @@ class ProxyExtrasDBManager:
                 time.sleep(random.randrange(5, 15))
             except subprocess.CalledProcessError as e:
                 attempts_left = 3 - attempt
-                retry_msg = (
-                    f" Retrying... ({attempts_left} attempts left)"
-                    if attempts_left > 0
-                    else ""
-                )
-                stderr_detail: Final = (
-                    f" stderr: {_redact_credentials(str(e.stderr))}" if e.stderr else ""
-                )
+                retry_msg = f" Retrying... ({attempts_left} attempts left)" if attempts_left > 0 else ""
+                stderr_detail: Final = f" stderr: {_redact_credentials(str(e.stderr))}" if e.stderr else ""
                 logger.error(
                     f"The process failed to execute. Details: {_redact_command_error(e)}.{stderr_detail}{retry_msg}"
                 )
