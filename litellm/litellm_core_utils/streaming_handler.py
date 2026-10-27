@@ -557,8 +557,8 @@ class CustomStreamWrapper:
     def check_send_stream_usage(self, stream_options: object) -> bool:
         if stream_options is None:
             return False
-        get_option: Final[Callable[[str, object], object]] = getattr(stream_options, "get")
-        return get_option("include_usage", False) is True
+        get_option: Final[Callable[[str, object], object] | None] = getattr(stream_options, "get", None)
+        return get_option is not None and get_option("include_usage", False) is True
 
     def check_is_function_call(self, logging_obj) -> bool:
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
