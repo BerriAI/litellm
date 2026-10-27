@@ -494,7 +494,11 @@ def test_streamed_thinking_blocks_accumulate_in_the_openai_sdk_and_replay_withou
         {"type": "content_block_delta", "index": 2, "delta": {"type": "thinking_delta", "thinking": "Step 3."}},
         {"type": "content_block_delta", "index": 2, "delta": {"type": "signature_delta", "signature": "sig-b"}},
         {"type": "content_block_stop", "index": 2},
-        {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 9}},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 9},
+        },
         {"type": "message_stop"},
     )
 
@@ -515,7 +519,11 @@ def test_streamed_thinking_blocks_accumulate_in_the_openai_sdk_and_replay_withou
         "thinking_blocks": message["thinking_blocks"],
     }
     replayed: Final = anthropic_messages_pt(
-        messages=[{"role": "user", "content": "Capital of France?"}, next_turn, {"role": "user", "content": "And Spain?"}],
+        messages=[
+            {"role": "user", "content": "Capital of France?"},
+            next_turn,
+            {"role": "user", "content": "And Spain?"},
+        ],
         model="claude-haiku-4-5",
         llm_provider="anthropic",
     )
@@ -3609,8 +3617,8 @@ def test_streamed_end_turn_carries_no_stop_details():
     assert "stop_reason" not in provider_fields
 
 
-def _anthropic_chat_body_for_bound_thinking(extra_headers: dict | None) -> dict:
-    captured_requests: list[httpx.Request] = []
+def _anthropic_chat_body_for_bound_thinking(extra_headers: dict[str, str] | None) -> dict[str, object]:
+    captured_requests: Final[list[httpx.Request]] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
         captured_requests.append(request)
@@ -3629,7 +3637,7 @@ def _anthropic_chat_body_for_bound_thinking(extra_headers: dict | None) -> dict:
         )
 
     thinking: Final = {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
-    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
     try:
         litellm.completion(
             model="anthropic/claude-opus-4-8",
@@ -3647,11 +3655,11 @@ def _anthropic_chat_body_for_bound_thinking(extra_headers: dict | None) -> dict:
 
 def test_anthropic_chat_keeps_block_binding_when_the_final_header_carries_the_binding_beta(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
-    body = _anthropic_chat_body_for_bound_thinking({"anthropic-beta": "thinking-binding-controls-2026-08-01"})
+    body: Final = _anthropic_chat_body_for_bound_thinking({"anthropic-beta": "thinking-binding-controls-2026-08-01"})
     assert body["thinking"] == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
 
 
 def test_anthropic_chat_drops_block_binding_when_no_header_carries_the_binding_beta(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
-    body = _anthropic_chat_body_for_bound_thinking(None)
+    body: Final = _anthropic_chat_body_for_bound_thinking(None)
     assert body["thinking"] == {"type": "adaptive"}

@@ -239,11 +239,25 @@ class StrippedNativeRequest:
     stripped: tuple[str, ...]
 
 
+def unstripped_native_request(optional_params: object, messages: object) -> StrippedNativeRequest:
+    """The identity result for legs that strip later, once their final ``anthropic_beta`` list exists."""
+    params: Final = _as_mapping(optional_params) or MappingProxyType({})
+    message_sequence: Final = _as_sequence(messages) if not isinstance(messages, str) else None
+    return StrippedNativeRequest(
+        thinking=params.get("thinking"),
+        thinking_stripped=False,
+        messages=message_sequence if message_sequence is not None else (),
+        messages_stripped=False,
+        stripped=(),
+    )
+
+
 def strip_beta_gated_native_request(
-    headers: object, optional_params: object, messages: object
+    headers: object, optional_params: object, messages: object, body_betas: object = ()
 ) -> StrippedNativeRequest:
-    """The ``/v1/messages`` seam, fed the final (already filtered) headers plus the body parts it may rewrite."""
-    active_betas: Final = active_beta_values(headers)
+    """The ``/v1/messages`` seam, fed the final (already filtered) headers, the final body ``anthropic_beta``
+    list on legs that carry betas in the body, plus the body parts it may rewrite."""
+    active_betas: Final = active_beta_values(headers, body_betas)
     params: Final = _as_mapping(optional_params) or MappingProxyType({})
     thinking: Final = strip_beta_gated_thinking(params.get("thinking"), active_betas)
     message_sequence: Final = _as_sequence(messages) if not isinstance(messages, str) else None

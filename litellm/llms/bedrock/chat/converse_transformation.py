@@ -17,7 +17,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.anthropic_beta_gated_fields import log_beta_gated_strips, strip_beta_gated_thinking
+from litellm.anthropic_beta_gated_fields import active_beta_values, log_beta_gated_strips, strip_beta_gated_thinking
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
     RESPONSE_FORMAT_TOOL_NAME,
@@ -2033,7 +2033,11 @@ class AmazonConverseConfig(BaseConfig):
             original_tools, model, headers, additional_request_params, litellm_params, deployment_model
         )
         requested_thinking: Final = additional_request_params.get("thinking")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # _prepare_request_params hands back a bare dict
-        gated_thinking: Final = strip_beta_gated_thinking(requested_thinking, frozenset(anthropic_beta_list))  # pyright: ignore[reportUnknownArgumentType]  # _process_tools_and_beta hands back a bare list
+        body_betas: Final = additional_request_params.get("anthropic_beta")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # same bare dict
+        gated_thinking: Final = strip_beta_gated_thinking(
+            requested_thinking,  # pyright: ignore[reportUnknownArgumentType]  # same bare dict
+            active_beta_values({}, body_betas) | frozenset(anthropic_beta_list),  # pyright: ignore[reportUnknownArgumentType]  # _process_tools_and_beta hands back a bare list
+        )
         if gated_thinking.stripped:
             log_beta_gated_strips(gated_thinking.stripped, model=model, provider="bedrock_converse")
             additional_request_params["thinking"] = gated_thinking.thinking

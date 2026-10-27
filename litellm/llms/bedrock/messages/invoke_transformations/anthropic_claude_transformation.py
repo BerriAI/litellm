@@ -7,6 +7,11 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.anthropic_beta_gated_fields import (
+    ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER,
+    log_beta_gated_strips,
+    strip_beta_gated_native_request,
+)
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
@@ -546,6 +551,9 @@ class AmazonAnthropicClaudeMessagesConfig(
             "edits": retained_edits,
         }
 
+    def strips_beta_gated_fields_from_final_headers(self) -> bool:
+        return False
+
     def _get_bedrock_invoke_anthropic_beta_headers(
         self,
         model: str,
@@ -589,6 +597,9 @@ class AmazonAnthropicClaudeMessagesConfig(
             ),
         )
         beta_set.update(auto_betas)
+
+        if "block_binding" in (anthropic_messages_request.get("thinking") or {}):  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # the base signature types the request as a bare dict
+            beta_set.add(ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER)
 
         if injected_thinking_for_clear_thinking:
             beta_set.add("interleaved-thinking-2025-05-14")
@@ -821,6 +832,16 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         if filtered_betas:
             anthropic_messages_request["anthropic_beta"] = filtered_betas
+
+        final_request: Final = OBJECT_MAPPING_ADAPTER.validate_python(anthropic_messages_request)  # pyright: ignore[reportUnknownArgumentType]  # built from the base signature's bare dict
+        gated: Final = strip_beta_gated_native_request(
+            {}, final_request, final_request.get("messages"), body_betas=filtered_betas
+        )
+        log_beta_gated_strips(gated.stripped, model=model, provider="bedrock_invoke")
+        if gated.thinking_stripped:
+            anthropic_messages_request["thinking"] = gated.thinking
+        if gated.messages_stripped:
+            anthropic_messages_request["messages"] = list(gated.messages)
 
         outbound_tools: Final = tools_without_eager_input_streaming(anthropic_messages_request)
         if outbound_tools is not None:

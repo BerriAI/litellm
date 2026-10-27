@@ -5349,7 +5349,6 @@ def test_recursive_output_config_format_follows_the_profile_native_key(
     assert ("outputConfig" in request) is forwarded
 
 
-
 def test_sonnet_4_6_json_schema_still_uses_native_output_config(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
@@ -10666,7 +10665,10 @@ def test_uses_opt_in_native_output_reads_the_base_model_of_an_application_infere
 
 
 _CALLER_OUTPUT_CONFIG_WITH_A_SCHEMA_OBJECT: Final = {
-    "textFormat": {"type": "json_schema", "structure": {"jsonSchema": {"name": "capital", "schema": {"type": "object"}}}}
+    "textFormat": {
+        "type": "json_schema",
+        "structure": {"jsonSchema": {"name": "capital", "schema": {"type": "object"}}},
+    }
 }
 _BEDROCK_SCHEMA_TYPE_ERROR: Final = "outputConfig.textFormat.structure.jsonSchema.schema must be a string"
 
@@ -10792,16 +10794,18 @@ def test_a_deployment_with_a_batch_control_plane_endpoint_keeps_it_out_of_chat_r
     assert "aws_bedrock_control_plane_endpoint" not in route.calls[0].request.content.decode()
 
 
-def _converse_bound_thinking_request(headers: dict | None) -> dict:
+def _converse_bound_thinking_request(
+    headers: dict[str, str] | None, body_betas: tuple[str, ...] = ()
+) -> dict[str, object]:
     thinking: Final = {
         "type": "adaptive",
         "block_binding": {"prefix_mismatch_behavior": "error"},
         "display": "updates",
     }
-    data = AmazonConverseConfig()._transform_request_helper(
+    data: Final = AmazonConverseConfig()._transform_request_helper(
         model="anthropic.claude-opus-4-8-v1:0",
         system_content_blocks=[],
-        optional_params={"thinking": thinking},
+        optional_params={"thinking": thinking, **({"anthropic_beta": list(body_betas)} if body_betas else {})},
         messages=[{"role": "user", "content": "hi"}],
         headers=headers,
     )
@@ -10834,3 +10838,15 @@ def test_converse_drops_beta_gated_thinking_fields_when_the_request_carries_no_b
         "thinking.block_binding" in record.getMessage() and "provider=bedrock_converse" in record.getMessage()
         for record in caplog.records
     )
+
+
+def test_converse_keeps_beta_gated_thinking_fields_the_body_anthropic_beta_carries(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    fields: Final = _converse_bound_thinking_request(
+        None, body_betas=("thinking-binding-controls-2026-08-01", "thinking-display-updates-2026-08-18")
+    )
+    assert fields["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }

@@ -6,7 +6,11 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.anthropic_beta_gated_fields import log_beta_gated_strips, strip_beta_gated_native_request
+from litellm.anthropic_beta_gated_fields import (
+    log_beta_gated_strips,
+    strip_beta_gated_native_request,
+    unstripped_native_request,
+)
 from litellm.anthropic_beta_headers_manager import get_unsupported_headers, is_beta_header_supported_by_bundled_config
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
@@ -610,6 +614,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if thinking_enabled or effort_enabled:
             optional_params.pop("temperature", None)
 
+    def strips_beta_gated_fields_from_final_headers(self) -> bool:
+        """False on legs whose final ``anthropic_beta`` list is only known after this transform (Bedrock Invoke),
+        which strip beta-gated fields themselves once that list exists."""
+        return True
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -710,7 +719,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if not _has_advisor:
             messages = strip_advisor_blocks_from_messages(messages)
 
-        gated: Final = strip_beta_gated_native_request(headers, anthropic_messages_optional_request_params, messages)  # pyright: ignore[reportUnknownArgumentType]  # the base signature types these as bare dicts
+        gated: Final = (
+            strip_beta_gated_native_request(headers, anthropic_messages_optional_request_params, messages)  # pyright: ignore[reportUnknownArgumentType]  # the base signature types these as bare dicts
+            if self.strips_beta_gated_fields_from_final_headers()
+            else unstripped_native_request(anthropic_messages_optional_request_params, messages)  # pyright: ignore[reportUnknownArgumentType]  # the base signature types these as bare dicts
+        )
         log_beta_gated_strips(gated.stripped, model=model, provider=self._resolved_provider)
         anthropic_messages_request: Final[AnthropicMessagesRequest] = AnthropicMessagesRequest(
             messages=strip_encrypted_reasoning_blocks_from_anthropic_messages(

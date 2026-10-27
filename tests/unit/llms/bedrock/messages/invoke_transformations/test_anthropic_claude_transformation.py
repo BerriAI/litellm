@@ -4198,3 +4198,28 @@ def test_bedrock_messages_without_guardrail_config_sends_no_guardrail_headers() 
         headers={}, model="anthropic.claude-sonnet-5-v1:0", messages=[], optional_params={}, litellm_params={}
     )
     assert not any(name.startswith("X-Amzn-Bedrock-Guardrail") for name in headers)
+
+
+def test_bedrock_messages_keeps_mid_conversation_output_config_its_auto_added_beta_gates():
+    """Invoke learns its body betas after the shared transform, so the gated field it supports must survive."""
+    from unittest.mock import patch
+
+    from litellm.types.router import GenericLiteLLMParams
+
+    messages: Final = [
+        {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Hi"}]},
+        {"role": "system", "content": "Answer briefly", "output_config": {"effort": "high"}},
+        {"role": "user", "content": [{"type": "text", "text": "Go on"}]},
+    ]
+    with patch("litellm.llms.bedrock.common_utils._bedrock_model_supports", return_value=True):
+        result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the base signature returns a bare dict
+            model="anthropic.claude-opus-4-8-v1:0",
+            messages=messages,
+            anthropic_messages_optional_request_params={"max_tokens": 4096},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    assert "mid-conversation-output-config-2026-07-01" in result["anthropic_beta"]
+    assert {"role": "system", "content": "Answer briefly", "output_config": {"effort": "high"}} in result["messages"]

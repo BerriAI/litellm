@@ -422,7 +422,7 @@ def test_drop_params_forwards_a_non_object_message_item_as_sent_on_the_native_re
 BINDING_AND_DISPLAY_BETAS: Final = "thinking-binding-controls-2026-08-01,thinking-display-updates-2026-08-18"
 
 
-def _bound_adaptive_request(headers: dict) -> dict:
+def _bound_adaptive_request(headers: dict[str, str]) -> dict[str, object]:
     thinking: Final = {
         "type": "adaptive",
         "block_binding": {"prefix_mismatch_behavior": "error"},
@@ -445,7 +445,7 @@ def _bound_adaptive_request(headers: dict) -> dict:
 
 
 def test_messages_request_keeps_beta_gated_thinking_fields_when_the_final_header_carries_the_betas():
-    request = _bound_adaptive_request({"anthropic-beta": BINDING_AND_DISPLAY_BETAS})
+    request: Final = _bound_adaptive_request({"anthropic-beta": BINDING_AND_DISPLAY_BETAS})
     assert request["thinking"] == {
         "type": "adaptive",
         "block_binding": {"prefix_mismatch_behavior": "error"},
@@ -464,7 +464,7 @@ def test_messages_request_drops_beta_gated_thinking_fields_the_final_header_does
 
 def test_messages_request_drops_clear_at_from_a_mid_conversation_system_turn_without_its_beta():
     system_turn: Final = {"role": "system", "content": "be terse", "clear_at": "end_turn"}
-    request = AnthropicMessagesConfig().transform_anthropic_messages_request(
+    request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
         model="claude-opus-4-8",
         messages=[{"role": "user", "content": "hi"}, system_turn, {"role": "user", "content": "go"}],
         anthropic_messages_optional_request_params={"max_tokens": 64},
