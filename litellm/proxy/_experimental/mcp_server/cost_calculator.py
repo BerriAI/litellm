@@ -46,21 +46,23 @@ class MCPCostCalculator:
             )
             or {}
         )
-        mcp_server_cost_info: Final[MCPServerCostInfo] = (
-            mcp_tool_call_metadata.get("mcp_server_cost_info") or MCPServerCostInfo()
+        return MCPCostCalculator.configured_cost_per_query(
+            mcp_server_cost_info=mcp_tool_call_metadata.get("mcp_server_cost_info"),
+            tool_name=mcp_tool_call_metadata.get("name", ""),
         )
-        #########################################################
-        # User defined cost per query
-        #########################################################
-        default_cost_per_query: Final = mcp_server_cost_info.get("default_cost_per_query", None)
-        tool_name_to_cost_per_query: Final[dict] = mcp_server_cost_info.get("tool_name_to_cost_per_query", {}) or {}
-        tool_name: Final = mcp_tool_call_metadata.get("name", "")
 
-        #########################################################
-        # 1. If tool_name is in tool_name_to_cost_per_query, use the cost per query
-        # 2. If tool_name is not in tool_name_to_cost_per_query, use the default cost per query
-        # 3. Default to 0.0 if no cost per query is found
-        #########################################################
+    @staticmethod
+    def configured_cost_per_query(mcp_server_cost_info: MCPServerCostInfo | None, tool_name: str) -> float:
+        """
+        The operator-configured price of one call to ``tool_name``.
+
+        1. If tool_name is in tool_name_to_cost_per_query, use the cost per query
+        2. If tool_name is not in tool_name_to_cost_per_query, use the default cost per query
+        3. Default to 0.0 if no cost per query is found
+        """
+        cost_info: Final[MCPServerCostInfo] = mcp_server_cost_info or MCPServerCostInfo()
+        default_cost_per_query: Final = cost_info.get("default_cost_per_query", None)
+        tool_name_to_cost_per_query: Final[dict] = cost_info.get("tool_name_to_cost_per_query", {}) or {}
         cost_per_query: float = 0.0
         if tool_name in tool_name_to_cost_per_query:
             cost_per_query = tool_name_to_cost_per_query[tool_name]
