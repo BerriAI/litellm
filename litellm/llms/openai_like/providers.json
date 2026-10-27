@@ -257,5 +257,15 @@
       "/v1/chat/completions",
       "/v1/responses"
     ]
+  },
+  "graphn": {
+    "base_url": "https://model.graphn.ai/v1",
+    "api_key_env": "GRAPHN_API_KEY",
+    "api_base_env": "GRAPHN_API_BASE",
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses",
+      "/v1/messages"
+    ]
   }
 }

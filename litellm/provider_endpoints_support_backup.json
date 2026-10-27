@@ -1954,6 +1954,23 @@
         "generateContent": true
       }
     },
+    "graphn": {
+      "display_name": "GraphN (`graphn`)",
+      "url": "https://docs.litellm.ai/docs/providers/graphn",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "groq": {
       "display_name": "Groq AI (`groq`)",
       "url": "https://docs.litellm.ai/docs/providers/groq",
