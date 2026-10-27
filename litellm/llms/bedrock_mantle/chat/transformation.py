@@ -24,7 +24,7 @@ from litellm.llms.bedrock_mantle.common_utils import (
     BEDROCK_MANTLE_DEFAULT_REGION,
     BedrockMantleAuthMixin,
 )
-from litellm.llms.openai.chat.gpt_5_transformation import get_effort_level, is_gpt_reasoning_series_name
+from litellm.llms.openai.chat.gpt_reasoning_transformation import get_effort_level, is_gpt_reasoning_series_name
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams

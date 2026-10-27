@@ -47,10 +47,12 @@ async def test_returns_pre_routing_hook_response_with_chosen_model():
 async def test_records_savings_baseline_and_conversation_shape():
     router = _make_router()
     router_instance = MagicMock()
-    router_instance.model_name_to_deployment_indices = {"fast": [0], "smart": [1]}
     router_instance.model_list = [
         {"litellm_params": {"model": "openai/fast"}, "model_info": {"id": "fast-id"}},
         {"litellm_params": {"model": "openai/smart"}, "model_info": {"id": "smart-id"}},
+    ]
+    router_instance.deployments_named.side_effect = lambda name: [
+        deployment for deployment in router_instance.model_list if deployment["model_info"]["id"] == f"{name}-id"
     ]
     router_instance.cached_deployment_model_info.side_effect = lambda deployment_id, model: {
         "input_cost_per_token": 0.00000015 if deployment_id == "fast-id" else 0.000005,
@@ -80,9 +82,7 @@ async def test_empty_messages_use_conservative_continuing_shape():
     router = _make_router()
     router.pick_model = AsyncMock(return_value="smart")  # type: ignore[method-assign]
 
-    response = await router.async_pre_routing_hook(
-        model="smart-cheap-router", request_kwargs={}, messages=None
-    )
+    response = await router.async_pre_routing_hook(model="smart-cheap-router", request_kwargs={}, messages=None)
 
     assert response is not None
     assert response.routing_decision["conversation_continuing"] is True

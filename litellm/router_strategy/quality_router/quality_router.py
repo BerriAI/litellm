@@ -51,13 +51,13 @@ class QualityRouter(CustomLogger):
         model_name: str,
         litellm_router_instance: "Router",
         default_model: str | None = None,
-        quality_router_config: dict[str, Any] | None = None,
+        quality_router_config: Mapping[str, object] | None = None,
     ):
         self.model_name = model_name
         self.litellm_router_instance = litellm_router_instance
 
         if quality_router_config:
-            self.config = QualityRouterConfig(**quality_router_config)
+            self.config = QualityRouterConfig.model_validate(dict(**quality_router_config))
         else:
             self.config = QualityRouterConfig()
 
@@ -189,7 +189,7 @@ class QualityRouter(CustomLogger):
                 if isinstance(raw_prefs, RoutingPreferences):
                     prefs = raw_prefs
                 elif isinstance(raw_prefs, dict):
-                    prefs = RoutingPreferences(**raw_prefs)
+                    prefs = RoutingPreferences.model_validate(dict(**raw_prefs))
                 else:
                     # A Pydantic object of some other shape — coerce via its dict.
                     prefs = RoutingPreferences(
@@ -324,12 +324,12 @@ class QualityRouter(CustomLogger):
             metadata["quality_router_decision"] = decision
 
     def _add_savings_fields(self, decision: StandardLoggingRoutingDecision) -> None:
-        baseline = resolve_baseline(self.litellm_router_instance, self.config.available_models)
+        baseline: Final = resolve_baseline(self.litellm_router_instance, self.config.available_models)
         if baseline is None:
             return
-        decision["savings_baseline_model"] = baseline.model
+        decision["savings_baseline_model"] = baseline.model  # rebind-ok: populate routing metadata
         if baseline.deployment_id is not None:
-            decision["savings_baseline_deployment_id"] = baseline.deployment_id
+            decision["savings_baseline_deployment_id"] = baseline.deployment_id  # rebind-ok: populate routing metadata
 
     async def async_pre_routing_hook(
         self,
@@ -465,7 +465,7 @@ class QualityRouter(CustomLogger):
             cause="quality_tier",
             tier=str(int(quality_tier)),
             score=score,
-            signals=list(signals),  # mutable-ok: routing decision metadata uses a JSON list
+            signals=list(signals),
             conversation_continuing=conversation_continuing,
         )
         self._add_savings_fields(quality_routing_decision)

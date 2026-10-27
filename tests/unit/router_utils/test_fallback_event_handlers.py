@@ -16,7 +16,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import FakeAnthropicMessagesStreamIterator
+from litellm.llms.anthropic.messages.native.fake_stream_iterator import FakeAnthropicMessagesStreamIterator
 from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper

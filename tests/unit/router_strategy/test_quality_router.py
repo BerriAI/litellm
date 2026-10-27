@@ -845,12 +845,13 @@ class TestDecisionMetadata:
 
     @pytest.mark.asyncio
     async def test_decision_includes_savings_baseline_and_conversation_shape(self, quality_router):
-        quality_router.litellm_router_instance.model_name_to_deployment_indices = {
-            "haiku": [0],
-            "sonnet": [1],
-            "opus": [2],
-            "opus-next": [3],
-        }
+        quality_router.litellm_router_instance.deployments_named.side_effect = (
+            lambda name: [
+                deployment
+                for deployment in quality_router.litellm_router_instance.model_list
+                if deployment["model_name"] == name
+            ]
+        )
         quality_router.litellm_router_instance.cached_deployment_model_info.side_effect = (
             lambda deployment_id, model: {
                 "input_cost_per_token": {

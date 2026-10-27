@@ -482,7 +482,7 @@ def _runs_by_anchor(
 ) -> Mapping[int, tuple[tuple[int, ...], ...]]:
     anchored: Final = tuple(sorted(((anchor, run) for run, anchor in anchors if anchor is not None), key=itemgetter(0)))
     return MappingProxyType(
-        {anchor: tuple(run for _, run in group) for anchor, group in groupby(anchored, key=itemgetter(0))}
+        {anchor: tuple(run for _, run in group) for anchor, group in groupby(anchored, key=lambda entry: entry[0])}
     )
 
 

@@ -243,12 +243,12 @@ class AdaptiveRouter:
     def _add_savings_baseline_fields(self, decision: StandardLoggingRoutingDecision) -> None:
         if self.litellm_router_instance is None:
             return
-        baseline = resolve_baseline(self.litellm_router_instance, self.config.available_models)
+        baseline: Final = resolve_baseline(self.litellm_router_instance, self.config.available_models)
         if baseline is None:
             return
-        decision["savings_baseline_model"] = baseline.model
+        decision["savings_baseline_model"] = baseline.model  # rebind-ok: populate routing metadata
         if baseline.deployment_id is not None:
-            decision["savings_baseline_deployment_id"] = baseline.deployment_id
+            decision["savings_baseline_deployment_id"] = baseline.deployment_id  # rebind-ok: populate routing metadata
 
     # ---- Pick model ------------------------------------------------------
 

@@ -16,6 +16,7 @@ import litellm
 from litellm import TranscriptionResponse, model_cost
 from litellm.constants import REALTIME_METERED_USAGE_KEY
 from litellm.cost_calculator import BaseTokenUsageProcessor, RealtimeAPITokenUsageProcessor, ResponsesWebSocketTokenUsageProcessor, batch_cost_calculator, completion_cost, cost_per_token, handle_realtime_stream_cost_calculation, response_cost_calculator
+from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.fallback_generalizations import (
     get_fallback_generalization_rules,
@@ -34,7 +35,7 @@ from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import HttpxBinaryResponseContent, OpenAIRealtimeStreamList, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.rerank import RerankResponse
-from litellm.types.utils import CallTypes, Choices, CompletionTokensDetailsWrapper, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import CacheCreationTokenDetails, CallTypes, Choices, CompletionTokensDetailsWrapper, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
 from litellm.types.videos.main import VideoObject
 from litellm.utils import supports_prompt_caching
 import os
@@ -3337,14 +3338,7 @@ def test_anthropic_us_data_residency_uplift_on_claude_4_6_and_later_models(_loca
 
 
 def test_gemini_cache_tokens_details_no_negative_values():
-    """
-    Test for Issue #18750: Negative text_tokens with Gemini caching
-
-    When using Gemini with explicit caching, the response includes cacheTokensDetails
-    which breaks down cached tokens by modality. This test ensures that:
-    1. text_tokens is never negative
-    2. We correctly subtract cached tokens per modality (not total)
-    """
+    """Ensure issue #18750 cache details remain non-negative after cost parsing."""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
@@ -3372,27 +3366,17 @@ def test_gemini_cache_tokens_details_no_negative_values():
 
     usage = VertexGeminiConfig.calculate_usage(completion_response)
 
-    # Text tokens should be non-cached text only: 9402 - 9393 = 9
-    assert usage.prompt_tokens_details.text_tokens == 9, (
-        f"Expected text_tokens=9, got {usage.prompt_tokens_details.text_tokens}"
-    )
+    prompt_details: Final = parse_prompt_tokens_details(usage)
 
-    # Image tokens should be non-cached image only: 258 - 258 = 0
-    assert usage.prompt_tokens_details.image_tokens == 0, (
-        f"Expected image_tokens=0, got {usage.prompt_tokens_details.image_tokens}"
+    assert usage.prompt_tokens_details.text_tokens == 9402
+    assert usage.prompt_tokens_details.image_tokens == 258
+    assert usage.prompt_tokens_details.cached_tokens == 9651
+    assert usage.prompt_tokens_details.cached_tokens_details == CachedTokensDetails(
+        text_tokens=9393, image_tokens=258
     )
-
-    # Total cached should match
-    assert usage.prompt_tokens_details.cached_tokens == 9651, (
-        f"Expected cached_tokens=9651, got {usage.prompt_tokens_details.cached_tokens}"
-    )
-
-    # MOST IMPORTANT: text_tokens should NEVER be negative
-    assert usage.prompt_tokens_details.text_tokens >= 0, (
-        f"BUG: text_tokens is negative ({usage.prompt_tokens_details.text_tokens})! This was the issue in #18750"
-    )
-
-    print("✅ Issue #18750 fix verified: text_tokens is correctly calculated and non-negative")
+    assert prompt_details["text_tokens"] == 9
+    assert prompt_details["image_tokens"] == 0
+    assert prompt_details["text_tokens"] >= 0
 
 
 def test_gemini_without_cache_tokens_details():
@@ -5963,6 +5947,110 @@ def test_batch_cost_calculator_bills_cache_write_tokens_at_the_batch_input_rate_
     assert prompt_cost == pytest.approx(300_048 * 3e-6)
 
 
+_TWELVE_HOUR_BATCH_MODEL_INFO: Final = cast(
+    ModelInfo,
+    {
+        "input_cost_per_token_batches": 1e-6,
+        "input_cost_per_token_above_272k_tokens_batches": 3e-6,
+        "cache_creation_input_token_cost_batches": 1.25e-6,
+        "cache_creation_input_token_cost_above_272k_tokens_batches": 3.75e-6,
+        "cache_creation_input_token_cost_above_12hr_batches": 2.5e-6,
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches": 7.5e-6,
+        "output_cost_per_token_batches": 4e-6,
+    },
+)
+
+
+def _twelve_hour_cache_write_usage(prompt_tokens: int) -> Usage:
+    return Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=4,
+        total_tokens=prompt_tokens + 4,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=0,
+            cache_creation_tokens=500,
+            cache_creation_token_details=CacheCreationTokenDetails(
+                ephemeral_30m_input_tokens=300, ephemeral_12h_input_tokens=200
+            ),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("prompt_tokens", "input_rate", "write_rate", "twelve_hour_rate"),
+    [(1_000, 1e-6, 1.25e-6, 2.5e-6), (272_000, 1e-6, 1.25e-6, 2.5e-6), (300_000, 3e-6, 3.75e-6, 7.5e-6)],
+)
+def test_batch_cost_calculator_bills_12h_cache_writes_at_the_12h_batch_rate_for_the_crossed_tier(
+    prompt_tokens: int, input_rate: float, write_rate: float, twelve_hour_rate: float
+) -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=_twelve_hour_cache_write_usage(prompt_tokens),
+        model="lit-12h-batch-model",
+        custom_llm_provider="openai",
+        model_info=_TWELVE_HOUR_BATCH_MODEL_INFO,
+    )
+
+    assert prompt_cost == pytest.approx((prompt_tokens - 500) * input_rate + 300 * write_rate + 200 * twelve_hour_rate)
+    assert completion_cost_value == pytest.approx(4 * 4e-6)
+
+
+@pytest.mark.parametrize(
+    ("prompt_tokens", "input_rate", "twelve_hour_write_rate"), [(1_000, 1e-6, 2.5e-6), (300_000, 3e-6, 7.5e-6)]
+)
+def test_batch_cost_calculator_bills_12h_cache_writes_once_when_only_the_12h_batch_key_exists(
+    prompt_tokens: int, input_rate: float, twelve_hour_write_rate: float
+) -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+
+    model_info: Final = cast(
+        ModelInfo,
+        {
+            key: rate
+            for key, rate in _TWELVE_HOUR_BATCH_MODEL_INFO.items()
+            if not key.startswith("cache_creation_input_token_cost_")
+            or key.startswith("cache_creation_input_token_cost_above_12hr")
+        },
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_twelve_hour_cache_write_usage(prompt_tokens),
+        model="lit-12h-batch-model",
+        custom_llm_provider="openai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx((prompt_tokens - 200) * input_rate + 200 * twelve_hour_write_rate)
+
+
+@pytest.mark.parametrize(("prompt_tokens", "write_rate"), [(1_000, 1.25e-6), (300_000, 3.75e-6)])
+def test_batch_cost_calculator_bills_12h_cache_writes_at_the_batch_cache_write_rate_without_a_12h_batch_key(
+    prompt_tokens: int, write_rate: float
+) -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+
+    model_info: Final = cast(
+        ModelInfo,
+        {
+            key: rate
+            for key, rate in _TWELVE_HOUR_BATCH_MODEL_INFO.items()
+            if not key.startswith("cache_creation_input_token_cost_above_12hr")
+        },
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_twelve_hour_cache_write_usage(prompt_tokens),
+        model="lit-12h-batch-model",
+        custom_llm_provider="openai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(
+        (prompt_tokens - 500) * (1e-6 if prompt_tokens <= 272_000 else 3e-6) + 500 * write_rate
+    )
+
+
 def test_batch_cost_calculator_prices_modalities_and_cached_tokens_together_in_the_crossed_tier() -> None:
     from litellm.cost_calculator import batch_cost_calculator
 
@@ -5988,6 +6076,45 @@ def test_batch_cost_calculator_prices_modalities_and_cached_tokens_together_in_t
     )
 
     assert prompt_cost == pytest.approx(298_926 * 3e-6 + 64 * 5e-6 + 10 * 3e-6 + 1_000 * 3e-7)
+
+
+def test_batch_cost_calculator_prices_cached_audio_at_its_batch_rate() -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 2e-6,
+        "input_cost_per_token_batches": 1e-6,
+        "input_cost_per_audio_token": 6e-6,
+        "input_cost_per_audio_token_batches": 3e-6,
+        "cache_read_input_token_cost": 8e-7,
+        "cache_read_input_token_cost_batches": 4e-7,
+        "cache_read_input_audio_token_cost": 5e-7,
+        "cache_read_input_audio_token_cost_batches": 2e-7,
+    }
+    usage: Final = Usage(
+        prompt_tokens=40,
+        completion_tokens=0,
+        total_tokens=40,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=20,
+            audio_tokens=20,
+            cached_tokens=10,
+            cached_tokens_details=CachedTokensDetails(text_tokens=5, audio_tokens=5),
+        ),
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=usage,
+        model="gemini-audio-batch-test-model",
+        custom_llm_provider="gemini",
+        model_info=model_info,
+    )
+
+    expected: Final = (
+        15 * model_info["input_cost_per_token_batches"]
+        + 15 * model_info["input_cost_per_audio_token_batches"]
+        + 5 * model_info["cache_read_input_token_cost_batches"]
+        + 5 * model_info["cache_read_input_audio_token_cost_batches"]
+    )
+    assert prompt_cost == pytest.approx(expected)
 
 
 QWEN3_NEXT_REGIONS: Final = ("ap-northeast-1", "ap-south-1", "ap-southeast-2", "eu-west-1", "eu-west-2", "sa-east-1")
