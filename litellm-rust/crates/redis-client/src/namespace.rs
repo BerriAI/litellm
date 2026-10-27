@@ -1,10 +1,14 @@
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Namespace(Option<String>);
 
 impl Namespace {
     pub fn new(namespace: impl Into<String>) -> Self {
         let namespace = namespace.into();
         Self((!namespace.is_empty()).then_some(namespace))
+    }
+
+    pub fn as_str(&self) -> Option<&str> {
+        self.0.as_deref()
     }
 
     pub(crate) fn apply(&self, key: &str) -> String {

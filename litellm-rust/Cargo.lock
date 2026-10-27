@@ -3676,6 +3676,8 @@ dependencies = [
  "strum",
  "tempfile",
  "thiserror 2.0.19",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -3764,6 +3766,7 @@ dependencies = [
  "futures-util",
  "http-body-util",
  "litellm-auth-types",
+ "litellm-circuit-breaker",
  "litellm-config",
  "litellm-gateway-auth",
  "litellm-gateway-inference",
@@ -3772,6 +3775,8 @@ dependencies = [
  "litellm-http",
  "litellm-inference",
  "litellm-llms",
+ "litellm-redis-client",
+ "litellm-redis-testing",
  "litellm-secrets",
  "litellm-tracing",
  "rstest",

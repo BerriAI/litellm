@@ -40,9 +40,16 @@ impl RedisServer {
     }
 
     pub async fn restart(&self) -> Result<(), Error> {
-        self.container.stop().await?;
-        self.container.start().await?;
-        Ok(())
+        self.stop().await?;
+        self.resume().await
+    }
+
+    pub async fn stop(&self) -> Result<(), Error> {
+        Ok(self.container.stop().await?)
+    }
+
+    pub async fn resume(&self) -> Result<(), Error> {
+        Ok(self.container.start().await?)
     }
 
     pub async fn freeze(&self) -> Result<(), Error> {
