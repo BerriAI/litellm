@@ -12,7 +12,7 @@ export interface PaletteNavItem {
 }
 
 export const paletteScopeForRoute = (routeSegment: string): PaletteScope =>
-  routeSegment === "" || routeSegment === "api-keys" ? "keys" : "global";
+  routeSegment === "api-keys" ? "keys" : "global";
 
 const matchRank = (item: PaletteNavItem, query: string): number => {
   const label = item.label.toLowerCase();

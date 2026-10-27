@@ -88,18 +88,21 @@ fn aws_context(
 }
 
 fn read_timeout(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Duration>> {
-    let Some(value) = value.filter(|value| !value.is_none()) else {
-        return Ok(None);
-    };
-    let seconds = match value.extract::<f64>() {
-        Ok(value) => Some(value),
-        Err(_) => value.getattr("read")?.extract::<Option<f64>>()?,
-    };
-    seconds
+    read_timeout_seconds(value)?
         .map(|value| {
             Duration::try_from_secs_f64(value).map_err(|_| PyValueError::new_err("invalid timeout"))
         })
         .transpose()
+}
+
+pub(super) fn read_timeout_seconds(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<f64>> {
+    let Some(value) = value.filter(|value| !value.is_none()) else {
+        return Ok(None);
+    };
+    match value.extract::<f64>() {
+        Ok(value) => Ok(Some(value)),
+        Err(_) => value.getattr("read")?.extract::<Option<f64>>(),
+    }
 }
 
 fn vault_context(params: Option<&Bound<'_, PyAny>>) -> PyResult<HashicorpOperationContext> {

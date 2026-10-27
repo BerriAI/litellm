@@ -3,22 +3,36 @@
 The aggregate listing deliberately keeps serving the healthy subset when one server fails, but a
 failed server must contribute a classified outcome instead of silently shrinking the list: an empty
 contribution with no signal makes a broken upstream indistinguishable from a healthy server with no
-tools. Outcomes carry only machine fields (category and status code) so nothing from an upstream
-body crosses the trust boundary; classification is total, so any exception out of a server fetch
+tools. Outcomes carry machine fields and controlled diagnostics so nothing from an upstream body
+crosses the trust boundary; classification is total, so any exception out of a server fetch
 becomes an outcome, never a second failure.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from typing import Final, Literal, NamedTuple, NoReturn, TypeAlias
+import email.utils
+import random
+import re
+from collections.abc import Awaitable, Callable, Iterator, Mapping
+from datetime import datetime, timezone
+from typing import Final, Literal, NamedTuple, NoReturn, TypeAlias, TypeVar
+from urllib.request import parse_http_list, parse_keqv_list
 
+import anyio
 import httpx
 import httpx2
+from mcp import MCPError
+from mcp.types import CONNECTION_CLOSED
 from mcp.types import Tool as MCPTool
-from pydantic import ConfigDict
+from pydantic import ConfigDict, PositiveInt, TypeAdapter
 from typing_extensions import assert_never
 
+from litellm._logging import verbose_logger
+from litellm.constants import (
+    MCP_UPSTREAM_RATE_LIMIT_BASE_DELAY_SECONDS,
+    MCP_UPSTREAM_RATE_LIMIT_MAX_DELAY_SECONDS,
+    MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES,
+)
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPServerListError,
     MCPUpstreamAuthError,
@@ -53,6 +67,16 @@ class ServerListFault(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     tag: ListFaultCategory
     status_code: int | None = None
+    sse_event_limit_bytes: PositiveInt | None = None
+
+    @property
+    def public_message(self) -> str | None:
+        if self.sse_event_limit_bytes is None:
+            return None
+        return (
+            f"Upstream MCP SSE event exceeded the {self.sse_event_limit_bytes} byte per-event limit. "
+            "Paginate tools/list responses so each event stays below the limit."
+        )
 
 
 ServerOutcome: TypeAlias = ServerListOk | ServerListFault
@@ -98,6 +122,29 @@ def upstream_auth_challenge(exc: BaseException) -> tuple[int, str | None] | None
     return None
 
 
+def upstream_insufficient_scope(exc: BaseException) -> str | None:
+    auth: Final = upstream_auth_challenge(exc)
+    if auth is None or auth[0] != 403 or not auth[1]:
+        return None
+    scheme, _, parameters = auth[1].partition(" ")
+    if scheme.lower() != "bearer":
+        return None
+    fields: Final = parse_http_list(parameters)
+    if any("=" not in field or not field.split("=", 1)[1] for field in fields):
+        return None
+    keys: Final = tuple(field.split("=", 1)[0].strip().lower() for field in fields)
+    if len(set(keys)) != len(keys) or any(re.fullmatch(r"[!#$%&'*+.^_`|~0-9a-z-]+", key) is None for key in keys):
+        return None
+    parsed: Final = TypeAdapter(dict[str, str]).validate_python(parse_keqv_list(fields))
+    values: Final = {key: value for key, value in zip(keys, parsed.values())}
+    if values.get("error") != "insufficient_scope":
+        return None
+    scope: Final = values.get("scope", "")
+    if scope and re.fullmatch(r"[!#-\[\]-~]+(?: [!#-\[\]-~]+)*", scope) is None:
+        return None
+    return scope
+
+
 def raise_classified_list_failure(
     exc: BaseException,
     server_name: str,
@@ -118,6 +165,18 @@ def raise_classified_list_failure(
             server_name=server_name,
         ) from exc
     raise MCPServerListError(classify_list_exception(exc), server_name) from exc
+
+
+def _sse_event_limit(exc: BaseException) -> int | None:
+    """The SDK replaces decoder exceptions with CONNECTION_CLOSED and a fixed diagnostic."""
+    if not isinstance(exc, (httpx2.SSEError, MCPError)):
+        return None
+    if isinstance(exc, MCPError) and exc.error.code != CONNECTION_CLOSED:
+        return None
+    prefix: Final = "SSE stream failed: " if isinstance(exc, MCPError) else ""
+    message: Final = exc.error.message if isinstance(exc, MCPError) else str(exc)
+    matched: Final = re.fullmatch(prefix + r"Server-sent event exceeded the ([1-9][0-9]{0,18}) byte limit\.", message)
+    return int(matched[1]) if matched is not None else None
 
 
 def classify_list_exception(exc: BaseException) -> ServerListFault:
@@ -144,6 +203,11 @@ def classify_list_exception(exc: BaseException) -> ServerListFault:
     response: Final = _find_upstream_response(exc)
     if response is not None:
         return ServerListFault(tag="upstream_error", status_code=response.status_code)
+    sse_event_limit: Final = next(
+        (limit for error in iter_exception_tree(exc) if (limit := _sse_event_limit(error)) is not None), None
+    )
+    if sse_event_limit is not None:
+        return ServerListFault(tag="upstream_error", sse_event_limit_bytes=sse_event_limit)
     if isinstance(exc, (httpx.TimeoutException, httpx2.TimeoutException)):
         return ServerListFault(tag="timeout")
     if isinstance(exc, (httpx.TransportError, httpx2.TransportError)):
@@ -151,9 +215,116 @@ def classify_list_exception(exc: BaseException) -> ServerListFault:
     return ServerListFault(tag="internal")
 
 
+class UpstreamRateLimit(NamedTuple):
+    retry_after_seconds: float | None
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    if value is None:
+        return None
+    stripped: Final = value.strip()
+    if re.fullmatch(r"\d+", stripped):
+        return float(stripped)
+    try:
+        parsed: Final = email.utils.parsedate_to_datetime(stripped)
+    except (TypeError, ValueError):
+        return None
+    aware: Final = parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+    return max(0.0, (aware - datetime.now(timezone.utc)).total_seconds())
+
+
+def upstream_rate_limit(exc: BaseException) -> UpstreamRateLimit | None:
+    """The upstream 429 signal for the tools/list retry loop: an auth challenge wins over rate
+    limiting so a 401/403 anywhere in the tree keeps its own channel, then the first 429 response
+    in deliberate order carries its Retry-After hint. Anything else is not retryable here."""
+    if upstream_auth_challenge(exc) is not None:
+        return None
+    for response in _iter_upstream_responses(exc):
+        if response.status_code == 429:
+            return UpstreamRateLimit(_parse_retry_after(response.headers.get("retry-after")))
+    return None
+
+
+def rate_limit_retry_delay(
+    attempt: int,
+    retry_after_seconds: float | None,
+    *,
+    base_delay: float,
+    max_delay: float,
+    jitter: float,
+) -> float:
+    if retry_after_seconds is not None:
+        return min(retry_after_seconds, max_delay)
+    return min(max_delay, base_delay * 2.0**attempt * (1 + jitter))
+
+
+T: Final = TypeVar("T")
+
+
+async def retry_upstream_rate_limit(
+    fetch: Callable[[], Awaitable[T]],
+    server_name: str,
+    *,
+    max_retries: int = MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES,
+    base_delay: float = MCP_UPSTREAM_RATE_LIMIT_BASE_DELAY_SECONDS,
+    max_delay: float = MCP_UPSTREAM_RATE_LIMIT_MAX_DELAY_SECONDS,
+    sleep: Callable[[float], Awaitable[None]] = anyio.sleep,
+    jitter: Callable[[], float] = random.random,
+    deadline_seconds: float | None = None,
+    clock: Callable[[], float] = anyio.current_time,
+) -> T:
+    attempts: Final = max(0, max_retries)
+    deadline: Final = None if deadline_seconds is None else clock() + deadline_seconds
+    last_rate_limit: BaseException | None = None  # rebind-ok: each 429 replaces the cause a retry deadline re-raises
+    for attempt in range(attempts + 1):
+        try:
+            if attempt > 0 and deadline is not None:
+                try:
+                    with anyio.fail_after(max(0.0, deadline - clock())):
+                        return await fetch()
+                except TimeoutError as timeout:
+                    if last_rate_limit is None:
+                        raise
+                    raise last_rate_limit from timeout
+            return await fetch()
+        except Exception as exc:
+            limit = upstream_rate_limit(exc)
+            if limit is not None:
+                last_rate_limit = exc
+            if limit is None or attempt == attempts:
+                raise
+            delay = rate_limit_retry_delay(
+                attempt,
+                limit.retry_after_seconds,
+                base_delay=base_delay,
+                max_delay=max_delay,
+                jitter=jitter(),
+            )
+            if deadline is not None and clock() + delay >= deadline:
+                raise
+            verbose_logger.warning(
+                "MCP server %s answered 429 to tools/list; retry %d/%d in %.2fs",
+                server_name,
+                attempt + 1,
+                max_retries,
+                delay,
+            )
+            await sleep(delay)
+    raise AssertionError("unreachable")
+
+
+def listing_failed_outright(outcomes: Mapping[str, ServerOutcome]) -> bool:
+    """True only when every server in scope contributed a non-auth fault: an auth outcome means a
+    caller can fix the listing by authenticating, so the aggregate stays a 200 with outcomes."""
+    return bool(outcomes) and all(
+        isinstance(outcome, ServerListFault) and outcome.tag not in ("auth_required", "forbidden")
+        for outcome in outcomes.values()
+    )
+
+
 def outcome_wire_value(outcome: ServerOutcome) -> dict[str, object]:
     """The client-visible form of one outcome, for the tools/list result ``_meta`` and the REST
-    response: category plus status code only, never upstream prose or URLs."""
+    response: category, status code and controlled diagnostics, never upstream prose or URLs."""
     match outcome.tag:
         case "ok":
             return {"status": "ok", "tool_count": outcome.tool_count}
@@ -161,6 +332,15 @@ def outcome_wire_value(outcome: ServerOutcome) -> dict[str, object]:
             return {
                 "status": outcome.tag,
                 **({"http_status": outcome.status_code} if outcome.status_code is not None else {}),
+                **(
+                    {
+                        "reason": "sse_event_too_large",
+                        "limit_bytes": outcome.sse_event_limit_bytes,
+                        "message": outcome.public_message,
+                    }
+                    if outcome.sse_event_limit_bytes is not None
+                    else {}
+                ),
             }
         case _:
             assert_never(outcome.tag)

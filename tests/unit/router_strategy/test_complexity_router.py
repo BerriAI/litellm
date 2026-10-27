@@ -93,7 +93,7 @@ from litellm.types.router import (
     TaggedPreRoutingStrategy,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.management_endpoints.auto_router_endpoints import RequestComplexityRouterConfig
+from litellm.router_strategy.complexity_router.request_models import RequestComplexityRouterConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
@@ -109,6 +109,13 @@ def _heuristic_v2_artifact() -> TrainedTierArtifact:
             for tier, successes in enumerate((10, 20, 90, 99), start=1)
         ),
         routing_threshold=0.8,
+    )
+
+
+def _answer_deployments_named(router: MagicMock) -> None:
+    """Make a mock router answer `deployments_named` from its own `model_list`, the way Router answers from its index."""
+    router.deployments_named.side_effect = lambda name: (
+        tuple(deployment for deployment in router.model_list if deployment["model_name"] == name) or None
     )
 
 
@@ -1064,6 +1071,11 @@ class TestCustomDimensions:
                 {"patterns": [r"\bCREATE\s{1,4}TABLE\b", r"\bALTER\s{1,4}TABLE\b"]},
                 "create table widgets (id integer); ALTER TABLE widgets ADD label text;",
                 id="regex",
+            ),
+            pytest.param(
+                {"patterns": [r"\b(?P<verb>create|alter)\s{1,4}?table\b"]},
+                "CREATE TABLE widgets (id integer)",
+                id="named-group-alternation-lazy-repeat",
             ),
         ],
     )
@@ -3176,7 +3188,7 @@ class TestCapabilityClassifier:
             {"model_name": "efficient-model", "litellm_params": {"input_cost_per_token": 0.000001}},
             {"model_name": "capable-model", "litellm_params": {"input_cost_per_token": 0.00001}},
         ]
-        mock_router_instance.model_name_to_deployment_indices = {"efficient-model": [0], "capable-model": [1]}
+        _answer_deployments_named(mock_router_instance)
         router: Final = self._router(
             mock_router_instance,
             adaptive=True,
@@ -5357,6 +5369,7 @@ class TestRouterPreRoutingSharedAliasName:
                 "api_key": "sk-marker",
                 "api_base": "https://marker.example/v1",
                 "api_version": "2024-01-01",
+                "responses_api_version": "v1",
             },
         }
         router = Router(model_list=[marker_with_connection_params, self._tier_entry()])
@@ -5372,6 +5385,7 @@ class TestRouterPreRoutingSharedAliasName:
         assert "api_base" not in request_kwargs
         assert "api_key" not in request_kwargs
         assert "api_version" not in request_kwargs
+        assert "responses_api_version" not in request_kwargs
         assert request_kwargs["drop_params"] is True
 
     @pytest.mark.asyncio
@@ -5510,6 +5524,48 @@ class TestRouterPreRoutingSharedAliasName:
         assert sent["drop_params"] is True
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "tier_params",
+        [
+            {
+                "api_key": "oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token",
+                "api_base": "https://attacker.example",
+            },
+            {"litellm_credential_name": "admin-oidc", "api_base": "https://attacker.example"},
+        ],
+        ids=["inline_reference", "credential_holding_a_reference"],
+    )
+    async def test_a_tier_cannot_make_the_proxy_read_an_oidc_api_key(self, monkeypatch, tier_params: dict):
+        """A team admin can write an auto-router's tiers, and tier params beat the target deployment's own, so a
+        tier could otherwise send the proxy's own token file to a host the tier picks."""
+        from litellm.types.utils import CredentialItem
+
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="admin-oidc",
+                    credential_values={"api_key": "oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token"},
+                    credential_info={},
+                )
+            ],
+        )
+        marker = self._region_marker_entry()
+        marker["litellm_params"]["complexity_router_config"] = {
+            "tiers": {
+                tier: {"model_name": "bedrock-tier", "litellm_params": tier_params}
+                for tier in ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")
+            }
+        }
+        tier_target = self._bedrock_tier_entry()
+        tier_target["litellm_params"]["mock_response"] = "sent upstream"
+        router = Router(model_list=[marker, tier_target])
+
+        with pytest.raises(ValueError, match="oidc/"):
+            await router.acompletion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
+
+    @pytest.mark.asyncio
     async def test_a_markers_explicit_flag_beats_the_tiers_pydantic_default(self):
         """Every deployment materializes `LiteLLM_Params` defaults such as
         `merge_reasoning_content_in_choices: False`; a default is not the tier setting its own value."""
@@ -5621,7 +5677,7 @@ class TestAdaptiveSoftFloors:
                 "model_info": {"adaptive_router_preferences": {"quality_tier": 3, "strengths": []}},
             },
         ]
-        router.model_name_to_deployment_indices = {"cheap": [0], "premium": [1]}
+        _answer_deployments_named(router)
         return router
 
     @pytest.fixture
@@ -6780,7 +6836,7 @@ class TestTierModelAffinity:
     ) -> ComplexityRouter:
         mock_router_instance.cache = DualCache()
         mock_router_instance.model_list = []
-        mock_router_instance.model_name_to_deployment_indices = {}
+        _answer_deployments_named(mock_router_instance)
         return ComplexityRouter(
             model_name="affinity-router",
             litellm_router_instance=mock_router_instance,
@@ -7498,7 +7554,7 @@ class TestSessionAffinity:
                 "model_info": {},
             },
         ]
-        mock_router_instance.model_name_to_deployment_indices = {"cheap": [0]}
+        _answer_deployments_named(mock_router_instance)
         router = ComplexityRouter(
             model_name="hybrid",
             litellm_router_instance=mock_router_instance,
@@ -11302,7 +11358,7 @@ class TestClientHousekeepingCalls:
                 "model_info": {"adaptive_router_preferences": {"quality_tier": 3, "strengths": []}},
             },
         ]
-        adaptive_instance.model_name_to_deployment_indices = {"cheap": [0], "premium": [1]}
+        _answer_deployments_named(adaptive_instance)
         router = ComplexityRouter(
             model_name="hybrid",
             litellm_router_instance=adaptive_instance,
@@ -13393,7 +13449,7 @@ class TestPlanModeTierFloor:
                 "model_info": {"adaptive_router_preferences": {"quality_tier": 3, "strengths": []}},
             },
         ]
-        adaptive_instance.model_name_to_deployment_indices = {"cheap": [0], "premium": [1]}
+        _answer_deployments_named(adaptive_instance)
         router = ComplexityRouter(
             model_name="hybrid",
             litellm_router_instance=adaptive_instance,
@@ -14892,7 +14948,7 @@ class TestModalityRouting:
         elif path == "adaptive_pick_rewritten":
             config["adaptive"] = True
             mock_router_instance.model_list = []
-            mock_router_instance.model_name_to_deployment_indices = {}
+            _answer_deployments_named(mock_router_instance)
         router = self._router(mock_router_instance, config, vision)
         result = await router.async_pre_routing_hook(model="m", request_kwargs=request_kwargs, messages=messages)
         assert result.model == expected_model

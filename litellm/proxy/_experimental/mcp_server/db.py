@@ -165,6 +165,7 @@ _CLIENT_FORWARDED_AUTH_TYPES: Final["frozenset[str]"] = frozenset({"true_passthr
 _MINTED_TOKEN_CREDENTIAL_FIELDS: Final["frozenset[str]"] = frozenset({"access_token", "refresh_token", "expires_in"})
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _bind_submitted_oauth_client(
@@ -339,7 +340,7 @@ def _decrypt_env_vars_on_returned_row(row: object) -> None:
         return
     if isinstance(env_vars, str):
         try:
-            env_vars = json.loads(env_vars)
+            env_vars = _DECODED_JSON.validate_python(json.loads(env_vars))
         except (json.JSONDecodeError, TypeError):
             return
         if not isinstance(env_vars, list):
@@ -476,8 +477,9 @@ def _prepare_mcp_server_data(
     # Serialize JSON fields from ``data_dict`` (not ``data``) so the
     # exclude_unset filter is respected. Reading back from ``data`` would
     # reintroduce defaults (e.g. ``env={}``) for fields the caller never set.
-    if data_dict.get("static_headers") is not None:
-        data_dict["static_headers"] = encrypt_secret_map(data_dict["static_headers"])
+    static_headers: Final[Mapping[str, str] | None] = data_dict.get("static_headers")
+    if static_headers is not None:
+        data_dict["static_headers"] = encrypt_secret_map(static_headers)
 
     # env_vars is read from ``data_dict`` (not ``data``) like every other JSON
     # column so the exclude_unset filter is respected: a partial update that
@@ -489,11 +491,13 @@ def _prepare_mcp_server_data(
         _encrypt_global_env_var_values(serialized_env_vars)
         data_dict["env_vars"] = safe_dumps(serialized_env_vars)
 
-    if data_dict.get("mcp_info") is not None:
-        data_dict["mcp_info"] = safe_dumps(data_dict["mcp_info"])
+    mcp_info: Final[object] = data_dict.get("mcp_info")
+    if mcp_info is not None:
+        data_dict["mcp_info"] = safe_dumps(mcp_info)
 
-    if data_dict.get("env") is not None:
-        data_dict["env"] = encrypt_secret_map(data_dict["env"])
+    env: Final[Mapping[str, str] | None] = data_dict.get("env")
+    if env is not None:
+        data_dict["env"] = encrypt_secret_map(env)
 
     if "tool_name_to_display_name" in data_dict:
         data_dict["tool_name_to_display_name"] = safe_dumps(data_dict["tool_name_to_display_name"] or {})
@@ -532,6 +536,12 @@ def encrypt_credentials(credentials: MCPCredentials, encryption_key: str | None)
     if client_private_key is not None:
         credentials["client_private_key"] = encrypt_value_helper(
             value=client_private_key,
+            new_encryption_key=encryption_key,
+        )
+    id_jag_resource_client_secret: Final = credentials.get("id_jag_resource_client_secret")
+    if id_jag_resource_client_secret is not None:
+        credentials["id_jag_resource_client_secret"] = encrypt_value_helper(  # rebind-ok: encrypt before persist
+            value=id_jag_resource_client_secret,
             new_encryption_key=encryption_key,
         )
     # AWS SigV4 credential fields
@@ -820,6 +830,7 @@ def decrypt_credentials(
         "client_id",
         "client_secret",
         "client_private_key",
+        "id_jag_resource_client_secret",
         "aws_access_key_id",
         "aws_secret_access_key",
         "aws_session_token",
@@ -1487,6 +1498,26 @@ async def upsert_mcp_server_oauth_client_credentials(
     )
 
 
+async def create_mcp_server_oauth_client_credentials_if_absent(
+    prisma_client: PrismaClient, server_id: str, credentials: MCPCredentials
+) -> bool:
+    """Insert a server's DCR client into the server-scoped store only when no row exists yet, so two
+    first registrations racing each other cannot overwrite one another. Returns False when another
+    writer already holds the row, in which case the caller adopts that client."""
+    from prisma.errors import UniqueViolationError  # noqa: PLC0415  # prisma client is generated at build time
+
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps  # noqa: PLC0415  # avoids circular import
+
+    encrypted: Final = encrypt_credentials(credentials=MCPCredentials(**credentials), encryption_key=get_salt_key())
+    try:
+        await _oauth_client_table_actions(prisma_client).create(
+            data={"server_id": server_id, "credentials": safe_dumps(encrypted)}
+        )
+    except UniqueViolationError:
+        return False
+    return True
+
+
 def _reencrypt_mcp_credentials_blob(
     credentials: "str | Mapping[str, object] | None", new_master_key: str
 ) -> str | None:
@@ -1790,7 +1821,7 @@ async def store_user_oauth_credential(
         payload["refresh_token"] = refresh_token
     if expires_at:
         payload["expires_at"] = expires_at
-    if scopes:
+    if scopes is not None:
         payload["scopes"] = scopes
 
     # Guard against silently overwriting a BYOK credential with an OAuth token.
@@ -2123,9 +2154,7 @@ async def refresh_user_oauth_token(
     new_refresh_token: Final[str | None] = body.get("refresh_token") or refresh_token
 
     raw_scope: Final = body.get("scope")
-    scopes: list[str] | None = (raw_scope.split() if isinstance(raw_scope, str) and raw_scope else None) or cred.get(
-        "scopes"
-    )
+    scopes: Final = raw_scope.split() if isinstance(raw_scope, str) else cred.get("scopes")
 
     await store_user_oauth_credential(
         prisma_client=prisma_client,
