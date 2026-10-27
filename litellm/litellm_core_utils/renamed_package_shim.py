@@ -15,10 +15,14 @@ def _old_name_for(new_module_name: str, renames: tuple[tuple[str, str], ...]) ->
     return new_module_name
 
 
+def _module_parts(path: Path, root: str) -> tuple[str, ...]:
+    relative: Final = path.relative_to(root).with_suffix("")
+    return relative.parts[:-1] if relative.name == "__init__" else relative.parts
+
+
 def _module_names_under(root: str, package_name: str) -> Iterator[str]:
     for path in Path(root).rglob("*.py"):
-        relative: Final = path.relative_to(root).with_suffix("")
-        parts: Final = relative.parts[:-1] if relative.name == "__init__" else relative.parts
+        parts = _module_parts(path, root)
         for depth in range(1, len(parts) + 1):
             yield ".".join((package_name, *parts[:depth]))
 
@@ -26,6 +30,14 @@ def _module_names_under(root: str, package_name: str) -> Iterator[str]:
 def _submodule_names(package: ModuleType) -> tuple[str, ...]:
     per_root: Final = (_module_names_under(root, package.__name__) for root in package.__path__)
     return tuple(sorted(frozenset(chain.from_iterable(per_root))))
+
+
+def _register_alias(new_module_name: str, renames: tuple[tuple[str, str], ...], shim: ModuleType) -> None:
+    module: Final = importlib.import_module(new_module_name)
+    alias: Final = _old_name_for(new_module_name, renames)
+    sys.modules[alias] = module
+    parent_name, _, child_name = alias.rpartition(".")
+    setattr(sys.modules.get(parent_name, shim), child_name, module)
 
 
 def alias_renamed_package(old_name: str, new_name: str, *, nested_renames: tuple[tuple[str, str], ...] = ()) -> None:
@@ -40,10 +52,5 @@ def alias_renamed_package(old_name: str, new_name: str, *, nested_renames: tuple
         stacklevel=3,
     )
     renames: Final = (*nested_renames, (old_name, new_name))
-    shim: Final = sys.modules[old_name]
     for new_module_name in _submodule_names(importlib.import_module(new_name)):
-        module: Final = importlib.import_module(new_module_name)
-        alias: Final = _old_name_for(new_module_name, renames)
-        sys.modules[alias] = module
-        parent_name, _, child_name = alias.rpartition(".")
-        setattr(sys.modules.get(parent_name, shim), child_name, module)
+        _register_alias(new_module_name, renames, sys.modules[old_name])

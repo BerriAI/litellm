@@ -4,6 +4,7 @@ import sys
 import pytest
 
 OLD_PACKAGE = "litellm.llms.anthropic.pass_through"
+NEW_PACKAGE = "litellm.llms.anthropic.messages"
 
 
 def _forget_old_package(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -14,22 +15,20 @@ def _forget_old_package(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_old_deep_import_is_the_new_module_object_and_warns(monkeypatch: pytest.MonkeyPatch) -> None:
     _forget_old_package(monkeypatch)
-    with pytest.warns(DeprecationWarning, match="litellm.llms.anthropic.messages"):
+    with pytest.warns(DeprecationWarning, match=NEW_PACKAGE):
         old_handler = importlib.import_module(f"{OLD_PACKAGE}.messages.handler")
     from litellm.llms.anthropic.messages.native import handler as new_handler
-    from litellm.llms.anthropic.messages.native.handler import anthropic_messages_handler
 
     assert old_handler is new_handler
-    assert old_handler.anthropic_messages_handler is anthropic_messages_handler
+    assert (
+        sys.modules[f"{OLD_PACKAGE}.adapters.transformation"] is sys.modules[f"{NEW_PACKAGE}.adapters.transformation"]
+    )
+    assert sys.modules[f"{OLD_PACKAGE}.safeguards"] is sys.modules[f"{NEW_PACKAGE}.safeguards"]
 
 
 def test_old_package_attribute_access_reaches_renamed_subpackage(monkeypatch: pytest.MonkeyPatch) -> None:
     _forget_old_package(monkeypatch)
     with pytest.warns(DeprecationWarning):
         old_package = importlib.import_module(OLD_PACKAGE)
-    from litellm.llms.anthropic.messages import safeguards
-    from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 
-    assert old_package.safeguards is safeguards
-    assert old_package.adapters.transformation.LiteLLMAnthropicMessagesAdapter is LiteLLMAnthropicMessagesAdapter
-    assert old_package.messages.handler is sys.modules["litellm.llms.anthropic.messages.native.handler"]
+    assert old_package.messages.handler is sys.modules[f"{NEW_PACKAGE}.native.handler"]  # pyright: ignore[reportAny]  # module attributes are untyped
