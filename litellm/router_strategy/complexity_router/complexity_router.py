@@ -28,7 +28,7 @@ from threading import Lock
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
-from pydantic import BaseModel, TypeAdapter, ValidationError, create_model
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError, create_model
 from pydantic_core import ErrorDetails
 from typing_extensions import ReadOnly, TypedDict
 
@@ -779,12 +779,35 @@ _CODEX_COMPACTION_SUMMARY_PREFIX: Final = (
 )
 
 
-class _CodexTurnMetadata(LiteLLMBaseModel):
+class _CodexTurnMetadata(BaseModel, frozen=True):
     request_kind: str | None = None
 
 
-def _codex_request_kind(value: object) -> str | None:
-    if not isinstance(value, str):
+class _CodexTurnMetadataCarrier(BaseModel, frozen=True):
+    turn_metadata: str | None = Field(default=None, alias=_CODEX_TURN_METADATA_KEY)
+
+
+class _CodexProxyRequest(BaseModel, frozen=True):
+    headers: _CodexTurnMetadataCarrier | None = None
+
+
+class _CodexRequestMetadata(BaseModel, frozen=True):
+    """Codex sends its turn metadata in the Responses body's `client_metadata` and projects it onto a
+    header of the same name for transports without that field"""
+
+    client_metadata: _CodexTurnMetadataCarrier | None = None
+    proxy_server_request: _CodexProxyRequest | None = None
+
+    def turn_metadata_values(self) -> tuple[str | None, ...]:
+        headers: Final = self.proxy_server_request.headers if self.proxy_server_request else None
+        return (
+            self.client_metadata.turn_metadata if self.client_metadata else None,
+            headers.turn_metadata if headers else None,
+        )
+
+
+def _codex_request_kind(value: str | None) -> str | None:
+    if value is None:
         return None
     try:
         return _CodexTurnMetadata.model_validate_json(value).request_kind
@@ -792,20 +815,12 @@ def _codex_request_kind(value: object) -> str | None:
         return None
 
 
-def _codex_turn_metadata_values(request_kwargs: Mapping[str, object]) -> Iterator[object]:
-    """Codex sends its turn metadata in the Responses body's `client_metadata` and projects it onto a
-    header of the same name for transports without that field."""
-    client_metadata: Final = request_kwargs.get("client_metadata")
-    if isinstance(client_metadata, Mapping):
-        yield client_metadata.get(_CODEX_TURN_METADATA_KEY)
-    proxy_request: Final = request_kwargs.get("proxy_server_request")
-    headers: Final = proxy_request.get("headers") if isinstance(proxy_request, Mapping) else None
-    if isinstance(headers, Mapping):
-        yield headers.get(_CODEX_TURN_METADATA_KEY)
-
-
 def _is_codex_compaction_request(request_kwargs: Mapping[str, object]) -> bool:
-    return any(_codex_request_kind(value) == "compaction" for value in _codex_turn_metadata_values(request_kwargs))
+    try:
+        request_metadata: Final = _CodexRequestMetadata.model_validate(request_kwargs)
+    except ValidationError:
+        return False
+    return any(_codex_request_kind(value) == "compaction" for value in request_metadata.turn_metadata_values())
 
 
 def _iter_system_scope_texts(
