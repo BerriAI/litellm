@@ -1695,19 +1695,17 @@ class TestRouterComplexityDeploymentMethods:
     def test_custom_default_resolution_preserves_explicit_precedence(self, tier_models, explicit, expected):
         from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
 
-        config: Final = ComplexityRouterConfig.model_validate(
-            {
-                "tiers": {"CUSTOM": tier_models, "OTHER": "other-model"},
-                "tier_definitions": [
-                    {"name": "CUSTOM", "description": "Custom work"},
-                    {"name": "OTHER", "description": "Other work"},
-                ],
-                "fallback_tier": " CUSTOM ",
-                "classifier_type": "llm",
-                "classifier_llm_config": {"model": "classifier"},
-                "default_model": "configured-model",
-            }
-        )
+        config: Final = ComplexityRouterConfig.model_validate({
+            "tiers": {"CUSTOM": tier_models, "OTHER": "other-model"},
+            "tier_definitions": [
+                {"name": "CUSTOM", "description": "Custom work"},
+                {"name": "OTHER", "description": "Other work"},
+            ],
+            "fallback_tier": " CUSTOM ",
+            "classifier_type": "llm",
+            "classifier_llm_config": {"model": "classifier"},
+            "default_model": "configured-model",
+        })
         assert config.resolve_default_model(explicit) == expected
         inferred: Final = config.model_copy(update={"default_model": None})
         assert inferred.resolve_default_model() == "custom-model"
@@ -2143,7 +2141,9 @@ class TestRouterComplexityDeploymentMethods:
 
     @pytest.mark.parametrize("classifier", ("heuristic_first", "hybrid"))
     @pytest.mark.parametrize("held_capability", ("heuristic_v2", "custom_prompt"))
-    def test_v2_chain_registration_enforces_each_claimed_allowance(self, classifier: str, held_capability: str) -> None:
+    def test_v2_chain_registration_enforces_each_claimed_allowance(
+        self, classifier: str, held_capability: str
+    ) -> None:
         held: Final = (
             self._router_row("existing", "existing-id", "heuristic_v2")
             if held_capability == "heuristic_v2"
@@ -2159,8 +2159,7 @@ class TestRouterComplexityDeploymentMethods:
                     "local_heuristic": "heuristic_v2",
                     **(
                         {"heuristic_first_max_tier": "MEDIUM"}
-                        if classifier == "heuristic_first"
-                        else {"hybrid_boundary_margin": 0.1}
+                        if classifier == "heuristic_first" else {"hybrid_boundary_margin": 0.1}
                     ),
                     "classifier_llm_config": {"model": "gpt-4o-mini", "system_prompt": "Grade by difficulty"},
                     "tiers": {"SIMPLE": "gpt-4o-mini"},
@@ -9400,15 +9399,11 @@ class TestRoutingDecisionSurvivesToSpendLogOnEveryMetadataShape:
         assert persisted is not None, f"routing_decision dropped for {expected_bucket}"
         assert persisted["router_model_name"] == "smart-router"
         if classifier_type == "heuristic_v2":
-            assert (
-                persisted["heuristic_v2_forecast"]
-                == request_kwargs[expected_bucket]["routing_decision"]["heuristic_v2_forecast"]
-            )
+            assert persisted["heuristic_v2_forecast"] == request_kwargs[expected_bucket]["routing_decision"][
+                "heuristic_v2_forecast"
+            ]
             assert set(persisted["heuristic_v2_forecast"]["probabilities"]) == {
-                "SIMPLE",
-                "MEDIUM",
-                "COMPLEX",
-                "REASONING",
+                "SIMPLE", "MEDIUM", "COMPLEX", "REASONING"
             }
         else:
             assert "heuristic_v2_forecast" not in persisted
@@ -9738,10 +9733,8 @@ class TestRedactedLoggingDropsPromptText:
             {
                 "classifier_type": "capability",
                 "capability_classifier_config": {
-                    "efficient_tier": "SIMPLE",
-                    "capable_tier": "REASONING",
-                    "base_threshold": 0.5,
-                    "threshold_step": 0.1,
+                    "efficient_tier": "SIMPLE", "capable_tier": "REASONING",
+                    "base_threshold": 0.5, "threshold_step": 0.1,
                 },
             },
             "capability_classifier_fallback",
@@ -9750,10 +9743,8 @@ class TestRedactedLoggingDropsPromptText:
             {
                 "classifier_type": "llm_v2",
                 "llm_v2_config": {
-                    "efficient_profile": "Routine tasks",
-                    "capable_profile": "Complex tasks",
-                    "harness": "Read files and run checks",
-                    "max_quality_gap": 0.05,
+                    "efficient_profile": "Routine tasks", "capable_profile": "Complex tasks",
+                    "harness": "Read files and run checks", "max_quality_gap": 0.05,
                 },
             },
             "llm_v2_fallback",
@@ -9764,46 +9755,36 @@ async def test_classifier_failure_survives_real_router_decision_and_redaction(
     overrides: Mapping[str, object], expected_cause: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "auto",
-                "litellm_params": {
-                    "model": "auto_router/complexity_router",
-                    "complexity_router_config": {
-                        "tiers": {"SIMPLE": "cheap", "REASONING": "capable"},
-                        "default_model": "cheap",
-                        "classifier_llm_config": {"model": "classifier", "timeout_ms": 2000},
-                        **overrides,
-                    },
+    router: Final = Router(model_list=[
+        {
+            "model_name": "auto",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {
+                    "tiers": {"SIMPLE": "cheap", "REASONING": "capable"},
+                    "default_model": "cheap",
+                    "classifier_llm_config": {"model": "classifier", "timeout_ms": 2000},
+                    **overrides,
                 },
             },
-            {
-                "model_name": "classifier",
-                "litellm_params": {
-                    "model": "openai/test-classifier",
-                    "api_key": "test-key",
-                    "api_base": "https://classifier.test/v1",
-                },
+        },
+        {
+            "model_name": "classifier",
+            "litellm_params": {
+                "model": "openai/test-classifier", "api_key": "test-key",
+                "api_base": "https://classifier.test/v1",
             },
-            {"model_name": "cheap", "litellm_params": {"model": "openai/test-cheap", "api_key": "test-key"}},
-            {"model_name": "capable", "litellm_params": {"model": "openai/test-capable", "api_key": "test-key"}},
-        ]
-    )
+        },
+        {"model_name": "cheap", "litellm_params": {"model": "openai/test-cheap", "api_key": "test-key"}},
+        {"model_name": "capable", "litellm_params": {"model": "openai/test-capable", "api_key": "test-key"}},
+    ])
     with respx.mock:
         upstream: Final = respx.post("https://classifier.test/v1/chat/completions").respond(
             200,
             json={
-                "id": "classifier-result",
-                "object": "chat.completion",
-                "model": "test-classifier",
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": "PRIVATE_INVALID_REPLY"},
-                        "finish_reason": "stop",
-                    }
-                ],
+                "id": "classifier-result", "object": "chat.completion", "model": "test-classifier",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "PRIVATE_INVALID_REPLY"},
+                             "finish_reason": "stop"}],
             },
         )
         metadata: Final[dict[str, object]] = {"headers": {"x-litellm-enable-message-redaction": True}}
@@ -9820,21 +9801,11 @@ async def test_classifier_failure_survives_real_router_decision_and_redaction(
         assert "PRIVATE_INVALID_REPLY" not in json.dumps(decision)
         assert "signals" not in decision
         if overrides["classifier_type"] == "llm":
-            upstream.respond(
-                200,
-                json={
-                    "id": "classifier-recovered",
-                    "object": "chat.completion",
-                    "model": "test-classifier",
-                    "choices": [
-                        {
-                            "index": 0,
-                            "message": {"role": "assistant", "content": '{"tier":"SIMPLE"}'},
-                            "finish_reason": "stop",
-                        }
-                    ],
-                },
-            )
+            upstream.respond(200, json={
+                "id": "classifier-recovered", "object": "chat.completion", "model": "test-classifier",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": '{"tier":"SIMPLE"}'},
+                             "finish_reason": "stop"}],
+            })
             recovered: Final = await router.async_pre_routing_hook(
                 model="auto", request_kwargs=request, messages=[{"role": "user", "content": "hi"}]
             )
@@ -14535,9 +14506,7 @@ class TestContextWindowEscalation:
         router = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=_windowed_router(_SMALL, ("mid-model", "openai/gpt-4o-mini", 200000), _BIG),
-            complexity_router_config=_tier_config(
-                tiers={"SIMPLE": ["small-model", "mid-model"], "COMPLEX": "big-model"}
-            ),
+            complexity_router_config=_tier_config(tiers={"SIMPLE": ["small-model", "mid-model"], "COMPLEX": "big-model"}),
         )
 
         result = await router.async_pre_routing_hook(model="test-router", request_kwargs={}, messages=_OVERSIZED_TURNS)
@@ -14644,7 +14613,9 @@ class TestContextWindowEscalation:
             else MappingProxyType({})
         )
         raw_config: Final = RequestComplexityRouterConfig.model_validate(
-            MappingProxyType({"tiers": MappingProxyType({"SIMPLE": "small-model", "COMPLEX": "big-model"}), **setting})
+            MappingProxyType(
+                {"tiers": MappingProxyType({"SIMPLE": "small-model", "COMPLEX": "big-model"}), **setting}
+            )
         )
         config: Final = (
             RequestComplexityRouterConfig.model_validate_json(raw_config.model_dump_json())
@@ -14890,7 +14861,9 @@ class TestModalityRouting:
             self.BASE_VISION,
         )
         original: Final = await router.aclassify("What color is this?")
-        result: Final = await router.async_pre_routing_hook(model="m", request_kwargs={}, messages=self.IMAGE_MESSAGE)
+        result: Final = await router.async_pre_routing_hook(
+            model="m", request_kwargs={}, messages=self.IMAGE_MESSAGE
+        )
 
         assert original.heuristic_v2_forecast is not None
         assert result is not None and result.routing_decision is not None
