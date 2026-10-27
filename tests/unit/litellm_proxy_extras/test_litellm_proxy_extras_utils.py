@@ -724,6 +724,64 @@ class TestResolveAllMigrationsLedger:
         assert self._executed_sql(calls) == _PARTITIONED_DRIFT_SQL
 
 
+class TestMigrateDiffKeepsDatabaseUrlOutOfArgv:
+    """argv is world-readable through ps and /proc/<pid>/cmdline, so every
+    `prisma migrate diff` has to take its URL from DATABASE_URL, read by the
+    schema's datasource, instead of --from-url/--to-url."""
+
+    _SECRET = "s3cret-pw"
+
+    def _capture(self, monkeypatch):
+        import litellm_proxy_extras.utils as utils_module
+
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((list(cmd), kwargs.get("env")))
+            return _FakeCompleted()
+
+        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", fake_run)
+        return calls
+
+    def _diff_call(self, calls):
+        return next((cmd, env) for cmd, env in calls if "diff" in cmd)
+
+    def test_drift_diff_reads_direct_url_from_env(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("DATABASE_URL", f"postgresql://u:{self._SECRET}@pooler:6543/db")
+        monkeypatch.setenv("DIRECT_URL", f"postgresql://u:{self._SECRET}@direct:5432/db")
+        calls = self._capture(monkeypatch)
+
+        ProxyExtrasDBManager._resolve_all_migrations(str(tmp_path), "schema.prisma")
+
+        cmd, env = self._diff_call(calls)
+        assert not any(self._SECRET in arg for arg in cmd)
+        assert cmd[cmd.index("--from-schema-datasource") + 1] == "schema.prisma"
+        assert env["DATABASE_URL"] == f"postgresql://u:{self._SECRET}@direct:5432/db"
+
+    def test_drift_diff_falls_back_to_database_url(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("DATABASE_URL", f"postgresql://u:{self._SECRET}@db:5432/db")
+        monkeypatch.delenv("DIRECT_URL", raising=False)
+        calls = self._capture(monkeypatch)
+
+        ProxyExtrasDBManager._resolve_all_migrations(str(tmp_path), "schema.prisma")
+
+        cmd, env = self._diff_call(calls)
+        assert not any(self._SECRET in arg for arg in cmd)
+        assert env["DATABASE_URL"] == f"postgresql://u:{self._SECRET}@db:5432/db"
+
+    def test_baseline_diff_reads_database_url_from_env(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("DATABASE_URL", f"postgresql://u:{self._SECRET}@db:5432/db")
+        monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", staticmethod(lambda: str(tmp_path)))
+        calls = self._capture(monkeypatch)
+
+        assert ProxyExtrasDBManager._create_baseline_migration("schema.prisma") is True
+
+        cmd, env = self._diff_call(calls)
+        assert not any(self._SECRET in arg for arg in cmd)
+        assert cmd[cmd.index("--to-schema-datasource") + 1] == "schema.prisma"
+        assert env["DATABASE_URL"] == f"postgresql://u:{self._SECRET}@db:5432/db"
+
+
 class TestPartitionedSpendLogsPushGuard:
     def _forbid_subprocess(self, monkeypatch):
         import litellm_proxy_extras.utils as utils_module
