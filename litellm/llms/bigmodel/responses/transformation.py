@@ -1,8 +1,9 @@
 from collections.abc import Mapping
-from typing import Final, Never
+from typing import Final
 
 import httpx
 from pydantic import JsonValue, TypeAdapter
+from typing_extensions import Never
 
 from litellm.exceptions import AuthenticationError, UnsupportedParamsError
 from litellm.litellm_core_utils.litellm_logging import Logging
