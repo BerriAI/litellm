@@ -3,6 +3,7 @@
 
 import asyncio
 import base64
+import itertools
 import json
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
@@ -497,6 +498,22 @@ class _SupportsKeyedGet(Protocol):
 
 def _keyed_get(source: object, key: str, default: object = None) -> object:
     return require_attributes(source, _SupportsKeyedGet, "get").get(key, default)
+
+
+def _user_content_parts(message: AllMessageValues) -> tuple[object, ...]:
+    match message:
+        case {"role": "user", "content": list() as parts}:
+            return tuple(parts)
+        case _:
+            return ()
+
+
+def _file_id_of_content_part(part: object) -> str | None:
+    match part:
+        case {"type": "file", "file": {"file_id": str() as file_id}} if file_id:
+            return file_id
+        case _:
+            return None
 
 
 class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
@@ -1652,21 +1669,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         """
         Gets file ids from messages
         """
-        file_ids = []
-        for message in messages:
-            if message.get("role") == "user":
-                content = message.get("content")
-                if content:
-                    if isinstance(content, str):
-                        continue
-                    for c in content:
-                        if c.get("type") == "file":
-                            file_object = cast(ChatCompletionFileObject, c)
-                            file_object_file_field = file_object["file"]
-                            file_id = file_object_file_field.get("file_id")
-                            if file_id:
-                                file_ids.append(file_id)
-        return file_ids
+        parts: Final = itertools.chain.from_iterable(_user_content_parts(message) for message in messages)
+        return [file_id for file_id in map(_file_id_of_content_part, parts) if file_id]
 
     def get_file_ids_from_responses_input(self, input: Union[str, List[Dict[str, object]]]) -> List[str]:
         """
