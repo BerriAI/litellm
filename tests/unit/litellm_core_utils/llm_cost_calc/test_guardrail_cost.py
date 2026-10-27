@@ -2,6 +2,7 @@ import json
 from typing import Final
 
 import pytest
+from pydantic import JsonValue
 
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc import guardrail_cost
@@ -263,7 +264,7 @@ _TRACE_PRICING: Final = {
 }
 
 
-def _converse_trace(action: str = "NONE") -> dict:
+def _converse_trace(action: str = "NONE") -> dict[str, JsonValue]:
     return {
         "guardrail": {
             "inputAssessment": {"gid": {"invocationMetrics": {"usage": _TRACE_USAGE_IN}}},
@@ -279,7 +280,7 @@ def _converse_trace(action: str = "NONE") -> dict:
     }
 
 
-def _invoke_trace() -> dict:
+def _invoke_trace() -> dict[str, JsonValue]:
     return {
         "guardrail": {
             "input": {"gid": {"invocationMetrics": {"usage": _TRACE_USAGE_IN}}},
@@ -291,7 +292,9 @@ def _invoke_trace() -> dict:
 @pytest.mark.parametrize("trace", [_converse_trace(), _invoke_trace()], ids=["converse", "invoke"])
 def test_native_trace_sums_every_assessment_and_prices_it_like_the_proxy_guardrail(monkeypatch, trace) -> None:
     monkeypatch.setattr(litellm, "model_cost", _TRACE_PRICING)
-    entry = guardrail_cost.native_bedrock_guardrail_information(trace, aws_region_name=None, guardrail_identifier=None)
+    entry: Final = guardrail_cost.native_bedrock_guardrail_information(
+        trace, aws_region_name=None, guardrail_identifier=None
+    )
     assert entry is not None
     assert entry["guardrail_usage"] == {
         "topicPolicyUnits": 3,
@@ -310,7 +313,7 @@ def test_native_trace_sums_every_assessment_and_prices_it_like_the_proxy_guardra
 
 def test_native_trace_marks_a_blocked_assessment_intervened_and_prefers_the_configured_identifier(monkeypatch) -> None:
     monkeypatch.setattr(litellm, "model_cost", _TRACE_PRICING)
-    entry = guardrail_cost.native_bedrock_guardrail_information(
+    entry: Final = guardrail_cost.native_bedrock_guardrail_information(
         _converse_trace("BLOCKED"), aws_region_name="us-east-1", guardrail_identifier="configured-id"
     )
     assert entry is not None
@@ -320,13 +323,13 @@ def test_native_trace_marks_a_blocked_assessment_intervened_and_prefers_the_conf
 
 def test_native_trace_without_usage_is_not_billed(monkeypatch) -> None:
     monkeypatch.setattr(litellm, "model_cost", _TRACE_PRICING)
-    unpriced = {"guardrail": {"inputAssessment": {"gid": {"topicPolicy": {"topics": []}}}}}
+    unpriced: Final = {"guardrail": {"inputAssessment": {"gid": {"topicPolicy": {"topics": []}}}}}
     assert guardrail_cost.native_bedrock_guardrail_information(unpriced, None, None) is None
     assert guardrail_cost.bedrock_guardrail_trace({"usage": {}}) is None
 
 
 def test_with_guardrail_entry_records_the_same_trace_once() -> None:
-    entry = {"guardrail_name": "gid", "guardrail_cost": 0.001}
+    entry: Final = {"guardrail_name": "gid", "guardrail_cost": 0.001}
     metadata: dict = {"standard_logging_guardrail_information": {"guardrail_name": "hook"}}
     guardrail_cost.with_guardrail_entry(metadata, entry)  # pyright: ignore[reportArgumentType]  # partial entry
     guardrail_cost.with_guardrail_entry(metadata, entry)  # pyright: ignore[reportArgumentType]  # partial entry
@@ -335,11 +338,13 @@ def test_with_guardrail_entry_records_the_same_trace_once() -> None:
 
 def test_native_trace_entry_redacts_the_pii_matches_before_they_reach_spend_logs(monkeypatch) -> None:
     monkeypatch.setattr(litellm, "model_cost", _TRACE_PRICING)
-    trace = _converse_trace()
+    trace: Final = _converse_trace()
     trace["guardrail"]["inputAssessment"]["gid"]["sensitiveInformationPolicy"] = {
         "piiEntities": [{"type": "US_SSN", "match": "123-45-6789", "action": "ANONYMIZED"}]
     }
-    entry = guardrail_cost.native_bedrock_guardrail_information(trace, aws_region_name=None, guardrail_identifier=None)
+    entry: Final = guardrail_cost.native_bedrock_guardrail_information(
+        trace, aws_region_name=None, guardrail_identifier=None
+    )
     assert entry is not None
     assert entry["guardrail_status"] == "guardrail_intervened"
     assert "123-45-6789" not in json.dumps(entry["guardrail_response"])
