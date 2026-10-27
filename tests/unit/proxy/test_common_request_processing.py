@@ -10175,6 +10175,32 @@ class TestInjectCostIntoUsageDict:
 
 
 class TestProcessChunkWithCostInjection:
+    @pytest.mark.parametrize("model", ["claude-opus-5-5", "vertex_ai/claude-opus-5-5"])
+    @pytest.mark.parametrize("search_requests", [None, "null", 0, 1, 2])
+    def test_claude_search_stream_cost_matches_complete_usage(
+        self, monkeypatch: pytest.MonkeyPatch, model: str, search_requests: int | Literal["null"] | None
+    ) -> None:
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        usage: Final = litellm.Usage(
+            prompt_tokens=10760,
+            completion_tokens=399,
+            total_tokens=11159,
+            server_tool_use={"web_search_requests": search_requests} if isinstance(search_requests, int) else None,
+        )
+        wire_usage: Final = usage.model_dump() | ({"server_tool_use": None} if search_requests == "null" else {})
+        event: Final = {"object": "chat.completion.chunk", "choices": [], "usage": wire_usage}
+        chunk: Final = f"data: {json.dumps(event)}\n\n".encode()
+
+        result: Final = ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(chunk, model)
+
+        assert isinstance(result, bytes)
+        payload: Final = json.loads(result.decode().removeprefix("data: "))
+        expected_cost: Final = litellm.completion_cost(
+            model=model, completion_response=litellm.ModelResponse(usage=usage)
+        )
+        assert payload["usage"]["cost"] == pytest.approx(expected_cost)
+        assert "cost" not in event["usage"]
+
     def test_complete_usage_frame_chunk_is_injected(self, monkeypatch):
         monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
         chunk = (
