@@ -4310,6 +4310,24 @@ def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
     assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)
 
 
+def test_batch_cost_calculator_cache_read_falls_back_to_input_rate():
+    from litellm.cost_calculator import batch_cost_calculator
+
+    model_info: ModelInfo = {
+        "supported_openai_params": [],
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 15e-6,
+    }
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_batch_cache_usage(),
+        model="my-fine-tuned-model",
+        custom_llm_provider="openai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(11000 * 3e-6 / 2)
+
+
 def test_completion_cost_bills_interactions_api_response():
     from litellm.types.interactions import InteractionsAPIResponse
 
