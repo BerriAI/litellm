@@ -3,11 +3,94 @@ Unit tests for SensitiveDataMasker - List Preservation
 """
 
 from functools import reduce
+from types import MappingProxyType
 from typing import Final
 
+import httpx
 import pytest
 
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+
+
+@pytest.mark.parametrize("field", ["headers", "extra_headers"])
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        "synthetic-header-secret",
+        b"synthetic-header-secret",
+        [("Authorization", "synthetic-header-secret")],
+        {b"synthetic-header-secret": "unused"},
+        {123: "synthetic-header-secret"},
+        {"Bearer synthetic-header-secret": "unused"},
+        {"synthetic-header-secret\r\n": "unused"},
+        {"": "synthetic-header-secret"},
+        {"\u2603": "synthetic-header-secret"},
+        {"SYNTHETIC_KEY": "Bearer synthetic-header-secret"},
+        {"q8m4p9x2": "synthetic-header-secret"},
+        {"X-Request-Id": b"synthetic-header-secret"},
+        {"X-Request-Id": {"value": "synthetic-header-secret"}},
+        {"X-Request-Id": ["synthetic-header-secret"]},
+    ],
+)
+def test_request_redaction_hides_malformed_headers_only(field: str, malformed: object) -> None:
+    from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_request
+
+    payload: Final = {field: malformed, "model": "synthetic-model", "temperature": 0.25}
+    assert redact_credentials_in_request(payload) == {
+        field: "REDACTED",
+        "model": "synthetic-model",
+        "temperature": 0.25,
+    }
+    assert payload[field] is malformed
+
+
+@pytest.mark.parametrize("factory", [dict, MappingProxyType, httpx.Headers])
+@pytest.mark.parametrize("field", ["headers", "extra_headers"])
+def test_request_redaction_preserves_normal_headers_and_tool_schema(factory, field: str) -> None:
+    from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_request
+
+    headers: Final = factory(
+        {
+            "authorization": "synthetic-header-secret",
+            "cookie": "synthetic-cookie",
+            "x-request-id": "safe-correlation",
+            "content-type": "application/json",
+        }
+    )
+    schema: Final = {
+        "type": "object",
+        "properties": {"headers": {"type": "string"}, "extra_headers": {"type": "array"}},
+    }
+    result: Final = redact_credentials_in_request({field: headers, "tools": [{"parameters": schema}]})
+    assert result == {
+        field: {
+            "authorization": "REDACTED",
+            "cookie": "REDACTED",
+            "x-request-id": "safe-correlation",
+            "content-type": "application/json",
+        },
+        "tools": [{"parameters": schema}],
+    }
+    assert headers["authorization"] == "synthetic-header-secret"
+
+
+@pytest.mark.parametrize("headers", [None, {}])
+def test_request_redaction_preserves_unset_headers(headers) -> None:
+    from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_request
+
+    assert redact_credentials_in_request({"headers": headers}) == {"headers": headers}
+
+
+def test_request_redaction_never_renders_non_string_header_values() -> None:
+    from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_request
+
+    class SensitiveHeaderValue:
+        def __repr__(self) -> str:
+            pytest.fail("A non-string header value must not be rendered")
+
+    assert redact_credentials_in_request({"headers": {"X-Request-Id": SensitiveHeaderValue()}}) == {
+        "headers": "REDACTED"
+    }
 
 
 def test_lists_are_preserved_not_converted_to_strings():

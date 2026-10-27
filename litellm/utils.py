@@ -94,7 +94,11 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
-from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
+from litellm.litellm_core_utils.secret_redaction import REDACTED
+from litellm.litellm_core_utils.sensitive_data_masker import (
+    redact_credentials_in_payload,
+    redact_credentials_in_request,
+)
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
 from litellm.litellm_core_utils.tool_fields import MalformedField, resolve_deployment_tool_fields
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
@@ -8537,7 +8541,38 @@ def get_valid_models(
         return []  # NON-Blocking
 
 
-def print_args_passed_to_litellm(original_function, args, kwargs):
+def _request_logging_parameters(original_function: Callable[..., object]) -> tuple[str, ...]:
+    parameters: Final = inspect.signature(original_function).parameters.values()
+    positional: Final = tuple(
+        parameter.name
+        for parameter in parameters
+        if parameter.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    )
+    if positional or not inspect.iscoroutinefunction(original_function):
+        return positional
+    if original_function.__name__.startswith("a"):
+        synchronous: Final = getattr(inspect.getmodule(original_function), original_function.__name__[1:], None)
+        if callable(synchronous) and not inspect.iscoroutinefunction(synchronous):
+            return _request_logging_parameters(synchronous)
+    return ()
+
+
+def _redact_positional_request_args(
+    original_function: Callable[..., object], args: tuple[object, ...]
+) -> tuple[object, ...]:
+    if not args:
+        return ()
+    try:
+        names: Final = _request_logging_parameters(original_function)
+    except (TypeError, ValueError):
+        return (REDACTED,) * len(args)
+    redacted: Final = redact_credentials_in_request(dict(zip(names, args)))
+    return tuple(redacted[name] for name in names[: len(args)]) + (REDACTED,) * max(0, len(args) - len(names))
+
+
+def print_args_passed_to_litellm(
+    original_function: Callable[..., object], args: tuple[object, ...], kwargs: Mapping[str, object]
+) -> None:
     if not is_debugging_on():
         return
     try:
@@ -8557,8 +8592,8 @@ def print_args_passed_to_litellm(original_function, args, kwargs):
         ):
             return
 
-        args_str: Final = ", ".join(map(repr, args))
-        redacted_kwargs: Final = redact_credentials_in_payload(kwargs)
+        args_str: Final = ", ".join(map(repr, _redact_positional_request_args(original_function, args)))
+        redacted_kwargs: Final = redact_credentials_in_request(kwargs)
         kwargs_str: Final = ", ".join(f"{key}={value!r}" for key, value in redacted_kwargs.items())
         print_verbose(
             "\n",

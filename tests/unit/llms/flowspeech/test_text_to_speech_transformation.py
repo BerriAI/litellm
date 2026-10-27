@@ -3,6 +3,7 @@ import json
 import logging
 import traceback
 import wave
+from typing import Final
 from uuid import UUID
 
 import httpx
@@ -11,11 +12,24 @@ import pytest
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
-from litellm.llms.flowspeech.text_to_speech.transformation import FlowSpeechTextToSpeechConfig
+from litellm.llms.flowspeech.text_to_speech.transformation import FlowSpeechException, FlowSpeechTextToSpeechConfig
 
 REQUEST_ID = "b698824b-de05-486d-8833-05d5c4522a39"
 JOB_ID = "11111111-2222-4333-8444-555555555555"
 SECRET_SENTINEL = "credential-value-must-not-appear-672911"
+
+
+def assert_clean_exception_chain(error: BaseException | None, seen: frozenset[int] = frozenset()) -> None:
+    if error is None or id(error) in seen:
+        return
+    assert SECRET_SENTINEL not in repr(error.args)
+    assert SECRET_SENTINEL not in repr(vars(error))
+    assert SECRET_SENTINEL not in "".join(traceback.format_exception(error))
+    request: Final = getattr(error, "request", None)
+    if isinstance(request, httpx.Request):
+        assert SECRET_SENTINEL not in str(request.url) + repr(request.headers) + repr(request.content)
+    assert_clean_exception_chain(error.__cause__, seen | {id(error)})
+    assert_clean_exception_chain(error.__context__, seen | {id(error)})
 
 
 class FailureRecorder(CustomLogger):
@@ -237,6 +251,7 @@ def test_invalid_headers_raise_no_input_bearing_exception_chain(headers):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("positional", [False, True])
 @pytest.mark.parametrize(
     "invalid,message",
     [
@@ -246,9 +261,25 @@ def test_invalid_headers_raise_no_input_bearing_exception_chain(headers):
         ({"headers": {"Authorization": {"value": SECRET_SENTINEL}}}, "FlowSpeech headers must be a mapping"),
         ({"extra_headers": {"Authorization": SECRET_SENTINEL.encode()}}, "FlowSpeech headers must be a mapping"),
         ({"extra_headers": {"Authorization": {"value": SECRET_SENTINEL}}}, "FlowSpeech headers must be a mapping"),
+        ({"headers": SECRET_SENTINEL}, "FlowSpeech headers must be a mapping"),
+        ({"extra_headers": SECRET_SENTINEL}, "FlowSpeech headers must be a mapping"),
+        ({"headers": {SECRET_SENTINEL.encode(): "unused"}}, "FlowSpeech headers must be a mapping"),
+        ({"extra_headers": {SECRET_SENTINEL.encode(): "unused"}}, "FlowSpeech headers must be a mapping"),
+        ({"headers": {"X-Correlation-Id": SECRET_SENTINEL.encode()}}, "FlowSpeech headers must be a mapping"),
+        ({"headers": {"X-Correlation-Id": {"value": SECRET_SENTINEL}}}, "FlowSpeech headers must be a mapping"),
+        ({"extra_headers": {"X-Correlation-Id": SECRET_SENTINEL.encode()}}, "FlowSpeech headers must be a mapping"),
+        ({"extra_headers": {"X-Correlation-Id": {"value": SECRET_SENTINEL}}}, "FlowSpeech headers must be a mapping"),
     ],
 )
-async def test_invalid_credentials_never_reach_errors_or_logs(asynchronous, invalid, message, monkeypatch, caplog, capsys):
+async def test_invalid_credentials_never_reach_errors_or_logs(
+    asynchronous,
+    positional,
+    invalid,
+    message,
+    monkeypatch,
+    caplog,
+    capsys,
+):
     caplog.set_level(logging.DEBUG, logger="LiteLLM")
     recorder = FailureRecorder()
     monkeypatch.setattr(litellm, "failure_callback", [recorder])
@@ -260,14 +291,20 @@ async def test_invalid_credentials_never_reach_errors_or_logs(asynchronous, inva
         return httpx.Response(200, json=success())
 
     kwargs = {"model": "flowspeech/flowspeech-tts", "input": "Hello", "api_key": "test-key", **invalid}
+    args: Final = (kwargs["model"], kwargs["input"], None, kwargs["api_key"]) if positional else ()
+    call_kwargs: Final = (
+        {key: value for key, value in kwargs.items() if key not in ("model", "input", "api_key")}
+        if positional
+        else kwargs
+    )
     if asynchronous:
         async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
             with pytest.raises(litellm.APIConnectionError, match=message) as error:
-                await litellm.aspeech(**kwargs, client=client)
+                await litellm.aspeech(*args, **call_kwargs, client=client)
     else:
         with httpx.Client(transport=httpx.MockTransport(respond)) as client:
             with pytest.raises(ValueError, match=message) as error:
-                litellm.speech(**kwargs, client=client)
+                litellm.speech(*args, **call_kwargs, client=client)
     captured = capsys.readouterr()
     assert requests == []
     assert recorder.errors
@@ -275,6 +312,136 @@ async def test_invalid_credentials_never_reach_errors_or_logs(asynchronous, inva
     assert SECRET_SENTINEL not in "".join(traceback.format_exception(error.value))
     assert SECRET_SENTINEL not in repr(recorder.errors)
     assert SECRET_SENTINEL not in caplog.text + captured.out + captured.err
+    assert_clean_exception_chain(error.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("positional", [False, True])
+@pytest.mark.parametrize("successful", [False, True])
+@pytest.mark.parametrize("verbose", [False, True])
+@pytest.mark.parametrize("header_field", ["headers", "extra_headers"])
+@pytest.mark.parametrize("header_name", ["Authorization", SECRET_SENTINEL])
+async def test_request_log_redaction_preserves_speech_transport(
+    asynchronous: bool,
+    positional: bool,
+    successful: bool,
+    verbose: bool,
+    header_field: str,
+    header_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(litellm, "set_verbose", verbose)
+    monkeypatch.setattr("litellm._logging.set_verbose", verbose)
+    caplog.set_level(logging.WARNING if verbose else logging.DEBUG, logger="LiteLLM")
+    headers: Final = {header_name: SECRET_SENTINEL, "X-Correlation-Id": "safe-correlation"}
+    args: Final = ("flowspeech/flowspeech-tts", "Hello", "Kore", SECRET_SENTINEL) if positional else ()
+    kwargs: Final = (
+        {}
+        if positional
+        else {
+            "model": "flowspeech/flowspeech-tts",
+            "input": "Hello",
+            "voice": "Kore",
+            "api_key": SECRET_SENTINEL,
+        }
+    )
+    calls: Final = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        calls.append(request.method)
+        if request.method == "POST":
+            assert request.headers["authorization"] == f"Bearer {SECRET_SENTINEL}"
+            assert request.headers["x-correlation-id"] == "safe-correlation"
+            assert request.headers["idempotency-key"] == REQUEST_ID
+            assert json.loads(request.content) == {"input": {"mode": "single", "text": "Hello", "voiceName": "Kore"}}
+            if not successful:
+                return httpx.Response(
+                    400, json={"error": {"code": "synthetic", "message": "synthetic", "retryable": False}}
+                )
+            return httpx.Response(200, json=success())
+        assert "authorization" not in request.headers
+        assert "cookie" not in request.headers
+        assert "x-correlation-id" not in request.headers
+        return httpx.Response(200, content=wav_bytes())
+
+    async def call():
+        if asynchronous:
+            async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+                return await litellm.aspeech(
+                    *args,
+                    **kwargs,
+                    **{header_field: headers},
+                    request_id=REQUEST_ID,
+                    max_retries=0,
+                    client=client,
+                )
+        with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+            return litellm.speech(
+                *args,
+                **kwargs,
+                **{header_field: headers},
+                request_id=REQUEST_ID,
+                max_retries=0,
+                client=client,
+            )
+
+    if successful:
+        result: Final = await call()
+        assert result.content == wav_bytes()
+    else:
+        with pytest.raises(litellm.BadRequestError if asynchronous else FlowSpeechException) as error:
+            await call()
+        assert_clean_exception_chain(error.value)
+        assert error.value.status_code == 400
+    captured: Final = capsys.readouterr()
+    output: Final = caplog.text + captured.out + captured.err
+    assert SECRET_SENTINEL not in output
+    assert "REDACTED" in output
+    assert ("safe-correlation" in output) is (header_name == "Authorization")
+    assert "Hello" in output and "Kore" in output
+    assert calls == (["POST", "GET"] if successful else ["POST"])
+    assert headers == {header_name: SECRET_SENTINEL, "X-Correlation-Id": "safe-correlation"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("debug", [False, True])
+async def test_positional_key_debug_controls(
+    asynchronous: bool,
+    debug: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(litellm, "set_verbose", False)
+    monkeypatch.setattr("litellm._logging.set_verbose", False)
+    caplog.set_level(logging.DEBUG if debug else logging.ERROR, logger="LiteLLM")
+    calls: Final = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        calls.append(request.method)
+        assert request.headers["authorization"] == f"Bearer {SECRET_SENTINEL}"
+        return httpx.Response(400, json={"error": {"code": "synthetic", "message": "synthetic", "retryable": False}})
+
+    with pytest.raises(litellm.BadRequestError if asynchronous else FlowSpeechException) as error:
+        if asynchronous:
+            async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+                await litellm.aspeech(
+                    "flowspeech/flowspeech-tts", "Hello", "Kore", SECRET_SENTINEL, client=client, max_retries=0
+                )
+        else:
+            with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+                litellm.speech(
+                    "flowspeech/flowspeech-tts", "Hello", "Kore", SECRET_SENTINEL, client=client, max_retries=0
+                )
+    captured: Final = capsys.readouterr()
+    assert SECRET_SENTINEL not in caplog.text + captured.out + captured.err
+    assert ("Request to litellm:" in caplog.text) is debug
+    assert calls == ["POST"]
+    assert_clean_exception_chain(error.value)
 
 
 def test_registers_provider():

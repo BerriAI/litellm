@@ -1,7 +1,7 @@
 from collections.abc import ItemsView, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from pydantic import BaseModel
 
@@ -253,6 +253,50 @@ def mask_sensitive_keys(data: Mapping[str, object], sensitive_fields: set[str]) 
         else:
             masked[key] = value
     return masked
+
+
+_REQUEST_LOG_HEADER_NAMES: Final = frozenset(
+    (
+        "accept",
+        "accept-encoding",
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "set-cookie",
+        "api-key",
+        "x-api-key",
+        "x-goog-api-key",
+        "content-type",
+        "content-length",
+        "user-agent",
+        "idempotency-key",
+        "x-request-id",
+        "x-correlation-id",
+    )
+)
+
+
+def _redact_request_headers(value: object) -> object:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        return REDACTED
+    headers: Final = cast(Mapping[object, object], value)  # cast-ok: Mapping checked above, keys remain untrusted
+    if any(
+        not isinstance(name, str) or name.lower() not in _REQUEST_LOG_HEADER_NAMES or not isinstance(item, str)
+        for name, item in headers.items()
+    ):
+        return REDACTED
+    return headers
+
+
+def redact_credentials_in_request(data: Mapping[str, object]) -> Mapping[str, object]:
+    return redact_credentials_in_payload(
+        {
+            key: _redact_request_headers(value) if key in ("headers", "extra_headers") else value
+            for key, value in data.items()
+        }
+    )
 
 
 def redact_credentials_in_payload(data: Mapping[str, object]) -> Mapping[str, object]:
