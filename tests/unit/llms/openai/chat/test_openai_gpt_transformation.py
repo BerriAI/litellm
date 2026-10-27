@@ -12,7 +12,7 @@ from httpx import Response
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.litellm_core_utils.prompt_templates.image_handling import in_memory_cache
-from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,

@@ -11,7 +11,7 @@ from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
-from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
 

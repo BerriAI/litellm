@@ -49,7 +49,7 @@ from litellm.llms.custom_httpx.llm_http_handler import (
     _rust_responses_websocket_enabled,
 )
 from litellm.llms.azure.videos.transformation import AzureVideoConfig
-from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
 from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
@@ -3173,7 +3173,7 @@ async def test_anthropic_invalid_thinking_signature_retry_resigns_bedrock_reques
     """Regression: after Bedrock rejects a replayed thinking block (400 invalid signature),
     the strip-and-retry re-sign must not inherit attempt 1's SigV4 Authorization/X-Amz-Date;
     reusing them over the new stripped body makes AWS return 403 SignatureDoesNotMatch."""
-    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeMessagesConfig,
     )
 

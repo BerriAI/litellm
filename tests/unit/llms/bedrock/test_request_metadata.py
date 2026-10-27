@@ -15,7 +15,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformati
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
-from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
 from litellm.llms.bedrock.request_metadata import (

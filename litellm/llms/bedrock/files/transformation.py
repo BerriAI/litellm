@@ -1052,7 +1052,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
         # --- Anthropic: use existing AmazonAnthropicClaudeConfig ---
         if provider == LlmProviders.ANTHROPIC:
-            from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+            from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
                 AmazonAnthropicClaudeConfig,
             )
 

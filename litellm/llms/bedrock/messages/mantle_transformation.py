@@ -19,7 +19,7 @@ from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.bedrock.common_utils import build_mantle_messages_url
-from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (

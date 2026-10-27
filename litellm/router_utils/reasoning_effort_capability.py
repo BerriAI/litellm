@@ -469,7 +469,7 @@ def _supports_none_reasoning_effort(model_info: Mapping[str, object], flag: obje
     if model_info.get("litellm_provider") != "azure":
         return flag is not False
 
-    from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
+    from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
 
     key: Final = model_info.get("key")
     if not isinstance(key, str) or not AzureOpenAIGPT5Config.is_model_gpt_5_model(key):

@@ -576,7 +576,7 @@ def test_all_model_configs():
     from litellm.llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
         VertexAIAi21Config,
     )
-    from litellm.llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import (
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.llama.transformation import (
         VertexAILlama3Config,
     )
 
@@ -2610,7 +2610,7 @@ def test_priced_router_deployment_id_stays_out_of_wildcard_model_listing():
 
 def test_anthropic_claude_4_invoke_chat_provider_config():
     """Test that the Anthropic Claude 4 Invoke chat provider config is correct."""
-    from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+    from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeConfig,
     )
 
@@ -5156,7 +5156,7 @@ def test_request_path_cost_map_walks_survive_a_registration_mid_walk(
     from litellm.llms.fal_ai.cost_calculator import _keyed_rows
     from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
     from litellm.llms.ollama.common_utils import OllamaModelInfo
-    from litellm.llms.openai.chat.gpt_5_transformation import _catalogue_declares_default_effort
+    from litellm.llms.openai.chat.gpt_reasoning_transformation import _catalogue_declares_default_effort
     from litellm.utils import _handle_new_key_with_scan, _invalidate_model_cost_lowercase_map
 
     walks: Final[Mapping[str, Callable[[], object]]] = {

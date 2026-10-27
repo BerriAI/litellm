@@ -1785,7 +1785,7 @@ if TYPE_CHECKING:
     from .llms.anthropic.pass_through.messages.transformation import (
         AnthropicMessagesConfig as AnthropicMessagesConfig,
     )
-    from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+    from .llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeMessagesConfig as AmazonAnthropicClaudeMessagesConfig,
     )
     from .llms.bedrock.messages.mantle_transformation import (
@@ -1808,7 +1808,7 @@ if TYPE_CHECKING:
     from .llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
         VertexAIAnthropicConfig as VertexAIAnthropicConfig,
     )
-    from .llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import (
+    from .llms.vertex_ai.vertex_ai_partner_models.llama.transformation import (
         VertexAILlama3Config as VertexAILlama3Config,
     )
     from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
@@ -1835,10 +1835,10 @@ if TYPE_CHECKING:
     from .llms.bedrock.chat.invoke_transformations.amazon_qwen3_transformation import (
         AmazonQwen3Config as AmazonQwen3Config,
     )
-    from .llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation import (
+    from .llms.bedrock.chat.invoke_transformations.anthropic_legacy_text_completions_transformation import (
         AmazonAnthropicConfig as AmazonAnthropicConfig,
     )
-    from .llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+    from .llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeConfig as AmazonAnthropicClaudeConfig,
     )
     from .llms.bedrock.chat.invoke_transformations.amazon_cohere_transformation import (
@@ -2000,7 +2000,7 @@ if TYPE_CHECKING:
         GradientAIConfig as GradientAIConfig,
     )
     from .llms.openai.chat.gpt_transformation import OpenAIGPTConfig as OpenAIGPTConfig
-    from .llms.openai.chat.gpt_5_transformation import (
+    from .llms.openai.chat.gpt_reasoning_transformation import (
         OpenAIGPT5Config as OpenAIGPT5Config,
     )
     from .llms.openai.transcriptions.whisper_transformation import (
@@ -2141,7 +2141,7 @@ if TYPE_CHECKING:
     from .llms.azure.chat.gpt_transformation import (
         AzureOpenAIConfig as AzureOpenAIConfig,
     )
-    from .llms.azure.chat.gpt_5_transformation import (
+    from .llms.azure.chat.gpt_reasoning_transformation import (
         AzureOpenAIGPT5Config as AzureOpenAIGPT5Config,
     )
     from .llms.azure.completion.transformation import (

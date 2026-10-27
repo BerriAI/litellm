@@ -6,7 +6,7 @@ use litellm_llms::{
     anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
     azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
     base_llm::messages::transformation::BaseMessagesConfig,
-    bedrock::messages::invoke_transformations::anthropic_claude3_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
+    bedrock::messages::invoke_transformations::anthropic_claude_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
     deepseek::messages::transformation::DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
     edenai::messages::transformation::EDENAI_MESSAGES_CONFIG,
     minimax::messages::transformation::MINIMAX_MESSAGES_CONFIG,
