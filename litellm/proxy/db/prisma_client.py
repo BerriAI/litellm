@@ -1131,7 +1131,7 @@ class PrismaManager:
         """The read-only pre-migration row check on its own, for `--db_preflight`: the
         refusal the migration step would print, or None when the pending schema changes
         can be applied to the rows the database has."""
-        from litellm_proxy_extras.utils import ProxyExtrasDBManager
+        from litellm_proxy_extras.utils import ProxyExtrasDBManager  # pyright: ignore[reportUnknownVariableType]  # litellm-proxy-extras is an optional install
 
         refusal: Final[str | None] = ProxyExtrasDBManager.preflight_report(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # litellm-proxy-extras is an optional install
             use_migrate=use_migrate
