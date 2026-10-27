@@ -2417,6 +2417,71 @@ def test_gemini_with_grounding(respx_mock: respx.MockRouter) -> None:
     assert complete_response.usage.prompt_tokens_details.web_search_requests == 1
 
 
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("stream", [False, True], ids=["unary", "stream"])
+def test_gemini_grounding_support_without_start_index_is_cited_from_zero(
+    respx_mock: respx.MockRouter, stream: bool
+) -> None:
+    body: Final = {
+        "candidates": [
+            {
+                "content": {"role": "model", "parts": [{"text": "Spain won Euro 2024. The final was in Berlin."}]},
+                "finishReason": "STOP",
+                "index": 0,
+                "groundingMetadata": {
+                    "groundingChunks": [
+                        {"web": {"uri": "https://example.com/uefa", "title": "uefa.com"}},
+                        {"web": {"uri": "https://example.com/news", "title": "news.com"}},
+                    ],
+                    "groundingSupports": [
+                        {"segment": {"endIndex": 20, "text": "Spain won Euro 2024."}, "groundingChunkIndices": [0]},
+                        {
+                            "segment": {"startIndex": 21, "endIndex": 45, "text": "The final was in Berlin."},
+                            "groundingChunkIndices": [1],
+                        },
+                    ],
+                },
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 6, "candidatesTokenCount": 12, "totalTokenCount": 18},
+    }
+    method: Final = "streamGenerateContent?alt=sse" if stream else "generateContent"
+    respx_mock.post(f"{GEMINI_MODELS_URL}/gemini-2.5-flash:{method}").mock(
+        return_value=_gemini_sse(body) if stream else httpx.Response(200, json=body)
+    )
+
+    response: Final = litellm.completion(
+        model="gemini/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Who won Euro 2024?"}],
+        web_search_options={},
+        stream=stream,
+        api_key="test-api-key",
+    )
+    message: Final = (litellm.stream_chunk_builder(list(response)) if stream else response).choices[0].message
+
+    assert message.annotations == [
+        {
+            "type": "url_citation",
+            "url_citation": {
+                "start_index": 0,
+                "end_index": 20,
+                "url": "https://example.com/uefa",
+                "title": "uefa.com",
+            },
+        },
+        {
+            "type": "url_citation",
+            "url_citation": {
+                "start_index": 21,
+                "end_index": 45,
+                "url": "https://example.com/news",
+                "title": "news.com",
+            },
+        },
+    ]
+
+
 @pytest.mark.parametrize(
     ("status_code", "expected_exception"),
     [
