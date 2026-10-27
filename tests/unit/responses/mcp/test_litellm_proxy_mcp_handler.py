@@ -18,10 +18,10 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.proxy._experimental.mcp_server import operations as mcp_operations
-from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
-from litellm.proxy._experimental.mcp_server.mcp_server_manager import ListedToolsCaller, MCPServerManager
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.mcp_server import operations as mcp_operations
+from litellm.proxy.mcp_server.faults.list_outcomes import AggregateToolListing
+from litellm.proxy.mcp_server.mcp_server_manager import ListedToolsCaller, MCPServerManager
 from litellm.proxy.utils import ProxyLogging
 from litellm.responses import main as responses_main
 from litellm.responses.mcp import litellm_proxy_mcp_handler as mcp_handler_module
@@ -55,7 +55,7 @@ def _setup_mcp_call_environment(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
         get_mcp_server_by_name=MagicMock(return_value=None),
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         fake_manager,
     )
     return fake_manager.call_tool
@@ -187,11 +187,11 @@ def test_transform_mcp_tools_to_openai_uses_chat_format(monkeypatch):
         return {"responses": True}
 
     monkeypatch.setattr(
-        "litellm.experimental_mcp_client.tools.transform_mcp_tool_to_openai_tool",
+        "litellm.mcp_client.tools.transform_mcp_tool_to_openai_tool",
         fake_transform_chat,
     )
     monkeypatch.setattr(
-        "litellm.experimental_mcp_client.tools.transform_mcp_tool_to_openai_responses_api_tool",
+        "litellm.mcp_client.tools.transform_mcp_tool_to_openai_responses_api_tool",
         fake_transform_responses,
     )
 
@@ -313,7 +313,7 @@ async def test_execute_tool_calls_strips_prefix_when_alias_differs_from_server_n
         mcp_info=None,
         tool_name_to_display_name=None,
     )
-    from litellm.proxy._experimental.mcp_server import mcp_server_manager as _msm
+    from litellm.proxy.mcp_server import mcp_server_manager as _msm
 
     _msm.global_mcp_server_manager.get_mcp_server_from_tool_name = MagicMock(return_value=fake_server)
 
@@ -355,7 +355,7 @@ async def test_execute_tool_calls_reverse_maps_display_name(monkeypatch):
         mcp_info=None,
         tool_name_to_display_name={"read_wiki_structure": "browse_repo_docs"},
     )
-    from litellm.proxy._experimental.mcp_server import mcp_server_manager as _msm
+    from litellm.proxy.mcp_server import mcp_server_manager as _msm
 
     _msm.global_mcp_server_manager.get_mcp_server_from_tool_name = MagicMock(return_value=colliding_server)
     _msm.global_mcp_server_manager.get_mcp_server_by_name = MagicMock(return_value=fake_server)
@@ -393,7 +393,7 @@ async def test_execute_tool_calls_logs_failure_via_post_call_failure_hook(monkey
         call_tool=AsyncMock(side_effect=HTTPException(status_code=500, detail="boom")),
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         fake_manager,
     )
 
@@ -515,7 +515,7 @@ async def test_execute_tool_calls_applies_post_call_hook_content(monkeypatch):
         get_mcp_server_by_name=MagicMock(return_value=None),
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         fake_manager,
     )
 
@@ -557,7 +557,7 @@ async def test_execute_tool_calls_returns_proxy_result_without_logging(monkeypat
         get_mcp_server_by_name=MagicMock(return_value=None),
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         fake_manager,
     )
     handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
@@ -591,7 +591,7 @@ async def test_execute_tool_calls_passes_logging_details_to_proxy_hook(monkeypat
         get_mcp_server_by_name=MagicMock(return_value=None),
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         fake_manager,
     )
     logging_obj = MagicMock()
@@ -627,7 +627,7 @@ async def test_execute_tool_calls_continues_when_post_call_logging_fails(monkeyp
         get_mcp_server_by_name=MagicMock(return_value=None),
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         fake_manager,
     )
 
@@ -670,7 +670,7 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
     ]
     mock_get_tools = AsyncMock(return_value=AggregateToolListing(tools=served_tools, outcomes={}))
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers",
+        "litellm.proxy.mcp_server.server._get_tools_from_mcp_servers",
         mock_get_tools,
     )
 
@@ -683,7 +683,7 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
         get_mcp_server_by_name=MagicMock(return_value=None),
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         fake_manager,
     )
 
@@ -730,7 +730,7 @@ def test_get_parent_request_tags_from_nested_litellm_params():
 async def test_get_mcp_tools_from_manager_forwards_request_tags(monkeypatch):
     mock_get_tools = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}))
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers",
+        "litellm.proxy.mcp_server.server._get_tools_from_mcp_servers",
         mock_get_tools,
     )
     fake_manager = types.SimpleNamespace(
@@ -741,7 +741,7 @@ async def test_get_mcp_tools_from_manager_forwards_request_tags(monkeypatch):
         get_mcp_server_by_name=MagicMock(return_value=None),
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         fake_manager,
     )
 
@@ -952,7 +952,7 @@ async def test_gateway_served_names_matches_alias_server_name_name_access_group_
 
 @pytest.mark.asyncio
 async def test_gateway_served_names_matches_server_id_short_prefix_and_alias_case_like_the_gateway():
-    from litellm.proxy._experimental.mcp_server.utils import compute_short_server_prefix
+    from litellm.proxy.mcp_server.utils import compute_short_server_prefix
     from litellm.responses.mcp.litellm_proxy_mcp_handler import _gateway_served_names
 
     server_id = "0b9ae4ca-1bd2-4faa-b183-7dd812597e3b"
@@ -1040,7 +1040,7 @@ def test_should_use_gateway_still_triggers_on_http_mcp_path():
 
 @pytest.mark.asyncio
 async def test_aresponses_api_with_mcp_forwards_unserved_external_mcp_tool_to_the_provider(monkeypatch):
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
     from litellm.responses import main as responses_main
     from litellm.types.llms.openai import ResponsesAPIResponse
 
@@ -1287,7 +1287,7 @@ async def test_mcp_follow_up_call_is_stateless_when_store_is_false(
 
 @pytest.mark.asyncio
 async def test_responses_discovery_logs_sanitized_caller_headers(monkeypatch: pytest.MonkeyPatch):
-    from litellm.proxy._experimental.mcp_server import mcp_server_manager, operations
+    from litellm.proxy.mcp_server import mcp_server_manager, operations
 
     headers: Final = {
         "x-app-id": "app-a",
@@ -1365,7 +1365,7 @@ async def test_bridge_listing_leaves_the_callers_catalog_unchanged(
         get_mcp_server_by_name=MagicMock(return_value=None),
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         fake_manager,
     )
     with (
@@ -1453,7 +1453,7 @@ async def test_concurrent_bridge_calls_use_their_own_served_metadata(monkeypatch
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", logger)
     monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
     monkeypatch.setattr(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server]))
-    monkeypatch.setattr("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager", manager)
+    monkeypatch.setattr("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", manager)
     first_listed: Final = asyncio.Event()
     second_listed: Final = asyncio.Event()
 
@@ -1508,13 +1508,13 @@ def _toolset_gateway_manager(toolset_id: str, server_id: str) -> types.SimpleNam
 
 
 async def _tools_listing_kwargs_for_toolset_url(monkeypatch, team_toolset_id: str) -> dict[str, object]:
-    from litellm.proxy._experimental.mcp_server.ui_session_utils import granted_toolset_ids
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.mcp_server.ui_session_utils import granted_toolset_ids
 
     mock_get_tools = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}))
-    monkeypatch.setattr("litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers", mock_get_tools)
+    monkeypatch.setattr("litellm.proxy.mcp_server.server._get_tools_from_mcp_servers", mock_get_tools)
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         _toolset_gateway_manager("ts-granted", "srv-1"),
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
@@ -1561,7 +1561,7 @@ async def test_apply_toolset_permissions_pins_the_auth_to_explicit_grants_only(m
         resolve_toolset_tool_permissions=AsyncMock(return_value={"srv-1": ["add"]}),
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         fake_manager,
     )
 

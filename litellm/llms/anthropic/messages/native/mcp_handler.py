@@ -76,12 +76,12 @@ async def anthropic_messages_with_mcp(
     upstream provider as a url it cannot reach.
     """
     import litellm
-    from litellm.experimental_mcp_client.tools import (
-        transform_mcp_tool_to_anthropic_tool,
-    )
     from litellm.llms.anthropic.messages.adapters.handler import request_safeguards_evaluator
     from litellm.llms.anthropic.messages.native.handler import proxy_classifies_tool_uses
     from litellm.llms.anthropic.messages.safeguards import with_safeguard_results
+    from litellm.mcp_client.tools import (
+        transform_mcp_tool_to_anthropic_tool,
+    )
     from litellm.responses.mcp.litellm_proxy_mcp_handler import (
         LiteLLM_Proxy_MCP_Handler,
     )
