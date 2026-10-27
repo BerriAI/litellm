@@ -28,7 +28,7 @@ from threading import Lock
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
-from pydantic import BaseModel, TypeAdapter, ValidationError, create_model
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError, create_model
 from pydantic_core import ErrorDetails
 from typing_extensions import ReadOnly, TypedDict
 
@@ -773,6 +773,56 @@ def _newest_turn_is_human_ask(
     return _last_human_ask_index(messages, marker_pairs) == newest_activity
 
 
+_CODEX_TURN_METADATA_KEY: Final = "x-codex-turn-metadata"
+_CODEX_COMPACTION_SUMMARY_PREFIX: Final = (
+    "Another language model started to solve this problem and produced a summary of its thinking process."
+)
+
+
+class _CodexTurnMetadata(BaseModel, frozen=True):
+    request_kind: str | None = None
+
+
+class _CodexTurnMetadataCarrier(BaseModel, frozen=True):
+    turn_metadata: str | None = Field(default=None, alias=_CODEX_TURN_METADATA_KEY)
+
+
+class _CodexProxyRequest(BaseModel, frozen=True):
+    headers: _CodexTurnMetadataCarrier | None = None
+
+
+class _CodexRequestMetadata(BaseModel, frozen=True):
+    """Codex sends its turn metadata in the Responses body's `client_metadata` and projects it onto a
+    header of the same name for transports without that field"""
+
+    client_metadata: _CodexTurnMetadataCarrier | None = None
+    proxy_server_request: _CodexProxyRequest | None = None
+
+    def turn_metadata_values(self) -> tuple[str | None, ...]:
+        headers: Final = self.proxy_server_request.headers if self.proxy_server_request else None
+        return (
+            self.client_metadata.turn_metadata if self.client_metadata else None,
+            headers.turn_metadata if headers else None,
+        )
+
+
+def _codex_request_kind(value: str | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        return _CodexTurnMetadata.model_validate_json(value).request_kind
+    except ValidationError:
+        return None
+
+
+def _is_codex_compaction_request(request_kwargs: Mapping[str, object]) -> bool:
+    try:
+        request_metadata: Final = _CodexRequestMetadata.model_validate(request_kwargs)
+    except ValidationError:
+        return False
+    return any(_codex_request_kind(value) == "compaction" for value in request_metadata.turn_metadata_values())
+
+
 def _iter_system_scope_texts(
     body_system: object,
     messages: Sequence[Mapping[str, object]],
@@ -787,10 +837,9 @@ def _iter_system_scope_texts(
     must go through the staleness-aware tail scan instead -- scanning it here would floor every
     turn of a session that once planned, for any pattern whose client injects mid-conversation.
     """
-    if isinstance(body_system, str):
-        yield body_system
-    elif isinstance(body_system, list):
-        yield _message_text(body_system)
+    body_system_text: Final = _message_text(body_system)
+    if body_system_text:
+        yield body_system_text
     for msg in messages:
         if msg.get("role") != "system":
             return
@@ -4263,14 +4312,31 @@ class ComplexityRouter(CustomLogger):
     def _reminder_markers_for_request(self, request_kwargs: Mapping[str, object]) -> tuple[tuple[str, str], ...]:
         if self.config.reminder_markers is not None:
             return self._reminder_markers
-        if any(
+        return _CODEX_REMINDER_MARKERS if self._is_codex_request(request_kwargs) else _DEFAULT_REMINDER_MARKERS
+
+    @staticmethod
+    def _is_codex_request(request_kwargs: Mapping[str, object]) -> bool:
+        return any(
             is_codex_user_agent(user_agent)
             for metadata_key in ("litellm_metadata", "metadata")
             if isinstance(metadata := request_kwargs.get(metadata_key), Mapping)
             if isinstance(user_agent := metadata.get("user_agent"), str)
-        ):
-            return _CODEX_REMINDER_MARKERS
-        return _DEFAULT_REMINDER_MARKERS
+        )
+
+    def _is_codex_compaction_lifecycle(
+        self,
+        request_kwargs: Mapping[str, object],
+        resolved_messages: Sequence[Mapping[str, object]] | None,
+        marker_pairs: tuple[tuple[str, str], ...],
+    ) -> bool:
+        """Codex's compaction call and the first request after it carry a synthetic user turn (the
+        summarization prompt, then the summary), so `user_turn` must read both as continuations."""
+        if _is_codex_compaction_request(request_kwargs):
+            return True
+        if not resolved_messages or not self._is_codex_request(request_kwargs):
+            return False
+        newest_ask: Final = _newest_turn_ask(resolved_messages, marker_pairs)
+        return newest_ask is not None and newest_ask.startswith(_CODEX_COMPACTION_SUMMARY_PREFIX)
 
     @staticmethod
     def _iter_metadata_dicts(request_kwargs: dict) -> list[dict]:
@@ -4380,15 +4446,22 @@ class ComplexityRouter(CustomLogger):
 
         # In 'user_turn' mode a held pin is replayed only on continuation turns; a new human
         # ask falls through and re-classifies. session_affinity restores pin-first for asks too.
-        pin_replay_allowed: Final = bool(self.config.session_affinity) or not _newest_turn_is_human_ask(
-            resolved_messages, marker_pairs
+        codex_compaction: Final = self._is_codex_compaction_lifecycle(request_kwargs, resolved_messages, marker_pairs)
+        pin_replay_allowed: Final = (
+            bool(self.config.session_affinity)
+            or not _newest_turn_is_human_ask(resolved_messages, marker_pairs)
+            or codex_compaction
         )
 
         if cache_key is not None and pin_replay_allowed:
             pinned_value: Final = await self.litellm_router_instance.cache.async_get_cache(key=cache_key)
             pinned_pin: Final = _parse_session_affinity_pin(pinned_value, self.config.tier_names())
             if pinned_pin is not None:
-                user_message: Final = _newest_turn_ask(resolved_messages, marker_pairs) if resolved_messages else None
+                user_message: Final = (
+                    _newest_turn_ask(resolved_messages, marker_pairs)
+                    if resolved_messages and not codex_compaction
+                    else None
+                )
                 pin_escalation_keyword: Final = (
                     self._matched_escalation_keyword(user_message) if user_message is not None else None
                 )
