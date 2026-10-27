@@ -1,3 +1,4 @@
+import hashlib
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -119,6 +120,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if "reasoning.encrypted_content" not in include:
             include.append("reasoning.encrypted_content")
         request["include"] = include
+        request["input"] = self._normalize_responses_input_for_chatgpt(request.get("input"))
 
         allowed_keys: Final = {
             "model",
@@ -139,6 +141,36 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if service_tier is not None:
             filtered["service_tier"] = service_tier
         return filtered
+
+    @classmethod
+    def _normalize_responses_input_for_chatgpt(cls, input_value: Any) -> Any:
+        if not isinstance(input_value, list):
+            return input_value
+
+        normalized_input: list[Any] = []
+        changed = False
+        for item in input_value:
+            if isinstance(item, dict):
+                item_type = item.get("type")
+                if item_type in {"reasoning", "web_search_call"}:
+                    changed = True
+                    continue
+                if item_type == "function_call":
+                    current_id = item.get("id")
+                    normalized_id = cls._normalize_function_call_item_id(current_id)
+                    if normalized_id != current_id:
+                        item = dict(item)
+                        item["id"] = normalized_id
+                        changed = True
+            normalized_input.append(item)
+        return normalized_input if changed else input_value
+
+    @staticmethod
+    def _normalize_function_call_item_id(item_id: Any) -> Any:
+        if not isinstance(item_id, str) or not item_id or item_id.startswith("fc"):
+            return item_id
+        digest: Final = hashlib.sha256(item_id.encode("utf-8")).hexdigest()[:32]
+        return f"fc_{digest}"
 
     def transform_response_api_response(
         self,
