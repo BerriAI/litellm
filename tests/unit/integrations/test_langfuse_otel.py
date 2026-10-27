@@ -11,7 +11,7 @@ import pytest
 from openai.types.responses import ResponseFunctionToolCall
 from opentelemetry import trace
 from opentelemetry.context import Context
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import SpanLimits, TracerProvider
 from opentelemetry.trace import Span
 
 import litellm
@@ -1411,6 +1411,9 @@ ERROR_KEYS: Final = (
     "error.stack_trace",
 )
 SPAN_ATTRIBUTE_LIMIT: Final = 128
+_LIMITED_TRACER: Final = TracerProvider(span_limits=SpanLimits(max_span_attributes=SPAN_ATTRIBUTE_LIMIT)).get_tracer(
+    "langfuse-otel-limit-tests"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1420,7 +1423,7 @@ class ExportedSpan:
 
 
 def _exported_full_span(filler: int, *, joins_caller: bool, failed: bool) -> ExportedSpan:
-    span: Final = _TRACER.start_span(
+    span: Final = _LIMITED_TRACER.start_span(
         "litellm_request",
         context=trace.set_span_in_context(trace.NonRecordingSpan(CALLER)) if joins_caller else Context(),
     )

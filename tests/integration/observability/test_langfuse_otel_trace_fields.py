@@ -262,9 +262,17 @@ def _rig(
         yield Rig(proxy, sink, openai_model, anthropic_model, embedding_model, key)
 
 
+SPAN_ATTRIBUTE_LIMIT: Final = 128
+
+
 @pytest.fixture(scope="module")
 def v1(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
-    yield from _rig(tmp_path_factory, "langfuse-v1", {}, {"langfuse_default_tags": ["cache_hit"]})
+    yield from _rig(
+        tmp_path_factory,
+        "langfuse-v1",
+        {"OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT": str(SPAN_ATTRIBUTE_LIMIT)},
+        {"langfuse_default_tags": ["cache_hit"]},
+    )
 
 
 V2_ENVIRONMENT: Final = {"LITELLM_OTEL_V2": "1", "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "span_only"}
