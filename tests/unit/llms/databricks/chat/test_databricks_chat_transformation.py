@@ -8,7 +8,7 @@ import httpx
 import pytest
 import respx
 from openai.lib.streaming.chat import ChatCompletionStreamState
-from openai.types.chat import ChatCompletionChunk
+from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from pydantic import TypeAdapter
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict
@@ -2427,6 +2427,44 @@ def test_transform_response_carries_served_service_tier(served_tier: str | None)
     )
 
     assert result.to_dict().get("service_tier") == served_tier
+
+
+def test_transform_response_keeps_a_tool_only_message_without_content() -> None:
+    tool_call: Final = {
+        "id": "call_weather",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+    }
+    raw_response: Final = httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "dbrx",
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "tool_calls": [tool_call]}, "finish_reason": "tool_calls"}
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        },
+    )
+
+    result: Final = DatabricksConfig().transform_response(
+        model="databricks/dbrx",
+        raw_response=raw_response,
+        model_response=litellm.ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "weather in Paris?"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    completion: Final = ChatCompletion.model_validate(result.model_dump())
+    assert completion.choices[0].finish_reason == "tool_calls"
+    assert completion.choices[0].message.model_dump(exclude_none=True) == {"role": "assistant", "tool_calls": [tool_call]}
+    assert completion.usage is not None and completion.usage.total_tokens == 8
 
 
 _DATABRICKS_TOOLS_WITH_OPENAI_TOOL_SEARCH: Final = [
