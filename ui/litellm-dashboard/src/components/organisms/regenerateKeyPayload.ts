@@ -29,9 +29,7 @@ export const buildRegenerateKeyPayload = (values: RegenerateKeyFormValues): Rege
   return {
     ...rest,
     max_budget:
-      typeof rest.max_budget === "number"
-        ? roundToPrecision(rest.max_budget, MAX_BUDGET_PRECISION)
-        : rest.max_budget,
+      typeof rest.max_budget === "number" ? roundToPrecision(rest.max_budget, MAX_BUDGET_PRECISION) : rest.max_budget,
     ...(duration.trim() !== "" ? { duration } : {}),
   };
 };
