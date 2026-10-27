@@ -1696,6 +1696,9 @@ if TYPE_CHECKING:
     from .llms.deepinfra.rerank.transformation import (
         DeepinfraRerankConfig as DeepinfraRerankConfig,
     )
+    from .llms.openrouter.rerank.transformation import (
+        OpenRouterRerankConfig as OpenRouterRerankConfig,
+    )
     from .llms.hosted_vllm.rerank.transformation import (
         HostedVLLMRerankConfig as HostedVLLMRerankConfig,
     )

@@ -159,6 +159,7 @@ LLM_CONFIG_NAMES: Final = (
     "JinaAIRerankConfig",
     "ScalewayRerankConfig",
     "DeepinfraRerankConfig",
+    "OpenRouterRerankConfig",
     "HostedVLLMRerankConfig",
     "PerplexityDecisionsConfig",
     "TypeSafeDecisionsConfig",
@@ -727,6 +728,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "DeepinfraRerankConfig": (
         ".llms.deepinfra.rerank.transformation",
         "DeepinfraRerankConfig",
+    ),
+    "OpenRouterRerankConfig": (
+        ".llms.openrouter.rerank.transformation",
+        "OpenRouterRerankConfig",
     ),
     "HostedVLLMRerankConfig": (
         ".llms.hosted_vllm.rerank.transformation",

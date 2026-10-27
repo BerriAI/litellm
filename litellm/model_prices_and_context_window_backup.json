@@ -734,6 +734,17 @@
         "mode": "rerank",
         "output_cost_per_token": 0.0
     },
+    "openrouter/cohere/rerank-v3.5": {
+        "input_cost_per_query": 0.001,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "rerank",
+        "output_cost_per_token": 0.0,
+        "source": "https://openrouter.ai/cohere/rerank-v3.5"
+    },
     "amazon.titan-embed-image-v1": {
         "input_cost_per_image": 6e-05,
         "input_cost_per_token": 8e-07,
