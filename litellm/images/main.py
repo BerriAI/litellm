@@ -85,7 +85,7 @@ def _get_ImageEditRequestUtils() -> type["ImageEditRequestUtils"]:
     return _ImageEditRequestUtils_cache
 
 
-def _chatgpt_image_headers(model: str, params: GenericLiteLLMParams, headers: object) -> dict[str, str]:
+def _chatgpt_image_headers(model: str, params: GenericLiteLLMParams, headers: dict[str, str]) -> dict[str, str]:
     from litellm.llms.chatgpt.common_utils import get_chatgpt_request_credential
     from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 
@@ -105,7 +105,7 @@ def _chatgpt_image_headers(model: str, params: GenericLiteLLMParams, headers: ob
         **{k: v for k, v in auth_headers.items() if k.lower() not in ("content-type", "accept")},
         **{
             k: v
-            for k, v in TypeAdapter(dict[str, str]).validate_python(headers).items()
+            for k, v in headers.items()
             if k.lower() not in ("authorization", "chatgpt-account-id", "cookie", "x-litellm-api-key")
         },
         "Accept": "application/json",
@@ -550,7 +550,9 @@ def image_generation(
                 client=client,
                 headers=(
                     _chatgpt_image_headers(
-                        model, chatgpt_params.model_copy(update={"api_key": dynamic_api_key or api_key}), headers
+                        model,
+                        chatgpt_params.model_copy(update={"api_key": dynamic_api_key or api_key}),
+                        TypeAdapter(dict[str, str]).validate_python(headers),
                     )
                     if chatgpt_params is not None
                     else headers
