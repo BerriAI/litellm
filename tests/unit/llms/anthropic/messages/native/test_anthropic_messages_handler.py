@@ -2,34 +2,38 @@ import asyncio
 import copy
 import json
 import os
+import unittest.mock
 import uuid
+from itertools import chain
 from typing import Any, Dict, Final, List
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import pytest
 import responses
 import respx
-import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import litellm
 from litellm.anthropic_interface import messages
+from litellm.caching.caching import Cache
+from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.router import Router
 from litellm.types.utils import (
+    CallTypes,
     Delta,
+    LLMResponseTypes,
     ModelResponse,
     StandardLoggingPayloadErrorInformation,
     StreamingChoices,
 )
 from litellm.utils import _invalidate_model_cost_lowercase_map
-import unittest.mock
 
 
 @pytest.mark.asyncio
@@ -2396,3 +2400,145 @@ def test_native_messages_tool_config_point_marks_last_tool_and_drops_the_key(mon
     assert "cache_control" not in captured["params"]["tools"][0]
     assert captured["messages"][0]["content"][-1]["cache_control"] == {"type": "ephemeral"}
     assert tools == tools_before
+
+
+class _MessagesAnswerRewrite(CustomLogger):
+    async def async_post_call_success_deployment_hook(
+        self, request_data: dict, response: LLMResponseTypes, call_type: CallTypes | None
+    ) -> LLMResponseTypes | None:
+        if call_type == CallTypes.anthropic_messages and isinstance(response, dict):
+            return {**response, "content": [{"type": "text", "text": "Reviewed answer"}]}
+        return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("tool_call", [False, True], ids=["text", "ordinary-tool"])
+@pytest.mark.parametrize("rewrite", [False, True], ids=["original", "success-hook"])
+@pytest.mark.parametrize("cache_enabled", [False, True], ids=["uncached", "response-cache"])
+async def test_bedrock_messages_mixed_search_tools_preserve_the_client_stream(
+    monkeypatch: pytest.MonkeyPatch, stream: bool, tool_call: bool, rewrite: bool, cache_enabled: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [WebSearchInterceptionLogger(enabled_providers=["bedrock"])] + ([_MessagesAnswerRewrite()] if rewrite else []),
+    )
+    if cache_enabled:
+        monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    content: Final = (
+        [{"toolUse": {"toolUseId": "call_weather", "name": "get_weather", "input": {"city": "Paris"}}}]
+        if tool_call
+        else [{"text": "No search needed"}]
+    )
+    stop_reason: Final = "tool_use" if tool_call else "end_turn"
+    with respx.mock as upstream:
+        converse: Final = upstream.post(
+            "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.openai.gpt-6.1-sol/converse"
+        ).respond(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": content}},
+                "stopReason": stop_reason,
+                "usage": {"inputTokens": 11, "outputTokens": 5, "totalTokens": 16},
+                "metrics": {"latencyMs": 1},
+            },
+        )
+        result: Final = await litellm.anthropic.messages.acreate(
+            model="bedrock/us.openai.gpt-6.1-sol",
+            api_key="synthetic-bedrock-bearer",
+            aws_region_name="us-east-1",
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Answer or call get_weather for Paris without searching."}],
+            tools=[
+                {"type": "web_search_20250305", "name": "web_search"},
+                {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
+                    },
+                },
+            ],
+            stream=stream,
+        )
+        assert len(converse.calls) == 1
+        assert "stream" not in json.loads(converse.calls.last.request.content)
+        if cache_enabled:
+            await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+            replay: Final = await litellm.anthropic.messages.acreate(
+                model="bedrock/us.openai.gpt-6.1-sol",
+                api_key="synthetic-bedrock-bearer",
+                aws_region_name="us-east-1",
+                max_tokens=100,
+                messages=[{"role": "user", "content": "Answer or call get_weather for Paris without searching."}],
+                tools=[
+                    {"type": "web_search_20250305", "name": "web_search"},
+                    {
+                        "name": "get_weather",
+                        "description": "Get weather",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {"city": {"type": "string"}},
+                            "required": ["city"],
+                        },
+                    },
+                ],
+                stream=stream,
+            )
+            if stream:
+                original_chunks: Final = tuple([chunk async for chunk in result])
+                replay_chunks: Final = tuple([chunk async for chunk in replay])
+                assert replay_chunks == original_chunks
+            else:
+                assert replay["content"] == result["content"]
+            assert len(converse.calls) == 1
+
+    if not stream:
+        assert result["stop_reason"] == stop_reason
+        assert result["content"] == (
+            [{"type": "text", "text": "Reviewed answer"}]
+            if rewrite
+            else (
+                [
+                    {"type": "text", "text": ""},
+                    {"type": "tool_use", "id": "call_weather", "name": "get_weather", "input": {"city": "Paris"}},
+                ]
+                if tool_call
+                else [{"type": "text", "text": "No search needed"}]
+            )
+        )
+        return
+
+    assert hasattr(result, "__aiter__"), result
+    chunks: Final = original_chunks if cache_enabled else tuple([chunk async for chunk in result])
+    lines: Final = chain.from_iterable(chunk.decode().splitlines() for chunk in chunks)
+    events: Final = [json.loads(line.removeprefix("data: ")) for line in lines if line.startswith("data: ")]
+    assert events[0]["type"] == "message_start"
+    assert events[-1] == {"type": "message_stop", "usage": {"input_tokens": 11, "output_tokens": 5}}
+    assert events[0]["message"]["usage"]["input_tokens"] == 11
+    assert events[-2]["usage"]["output_tokens"] == 5
+    assert events[-2]["delta"]["stop_reason"] == stop_reason
+    starts: Final = [event["content_block"] for event in events if event["type"] == "content_block_start"]
+    deltas: Final = [event["delta"] for event in events if event["type"] == "content_block_delta"]
+    assert starts[-1] == (
+        {"type": "text", "text": ""}
+        if rewrite
+        else (
+            {"type": "tool_use", "id": "call_weather", "name": "get_weather", "input": {}}
+            if tool_call
+            else {"type": "text", "text": ""}
+        )
+    )
+    assert deltas[-1] == (
+        {"type": "text_delta", "text": "Reviewed answer"}
+        if rewrite
+        else (
+            {"type": "input_json_delta", "partial_json": json.dumps({"city": "Paris"})}
+            if tool_call
+            else {"type": "text_delta", "text": "No search needed"}
+        )
+    )

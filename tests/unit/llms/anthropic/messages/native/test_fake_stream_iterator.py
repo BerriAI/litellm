@@ -91,3 +91,25 @@ def test_message_delta_omits_absent_optional_fields():
         "usage": {"input_tokens": 10, "output_tokens": 2},
     }
     assert _message_delta(response) == {"stop_reason": "end_turn", "stop_sequence": None}
+
+
+def test_replayed_stream_preserves_redacted_reasoning_and_tool_signatures():
+    redacted: Final = {"type": "redacted_thinking", "data": "opaque-continuation-data"}
+    tool: Final = {
+        "type": "tool_use",
+        "id": "call_signed",
+        "name": "get_weather",
+        "input": {"city": "Paris"},
+        "provider_specific_fields": {"thought_signature": "opaque-tool-signature"},
+    }
+    response: Final = {
+        "id": "msg_signed",
+        "content": [redacted, tool],
+        "stop_reason": "tool_use",
+        "usage": {"input_tokens": 11, "output_tokens": 5},
+    }
+    events: Final = _decoded_events(FakeAnthropicMessagesStreamIterator(response=response))
+    starts: Final = tuple(payload["content_block"] for kind, payload in events if kind == "content_block_start")
+    assert starts == (redacted, {**tool, "input": {}})
+    deltas: Final = tuple(payload["delta"] for kind, payload in events if kind == "content_block_delta")
+    assert deltas == ({"type": "input_json_delta", "partial_json": json.dumps(tool["input"])},)

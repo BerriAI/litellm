@@ -37,6 +37,7 @@ from litellm.integrations.websearch_interception.transformation import (
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
@@ -514,7 +515,13 @@ class WebSearchInterceptionLogger(CustomLogger):
             get_litellm_web_search_tool_responses() if is_web_search_tool_responses(tool) else tool for tool in tools
         ]
 
-        converted_kwargs: Final = {**kwargs, "tools": converted_tools}
+        tool_choice: Final = as_str_mapping(kwargs.get("tool_choice"))
+        choice_patch: Final = (
+            {"tool_choice": {"type": "function", "name": LITELLM_WEB_SEARCH_TOOL_NAME}}
+            if tool_choice is not None and is_web_search_tool_responses(tool_choice)
+            else {}
+        )
+        converted_kwargs: Final = {**kwargs, "tools": converted_tools, **choice_patch}
 
         if kwargs.get("stream"):
             verbose_logger.debug("WebSearchInterception: deployment hook converting stream=True to stream=False")
@@ -1266,7 +1273,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             model=full_model_name,
             messages=input_list,
             tools=tools_param if isinstance(tools_param, list) else None,
-            optional_params=optional_params_clean,
+            optional_params={**optional_params_clean, "tool_choice": "auto"},
             kwargs=kwargs_for_followup,
         )
 

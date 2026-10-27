@@ -1014,6 +1014,33 @@ def _is_converted_stream_result(result: object) -> bool:
     return isinstance(result, (CustomStreamWrapper, BaseResponsesAPIStreamingIterator))
 
 
+_MESSAGES_REPLAY_REQUEST: Final = TypeAdapter(Mapping[str, object])
+_MESSAGES_REPLAY_RESPONSE: Final = TypeAdapter(object)
+
+
+def _is_buffered_messages_stream(result: object, request_data: Mapping[str, object], call_type: str) -> bool:
+    from litellm.types.integrations.custom_logger import converted_stream_requested
+
+    return (
+        call_type == CallTypes.anthropic_messages.value
+        and isinstance(result, dict)
+        and (bool(request_data.get("stream")) or converted_stream_requested(request_data))
+    )
+
+
+def _restore_buffered_messages_stream(result: object, request_data: Mapping[str, object], call_type: str) -> object:
+    if not _is_buffered_messages_stream(result, request_data, call_type):
+        return result
+    from litellm.llms.anthropic.messages.native.fake_stream_iterator import FakeAnthropicMessagesStreamIterator
+    from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+
+    return FakeAnthropicMessagesStreamIterator(
+        response=cast(  # cast-ok: adapter-validated Messages body; preserve provider fields
+            AnthropicMessagesResponse, result
+        )
+    )
+
+
 async def _run_success_deployment_hook_on_converted_chat_stream(
     result: object, request_data: dict[str, object], call_type: str
 ) -> None:
@@ -2205,6 +2232,12 @@ def client(original_function):
             if modified_kwargs is not None:
                 kwargs = modified_kwargs
 
+            messages_replay_request: Final[Mapping[str, object]] = (
+                _MESSAGES_REPLAY_REQUEST.validate_python(kwargs)
+                if call_type == CallTypes.anthropic_messages.value
+                else {}
+            )
+
             # Sync logging_obj.stream after deployment hooks (they may convert it).
             _hook_stream: Final = kwargs.get("stream")
             if (
@@ -2252,7 +2285,9 @@ def client(original_function):
                     if _is_converted_stream_result(_caching_handler_response.cached_result):
                         logging_obj.stream = True
                         logging_obj.model_call_details["stream"] = True
-                    return _caching_handler_response.cached_result
+                    return _restore_buffered_messages_stream(
+                        _caching_handler_response.cached_result, messages_replay_request, call_type
+                    )
 
                 elif _caching_handler_response.embedding_all_elements_cache_hit is True:
                     return _caching_handler_response.final_embedding_cached_response
@@ -2316,7 +2351,10 @@ def client(original_function):
             end_time = datetime.datetime.now()
 
             streaming_requested: Final = _is_streaming_request(kwargs=kwargs, call_type=call_type)
-            if streaming_requested or _is_converted_stream_result(result):
+            buffered_messages_stream: Final = _is_buffered_messages_stream(
+                _MESSAGES_REPLAY_RESPONSE.validate_python(result), messages_replay_request, call_type
+            )
+            if (streaming_requested and not buffered_messages_stream) or _is_converted_stream_result(result):
                 logging_obj.stream = True
                 logging_obj.model_call_details["stream"] = True
                 if not streaming_requested:
@@ -2406,7 +2444,9 @@ def client(original_function):
                 is_litellm_internal_call=_is_litellm_internal_call,
             )
 
-            return result
+            return _restore_buffered_messages_stream(
+                _MESSAGES_REPLAY_RESPONSE.validate_python(result), messages_replay_request, call_type
+            )
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()
             # Reuse the timestamp taken right when the deployment call itself failed, before
