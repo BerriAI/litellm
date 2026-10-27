@@ -1268,6 +1268,46 @@ def test_custom_pricing_cost_calc_uses_router_model_id_from_litellm_metadata():
     assert custom_model_id not in (selected_model_no_custom or "")
 
 
+def test_priced_router_model_id_is_not_provider_prefixed():
+    """A priced router deployment id is itself a model_cost key. Prefixing it
+    with custom_llm_provider builds "<provider>/<uuid>", which no cost map entry
+    matches, so completion_cost returns 0 instead of the deployment's price."""
+    from litellm.cost_calculator import select_model_name_for_cost_calc
+
+    deployment_id = "c8c6c368-3546-4de0-af49-f75349b3a95c"
+    litellm.register_model(
+        {
+            deployment_id: {
+                "input_cost_per_token": 3e-7,
+                "output_cost_per_token": 3e-7,
+                "litellm_provider": "deepseek",
+                "mode": "chat",
+            }
+        }
+    )
+    try:
+        selected = select_model_name_for_cost_calc(
+            model="deepseek/deepseek-flash",
+            completion_response=None,
+            custom_pricing=True,
+            custom_llm_provider="deepseek",
+            router_model_id=deployment_id,
+        )
+        assert selected == deployment_id
+        assert selected in litellm.model_cost
+
+        unregistered = select_model_name_for_cost_calc(
+            model="deepseek-flash",
+            completion_response=None,
+            custom_pricing=True,
+            custom_llm_provider="deepseek",
+            router_model_id="00000000-0000-0000-0000-000000000000",
+        )
+        assert unregistered == "deepseek/deepseek-flash"
+    finally:
+        litellm.model_cost.pop(deployment_id, None)
+
+
 def test_per_request_custom_pricing_with_router():
     """When custom pricing is passed as per-request kwargs (not in model_list),
     _select_model_name_for_cost_calc should fall back to the model name
