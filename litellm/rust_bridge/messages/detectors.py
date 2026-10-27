@@ -5,8 +5,13 @@ from __future__ import annotations
 from typing import Final
 
 import litellm
-from litellm.rust_bridge.detectors import overridden, present, streaming
+from litellm.llms.opencode.common_utils import is_opencode_api_base
+from litellm.rust_bridge.detectors import api_base, overridden, present, streaming
 from litellm.rust_bridge.public_call import NativeCall, optional_mapping, optional_sequence, optional_str
+
+
+def provider_affinity(request: NativeCall) -> bool:
+    return is_opencode_api_base(api_base(request))
 
 
 def anthropic_workload_identity(request: NativeCall) -> bool:
@@ -68,7 +73,7 @@ def _resolved_provider(request: NativeCall) -> str | None:
 
 def intercepted(request: NativeCall) -> bool:
     """The async Messages handler delegates matching tools to a registered interceptor."""
-    from litellm.llms.anthropic.pass_through.messages.interceptors import get_messages_interceptors
+    from litellm.llms.anthropic.messages.native.interceptors import get_messages_interceptors
 
     tools: Final = optional_sequence(request.resolved.get("tools"))
     if not tools:
@@ -80,6 +85,6 @@ def intercepted(request: NativeCall) -> bool:
 
 def safeguards_classifier(request: NativeCall) -> bool:
     """Python's proxy classifier evaluates dangerous tool use for non-Claude models."""
-    from litellm.llms.anthropic.pass_through.safeguards import native_route_classifies
+    from litellm.llms.anthropic.messages.safeguards import native_route_classifies
 
     return native_route_classifies(str(request.resolved["model"]), request.resolved.get("safeguards"))

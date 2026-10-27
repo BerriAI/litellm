@@ -121,6 +121,7 @@ async def test_claude_code_ua_routes_to_cc_deployment():
         llm_router_instance=router,
         model="claude-sonnet",
         healthy_deployments=ALL_DEPLOYMENTS,
+        request_deployments=ALL_DEPLOYMENTS,
         request_kwargs={"metadata": {"user_agent": "claude-code/1.2.3"}},
     )
     assert len(result) == 1
@@ -135,6 +136,7 @@ async def test_regular_ua_routes_to_default_deployment():
         llm_router_instance=router,
         model="claude-sonnet",
         healthy_deployments=ALL_DEPLOYMENTS,
+        request_deployments=ALL_DEPLOYMENTS,
         request_kwargs={"metadata": {"user_agent": "Mozilla/5.0 (browser)"}},
     )
     assert len(result) == 1
@@ -149,6 +151,7 @@ async def test_no_ua_routes_to_default_deployment():
         llm_router_instance=router,
         model="claude-sonnet",
         healthy_deployments=ALL_DEPLOYMENTS,
+        request_deployments=ALL_DEPLOYMENTS,
         request_kwargs={"metadata": {}},
     )
     assert len(result) == 1
@@ -164,6 +167,7 @@ async def test_tag_routing_metadata_written_for_regex_match():
         llm_router_instance=router,
         model="claude-sonnet",
         healthy_deployments=ALL_DEPLOYMENTS,
+        request_deployments=ALL_DEPLOYMENTS,
         request_kwargs={"metadata": metadata},
     )
     assert "tag_routing" in metadata
@@ -181,6 +185,7 @@ async def test_tag_filtering_disabled_returns_all_deployments():
         llm_router_instance=router,
         model="claude-sonnet",
         healthy_deployments=ALL_DEPLOYMENTS,
+        request_deployments=ALL_DEPLOYMENTS,
         request_kwargs={"metadata": {"user_agent": "claude-code/1.0"}},
     )
     assert result == ALL_DEPLOYMENTS
@@ -199,6 +204,7 @@ async def test_empty_healthy_deployments_with_request_tags_returns_empty_list():
         llm_router_instance=router,
         model="gpt-5.2",
         healthy_deployments=[],
+        request_deployments=[],
         request_kwargs={
             "metadata": {"tags": ["client_id:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]}
         },
@@ -228,6 +234,7 @@ async def test_explicit_tag_match_takes_precedence_over_regex():
         llm_router_instance=router,
         model="claude-sonnet",
         healthy_deployments=[deployment_with_both],
+        request_deployments=[deployment_with_both],
         request_kwargs={"metadata": metadata},
     )
     assert len(result) == 1
@@ -269,6 +276,7 @@ async def test_user_agent_present_no_tag_regex_deployments_does_not_raise():
         llm_router_instance=router,
         model="gpt-4",
         healthy_deployments=plain_tag_only_deployments,
+        request_deployments=plain_tag_only_deployments,
         request_kwargs={"metadata": {"user_agent": "Mozilla/5.0 (any-client)"}},
     )
     # Falls through to "return healthy_deployments" path unchanged
@@ -305,6 +313,7 @@ async def test_tag_routing_metadata_not_overwritten_for_multiple_matches():
         llm_router_instance=router,
         model="claude-sonnet",
         healthy_deployments=[deployment_a, deployment_b],
+        request_deployments=[deployment_a, deployment_b],
         request_kwargs={"metadata": metadata},
     )
     assert len(result) == 2
@@ -357,6 +366,7 @@ async def test_match_any_false_strict_tag_check_blocks_regex_fallback():
         llm_router_instance=router,
         model="claude-sonnet",
         healthy_deployments=[deployment_strict, default_deployment],
+        request_deployments=[deployment_strict, default_deployment],
         request_kwargs={"metadata": metadata},
     )
     ids = [d["model_info"]["id"] for d in result]
@@ -387,6 +397,7 @@ async def test_match_any_false_regex_only_deployment_still_matches():
         llm_router_instance=router,
         model="claude-sonnet",
         healthy_deployments=[regex_only_deployment],
+        request_deployments=[regex_only_deployment],
         request_kwargs={"metadata": {"user_agent": "claude-code/1.0"}},
     )
     assert len(result) == 1

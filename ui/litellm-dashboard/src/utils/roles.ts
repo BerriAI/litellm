@@ -43,7 +43,10 @@ export const isUserTeamAdminForAnyTeam = (teams: Team[] | null, userID: string):
   return teams.some((team) => isUserTeamAdminForSingleTeam(team.members_with_roles, userID));
 };
 
-export const isUserTeamAdminForSingleTeam = (teamMemberWithRoles: Member[] | null, userID: string): boolean => {
+export const isUserTeamAdminForSingleTeam = (
+  teamMemberWithRoles: readonly Member[] | null,
+  userID: string,
+): boolean => {
   if (teamMemberWithRoles == null) {
     return false;
   }

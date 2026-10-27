@@ -18,7 +18,7 @@ GATEWAY_REGISTRY_MODULE: Final = "litellm.proxy._experimental.mcp_server.mcp_ser
 GATEWAY_HANDLER_MODULES: Final = (
     "litellm.responses.mcp.litellm_proxy_mcp_handler",
     "litellm.responses.mcp.chat_completions_handler",
-    "litellm.llms.anthropic.pass_through.messages.mcp_handler",
+    "litellm.llms.anthropic.messages.native.mcp_handler",
 )
 
 FUNCTION_TOOL: Final = {

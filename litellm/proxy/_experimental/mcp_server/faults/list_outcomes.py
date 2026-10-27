@@ -3,8 +3,8 @@
 The aggregate listing deliberately keeps serving the healthy subset when one server fails, but a
 failed server must contribute a classified outcome instead of silently shrinking the list: an empty
 contribution with no signal makes a broken upstream indistinguishable from a healthy server with no
-tools. Outcomes carry only machine fields (category and status code) so nothing from an upstream
-body crosses the trust boundary; classification is total, so any exception out of a server fetch
+tools. Outcomes carry machine fields and controlled diagnostics so nothing from an upstream body
+crosses the trust boundary; classification is total, so any exception out of a server fetch
 becomes an outcome, never a second failure.
 """
 
@@ -21,8 +21,10 @@ from urllib.request import parse_http_list, parse_keqv_list
 import anyio
 import httpx
 import httpx2
+from mcp import MCPError
+from mcp.types import CONNECTION_CLOSED
 from mcp.types import Tool as MCPTool
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, PositiveInt, TypeAdapter
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
@@ -65,6 +67,16 @@ class ServerListFault(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     tag: ListFaultCategory
     status_code: int | None = None
+    sse_event_limit_bytes: PositiveInt | None = None
+
+    @property
+    def public_message(self) -> str | None:
+        if self.sse_event_limit_bytes is None:
+            return None
+        return (
+            f"Upstream MCP SSE event exceeded the {self.sse_event_limit_bytes} byte per-event limit. "
+            "Paginate tools/list responses so each event stays below the limit."
+        )
 
 
 ServerOutcome: TypeAlias = ServerListOk | ServerListFault
@@ -155,6 +167,18 @@ def raise_classified_list_failure(
     raise MCPServerListError(classify_list_exception(exc), server_name) from exc
 
 
+def _sse_event_limit(exc: BaseException) -> int | None:
+    """The SDK replaces decoder exceptions with CONNECTION_CLOSED and a fixed diagnostic."""
+    if not isinstance(exc, (httpx2.SSEError, MCPError)):
+        return None
+    if isinstance(exc, MCPError) and exc.error.code != CONNECTION_CLOSED:
+        return None
+    prefix: Final = "SSE stream failed: " if isinstance(exc, MCPError) else ""
+    message: Final = exc.error.message if isinstance(exc, MCPError) else str(exc)
+    matched: Final = re.fullmatch(prefix + r"Server-sent event exceeded the ([1-9][0-9]{0,18}) byte limit\.", message)
+    return int(matched[1]) if matched is not None else None
+
+
 def classify_list_exception(exc: BaseException) -> ServerListFault:
     """Classify a per-server listing failure into exactly one outcome. Total: an exception this
     function cannot recognize is the gateway's own fault (``internal``), never a re-raise."""
@@ -179,6 +203,11 @@ def classify_list_exception(exc: BaseException) -> ServerListFault:
     response: Final = _find_upstream_response(exc)
     if response is not None:
         return ServerListFault(tag="upstream_error", status_code=response.status_code)
+    sse_event_limit: Final = next(
+        (limit for error in iter_exception_tree(exc) if (limit := _sse_event_limit(error)) is not None), None
+    )
+    if sse_event_limit is not None:
+        return ServerListFault(tag="upstream_error", sse_event_limit_bytes=sse_event_limit)
     if isinstance(exc, (httpx.TimeoutException, httpx2.TimeoutException)):
         return ServerListFault(tag="timeout")
     if isinstance(exc, (httpx.TransportError, httpx2.TransportError)):
@@ -226,7 +255,7 @@ def rate_limit_retry_delay(
 ) -> float:
     if retry_after_seconds is not None:
         return min(retry_after_seconds, max_delay)
-    return min(max_delay, base_delay * 2**attempt * (1 + jitter))
+    return min(max_delay, base_delay * 2.0**attempt * (1 + jitter))
 
 
 T: Final = TypeVar("T")
@@ -295,7 +324,7 @@ def listing_failed_outright(outcomes: Mapping[str, ServerOutcome]) -> bool:
 
 def outcome_wire_value(outcome: ServerOutcome) -> dict[str, object]:
     """The client-visible form of one outcome, for the tools/list result ``_meta`` and the REST
-    response: category plus status code only, never upstream prose or URLs."""
+    response: category, status code and controlled diagnostics, never upstream prose or URLs."""
     match outcome.tag:
         case "ok":
             return {"status": "ok", "tool_count": outcome.tool_count}
@@ -303,6 +332,15 @@ def outcome_wire_value(outcome: ServerOutcome) -> dict[str, object]:
             return {
                 "status": outcome.tag,
                 **({"http_status": outcome.status_code} if outcome.status_code is not None else {}),
+                **(
+                    {
+                        "reason": "sse_event_too_large",
+                        "limit_bytes": outcome.sse_event_limit_bytes,
+                        "message": outcome.public_message,
+                    }
+                    if outcome.sse_event_limit_bytes is not None
+                    else {}
+                ),
             }
         case _:
             assert_never(outcome.tag)
