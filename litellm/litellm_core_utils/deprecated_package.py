@@ -56,6 +56,8 @@ def alias_deprecated_package(old_name: str, new_name: str) -> Callable[[str], Mo
         try:
             return importlib.import_module(f"{old_name}.{name}")
         except ModuleNotFoundError as error:
+            if error.name != f"{old_name}.{name}":
+                raise
             raise AttributeError(f"module {old_name!r} has no attribute {name!r}") from error
 
     return module_getattr
