@@ -186,7 +186,10 @@ impl Admission {
 impl Drop for Admission {
     fn drop(&mut self) {
         if self.probe && !self.settled {
-            self.breaker.failed(Failure::Hard, Instant::now());
+            self.breaker.0.fire_if(
+                self.generation,
+                Event::Failed(Failure::Hard, Instant::now()),
+            );
         }
     }
 }
@@ -220,6 +223,33 @@ mod tests {
     }
 
     use Phase::{Closed as C, HalfOpen as H, Open as O};
+
+    #[rstest]
+    fn dropping_an_old_probe_does_not_undo_a_newer_recovery() {
+        let breaker = Breaker::new(
+            Config {
+                failure_threshold: 1,
+                recovery_timeout: Duration::from_secs(1),
+                ..Config::default()
+            },
+            Box::new(|_| {}),
+        );
+        let now = Instant::now();
+        let pending = breaker.admit(now).unwrap();
+        breaker.failed(Failure::Hard, now);
+        let old_probe = breaker.admit(now + Duration::from_secs(2)).unwrap();
+        assert!(old_probe.probe());
+        pending.failed(Failure::Hard, now + Duration::from_secs(2));
+        let new_probe = breaker.admit(now + Duration::from_secs(4)).unwrap();
+        assert!(new_probe.probe());
+        new_probe.succeeded();
+        assert_eq!(breaker.state(), State::CLOSED);
+
+        drop(old_probe);
+
+        assert_eq!(breaker.state(), State::CLOSED);
+        assert!(!breaker.admit(now + Duration::from_secs(4)).unwrap().probe());
+    }
 
     fn hard(at: f64) -> Step {
         Step::Fail(at, Failure::Hard)
