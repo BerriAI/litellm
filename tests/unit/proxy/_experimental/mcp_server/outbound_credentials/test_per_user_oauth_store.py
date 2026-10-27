@@ -1,5 +1,6 @@
 import asyncio
 
+import httpx
 import pytest
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
@@ -35,6 +36,8 @@ def credential_database(monkeypatch):
     prisma = MagicMock()
     table = prisma.db.litellm_mcpusercredentials
     table.upsert = AsyncMock()
+    table.find_unique = AsyncMock(return_value=None)
+    table.delete_many = AsyncMock(return_value=1)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setenv("LITELLM_SALT_KEY", "credential-persistence-test-salt")
     return table
@@ -59,23 +62,39 @@ async def test_credential_persistence_preserves_known_and_unknown_scopes(credent
     [((), None, []), (("read", "write"), "", []), (("read", "write"), None, ["read", "write"])],
 )
 async def test_native_refresh_persists_actual_grant_through_storage_adapter(
-    credential_database, prior_scopes, response_scope, expected,
+    credential_database,
+    prior_scopes,
+    response_scope,
+    expected,
 ):
     from litellm.proxy._experimental.mcp_server.db import decode_oauth_payload
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.authz_code_refresher import AuthorizationCodeRefresher
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_store import _persist_credential
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.authz_code_refresher import (
+        AuthorizationCodeRefresher,
+    )
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_store import (
+        _persist_credential,
+        _purge_credential,
+    )
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     server = MCPServer(
-        server_id="srv", name="srv", transport="http", auth_type="oauth2",
-        token_url="https://idp.example/token", client_id="client", client_secret="secret",
+        server_id="srv",
+        name="srv",
+        transport="http",
+        auth_type="oauth2",
+        token_url="https://idp.example/token",
+        client_id="client",
+        client_secret="secret",
     )
 
     async def token_endpoint(url, form, headers):
         assert url == server.token_url and form["grant_type"] == "refresh_token"
-        return {"access_token": "rotated", **({"scope": response_scope} if response_scope is not None else {})}
+        return Ok({"access_token": "rotated", **({"scope": response_scope} if response_scope is not None else {})})
 
-    refresher = AuthorizationCodeRefresher(lambda _: server, token_endpoint, _persist_credential)
+    refresher = AuthorizationCodeRefresher(
+        lambda _: server, token_endpoint, _persist_credential, purge=_purge_credential
+    )
     refreshed = await refresher.refresh("alice", "srv", OAuthToken("old", refresh_token="refresh", scopes=prior_scopes))
     assert refreshed is not None and refreshed.scopes == tuple(expected)
     payload = decode_oauth_payload(credential_database.upsert.call_args.kwargs["data"]["create"]["credential_b64"])
@@ -394,3 +413,128 @@ async def test_expired_unverified_credential_never_reaches_refresh(monkeypatch):
     store = LazyPerUserOAuthTokenStore(lambda _: server, redis_available=lambda: False)
     assert await store.fetch("alice", "srv") is None
     post.assert_not_awaited()
+
+
+async def _stored_row(credential_database, refresh_token):
+    from types import SimpleNamespace
+
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_store import _persist_credential
+
+    await _persist_credential("alice", "srv", "expired-access", refresh_token, -60, ("read",))
+    credential_b64 = credential_database.upsert.call_args.kwargs["data"]["create"]["credential_b64"]
+    return SimpleNamespace(user_id="alice", server_id="srv", credential_b64=credential_b64)
+
+
+def _refreshable_server():
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    return MCPServer(
+        server_id="srv",
+        name="srv",
+        transport="http",
+        auth_type="oauth2",
+        oauth2_flow="authorization_code",
+        token_url="https://idp.example/token",
+        client_id="client",
+        client_secret="secret",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_code", ["invalid_grant", "invalid_token"])
+async def test_revoked_refresh_token_deletes_the_stored_credential(
+    monkeypatch, respx_mock, credential_database, error_code
+):
+    from litellm.proxy._experimental.mcp_server.outbound_credentials import per_user_oauth_store as module
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setattr(module, "_runtime_backend_and_coordinator", lambda: (None, None, False))
+    row = await _stored_row(credential_database, "revoked-refresh")
+    credential_database.find_unique.return_value = row
+    upstream = respx_mock.post("https://idp.example/token").respond(400, json={"error": error_code})
+
+    store = LazyPerUserOAuthTokenStore(lambda _: _refreshable_server(), redis_available=lambda: False)
+    assert await store.fetch("alice", "srv") is None
+    assert upstream.call_count == 1
+    credential_database.delete_many.assert_awaited_once_with(
+        where={"user_id": "alice", "server_id": "srv", "credential_b64": row.credential_b64}
+    )
+
+
+@pytest.mark.asyncio
+async def test_revoked_refresh_completes_when_redis_comes_up_mid_fetch(monkeypatch, respx_mock, credential_database):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.outbound_credentials import per_user_oauth_store as module
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setattr(module, "_runtime_backend_and_coordinator", lambda: (None, None, False))
+    credential_database.find_unique.return_value = await _stored_row(credential_database, "revoked-refresh")
+    redis_available = _RedisAvailability()
+
+    def revoke_while_redis_comes_up(_request: httpx.Request) -> httpx.Response:
+        redis_available.available = True
+        return httpx.Response(400, json={"error": "invalid_grant"})
+
+    respx_mock.post("https://idp.example/token").mock(side_effect=revoke_while_redis_comes_up)
+    store = LazyPerUserOAuthTokenStore(lambda _: _refreshable_server(), redis_available=redis_available)
+    monkeypatch.setattr(global_mcp_server_manager, "_per_user_oauth_token_store", store)
+
+    assert await asyncio.wait_for(store.fetch("alice", "srv"), timeout=5) is None
+    credential_database.delete_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"status_code": 503, "json": {"error": "temporarily_unavailable"}},
+        {"status_code": 400, "json": {"error": "invalid_client"}},
+        {"status_code": 200, "text": "not json"},
+        {"status_code": 200, "json": ["not", "an", "object"]},
+        {"status_code": 400, "json": ["invalid_grant"]},
+        {"status_code": 400, "text": "invalid_grant"},
+    ],
+)
+async def test_transient_refresh_failure_keeps_the_stored_credential_for_retry(
+    monkeypatch, respx_mock, credential_database, response
+):
+    from litellm.proxy._experimental.mcp_server.outbound_credentials import per_user_oauth_store as module
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setattr(module, "_runtime_backend_and_coordinator", lambda: (None, None, False))
+    credential_database.find_unique.return_value = await _stored_row(credential_database, "live-refresh")
+    upstream = respx_mock.post("https://idp.example/token").respond(**response)
+
+    store = LazyPerUserOAuthTokenStore(lambda _: _refreshable_server(), redis_available=lambda: False)
+    assert await store.fetch("alice", "srv") is None
+    upstream.respond(200, json={"access_token": "recovered", "expires_in": 3600})
+    recovered = await store.fetch("alice", "srv")
+    assert recovered is not None and recovered.access_token == "recovered"
+    assert upstream.call_count == 2
+    credential_database.delete_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport_error", [httpx.ConnectError("refused"), httpx.ReadTimeout("slow")])
+async def test_unreachable_token_endpoint_keeps_the_stored_credential(
+    monkeypatch, respx_mock, credential_database, transport_error
+):
+    from litellm.proxy._experimental.mcp_server.outbound_credentials import per_user_oauth_store as module
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setattr(module, "_runtime_backend_and_coordinator", lambda: (None, None, False))
+    credential_database.find_unique.return_value = await _stored_row(credential_database, "live-refresh")
+    respx_mock.post("https://idp.example/token").mock(side_effect=transport_error)
+
+    store = LazyPerUserOAuthTokenStore(lambda _: _refreshable_server(), redis_available=lambda: False)
+    assert await store.fetch("alice", "srv") is None
+    credential_database.delete_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_purge_skips_a_credential_already_replaced_by_reauthorization(monkeypatch, credential_database):
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_store import _purge_credential
+
+    credential_database.find_unique.return_value = await _stored_row(credential_database, "fresh-refresh")
+    await _purge_credential("alice", "srv", "revoked-refresh")
+    credential_database.delete_many.assert_not_awaited()
