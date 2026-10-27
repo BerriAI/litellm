@@ -9,7 +9,11 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm.constants import LITELLM_DETAILED_TIMING
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs, process_response_headers
-from litellm.litellm_core_utils.hidden_params import stamp_billable_usage_cost
+from litellm.litellm_core_utils.hidden_params import (
+    USAGE_COST_BEFORE_LITELLM_STAMP,
+    get_hidden_params,
+    stamp_billable_usage_cost,
+)
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.logging_utils import LiteLLMLoggingObject
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
@@ -197,7 +201,12 @@ class ResponseMetadata:
             return
         if getattr(usage, "cost", None) is None and not litellm.include_cost_in_streaming_usage:
             return
-        stamp_billable_usage_cost(self.result, usage, response_cost)
+        if stamp_billable_usage_cost(self.result, usage, response_cost) is None:
+            return
+        stamped: Final = get_hidden_params(self.result)
+        if stamped is None or USAGE_COST_BEFORE_LITELLM_STAMP not in stamped:
+            return
+        self._update_hidden_params({USAGE_COST_BEFORE_LITELLM_STAMP: stamped[USAGE_COST_BEFORE_LITELLM_STAMP]})
 
     def _update_hidden_params(self, new_params: Mapping[str, object]) -> None:
         """

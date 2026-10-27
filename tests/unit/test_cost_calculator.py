@@ -10846,6 +10846,34 @@ def test_include_cost_in_streaming_usage_puts_the_bill_on_a_plain_reply_without_
     assert logging_obj.response_cost_calculator(result=response, ignore_stamped_cost=True) == pytest.approx(bill)
 
 
+def test_a_bill_stamped_on_a_plain_reply_survives_the_metadata_pass_for_a_second_pricing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The metadata pass installs a fresh hidden-params dict on a reply that arrived with none, which dropped the
+    provider's figure the stamp keeps and let a second pricing pass apply the margin twice."""
+    monkeypatch.setattr(litellm, "cost_margin_config", {"global": {"percentage": 0.5}})
+    monkeypatch.delitem(litellm.model_cost, _REPORTED_COST_FIXTURE_MODEL, raising=False)
+    logging_obj: Final = _reported_cost_logging(False, {})
+    response: Final = ModelResponse(
+        id="chatcmpl-reported",
+        model="reported-cost-fixture",
+        choices=[Choices(index=0, message=Message(role="assistant", content="hi"), finish_reason="stop")],
+        usage=_reported_cost_usage(),
+    )
+
+    update_response_metadata(
+        result=response,
+        logging_obj=logging_obj,
+        model=_REPORTED_COST_FIXTURE_MODEL,
+        kwargs={},
+        start_time=datetime.datetime(2026, 1, 1),
+        end_time=datetime.datetime(2026, 1, 1, 0, 0, 1),
+    )
+
+    assert response.usage is not None and response.usage.cost == pytest.approx(0.037 * 1.5)
+    assert logging_obj.response_cost_calculator(result=response, ignore_stamped_cost=True) == pytest.approx(0.037 * 1.5)
+
+
 def test_provider_reported_usage_cost_splits_input_and_output_by_the_token_math_ratio(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
