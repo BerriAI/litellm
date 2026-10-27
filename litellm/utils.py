@@ -3614,9 +3614,18 @@ def model_info_with_pricing_overrides(model_info: ModelInfo, registration: Mappi
     overrides: Final = {
         name: value for name, value in registration.items() if value is not None and is_server_derived_pricing_key(name)
     }
-    return _PRICING_MODEL_INFO.validate_python(
-        update_dictionary(dict(_without_overridden_price_variants(model_info, overrides)), overrides)
-    )
+    try:
+        return _PRICING_MODEL_INFO.validate_python(
+            update_dictionary(dict(_without_overridden_price_variants(model_info, overrides)), overrides)
+        )
+    except ValidationError as e:
+        # A cost-map row whose shape this version does not recognise (an unknown
+        # ``mode``, for example) must not stop a deployment from being registered.
+        # Keep the caller's explicit model_info instead of dropping the deployment.
+        verbose_logger.warning(
+            "litellm.utils: could not apply cost-map pricing to model_info, keeping the explicit model_info: %s", e
+        )
+        return model_info
 
 
 @dataclass(frozen=True, slots=True)
