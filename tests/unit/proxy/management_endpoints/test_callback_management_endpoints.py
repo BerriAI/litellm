@@ -542,7 +542,7 @@ class TestMixpanelCallbackValidation:
             with pytest.raises(HTTPException) as exc:
                 raise_on_invalid_key_logging_config(self._key_metadata({"mixpanel_region": "eu"}))
             assert "requires mixpanel_project_token" in str(exc.value.detail)
-            _validate_team_callback(self._team_data({}))
+            _validate_team_callback(self._team_data({"capture_message_content": "span_only"}))
             _validate_team_callback(self._team_data({"mixpanel_project_token": "tok", "mixpanel_region": "in"}))
             raise_on_invalid_key_logging_config(
                 self._key_metadata({"mixpanel_project_token": "tok", "mixpanel_region": "EU"})
