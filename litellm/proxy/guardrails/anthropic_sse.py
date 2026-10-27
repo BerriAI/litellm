@@ -13,15 +13,15 @@ from types import MappingProxyType
 from typing import Final
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.llms.anthropic.pass_through.messages.utils import filtered_safeguard_results, redacted_stop_details
-from litellm.llms.anthropic.pass_through.stream_assembly import anthropic_message_delta_fields
-from litellm.llms.anthropic.pass_through.stream_assembly import (
+from litellm.llms.anthropic.messages.native.utils import filtered_safeguard_results, redacted_stop_details
+from litellm.llms.anthropic.messages.stream_assembly import anthropic_message_delta_fields
+from litellm.llms.anthropic.messages.stream_assembly import (
     assemble_anthropic_sse_stream as assemble_anthropic_sse_stream,  # noqa: PLC0414  # public re-export
 )
-from litellm.llms.anthropic.pass_through.stream_assembly import (
+from litellm.llms.anthropic.messages.stream_assembly import (
     is_anthropic_sse_stream as is_anthropic_sse_stream,  # noqa: PLC0414  # public re-export
 )
-from litellm.llms.anthropic.pass_through.stream_assembly import (
+from litellm.llms.anthropic.messages.stream_assembly import (
     is_raw_sse_stream as is_raw_sse_stream,  # noqa: PLC0414  # public re-export
 )
 from litellm.types.utils import Choices, ModelResponse
@@ -50,7 +50,7 @@ def anthropic_sse_error_frames(message: str) -> tuple[bytes, ...]:
     )
 
 
-from litellm.llms.anthropic.pass_through.stream_assembly import (  # noqa: E402  # re-export after the definitions above
+from litellm.llms.anthropic.messages.stream_assembly import (  # noqa: E402  # re-export after the definitions above
     is_sse_error_stream as is_sse_error_stream,  # noqa: PLC0414  # public re-export
 )
 
@@ -111,10 +111,10 @@ def anthropic_sse_chunks_from_response(
     the input the classifier judged. Their free-text ``explanation`` was written about the text the
     guardrail rewrote, so it is dropped unless the caller rewrites no text (``keep_explanations``).
     """
-    from litellm.llms.anthropic.pass_through.adapters.transformation import (
+    from litellm.llms.anthropic.messages.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
     )
-    from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
+    from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
         FakeAnthropicMessagesStreamIterator,
     )
 

@@ -9,7 +9,7 @@ import pytest
 
 import litellm
 from litellm.integrations.custom_secret_manager import CustomSecretManager
-from litellm.llms.anthropic.pass_through.messages.handler import anthropic_messages
+from litellm.llms.anthropic.messages.native.handler import anthropic_messages
 from litellm.rust_bridge.host import settings
 from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, NATIVE_MESSAGES
 from litellm.rust_bridge.public_call import NativeCall

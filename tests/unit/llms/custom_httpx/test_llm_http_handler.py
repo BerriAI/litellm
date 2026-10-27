@@ -979,7 +979,7 @@ async def test_async_anthropic_messages_handler_streaming_forwards_provider_resp
     """
     from collections.abc import AsyncIterator as ABCAsyncIterator
 
-    from litellm.llms.anthropic.pass_through.messages.transformation import (
+    from litellm.llms.anthropic.messages.native.transformation import (
         AnthropicMessagesConfig,
     )
 
@@ -1042,10 +1042,10 @@ async def test_async_anthropic_messages_handler_agentic_streaming_forwards_provi
     from collections.abc import AsyncIterator as ABCAsyncIterator
 
     from litellm.integrations.custom_logger import CustomLogger
-    from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator import (
+    from litellm.llms.anthropic.messages.native.agentic_streaming_iterator import (
         AgenticAnthropicStreamingIterator,
     )
-    from litellm.llms.anthropic.pass_through.messages.transformation import (
+    from litellm.llms.anthropic.messages.native.transformation import (
         AnthropicMessagesConfig,
     )
 
@@ -1113,7 +1113,7 @@ async def test_anthropic_messages_streaming_response_aclose_closes_upstream_stre
     the upstream stream so provider connections are released on client
     disconnect instead of lingering until garbage collection.
     """
-    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+    from litellm.llms.anthropic.messages.native.streaming_iterator import (
         AnthropicMessagesStreamingResponse,
     )
 
@@ -1145,10 +1145,10 @@ async def test_anthropic_messages_streaming_response_aclose_closes_upstream_stre
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_streaming_response_aclose_closes_agentic_upstream_stream():
-    from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator import (
+    from litellm.llms.anthropic.messages.native.agentic_streaming_iterator import (
         AgenticAnthropicStreamingIterator,
     )
-    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+    from litellm.llms.anthropic.messages.native.streaming_iterator import (
         AnthropicMessagesStreamingResponse,
     )
 
@@ -2096,7 +2096,7 @@ async def test_anthropic_post_skips_the_thinking_strip_retry_when_block_binding_
 ) -> None:
     """A caller that pinned ``prefix_mismatch_behavior: error`` asked for the 400,
     so the handler must surface it instead of stripping the bound blocks and retrying."""
-    from litellm.llms.anthropic.pass_through.messages.transformation import AnthropicMessagesConfig
+    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
 
     handler = BaseLLMHTTPHandler()
     thinking_block = {"type": "thinking", "thinking": "", "signature": "sig"}

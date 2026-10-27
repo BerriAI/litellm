@@ -24,7 +24,7 @@ from litellm.llms.anthropic.common_utils import (
     carried_thinking_keys,
     validated_object_mapping,
 )
-from litellm.llms.anthropic.pass_through.messages.transformation import (
+from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -878,7 +878,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         merge them from ``message_start`` so logging/cost sees a consistent usage
         object (fixes negative input costs: LIT-2411).
         """
-        from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+        from litellm.llms.anthropic.messages.native.streaming_iterator import (
             BaseAnthropicMessagesStreamingIterator,
         )
 

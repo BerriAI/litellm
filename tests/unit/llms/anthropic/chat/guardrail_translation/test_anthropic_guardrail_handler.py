@@ -18,7 +18,7 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import Streami
 from litellm.llms.anthropic.chat.guardrail_translation.handler import (
     AnthropicMessagesHandler,
 )
-from litellm.llms.anthropic.pass_through.adapters.transformation import truncate_tool_name
+from litellm.llms.anthropic.messages.adapters.transformation import truncate_tool_name
 from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
 
 

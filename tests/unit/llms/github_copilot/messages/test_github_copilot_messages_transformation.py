@@ -334,7 +334,7 @@ def test_github_copilot_config_does_not_handle_web_search_natively():
     interception handler short-circuiting Copilot instead of routing to it, even
     though Copilot now has a BaseAnthropicMessagesConfig. The base Anthropic
     config (bedrock/vertex/anthropic path) must report True."""
-    from litellm.llms.anthropic.pass_through.messages.transformation import (
+    from litellm.llms.anthropic.messages.native.transformation import (
         AnthropicMessagesConfig,
     )
 

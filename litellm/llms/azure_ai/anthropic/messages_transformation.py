@@ -5,7 +5,7 @@ Azure Anthropic messages transformation config - extends AnthropicMessagesConfig
 from collections.abc import Sequence
 from typing import Any, Final
 
-from litellm.llms.anthropic.pass_through.messages.transformation import (
+from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM

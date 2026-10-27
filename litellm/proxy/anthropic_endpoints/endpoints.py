@@ -19,7 +19,7 @@ from litellm.anthropic_interface.exceptions import (
 )
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.litellm_core_utils.tool_fields import first_validation_error
-from litellm.llms.anthropic.pass_through.context_management import (
+from litellm.llms.anthropic.messages.context_management import (
     AnthropicContextManagementError,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (

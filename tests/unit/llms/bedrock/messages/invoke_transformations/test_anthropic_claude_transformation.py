@@ -29,7 +29,7 @@ from litellm.constants import (
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.anthropic.pass_through.messages.mid_conversation_system import (
+from litellm.llms.anthropic.messages.native.mid_conversation_system import (
     as_system_content_blocks,
 )
 from litellm.llms.bedrock.common_utils import (

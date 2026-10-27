@@ -20,7 +20,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.tinyfish_passthr
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.llms.anthropic.pass_through.messages.streaming_iterator import aclose_superseded_attempt
+from litellm.llms.anthropic.messages.native.streaming_iterator import aclose_superseded_attempt
 from litellm.proxy.pass_through_endpoints.streaming_handler import (
     PassThroughStreamingHandler,
 )

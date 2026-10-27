@@ -2842,7 +2842,7 @@ def test_thinking_block_signature_is_not_forwarded_to_gemini() -> None:
 
 def test_anthropic_messages_history_replays_to_gemini_without_claude_signature() -> None:
     from litellm.litellm_core_utils.prompt_templates.factory import _get_dummy_thought_signature
-    from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+    from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 
     thinking: Final = "I should look the weather up before answering."
     anthropic_messages: Final = [

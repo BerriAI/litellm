@@ -8,8 +8,8 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.llms.anthropic.pass_through.messages import interceptors
-from litellm.llms.anthropic.pass_through.messages.interceptors.base import MessagesInterceptor
+from litellm.llms.anthropic.messages.native import interceptors
+from litellm.llms.anthropic.messages.native.interceptors.base import MessagesInterceptor
 from tests.test_litellm_rust.messages.data import BODY_HOOKS, MESSAGES_RESPONSE, REQUEST, call
 from tests.test_litellm_rust.support.callback_recorder import drain_logging
 from tests.test_litellm_rust.support.body_hooks import LegacyAgenticLoop, PlannedAgenticLoop, agentic_hooks

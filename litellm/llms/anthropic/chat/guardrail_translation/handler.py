@@ -26,18 +26,18 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.anthropic.pass_through.adapters.transformation import (
+from litellm.llms.anthropic.messages.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
     LiteLLMAnthropicMessagesAdapter,
     is_provider_native_tool_dict,
     truncate_tool_name,
 )
-from litellm.llms.anthropic.pass_through.convertible_blocks import (
+from litellm.llms.anthropic.messages.convertible_blocks import (
     keep_non_string_tool_result_texts,
     scannable_tool_result_request,
 )
-from litellm.llms.anthropic.pass_through.messages.utils import filtered_safeguard_results, redacted_stop_details
-from litellm.llms.anthropic.pass_through.stream_assembly import (
+from litellm.llms.anthropic.messages.native.utils import filtered_safeguard_results, redacted_stop_details
+from litellm.llms.anthropic.messages.stream_assembly import (
     build_complete_streaming_response,
     build_usage_only_response_from_chunks,
 )
@@ -435,7 +435,7 @@ class AnthropicMessagesHandler(BaseTranslation):
     def _standalone_block_chunks(self, exc: "ModifyResponseException") -> list[bytes]:
         import uuid
 
-        from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
+        from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
             FakeAnthropicMessagesStreamIterator,
         )
         from litellm.llms.base_llm.guardrail_translation.utils import (

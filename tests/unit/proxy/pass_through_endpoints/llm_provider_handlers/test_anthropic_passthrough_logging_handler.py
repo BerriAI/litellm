@@ -11,7 +11,7 @@ from pydantic import ValidationError
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.anthropic.pass_through.stream_assembly import extract_sse_data
+from litellm.llms.anthropic.messages.stream_assembly import extract_sse_data
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )

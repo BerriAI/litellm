@@ -6575,7 +6575,7 @@ def test_handle_anthropic_messages_response_logging_keeps_the_served_response_id
 def test_handle_anthropic_messages_response_logging_bills_the_bridged_chat_completion_not_the_served_body():
     """A chat deployment answers /v1/messages through the chat bridge. The Anthropic body served to the
     caller has no reasoning token field, so the spend row must come from the recorded chat completion."""
-    from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+    from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
     from litellm.types.utils import CompletionTokensDetailsWrapper, Usage
 
     chat_completion = ModelResponse(

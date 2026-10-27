@@ -32,7 +32,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     chat_completion_tools_for,
     is_flat_responses_tool,
 )
-from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
 KIMI_K3_REPO: Final = "moonshotai/Kimi-K3"

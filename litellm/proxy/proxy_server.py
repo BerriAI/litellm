@@ -374,7 +374,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
     mask_sensitive_keys,
 )
-from litellm.llms.anthropic.pass_through.convertible_blocks import (
+from litellm.llms.anthropic.messages.convertible_blocks import (
     deployment_drops_params,
     drop_non_string_tool_result_texts,
     malformed_tool_result_count_error,
@@ -15171,7 +15171,7 @@ def _router_default_litellm_params(router: Router | None) -> Mapping[str, object
 def _count_context_management(
     context_management: JsonValue, model: str, request_litellm_params: Mapping[str, JsonValue]
 ) -> CountContextManagement | None:
-    from litellm.llms.anthropic.pass_through.adapters.handler import context_management_explicitly_dropped
+    from litellm.llms.anthropic.messages.adapters.handler import context_management_explicitly_dropped
 
     if context_management is None or llm_router is None:
         return None

@@ -311,7 +311,7 @@ class PassThroughStreamingHandler:
 
     @staticmethod
     def _error_frame_closed_at(endpoint_type: EndpointType, raw_bytes: Sequence[bytes]) -> tuple[str, str, int] | None:
-        from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+        from litellm.llms.anthropic.messages.native.streaming_iterator import (
             closing_superseded_attempt,
             parse_anthropic_error_event,
         )
@@ -342,7 +342,7 @@ class PassThroughStreamingHandler:
         - Vertex AI
         - OpenAI
         """
-        from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+        from litellm.llms.anthropic.messages.native.streaming_iterator import (
             is_message_stop_chunk,  # pyright: ignore[reportPrivateUsage]  # both native stream paths share terminal-event detection
             is_provider_error_chunk,  # pyright: ignore[reportPrivateUsage]  # provider errors must not become cache evidence
         )
