@@ -14,7 +14,7 @@ from litellm.proxy.management_endpoints.config_override_endpoints import (
     CYBERARK_ENV_VAR_MAPPING,
     HASHICORP_ENV_VAR_MAPPING,
     _build_field_schema,
-    _set_env_vars,
+    set_env_vars,
 )
 from litellm.proxy.proxy_server import app
 from litellm.types.proxy.management_endpoints.config_overrides import (
@@ -50,6 +50,14 @@ def _make_mock_proxy_config():
         side_effect=lambda d: {k: f"enc_{v}" for k, v in d.items()}
     )
     cfg._decrypt_db_variables = MagicMock(
+        side_effect=lambda d: {
+            k: v.replace("enc_", "") if isinstance(v, str) else v for k, v in d.items()
+        }
+    )
+    cfg.encrypt_env_variables = MagicMock(
+        side_effect=lambda d: {k: f"enc_{v}" for k, v in d.items()}
+    )
+    cfg.decrypt_db_variables = MagicMock(
         side_effect=lambda d: {
             k: v.replace("enc_", "") if isinstance(v, str) else v for k, v in d.items()
         }
@@ -194,7 +202,7 @@ async def test_hashicorp_vault_crud_lifecycle(client, monkeypatch):
 
         # 10. _set_env_vars: empty string unsets
         monkeypatch.setenv("HCP_VAULT_TOKEN", "existing")
-        _set_env_vars({"vault_token": "", "vault_addr": "https://v.com"})
+        set_env_vars({"vault_token": "", "vault_addr": "https://v.com"})
         assert os.environ.get("HCP_VAULT_TOKEN") is None
         assert os.environ["HCP_VAULT_ADDR"] == "https://v.com"
 
@@ -209,9 +217,9 @@ async def test_hashicorp_vault_crud_lifecycle(client, monkeypatch):
         monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key")
         pc = ProxyConfig()
         orig = {"vault_addr": "https://v.com", "vault_token": "secret"}
-        encrypted = pc._encrypt_env_variables(orig)
+        encrypted = pc.encrypt_env_variables(orig)
         assert all(encrypted[k] != orig[k] for k in orig)
-        decrypted = pc._decrypt_db_variables(encrypted)
+        decrypted = pc.decrypt_db_variables(encrypted)
         assert all(decrypted[k] == orig[k] for k in orig)
 
     finally:

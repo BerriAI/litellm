@@ -10,7 +10,9 @@ from unittest.mock import Mock
 import pytest
 from fastapi import HTTPException
 
+from litellm.proxy._experimental.mcp_server.contracts import TargetCatalog
 from litellm.proxy._experimental.mcp_server.server_resolution import (
+    MCPServerTargetCatalog,
     ResolutionSource,
     ResolvedMCPServer,
     authorize_mcp_server,
@@ -41,11 +43,11 @@ class FakeMCPServerManager:
         self.name_lookup_spy(server_name, client_ip)
         return self.servers_by_name.get(server_name)
 
-    def _is_server_accessible_from_ip(self, server: MCPServer, client_ip: str | None) -> bool:
+    def is_server_accessible_from_ip(self, server: MCPServer, client_ip: str | None) -> bool:
         self.ip_filter_spy(server, client_ip)
         return self.ip_accessible
 
-    def _build_mcp_server_table(self, server: MCPServer) -> LiteLLM_MCPServerTable:
+    def build_mcp_server_table(self, server: MCPServer) -> LiteLLM_MCPServerTable:
         return LiteLLM_MCPServerTable(
             server_id=server.server_id,
             alias=server.alias,
@@ -130,7 +132,7 @@ async def test_temp_resolution_precedes_db_and_registry() -> None:
     )
 
     assert resolved == ResolvedMCPServer(
-        table=manager._build_mcp_server_table(temporary_server),
+        table=manager.build_mcp_server_table(temporary_server),
         runtime=temporary_server,
         source="temp",
     )
@@ -177,7 +179,7 @@ async def test_registry_id_resolution_precedes_name() -> None:
     )
 
     assert resolved == ResolvedMCPServer(
-        table=manager._build_mcp_server_table(server),
+        table=manager.build_mcp_server_table(server),
         runtime=server,
         source="registry",
     )
@@ -242,7 +244,7 @@ async def test_db_lookup_none_skips_db_and_returns_registry_source() -> None:
     resolved: Final = await resolve_mcp_server(server.server_id, manager=manager, db_lookup=None)
 
     assert resolved == ResolvedMCPServer(
-        table=manager._build_mcp_server_table(server),
+        table=manager.build_mcp_server_table(server),
         runtime=server,
         source="registry",
     )
@@ -284,7 +286,7 @@ async def test_non_admin_temp_resolution_is_denied_before_allowed_lookup() -> No
     server: Final = _runtime_server()
     manager: Final = _manager(allowed_server_ids=(server.server_id,))
     resolved: Final = ResolvedMCPServer(
-        table=manager._build_mcp_server_table(server),
+        table=manager.build_mcp_server_table(server),
         runtime=server,
         source="temp",
     )
@@ -382,7 +384,7 @@ async def test_catalog_visibility_never_opens_temporary_setup_to_non_admins(
 ) -> None:
     server: Final = _runtime_server()
     manager: Final = _manager()
-    resolved: Final = ResolvedMCPServer(manager._build_mcp_server_table(server), server, source)
+    resolved: Final = ResolvedMCPServer(manager.build_mcp_server_table(server), server, source)
     operation: Final = authorize_mcp_server(
         resolved,
         _auth(),
@@ -460,3 +462,107 @@ async def test_missing_alias_does_not_produce_a_resolution() -> None:
     manager: Final = _manager()
     assert await resolve_mcp_server("missing", manager=manager, match_name=True) is None
     manager.name_lookup_spy.assert_called_once_with("missing", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["db", "registry", "temp"])
+@pytest.mark.parametrize("allowed", [False, True])
+async def test_target_catalog_authorizes_canonical_identity(source: ResolutionSource, allowed: bool) -> None:
+    server: Final = _runtime_server()
+    manager: Final = _manager(
+        servers_by_name={"requested-alias": server},
+        allowed_server_ids=(server.server_id,) if allowed else ("requested-alias",),
+    )
+
+    async def database_lookup(server_id: str) -> LiteLLM_MCPServerTable | None:
+        return _table_server(server.server_id)
+
+    async def temporary_lookup(server_id: str) -> MCPServer | None:
+        return server
+
+    catalog: Final[TargetCatalog] = MCPServerTargetCatalog(
+        manager=manager,
+        db_lookup=database_lookup if source == "db" else None,
+        temp_lookup=temporary_lookup if source == "temp" else None,
+        match_name=True,
+    )
+    operation: Final = catalog.resolve(
+        "requested-alias",
+        _auth(),
+        is_admin_view=False,
+        not_found_detail={"error": "missing"},
+        forbidden_detail={"error": "denied"},
+        non_admin_missing="forbidden",
+    )
+    if allowed and source != "temp":
+        result: Final = await operation
+        assert result.table.server_id == server.server_id
+        assert result.source == source
+        assert result.runtime is (None if source == "db" else server)
+    else:
+        with pytest.raises(HTTPException) as error:
+            await operation
+        assert (error.value.status_code, error.value.detail) == (403, {"error": "denied"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "admin,missing,status_code", [(True, "forbidden", 404), (False, "forbidden", 403), (False, "not_found", 404)]
+)
+async def test_target_catalog_preserves_missing_target_policy(
+    admin: bool,
+    missing: Literal["forbidden", "not_found"],
+    status_code: int,
+) -> None:
+    catalog: Final[TargetCatalog] = MCPServerTargetCatalog(manager=_manager())
+    with pytest.raises(HTTPException) as error:
+        await catalog.resolve(
+            "missing",
+            _auth(),
+            is_admin_view=admin,
+            not_found_detail={"error": "missing"},
+            forbidden_detail={"error": "denied"},
+            non_admin_missing=missing,
+        )
+    assert error.value.status_code == status_code
+    assert error.value.detail == {"error": "missing" if status_code == 404 else "denied"}
+
+
+@pytest.mark.asyncio
+async def test_target_catalog_does_not_reuse_admin_authorization_for_another_caller() -> None:
+    server: Final = _runtime_server()
+    manager: Final = _manager(servers_by_id={server.server_id: server})
+    catalog: Final[TargetCatalog] = MCPServerTargetCatalog(manager=manager)
+    admin: Final = await catalog.resolve(
+        server.server_id,
+        UserAPIKeyAuth(user_id="admin"),
+        is_admin_view=True,
+        not_found_detail={"error": "missing"},
+        forbidden_detail={"error": "denied"},
+        non_admin_missing="forbidden",
+    )
+    assert admin.runtime is server
+    with pytest.raises(HTTPException) as error:
+        await catalog.resolve(
+            server.server_id,
+            _auth(),
+            is_admin_view=False,
+            not_found_detail={"error": "missing"},
+            forbidden_detail={"error": "denied"},
+            non_admin_missing="forbidden",
+        )
+    assert (error.value.status_code, error.value.detail) == (403, {"error": "denied"})
+    manager.allowed_servers_spy.assert_called_once_with(_auth())
+
+
+@pytest.mark.asyncio
+async def test_catalog_without_listing_dependency_fails_explicitly():
+    from mcp.types import ListToolsRequest
+
+    from litellm.proxy._experimental.mcp_server.contracts import OperationContext
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+    from litellm.proxy._experimental.mcp_server.server_resolution import MCPServerTargetCatalog
+
+    catalog = MCPServerTargetCatalog(MCPServerManager())
+    with pytest.raises(RuntimeError, match="listing dependency"):
+        await catalog.list(OperationContext(_caller=None), ListToolsRequest())

@@ -1,8 +1,16 @@
+import datetime
+import json
 from unittest.mock import MagicMock, patch
+from typing import Final
 
 import httpx
+import pytest
+from google.oauth2.credentials import Credentials
+from pydantic import ValidationError
 
-
+import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.vertex_ai.image_generation import (
     get_vertex_ai_image_generation_config,
 )
@@ -12,6 +20,7 @@ from litellm.llms.vertex_ai.image_generation.vertex_gemini_transformation import
 from litellm.llms.vertex_ai.image_generation.vertex_imagen_transformation import (
     VertexAIImagenImageGenerationConfig,
 )
+from litellm.types.utils import ImageResponse
 
 
 class TestVertexAIGeminiImageGenerationConfig:
@@ -635,3 +644,416 @@ class TestVertexAIImageGenerationIntegration:
         assert "us-central1" in url
         assert "imagegeneration@006" in url
         assert "predict" in url
+
+
+def _transform_gemini_response(payload: object) -> ImageResponse:
+    logging_obj: Final = Logging(
+        model="gemini/gemini-2.5-flash-image",
+        messages=[{"role": "user", "content": "Draw a red square."}],
+        stream=False,
+        call_type="image_generation",
+        start_time=datetime.datetime(2024, 1, 1),
+        litellm_call_id="vertex-gemini-image-response",
+        function_id="vertex-gemini-image-response",
+    )
+    return VertexAIGeminiImageGenerationConfig().transform_image_generation_response(
+        model="gemini-2.5-flash-image",
+        raw_response=httpx.Response(200, json=payload),
+        model_response=ImageResponse(),
+        logging_obj=logging_obj,
+        request_data={},
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+
+def test_gemini_image_generation_response_maps_usage_by_modality():
+    response: Final = _transform_gemini_response(
+        {
+            "candidates": [{"content": {"parts": [{"inlineData": {"data": "aGVsbG8="}}]}}],
+            "usageMetadata": {
+                "promptTokenCount": 5,
+                "candidatesTokenCount": 7,
+                "totalTokenCount": 12,
+                "promptTokensDetails": [
+                    {"modality": "TEXT", "tokenCount": 3},
+                    {"modality": "IMAGE", "tokenCount": 2},
+                ],
+            },
+        }
+    )
+
+    assert [image.b64_json for image in response.data] == ["aGVsbG8="]
+    assert response.usage.input_tokens == 5
+    assert response.usage.output_tokens == 7
+    assert response.usage.total_tokens == 12
+    assert response.usage.input_tokens_details.text_tokens == 3
+    assert response.usage.input_tokens_details.image_tokens == 2
+
+
+@pytest.mark.parametrize("usage_metadata", [None, {}, [], "", 0])
+def test_gemini_image_generation_response_with_falsy_usage_metadata_keeps_zeroed_usage(usage_metadata: object):
+    response: Final = _transform_gemini_response(
+        {
+            "candidates": [{"content": {"parts": []}, "groundingMetadata": {"webSearchQueries": ["a"]}}],
+            "usageMetadata": usage_metadata,
+        }
+    )
+
+    assert response.data == []
+    assert (response.usage.input_tokens, response.usage.output_tokens, response.usage.total_tokens) == (0, 0, 0)
+    assert response.usage.web_search_requests == 1
+
+
+@pytest.mark.parametrize("usage_metadata", ["not an object", ["not", "an", "object"], 7, True])
+def test_gemini_image_generation_response_rejects_non_object_usage_metadata_without_echoing_it(
+    usage_metadata: object,
+):
+    with pytest.raises(ValidationError) as exc_info:
+        _transform_gemini_response({"candidates": [], "usageMetadata": usage_metadata})
+
+    assert "input_value" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"candidates": []},
+        {"candidates": ""},
+        {"candidates": {}},
+        {"candidates": [{}]},
+        {"candidates": [{"finishReason": "SAFETY"}]},
+        {"candidates": [{"content": {}}]},
+        {"candidates": [{"content": {"parts": ""}}]},
+        {"candidates": [{"content": {"parts": "plain text"}}]},
+        {"candidates": [{"content": {"parts": {"text": "only text"}}}]},
+        {"candidates": [{"content": {"parts": [{"text": "only text"}, "plain text", ["text"], [], ""]}}]},
+        {"candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "image/png"}}]}}]},
+        {"candidates": [{"content": {"parts": [{"inlineData": "no image"}, {"inlineData": ["mimeType"]}]}}]},
+        {"candidates": [{"content": {"parts": [{"inlineData": ""}, {"inlineData": []}, {"inlineData": {}}]}}]},
+        {"candidates": [{"content": {"parts": [{"inline_data": {"data": "snake-case-is-not-read"}}]}}]},
+    ],
+)
+def test_gemini_image_generation_response_without_inline_image_data_has_no_images(payload: object):
+    assert _transform_gemini_response(payload).data == []
+
+
+def test_gemini_image_generation_response_keeps_image_order_and_thought_signatures():
+    response = _transform_gemini_response(
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {"text": "caption"},
+                            {"inlineData": {"mimeType": "image/png", "data": "first"}, "thoughtSignature": "sig-1"},
+                            "plain text",
+                        ]
+                    }
+                },
+                {
+                    "content": {
+                        "parts": [
+                            {"inlineData": {"data": "second"}},
+                            {"inlineData": {"data": None}, "thoughtSignature": ""},
+                            {"inlineData": {"data": "fourth"}, "thoughtSignature": {"nested": ["sig"]}},
+                        ]
+                    }
+                },
+            ]
+        }
+    )
+
+    assert [(image.b64_json, image.provider_specific_fields) for image in response.data or []] == [
+        ("first", {"thought_signature": "sig-1"}),
+        ("second", None),
+        (None, None),
+        ("fourth", {"thought_signature": {"nested": ["sig"]}}),
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        ["vertex-secret"],
+        "vertex-secret",
+        {"candidates": None},
+        {"candidates": 7},
+        {"candidates": "vertex-secret"},
+        {"candidates": ["vertex-secret"]},
+        {"candidates": [{"content": None}]},
+        {"candidates": [{"content": "vertex-secret"}]},
+        {"candidates": [{"content": ["vertex-secret"]}]},
+        {"candidates": [{"content": {"parts": None}}]},
+        {"candidates": [{"content": {"parts": [None]}}]},
+        {"candidates": [{"content": {"parts": [7]}}]},
+        {"candidates": [{"content": {"parts": ["inlineData vertex-secret"]}}]},
+        {"candidates": [{"content": {"parts": [["inlineData", "vertex-secret"]]}}]},
+        {"candidates": [{"content": {"parts": {"inlineData": "vertex-secret"}}}]},
+        {"candidates": [{"content": {"parts": [{"inlineData": None}]}}]},
+        {"candidates": [{"content": {"parts": [{"inlineData": 7}]}}]},
+        {"candidates": [{"content": {"parts": [{"inlineData": "data vertex-secret"}]}}]},
+        {"candidates": [{"content": {"parts": [{"inlineData": ["data", "vertex-secret"]}]}}]},
+    ],
+)
+def test_gemini_image_generation_response_rejects_malformed_candidates_without_echoing_them(payload: object):
+    with pytest.raises(ValidationError) as exc_info:
+        _transform_gemini_response(payload)
+
+    assert "vertex-secret" not in str(exc_info.value)
+
+
+def _gemini_rejection_text(payload: object) -> str:
+    with pytest.raises(ValidationError) as exc_info:
+        _transform_gemini_response(payload)
+
+    return str(exc_info.value)
+
+
+@pytest.mark.parametrize("position", [403, 429])
+@pytest.mark.parametrize("malformed_entry", [None, 7, "inlineData"])
+def test_gemini_image_generation_response_rejection_text_is_the_same_wherever_the_malformed_entry_sits(
+    position: int, malformed_entry: object
+):
+    late_parts = [*[{"text": "caption"}] * position, malformed_entry]
+    late_candidates = [*[{"finishReason": "STOP"}] * position, malformed_entry]
+
+    assert _gemini_rejection_text({"candidates": [{"content": {"parts": late_parts}}]}) == _gemini_rejection_text(
+        {"candidates": [{"content": {"parts": [malformed_entry]}}]}
+    )
+    assert _gemini_rejection_text({"candidates": late_candidates}) == _gemini_rejection_text(
+        {"candidates": [malformed_entry]}
+    )
+
+
+_IMAGEN_IMAGE_KEY = "bytesBase64Encoded"
+
+
+def _imagen_predict_response(payload: object) -> httpx.Response:
+    return httpx.Response(200, content=json.dumps(payload).encode(), headers={"content-type": "application/json"})
+
+
+def _transform_imagen_response(payload: object, model_response: ImageResponse) -> ImageResponse:
+    return VertexAIImagenImageGenerationConfig().transform_image_generation_response(
+        model="imagegeneration@006",
+        raw_response=_imagen_predict_response(payload),
+        model_response=model_response,
+        logging_obj=Logging(
+            model="imagegeneration@006",
+            messages=[],
+            stream=False,
+            call_type="image_generation",
+            start_time=datetime.datetime(2026, 1, 1),
+            litellm_call_id="vertex-imagen-generation-test",
+            function_id="vertex-imagen-generation-test",
+        ),
+        request_data={},
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+
+def _imagen_rejection_text(payload: object) -> str:
+    with pytest.raises(ValidationError) as exc_info:
+        _transform_imagen_response(payload, ImageResponse())
+
+    return str(exc_info.value)
+
+
+def _generate_imagen_image(payload: object) -> ImageResponse:
+    transport = httpx.MockTransport(lambda request: _imagen_predict_response(payload))
+    return litellm.image_generation(
+        model="vertex_ai/imagegeneration@006",
+        prompt="a cat",
+        api_base="https://vertex.invalid/v1/predict",
+        client=HTTPHandler(client=httpx.Client(transport=transport)),
+    )
+
+
+def test_imagen_image_generation_response_appends_prediction_images_in_order_to_the_given_response():
+    model_response = ImageResponse(data=[{"b64_json": "seeded", "url": None}])
+    seeded_image = model_response.data[0]
+
+    result = _transform_imagen_response(
+        {
+            "predictions": [
+                {_IMAGEN_IMAGE_KEY: "first", "mimeType": "image/png"},
+                {"raiFilteredReason": "filtered"},
+                "plain text",
+                [],
+                {_IMAGEN_IMAGE_KEY: "second"},
+            ],
+            "deployedModelId": "123",
+        },
+        model_response,
+    )
+
+    assert result is model_response
+    assert result.data[0] is seeded_image
+    assert [(image.b64_json, image.url) for image in result.data] == [
+        ("seeded", None),
+        ("first", None),
+        ("second", None),
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"deployedModelId": "123"},
+        {"predictions": []},
+        {"predictions": ""},
+        {"predictions": "plain text"},
+        {"predictions": _IMAGEN_IMAGE_KEY},
+        {"predictions": {}},
+        {"predictions": {"mimeType": "image/png", "prompt": "a cat"}},
+        {"predictions": [{}]},
+        {"predictions": [{"mimeType": "image/png"}, {"raiFilteredReason": "filtered"}]},
+        {"predictions": ["plain text", ""]},
+        {"predictions": [["mimeType", "image/png"], []]},
+        {"predictions": [[[_IMAGEN_IMAGE_KEY]]]},
+        {"predictions": [{"bytes_base64_encoded": "snake-case-is-not-read"}]},
+    ],
+)
+def test_imagen_image_generation_response_without_prediction_image_bytes_has_no_images(payload: object):
+    assert _transform_imagen_response(payload, ImageResponse()).data == []
+
+
+@pytest.mark.parametrize("b64_value", [None, "", "aGVsbG8=", "1.5", "true"])
+def test_imagen_image_generation_response_keeps_the_image_bytes_value_exactly_as_sent(b64_value: object):
+    result = _transform_imagen_response({"predictions": [{_IMAGEN_IMAGE_KEY: b64_value}]}, ImageResponse())
+
+    assert [repr(image.b64_json) for image in result.data] == [repr(b64_value)]
+
+
+@pytest.mark.parametrize("b64_value", [5, 1.5, True, ["aGVsbG8="], {"data": "aGVsbG8="}])
+def test_imagen_image_generation_response_rejects_non_string_image_bytes_naming_b64_json(b64_value: object):
+    with pytest.raises(ValidationError, match="b64_json"):
+        _transform_imagen_response({"predictions": [{_IMAGEN_IMAGE_KEY: b64_value}]}, ImageResponse())
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        ["vertex-secret"],
+        "vertex-secret",
+        7,
+        None,
+        {"predictions": None},
+        {"predictions": 7},
+        {"predictions": True},
+        {"predictions": [None]},
+        {"predictions": [7]},
+        {"predictions": [False]},
+        {"predictions": [f"{_IMAGEN_IMAGE_KEY} vertex-secret"]},
+        {"predictions": [[_IMAGEN_IMAGE_KEY, "vertex-secret"]]},
+        {"predictions": {_IMAGEN_IMAGE_KEY: "vertex-secret"}},
+        {"predictions": [{_IMAGEN_IMAGE_KEY: "kept"}, None]},
+    ],
+)
+def test_imagen_image_generation_response_rejects_malformed_predictions_without_echoing_them(payload: object):
+    rejection_text = _imagen_rejection_text(payload)
+
+    assert "vertex-secret" not in rejection_text
+    assert "input_value" not in rejection_text
+
+
+@pytest.mark.parametrize("position", [403, 429])
+@pytest.mark.parametrize("malformed_entry", [None, 7, _IMAGEN_IMAGE_KEY, [_IMAGEN_IMAGE_KEY]])
+def test_imagen_image_generation_response_rejection_text_is_the_same_wherever_the_malformed_prediction_sits(
+    position: int, malformed_entry: object
+):
+    late_predictions = [*[{_IMAGEN_IMAGE_KEY: "kept"}] * position, malformed_entry]
+
+    assert _imagen_rejection_text({"predictions": late_predictions}) == _imagen_rejection_text(
+        {"predictions": [malformed_entry]}
+    )
+
+
+def test_imagen_image_generation_returns_the_prediction_images_of_the_predict_endpoint():
+    result = _generate_imagen_image(
+        {"predictions": [{_IMAGEN_IMAGE_KEY: "first"}, {"mimeType": "image/png"}, {_IMAGEN_IMAGE_KEY: "second"}]}
+    )
+
+    assert [(image.b64_json, image.url) for image in result.data] == [("first", None), ("second", None)]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        ["vertex-secret"],
+        "vertex-secret",
+        {"predictions": None},
+        {"predictions": [*[{_IMAGEN_IMAGE_KEY: "kept"}] * 403, f"{_IMAGEN_IMAGE_KEY} vertex-secret"]},
+        {"predictions": [*[{_IMAGEN_IMAGE_KEY: "kept"}] * 429, None]},
+    ],
+)
+def test_imagen_image_generation_maps_a_malformed_predict_body_to_a_connection_error_without_echoing_it(
+    payload: object,
+):
+    with pytest.raises(litellm.APIConnectionError) as exc_info:
+        _generate_imagen_image(payload)
+
+    assert type(exc_info.value) is litellm.APIConnectionError
+    assert exc_info.value.status_code == 500
+    assert "vertex-secret" not in str(exc_info.value)
+
+
+def test_gemini_image_generation_validation_uses_supplied_vertex_token() -> None:
+    config: Final = VertexAIGeminiImageGenerationConfig()
+    credentials_json: Final = json.dumps({"type": "authorized_user", "client_id": "test-client"})
+    cache_key: Final = (credentials_json, "test-project")
+    config._credentials_project_mapping[cache_key] = (
+        Credentials(token="test-access-token"),
+        "test-project",
+    )
+    try:
+        headers: Final = config.validate_environment(
+            headers={"X-Test": "preserved"},
+            model="gemini-2.5-flash-image",
+            messages=[],
+            optional_params={},
+            litellm_params={
+                "vertex_project": "test-project",
+                "vertex_location": "us-central1",
+                "vertex_credentials": credentials_json,
+            },
+        )
+    finally:
+        config._credentials_project_mapping.pop(cache_key, None)
+
+    assert headers == {
+        "Content-Type": "application/json",
+        "X-Test": "preserved",
+        "Authorization": "Bearer test-access-token",
+    }
+
+
+def test_imagen_image_generation_validation_uses_supplied_vertex_token() -> None:
+    config: Final = VertexAIImagenImageGenerationConfig()
+    credentials_json: Final = json.dumps({"type": "authorized_user", "client_id": "test-client"})
+    cache_key: Final = (credentials_json, "test-project")
+    config._credentials_project_mapping[cache_key] = (
+        Credentials(token="test-access-token"),
+        "test-project",
+    )
+    try:
+        headers: Final = config.validate_environment(
+            headers={},
+            model="imagen-3.0-generate-001",
+            messages=[],
+            optional_params={},
+            litellm_params={
+                "vertex_project": "test-project",
+                "vertex_location": "us-central1",
+                "vertex_credentials": credentials_json,
+            },
+        )
+    finally:
+        config._credentials_project_mapping.pop(cache_key, None)
+
+    assert headers == {"Content-Type": "application/json", "Authorization": "Bearer test-access-token"}

@@ -347,6 +347,29 @@ class TestAllowFlow:
         assert evaluate_call.json["agentId"] == "my-agent-key"
 
     @pytest.mark.asyncio
+    async def test_evaluate_payload_includes_listed_tool_metadata(self):
+        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        guardrail: Final = _make_guardrail(handler)
+        schema: Final = {"type": "object", "properties": {"to": {"type": "string"}}, "required": ["to"]}
+        await _run(guardrail, _mcp_data(mcp_tool_description="Send an email", mcp_input_schema=schema))
+        assert handler.calls[1].json["tool"] == {
+            "name": "send_email",
+            "description": "Send an email",
+            "inputSchema": schema,
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("description", "schema"),
+        [(None, None), ("", None), (None, ["not", "a", "schema"]), (42, "type: object")],
+    )
+    async def test_evaluate_payload_omits_missing_or_malformed_tool_metadata(self, description, schema):
+        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        guardrail: Final = _make_guardrail(handler)
+        await _run(guardrail, _mcp_data(mcp_tool_description=description, mcp_input_schema=schema))
+        assert handler.calls[1].json["tool"] == {"name": "send_email"}
+
+    @pytest.mark.asyncio
     async def test_non_mcp_call_type_skipped(self):
         handler: Final = FakeHandler([])
         guardrail: Final = _make_guardrail(handler)

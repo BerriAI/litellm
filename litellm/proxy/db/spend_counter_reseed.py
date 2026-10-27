@@ -19,12 +19,17 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final, Optional
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup, db_lookup_gate
-from litellm.proxy.spend_tracking.spend_counter_batch import read_batched_spend_counter, record_spend_counter_value
+from litellm.proxy.spend_tracking.spend_counter_batch import (
+    SPEND_COUNTERS_TARGET,
+    read_batched_spend_counter,
+    record_spend_counter_value,
+)
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
@@ -108,6 +113,7 @@ class SpendCounterReseed:
             return lock
 
     @staticmethod
+    @with_service_target(SPEND_COUNTERS_TARGET)
     async def increment_in_memory(spend_counter_cache: "DualCache", counter_key: str, increment: float) -> float | None:
         """Apply local deltas after an in-flight reseed establishes the spend balance."""
         lock: Final = await SpendCounterReseed._get_lock(counter_key)
@@ -213,6 +219,7 @@ class SpendCounterReseed:
         return await read_batched_spend_counter(counter_key)
 
     @staticmethod
+    @with_service_target(SPEND_COUNTERS_TARGET)
     async def coalesced(
         prisma_client: Optional["PrismaClient"],
         spend_counter_cache: "DualCache",
@@ -415,6 +422,7 @@ class SpendCounterReseed:
         return float(spend or 0.0)
 
     @staticmethod
+    @with_service_target(SPEND_COUNTERS_TARGET)
     async def coalesced_window(
         prisma_client: Optional["PrismaClient"],
         spend_counter_cache: "DualCache",
