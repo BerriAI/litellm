@@ -800,28 +800,17 @@ def filter_tools_by_allowed_tools(
         Filtered list of tools
     """
     from litellm.proxy.mcp_server.utils import (
+        is_tool_allowed_for_server,
         server_applies_tool_allowlist,
     )
 
-    tools_to_return = tools
-
-    # Filter by allowed_tools (whitelist)
-    if server_applies_tool_allowlist(mcp_server):
-        if not mcp_server.allowed_tools:
-            return []
-        tools_to_return = [
-            tool for tool in tools if _tool_name_matches(tool.name, mcp_server.allowed_tools, mcp_server)
-        ]
-
-    # Filter by disallowed_tools (blacklist)
-    if mcp_server.disallowed_tools:
-        tools_to_return = [
-            tool
-            for tool in tools_to_return
-            if not _tool_name_matches(tool.name, mcp_server.disallowed_tools, mcp_server)
-        ]
-
-    return tools_to_return
+    if not server_applies_tool_allowlist(mcp_server) and not mcp_server.disallowed_tools:
+        return tools
+    return [
+        tool
+        for tool in tools
+        if is_tool_allowed_for_server(strip_known_server_prefix(tool.name, mcp_server), mcp_server)
+    ]
 
 
 def apply_display_name_overrides(

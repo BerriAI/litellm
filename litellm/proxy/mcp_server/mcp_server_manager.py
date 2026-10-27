@@ -1705,6 +1705,24 @@ def warn_on_shared_identifier_prefixes(servers: Iterable[MCPServer]) -> None:
             )
 
 
+def _warn_overlapping_tool_policies(server: MCPServer) -> None:
+    overlapping_tools: Final = tuple(
+        entry
+        for entry in server.allowed_tools or ()
+        if any(
+            match_known_tool_name(name, server, server.disallowed_tools or ()) is not None
+            for name in (entry, strip_known_server_prefix(entry, server))
+        )
+    )
+    if overlapping_tools:
+        verbose_logger.warning(
+            "MCP server %s has entries in both allowed_tools and disallowed_tools: %s. "
+            "disallowed_tools takes precedence; matching tools will be blocked.",
+            server.name,
+            ", ".join(overlapping_tools),
+        )
+
+
 def _warn_legacy_delegate_auth_if_applicable(server: MCPServer, *, source: str) -> None:
     """Direct legacy delegated OAuth configurations to the admitted replacement."""
     if server.auth_type != MCPAuth.oauth2:
@@ -2854,6 +2872,7 @@ class MCPServerManager:
                 oauth_identity_binding=server_config.get("oauth_identity_binding", None),
             )
             self.assign_unique_short_prefix(new_server)
+            _warn_overlapping_tool_policies(new_server)
             _warn_legacy_delegate_auth_if_applicable(new_server, source="config")
             _warn_config_id_jag_server_outruns_sso(new_server)
             self.invalidate_server_definition_caches(server_id)
@@ -5943,12 +5962,10 @@ class MCPServerManager:
         cut a second boundary out of a native name that opens with the server prefix.
         """
         from litellm.proxy.mcp_server.utils import (
-            server_applies_tool_allowlist,
+            is_tool_allowed_for_server,
         )
 
-        if server_applies_tool_allowlist(server):
-            return match_known_tool_name(tool_name, server, server.allowed_tools or ()) is not None
-        return match_known_tool_name(tool_name, server, server.disallowed_tools or ()) is None
+        return is_tool_allowed_for_server(tool_name, server)
 
     def validate_allowed_params(self, tool_name: str, arguments: _ToolArguments, server: MCPServer) -> None:
         """
