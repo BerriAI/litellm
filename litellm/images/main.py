@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 import importlib
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from functools import partial
 from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
@@ -85,7 +85,7 @@ def _get_ImageEditRequestUtils() -> type["ImageEditRequestUtils"]:
     return _ImageEditRequestUtils_cache
 
 
-def _chatgpt_image_headers(model: str, params: GenericLiteLLMParams, headers: dict[str, str]) -> dict[str, str]:
+def _chatgpt_image_headers(model: str, params: GenericLiteLLMParams, headers: Mapping[str, str]) -> Mapping[str, str]:
     from litellm.llms.chatgpt.common_utils import get_chatgpt_request_credential
     from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 
@@ -549,10 +549,12 @@ def image_generation(
                 aimg_generation=aimg_generation,
                 client=client,
                 headers=(
-                    _chatgpt_image_headers(
-                        model,
-                        chatgpt_params.model_copy(update={"api_key": dynamic_api_key or api_key}),
-                        TypeAdapter(dict[str, str]).validate_python(headers),
+                    dict(
+                        _chatgpt_image_headers(
+                            model,
+                            chatgpt_params.model_copy(update={"api_key": dynamic_api_key or api_key}),
+                            TypeAdapter(dict[str, str]).validate_python(headers),
+                        )
                     )
                     if chatgpt_params is not None
                     else headers
