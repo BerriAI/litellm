@@ -1,5 +1,6 @@
 """Tests for litellm_core_utils.core_helpers module."""
 
+import datetime
 import json
 import logging
 import threading
@@ -18,13 +19,13 @@ from litellm.litellm_core_utils.core_helpers import (
     drop_params_env_flag,
     drop_params_flag,
     get_litellm_metadata_from_kwargs,
-    get_parent_otel_span_from_kwargs,
     get_or_create_metadata_bucket,
+    get_parent_otel_span_from_kwargs,
     get_provider_response_headers_from_hidden_params,
     map_finish_reason,
     normalize_drop_params,
-    process_response_headers,
     preserve_upstream_non_openai_attributes,
+    process_response_headers,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
     set_provider_response_headers_in_hidden_params,
@@ -685,3 +686,36 @@ def test_spend_metadata_merge_reads_request_metadata_that_is_a_read_only_mapping
     )
 
     assert merged == {"user_api_key_hash": "hash", "model_group": "claude"}
+
+
+class TestReceiveStampSurvivesASecondMetadataBucket:
+    """A guardrail hook can plant ``litellm_metadata`` on a chat request after the proxy stamped
+    ``litellm_received_at`` into ``metadata``. The resolved bucket must still carry the stamp, or
+    ``x-litellm-overhead-duration-ms`` starts at the router call and hides every pre-call cost."""
+
+    def test_receive_stamp_is_carried_into_litellm_metadata(self):
+        received_at = datetime.datetime(2026, 10, 21, 5, 0, tzinfo=datetime.timezone.utc)
+        kwargs = {
+            "litellm_params": {
+                "metadata": {"litellm_received_at": received_at, "user_api_key_user_id": "user-1"},
+                "litellm_metadata": {"applied_guardrails": ["perf-pre"]},
+            }
+        }
+
+        resolved = get_litellm_metadata_from_kwargs(kwargs)
+
+        assert resolved is kwargs["litellm_params"]["litellm_metadata"]
+        assert resolved["litellm_received_at"] is received_at
+        assert resolved["user_api_key_user_id"] == "user-1"
+
+    def test_litellm_metadata_keeps_its_own_receive_stamp(self):
+        own = datetime.datetime(2026, 10, 21, 5, 0, tzinfo=datetime.timezone.utc)
+        other = datetime.datetime(2026, 10, 21, 5, 1, tzinfo=datetime.timezone.utc)
+        kwargs = {
+            "litellm_params": {
+                "metadata": {"litellm_received_at": other},
+                "litellm_metadata": {"litellm_received_at": own},
+            }
+        }
+
+        assert get_litellm_metadata_from_kwargs(kwargs)["litellm_received_at"] is own

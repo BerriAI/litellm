@@ -5,10 +5,11 @@ import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UrlUpdateEvent } from "nuqs/adapters/testing";
-import { renderWithProviders } from "@/../tests/test-utils";
+import { chooseSelectOption, renderWithProviders } from "@/../tests/test-utils";
 import { toast } from "@/lib/toast";
 import { processActivityData } from "@/components/activity_metrics";
 import type { Organization } from "@/components/networking";
@@ -17,8 +18,23 @@ import * as networking from "@/components/networking";
 import { STACKED_USAGE_PALETTE } from "@/components/shared/charts";
 import { OTHER_COLOR } from "./overview/overviewData";
 import UsagePage from "./UsagePageView";
+import type ClientUsagePanel from "./ClientUsagePanel";
 
 const mockEntityUsageMounted = vi.hoisted(() => vi.fn());
+const mockClientUsagePanel = vi.hoisted(() => vi.fn());
+
+vi.mock("./ClientUsagePanel", () => ({
+  default: (props: ComponentProps<typeof ClientUsagePanel>) => {
+    mockClientUsagePanel(props);
+    return (
+      <section aria-label="Client usage panel">
+        <button onClick={() => props.onTeamChange?.("design")}>Select Design scope</button>
+        <button onClick={() => props.onUserChange("maya")}>Select Maya</button>
+        <button onClick={props.onClose}>Close client panel</button>
+      </section>
+    );
+  },
+}));
 
 // The Overview tab. The Key Activity tab stays mounted and carries its own spend-derived totals,
 // so assertions about the overview's request tiles are scoped here rather than to the whole page.
@@ -223,8 +239,9 @@ vi.mock("@/components/EntityUsageExport", () => ({
   default: () => <div>Entity Usage Export Modal</div>,
 }));
 
-vi.mock("./UsageAIChatPanel", () => ({
-  default: () => <div data-testid="usage-ai-chat-panel">Usage AI Chat Panel</div>,
+vi.mock("@/components/liteadmin/LiteAdmin", () => ({
+  AriaUsageTrigger: () => <button aria-label="Open Aria Agent">Aria</button>,
+  AriaUsageComposer: () => <section aria-label="Ask Aria Agent">Shared Aria composer</section>,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/customers/useCustomers", () => ({
@@ -499,11 +516,13 @@ describe("UsagePage", () => {
   };
 
   beforeEach(() => {
+    mockClientUsagePanel.mockClear();
     vi.mocked(processActivityData).mockReset();
     vi.mocked(processActivityData).mockImplementation((_data, key) => ({
       [key]: modelActivity(`activity-source:${key}`),
     }));
     mockUseAuthorized.mockReturnValue({
+      ...nonAdminSession,
       isLoading: false,
       isAuthorized: true,
       token: "mock-token",
@@ -861,7 +880,7 @@ describe("UsagePage", () => {
   });
 
   it("should withhold the tag list until it resolves so no empty state is shown while loading", async () => {
-    let resolveTagList: (tags: Record<string, unknown>) => void = () => {};
+    let resolveTagList: (tags: Awaited<ReturnType<typeof networking.tagListCall>>) => void = () => {};
     mockTagListCall.mockReturnValue(
       new Promise((resolve) => {
         resolveTagList = resolve;
@@ -900,7 +919,7 @@ describe("UsagePage", () => {
       );
     });
 
-    let resolveNewRange: (tags: Record<string, unknown>) => void = () => {};
+    let resolveNewRange: (tags: Awaited<ReturnType<typeof networking.tagListCall>>) => void = () => {};
     mockTagListCall.mockReturnValue(
       new Promise((resolve) => {
         resolveNewRange = resolve;
@@ -922,6 +941,7 @@ describe("UsagePage", () => {
 
   it("should show tag usage selector option for internal users", async () => {
     mockUseAuthorized.mockReturnValue({
+      ...nonAdminSession,
       isLoading: false,
       isAuthorized: true,
       token: "mock-token",
@@ -971,6 +991,7 @@ describe("UsagePage", () => {
     const mockUseIsOrgAdmin = vi.mocked(useIsOrgAdmin);
     mockUseIsOrgAdmin.mockReturnValue(true);
     mockUseAuthorized.mockReturnValue({
+      ...nonAdminSession,
       isLoading: false,
       isAuthorized: true,
       token: "mock-token",
@@ -1244,6 +1265,7 @@ describe("UsagePage", () => {
   describe("non-admin user behavior", () => {
     it("should not render user selector for non-admin users", async () => {
       mockUseAuthorized.mockReturnValue({
+        ...nonAdminSession,
         isLoading: false,
         isAuthorized: true,
         token: "mock-token",
@@ -1269,6 +1291,7 @@ describe("UsagePage", () => {
 
     it("should always pass own userId for non-admin users", async () => {
       mockUseAuthorized.mockReturnValue({
+        ...nonAdminSession,
         isLoading: false,
         isAuthorized: true,
         token: "mock-token",
@@ -1301,7 +1324,22 @@ describe("UsagePage", () => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
       expect(mockDailyActivityAggregatedCall.mock.calls.filter((c) => c[0] === "user")).toHaveLength(1);
-      expect(await screen.findByText(/Fetching spend data failed/)).toBeInTheDocument();
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent("Failed to load spend data");
+      expect(alert).toHaveTextContent("Aggregated endpoint not available");
+      expect(within(alert).getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    });
+
+    it("re-issues the aggregated call when Retry is clicked", async () => {
+      mockUserDailyActivityAggregatedCall.mockRejectedValue(new Error("Aggregated endpoint not available"));
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      const alert = await screen.findByRole("alert");
+      const callsBefore = mockUserDailyActivityAggregatedCall.mock.calls.length;
+      fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+
+      await waitFor(() => expect(mockUserDailyActivityAggregatedCall.mock.calls.length).toBe(callsBefore + 1));
     });
   });
 
@@ -1351,25 +1389,33 @@ describe("UsagePage", () => {
     });
   });
 
-  describe("Ask AI button", () => {
-    it("should render Ask AI button in global view", async () => {
+  describe("Aria Agent", () => {
+    it("should render the shared Aria prompt and entry point in global view", async () => {
       renderWithProviders(<UsagePage {...defaultProps} />);
 
       await waitFor(() => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
 
-      expect(screen.getByText("Ask AI")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Open Aria Agent" })).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Ask Aria Agent" })).toBeVisible();
+      expect(screen.queryByText("Ask AI")).not.toBeInTheDocument();
     });
 
-    it("should render AI chat panel component", async () => {
+    it("should keep the shared Aria prompt available in entity usage views", async () => {
       renderWithProviders(<UsagePage {...defaultProps} />);
 
       await waitFor(() => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
 
-      expect(screen.getByTestId("usage-ai-chat-panel")).toBeInTheDocument();
+      act(() => {
+        fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "team" } });
+      });
+
+      expect(await screen.findByText("Entity Usage")).toBeInTheDocument();
+      expect(screen.getAllByRole("region", { name: "Ask Aria Agent" })).toHaveLength(1);
+      expect(screen.getByRole("region", { name: "Ask Aria Agent" })).toBeVisible();
     });
   });
 
@@ -1576,6 +1622,195 @@ describe("UsagePage", () => {
       expect(screen.getByText("Endpoint Activity")).toBeInTheDocument();
     });
   });
+  describe("client scope wiring", () => {
+    const administeredTeams = [
+      {
+        ...defaultProps.teams[0],
+        team_id: "engineering",
+        team_alias: "Engineering",
+        members_with_roles: [
+          { user_id: "user-123", role: "admin" },
+          { user_id: "alice", role: "user", user_email: "alice@example.com" },
+        ],
+      },
+      {
+        ...defaultProps.teams[0],
+        team_id: "design",
+        team_alias: "Design",
+        members_with_roles: [
+          { user_id: "user-123", role: "admin" },
+          { user_id: "maya", role: "user", user_email: "maya@example.com" },
+        ],
+      },
+      {
+        ...defaultProps.teams[0],
+        team_id: "outside-team",
+        team_alias: "Outside team",
+        members_with_roles: [
+          { user_id: "user-123", role: "user" },
+          { user_id: "outside-user", role: "admin" },
+        ],
+      },
+    ];
+    const renderClientAt = (searchParams: string, props: ComponentProps<typeof UsagePage> = defaultProps) => {
+      const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
+      const view = renderWithProviders(<UsagePage {...props} />, {
+        searchParams,
+        onUrlUpdate,
+        resetUrlUpdateQueueOnMount: false,
+      });
+      return { ...view, onUrlUpdate };
+    };
+    const lastPanelProps = (): ComponentProps<typeof ClientUsagePanel> => mockClientUsagePanel.mock.lastCall?.[0];
+
+    it("should default a proxy administrator's client panel to all users", async () => {
+      renderClientAt("?client=claude-desktop");
+      expect(await screen.findByRole("region", { name: "Client usage panel" })).toBeInTheDocument();
+      expect(lastPanelProps()).toMatchObject({ userId: null, teamId: null, canChooseUser: true });
+      expect(lastPanelProps().scopeError).toBeNull();
+    });
+
+    it("should honor a proxy administrator's linked person", async () => {
+      renderClientAt("?client=claude-desktop&client_user=selected-person");
+      expect(await screen.findByRole("region", { name: "Client usage panel" })).toBeInTheDocument();
+      const expectedScope = {
+        userId: "selected-person",
+        teamId: null,
+        canChooseUser: true,
+        scopeError: null,
+        defaultScopeLabel: "All users",
+      };
+      expect(lastPanelProps()).toMatchObject(expectedScope);
+    });
+
+    it("should default an internal user to their own client usage without a global person selector", async () => {
+      mockUseAuthorized.mockReturnValue(nonAdminSession);
+      renderClientAt("?client=claude-desktop");
+      expect(await screen.findByRole("region", { name: "Client usage panel" })).toBeInTheDocument();
+      const expectedScope = {
+        userId: "user-123",
+        teamId: null,
+        canChooseUser: false,
+        scopeError: null,
+        teams: [],
+        defaultScopeLabel: "My usage",
+      };
+      expect(lastPanelProps()).toMatchObject(expectedScope);
+    });
+
+    it("should keep an administered-team member scoped and reset the person when the team changes", async () => {
+      mockUseAuthorized.mockReturnValue(nonAdminSession);
+      const user = userEvent.setup();
+      const props = { ...defaultProps, teams: administeredTeams };
+      const { onUrlUpdate } = renderClientAt("?client=claude-desktop&client_team=engineering&client_user=alice", props);
+      expect(await screen.findByRole("region", { name: "Client usage panel" })).toBeInTheDocument();
+      const expectedScope = {
+        userId: "alice",
+        teamId: "engineering",
+        canChooseUser: false,
+        scopeError: null,
+      };
+      expect(lastPanelProps()).toMatchObject(expectedScope);
+      expect(lastPanelProps().teams).toEqual([
+        { value: "engineering", label: "Engineering" },
+        { value: "design", label: "Design" },
+      ]);
+      expect(lastPanelProps().members?.map((member) => member.value)).toEqual(["user-123", "alice"]);
+
+      await user.click(screen.getByRole("button", { name: "Select Design scope" }));
+      await waitFor(() => expect(lastPanelProps()).toMatchObject({ teamId: "design", userId: null, scopeError: null }));
+      expect(lastPanelProps().members?.map((member) => member.value)).toEqual(["user-123", "maya"]);
+      expect(new URLSearchParams(onUrlUpdate.mock.lastCall?.[0].queryString).get("client_team")).toBe("design");
+
+      await user.click(screen.getByRole("button", { name: "Select Maya" }));
+      await waitFor(() =>
+        expect(lastPanelProps()).toMatchObject({ teamId: "design", userId: "maya", scopeError: null }),
+      );
+      expect(screen.getByRole("region", { name: "Client usage panel" })).toBeInTheDocument();
+    });
+
+    it("should reject a member from another administered team in a saved link", async () => {
+      mockUseAuthorized.mockReturnValue(nonAdminSession);
+      const props = { ...defaultProps, teams: administeredTeams };
+      renderClientAt("?client=claude-desktop&client_team=engineering&client_user=maya", props);
+      expect(await screen.findByRole("region", { name: "Client usage panel" })).toBeInTheDocument();
+      const expectedScope = {
+        userId: "maya",
+        teamId: "engineering",
+        canChooseUser: false,
+        scopeError: "Choose a member of the selected team",
+      };
+      expect(lastPanelProps()).toMatchObject(expectedScope);
+      expect(mockClientUsagePanel.mock.calls.every(([props]) => Boolean(props.scopeError))).toBe(true);
+    });
+
+    it.each([
+      "?client=claude-desktop&client_user=outside-user",
+      "?client=claude-desktop&client_team=outside-team&client_user=outside-user",
+    ])("should never broaden an ordinary user's saved client scope from %s", async (searchParams) => {
+      mockUseAuthorized.mockReturnValue(nonAdminSession);
+      const { onUrlUpdate } = renderClientAt(searchParams);
+      expect(await screen.findByRole("region", { name: "Client usage panel" })).toBeInTheDocument();
+      await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+      if (searchParams.includes("client_team")) {
+        await waitFor(() => expect(lastPanelProps().scopeError).toBe("Choose a team you administer"));
+      } else {
+        await waitFor(() => expect(lastPanelProps()).toMatchObject({ userId: "user-123", scopeError: null }));
+      }
+      expect(mockClientUsagePanel.mock.calls.length).toBeGreaterThan(0);
+      for (const [props] of mockClientUsagePanel.mock.calls) {
+        expect(props.canChooseUser).toBe(false);
+        const personalScope = props.userId === "user-123" && props.teamId === null;
+        expect(personalScope || Boolean(props.scopeError)).toBe(true);
+      }
+      expect(lastPanelProps().teams).toEqual([]);
+    });
+
+    it("should preserve an unauthorized main team selection when opening client usage instead of substituting an allowed team", async () => {
+      mockUseAuthorized.mockReturnValue(nonAdminSession);
+      const user = userEvent.setup();
+      const props = { ...defaultProps, teams: administeredTeams };
+      const { onUrlUpdate } = renderClientAt("?view=team&team=outside-team", props);
+
+      await chooseSelectOption(user, screen.getByRole("combobox", { name: "View client usage" }), "Claude Desktop");
+      expect(await screen.findByRole("region", { name: "Client usage panel" })).toBeInTheDocument();
+      expect(lastPanelProps()).toMatchObject({
+        teamId: "outside-team",
+        scopeError: "Choose a team you administer",
+        canChooseUser: false,
+      });
+      expect(new URLSearchParams(onUrlUpdate.mock.lastCall?.[0].queryString).get("client_team")).toBe("outside-team");
+    });
+
+    it("should keep an administrator's explicit My usage view personal despite client scope URL parameters", async () => {
+      renderClientAt("?view=my-usage&client=claude-desktop&client_team=outside-team&client_user=outside-user");
+      expect(await screen.findByRole("region", { name: "Client usage panel" })).toBeInTheDocument();
+      const expectedScope = {
+        userId: "user-123",
+        teamId: null,
+        canChooseUser: false,
+        teams: [],
+        scopeError: null,
+      };
+      expect(lastPanelProps()).toMatchObject(expectedScope);
+    });
+
+    it("should wait for team membership before mounting a linked client panel", async () => {
+      mockUseAuthorized.mockReturnValue(nonAdminSession);
+      const pendingProps = { ...defaultProps, teams: [], teamsLoading: true };
+      const { rerender } = renderClientAt(
+        "?client=claude-desktop&client_team=engineering&client_user=alice",
+        pendingProps,
+      );
+      expect(screen.queryByRole("region", { name: "Client usage panel" })).not.toBeInTheDocument();
+      expect(mockClientUsagePanel).not.toHaveBeenCalled();
+
+      rerender(<UsagePage {...defaultProps} teams={administeredTeams} teamsLoading={false} />);
+      expect(await screen.findByRole("region", { name: "Client usage panel" })).toBeInTheDocument();
+      expect(lastPanelProps()).toMatchObject({ userId: "alice", teamId: "engineering", scopeError: null });
+    });
+  });
+
   describe("URL state", () => {
     const renderAt = (searchParams: string) => {
       const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
@@ -1678,6 +1913,61 @@ describe("UsagePage", () => {
         JSON.stringify(["User-Agent: Firefox/2.0"]),
       );
     });
+
+    it("queries the configured month and preserves later manual selections", async () => {
+      const now = new Date(2026, 9, 24, 12);
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(now);
+      try {
+        renderWithProviders(<UsagePage {...defaultProps} defaultTimeRange="month_to_date" />);
+        await waitFor(() =>
+          expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
+            expect.objectContaining({
+              startTime: new Date(2026, 9, 1),
+              endTime: new Date(2026, 9, 24, 23, 59, 59, 999),
+            }),
+          ),
+        );
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(1);
+        fireEvent.click(screen.getByTestId("pick-a-different-range"));
+        await waitFor(() =>
+          expect(mockUserDailyActivityAggregatedCall).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+              startTime: new Date(2024, 0, 1),
+              endTime: new Date(2024, 0, 8, 23, 59, 59, 999),
+            }),
+          ),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it.each(["?range=today", "?from=2025-03-01&to=2025-03-05"])(
+      "preserves explicit dates over configured defaults for %s",
+      async (searchParams) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date(2026, 9, 24, 12));
+        try {
+          const view = renderWithProviders(<UsagePage {...defaultProps} defaultTimeRange="month_to_date" />, {
+            searchParams,
+          });
+          const startTime = searchParams.includes("range=today") ? new Date(2026, 9, 24) : new Date(2025, 2, 1);
+          const endTime = searchParams.includes("range=today")
+            ? new Date(2026, 9, 24, 23, 59, 59, 999)
+            : new Date(2025, 2, 5, 23, 59, 59, 999);
+          await waitFor(() =>
+            expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
+              expect.objectContaining({ startTime, endTime }),
+            ),
+          );
+          view.rerender(<UsagePage {...defaultProps} defaultTimeRange="year_to_date" />);
+          expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(1);
+        } finally {
+          vi.useRealTimers();
+        }
+      },
+    );
 
     it("fetches the custom range in the URL and writes a newly picked one", async () => {
       const { lastQuery } = renderAt("?from=2025-03-01&to=2025-03-05");

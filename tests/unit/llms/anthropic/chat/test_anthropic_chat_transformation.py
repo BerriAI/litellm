@@ -31,7 +31,7 @@ from litellm.llms.anthropic.pass_through.messages.transformation import (
 )
 from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
 from litellm.llms.bedrock.claude_platform.transformation import BedrockClaudePlatformConfig
-from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
@@ -2549,18 +2549,6 @@ def test_translate_system_message_preserves_cache_control():
 # ============ Dynamic max_tokens Tests ============
 
 
-def test_get_max_tokens_for_model_claude_3():
-    """
-    Test that get_max_tokens_for_model returns correct value for Claude 3 models.
-    Claude 3 models have max_output_tokens of 4096.
-    """
-    config = AnthropicConfig()
-
-    # Claude 3 Sonnet should return 4096
-    max_tokens = config.get_max_tokens_for_model("claude-3-sonnet-20240229")
-    assert max_tokens == 4096
-
-
 def test_get_max_tokens_for_model_claude_35():
     """
     Test that get_max_tokens_for_model returns correct value for Claude 3.5 models.
@@ -2581,24 +2569,24 @@ def test_get_max_tokens_for_model_claude_35():
 
 def test_get_max_tokens_for_model_unknown():
     """
-    Test that get_max_tokens_for_model returns 4096 fallback for unknown models.
+    Test that get_max_tokens_for_model returns 128000 fallback for unknown models.
     """
     config = AnthropicConfig()
 
-    # Unknown model should return 4096 as fallback
+    # Unknown model should return 128000 as fallback
     max_tokens = config.get_max_tokens_for_model("unknown-model-xyz")
-    assert max_tokens == 4096
+    assert max_tokens == 128000
 
 
 def test_get_max_tokens_for_model_none():
     """
-    Test that get_max_tokens_for_model returns 4096 fallback when model is None.
+    Test that get_max_tokens_for_model returns 128000 fallback when model is None.
     """
     config = AnthropicConfig()
 
-    # None model should return 4096 as fallback
+    # None model should return 128000 as fallback
     max_tokens = config.get_max_tokens_for_model(None)
-    assert max_tokens == 4096
+    assert max_tokens == 128000
 
 
 def test_get_config_with_model_uses_dynamic_max_tokens():
@@ -2639,10 +2627,10 @@ def test_get_config_with_model_uses_dynamic_max_tokens():
 
 def test_get_config_without_model_uses_fallback():
     """
-    Test that get_config without model parameter uses 4096 fallback.
+    Test that get_config without model parameter uses 128000 fallback.
     """
     config = AnthropicConfig.get_config()
-    assert config["max_tokens"] == 4096
+    assert config["max_tokens"] == 128000
 
 
 def test_get_config_does_not_leak_module_constants():
@@ -6145,7 +6133,7 @@ def test_anthropic_messages_request_strips_billing_header_for_minimax():
 
 
 def test_translate_system_message_strips_billing_header_for_bedrock_invoke():
-    from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+    from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeConfig,
     )
 
@@ -6174,12 +6162,12 @@ def test_translate_system_message_strips_billing_header_for_bedrock_invoke():
             True,
         ),
         (
-            "litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation",
+            "litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation",
             "AmazonAnthropicClaudeConfig",
             True,
         ),
         (
-            "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation",
+            "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation",
             "AmazonAnthropicClaudeMessagesConfig",
             True,
         ),

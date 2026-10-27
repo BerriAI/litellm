@@ -73,21 +73,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/budgets/_components/budget_modal.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/budgets/_components/budget_panel.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/budgets/_components/edit_budget_modal.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/caching/_components/cache_dashboard.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -1113,14 +1098,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/usage/_components/components/UsageAIChatPanel.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "react-hooks/immutability": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/usage/_components/components/UsagePageView.tsx": {
     "react-hooks/purity": {
       "count": 1
@@ -1753,9 +1730,6 @@
   "src/components/model_group_alias_settings.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
     }
   },
   "src/components/model_info_view.tsx": {
@@ -1763,7 +1737,7 @@
       "count": 1
     },
     "prefer-const": {
-      "count": 5
+      "count": 3
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -1782,16 +1756,16 @@
       "count": 1
     },
     "max-params": {
-      "count": 15
+      "count": 14
     },
     "no-nested-ternary": {
       "count": 5
     },
     "no-restricted-syntax": {
-      "count": 140
+      "count": 139
     },
     "prefer-const": {
-      "count": 29
+      "count": 28
     }
   },
   "src/components/object_permissions_view.tsx": {
@@ -1813,9 +1787,6 @@
     },
     "prefer-const": {
       "count": 2
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 4
     }
   },
   "src/components/organization/organization_view.tsx": {
@@ -2198,11 +2169,6 @@
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/utils/dataUtils.test.ts": {
-    "max-nested-callbacks": {
       "count": 1
     }
   },
