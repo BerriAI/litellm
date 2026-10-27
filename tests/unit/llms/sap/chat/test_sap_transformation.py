@@ -9,11 +9,11 @@ from pydantic import ValidationError
 def _make_config():
     from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
 
-    cfg = GenAIHubOrchestrationConfig()
-    cfg.token_creator = lambda: "Bearer TEST_TOKEN"
-    cfg._base_url = "https://api.test-sap.com"
-    cfg._resource_group = "test-group"
-    return cfg
+    config = GenAIHubOrchestrationConfig()
+    config.token_creator = lambda: "Bearer TEST_TOKEN"
+    config._base_url = "https://api.test-sap.com"
+    config._resource_group = "test-group"
+    return config
 
 
 class TestSAPTransformationIntegration:
@@ -32,7 +32,6 @@ class TestSAPTransformationIntegration:
         optional_params = {
             "temperature": 0.7,
             "max_tokens": 100,
-            "deployment_url": "https://custom.sap.com/deployment/123",
             "model_version": "v1.5",
             "tools": [{"type": "function", "function": {"name": "calculator"}}],
             "frequency_penalty": 0.1,
@@ -46,7 +45,6 @@ class TestSAPTransformationIntegration:
 
         assert "temperature" in model_params
         assert "frequency_penalty" in model_params
-        assert "deployment_url" not in model_params
         assert "model_version" not in model_params
         assert "tools" not in model_params
 
@@ -77,15 +75,14 @@ class TestSAPTransformationIntegration:
                 "expected_in_model": {"temperature", "max_tokens"},
                 "expected_excluded": set(),
             },
-            # Case 2: Parameters with auth/infrastructure components
+            # Case 2: Parameters with framework components
             {
                 "params": {
                     "temperature": 0.8,
-                    "deployment_url": "https://api.sap.com/deployments/test",
                     "max_tokens": 150,
                 },
                 "expected_in_model": {"temperature", "max_tokens"},
-                "expected_excluded": {"deployment_url"},
+                "expected_excluded": set(),
             },
             # Case 3: Parameters with framework components
             {
@@ -104,7 +101,7 @@ class TestSAPTransformationIntegration:
             filtered_params = {
                 k: v
                 for k, v in test_case["params"].items()
-                if k not in {"tools", "model_version", "deployment_url"}
+                if k not in {"tools", "model_version"}
             }
 
             for expected_param in test_case["expected_in_model"]:
@@ -156,7 +153,6 @@ class TestSAPTransformationIntegration:
             ],
             optional_params={
                 "response_format": {"type": "json_object"},
-                "deployment_url": "shouldn't be in results",
             },
             litellm_params={},
             headers={},
@@ -200,7 +196,6 @@ class TestSAPTransformationIntegration:
             ],
             optional_params={
                 "response_format": expected_response_format,
-                "deployment_url": "shouldn't be in results",
             },
             litellm_params={},
             headers={},
@@ -243,7 +238,6 @@ class TestSAPTransformationIntegration:
                 "stream": True,
                 "stream_options": {"chunk_size": 10},
                 "model_version": "latest",
-                "deployment_url": "shouldn't be in results",
             },
             litellm_params={},
             headers={},
@@ -256,7 +250,6 @@ class TestSAPTransformationIntegration:
             model="gpt-4o",
             messages=[{"role": "user", "content": "Hello. Answer {{ ?user_query }}"}],
             optional_params={
-                "deployment_url": "shouldn't be in results",
                 "placeholder_defaults": {"user_query": "default value"},
             },
             litellm_params={},
@@ -274,7 +267,6 @@ class TestSAPTransformationIntegration:
             model="gpt-4o",
             messages=[{"role": "user", "content": "Hello. Answer {{ ?user_query }}"}],
             optional_params={
-                "deployment_url": "shouldn't be in results",
                 "placeholder_values": placeholder_values,
             },
             litellm_params={},
@@ -319,7 +311,6 @@ class TestSAPTransformationIntegration:
                 }
             ],
             optional_params={
-                "deployment_url": "shouldn't be in results",
                 "grounding": grounding_config,
                 "placeholder_values": placeholder_values,
             },
@@ -416,7 +407,6 @@ class TestSAPTransformationIntegration:
             model="gpt-4o",
             messages=[{"role": "user", "content": "Hello."}],
             optional_params={
-                "deployment_url": "shouldn't be in results",
                 "filtering": filtering_config_azure,
             },
             litellm_params={},
@@ -429,7 +419,6 @@ class TestSAPTransformationIntegration:
             model="gpt-4o",
             messages=[{"role": "user", "content": "Hello."}],
             optional_params={
-                "deployment_url": "shouldn't be in results",
                 "filtering": filtering_config_llama,
             },
             litellm_params={},
@@ -474,7 +463,6 @@ class TestSAPTransformationIntegration:
             model="gpt-4o",
             messages=[{"role": "user", "content": "Hello."}],
             optional_params={
-                "deployment_url": "shouldn't be in results",
                 "masking": masking_config,
             },
             litellm_params={},
@@ -560,7 +548,6 @@ class TestSAPTransformationIntegration:
             model="gpt-4o",
             messages=[{"role": "user", "content": "Hello."}],
             optional_params={
-                "deployment_url": "shouldn't be in results",
                 "translation": translation_config,
             },
             litellm_params={},
@@ -600,7 +587,6 @@ class TestSAPTransformationIntegration:
                 model="gpt-4o",
                 messages=[{"role": "user", "content": "Hello."}],
                 optional_params={
-                    "deployment_url": "shouldn't be in results",
                     "fallback_sap_modules": [
                         {
                             "model": model,
@@ -652,8 +638,8 @@ class TestCacheControl:
     """Unit tests for cache_control preservation on message content parts."""
 
     def _transform(self, model: str, messages: list) -> dict:
-        cfg = _make_config()
-        return cfg.transform_request(
+        config = _make_config()
+        return config.transform_request(
             model=model,
             messages=messages,
             optional_params={},
@@ -744,8 +730,8 @@ class TestCacheControl:
             "cache_control": {"type": "ephemeral"},
         }
         messages = [{"role": "user", "content": "Hi"}]
-        cfg = _make_config()
-        body = cfg.transform_request(
+        config = _make_config()
+        body = config.transform_request(
             model="anthropic--claude-3-5-sonnet",
             messages=messages,
             optional_params={"tools": [tool]},
@@ -765,8 +751,8 @@ class TestCacheControl:
             },
         }
         messages = [{"role": "user", "content": "Hi"}]
-        cfg = _make_config()
-        body = cfg.transform_request(
+        config = _make_config()
+        body = config.transform_request(
             model="anthropic--claude-3-5-sonnet",
             messages=messages,
             optional_params={"tools": [tool]},

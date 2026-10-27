@@ -1,5 +1,5 @@
 """
-Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
+Translates from OpenAI's `/v1/embeddings` to SAP GenAI Hub's Orchestration Service `/v2/embeddings`.
 """
 
 from typing import Final, Literal
@@ -16,8 +16,6 @@ from litellm.llms.sap.chat.models import MaskingModuleConfig
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.utils import EmbeddingResponse
-
-_AICORE_EMBEDDING_DEPLOYMENT_URL_ENV_VAR = "AICORE_EMBEDDING_DEPLOYMENT_URL"
 
 from ..chat.handler import GenAIHubOrchestrationError
 from ..credentials import get_token_creator
@@ -105,7 +103,6 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         return resolve_deployment_url(
             self.base_url,
             self.resource_group,
-            _AICORE_EMBEDDING_DEPLOYMENT_URL_ENV_VAR,
             self._fetch_deployment_url,
         )
 
@@ -113,8 +110,6 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         return fetch_deployment_url(
             self.base_url,
             self.headers,
-            "No embedding deployment found in SAP AI Core.",
-            "embedding",
         )
 
     def get_error_class(self, error_message, status_code, headers):

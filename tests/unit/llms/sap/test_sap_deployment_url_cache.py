@@ -1,10 +1,4 @@
-"""Process-wide deployment_url caching for SAP GenAI Hub configs (issue #47096).
-
-The provider map builds a fresh config instance on every LLM call, so an
-instance-scoped cached_property re-ran the orchestration-discovery GET on
-every call. The cache now lives in deployment.py as a single process-wide
-dict keyed on (base_url, resource_group), shared by chat and embed.
-"""
+"""Process-wide deployment_url caching for SAP GenAI Hub configs."""
 
 import pytest
 
