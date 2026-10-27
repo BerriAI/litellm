@@ -41,7 +41,6 @@ from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_api_base
-from litellm.litellm_core_utils.hidden_params import USAGE_COST_BEFORE_LITELLM_STAMP, stamp_billable_usage_cost
 from litellm.litellm_core_utils.internal_call_metadata import without_budget_reservation
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -586,7 +585,7 @@ class BaseResponsesAPIStreamingIterator:
                         else openai_responses_api_chunk.model_copy(update={"response": _billed_response})
                     )
                     self.completed_response = _terminal_chunk
-                    stamp_responses_usage_cost(_billed_response, self.logging_obj)
+                    normalize_responses_usage(_billed_response)
 
                     if _chunk_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED:
                         self._handle_logging_failed_response()
@@ -676,17 +675,10 @@ class BaseResponsesAPIStreamingIterator:
         headers: Final[Mapping[str, object]] = processed if isinstance(processed, Mapping) else EMPTY_MAPPING
         raw_headers: Final[Mapping[str, object]] = raw if isinstance(raw, Mapping) else EMPTY_MAPPING
         # rebuild by value and let existing keys win: sharing the source dicts would alias what the proxy
-        # splats into the client's HTTP headers, and copying non-header keys would carry response_cost.
-        # The provider's own usage.cost travels along, or the stamped bill would be priced as a provider report
-        stamp: Final[Mapping[str, object]] = (
-            {USAGE_COST_BEFORE_LITELLM_STAMP: source[USAGE_COST_BEFORE_LITELLM_STAMP]}
-            if USAGE_COST_BEFORE_LITELLM_STAMP in source
-            else EMPTY_MAPPING
-        )
+        # splats into the client's HTTP headers, and copying non-header keys would carry response_cost
         target.hidden_params = {
             "additional_headers": {**headers},
             "headers": {**raw_headers},
-            **stamp,
             **existing,
         }
 
@@ -1077,7 +1069,7 @@ class BaseResponsesAPIStreamingIterator:
                 "output": _partial_output_items(self._generated_content),
             }
         )
-        stamp_responses_usage_cost(partial, self.logging_obj)
+        normalize_responses_usage(partial)
         return ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=partial)
 
     def _note_yielded_event(self, event: ResponsesAPIStreamingResponse) -> None:
@@ -1749,20 +1741,14 @@ def _estimate_usage_safely(
         return None
 
 
-def stamp_responses_usage_cost(
-    response_obj: ResponsesAPIResponse | None, logging_obj: LiteLLMLoggingObj | None
-) -> None:
-    if response_obj is None or logging_obj is None:
+def normalize_responses_usage(response_obj: ResponsesAPIResponse | None) -> None:
+    """A terminal response built off an untyped dict carries its usage as a dict, logging and the proxy read a model."""
+    if response_obj is None:
         return
     usage_obj: Final[ResponseAPIUsage | None] = _usage_as_model(getattr(response_obj, "usage", None))
     if usage_obj is None:
         return
-    response_obj.usage = usage_obj  # rebind-ok: the stamped cost has to ride on the response the client receives
-    try:
-        cost: Final[float | None] = logging_obj.response_cost_calculator(result=response_obj)
-    except Exception:
-        return
-    stamp_billable_usage_cost(response_obj, usage_obj, cost)
+    response_obj.usage = usage_obj  # rebind-ok: the typed usage has to ride on the response the client receives
 
 
 def opening_item_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
@@ -1796,7 +1782,7 @@ def build_synthetic_response_events(
     chunk_size: int,
 ) -> list[ResponsesAPIStreamingResponse]:
     openai_types: Final = get_openai_response_types()
-    stamp_responses_usage_cost(transformed, logging_obj)
+    normalize_responses_usage(transformed)
 
     events: Final[list[ResponsesAPIStreamingResponse]] = [
         _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED, transformed),

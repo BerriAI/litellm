@@ -13,7 +13,7 @@ from typing_extensions import ReadOnly, Required
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import chunk_usage, provider_reported_usage_cost
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params, stamp_billable_usage_cost
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import BEDROCK_TRACE_FIELDS, object_items, object_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,  # pyright: ignore[reportUnknownVariableType]  # response param accepts an untyped dict
@@ -1411,13 +1411,13 @@ def _set_stream_builder_response_cost(
     _set_hidden_response_cost(response, response_cost)
 
 
-def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
+def _stamp_streaming_response_cost(response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
     if logging_obj is None:
         return
-    billed: Final = stamp_billable_usage_cost(response, usage, logging_obj.response_cost_calculator(result=response))
-    if billed is None:
+    computed_cost: Final = logging_obj.response_cost_calculator(result=response)
+    if not isinstance(computed_cost, (int, float)) or computed_cost <= 0:
         return
-    _set_hidden_response_cost(response, billed)
+    _set_hidden_response_cost(response, float(computed_cost))
 
 
 def _field_of(value: object, name: str) -> object:
@@ -1587,7 +1587,7 @@ def stream_chunk_builder(
                 response,
                 logging_obj,
             )
-            _stamp_streaming_usage_cost(usage, response, logging_obj)
+            _stamp_streaming_response_cost(response, logging_obj)
             _set_stream_builder_response_cost(
                 response,
                 logging_obj,
@@ -1775,7 +1775,7 @@ def stream_chunk_builder(
                 )
                 break
 
-        _stamp_streaming_usage_cost(usage, response, logging_obj)
+        _stamp_streaming_response_cost(response, logging_obj)
         _set_stream_builder_response_cost(
             response,
             logging_obj,

@@ -25,7 +25,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, provider_reported_usage_cost
 from litellm.litellm_core_utils.cost_discount import resolve_cost_discount
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, is_decisions_call_type
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, provider_stated_usage_cost
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
@@ -1560,16 +1560,6 @@ def _store_cost_breakdown_in_logging_obj(
         # Don't fail the main cost calculation if breakdown storage fails
 
 
-def _with_provider_stated_cost(completion_response: object, usage: Usage | None) -> Usage | None:
-    if usage is None:
-        return usage
-    stamped_cost: Final = getattr(usage, "cost", None)
-    stated_cost: Final = provider_stated_usage_cost(completion_response, stamped_cost)
-    if stated_cost is stamped_cost:
-        return usage
-    return usage.model_copy(update=MappingProxyType({"cost": stated_cost}))
-
-
 def _without_provider_stated_cost(usage: Usage | None) -> Usage | None:
     if usage is None or getattr(usage, "cost", None) is None:
         return usage
@@ -1712,9 +1702,7 @@ def completion_cost(
         cache_creation_input_tokens: int | None = None
         cache_read_input_tokens: int | None = None
         audio_transcription_file_duration: float = 0.0
-        provider_usage_object: Final = _with_provider_stated_cost(
-            completion_response, get_usage_object(completion_response=completion_response)
-        )
+        provider_usage_object: Final = get_usage_object(completion_response=completion_response)
         cost_per_token_usage_object: Final[Usage | None] = (
             _without_provider_stated_cost(provider_usage_object)
             if custom_pricing or base_model is not None
