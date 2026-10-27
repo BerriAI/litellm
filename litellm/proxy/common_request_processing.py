@@ -273,6 +273,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 )
 from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -4724,7 +4725,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _completion_cost_or_none(
-        model_response: ModelResponse, model_name: str, service_tier: str | None
+        model_response: ModelResponse | ResponsesAPIResponse, model_name: str, service_tier: str | None
     ) -> float | None:
         try:
             return litellm.completion_cost(
@@ -4735,7 +4736,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _logging_obj_cost_or_none(
-        model_response: ModelResponse, litellm_logging_obj: LiteLLMLoggingObj
+        model_response: ModelResponse | ResponsesAPIResponse, litellm_logging_obj: LiteLLMLoggingObj
     ) -> float | None:
         # Pricing a frame stamps cost_breakdown and, on failure, the cost-failure debug key onto
         # the live logging object. The pass-through handlers never recompute either one, so a
@@ -4762,7 +4763,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _streamed_usage_cost(
-        model_response: ModelResponse,
+        model_response: ModelResponse | ResponsesAPIResponse,
         model_name: str,
         service_tier: str | None,
         litellm_logging_obj: LiteLLMLoggingObj | None,
