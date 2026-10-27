@@ -3256,12 +3256,17 @@ class ProxyLogging:
                 if resolved.enforces_request_content is True:
                     has_content_enforcer = True
 
-        # A hook set on the instance runs per chunk only beside a guardrail,
-        # the one case where the per-chunk loop used to reach it.
+        # A hook set on the instance runs per chunk only when a guardrail or a
+        # class-level override is present, the cases where the per-chunk loop
+        # used to reach it.
+        reaches_instance_hooks: Final = has_guardrail or any(
+            _overrides_streaming_chunk_hook(callback) for callback in resolved_callbacks
+        )
         streaming_chunk_overrides: Final = tuple(
             callback
             for callback in resolved_callbacks
-            if _overrides_streaming_chunk_hook(callback) or (has_guardrail and _assigns_streaming_chunk_hook(callback))
+            if _overrides_streaming_chunk_hook(callback)
+            or (reaches_instance_hooks and _assigns_streaming_chunk_hook(callback))
         )
         caps: Final = _CallbackCapabilities(
             has_post_call_response_headers=has_post_call_response_headers,

@@ -36,6 +36,8 @@ _OPT_IN: Final = "opt-in-chunk-check"
 _INHERITED: Final = "inherited-chunk-check"
 _RAISING: Final = "raising-chunk-check"
 _INSTANCE: Final = "instance-chunk-check"
+_CLASS_LOGGER: Final = "class-chunk-logger"
+_INSTANCE_LOGGER: Final = "instance-chunk-logger"
 _CHUNK_ERROR: Final = "Chunk check failed"
 _MODULE: Final = "request_only_guardrail"
 _LOG_ENV: Final = "REQUEST_ONLY_GUARDRAIL_LOG"
@@ -55,6 +57,7 @@ import re
 from fastapi import HTTPException
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
 
 MARKER = re.compile("marker-([0-9a-f]{{32}})")
 
@@ -105,6 +108,26 @@ class RaisingPerChunkGuardrail(CustomGuardrail):
         if "word3 " in response:
             raise HTTPException(status_code=400, detail={{"error": "{_CHUNK_ERROR}"}})
         return None
+
+
+class ClassChunkLogger(CustomLogger):
+    async def async_post_call_streaming_hook(self, user_api_key_dict, response):
+        _log(_marker_in(response), "chunk:{_CLASS_LOGGER}")
+        return None
+
+
+class InstanceChunkLogger(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.async_post_call_streaming_hook = self._see_chunk
+
+    async def _see_chunk(self, user_api_key_dict, response):
+        _log(_marker_in(response), "chunk:{_INSTANCE_LOGGER}")
+        return None
+
+
+class_chunk_logger = ClassChunkLogger()
+instance_chunk_logger = InstanceChunkLogger()
 '''
 
 
@@ -356,6 +379,17 @@ def instance_rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFact
         session_gateway,
         tmp_path_factory.mktemp("request-only-guardrail-beside-instance-per-chunk-hook"),
         [*_request_only(), _guardrail(_INSTANCE, "InstancePerChunkGuardrail", "post_call")],
+    ) as built:
+        yield built
+
+
+@pytest.fixture(scope="module")
+def logger_rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
+    with _rig(
+        session_gateway,
+        tmp_path_factory.mktemp("per-chunk-loggers-without-guardrails"),
+        [],
+        {"callbacks": [f"{_MODULE}.class_chunk_logger", f"{_MODULE}.instance_chunk_logger"]},
     ) as built:
         yield built
 
@@ -617,6 +651,13 @@ def test_a_per_chunk_hook_set_on_the_instance_still_sees_every_chunk(instance_ri
     text: Final = _stream(instance_rig, "chat", marker)
     _assert_every_chunk_seen(instance_rig, marker, _INSTANCE, text)
     assert _events(instance_rig, marker).count("post_call") <= 1, _events(instance_rig, marker)
+
+
+def test_a_per_chunk_hook_set_on_the_instance_runs_beside_a_class_hook_without_guardrails(logger_rig: Rig) -> None:
+    marker: Final = uuid.uuid4().hex
+    text: Final = _stream(logger_rig, "chat", marker)
+    _assert_every_chunk_seen(logger_rig, marker, _CLASS_LOGGER, text)
+    _assert_every_chunk_seen(logger_rig, marker, _INSTANCE_LOGGER, text)
 
 
 def test_a_model_level_per_chunk_guardrail_sees_every_chunk(opt_in_rig: Rig) -> None:

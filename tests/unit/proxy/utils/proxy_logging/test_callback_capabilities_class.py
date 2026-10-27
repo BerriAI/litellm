@@ -9,13 +9,14 @@ Covers ``_callback_capabilities`` (the cached deriver),
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Final
 
 import pytest
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging, _CallbackCapabilities
 
 
@@ -49,12 +50,12 @@ class _OverridesPreCall(CustomLogger):
 
 
 def _instance_per_chunk_logger() -> CustomLogger:
-    logger = _PlainLogger()
+    logger: Final = _PlainLogger()
 
-    async def per_chunk(user_api_key_dict, response):
+    async def per_chunk(user_api_key_dict: UserAPIKeyAuth, response: str) -> None:
         return None
 
-    logger.async_post_call_streaming_hook = per_chunk  # type: ignore[method-assign]
+    vars(logger)["async_post_call_streaming_hook"] = per_chunk
     return logger
 
 
