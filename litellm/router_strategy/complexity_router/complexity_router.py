@@ -773,6 +773,41 @@ def _newest_turn_is_human_ask(
     return _last_human_ask_index(messages, marker_pairs) == newest_activity
 
 
+_CODEX_TURN_METADATA_KEY: Final = "x-codex-turn-metadata"
+_CODEX_COMPACTION_SUMMARY_PREFIX: Final = (
+    "Another language model started to solve this problem and produced a summary of its thinking process."
+)
+
+
+class _CodexTurnMetadata(LiteLLMBaseModel):
+    request_kind: str | None = None
+
+
+def _codex_request_kind(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return _CodexTurnMetadata.model_validate_json(value).request_kind
+    except ValidationError:
+        return None
+
+
+def _codex_turn_metadata_values(request_kwargs: Mapping[str, object]) -> Iterator[object]:
+    """Codex sends its turn metadata in the Responses body's `client_metadata` and projects it onto a
+    header of the same name for transports without that field."""
+    client_metadata: Final = request_kwargs.get("client_metadata")
+    if isinstance(client_metadata, Mapping):
+        yield client_metadata.get(_CODEX_TURN_METADATA_KEY)
+    proxy_request: Final = request_kwargs.get("proxy_server_request")
+    headers: Final = proxy_request.get("headers") if isinstance(proxy_request, Mapping) else None
+    if isinstance(headers, Mapping):
+        yield headers.get(_CODEX_TURN_METADATA_KEY)
+
+
+def _is_codex_compaction_request(request_kwargs: Mapping[str, object]) -> bool:
+    return any(_codex_request_kind(value) == "compaction" for value in _codex_turn_metadata_values(request_kwargs))
+
+
 def _iter_system_scope_texts(
     body_system: object,
     messages: Sequence[Mapping[str, object]],
@@ -4263,14 +4298,31 @@ class ComplexityRouter(CustomLogger):
     def _reminder_markers_for_request(self, request_kwargs: Mapping[str, object]) -> tuple[tuple[str, str], ...]:
         if self.config.reminder_markers is not None:
             return self._reminder_markers
-        if any(
+        return _CODEX_REMINDER_MARKERS if self._is_codex_request(request_kwargs) else _DEFAULT_REMINDER_MARKERS
+
+    @staticmethod
+    def _is_codex_request(request_kwargs: Mapping[str, object]) -> bool:
+        return any(
             is_codex_user_agent(user_agent)
             for metadata_key in ("litellm_metadata", "metadata")
             if isinstance(metadata := request_kwargs.get(metadata_key), Mapping)
             if isinstance(user_agent := metadata.get("user_agent"), str)
-        ):
-            return _CODEX_REMINDER_MARKERS
-        return _DEFAULT_REMINDER_MARKERS
+        )
+
+    def _is_codex_compaction_lifecycle(
+        self,
+        request_kwargs: Mapping[str, object],
+        resolved_messages: Sequence[Mapping[str, object]] | None,
+        marker_pairs: tuple[tuple[str, str], ...],
+    ) -> bool:
+        """Codex's compaction call and the first request after it carry a synthetic user turn (the
+        summarization prompt, then the summary), so `user_turn` must read both as continuations."""
+        if _is_codex_compaction_request(request_kwargs):
+            return True
+        if not resolved_messages or not self._is_codex_request(request_kwargs):
+            return False
+        newest_ask: Final = _newest_turn_ask(resolved_messages, marker_pairs)
+        return newest_ask is not None and newest_ask.startswith(_CODEX_COMPACTION_SUMMARY_PREFIX)
 
     @staticmethod
     def _iter_metadata_dicts(request_kwargs: dict) -> list[dict]:
@@ -4380,8 +4432,10 @@ class ComplexityRouter(CustomLogger):
 
         # In 'user_turn' mode a held pin is replayed only on continuation turns; a new human
         # ask falls through and re-classifies. session_affinity restores pin-first for asks too.
-        pin_replay_allowed: Final = bool(self.config.session_affinity) or not _newest_turn_is_human_ask(
-            resolved_messages, marker_pairs
+        pin_replay_allowed: Final = (
+            bool(self.config.session_affinity)
+            or not _newest_turn_is_human_ask(resolved_messages, marker_pairs)
+            or self._is_codex_compaction_lifecycle(request_kwargs, resolved_messages, marker_pairs)
         )
 
         if cache_key is not None and pin_replay_allowed:
