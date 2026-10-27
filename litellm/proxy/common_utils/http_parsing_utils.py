@@ -5,16 +5,19 @@ from types import MappingProxyType, UnionType
 from typing import Annotated, Any, Final, Literal, Union, get_args, get_origin
 
 import orjson
-from fastapi import Request, UploadFile, status
+from fastapi import HTTPException, Request, UploadFile, status
 from pydantic import TypeAdapter, ValidationError
 from starlette._utils import get_route_path
-from starlette.requests import HTTPConnection
+from starlette.datastructures import FormData
+from starlette.requests import ClientDisconnect, HTTPConnection
 from typing_extensions import NotRequired, ReadOnly, Required, assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX,
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
+    LITELLM_CLIENT_DISCONNECT_DETAIL,
+    LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB,
 )
 from litellm.integrations.otel.runtime import phase_event
@@ -207,6 +210,29 @@ def _parse_form_metadata(raw_metadata: str) -> object:
     return parsed
 
 
+async def _read_form_data(request: Request) -> FormData:
+    try:
+        form_data: Final = await request.form()
+        _mark_body_received(_declared_content_length(request.headers))
+    except ClientDisconnect:
+        raise
+    except Exception as e:
+        # ``request.form()`` raises on malformed multipart (missing
+        # boundary, malformed chunk encoding, …). Surface as 400 so
+        # the auth-time pre-read does not silently cache ``{}`` while
+        # a later raw-body re-read sees the original payload —
+        # banned-param checks must see the same body the handler
+        # acts on.
+        verbose_proxy_logger.error("Invalid form payload: %s", e)
+        raise ProxyException(
+            message=f"Invalid form payload: {e}",
+            type="invalid_request_error",
+            param="request_body",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    return form_data
+
+
 async def read_request_body(request: Request | None) -> dict:
     """
     Safely read the request body and parse it as JSON.
@@ -217,10 +243,9 @@ async def read_request_body(request: Request | None) -> dict:
     Returns:
     - dict: Parsed request data as a dictionary or an empty dictionary if parsing fails
     """
+    if request is None:
+        return {}
     try:
-        if request is None:
-            return {}
-
         if is_otlp_trace_request(request):
             return {}
 
@@ -237,24 +262,7 @@ async def read_request_body(request: Request | None) -> dict:
             _mark_body_received(len(binary_body))
             parsed_body = _parse_binary_body(binary_body)
         elif _is_form_content_type(content_type):
-            try:
-                form_data: Final = await request.form()
-                _mark_body_received(_declared_content_length(request.headers))
-            except Exception as e:
-                # ``request.form()`` raises on malformed multipart (missing
-                # boundary, malformed chunk encoding, …). Surface as 400 so
-                # the auth-time pre-read does not silently cache ``{}`` while
-                # a later raw-body re-read sees the original payload —
-                # banned-param checks must see the same body the handler
-                # acts on.
-                verbose_proxy_logger.error("Invalid form payload: %s", e)
-                raise ProxyException(
-                    message=f"Invalid form payload: {e}",
-                    type="invalid_request_error",
-                    param="request_body",
-                    code=status.HTTP_400_BAD_REQUEST,
-                )
-            form_body: Final = dict(form_data)
+            form_body: Final = dict(await _read_form_data(request))
             raw_metadata: Final = form_body.get("metadata")
             parsed_body = (
                 {**form_body, "metadata": _parse_form_metadata(raw_metadata)}
@@ -323,8 +331,8 @@ async def read_request_body(request: Request | None) -> dict:
         )
         from litellm.proxy.lens.buffering import LensRoute
 
-        route: Final[object] = request.scope.get("route") if request is not None else None
-        if request is not None and (
+        route: Final[object] = request.scope.get("route")
+        if (
             request_dispatched_to_pass_through_endpoint(request)
             or request_dispatched_to_provider_pass_through(request)
             or isinstance(route, LensRoute)
@@ -346,6 +354,17 @@ async def read_request_body(request: Request | None) -> dict:
         # Re-raise ProxyException as-is
         verbose_proxy_logger.error("Invalid JSON payload received: %s", e)
         raise
+    except ClientDisconnect as e:
+        from litellm.proxy.proxy_server import (
+            _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; the Starlette HTTPException handler does not stamp the OTel server span opened at auth time, so the body reader must before it aborts
+        )
+
+        verbose_proxy_logger.info("Client disconnected before the request body was fully received")
+        disconnected: Final = HTTPException(
+            status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, detail=LITELLM_CLIENT_DISCONNECT_DETAIL
+        )
+        _close_dangling_otel_server_span(request, LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, exc=disconnected)
+        raise disconnected from e
     except Exception as e:
         # Catch unexpected errors to avoid crashes
         verbose_proxy_logger.exception("Unexpected error reading request body - %s", e)
