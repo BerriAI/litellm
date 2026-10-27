@@ -9,6 +9,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 from litellm.proxy._types import (
     CommonProxyErrors,
@@ -166,6 +167,16 @@ class _AccessGroupTx(Protocol):
     def litellm_agentstable(self) -> _AgentTable: ...
 
 
+class _AccessGroupTransaction(Protocol):
+    async def __aenter__(self) -> _AccessGroupTx: ...
+
+    async def __aexit__(self, *exc_info: object) -> None: ...
+
+
+def _access_group_transaction(prisma_client: PrismaClient) -> _AccessGroupTransaction:
+    return prisma_client.db.tx()
+
+
 def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
@@ -189,6 +200,10 @@ def _tool_permissions_json(value: Mapping[str, Sequence[str]] | None) -> "Json":
     from prisma import Json  # noqa: PLC0415  # local import: prisma may be ungenerated at module load in some tools
 
     return Json(None) if value is None else Json({server: list(tools) for server, tools in value.items()})
+
+
+def _explicitly_set_fields(data: AccessGroupUpdateRequest) -> Mapping[str, object]:
+    return data.model_dump(exclude_unset=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -539,7 +554,7 @@ async def create_access_group(
 
     try:
         tx: _AccessGroupTx
-        async with prisma_client.db.tx() as tx:
+        async with _access_group_transaction(prisma_client) as tx:
             existing: Final = await tx.litellm_accessgrouptable.find_unique(
                 where={"access_group_name": data.access_group_name}
             )
@@ -647,7 +662,7 @@ async def update_access_group(
     _require_proxy_admin(user_api_key_dict)
     prisma_client: Final = get_prisma_client_or_throw(CommonProxyErrors.db_not_connected_error.value)
 
-    update_fields: Final = data.model_dump(exclude_unset=True)
+    update_fields: Final = _explicitly_set_fields(data)
     update_data: Final[dict] = {"updated_by": user_api_key_dict.user_id}
     for field, value in update_fields.items():
         if field in (
@@ -658,7 +673,7 @@ async def update_access_group(
             "access_agent_ids",
             "access_skill_names",
         ):
-            value = list(value or ())
+            value = list(iter_items(value or ()))
         update_data[field] = (
             _tool_permissions_json(data.mcp_tool_permissions) if field == "mcp_tool_permissions" else value
         )
@@ -672,7 +687,7 @@ async def update_access_group(
 
     try:
         tx: _AccessGroupTx
-        async with prisma_client.db.tx() as tx:
+        async with _access_group_transaction(prisma_client) as tx:
             # Read inside the transaction so delta computation is consistent with the write,
             # avoiding a TOCTOU race where a concurrent update could make deltas stale.
             existing: Final = await tx.litellm_accessgrouptable.find_unique(where={"access_group_id": access_group_id})
@@ -687,10 +702,10 @@ async def update_access_group(
             old_team_ids: Final[set[str]] = set(attached[access_group_id])
             old_key_ids: Final[set[str]] = set(existing.assigned_key_ids or [])
             new_team_ids: Final[set[str]] = (
-                set(update_fields["assigned_team_ids"] or []) if "assigned_team_ids" in update_fields else old_team_ids
+                set(data.assigned_team_ids or []) if "assigned_team_ids" in update_fields else old_team_ids
             )
             new_key_ids: Final[set[str]] = (
-                set(update_fields["assigned_key_ids"] or []) if "assigned_key_ids" in update_fields else old_key_ids
+                set(data.assigned_key_ids or []) if "assigned_key_ids" in update_fields else old_key_ids
             )
 
             teams_to_add = list(new_team_ids - old_team_ids)
@@ -747,7 +762,7 @@ async def delete_access_group(
         affected_key_tokens: list[str] = []
 
         tx: _AccessGroupTx
-        async with prisma_client.db.tx() as tx:
+        async with _access_group_transaction(prisma_client) as tx:
             existing: Final = await tx.litellm_accessgrouptable.find_unique(where={"access_group_id": access_group_id})
             if existing is None:
                 raise HTTPException(

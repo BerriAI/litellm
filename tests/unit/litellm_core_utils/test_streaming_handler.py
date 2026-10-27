@@ -1,5 +1,7 @@
 import asyncio
+import datetime
 import json
+import queue
 import sys
 import threading
 import time
@@ -12,12 +14,12 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import pytest
 from openai.types.chat import ChatCompletionChunk
-from pydantic import BaseModel
-
+from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm import verbose_logger
 from litellm._logging import session_id_var, trace_id_var
 from litellm.exceptions import MidStreamFallbackError
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import (
@@ -26,6 +28,7 @@ from litellm.litellm_core_utils.streaming_handler import (
     _ProviderChunkParsed,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.responses.mcp.chat_completions_handler import _add_mcp_metadata_to_response
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     Delta,
@@ -33,6 +36,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     PromptTokensDetailsWrapper,
     StreamingChoices,
+    StandardLoggingPayload,
     Usage,
 )
 from litellm.utils import ModelResponseListIterator
@@ -598,6 +602,91 @@ async def test_streaming_handler_with_usage(
                 assert chunk.usage == final_usage_block
             chunk_has_usage = True
     assert chunk_has_usage
+
+
+def _usage_test_logging(
+    caller_stream_options: dict[str, bool] | None, stream_usage_injected: bool = False
+) -> Logging:
+    logging_obj: Final = Logging(
+        model="hosted_vllm/m",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=1_790_000_000.0,
+        litellm_call_id="12345",
+        function_id="1245",
+        kwargs={"_litellm_stream_usage_injected": True} if stream_usage_injected else {},
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={}, optional_params={}, model="hosted_vllm/m", stream_options=caller_stream_options
+    )
+    return logging_obj
+
+
+@pytest.mark.parametrize(
+    ("caller_stream_options", "stream_usage_injected", "usage_chunk_choice_count"),
+    [
+        ({"include_usage": True}, False, 0),
+        (None, False, 1),
+        ({"include_usage": True}, True, 1),
+    ],
+    ids=["caller-asked", "provider-handler-injected", "proxy-injected"],
+)
+@pytest.mark.parametrize("plain_iterator", [False, True])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_usage_chunk_has_empty_choices_only_for_callers_that_asked(
+    sync_mode: bool,
+    plain_iterator: bool,
+    caller_stream_options: dict[str, bool] | None,
+    stream_usage_injected: bool,
+    usage_chunk_choice_count: int,
+):
+    usage: Final = Usage(prompt_tokens=5, completion_tokens=1, total_tokens=6)
+    provider_chunks: Final = [
+        ModelResponseStream(id="c1", choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content="ok"))]),
+        ModelResponseStream(id="c1", choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")]),
+        ModelResponseStream(id="c1", choices=[], provider_specific_fields={"citations": ["a"]}),
+        ModelResponseStream(id="c1", choices=[], usage=usage),
+    ]
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=(
+            iter(provider_chunks) if plain_iterator else ModelResponseListIterator(model_responses=provider_chunks)
+        ),
+        model="hosted_vllm/m",
+        custom_llm_provider="hosted_vllm",
+        logging_obj=_usage_test_logging(caller_stream_options, stream_usage_injected),
+        stream_options={"include_usage": True},
+    )
+
+    chunks: Final = list(wrapper) if sync_mode else [chunk async for chunk in wrapper]
+
+    assert [len(chunk.choices) for chunk in chunks] == [1, 1, 0, usage_chunk_choice_count]
+    assert chunks[2].provider_specific_fields == {"citations": ["a"]}
+    assert [getattr(chunk, "usage", None) is not None for chunk in chunks] == [False, False, False, True]
+    assert chunks[-1].usage.total_tokens == 6
+
+
+@pytest.mark.asyncio
+async def test_plain_iterator_stream_keeps_usage_on_its_chunk_when_usage_was_not_requested():
+    usage: Final = Usage(prompt_tokens=5, completion_tokens=1, total_tokens=6)
+    provider_chunks: Final = [
+        ModelResponseStream(id="c1", choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content="ok"))]),
+        ModelResponseStream(
+            id="c1", choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")], usage=usage
+        ),
+    ]
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(provider_chunks),
+        model="hosted_vllm/m",
+        custom_llm_provider="hosted_vllm",
+        logging_obj=_usage_test_logging(None),
+    )
+
+    chunks: Final = [chunk async for chunk in wrapper]
+
+    assert [chunk.choices[0].finish_reason for chunk in chunks] == [None, "stop"]
+    assert chunks[-1].usage.total_tokens == 6
 
 
 @pytest.mark.parametrize("sync_mode", [False])
@@ -2731,6 +2820,123 @@ def test_raise_on_model_repetition_tolerates_empty_choices(
         wrapper.raise_on_model_repetition()
 
 
+_STUCK_CHUNK: Final = "the model is stuck on this"
+_STUCK_PROVIDER_CHUNK_CAP: Final = 10 * litellm.REPEATED_STREAMING_CHUNK_LIMIT
+
+
+class _StuckProvider:
+    def __init__(self) -> None:
+        self.closed_early = threading.Event()
+        self.chunks_sent = 0
+
+    def _next_chunk(self) -> ModelResponseStream:
+        self.chunks_sent += 1
+        return _make_chunk(_STUCK_CHUNK)
+
+    def sync_stream(self) -> Iterator[ModelResponseStream]:
+        try:
+            yield from (self._next_chunk() for _ in range(_STUCK_PROVIDER_CHUNK_CAP))
+        except GeneratorExit:
+            self.closed_early.set()
+            raise
+
+    async def async_stream(self) -> AsyncIterator[ModelResponseStream]:
+        try:
+            for _ in range(_STUCK_PROVIDER_CHUNK_CAP):
+                yield self._next_chunk()
+        except GeneratorExit:
+            self.closed_early.set()
+            raise
+
+
+class _StuckStreamFailureRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures: Final = queue.SimpleQueue[str]()
+
+    def log_failure_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        self.failures.put(str(cast(Mapping[str, object], kwargs)["exception"]))
+
+    async def async_log_failure_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.failures.put(str(cast(Mapping[str, object], kwargs)["exception"]))
+
+
+def _stuck_stream_wrapper(
+    provider_stream: Iterator[ModelResponseStream] | AsyncIterator[ModelResponseStream],
+    call_type: Literal["completion", "acompletion"],
+    recorder: _StuckStreamFailureRecorder,
+) -> CustomStreamWrapper:
+    logging_obj: Final = Logging(
+        model="test-model",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type=call_type,
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id=f"stuck-stream-{call_type}",
+        function_id=f"stuck-stream-{call_type}",
+        dynamic_failure_callbacks=[recorder],
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="test-model",
+        optional_params={},
+        litellm_params=get_litellm_params(custom_llm_provider="openai", acompletion=call_type == "acompletion"),
+    )
+    return CustomStreamWrapper(
+        completion_stream=provider_stream,
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_stream_stuck_on_one_chunk_closes_the_provider_stream_and_logs_one_failure():
+    """https://github.com/BerriAI/litellm/issues/19428 and https://github.com/BerriAI/litellm/issues/13786"""
+    provider: Final = _StuckProvider()
+    recorder: Final = _StuckStreamFailureRecorder()
+    wrapper: Final = _stuck_stream_wrapper(provider.async_stream(), "acompletion", recorder)
+
+    with pytest.raises(Exception, match="repeating the same chunk"):
+        async for _ in wrapper:
+            pass
+    assert provider.closed_early.is_set()
+    assert provider.chunks_sent <= litellm.REPEATED_STREAMING_CHUNK_LIMIT + 1
+    chunks_sent_at_failure: Final = provider.chunks_sent
+
+    with pytest.raises(StopAsyncIteration):
+        await wrapper.__anext__()
+    await wrapper.wait_for_failure_logging(timeout=5)
+
+    assert provider.chunks_sent == chunks_sent_at_failure
+    assert "repeating the same chunk" in recorder.failures.get_nowait()
+    assert recorder.failures.empty()
+
+
+def test_sync_stream_stuck_on_one_chunk_closes_the_provider_stream_and_logs_one_failure():
+    """Sync counterpart of the async test above"""
+    provider: Final = _StuckProvider()
+    recorder: Final = _StuckStreamFailureRecorder()
+    wrapper: Final = _stuck_stream_wrapper(provider.sync_stream(), "completion", recorder)
+
+    with pytest.raises(Exception, match="repeating the same chunk"):
+        for _ in wrapper:
+            pass
+    assert provider.closed_early.is_set()
+    assert provider.chunks_sent <= litellm.REPEATED_STREAMING_CHUNK_LIMIT + 1
+    chunks_sent_at_failure: Final = provider.chunks_sent
+    assert "repeating the same chunk" in recorder.failures.get(timeout=5)
+
+    with pytest.raises(StopIteration):
+        next(wrapper)
+
+    assert provider.chunks_sent == chunks_sent_at_failure
+    with pytest.raises(queue.Empty):
+        recorder.failures.get(timeout=0.5)
+
+
 def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
     """
     Test that provider-reported usage from a post-finish_reason chunk
@@ -2818,6 +3024,238 @@ def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
     assert (
         hidden_usage.completion_tokens == 135
     ), f"Expected completion_tokens=135 from provider, got {hidden_usage.completion_tokens}"
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("ends_with_finish_chunk", [True, False])
+@pytest.mark.asyncio
+async def test_stream_without_provider_usage_falls_back_to_the_token_estimate(
+    sync_mode: bool, ends_with_finish_chunk: bool
+) -> None:
+    model: Final = "gpt-4o"
+    messages: Final = [{"role": "user", "content": "Write a long sentence about a fox. " * 30}]
+    text: Final = "The quick brown fox jumps over the lazy dog. " * 20
+    content_chunk: Final = ModelResponseStream(
+        id="chatcmpl-no-usage",
+        created=1741037890,
+        model=model,
+        choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content=text))],
+    )
+    finish_chunk: Final = ModelResponseStream(
+        id="chatcmpl-no-usage",
+        created=1741037890,
+        model=model,
+        choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(
+            model_responses=[content_chunk, finish_chunk] if ends_with_finish_chunk else [content_chunk]
+        ),
+        model=model,
+        custom_llm_provider="openai",
+        logging_obj=Logging(
+            model=model,
+            messages=messages,
+            stream=True,
+            call_type="completion",
+            start_time=datetime.datetime(2025, 3, 3, 21, 38, 10),
+            litellm_call_id="no-usage-call",
+            function_id="no-usage-fn",
+        ),
+        stream_options=None,
+    )
+
+    yielded: Final = (
+        [(chunk, chunk._hidden_params.get("usage")) for chunk in wrapper]
+        if sync_mode
+        else [(chunk, chunk._hidden_params.get("usage")) async for chunk in wrapper]
+    )
+    collected: Final = [chunk for chunk, _ in yielded]
+
+    expected: Final = (
+        litellm.token_counter(model=model, messages=messages),
+        litellm.token_counter(model=model, text=text, count_response_tokens=True),
+    )
+    assembled: Final = litellm.stream_chunk_builder(chunks=collected, messages=messages)
+    assert assembled is not None
+    assert (assembled.usage.prompt_tokens, assembled.usage.completion_tokens) == expected
+    last_chunk, usage_when_yielded = yielded[-1]
+    assert usage_when_yielded is not None
+    usage_after_drain: Final = last_chunk._hidden_params["usage"]
+    assert (usage_after_drain.prompt_tokens, usage_after_drain.completion_tokens) == expected
+
+    rates: Final = litellm.model_cost[model]
+    spend: Final = expected[0] * rates["input_cost_per_token"] + expected[1] * rates["output_cost_per_token"]
+    assert litellm.completion_cost(completion_response=assembled) == pytest.approx(spend)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_stream_with_usage_after_the_finish_chunk_bills_only_the_reported_usage(sync_mode: bool) -> None:
+    model: Final = "gpt-4o"
+    messages: Final = [{"role": "user", "content": "Write a long sentence about a fox. " * 30}]
+    text: Final = "The quick brown fox jumps over the lazy dog. " * 20
+    reported: Final = (6, 20)
+    chunks: Final = [
+        ModelResponseStream(id="cmpl-late-usage", created=1741037890, model=model, choices=choices, usage=usage)
+        for choices, usage in (
+            ([StreamingChoices(index=0, delta=Delta(role="assistant", content=text))], None),
+            ([StreamingChoices(index=0, delta=Delta(content=""), finish_reason="length")], None),
+            ([], Usage(prompt_tokens=reported[0], completion_tokens=reported[1], total_tokens=sum(reported))),
+        )
+    ]
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model=model,
+        custom_llm_provider="openai",
+        logging_obj=Logging(
+            model=model,
+            messages=messages,
+            stream=True,
+            call_type="completion",
+            start_time=datetime.datetime(2025, 3, 3, 21, 38, 10),
+            litellm_call_id="late-usage-call",
+            function_id="late-usage-fn",
+        ),
+        stream_options=None,
+    )
+
+    collected: Final = [chunk for chunk in wrapper] if sync_mode else [chunk async for chunk in wrapper]
+
+    usage_after_drain: Final = collected[-1]._hidden_params["usage"]
+    assert (usage_after_drain.prompt_tokens, usage_after_drain.completion_tokens) == reported
+    assembled: Final = litellm.stream_chunk_builder(chunks=collected, messages=messages)
+    assert assembled is not None
+    rates: Final = litellm.model_cost[model]
+    spend: Final = reported[0] * rates["input_cost_per_token"] + reported[1] * rates["output_cost_per_token"]
+    assert litellm.completion_cost(completion_response=assembled) == pytest.approx(spend)
+
+
+class _LoggedResponseRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.responses: list[object] = []
+        self.logged: Final = threading.Event()
+
+    def log_success_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        self.responses.append(response_obj)
+        self.logged.set()
+
+    async def async_log_success_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.responses.append(response_obj)
+        self.logged.set()
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_stream_without_provider_usage_logs_the_estimate_with_the_final_chunk_mcp_metadata(
+    sync_mode: bool,
+) -> None:
+    model: Final = "gpt-4o"
+    messages: Final = [{"role": "user", "content": "Write a long sentence about a fox. " * 30}]
+    text: Final = "The quick brown fox jumps over the lazy dog. " * 20
+    tool_calls: Final = [{"name": "lookup_fox", "arguments": "{}"}]
+    recorder: Final = _LoggedResponseRecorder()
+    logging_obj: Final = Logging(
+        model=model,
+        messages=messages,
+        stream=True,
+        call_type="completion" if sync_mode else "acompletion",
+        start_time=datetime.datetime(2025, 3, 3, 21, 38, 10),
+        litellm_call_id="mcp-no-usage-call",
+        function_id="mcp-no-usage-fn",
+        dynamic_success_callbacks=[recorder],
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model=model, user=None, optional_params={}, litellm_params={"litellm_call_id": "mcp-no-usage-call"}
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(
+            model_responses=[
+                ModelResponseStream(id="chatcmpl-mcp", created=1741037890, model=model, choices=choices)
+                for choices in (
+                    [StreamingChoices(index=0, delta=Delta(role="assistant", content=text))],
+                    [StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+                )
+            ]
+        ),
+        model=model,
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+        stream_options=None,
+    )
+    _add_mcp_metadata_to_response(wrapper, openai_tools=None, tool_calls=tool_calls)
+
+    _ = [chunk for chunk in wrapper] if sync_mode else [chunk async for chunk in wrapper]
+
+    assert await asyncio.to_thread(recorder.logged.wait, 5)
+    assert len(recorder.responses) == 1
+    logged: Final = recorder.responses[0]
+    assert isinstance(logged, ModelResponse)
+    assert logged.choices[0].message.provider_specific_fields == {"mcp_tool_calls": tool_calls}
+    assert (logged.usage.prompt_tokens, logged.usage.completion_tokens) == (
+        litellm.token_counter(model=model, messages=messages),
+        litellm.token_counter(model=model, text=text, count_response_tokens=True),
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("ends_with_finish_chunk", [True, False])
+@pytest.mark.parametrize("reported_tokens", [(30, 12), (0, 0)])
+@pytest.mark.asyncio
+async def test_stream_with_provider_usage_hands_that_usage_to_the_last_chunk(
+    logging_obj: Logging, sync_mode: bool, ends_with_finish_chunk: bool, reported_tokens: tuple[int, int]
+) -> None:
+    model: Final = "gpt-4o"
+    reported: Final = Usage(
+        prompt_tokens=reported_tokens[0],
+        completion_tokens=reported_tokens[1],
+        total_tokens=sum(reported_tokens),
+    )
+    content_chunk: Final = ModelResponseStream(
+        id="chatcmpl-with-usage",
+        created=1741037890,
+        model=model,
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(role="assistant", content="Hello there"),
+                finish_reason=None if ends_with_finish_chunk else "stop",
+            )
+        ],
+        **({} if ends_with_finish_chunk else {"usage": reported}),
+    )
+    finish_chunk: Final = ModelResponseStream(
+        id="chatcmpl-with-usage",
+        created=1741037890,
+        model=model,
+        choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+        usage=reported,
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(
+            model_responses=[content_chunk, finish_chunk] if ends_with_finish_chunk else [content_chunk]
+        ),
+        model=model,
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+        stream_options=None,
+    )
+
+    yielded: Final = (
+        [(chunk, chunk._hidden_params.get("usage")) for chunk in wrapper]
+        if sync_mode
+        else [(chunk, chunk._hidden_params.get("usage")) async for chunk in wrapper]
+    )
+
+    last_chunk, usage_when_yielded = yielded[-1]
+    assert usage_when_yielded is not None
+    assert (usage_when_yielded.prompt_tokens, usage_when_yielded.completion_tokens) == reported_tokens
+    usage_after_drain: Final = last_chunk._hidden_params["usage"]
+    assert (usage_after_drain.prompt_tokens, usage_after_drain.completion_tokens) == reported_tokens
 
 
 @pytest.mark.asyncio
@@ -3943,6 +4381,68 @@ def test_record_partial_usage_for_failure_stashes_usage_and_cost():
     assert stashed.completion_tokens == 1
     assert stashed.total_tokens == 31
     assert isinstance(logging_obj.model_call_details["response_cost"], float)
+
+
+class _FailureRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures: tuple[tuple[int, int], ...] = ()
+        self.logged: asyncio.Event = asyncio.Event()
+
+    async def async_log_failure_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        payload: Final = TypeAdapter(StandardLoggingPayload).validate_python(kwargs["standard_logging_object"])
+        self.failures = (*self.failures, (payload["prompt_tokens"], payload["completion_tokens"]))
+        self.logged.set()
+
+
+@pytest.mark.asyncio
+async def test_log_stream_failure_bills_the_dropped_attempt_even_after_the_router_discards_its_usage() -> None:
+    """The dropped attempt's failure log is queued, and the router discards the stashed usage as it opens the
+    fallback hop before that log runs. The log must still bill what the dropped attempt consumed, and the shared
+    logging object must not be marked as already failed, since the hop's own failure still has to reach the
+    integrations."""
+    recorder: Final = _FailureRecorder()
+    logging_obj: Final = Logging(
+        model="gpt-5.6",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type="completion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="partial-usage-copy",
+        function_id="1245",
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-5.6",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    wrapper.chunks = [
+        ModelResponseStream(
+            id="chatcmpl-partial-copy",
+            created=1742056047,
+            model="gpt-5.6",
+            object="chat.completion.chunk",
+            choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="The", role="assistant"))],
+            usage=Usage(prompt_tokens=30, completion_tokens=1, total_tokens=31),
+        )
+    ]
+
+    with pytest.raises(MidStreamFallbackError):
+        wrapper._log_stream_failure_and_raise(httpx.ReadError("connection dropped"))
+    logging_obj.carry_failed_attempt_usage()
+    await asyncio.wait_for(recorder.logged.wait(), timeout=10)
+
+    assert recorder.failures == ((30, 1),)
+    assert logging_obj.model_call_details.get("has_logged_async_failure") is not True
 
 
 def test_record_partial_usage_for_failure_noop_without_chunks():

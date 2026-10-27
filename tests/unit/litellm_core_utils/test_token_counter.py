@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import importlib
+import io
 import json
 import os
 import subprocess
@@ -14,11 +15,12 @@ from concurrent.futures import Future, ThreadPoolExecutor, wait
 from itertools import accumulate, chain
 from pathlib import Path
 from typing import Final
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, sentinel
 
 import anyio.to_thread
 import pytest
 import tiktoken
+from PIL import Image
 from tokenizers import Regex, Tokenizer, models, pre_tokenizers
 
 from unittest.mock import AsyncMock, patch
@@ -27,7 +29,7 @@ import litellm
 from litellm import decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
 import litellm.constants
-from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+from litellm.constants import HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS, TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.token_counter import (
     _encoding_count,
@@ -940,10 +942,17 @@ def test_token_counter():
 
 import unittest
 
-from litellm.utils import _load_huggingface_tokenizer, _select_tokenizer_helper, claude_json_str, encoding
+from litellm.utils import (
+    _HUGGINGFACE_TOKENIZER_LOAD_FAILURES,
+    _load_huggingface_tokenizer,
+    _select_tokenizer_helper,
+    claude_json_str,
+    encoding,
+)
 
 # Clear the cache at module load to ensure clean state
 _load_huggingface_tokenizer.cache_clear()
+_HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
 
 
 class TestTokenizerSelection(unittest.TestCase):
@@ -955,6 +964,7 @@ class TestTokenizerSelection(unittest.TestCase):
         --dist=loadscope (tests from same file run on same worker).
         """
         _load_huggingface_tokenizer.cache_clear()
+        _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
 
     @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
     def test_llama3_tokenizer_api_failure(self, mock_from_pretrained):
@@ -1038,6 +1048,69 @@ class TestTokenizerSelection(unittest.TestCase):
         finally:
             monkeypatch.undo()
 
+    @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
+    def test_failed_huggingface_tokenizer_download_is_not_retried_on_every_count(
+        self, mock_from_pretrained: MagicMock
+    ):
+        _load_huggingface_tokenizer.cache_clear()
+        _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+        try:
+            with patch("litellm.utils.time.monotonic", return_value=0.0):
+                mock_from_pretrained.side_effect = RuntimeError("HF unavailable")
+                model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+                text: Final = "Count the tokens for this message."
+                expected: Final = len(encoding.encode(text, disallowed_special=()))
+
+                first_count: Final = litellm.token_counter(model=model, text=text)
+                first_attempts: Final = mock_from_pretrained.call_count
+                second_count: Final = litellm.token_counter(model=model, text=text)
+
+                assert first_attempts > 0
+                assert mock_from_pretrained.call_count == first_attempts
+                assert first_count == expected
+                assert second_count == expected
+        finally:
+            _load_huggingface_tokenizer.cache_clear()
+            _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+
+    @patch("litellm.utils.time.monotonic", return_value=299.0)
+    @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
+    def test_failed_huggingface_tokenizer_download_is_retried_after_retry_window(
+        self, mock_from_pretrained: MagicMock, mock_monotonic: MagicMock
+    ):
+        _load_huggingface_tokenizer.cache_clear()
+        _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+        try:
+            def from_pretrained_side_effect(_: str) -> object:
+                if mock_from_pretrained.call_count == 1:
+                    mock_monotonic.return_value = 322.0
+                    raise RuntimeError("HF unavailable")
+                return sentinel.tokenizer
+
+            mock_from_pretrained.side_effect = from_pretrained_side_effect
+            model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+
+            first_result: Final = _select_tokenizer_helper(model)
+            assert first_result["type"] == "openai_tokenizer"
+            mock_monotonic.return_value = 323.0
+            second_result: Final = _select_tokenizer_helper(model)
+            assert second_result["type"] == "openai_tokenizer", "tokenizer was retried at t=323"
+            assert mock_from_pretrained.call_count == 1
+
+            mock_monotonic.return_value = 322.0 + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS - 1
+            third_result: Final = _select_tokenizer_helper(model)
+            assert third_result["type"] == "openai_tokenizer"
+            assert mock_from_pretrained.call_count == 1
+
+            mock_monotonic.return_value = 322.0 + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS + 1
+            retried_result: Final = _select_tokenizer_helper(model)
+            assert retried_result["type"] == "huggingface_tokenizer"
+            assert retried_result["tokenizer"] is sentinel.tokenizer
+            assert mock_from_pretrained.call_count == 2
+        finally:
+            _load_huggingface_tokenizer.cache_clear()
+            _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+
 
 _CODE_SAMPLE: Final = "    for item in items:\n        total += item.price * item.quantity\n" * 20
 
@@ -1102,8 +1175,30 @@ def test_disable_hf_tokenizer_download_keeps_deepseek_v4_on_cl100k(monkeypatch: 
     assert counted == litellm.token_counter(model="", text=_CODE_SAMPLE)
 
 
+@pytest.mark.parametrize("model", ["llama-2-7b", "meta-llama/llama-3-8b-instruct"])
+def test_offline_mode_counts_downloaded_tokenizer_models_with_tiktoken(monkeypatch: pytest.MonkeyPatch, model: str):
+    _load_huggingface_tokenizer.cache_clear()
+    _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+    monkeypatch.setenv("LITELLM_OFFLINE_MODE", "true")
+
+    with patch("litellm.utils.tokenizer_dispatch.from_pretrained") as from_pretrained:
+        result: Final = _select_tokenizer_helper(model)
+
+    from_pretrained.assert_not_called()
+    assert result["type"] == "openai_tokenizer"
+
+
+def test_offline_mode_keeps_deepseek_v4_on_its_bundled_tokenizer(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LITELLM_OFFLINE_MODE", "true")
+
+    assert litellm.token_counter(model="deepseek/deepseek-v4-flash", text=_CODE_SAMPLE) == _deepseek_token_count(
+        _CODE_SAMPLE
+    )
+
+
 def test_concurrent_first_deepseek_counts_share_one_loaded_tokenizer():
     _load_huggingface_tokenizer.cache_clear()
+    _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
     start: Final = threading.Barrier(8)
 
     def first_tokenizer(_: int) -> object:
@@ -1114,6 +1209,44 @@ def test_concurrent_first_deepseek_counts_share_one_loaded_tokenizer():
         tokenizers: Final = tuple(pool.map(first_tokenizer, range(8)))
 
     assert len({id(tokenizer) for tokenizer in tokenizers}) == 1
+
+
+def test_remembered_tokenizer_failure_warns_once_instead_of_on_every_count(caplog: pytest.LogCaptureFixture):
+    _load_huggingface_tokenizer.cache_clear()
+    _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    try:
+        with (
+            patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=RuntimeError("HF unavailable")),
+            caplog.at_level("WARNING", logger="LiteLLM"),
+        ):
+            types: Final = tuple(_select_tokenizer_helper(model)["type"] for _ in range(3))
+        fallback_warnings: Final = [r for r in caplog.records if "token counts may be approximate" in r.getMessage()]
+        assert types == ("openai_tokenizer",) * 3
+        assert len(fallback_warnings) == 1
+    finally:
+        _load_huggingface_tokenizer.cache_clear()
+        _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+
+
+def test_fork_guard_error_while_loading_a_tokenizer_is_raised_and_not_remembered():
+    from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
+
+    _load_huggingface_tokenizer.cache_clear()
+    _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    forked: Final = ForkedAfterNativeRuntimeStarted("native runtime started before fork")
+    try:
+        with patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=forked):
+            with pytest.raises(ForkedAfterNativeRuntimeStarted):
+                _select_tokenizer_helper(model)
+        with patch("litellm.utils.tokenizer_dispatch.from_pretrained", return_value=sentinel.tokenizer):
+            loaded: Final = _select_tokenizer_helper(model)
+        assert loaded["type"] == "huggingface_tokenizer"
+        assert loaded["tokenizer"] is sentinel.tokenizer
+    finally:
+        _load_huggingface_tokenizer.cache_clear()
+        _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
 
 
 def test_token_counter_with_anthropic_tool_use():
@@ -1882,6 +2015,71 @@ def test_pdf_document_without_pypdf_is_priced_like_an_image(monkeypatch: pytest.
 def _png_data_url(width: int, height: int) -> str:
     ihdr = b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + width.to_bytes(4, "big") + height.to_bytes(4, "big")
     return "data:image/png;base64," + base64.b64encode(ihdr + b"\x08\x06\x00\x00\x00").decode()
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "expected"), [(256, 256, 262), (512, 512, 262), (768, 768, 772), (1024, 1024, 772)]
+)
+@pytest.mark.parametrize("detail", [None, "auto", "high"])
+def test_inline_auto_images_count_high_detail_tiles(width: int, height: int, expected: int, detail: str | None) -> None:
+    image_url = {"url": _png_data_url(width, height)}
+    if detail is not None:
+        image_url["detail"] = detail
+    messages = [{"role": "user", "content": [{"type": "image_url", "image_url": image_url}]}]
+
+    assert token_counter_new(model="gpt-4o", messages=messages) == expected
+
+
+@pytest.mark.parametrize("image_format", ["PNG", "JPEG", "GIF", "WEBP"])
+def test_inline_auto_images_read_supported_formats(image_format: str) -> None:
+    output = io.BytesIO()
+    Image.new("RGB", (1024, 1024)).save(output, format=image_format)
+    url = f"data:image/{image_format.lower()};base64," + base64.b64encode(output.getvalue()).decode()
+
+    assert calculate_img_tokens(url) == 765
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        "https://example.com/image.png",
+        "http://127.0.0.1/image.png",
+        "http://169.254.169.254/latest/meta-data/",
+        "file:///etc/passwd",
+        "data:application/pdf;base64,JVBERi0xLjQK",
+        "data:image/png;base64,%%%",
+        "data:image/png;base64,iVBORw0KGgo=",
+        "data:image/jpeg;base64,/9j/4AAQ",
+        "data:image/png,not-base64",
+        "",
+        _png_data_url(0, 1024),
+        _png_data_url(1024, 0),
+    ],
+)
+def test_auto_image_fallback_does_not_fetch_urls_or_raise(data: str) -> None:
+    # The unit suite disables sockets; a fetch must also not be attempted and swallowed.
+    with patch("httpx.Client.get", side_effect=AssertionError("auto counting must not fetch URLs")) as get:
+        assert calculate_img_tokens(data) == 85
+    get.assert_not_called()
+
+
+def test_auto_image_decode_respects_size_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    counter = importlib.import_module("litellm.litellm_core_utils.token_counter")
+    monkeypatch.setattr(counter, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 24 / (1024 * 1024))
+
+    with patch("base64.b64decode", side_effect=AssertionError("oversized input must not be decoded")) as decode:
+        assert calculate_img_tokens(_png_data_url(1024, 1024)) == 85
+    decode.assert_not_called()
+
+
+def test_low_and_default_image_counts_skip_inline_decoding() -> None:
+    with patch("base64.b64decode", side_effect=AssertionError("fixed counts must not decode")) as decode:
+        assert calculate_img_tokens(_png_data_url(1024, 1024), mode="low") == 85
+        assert (
+            calculate_img_tokens(_png_data_url(1024, 1024), use_default_image_token_count=True)
+            == litellm.constants.DEFAULT_IMAGE_TOKEN_COUNT
+        )
+    decode.assert_not_called()
 
 
 @pytest.mark.parametrize(("width", "height"), [(1, 1), (768, 768), (2000, 768), (768, 2000), (4096, 4096), (8000, 3072)])

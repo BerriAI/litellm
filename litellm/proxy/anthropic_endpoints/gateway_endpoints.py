@@ -58,6 +58,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 )
 from litellm.proxy.management_endpoints.sso_helper_utils import CLI_SSO_SESSIONS_TARGET
 from litellm.proxy.management_endpoints.ui_sso import CliSsoTeamDetail
+from litellm.proxy.proxy_server import model_list
 from litellm.types.llms.base import LiteLLMBaseModel
 
 GATEWAY_PREFIX: Final = "/claude_code_gateway"
@@ -158,6 +159,13 @@ router: Final = APIRouter(
 _GATEWAY_ENABLED: Final = (Depends(ensure_gateway_enabled),)
 _AUTHENTICATED: Final = (Depends(user_api_key_auth),)
 
+router.add_api_route(
+    "/v1/models",
+    model_list,
+    methods=["GET"],
+    dependencies=_GATEWAY_ENABLED,
+    include_in_schema=False,
+)
 router.add_api_route(
     "/v1/messages",
     anthropic_response,

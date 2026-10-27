@@ -6,6 +6,7 @@ import uuid
 from typing import Any, Dict, Final, List
 
 import httpx
+import responses
 import respx
 import pytest
 from fastapi.testclient import TestClient
@@ -31,7 +32,58 @@ from litellm.utils import _invalidate_model_cost_lowercase_map
 import unittest.mock
 
 
-def test_anthropic_experimental_pass_through_messages_handler():
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("stream", [False, True], ids=["complete", "stream"])
+async def test_openai_messages_forwards_stop_sequences_to_chat_completions(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool, stream: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response: Final = (
+        httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-stop-sequences",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4o-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": ""}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
+            },
+        )
+        if not stream
+        else httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text='data: {"id":"chatcmpl-stop-sequences","object":"chat.completion.chunk","created":1,'
+            '"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":""},"finish_reason":"stop"}]}\n\n'
+            "data: [DONE]\n\n",
+        )
+    )
+    with respx.mock as upstream:
+        chat: Final = upstream.post("https://api.openai.com/v1/chat/completions").mock(return_value=response)
+        create: Final = litellm.anthropic.messages.acreate if is_async else litellm.anthropic.messages.create
+        pending: Final = create(
+            model="openai/gpt-4o-mini",
+            max_tokens=80,
+            messages=[{"role": "user", "content": "hi"}],
+            stop_sequences=["STOPPROBE", "ENDPROBE"],
+            stream=stream,
+            api_key="test-api-key",
+        )
+        result: Final = await pending if is_async else pending
+        if stream:
+            chunks: Final = [chunk async for chunk in result] if is_async else list(result)
+            assert "message_stop" in "".join(chunk.decode() if isinstance(chunk, bytes) else chunk for chunk in chunks)
+        else:
+            assert result["content"] == [{"type": "text", "text": ""}]
+        body: Final = json.loads(chat.calls.last.request.content)
+        assert body["stop"] == ["STOPPROBE", "ENDPROBE"]
+        assert "stop_sequences" not in body
+
+
+@pytest.mark.parametrize("stop_sequences", [None, []], ids=["no-stops", "empty-stops"])
+def test_anthropic_experimental_pass_through_messages_handler(stop_sequences):
     """
     Test that api key is passed to litellm.responses for OpenAI models.
     OpenAI and Azure models are routed directly to the Responses API.
@@ -47,6 +99,7 @@ def test_anthropic_experimental_pass_through_messages_handler():
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 model="openai/claude-3-5-sonnet-20240620",
                 api_key="test-api-key",
+                stop_sequences=stop_sequences,
             )
         except (ValueError, TypeError, AttributeError) as e:
             print(f"Error: {e}")
@@ -1709,16 +1762,20 @@ async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_bet
 @pytest.mark.asyncio
 @pytest.mark.parametrize("client_headers", _CLIENT_BETA_HEADERS)
 async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_beta_to_vertex(
-    local_beta_headers_config, client_headers
-):
+    local_beta_headers_config: None, client_headers: dict[str, str]
+) -> None:
     """Vertex rawPredict takes the beta as the `anthropic-beta` header and 400s on `safeguards` without it, so the beta rides along with the field."""
     from litellm.llms.anthropic.pass_through.messages import handler
-    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
     safeguards, safeguard_results = _claude_code_auto_mode_request()
     captured: dict[str, object] = {}
 
-    with patch.object(VertexBase, "_ensure_access_token", return_value=("test-token", "test-project")):
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as oauth:
+        oauth.add(
+            responses.POST,
+            "https://oauth2.googleapis.com/token",
+            json={"access_token": "test-token", "expires_in": 3600},
+        )
         response = await handler.anthropic_messages(
             max_tokens=16,
             messages=[{"role": "user", "content": "hi"}],
@@ -1726,7 +1783,14 @@ async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_bet
             custom_llm_provider="vertex_ai",
             vertex_project="test-project",
             vertex_location="global",
-            vertex_credentials="{}",
+            vertex_credentials=json.dumps(
+                {
+                    "type": "authorized_user",
+                    "client_id": "synthetic-client",
+                    "client_secret": "synthetic-secret",
+                    "refresh_token": "synthetic-refresh",
+                }
+            ),
             client=_upstream_answering_with(safeguard_results, captured),
             safeguards=safeguards,
             extra_headers=client_headers,
@@ -2033,6 +2097,7 @@ async def test_anthropic_messages_with_extra_headers():
         ],
         "model": "claude-haiku-4-5-20251001",
         "stop_reason": "end_turn",
+        "stop_sequence": None,
         "usage": {"input_tokens": 10, "output_tokens": 20},
     }
 
@@ -2096,6 +2161,7 @@ async def test_anthropic_messages_with_thinking():
         ],
         "model": "claude-haiku-4-5-20251001",
         "stop_reason": "end_turn",
+        "stop_sequence": None,
         "usage": {"input_tokens": 10, "output_tokens": 20},
     }
 
@@ -2210,6 +2276,7 @@ async def test_anthropic_messages_bedrock_dynamic_region():
         "content": [{"type": "text", "text": "This is a mock response"}],
         "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "stop_reason": "end_turn",
+        "stop_sequence": None,
         "usage": {"input_tokens": 10, "output_tokens": 20},
     }
 
