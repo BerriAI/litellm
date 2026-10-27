@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -416,3 +417,59 @@ def test_drop_params_forwards_a_non_object_message_item_as_sent_on_the_native_re
 
     assert request["messages"][1] == 7
     assert request["messages"][2]["content"][0]["content"] == [{"type": "text", "text": "sunny"}]
+
+
+BINDING_AND_DISPLAY_BETAS: Final = "thinking-binding-controls-2026-08-01,thinking-display-updates-2026-08-18"
+
+
+def _bound_adaptive_request(headers: dict) -> dict:
+    thinking: Final = {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+    optional_params: Final = {"max_tokens": 64, "thinking": thinking}
+    request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-opus-4-8",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers=headers,
+    )
+    assert thinking == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }, "the caller's thinking dict must survive for a fallback leg"
+    return request
+
+
+def test_messages_request_keeps_beta_gated_thinking_fields_when_the_final_header_carries_the_betas():
+    request = _bound_adaptive_request({"anthropic-beta": BINDING_AND_DISPLAY_BETAS})
+    assert request["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+
+
+def test_messages_request_drops_beta_gated_thinking_fields_the_final_header_does_not_carry(
+    caplog: pytest.LogCaptureFixture,
+):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        request = _bound_adaptive_request({"anthropic-beta": "thinking-binding-controls-2026-08-01"})
+    assert request["thinking"] == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+    assert any("thinking.display=updates" in record.getMessage() for record in caplog.records)
+
+
+def test_messages_request_drops_clear_at_from_a_mid_conversation_system_turn_without_its_beta():
+    system_turn: Final = {"role": "system", "content": "be terse", "clear_at": "end_turn"}
+    request = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-opus-4-8",
+        messages=[{"role": "user", "content": "hi"}, system_turn, {"role": "user", "content": "go"}],
+        anthropic_messages_optional_request_params={"max_tokens": 64},
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": "mid-conversation-system-2026-07-01"},
+    )
+    assert request["messages"][1] == {"role": "system", "content": "be terse"}
+    assert system_turn == {"role": "system", "content": "be terse", "clear_at": "end_turn"}

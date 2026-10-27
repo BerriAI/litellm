@@ -2,9 +2,11 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import ClassVar, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.anthropic_beta_gated_fields import log_beta_gated_strips, strip_beta_gated_native_request
 from litellm.anthropic_beta_headers_manager import get_unsupported_headers, is_beta_header_supported_by_bundled_config
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
@@ -79,6 +81,9 @@ def _ensure_stop_sequence(response: AnthropicMessagesResponse) -> AnthropicMessa
     if "stop_sequence" not in response:
         response["stop_sequence"] = None  # rebind-ok: normalize the request-owned response in place
     return response
+
+
+_MESSAGES_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 
 
 class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
@@ -705,15 +710,22 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if not _has_advisor:
             messages = strip_advisor_blocks_from_messages(messages)
 
+        gated: Final = strip_beta_gated_native_request(headers, anthropic_messages_optional_request_params, messages)  # pyright: ignore[reportUnknownArgumentType]  # the base signature types these as bare dicts
+        log_beta_gated_strips(gated.stripped, model=model, provider=self._resolved_provider)
         anthropic_messages_request: Final[AnthropicMessagesRequest] = AnthropicMessagesRequest(
             messages=strip_encrypted_reasoning_blocks_from_anthropic_messages(
-                drop_non_string_tool_result_texts(messages, getattr(litellm_params, "drop_params", None))
+                drop_non_string_tool_result_texts(
+                    _MESSAGES_ADAPTER.validate_python(gated.messages) if gated.messages_stripped else messages,
+                    getattr(litellm_params, "drop_params", None),
+                )
             ),
             max_tokens=max_tokens,
             model=model,
             **anthropic_messages_optional_request_params,
         )
-        return dict(anthropic_messages_request)
+        if gated.thinking_stripped:
+            return {**dict(anthropic_messages_request), "thinking": gated.thinking}
+        return dict(anthropic_messages_request)  # pyright: ignore[reportUnknownVariableType]  # built from the base signature's bare dict
 
     def transform_anthropic_messages_response(
         self,

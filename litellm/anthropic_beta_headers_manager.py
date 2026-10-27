@@ -397,7 +397,7 @@ def update_request_with_filtered_beta(
     headers: dict,
     request_data: dict,
     provider: str,
-) -> tuple[dict, dict]:
+) -> tuple[dict[str, str], dict[str, object]]:
     """
     Update both headers and request body beta fields based on provider support.
     Modifies both dicts in place and returns them.

@@ -3607,3 +3607,51 @@ def test_streamed_end_turn_carries_no_stop_details():
     provider_fields: Final = assembled.choices[0].message.provider_specific_fields or {}
     assert "stop_details" not in provider_fields
     assert "stop_reason" not in provider_fields
+
+
+def _anthropic_chat_body_for_bound_thinking(extra_headers: dict | None) -> dict:
+    captured_requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_bound",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-4-8",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    thinking: Final = {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    try:
+        litellm.completion(
+            model="anthropic/claude-opus-4-8",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            client=client,
+            thinking=thinking,
+            extra_headers=extra_headers,
+        )
+    finally:
+        client.close()
+    assert thinking == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+    return json.loads(captured_requests[0].content)
+
+
+def test_anthropic_chat_keeps_block_binding_when_the_final_header_carries_the_binding_beta(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    body = _anthropic_chat_body_for_bound_thinking({"anthropic-beta": "thinking-binding-controls-2026-08-01"})
+    assert body["thinking"] == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+
+
+def test_anthropic_chat_drops_block_binding_when_no_header_carries_the_binding_beta(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    body = _anthropic_chat_body_for_bound_thinking(None)
+    assert body["thinking"] == {"type": "adaptive"}

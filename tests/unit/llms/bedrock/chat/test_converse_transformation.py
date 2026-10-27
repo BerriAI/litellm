@@ -1,3 +1,4 @@
+import logging
 import base64
 import copy
 import json
@@ -10789,3 +10790,47 @@ def test_a_deployment_with_a_batch_control_plane_endpoint_keeps_it_out_of_chat_r
 
     assert response.choices[0].message.content == "ok"
     assert "aws_bedrock_control_plane_endpoint" not in route.calls[0].request.content.decode()
+
+
+def _converse_bound_thinking_request(headers: dict | None) -> dict:
+    thinking: Final = {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+    data = AmazonConverseConfig()._transform_request_helper(
+        model="anthropic.claude-opus-4-8-v1:0",
+        system_content_blocks=[],
+        optional_params={"thinking": thinking},
+        messages=[{"role": "user", "content": "hi"}],
+        headers=headers,
+    )
+    assert thinking == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }, "the caller's thinking dict must survive for a fallback leg"
+    return data["additionalModelRequestFields"]
+
+
+def test_converse_keeps_beta_gated_thinking_fields_the_bedrock_converse_row_carries(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    fields = _converse_bound_thinking_request(
+        {"anthropic-beta": "thinking-binding-controls-2026-08-01,thinking-display-updates-2026-08-18"}
+    )
+    assert fields["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+
+
+def test_converse_drops_beta_gated_thinking_fields_when_the_request_carries_no_beta(monkeypatch, caplog):
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        fields = _converse_bound_thinking_request(None)
+    assert fields["thinking"] == {"type": "adaptive"}
+    assert any(
+        "thinking.block_binding" in record.getMessage() and "provider=bedrock_converse" in record.getMessage()
+        for record in caplog.records
+    )
