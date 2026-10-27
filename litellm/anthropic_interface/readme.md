@@ -57,6 +57,40 @@ async for chunk in response:
     print(chunk)
 ```
 
+### Optional opening token estimate
+
+When `/v1/messages` streams through the Chat Completions adapter, the opening
+`message_start.usage.input_tokens` defaults to `0`. To show an estimated prompt
+size while a response streams, enable `anthropic_messages_estimate_initial_input_tokens`.
+This setting defaults to `false` and applies to all requests using this adapter
+
+For an existing proxy deployment, add the setting under `litellm_settings` in
+`config.yaml` and restart the proxy. Use a YAML boolean, without quotes
+
+```yaml
+litellm_settings:
+  anthropic_messages_estimate_initial_input_tokens: true
+```
+
+For the Python SDK, set the option before making streaming Messages requests
+
+```python
+import litellm
+
+litellm.anthropic_messages_estimate_initial_input_tokens = True
+```
+
+Send a streaming Messages request to a Chat Completions-backed model, such as a
+`hosted_vllm/` model. The opening `message_start` event includes the estimated
+input count. If estimation fails, the count remains `0`. Set the option to
+`false` in YAML or `False` in Python to disable estimation and skip token counting
+
+The opening count is approximate and is not suitable for billing or enforcing
+exact context limits. Opening output and cache counts remain `0`. Final
+`message_delta` usage still comes from the provider and takes precedence over the
+opening estimate. Native Anthropic streams, the Responses adapter, and
+non-streaming responses are unaffected. This setting does not select the adapter
+
 ### LiteLLM Proxy Server 
 
 
