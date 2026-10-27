@@ -7,12 +7,12 @@ All values are configurable via proxy config.yaml.
 
 import math
 import re
-import warnings
+import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
-from typing import Annotated, Final, Literal, NamedTuple
+from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple
 
 from pydantic import (
     ConfigDict,
@@ -27,8 +27,13 @@ from pydantic import (
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", DeprecationWarning)
+if TYPE_CHECKING:
+    import sre_constants
+    import sre_parse
+elif sys.version_info >= (3, 11):
+    from re import _constants as sre_constants
+    from re import _parser as sre_parse
+else:
     import sre_constants
     import sre_parse
 

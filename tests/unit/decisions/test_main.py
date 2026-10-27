@@ -38,6 +38,7 @@ from litellm.types.decisions import (
 from litellm.types.router import ModelInfo
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
+from tests.unit.conftest import AsyncOnlyImageFetch
 
 _QUESTIONS: Final[Mapping[str, object]] = MappingProxyType(
     {
@@ -398,6 +399,68 @@ async def test_systemone_uses_evaluation_pricing(respx_mock: respx.MockRouter, d
     assert litellm.completion_cost(completion_response=response) == pytest.approx(
         _INPUT_TOKENS * _GPT_6_LUNA_DECISIONS_INPUT_RATE
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("base_url", "expected_api_base"),
+    [
+        ("https://onprem.example/v1", "https://onprem.example/v1"),
+        ("", "https://fallback.example/v1"),
+        (None, "https://fallback.example/v1"),
+        (123, "https://fallback.example/v1"),
+    ],
+)
+async def test_openai_decisions_honors_base_url_alias(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    base_url: str | int | None,
+    expected_api_base: str,
+) -> None:
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://fallback.example/v1")
+    route: Final = respx_mock.post(f"{expected_api_base}/decisions").respond(json=_OPENAI_RESPONSE)
+    response: Final = await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_key="backend-secret-key",
+        base_url=base_url,
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer backend-secret-key"
+    assert response._hidden_params["model"] == "openai/gpt-6-luna"
+
+
+@pytest.mark.asyncio
+async def test_openai_systemone_honors_base_url_alias(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://onprem.example/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    response: Final = await litellm.asystemone(
+        model="openai/gpt-6-luna",
+        state="The package arrived broken.",
+        questions=_QUESTIONS,
+        api_key="backend-secret-key",
+        base_url="https://onprem.example/v1",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer backend-secret-key"
+    assert response._hidden_params["model"] == "openai/gpt-6-luna"
+
+
+@pytest.mark.asyncio
+async def test_openai_decisions_api_base_wins_over_base_url_alias(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_key="test-key",
+        api_base="https://api.openai.com/v1",
+        base_url="https://onprem.example/v1",
+    )
+
+    assert route.called
 
 
 @pytest.mark.asyncio
@@ -1506,7 +1569,13 @@ async def test_databricks_router_deployment_sends_its_own_key_to_its_own_base(
 
 
 _PROVIDERS_WHOSE_CHAT_MODELS_ALSO_DECIDE: Final = frozenset(
-    {LlmProviders.OPENAI.value, LlmProviders.OPENROUTER.value, LlmProviders.HOSTED_VLLM.value}
+    {
+        LlmProviders.OPENAI.value,
+        LlmProviders.AZURE.value,
+        LlmProviders.OPENROUTER.value,
+        LlmProviders.HOSTED_VLLM.value,
+        LlmProviders.LM_STUDIO.value,
+    }
 )
 _DEDICATED_DECIDER_PROVIDERS: Final[tuple[str, ...]] = tuple(
     sorted(
@@ -3847,3 +3916,152 @@ def test_nace_upstream_failures_preserve_status_and_message(
         )
     assert getattr(error.value, "status_code") == status
     assert upstream.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize(
+    "usage", [None, {"input_tokens": 0, "output_tokens": 0}, {"input_tokens": 12, "output_tokens": 1}]
+)
+async def test_native_decisions_distinguishes_missing_usage_from_reported_zero(
+    is_async: bool, usage: dict[str, int] | None, respx_mock: respx.MockRouter
+) -> None:
+    body = {
+        **{key: value for key, value in _RESPONSE.items() if key != "usage"},
+        "model": "jev-1.13.0",
+        **({"usage": usage} if usage is not None else {}),
+    }
+    respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=body)
+    params = {"model": "typesafe/jev-1.13.0", "state": "review", "questions": _QUESTIONS, "api_key": "synthetic-key"}
+    response = await litellm.adecisions(**params) if is_async else litellm.decisions(**params)
+
+    assert isinstance(response, DecisionsResponse)
+    if usage is None:
+        assert response.usage is None
+        assert response._hidden_params.get("response_cost") is None
+        with pytest.raises(ValueError, match="provider did not report usage"):
+            litellm.completion_cost(completion_response=response)
+    else:
+        assert response.usage is not None
+        assert response.usage.input_tokens == usage["input_tokens"]
+        assert response.usage.output_tokens == usage["output_tokens"]
+        expected = litellm.completion_cost(completion_response=response)
+        assert response._hidden_params["response_cost"] == pytest.approx(expected)
+        assert (expected == 0) == (usage["input_tokens"] == usage["output_tokens"] == 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", (True, False), ids=("asystemone", "systemone"))
+@pytest.mark.parametrize("api_base", ("http://lmstudio.local:1234", "http://lmstudio.local:1234/v1"))
+async def test_lm_studio_systemone_preserves_questions_and_omits_placeholder_auth(
+    use_async: bool, api_base: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("LM_STUDIO_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+    route: Final = respx_mock.post("http://lmstudio.local:1234/v1/systemone").respond(json=_RESPONSE)
+    kwargs: Final = {
+        "model": "lm_studio/local-decision",
+        "state": "review",
+        "questions": _QUESTIONS,
+        "api_base": api_base,
+    }
+
+    response: Final = await litellm.asystemone(**kwargs) if use_async else litellm.systemone(**kwargs)
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "local-decision",
+        "state": "review",
+        "questions": dict(_QUESTIONS),
+    }
+    assert "authorization" not in route.calls.last.request.headers
+    assert response.answers["is_defect"] == NoulAnswer(type="noul", noul=0.9)
+    assert response.answers["sentiment"].choice == "positive"
+    assert response.answers["severity"].score == 1
+    assert response.usage == DecisionsUsage(input_tokens=_INPUT_TOKENS, output_tokens=_OUTPUT_TOKENS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", (True, False), ids=("adecisions", "decisions"))
+async def test_lm_studio_decisions_translates_openai_questions_and_answers(
+    use_async: bool, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("LM_STUDIO_API_KEY", raising=False)
+    route: Final = respx_mock.post("http://lmstudio.local:1234/v1/systemone").respond(json=_RESPONSE)
+    kwargs: Final = {
+        "model": "lm_studio/local-decision",
+        "input": "review",
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        "api_base": "http://lmstudio.local:1234/v1",
+    }
+
+    response: Final = await litellm.adecisions(**kwargs) if use_async else litellm.decisions(**kwargs)
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "local-decision",
+        "state": "review",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert response.answers[0].type == "predicate"
+    assert response.answers[0].name == "is_defect"
+    assert response.answers[0].probability == 0.9
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_key", (None, "deployment-key"))
+async def test_lm_studio_decisions_resolves_environment_connection_and_explicit_key_override(
+    explicit_key: str | None, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setenv("LM_STUDIO_API_BASE", "http://lmstudio.local:1234/v1")
+    monkeypatch.setenv("LM_STUDIO_API_KEY", "environment-key")
+    route: Final = respx_mock.post("http://lmstudio.local:1234/v1/systemone").respond(json=_RESPONSE)
+
+    response: Final = await litellm.asystemone(
+        model="lm_studio/local-decision", state="review", questions=_QUESTIONS, api_key=explicit_key
+    )
+
+    assert route.calls.last.request.headers["authorization"] == f"Bearer {explicit_key or 'environment-key'}"
+    assert response.answers["is_defect"] == NoulAnswer(type="noul", noul=0.9)
+
+
+@pytest.mark.asyncio
+async def test_lm_studio_decisions_requires_a_server_before_http(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("LM_STUDIO_API_BASE", raising=False)
+    with pytest.raises(litellm.BadRequestError, match="api_base is required"):
+        await litellm.asystemone(model="lm_studio/local-decision", state="review", questions=_QUESTIONS)
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("remote_image", (False, True), ids=("inline", "remote"))
+async def test_lm_studio_decisions_sends_inline_images_to_systemone(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    remote_image: bool,
+    async_only_image_fetch: AsyncOnlyImageFetch,
+) -> None:
+    monkeypatch.delenv("LM_STUDIO_API_KEY", raising=False)
+    image: Final = "https://images.example/input.png" if remote_image else "data:image/png;base64,AA=="
+    expected_image: Final = async_only_image_fetch.data_url if remote_image else image
+    route: Final = respx_mock.post("http://lmstudio.local:1234/v1/systemone").respond(json=_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="lm_studio/local-decision",
+        input=[
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "review"}, {"type": "input_image", "image_url": image}],
+            }
+        ],
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_base="http://lmstudio.local:1234/v1",
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "local-decision",
+        "state": "review",
+        "images": [expected_image],
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert response.answers[0].probability == 0.9

@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import pytest
 import respx
-from jsonschema import validate
+from jsonschema import Draft7Validator, validate
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
@@ -90,7 +90,6 @@ from litellm.utils import (
     get_llm_provider,
     get_optional_params_embeddings,
     ProviderConfigManager,
-    TextCompletionStreamWrapper,
     _check_provider_match,
     get_potential_model_names,
     _is_litellm_router_call,
@@ -577,7 +576,7 @@ def test_all_model_configs():
     from litellm.llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
         VertexAIAi21Config,
     )
-    from litellm.llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import (
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.llama.transformation import (
         VertexAILlama3Config,
     )
 
@@ -924,436 +923,463 @@ def validate_model_cost_values(model_data, exceptions=None):
     return len(violations) == 0, violations
 
 
+_COST_MAP_ROW_SCHEMA: Final = {
+    "type": "object",
+    "additionalProperties": {
+        "type": "object",
+        "properties": {
+            "supports_computer_use": {"type": "boolean"},
+            "cache_creation_input_audio_token_cost": {"type": "number"},
+            "cache_creation_input_token_cost": {"type": "number"},
+            "cache_creation_input_token_cost_above_1hr": {"type": "number"},
+            "cache_creation_input_token_cost_above_12hr": {"type": "number"},
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens": {
+                "type": "number"
+            },
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex": {
+                "type": "number"
+            },
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority": {
+                "type": "number"
+            },
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches": {
+                "type": "number"
+            },
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast": {
+                "type": "number"
+            },
+            "cache_creation_input_token_cost_above_12hr_flex": {"type": "number"},
+            "cache_creation_input_token_cost_above_12hr_priority": {"type": "number"},
+            "cache_creation_input_token_cost_above_12hr_batches": {"type": "number"},
+            "cache_creation_input_token_cost_above_12hr_ultrafast": {"type": "number"},
+            "cache_creation_input_token_cost_above_32k_tokens": {"type": "number"},
+            "cache_creation_input_token_cost_above_100k_tokens": {"type": "number"},
+            "cache_creation_input_token_cost_above_100k_tokens_batches": {"type": "number"},
+            "cache_creation_input_token_cost_above_128k_tokens": {"type": "number"},
+            "cache_creation_input_token_cost_above_200k_tokens": {"type": "number"},
+            "cache_creation_input_token_cost_above_256k_tokens": {"type": "number"},
+            "cache_creation_input_token_cost_above_272k_tokens": {"type": "number"},
+            "cache_creation_input_token_cost_above_272k_tokens_flex": {"type": "number"},
+            "cache_creation_input_token_cost_above_272k_tokens_ultrafast": {"type": "number"},
+            "cache_creation_input_token_cost_above_272k_tokens_priority": {"type": "number"},
+            "cache_creation_input_token_cost_above_200k_tokens_batches": {"type": "number"},
+            "cache_creation_input_token_cost_above_272k_tokens_batches": {"type": "number"},
+            "cache_creation_input_token_cost_batches": {"type": "number"},
+            "cache_creation_input_token_cost_decisions": {"type": "number"},
+            "cache_creation_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
+            "cache_read_input_token_cost_decisions": {"type": "number"},
+            "cache_read_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
+            "input_cost_per_token_decisions": {"type": "number"},
+            "input_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
+            "output_cost_per_token_decisions": {"type": "number"},
+            "output_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
+            "cache_creation_input_token_cost_flex": {"type": "number"},
+            "cache_creation_input_token_cost_priority": {"type": "number"},
+            "cache_creation_input_token_cost_ultrafast": {"type": "number"},
+            "cache_read_input_token_cost": {"type": "number"},
+            "explicit_cache_read_input_token_cost": {"type": "number"},
+            "cache_read_input_token_cost_above_32k_tokens": {"type": "number"},
+            "cache_read_input_token_cost_above_100k_tokens": {"type": "number"},
+            "cache_read_input_token_cost_above_100k_tokens_batches": {"type": "number"},
+            "cache_read_input_token_cost_above_128k_tokens": {"type": "number"},
+            "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
+            "cache_read_input_token_cost_above_200k_tokens_batches": {"type": "number"},
+            "cache_read_input_token_cost_above_256k_tokens": {"type": "number"},
+            "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
+            "cache_read_input_token_cost_above_272k_tokens_flex": {"type": "number"},
+            "cache_read_input_token_cost_above_272k_tokens_ultrafast": {"type": "number"},
+            "cache_read_input_token_cost_above_512k_tokens": {"type": "number"},
+            "input_cost_per_token_above_272k_tokens_ultrafast": {"type": "number"},
+            "cache_read_input_token_cost_batches": {"type": "number"},
+            "cache_read_input_token_cost_above_272k_tokens_batches": {"type": "number"},
+            "cache_creation_input_token_cost_above_1hr_above_100k_tokens": {"type": "number"},
+            "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
+            "cache_read_input_audio_token_cost": {"type": "number"},
+            "cache_read_input_audio_token_cost_batches": {"type": "number"},
+            "cache_read_input_audio_token_cost_flex": {"type": "number"},
+            "cache_read_input_audio_token_cost_priority": {"type": "number"},
+            "cache_read_input_image_token_cost": {"type": "number"},
+            "audio_transcription_config": {"type": "string"},
+            "deprecation_date": {"type": "string"},
+            "input_cost_per_audio_per_second": {"type": "number"},
+            "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
+            "google_maps_grounding_cost_per_query": {"type": "number"},
+            "input_cost_per_audio_token": {"type": "number"},
+            "input_cost_per_audio_token_flex": {"type": "number"},
+            "input_cost_per_image_token": {"type": "number"},
+            "input_cost_per_character": {"type": "number"},
+            "input_cost_per_character_above_128k_tokens": {"type": "number"},
+            "input_cost_per_image": {"type": "number"},
+            "input_cost_per_image_above_128k_tokens": {"type": "number"},
+            "input_cost_per_video_token": {"type": "number"},
+            "input_cost_per_token_above_32k_tokens": {"type": "number"},
+            "input_cost_per_token_above_100k_tokens": {"type": "number"},
+            "input_cost_per_token_above_100k_tokens_batches": {"type": "number"},
+            "input_cost_per_token_above_200k_tokens": {"type": "number"},
+            "input_cost_per_token_above_200k_tokens_batches": {"type": "number"},
+            "input_cost_per_token_above_256k_tokens": {"type": "number"},
+            "input_cost_per_token_above_272k_tokens": {"type": "number"},
+            "input_cost_per_token_above_512k_tokens": {"type": "number"},
+            "cache_read_input_token_cost_flex": {"type": "number"},
+            "cache_read_input_token_cost_priority": {"type": "number"},
+            "cache_read_input_token_cost_balanced": {"type": "number"},
+            "cache_read_input_token_cost_ultrafast": {"type": "number"},
+            "cache_read_input_token_cost_above_200k_tokens_priority": {"type": "number"},
+            "cache_read_input_token_cost_above_272k_tokens_priority": {"type": "number"},
+            "input_cost_per_token_flex": {"type": "number"},
+            "input_cost_per_token_priority": {"type": "number"},
+            "input_cost_per_token_balanced": {"type": "number"},
+            "input_cost_per_token_ultrafast": {"type": "number"},
+            "input_cost_per_token_above_200k_tokens_priority": {"type": "number"},
+            "input_cost_per_token_above_272k_tokens_priority": {"type": "number"},
+            "input_cost_per_token_above_272k_tokens_batches": {"type": "number"},
+            "input_cost_per_token_above_272k_tokens_flex": {"type": "number"},
+            "input_cost_per_audio_token_priority": {"type": "number"},
+            "output_cost_per_token_flex": {"type": "number"},
+            "output_cost_per_token_priority": {"type": "number"},
+            "output_cost_per_token_balanced": {"type": "number"},
+            "output_cost_per_token_ultrafast": {"type": "number"},
+            "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
+            "output_cost_per_token_above_272k_tokens_priority": {"type": "number"},
+            "output_cost_per_token_above_272k_tokens_ultrafast": {"type": "number"},
+            "output_cost_per_token_above_272k_tokens_batches": {"type": "number"},
+            "output_cost_per_token_above_272k_tokens_flex": {"type": "number"},
+            "regional_endpoint_uplift_multiplier": {"type": "number"},
+            "regional_processing_uplift_multiplier_eu": {"type": "number"},
+            "regional_processing_uplift_multiplier_us": {"type": "number"},
+            "input_cost_per_pixel": {"type": "number"},
+            "input_cost_per_query": {"type": "number"},
+            "input_cost_per_request": {"type": "number"},
+            "cost_per_second": {"type": "number"},
+            "input_cost_per_second": {"type": "number"},
+            "input_cost_per_text_message": {"type": "number"},
+            "input_cost_per_token": {"type": "number"},
+            "input_cost_per_token_above_128k_tokens": {"type": "number"},
+            "input_cost_per_audio_token_batches": {"type": "number"},
+            "input_cost_per_image_token_batches": {"type": "number"},
+            "input_cost_per_token_batches": {"type": "number"},
+            "input_cost_per_video_token_batches": {"type": "number"},
+            "input_cost_per_token_cache_hit": {"type": "number"},
+            "input_cost_per_video_per_second": {"type": "number"},
+            "input_cost_per_video_per_second_above_8s_interval": {"type": "number"},
+            "input_cost_per_video_per_second_above_15s_interval": {"type": "number"},
+            "input_cost_per_video_per_second_above_128k_tokens": {"type": "number"},
+            "input_dbu_cost_per_token": {"type": "number"},
+            "annotation_cost_per_page": {"type": "number"},
+            "annotation_cost_per_page_batches": {"type": "number"},
+            "ocr_cost_per_page": {"type": "number"},
+            "ocr_cost_per_page_batches": {"type": "number"},
+            "ocr_cost_per_credit": {"type": "number"},
+            "code_interpreter_cost_per_session": {"type": "number"},
+            "inference_geo": {"type": "string"},
+            "litellm_provider": {"type": "string"},
+            "max_input_tokens": {"type": "number"},
+            "max_output_tokens": {"type": "number"},
+            "max_tokens": {"type": "number"},
+            "metadata": {"type": "object"},
+            "provider_specific_entry": {"type": "object"},
+            "mode": {
+                "type": "string",
+                "enum": [
+                    "audio_speech",
+                    "audio_transcription",
+                    "chat",
+                    "completion",
+                    "container",
+                    "decisions",
+                    "image_edit",
+                    "embedding",
+                    "evaluation",
+                    "extraction",
+                    "guardrail",
+                    "image_generation",
+                    "video_generation",
+                    "moderation",
+                    "rerank",
+                    "realtime",
+                    "responses",
+                    "ocr",
+                    "search",
+                    "vector_store",
+                ],
+            },
+            "output_cost_per_audio_token": {"type": "number"},
+            "output_cost_per_character": {"type": "number"},
+            "output_cost_per_character_above_128k_tokens": {"type": "number"},
+            "output_cost_per_image": {"type": "number"},
+            "output_cost_per_image_512": {"type": "number"},
+            "output_cost_per_image_1024": {"type": "number"},
+            "output_cost_per_image_1536": {"type": "number"},
+            "output_cost_per_image_0.5K": {"type": "number"},
+            "output_cost_per_image_1K": {"type": "number"},
+            "output_cost_per_image_2K": {"type": "number"},
+            "output_cost_per_image_4K": {"type": "number"},
+            "output_cost_per_image_token": {"type": "number"},
+            "output_cost_per_image_token_batches": {"type": "number"},
+            "output_cost_per_video_token": {"type": "number"},
+            "output_cost_per_pixel": {"type": "number"},
+            "output_cost_per_second": {"type": "number"},
+            "output_cost_per_second_480p": {"type": "number"},
+            "output_cost_per_second_720p": {"type": "number"},
+            "output_cost_per_second_768p": {"type": "number"},
+            "output_cost_per_second_2k": {"type": "number"},
+            "output_cost_per_second_1080p": {"type": "number"},
+            "output_cost_per_second_4k": {"type": "number"},
+            "output_cost_per_token": {"type": "number"},
+            "output_cost_per_token_above_32k_tokens": {"type": "number"},
+            "output_cost_per_token_above_100k_tokens": {"type": "number"},
+            "output_cost_per_token_above_100k_tokens_batches": {"type": "number"},
+            "output_cost_per_token_above_128k_tokens": {"type": "number"},
+            "output_cost_per_token_above_200k_tokens": {"type": "number"},
+            "output_cost_per_token_above_200k_tokens_batches": {"type": "number"},
+            "output_cost_per_token_above_256k_tokens": {"type": "number"},
+            "output_cost_per_token_above_272k_tokens": {"type": "number"},
+            "output_cost_per_token_above_512k_tokens": {"type": "number"},
+            "output_cost_per_token_batches": {"type": "number"},
+            "output_cost_per_reasoning_token": {"type": "number"},
+            "output_cost_per_video_per_second": {"type": "number"},
+            "output_db_cost_per_token": {"type": "number"},
+            "output_dbu_cost_per_token": {"type": "number"},
+            "output_vector_size": {"type": "number"},
+            "rpd": {"type": "number"},
+            "rpm": {"type": "number"},
+            "source": {"type": "string"},
+            "comment": {"type": "string"},
+            "supports_assistant_prefill": {"type": "boolean"},
+            "supports_anthropic_compaction": {"type": "boolean"},
+            "supports_audio_input": {"type": "boolean"},
+            "supports_audio_output": {"type": "boolean"},
+            "gemini_native_audio": {"type": "boolean"},
+            "gemini_audio_only_live": {"type": "boolean"},
+            "supports_embedding_image_input": {"type": "boolean"},
+            "supports_forced_tool_use": {"type": "boolean"},
+            "supports_function_calling": {"type": "boolean"},
+            "supports_image_input": {"type": "boolean"},
+            "supports_nova_canvas_image_edit": {"type": "boolean"},
+            "supports_parallel_function_calling": {"type": "boolean"},
+            "supports_parallel_tool_use_config": {"type": "boolean"},
+            "supports_pdf_input": {"type": "boolean"},
+            "prompt_cache_min_tokens": {"type": "number"},
+            "supports_prompt_cache_breakpoint": {"type": "boolean"},
+            "supports_thinking_cache_preservation": {"type": "boolean"},
+            "supports_prompt_caching": {"type": "boolean"},
+            "supports_response_schema": {"type": "boolean"},
+            "supports_system_messages": {"type": "boolean"},
+            "supports_tool_choice": {"type": "boolean"},
+            "supports_tool_search": {"type": "boolean"},
+            "supports_video_input": {"type": "boolean"},
+            "supports_box_questions": {"type": "boolean"},
+            "supports_vision": {"type": "boolean"},
+            "supports_web_search": {"type": "boolean"},
+            "token_count_framing": {"type": "integer"},
+            "token_count_model": {
+                "type": "object",
+                "properties": {"model": {"type": "string"}, "region": {"type": "string"}},
+                "required": ["model"],
+            },
+            "token_count_tokenizer": {"type": "string", "enum": ["kimi_k3"]},
+            "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {"type": "boolean"},
+            "supports_bedrock_runtime_chat_completions_response_format": {"type": "boolean"},
+            "supports_bedrock_runtime_chat_completions_inline_reasoning": {"type": "boolean"},
+            "supports_bedrock_converse_tool_result_images": {"type": "boolean"},
+            "supports_url_context": {"type": "boolean"},
+            "supports_multimodal": {"type": "boolean"},
+            "uses_embed_content": {"type": "boolean"},
+            "supports_reasoning": {"type": "boolean"},
+            "supports_minimal_reasoning_effort": {"type": "boolean"},
+            "supports_low_reasoning_effort": {"type": "boolean"},
+            "supports_none_reasoning_effort": {"type": "boolean"},
+            "supports_xhigh_reasoning_effort": {"type": "boolean"},
+            "supports_max_reasoning_effort": {"type": "boolean"},
+            "reasoning_effort_levels": {
+                "type": "array",
+                "items": {"type": "string", "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]},
+            },
+            "default_reasoning_effort": {
+                "type": "string",
+                "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],
+            },
+            "supports_adaptive_thinking": {"type": "boolean"},
+            "supports_anthropic_thinking_payload": {"type": "boolean"},
+            "supports_legacy_thinking": {"type": "boolean"},
+            "thinking_always_on": {"type": "boolean"},
+            "supports_mid_conversation_system": {"type": "boolean"},
+            "supports_sampling_params": {"type": "boolean"},
+            "supports_output_config": {"type": "boolean"},
+            "supports_speed": {"type": "boolean"},
+            "supports_fast_mode": {"type": "boolean"},
+            "supported_audio_formats": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": ["mp3", "wav"],
+                },
+            },
+            "vertex_ai_audio_api": {
+                "type": "string",
+                "enum": ["lyria_predict", "lyria_interactions"],
+            },
+            "bedrock_output_config_effort_ceiling": {
+                "type": "string",
+                "enum": ["low", "medium", "high", "max", "xhigh"],
+            },
+            "bedrock_converse_supports_strict_tools": {"type": "boolean"},
+            "supports_regex_lookaround": {"type": "boolean"},
+            "tpm": {"type": "number"},
+            "supported_endpoints": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": [
+                        "/v1/responses",
+                        "/v1/embeddings",
+                        "/v1/chat/completions",
+                        "/v1/completions",
+                        "/v1/messages",
+                        "/v1/images/generations",
+                        "/v1/realtime",
+                        "/v1/realtime/transcription_sessions",
+                        "/v1/images/variations",
+                        "/v1/images/edits",
+                        "/v1/batch",
+                        "/v1beta/interactions",
+                        "/v1beta/models",
+                        "/v1/audio/transcriptions",
+                        "/v1/audio/speech",
+                        "/v1/ocr",
+                        "/v1/videos",
+                        "/vertex_ai/live",
+                        "/v1/listen",
+                        "/v1/systemone",
+                        "/v1/decisions",
+                        "/v1beta/interactions",
+                    ],
+                },
+            },
+            "supported_regions": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                },
+            },
+            "guardrail_cost_per_unit": {
+                "type": "object",
+                "additionalProperties": {"type": "number"},
+            },
+            "search_context_cost_per_query": {
+                "type": "object",
+                "properties": {
+                    "search_context_size_low": {"type": "number"},
+                    "search_context_size_medium": {"type": "number"},
+                    "search_context_size_high": {"type": "number"},
+                },
+                "additionalProperties": False,
+            },
+            "web_search_billing_unit": {
+                "type": "string",
+                "enum": ["per_prompt", "per_query"],
+            },
+            "search_free_requests": {
+                "type": "object",
+                "properties": {
+                    "count": {"type": "integer", "minimum": 1},
+                    "period": {"type": "string", "enum": ["day", "month"]},
+                    "shared_group": {"type": "string"},
+                },
+                "required": ["count", "period", "shared_group"],
+                "additionalProperties": False,
+            },
+            "citation_cost_per_token": {"type": "number"},
+            "supported_modalities": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": ["text", "audio", "image", "video"],
+                },
+            },
+            "supported_output_modalities": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": ["text", "image", "audio", "code", "video"],
+                },
+            },
+            "supports_native_streaming": {"type": "boolean"},
+            "supports_image_size": {"type": "boolean"},
+            "supports_native_structured_output": {"type": "boolean"},
+            "supports_bedrock_native_structured_output": {"type": "boolean"},
+            "use_openai_responses_path": {"type": "boolean"},
+            "off_peak_pricing": {
+                "type": "object",
+                "properties": {
+                    "hours_utc": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                    },
+                    "windows": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "hours_utc": {
+                                    "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                                },
+                                "weekdays": {
+                                    "type": "array",
+                                    "items": {"oneOf": [{"type": "integer"}, {"type": "string"}]},
+                                },
+                            },
+                            "required": ["hours_utc"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "weekday_timezone": {"type": "string"},
+                    "input_cost_per_token": {"type": "number"},
+                    "output_cost_per_token": {"type": "number"},
+                    "output_cost_per_reasoning_token": {"type": "number"},
+                    "cache_read_input_token_cost": {"type": "number"},
+                    "cache_creation_input_token_cost": {"type": "number"},
+                },
+                "additionalProperties": False,
+            },
+            "tiered_pricing": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "range": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "minItems": 2,
+                            "maxItems": 2,
+                        },
+                        "input_cost_per_token": {"type": "number"},
+                        "output_cost_per_token": {"type": "number"},
+                        "cache_read_input_token_cost": {"type": "number"},
+                        "cache_creation_input_token_cost": {"type": "number"},
+                        "output_cost_per_reasoning_token": {"type": "number"},
+                        "max_results_range": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "minItems": 2,
+                            "maxItems": 2,
+                        },
+                        "input_cost_per_query": {"type": "number"},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "additionalProperties": False,
+    },
+}
+
+
 def test_aaamodel_prices_and_context_window_json_is_valid():
     """
     Validates the `model_prices_and_context_window.json` file.
 
     If this test fails after you update the json, you need to update the schema or correct the change you made.
     """
-
-    INTENDED_SCHEMA = {
-        "type": "object",
-        "additionalProperties": {
-            "type": "object",
-            "properties": {
-                "supports_computer_use": {"type": "boolean"},
-                "cache_creation_input_audio_token_cost": {"type": "number"},
-                "cache_creation_input_token_cost": {"type": "number"},
-                "cache_creation_input_token_cost_above_1hr": {"type": "number"},
-                "cache_creation_input_token_cost_above_32k_tokens": {"type": "number"},
-                "cache_creation_input_token_cost_above_100k_tokens": {"type": "number"},
-                "cache_creation_input_token_cost_above_100k_tokens_batches": {"type": "number"},
-                "cache_creation_input_token_cost_above_128k_tokens": {"type": "number"},
-                "cache_creation_input_token_cost_above_200k_tokens": {"type": "number"},
-                "cache_creation_input_token_cost_above_256k_tokens": {"type": "number"},
-                "cache_creation_input_token_cost_above_272k_tokens": {"type": "number"},
-                "cache_creation_input_token_cost_above_272k_tokens_flex": {"type": "number"},
-                "cache_creation_input_token_cost_above_272k_tokens_ultrafast": {"type": "number"},
-                "cache_creation_input_token_cost_above_272k_tokens_priority": {"type": "number"},
-                "cache_creation_input_token_cost_above_200k_tokens_batches": {"type": "number"},
-                "cache_creation_input_token_cost_above_272k_tokens_batches": {"type": "number"},
-                "cache_creation_input_token_cost_batches": {"type": "number"},
-                "cache_creation_input_token_cost_decisions": {"type": "number"},
-                "cache_creation_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
-                "cache_read_input_token_cost_decisions": {"type": "number"},
-                "cache_read_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
-                "input_cost_per_token_decisions": {"type": "number"},
-                "input_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
-                "output_cost_per_token_decisions": {"type": "number"},
-                "output_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
-                "cache_creation_input_token_cost_flex": {"type": "number"},
-                "cache_creation_input_token_cost_priority": {"type": "number"},
-                "cache_creation_input_token_cost_ultrafast": {"type": "number"},
-                "cache_read_input_token_cost": {"type": "number"},
-                "explicit_cache_read_input_token_cost": {"type": "number"},
-                "cache_read_input_token_cost_above_32k_tokens": {"type": "number"},
-                "cache_read_input_token_cost_above_100k_tokens": {"type": "number"},
-                "cache_read_input_token_cost_above_100k_tokens_batches": {"type": "number"},
-                "cache_read_input_token_cost_above_128k_tokens": {"type": "number"},
-                "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
-                "cache_read_input_token_cost_above_200k_tokens_batches": {"type": "number"},
-                "cache_read_input_token_cost_above_256k_tokens": {"type": "number"},
-                "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
-                "cache_read_input_token_cost_above_272k_tokens_flex": {"type": "number"},
-                "cache_read_input_token_cost_above_272k_tokens_ultrafast": {"type": "number"},
-                "cache_read_input_token_cost_above_512k_tokens": {"type": "number"},
-                "input_cost_per_token_above_272k_tokens_ultrafast": {"type": "number"},
-                "cache_read_input_token_cost_batches": {"type": "number"},
-                "cache_read_input_token_cost_above_272k_tokens_batches": {"type": "number"},
-                "cache_creation_input_token_cost_above_1hr_above_100k_tokens": {"type": "number"},
-                "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
-                "cache_read_input_audio_token_cost": {"type": "number"},
-                "cache_read_input_image_token_cost": {"type": "number"},
-                "audio_transcription_config": {"type": "string"},
-                "deprecation_date": {"type": "string"},
-                "input_cost_per_audio_per_second": {"type": "number"},
-                "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
-                "google_maps_grounding_cost_per_query": {"type": "number"},
-                "input_cost_per_audio_token": {"type": "number"},
-                "input_cost_per_image_token": {"type": "number"},
-                "input_cost_per_character": {"type": "number"},
-                "input_cost_per_character_above_128k_tokens": {"type": "number"},
-                "input_cost_per_image": {"type": "number"},
-                "input_cost_per_image_above_128k_tokens": {"type": "number"},
-                "input_cost_per_video_token": {"type": "number"},
-                "input_cost_per_token_above_32k_tokens": {"type": "number"},
-                "input_cost_per_token_above_100k_tokens": {"type": "number"},
-                "input_cost_per_token_above_100k_tokens_batches": {"type": "number"},
-                "input_cost_per_token_above_200k_tokens": {"type": "number"},
-                "input_cost_per_token_above_200k_tokens_batches": {"type": "number"},
-                "input_cost_per_token_above_256k_tokens": {"type": "number"},
-                "input_cost_per_token_above_272k_tokens": {"type": "number"},
-                "input_cost_per_token_above_512k_tokens": {"type": "number"},
-                "cache_read_input_token_cost_flex": {"type": "number"},
-                "cache_read_input_token_cost_priority": {"type": "number"},
-                "cache_read_input_token_cost_balanced": {"type": "number"},
-                "cache_read_input_token_cost_ultrafast": {"type": "number"},
-                "cache_read_input_token_cost_above_200k_tokens_priority": {"type": "number"},
-                "cache_read_input_token_cost_above_272k_tokens_priority": {"type": "number"},
-                "input_cost_per_token_flex": {"type": "number"},
-                "input_cost_per_token_priority": {"type": "number"},
-                "input_cost_per_token_balanced": {"type": "number"},
-                "input_cost_per_token_ultrafast": {"type": "number"},
-                "input_cost_per_token_above_200k_tokens_priority": {"type": "number"},
-                "input_cost_per_token_above_272k_tokens_priority": {"type": "number"},
-                "input_cost_per_token_above_272k_tokens_batches": {"type": "number"},
-                "input_cost_per_token_above_272k_tokens_flex": {"type": "number"},
-                "input_cost_per_audio_token_priority": {"type": "number"},
-                "output_cost_per_token_flex": {"type": "number"},
-                "output_cost_per_token_priority": {"type": "number"},
-                "output_cost_per_token_balanced": {"type": "number"},
-                "output_cost_per_token_ultrafast": {"type": "number"},
-                "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
-                "output_cost_per_token_above_272k_tokens_priority": {"type": "number"},
-                "output_cost_per_token_above_272k_tokens_ultrafast": {"type": "number"},
-                "output_cost_per_token_above_272k_tokens_batches": {"type": "number"},
-                "output_cost_per_token_above_272k_tokens_flex": {"type": "number"},
-                "regional_endpoint_uplift_multiplier": {"type": "number"},
-                "regional_processing_uplift_multiplier_eu": {"type": "number"},
-                "regional_processing_uplift_multiplier_us": {"type": "number"},
-                "input_cost_per_pixel": {"type": "number"},
-                "input_cost_per_query": {"type": "number"},
-                "input_cost_per_request": {"type": "number"},
-                "cost_per_second": {"type": "number"},
-                "input_cost_per_second": {"type": "number"},
-                "input_cost_per_text_message": {"type": "number"},
-                "input_cost_per_token": {"type": "number"},
-                "input_cost_per_token_above_128k_tokens": {"type": "number"},
-                "input_cost_per_audio_token_batches": {"type": "number"},
-                "input_cost_per_image_token_batches": {"type": "number"},
-                "input_cost_per_token_batches": {"type": "number"},
-                "input_cost_per_video_token_batches": {"type": "number"},
-                "input_cost_per_token_cache_hit": {"type": "number"},
-                "input_cost_per_video_per_second": {"type": "number"},
-                "input_cost_per_video_per_second_above_8s_interval": {"type": "number"},
-                "input_cost_per_video_per_second_above_15s_interval": {"type": "number"},
-                "input_cost_per_video_per_second_above_128k_tokens": {"type": "number"},
-                "input_dbu_cost_per_token": {"type": "number"},
-                "annotation_cost_per_page": {"type": "number"},
-                "annotation_cost_per_page_batches": {"type": "number"},
-                "ocr_cost_per_page": {"type": "number"},
-                "ocr_cost_per_page_batches": {"type": "number"},
-                "ocr_cost_per_credit": {"type": "number"},
-                "code_interpreter_cost_per_session": {"type": "number"},
-                "inference_geo": {"type": "string"},
-                "litellm_provider": {"type": "string"},
-                "max_input_tokens": {"type": "number"},
-                "max_output_tokens": {"type": "number"},
-                "max_tokens": {"type": "number"},
-                "metadata": {"type": "object"},
-                "provider_specific_entry": {"type": "object"},
-                "mode": {
-                    "type": "string",
-                    "enum": [
-                        "audio_speech",
-                        "audio_transcription",
-                        "chat",
-                        "completion",
-                        "container",
-                        "image_edit",
-                        "embedding",
-                        "evaluation",
-                        "extraction",
-                        "guardrail",
-                        "image_generation",
-                        "video_generation",
-                        "moderation",
-                        "rerank",
-                        "realtime",
-                        "responses",
-                        "ocr",
-                        "search",
-                        "vector_store",
-                    ],
-                },
-                "output_cost_per_audio_token": {"type": "number"},
-                "output_cost_per_character": {"type": "number"},
-                "output_cost_per_character_above_128k_tokens": {"type": "number"},
-                "output_cost_per_image": {"type": "number"},
-                "output_cost_per_image_512": {"type": "number"},
-                "output_cost_per_image_1024": {"type": "number"},
-                "output_cost_per_image_1536": {"type": "number"},
-                "output_cost_per_image_0.5K": {"type": "number"},
-                "output_cost_per_image_1K": {"type": "number"},
-                "output_cost_per_image_2K": {"type": "number"},
-                "output_cost_per_image_4K": {"type": "number"},
-                "output_cost_per_image_token": {"type": "number"},
-                "output_cost_per_image_token_batches": {"type": "number"},
-                "output_cost_per_video_token": {"type": "number"},
-                "output_cost_per_pixel": {"type": "number"},
-                "output_cost_per_second": {"type": "number"},
-                "output_cost_per_second_480p": {"type": "number"},
-                "output_cost_per_second_720p": {"type": "number"},
-                "output_cost_per_second_768p": {"type": "number"},
-                "output_cost_per_second_2k": {"type": "number"},
-                "output_cost_per_second_1080p": {"type": "number"},
-                "output_cost_per_second_4k": {"type": "number"},
-                "output_cost_per_token": {"type": "number"},
-                "output_cost_per_token_above_32k_tokens": {"type": "number"},
-                "output_cost_per_token_above_100k_tokens": {"type": "number"},
-                "output_cost_per_token_above_100k_tokens_batches": {"type": "number"},
-                "output_cost_per_token_above_128k_tokens": {"type": "number"},
-                "output_cost_per_token_above_200k_tokens": {"type": "number"},
-                "output_cost_per_token_above_200k_tokens_batches": {"type": "number"},
-                "output_cost_per_token_above_256k_tokens": {"type": "number"},
-                "output_cost_per_token_above_272k_tokens": {"type": "number"},
-                "output_cost_per_token_above_512k_tokens": {"type": "number"},
-                "output_cost_per_token_batches": {"type": "number"},
-                "output_cost_per_reasoning_token": {"type": "number"},
-                "output_cost_per_video_per_second": {"type": "number"},
-                "output_db_cost_per_token": {"type": "number"},
-                "output_dbu_cost_per_token": {"type": "number"},
-                "output_vector_size": {"type": "number"},
-                "rpd": {"type": "number"},
-                "rpm": {"type": "number"},
-                "source": {"type": "string"},
-                "comment": {"type": "string"},
-                "supports_assistant_prefill": {"type": "boolean"},
-                "supports_anthropic_compaction": {"type": "boolean"},
-                "supports_audio_input": {"type": "boolean"},
-                "supports_audio_output": {"type": "boolean"},
-                "gemini_native_audio": {"type": "boolean"},
-                "gemini_audio_only_live": {"type": "boolean"},
-                "supports_embedding_image_input": {"type": "boolean"},
-                "supports_forced_tool_use": {"type": "boolean"},
-                "supports_function_calling": {"type": "boolean"},
-                "supports_image_input": {"type": "boolean"},
-                "supports_nova_canvas_image_edit": {"type": "boolean"},
-                "supports_parallel_function_calling": {"type": "boolean"},
-                "supports_parallel_tool_use_config": {"type": "boolean"},
-                "supports_pdf_input": {"type": "boolean"},
-                "prompt_cache_min_tokens": {"type": "number"},
-                "supports_prompt_cache_breakpoint": {"type": "boolean"},
-                "supports_thinking_cache_preservation": {"type": "boolean"},
-                "supports_prompt_caching": {"type": "boolean"},
-                "supports_response_schema": {"type": "boolean"},
-                "supports_system_messages": {"type": "boolean"},
-                "supports_tool_choice": {"type": "boolean"},
-                "supports_tool_search": {"type": "boolean"},
-                "supports_video_input": {"type": "boolean"},
-                "supports_box_questions": {"type": "boolean"},
-                "supports_vision": {"type": "boolean"},
-                "supports_web_search": {"type": "boolean"},
-                "token_count_framing": {"type": "integer"},
-                "token_count_model": {
-                    "type": "object",
-                    "properties": {"model": {"type": "string"}, "region": {"type": "string"}},
-                    "required": ["model"],
-                },
-                "token_count_tokenizer": {"type": "string", "enum": ["kimi_k3"]},
-                "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {"type": "boolean"},
-                "supports_bedrock_runtime_chat_completions_response_format": {"type": "boolean"},
-                "supports_bedrock_runtime_chat_completions_inline_reasoning": {"type": "boolean"},
-                "supports_bedrock_converse_tool_result_images": {"type": "boolean"},
-                "supports_url_context": {"type": "boolean"},
-                "supports_multimodal": {"type": "boolean"},
-                "uses_embed_content": {"type": "boolean"},
-                "supports_reasoning": {"type": "boolean"},
-                "supports_minimal_reasoning_effort": {"type": "boolean"},
-                "supports_low_reasoning_effort": {"type": "boolean"},
-                "supports_none_reasoning_effort": {"type": "boolean"},
-                "supports_xhigh_reasoning_effort": {"type": "boolean"},
-                "supports_max_reasoning_effort": {"type": "boolean"},
-                "reasoning_effort_levels": {
-                    "type": "array",
-                    "items": {"type": "string", "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]},
-                },
-                "default_reasoning_effort": {
-                    "type": "string",
-                    "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],
-                },
-                "supports_adaptive_thinking": {"type": "boolean"},
-                "supports_anthropic_thinking_payload": {"type": "boolean"},
-                "supports_legacy_thinking": {"type": "boolean"},
-                "thinking_always_on": {"type": "boolean"},
-                "supports_mid_conversation_system": {"type": "boolean"},
-                "supports_sampling_params": {"type": "boolean"},
-                "supports_output_config": {"type": "boolean"},
-                "supports_speed": {"type": "boolean"},
-                "supports_fast_mode": {"type": "boolean"},
-                "supported_audio_formats": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "enum": ["mp3", "wav"],
-                    },
-                },
-                "vertex_ai_audio_api": {
-                    "type": "string",
-                    "enum": ["lyria_predict", "lyria_interactions"],
-                },
-                "bedrock_output_config_effort_ceiling": {
-                    "type": "string",
-                    "enum": ["low", "medium", "high", "max", "xhigh"],
-                },
-                "bedrock_converse_supports_strict_tools": {"type": "boolean"},
-                "supports_regex_lookaround": {"type": "boolean"},
-                "tpm": {"type": "number"},
-                "supported_endpoints": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "enum": [
-                            "/v1/responses",
-                            "/v1/embeddings",
-                            "/v1/chat/completions",
-                            "/v1/completions",
-                            "/v1/messages",
-                            "/v1/images/generations",
-                            "/v1/realtime",
-                            "/v1/realtime/transcription_sessions",
-                            "/v1/images/variations",
-                            "/v1/images/edits",
-                            "/v1/batch",
-                            "/v1beta/interactions",
-                            "/v1/audio/transcriptions",
-                            "/v1/audio/speech",
-                            "/v1/ocr",
-                            "/v1/videos",
-                            "/vertex_ai/live",
-                            "/v1/listen",
-                            "/v1/systemone",
-                            "/v1/decisions",
-                            "/v1beta/interactions",
-                        ],
-                    },
-                },
-                "supported_regions": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                    },
-                },
-                "guardrail_cost_per_unit": {
-                    "type": "object",
-                    "additionalProperties": {"type": "number"},
-                },
-                "search_context_cost_per_query": {
-                    "type": "object",
-                    "properties": {
-                        "search_context_size_low": {"type": "number"},
-                        "search_context_size_medium": {"type": "number"},
-                        "search_context_size_high": {"type": "number"},
-                    },
-                    "additionalProperties": False,
-                },
-                "web_search_billing_unit": {
-                    "type": "string",
-                    "enum": ["per_prompt", "per_query"],
-                },
-                "search_free_requests": {
-                    "type": "object",
-                    "properties": {
-                        "count": {"type": "integer", "minimum": 1},
-                        "period": {"type": "string", "enum": ["day", "month"]},
-                        "shared_group": {"type": "string"},
-                    },
-                    "required": ["count", "period", "shared_group"],
-                    "additionalProperties": False,
-                },
-                "citation_cost_per_token": {"type": "number"},
-                "supported_modalities": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "enum": ["text", "audio", "image", "video"],
-                    },
-                },
-                "supported_output_modalities": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "enum": ["text", "image", "audio", "code", "video"],
-                    },
-                },
-                "supports_native_streaming": {"type": "boolean"},
-                "supports_image_size": {"type": "boolean"},
-                "supports_native_structured_output": {"type": "boolean"},
-                "supports_bedrock_native_structured_output": {"type": "boolean"},
-                "use_openai_responses_path": {"type": "boolean"},
-                "off_peak_pricing": {
-                    "type": "object",
-                    "properties": {
-                        "hours_utc": {
-                            "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
-                        },
-                        "windows": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "hours_utc": {
-                                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
-                                    },
-                                    "weekdays": {
-                                        "type": "array",
-                                        "items": {"oneOf": [{"type": "integer"}, {"type": "string"}]},
-                                    },
-                                },
-                                "required": ["hours_utc"],
-                                "additionalProperties": False,
-                            },
-                        },
-                        "weekday_timezone": {"type": "string"},
-                        "input_cost_per_token": {"type": "number"},
-                        "output_cost_per_token": {"type": "number"},
-                        "output_cost_per_reasoning_token": {"type": "number"},
-                        "cache_read_input_token_cost": {"type": "number"},
-                        "cache_creation_input_token_cost": {"type": "number"},
-                    },
-                    "additionalProperties": False,
-                },
-                "tiered_pricing": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "range": {
-                                "type": "array",
-                                "items": {"type": "number"},
-                                "minItems": 2,
-                                "maxItems": 2,
-                            },
-                            "input_cost_per_token": {"type": "number"},
-                            "output_cost_per_token": {"type": "number"},
-                            "cache_read_input_token_cost": {"type": "number"},
-                            "cache_creation_input_token_cost": {"type": "number"},
-                            "output_cost_per_reasoning_token": {"type": "number"},
-                            "max_results_range": {
-                                "type": "array",
-                                "items": {"type": "number"},
-                                "minItems": 2,
-                                "maxItems": 2,
-                            },
-                            "input_cost_per_query": {"type": "number"},
-                        },
-                        "additionalProperties": False,
-                    },
-                },
-            },
-            "additionalProperties": False,
-        },
-    }
 
     prod_json = os.path.join(os.path.dirname(__file__), "..", "..", "model_prices_and_context_window.json")
     with open(prod_json, "r") as model_prices_file:
@@ -1363,7 +1389,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
     actual_json.pop("fallback_generalizations", None)  # reserved meta key, not a model entry
 
     # Validate schema
-    validate(actual_json, INTENDED_SCHEMA)
+    validate(actual_json, _COST_MAP_ROW_SCHEMA)
 
     # Validate cost values
     # Define exceptions for models that are allowed to have costs > 1
@@ -1383,6 +1409,21 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         error_message = "Cost validation failed:\n" + "\n".join(violations)
         error_message += "\n\nTo add exceptions, add the model ID to the 'exceptions' list in the test function."
         raise AssertionError(error_message)
+
+
+def test_cost_map_schema_accepts_12hr_cache_write_rates_for_batch_and_ultrafast_tiers() -> None:
+    row: Final = {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "cache_creation_input_token_cost_above_12hr_batches": 3e-6,
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches": 4e-6,
+        "cache_creation_input_token_cost_above_12hr_ultrafast": 5e-6,
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast": 6e-6,
+    }
+
+    assert Draft7Validator(_COST_MAP_ROW_SCHEMA).is_valid({"synthetic-12hr-cache-write-model": row})
 
 
 def test_max_tokens_consistency():
@@ -2219,6 +2260,45 @@ class TestProxyFunctionCalling:
 
 
 @pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
+def test_get_model_info_derives_max_tokens_from_the_output_limit() -> None:
+    model: Final = "derived-max-tokens-chat-model"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "max_input_tokens": 400000,
+                "max_output_tokens": 128000,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    info: Final = litellm.get_model_info(model, custom_llm_provider="openai")
+    assert info["max_tokens"] == 128000
+    assert litellm.get_max_tokens(model) == 128000
+
+
+def test_get_model_info_derives_max_tokens_from_the_input_limit_when_the_row_has_no_output_limit() -> None:
+    model: Final = "derived-max-tokens-embedding-model"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "embedding",
+                "max_input_tokens": 8191,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    info: Final = litellm.get_model_info(model, custom_llm_provider="openai")
+    assert info["max_tokens"] == 8191
+    assert info["max_output_tokens"] is None
+
+
 def test_register_model_price_is_used_for_completion_cost() -> None:
     model: Final = "migration-custom-pricing-model"
     price: Final = {
@@ -2528,44 +2608,9 @@ def test_priced_router_deployment_id_stays_out_of_wildcard_model_listing():
     assert litellm.model_cost[deployment_id]["input_cost_per_token"] == 0.000001
 
 
-def test_reasoning_content_preserved_in_text_completion_wrapper():
-    """Ensure reasoning_content is copied from delta to text_choices."""
-    chunk = ModelResponseStream(
-        id="test-id",
-        created=1234567890,
-        model="test-model",
-        object="chat.completion.chunk",
-        choices=[
-            StreamingChoices(
-                finish_reason=None,
-                index=0,
-                delta=Delta(
-                    content="Some answer text",
-                    role="assistant",
-                    reasoning_content="Here's my chain of thought...",
-                ),
-            )
-        ],
-    )
-
-    wrapper = TextCompletionStreamWrapper(
-        completion_stream=None,  # Not used in convert_to_text_completion_object
-        model="test-model",
-        stream_options=None,
-    )
-
-    transformed = wrapper.convert_to_text_completion_object(chunk)
-
-    assert "choices" in transformed
-    assert len(transformed["choices"]) == 1
-    choice = transformed["choices"][0]
-    assert choice["text"] == "Some answer text"
-    assert choice["reasoning_content"] == "Here's my chain of thought..."
-
-
 def test_anthropic_claude_4_invoke_chat_provider_config():
     """Test that the Anthropic Claude 4 Invoke chat provider config is correct."""
-    from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+    from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeConfig,
     )
 
@@ -5111,7 +5156,7 @@ def test_request_path_cost_map_walks_survive_a_registration_mid_walk(
     from litellm.llms.fal_ai.cost_calculator import _keyed_rows
     from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
     from litellm.llms.ollama.common_utils import OllamaModelInfo
-    from litellm.llms.openai.chat.gpt_5_transformation import _catalogue_declares_default_effort
+    from litellm.llms.openai.chat.gpt_reasoning_transformation import _catalogue_declares_default_effort
     from litellm.utils import _handle_new_key_with_scan, _invalidate_model_cost_lowercase_map
 
     walks: Final[Mapping[str, Callable[[], object]]] = {
@@ -8623,7 +8668,7 @@ def test_basic_trimming_no_max_tokens_specified():
     trimmed_messages = trim_messages(messages, model="gpt-4")
     print("trimmed messages for gpt-4")
     print(trimmed_messages)
-    assert (get_token_count(messages=trimmed_messages, model="gpt-4")) <= litellm.model_cost["gpt-4"]["max_tokens"]
+    assert (get_token_count(messages=trimmed_messages, model="gpt-4")) <= litellm.model_cost["gpt-4"]["max_input_tokens"]
 
 
 def test_multiple_messages_trimming():
