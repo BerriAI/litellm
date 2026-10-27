@@ -5,7 +5,6 @@ from typing import Final, cast  # noqa: TID251  # narrows legacy callable signat
 import pytest
 
 import litellm
-from litellm.caching.caching import Cache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
 from litellm.llms.anthropic.pass_through.messages import handler as python_messages
@@ -457,7 +456,6 @@ ADVISOR_TOOL: Final = {"type": ANTHROPIC_ADVISOR_TOOL_TYPE, "name": "advisor", "
         (Feature.CALLER_CLIENT, "anthropic/claude-sonnet-4-5", {"client": object()}, {}),
         (Feature.TIMEOUT_VARIANTS, "anthropic/claude-sonnet-4-5", {"request_timeout": 5}, {}),
         (Feature.AGENTIC_LOOP_HOOK, "anthropic/claude-sonnet-4-5", {}, {"callbacks": [_Agentic()]}),
-        (Feature.RESPONSE_CACHE, "anthropic/claude-sonnet-4-5", {}, {"cache": Cache()}),
         (Feature.TLS_POLICY, "anthropic/claude-sonnet-4-5", {}, {"ssl_security_level": "DEFAULT@SECLEVEL=1"}),
         (Feature.MODIFY_PARAMS, "anthropic/claude-sonnet-4-5", {}, {"modify_params": True}),
         (

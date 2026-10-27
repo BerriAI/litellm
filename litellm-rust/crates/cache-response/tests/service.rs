@@ -6,11 +6,10 @@ use std::{
     time::Duration,
 };
 
-use litellm_cache::ExactCacheContext;
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheEntry, CacheKeyInput, ResponseCache, ResponseCacheConfig, ResponseCacheRequest,
-    ResponseCacheService,
+    CacheEntry, CacheKeyInput, CacheOptions, CachePolicy, CacheScope, ResponseCache,
+    ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService,
 };
 use rstest::rstest;
 use serde_json::json;
@@ -25,48 +24,61 @@ async fn service_honors_per_call_expiry_and_freshness() {
             Duration::from_secs(cache_clock.load(Ordering::SeqCst))
         }),
     )));
-    let request = ResponseCacheRequest {
-        context: ExactCacheContext {
+    let options = CacheOptions {
+        policy: CachePolicy {
             ttl: Some(Duration::from_secs(5)),
+            ..CachePolicy::default()
         },
-        ..ResponseCacheRequest::new(CacheKeyInput {
-            preset: Some("entry".into()),
-            ..Default::default()
-        })
+        scope: CacheScope::Shared,
     };
-    cache
-        .store(&request, json!({"answer":7}), Duration::ZERO)
+    let key =
+        litellm_cache_response::cache_key(&options.clone().request("", "test", json!("entry")).key);
+    let request = cache
+        .clone()
+        .prepare(options.clone(), "test", &|| json!("entry"));
+    request
+        .call
+        .store(json!({"answer":7}), Duration::ZERO)
         .await
         .unwrap();
     assert_eq!(
-        cache.lookup(&request, Duration::ZERO).await.unwrap(),
-        Some(json!({"answer":7}))
+        request.call.lookup(Duration::ZERO).await.unwrap(),
+        Some(litellm_cache_response::CacheHit {
+            value: json!({"answer":7}),
+            key,
+        })
     );
-    let stale_request = ResponseCacheRequest {
-        max_age: Some(Duration::from_secs(1)),
-        ..request.clone()
-    };
+    let stale_request = cache.prepare(
+        CacheOptions {
+            policy: CachePolicy {
+                max_age: Some(Duration::from_secs(1)),
+                ..options.policy
+            },
+            ..options
+        },
+        "test",
+        &|| json!("entry"),
+    );
     clock.store(2, Ordering::SeqCst);
     assert_eq!(
-        cache
-            .lookup(&stale_request, Duration::from_secs(2))
+        stale_request
+            .call
+            .lookup(Duration::from_secs(2))
             .await
             .unwrap(),
         None
     );
     assert!(
-        cache
-            .lookup(&request, Duration::from_secs(2))
+        request
+            .call
+            .lookup(Duration::from_secs(2))
             .await
             .unwrap()
             .is_some()
     );
     clock.store(6, Ordering::SeqCst);
     assert_eq!(
-        cache
-            .lookup(&request, Duration::from_secs(6))
-            .await
-            .unwrap(),
+        request.call.lookup(Duration::from_secs(6)).await.unwrap(),
         None
     );
 }
@@ -104,20 +116,33 @@ async fn entry_limit_applies_to_sync_async_and_batch_writes() {
         )
         .await
         .unwrap();
-    let service: Arc<dyn ResponseCacheService> = Arc::new(cache);
+    let service = Arc::new(cache).prepare(CacheOptions::new(CacheScope::Shared), "test", &|| {
+        json!("service")
+    });
     service
-        .store(&request("service"), small.clone(), Duration::ZERO)
+        .call
+        .store(small.clone(), Duration::ZERO)
         .await
         .unwrap();
-    for key in ["sync", "async", "batch-large"] {
-        assert!(storage.get_cache(key).unwrap().is_none());
-    }
-    for key in ["batch-small", "service"] {
-        assert_eq!(
-            service.lookup(&request(key), Duration::ZERO).await.unwrap(),
-            Some(small.clone())
-        );
-    }
+    assert!(storage.get_cache("sync").unwrap().is_none());
+    assert!(storage.get_cache("async").unwrap().is_none());
+    assert!(storage.get_cache("batch-large").unwrap().is_none());
+    assert_eq!(
+        storage
+            .get_cache("batch-small")
+            .unwrap()
+            .map(|entry| entry.response),
+        Some(small.clone())
+    );
+    assert_eq!(
+        service
+            .call
+            .lookup(Duration::ZERO)
+            .await
+            .unwrap()
+            .map(|hit| hit.value),
+        Some(small)
+    );
 }
 
 #[rstest]

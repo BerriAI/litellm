@@ -78,7 +78,6 @@ _FEATURES: Final[detectors.Detectors] = MappingProxyType(
         Feature.INPUT_REWRITE: route_detectors.input_rewrite,
         Feature.EXTRA_BODY: detectors.extra_body,
         Feature.PROVIDER_AFFINITY: route_detectors.provider_affinity,
-        Feature.RESPONSE_CACHE: detectors.response_cache,
         Feature.MANAGED_RESOURCE_IDS: route_detectors.managed_resource_ids,
         Feature.CACHE_CONTROL_MARKS: route_detectors.cache_control_marks,
         Feature.ANTHROPIC_TOOL_SEARCH: route_detectors.anthropic_tool_search,

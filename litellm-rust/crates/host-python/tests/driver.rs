@@ -24,7 +24,7 @@ use rstest::rstest;
 use support::{
     HookScript, Interpreter, Log, MachineFactory, OpScript, Synthetic, binding, call_options,
     failing_machine, handed, hooks, interpreter, lifecycle_module, open_stream, read_all,
-    run_composed, run_scripted, settled, success_machine,
+    reviewed_machine, run_composed, run_scripted, settled, success_machine,
 };
 
 fn observed(capacity: usize) -> (CallOptions, impl FnMut() -> Vec<CallEvent>) {
@@ -322,6 +322,72 @@ fn success_runs_every_step_in_order_and_returns_the_public_response(
                 "host.close",
             ]
         );
+    });
+}
+
+#[rstest]
+#[case::reviewed(HookScript::ReviewResult, "reviewed", &["provider_result:provider"])]
+#[case::not_reviewed(HookScript::Plain, "provider", &[])]
+fn a_provider_result_keeps_what_the_reviewing_hooks_answer(
+    #[from(interpreter)] _python: Interpreter,
+    #[values(false, true)] asynchronous: bool,
+    #[case] script: HookScript,
+    #[case] kept: &str,
+    #[case] reviewed: &[&str],
+) {
+    Python::attach(|py| {
+        let (result, log) = run_scripted(
+            py,
+            reviewed_machine(),
+            OpScript::Answer,
+            script,
+            asynchronous,
+        );
+        let seen: Vec<_> = log
+            .iter()
+            .filter(|entry| entry.starts_with("provider_result:"))
+            .cloned()
+            .collect();
+        assert_eq!(result.unwrap().extract::<String>(py).unwrap(), kept);
+        assert_eq!(seen, reviewed);
+    });
+}
+
+#[rstest]
+#[case::hit(Some("cached"), "cached", &["lookup"])]
+#[case::miss(
+    None,
+    "reviewed",
+    &["lookup", "complete", "provider_result:provider", "store:reviewed"]
+)]
+fn a_host_hit_skips_the_provider_and_a_miss_stores_what_the_hooks_answered(
+    #[from(interpreter)] _python: Interpreter,
+    #[values(false, true)] asynchronous: bool,
+    #[case] cached: Option<&'static str>,
+    #[case] returned: &str,
+    #[case] steps: &[&str],
+) {
+    Python::attach(|py| {
+        let log = Log::default();
+        let (result, log) = run_composed(
+            py,
+            reviewed_machine(),
+            binding(&log, OpScript::Answer).with_cache(cached),
+            hooks(&log, HookScript::ReviewResult),
+            std::convert::identity,
+            call_options(asynchronous),
+        );
+        let seen: Vec<_> = log
+            .iter()
+            .filter(|entry| {
+                ["lookup", "complete", "provider_result:", "store:"]
+                    .iter()
+                    .any(|step| entry.starts_with(step))
+            })
+            .cloned()
+            .collect();
+        assert_eq!(result.unwrap().extract::<String>(py).unwrap(), returned);
+        assert_eq!(seen, steps);
     });
 }
 

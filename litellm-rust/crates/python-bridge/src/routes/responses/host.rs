@@ -135,6 +135,14 @@ impl PythonBinding for ResponsesPythonHost {
         self.host.response(py, &response)
     }
 
+    fn public_response(
+        &mut self,
+        py: Python<'_>,
+        response: &serde_json::Value,
+    ) -> PyResult<Py<PyAny>> {
+        self.host.response(py, response)
+    }
+
     fn encode_stream_head(
         &mut self,
         _py: Python<'_>,

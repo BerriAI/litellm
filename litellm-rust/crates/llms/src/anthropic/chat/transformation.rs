@@ -150,6 +150,7 @@ impl BaseConfig for AnthropicConfig {
             .collect();
 
         Ok(ChatCompletionsResponse {
+            id: None,
             created: unix_now(),
             model: body.model,
             choices: vec![ChatCompletionsChoice {

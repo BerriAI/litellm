@@ -21,7 +21,7 @@ mod runtime;
 mod services;
 
 pub use argument::{effective_py_args, lookup, present};
-pub use binding::PythonBinding;
+pub use binding::{Hit, HitOutput, Lookup, PythonBinding};
 pub use conversion_cache::{FromPythonCache, ToPythonCache};
 pub use driver::{CallOptions, run_call};
 pub use error::{Error, InvokeError};

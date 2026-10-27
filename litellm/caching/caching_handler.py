@@ -26,8 +26,8 @@ from pydantic import ConfigDict, SkipValidation, TypeAdapter, ValidationError
 import litellm
 from litellm._internal_context import is_internal_call, post_response_phase
 from litellm._logging import print_verbose, verbose_logger
-from litellm.caching import InMemoryCache
-from litellm.caching.caching import S3Cache, response_cache_phase
+from litellm.caching import DualCache, InMemoryCache
+from litellm.caching.caching import Cache, RedisCache, S3Cache, response_cache_phase
 from litellm.constants import CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS, RESPONSE_CACHE_EXCLUDED_PROVIDERS
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
@@ -116,6 +116,46 @@ def _is_response_cache_excluded(model: str | None, kwargs: Mapping[str, object])
         or model_provider in RESPONSE_CACHE_EXCLUDED_PROVIDERS
         or is_github_copilot_per_user_request(kwargs)
     )
+
+
+_CACHE_CONTROLS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _cache_controls(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    controls: Final = kwargs.get("cache")
+    return _CACHE_CONTROLS.validate_python(controls) if isinstance(controls, Mapping) else {}
+
+
+def is_call_type_cached(call_type: str) -> bool:
+    if litellm.cache is None or litellm.cache.supported_call_types is None:
+        return False
+    covering_call_types: Final = ("aresponses", "responses") if call_type == "aresponses" else (call_type,)
+    return any(name in litellm.cache.supported_call_types for name in covering_call_types)
+
+
+def _reads_requested(caching: object, controls: Mapping[str, object]) -> bool:
+    return ((caching is None and litellm.cache is not None) or caching is True) and controls.get("no-cache") is not True
+
+
+def cache_reads_requested(kwargs: Mapping[str, object]) -> bool:
+    return _reads_requested(kwargs.get("caching"), _cache_controls(kwargs))
+
+
+def cache_access(model: str | None, kwargs: Mapping[str, object], call_type: str) -> tuple[bool, bool]:
+    if _is_response_cache_excluded(model=model, kwargs=kwargs) or not is_call_type_cached(call_type):
+        return (False, False)
+    controls: Final = _cache_controls(kwargs)
+    return (_reads_requested(kwargs.get("caching"), controls), controls.get("no-store") is not True)
+
+
+def may_store_cache(model: str | None, kwargs: Mapping[str, object], call_type: str) -> bool:
+    return cache_access(model, kwargs, call_type)[1]
+
+
+def response_memory_tier(cache: Cache) -> DualCache | None:
+    if not isinstance(cache.cache, RedisCache):
+        return None
+    return DualCache(redis_cache=cache.cache, in_memory_cache=in_memory_cache_obj)
 
 
 def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
@@ -222,9 +262,17 @@ def create_cache_write_task(write_factory: Callable[[], Awaitable[None]]) -> "as
     return task
 
 
-def _request_cache_key(request_kwargs: Mapping[str, Any]) -> str | None:
-    """Read the caller-supplied ``cache_key`` off the request kwargs."""
-    return request_kwargs.get("cache_key", None)
+def cache_key_kwargs(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        name: value
+        for name, value in kwargs.items()
+        if name != "cache_key" and not (name == "metadata" and value is None)
+    }
+
+
+def response_cache_key(cache: Cache, kwargs: Mapping[str, object]) -> object:
+    preset: Final = kwargs.get("cache_key")
+    return preset if preset else cache.get_cache_key(**cache_key_kwargs(kwargs))
 
 
 def _set_cached_hidden_param(response: object, key: str, value: object) -> None:
@@ -274,21 +322,13 @@ class LLMCachingHandler:
         request_kwargs: dict[str, object],
         start_time: datetime.datetime,
     ):
-        from litellm.caching import DualCache, RedisCache
-
         self.async_streaming_chunks: list[object] = []
         self.sync_streaming_chunks: list[object] = []
         self.request_kwargs = _drop_logging_obj_from_kwargs(request_kwargs)
-        self.preset_cache_key: str | None = None
+        self.preset_cache_key: object = None
         self.original_function = original_function
         self.start_time = start_time
-        if litellm.cache is not None and isinstance(litellm.cache.cache, RedisCache):
-            self.dual_cache: DualCache | None = DualCache(
-                redis_cache=litellm.cache.cache,
-                in_memory_cache=in_memory_cache_obj,
-            )
-        else:
-            self.dual_cache = None
+        self.dual_cache: DualCache | None = None if litellm.cache is None else response_memory_tier(litellm.cache)
 
     async def async_get_cache(
         self,
@@ -325,11 +365,7 @@ class LLMCachingHandler:
             return None
 
         # Check if caching should be performed BEFORE doing expensive operations
-        if (
-            (kwargs.get("caching", None) is None and litellm.cache is not None) or kwargs.get("caching", False) is True
-        ) and (
-            kwargs.get("cache", {}).get("no-cache", False) is not True
-        ):  # allow users to control returning cached responses from the completion function
+        if cache_reads_requested(kwargs):
             args = args or ()
             final_embedding_cached_response: EmbeddingResponse | None = None
             embedding_all_elements_cache_hit: bool = False
@@ -908,12 +944,10 @@ class LLMCachingHandler:
                 if all(result is None for result in cached_result):
                     cached_result = None
         else:
-            request_kwargs: Final = new_kwargs.copy()
-            request_cache_key: Final = _request_cache_key(request_kwargs)
-            request_kwargs.pop("cache_key", None)
+            request_kwargs: Final = cache_key_kwargs(new_kwargs)
+            self.preset_cache_key = response_cache_key(litellm.cache, new_kwargs)
             if litellm.cache.supports_async() is True:
                 ## check if dual cache is supported ##
-                self.preset_cache_key = request_cache_key or litellm.cache.get_cache_key(**request_kwargs)
                 with response_cache_phase("get"):
                     cached_result = await litellm.cache.async_get_cache(
                         dynamic_cache_object=self.dual_cache,
@@ -921,7 +955,6 @@ class LLMCachingHandler:
                         **request_kwargs,
                     )
             else:  # fallback for caches that don't support async
-                self.preset_cache_key = request_cache_key or litellm.cache.get_cache_key(**request_kwargs)
                 with response_cache_phase("get"):
                     cached_result = litellm.cache.get_cache(
                         dynamic_cache_object=self.dual_cache,
@@ -937,7 +970,7 @@ class LLMCachingHandler:
     def _forget_worker_copy(self) -> None:
         """Drop this worker's memory copy of a stored response without output, so the next read reaches Redis,
         where the refill lands: the text completion and messages writers skip the memory tier."""
-        if self.dual_cache is None or self.preset_cache_key is None:
+        if self.dual_cache is None or not isinstance(self.preset_cache_key, str):
             return
         self.dual_cache.in_memory_cache.delete_cache(self.preset_cache_key)
 
@@ -1239,20 +1272,8 @@ class LLMCachingHandler:
         Returns:
             bool: True if the result should be stored in the cache, False otherwise.
         """
-        model_value: Final = kwargs.get("model")
-        model: Final = model_value if isinstance(model_value, str) else None
-        cache_options_value: Final = kwargs.get("cache")
-        cache_options: Final[Mapping[str, object]] = (
-            TypeAdapter(Mapping[str, object]).validate_python(cache_options_value)
-            if isinstance(cache_options_value, Mapping)
-            else {}
-        )
-        no_store: Final = cache_options.get("no-store", False)
-        return (
-            not _is_response_cache_excluded(model=model, kwargs=kwargs)
-            and self._is_call_type_supported_by_cache(original_function=original_function)
-            and no_store is not True
-        )
+        model: Final = kwargs.get("model")
+        return may_store_cache(model if isinstance(model, str) else None, kwargs, str(original_function.__name__))
 
     _should_store_result_in_cache = should_store_result_in_cache
 
@@ -1290,11 +1311,7 @@ class LLMCachingHandler:
         Returns:
             bool: True if the call type is supported by the cache, False otherwise.
         """
-        if litellm.cache is None or litellm.cache.supported_call_types is None:
-            return False
-        call_type: Final = str(original_function.__name__)
-        covering_call_types: Final = ("aresponses", "responses") if call_type == "aresponses" else (call_type,)
-        return any(name in litellm.cache.supported_call_types for name in covering_call_types)
+        return is_call_type_cached(str(original_function.__name__))
 
     async def add_streaming_response_to_cache(self, processed_chunk: ModelResponse) -> None:
         """

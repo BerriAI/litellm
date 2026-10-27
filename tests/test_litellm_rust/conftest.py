@@ -6,6 +6,15 @@ import pytest
 import pytest_asyncio
 
 import litellm
+from tests.test_litellm_rust.support.caching import (
+    cache as cache,
+)
+from tests.test_litellm_rust.support.caching import (
+    call as call,
+)
+from tests.test_litellm_rust.support.caching import (
+    fake_redis as fake_redis,
+)
 from tests.test_litellm_rust.support.clickhouse import clickhouse_url as clickhouse_url
 from tests.test_litellm_rust.support.isolation import isolated_test_state
 from tests.test_litellm_rust.support.recording_server import RecordingServer, recording_service

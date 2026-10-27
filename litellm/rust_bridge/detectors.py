@@ -13,7 +13,7 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.rust_bridge.catalog import Feature
-from litellm.rust_bridge.public_call import NativeCall, optional_mapping, optional_sequence, optional_str
+from litellm.rust_bridge.public_call import NativeCall, optional_sequence, optional_str
 
 if TYPE_CHECKING:
     from litellm.responses.mcp.litellm_proxy_mcp_handler import ToolParam
@@ -152,12 +152,6 @@ def call_callbacks(request: NativeCall) -> tuple[object, ...]:
 def agentic_loop_hook(request: NativeCall) -> bool:
     """A callback can request follow-up tool calls through Python's agentic loop."""
     return overridden("async_should_run_agentic_loop", call_callbacks(request))
-
-
-def response_cache(request: NativeCall) -> bool:
-    """Python owns cache lookup and storage unless this call disables cache reads."""
-    cache: Final = optional_mapping(request.resolved.get("cache")) or {}
-    return litellm.cache is not None and cache.get("no-cache") is not True
 
 
 _NATIVE_ECDH_CURVES: Final = frozenset({"x25519", "prime256v1", "secp256r1", "p-256", "secp384r1", "p-384"})
