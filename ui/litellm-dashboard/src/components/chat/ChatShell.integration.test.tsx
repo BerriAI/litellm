@@ -1,8 +1,12 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders as render } from "@/../tests/test-utils";
+import { renderWithProviders } from "@/../tests/test-utils";
+import type { ReactElement } from "react";
+import { ThemeProvider } from "@/contexts/ThemeContext";
 import ChatShell from "./ChatShell";
+
+const render = (ui: ReactElement) => renderWithProviders(<ThemeProvider>{ui}</ThemeProvider>);
 
 const { mockPush, mockUsePathname, mockUseChatShell, mockUseMediaQuery } = vi.hoisted(() => ({
   mockPush: vi.fn(),
@@ -34,7 +38,15 @@ vi.mock("usehooks-ts", () => ({ useMediaQuery: mockUseMediaQuery }));
 vi.mock("./ConversationList", () => ({ default: () => <div data-testid="conversation-list" /> }));
 
 describe("ChatShell", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ values: {} })),
+    );
+  });
+
   afterEach(() => {
+    vi.unstubAllGlobals();
     mockPush.mockClear();
     mockUsePathname.mockReturnValue("/ui/chat");
     mockUseMediaQuery.mockReturnValue(true);

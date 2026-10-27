@@ -234,6 +234,9 @@ class DefaultTeamSettingsResponse(SettingsResponse):
 class UIThemeSettingsResponse(SettingsResponse):
     """Response model for UI theme settings"""
 
+    logo_url_via_proxy: bool = False
+    logo_url_dark_via_proxy: bool = False
+
 
 _TEAM_ADMIN_FIELD_ENUM: Final = tuple(sorted(SUPPORTED_TEAM_ADMIN_PERMISSIONS))
 
@@ -1377,7 +1380,7 @@ async def update_sso_settings(
     tags=["UI Theme Settings"],
     response_model=UIThemeSettingsResponse,
 )
-async def get_ui_theme_settings():
+async def get_ui_theme_settings() -> UIThemeSettingsResponse:
     """
     Get UI theme configuration from the litellm_settings.
     Returns current logo settings for UI customization.
@@ -1390,18 +1393,23 @@ async def get_ui_theme_settings():
     # Load existing config
     config: Final = await proxy_config.get_config()
 
-    result: Final = await _get_settings_with_schema(
-        settings_key="ui_theme_config",
-        settings_class=UIThemeConfig,
-        config=config,
+    result: Final = _SettingsWithSchema.model_validate(
+        await _get_settings_with_schema(
+            settings_key="ui_theme_config",
+            settings_class=UIThemeConfig,
+            config=config,
+        )
     )
-
-    stored_values: Final = result.get("values", {})
-    result["values"] = {
-        **stored_values,
-        **{field: _resolve_ui_theme_field(stored_values, field) for field in _UI_THEME_FIELD_ENV_VARS},
+    values: Final = {
+        **result.values,
+        **{field: _resolve_ui_theme_field(result.values, field) for field in _UI_THEME_FIELD_ENV_VARS},
     }
-    return result
+    return UIThemeSettingsResponse(
+        values=values,
+        field_schema=result.field_schema,
+        logo_url_via_proxy=values["logo_url"] is None and bool(os.getenv("UI_LOGO_PATH", "").strip()),
+        logo_url_dark_via_proxy=values["logo_url_dark"] is None and bool(os.getenv("UI_LOGO_PATH_DARK", "").strip()),
+    )
 
 
 def _validate_public_image_url(value: str | None, field_name: str) -> None:
