@@ -612,13 +612,35 @@ async def test_oss_classifier_rejects_unknown_models_and_ambiguous_bases_before_
     assert len(respx_mock.calls) == 0
 
 
-@pytest.mark.asyncio
-async def test_upstream_reply_without_answers_is_a_server_error(respx_mock: respx.MockRouter) -> None:
-    respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(
-        json={"model": "pplx-decider-v1-27b", "usage": {"input_tokens": 10, "output_tokens": 0}}
-    )
+_PPLX_USAGE: Final = {"model": "pplx-decider-v1-27b", "usage": {"input_tokens": 10, "output_tokens": 0}}
 
-    with pytest.raises(litellm.InternalServerError, match="unexpected response"):
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reply", "detail"),
+    (
+        pytest.param(_PPLX_USAGE, "DecisionsResponse answers: Field required", id="usage"),
+        pytest.param({"error": "Rate limit reached"}, "DecisionsResponse answers: Field required", id="rate_limit_text"),
+        pytest.param({"error": "Request timed out"}, "DecisionsResponse answers: Field required", id="timeout_text"),
+        pytest.param(
+            {**_PPLX_USAGE, "answers": {"rate_limit": None}},
+            "DecisionsResponse answers.rate_limit: Input should be a valid dictionary",
+            id="null_answer_named_rate_limit",
+        ),
+        pytest.param(
+            {**_PPLX_USAGE, "answers": {"is_defect": {"type": "Request timed out"}}},
+            "DecisionsResponse answers.is_defect",
+            id="answer_type_timeout_text",
+        ),
+        pytest.param(["Rate limit reached"], "DecisionsResponse Input should be a valid dictionary", id="not_an_object"),
+    ),
+)
+async def test_a_malformed_upstream_reply_is_a_server_error_whatever_its_text(
+    reply: object, detail: str, respx_mock: respx.MockRouter
+) -> None:
+    respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=reply)
+
+    with pytest.raises(litellm.InternalServerError, match=re.escape(f"unexpected response: {detail}")):
         await litellm.asystemone(
             model="perplexity/pplx-decider-v1-27b",
             state="review",
@@ -3690,6 +3712,39 @@ async def test_decision_hosts_preserve_drex_model_routing_credentials_and_return
     }
 
 
+@pytest.mark.parametrize(
+    "unpriced_row",
+    (
+        pytest.param({}, id="empty"),
+        pytest.param(
+            {"litellm_provider": "typesafe", "mode": "evaluation", "input_cost_per_token": None},
+            id="metadata_and_null_rate",
+        ),
+    ),
+)
+async def test_a_returned_model_registered_without_prices_is_billed_at_the_requested_model(
+    unpriced_row: dict[str, object], monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "typesafe-test-key")
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "typesafe/jev-test-alias",
+        {"litellm_provider": "typesafe", "mode": "evaluation", "input_cost_per_token": 0.001, "output_cost_per_token": 0},
+    )
+    monkeypatch.setitem(litellm.model_cost, "typesafe/jev-test-unpriced", unpriced_row)
+    respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json={**_RESPONSE, "model": "jev-test-unpriced"})
+
+    response: Final = await litellm.asystemone(
+        model="typesafe/jev-test-alias",
+        state="damaged order",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    )
+
+    assert litellm.completion_cost(completion_response=response, call_type="asystemone") == pytest.approx(
+        _INPUT_TOKENS * 0.001
+    )
+
+
 @pytest.mark.parametrize("base_env", ("NACE_API_BASE", "NACE_BASE_URL"))
 def test_nace_sync_call_uses_environment_base_and_explicit_credentials(
     base_env: str,
@@ -3744,3 +3799,35 @@ def test_nace_upstream_failures_preserve_status_and_message(
         )
     assert getattr(error.value, "status_code") == status
     assert upstream.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize(
+    "usage", [None, {"input_tokens": 0, "output_tokens": 0}, {"input_tokens": 12, "output_tokens": 1}]
+)
+async def test_native_decisions_distinguishes_missing_usage_from_reported_zero(
+    is_async: bool, usage: dict[str, int] | None, respx_mock: respx.MockRouter
+) -> None:
+    body = {
+        **{key: value for key, value in _RESPONSE.items() if key != "usage"},
+        "model": "jev-1.13.0",
+        **({"usage": usage} if usage is not None else {}),
+    }
+    respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=body)
+    params = {"model": "typesafe/jev-1.13.0", "state": "review", "questions": _QUESTIONS, "api_key": "synthetic-key"}
+    response = await litellm.adecisions(**params) if is_async else litellm.decisions(**params)
+
+    assert isinstance(response, DecisionsResponse)
+    if usage is None:
+        assert response.usage is None
+        assert response._hidden_params.get("response_cost") is None
+        with pytest.raises(ValueError, match="provider did not report usage"):
+            litellm.completion_cost(completion_response=response)
+    else:
+        assert response.usage is not None
+        assert response.usage.input_tokens == usage["input_tokens"]
+        assert response.usage.output_tokens == usage["output_tokens"]
+        expected = litellm.completion_cost(completion_response=response)
+        assert response._hidden_params["response_cost"] == pytest.approx(expected)
+        assert (expected == 0) == (usage["input_tokens"] == usage["output_tokens"] == 0)
