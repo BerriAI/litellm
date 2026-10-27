@@ -2666,6 +2666,10 @@ def _complete_custom_openai(
 
     # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
     api_base = _resolve_openai_api_base(api_base)
+    if custom_llm_provider == "bigmodel" and not api_key:
+        raise litellm.AuthenticationError(
+            message="Set BIGMODEL_API_KEY or pass api_key", llm_provider="bigmodel", model=model
+        )
     organization = (
         organization
         or litellm.organization
