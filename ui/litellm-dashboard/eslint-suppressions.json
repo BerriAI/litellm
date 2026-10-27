@@ -498,9 +498,6 @@
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/MCPToolsetsTab.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }

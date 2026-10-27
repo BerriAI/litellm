@@ -1,28 +1,39 @@
-import React, { useState, useCallback } from "react";
+import React, { useState } from "react";
 import { z } from "zod";
 import { SortingState } from "@tanstack/react-table";
 import { Inbox, Plus, X } from "lucide-react";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useQueryClient } from "@tanstack/react-query";
-import { DataTable } from "@/components/shared/DataTable";
+import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import {
-  createMCPToolset,
-  updateMCPToolset,
-  deleteMCPToolset,
-  listMCPTools,
-  getGatewayBaseUrl,
-} from "@/components/networking";
-import { MCPToolset, MCPToolsetTool } from "@/components/mcp_tools/types";
+  useMCPServerTools,
+  type MCPServerToolEntry,
+  type MCPServerToolsState,
+} from "@/app/(dashboard)/hooks/mcpServers/useMCPServerTools";
+import { DataTable } from "@/components/shared/DataTable";
+import { createMCPToolset, updateMCPToolset, deleteMCPToolset, getGatewayBaseUrl } from "@/components/networking";
+import { MCPServer, MCPToolset, MCPToolsetTool } from "@/components/mcp_tools/types";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
 import { displayToolName, getMCPToolsetTableColumns } from "./MCPToolsetTableColumns";
+import {
+  deselectTools,
+  filterServerTools,
+  isToolSelected,
+  matchesServerName,
+  selectTools,
+  selectionState,
+  toggleTool,
+  type SelectionState,
+} from "./toolsetSelection";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface MCPToolsetsTabProps {
@@ -37,110 +48,162 @@ const toolsetSchema = z.object({
 
 type ToolsetFormValues = z.infer<typeof toolsetSchema>;
 
-interface MCPToolListProps {
+// Typing starts a fetch of every server's tools; wait for a pause so each keystroke does not.
+const SEARCH_DEBOUNCE_WAIT_MS = 300;
+
+const IDLE_SERVER_TOOLS: MCPServerToolsState = { tools: [], status: "idle" };
+
+const checkboxStateProps = (state: SelectionState) => ({
+  checked: state === "all",
+  indeterminate: state === "some",
+});
+
+interface ServerView {
+  server: MCPServer;
+  serverName: string;
+  state: MCPServerToolsState;
+  visibleTools: readonly MCPServerToolEntry[];
+}
+
+const isPending = (state: MCPServerToolsState) => state.status === "idle" || state.status === "loading";
+
+// While searching, a server stays listed until its tools load and turn out not to match.
+const isHiddenBySearch = (
+  search: string,
+  serverNames: readonly string[],
+  state: MCPServerToolsState,
+  visibleTools: readonly MCPServerToolEntry[],
+) => {
+  if (!search.trim() || state.status !== "success") return false;
+  return visibleTools.length === 0 && !matchesServerName(search, serverNames);
+};
+
+const buildServerViews = (
+  servers: readonly MCPServer[],
+  toolsByServer: ReadonlyMap<string, MCPServerToolsState>,
+  search: string,
+): ServerView[] =>
+  servers.flatMap((server) => {
+    const state = toolsByServer.get(server.server_id) ?? IDLE_SERVER_TOOLS;
+    const names = [server.alias ?? "", server.server_name ?? ""];
+    const visibleTools = filterServerTools(search, names, state.tools);
+    if (isHiddenBySearch(search, names, state, visibleTools)) return [];
+    return [{ server, serverName: server.alias || server.server_name || server.server_id, state, visibleTools }];
+  });
+
+const summarizeSearch = (serverViews: readonly ServerView[]) => ({
+  matchingTools: serverViews.flatMap(({ server, visibleTools }) =>
+    visibleTools.map((tool) => ({ server_id: server.server_id, tool_name: tool.name })),
+  ),
+  pendingServerCount: serverViews.filter(({ state }) => isPending(state)).length,
+});
+
+interface ServerToolGroupProps {
   serverId: string;
   serverName: string;
-  accessToken: string | null;
+  state: MCPServerToolsState;
+  visibleTools: readonly MCPServerToolEntry[];
+  expanded: boolean;
+  searchActive: boolean;
   selectedTools: MCPToolsetTool[];
-  onToggle: (tool: MCPToolsetTool) => void;
+  onToggleExpanded: () => void;
+  onToggleTool: (tool: MCPToolsetTool) => void;
+  onSetToolsSelected: (tools: MCPToolsetTool[], selected: boolean) => void;
 }
 
-interface ToolEntry {
-  name: string;
-  description?: string;
-}
+function ServerToolGroup({
+  serverId,
+  serverName,
+  state,
+  visibleTools,
+  expanded,
+  searchActive,
+  selectedTools,
+  onToggleExpanded,
+  onToggleTool,
+  onSetToolsSelected,
+}: ServerToolGroupProps) {
+  const selectedCount = selectedTools.filter((t) => t.server_id === serverId).length;
+  const visibleRefs = visibleTools.map((tool) => ({ server_id: serverId, tool_name: tool.name }));
+  const groupState = selectionState(selectedTools, visibleRefs);
 
-function MCPToolList({ serverId, serverName, accessToken, selectedTools, onToggle }: MCPToolListProps) {
-  const [tools, setTools] = useState<ToolEntry[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-
-  const selectedSet = new Set(selectedTools.filter((t) => t.server_id === serverId).map((t) => t.tool_name));
-
-  const fetchTools = useCallback(async () => {
-    if (!accessToken || tools.length > 0) return;
-    setLoading(true);
-    try {
-      const result = await listMCPTools(accessToken, serverId);
-      const toolList = Array.isArray(result) ? result : result?.tools ?? [];
-      setTools(toolList.map((t: any) => ({ name: t.name ?? t.tool_name ?? t, description: t.description ?? "" })));
-    } catch {
-      setTools([]);
-    } finally {
-      setLoading(false);
+  const renderBody = () => {
+    if (isPending(state)) {
+      return (
+        <div className="flex justify-center py-3">
+          <UiLoadingSpinner className="size-4" />
+        </div>
+      );
     }
-  }, [accessToken, serverId, tools.length]);
-
-  const handleToggle = () => {
-    if (!expanded) fetchTools();
-    setExpanded(!expanded);
+    if (state.status === "error") {
+      return <p className="text-xs text-destructive px-2 py-2">Couldn&apos;t load tools for this server.</p>;
+    }
+    if (visibleTools.length === 0) {
+      return (
+        <p className="text-xs text-muted-foreground px-2 py-2">
+          {searchActive ? "No matching tools on this server." : "No tools found for this server."}
+        </p>
+      );
+    }
+    return (
+      <div className="flex flex-col gap-1">
+        {visibleRefs.map((ref, idx) => {
+          const tool = visibleTools[idx];
+          const selected = isToolSelected(selectedTools, ref);
+          return (
+            <label
+              key={tool.name}
+              className={`flex cursor-pointer items-start gap-3 px-3 py-2 rounded-lg transition-colors ${
+                selected
+                  ? "bg-purple-50 border border-purple-300 dark:bg-purple-950 dark:border-purple-700"
+                  : "bg-card border border-border hover:bg-muted"
+              }`}
+            >
+              <Checkbox checked={selected} onCheckedChange={() => onToggleTool(ref)} className="mt-0.5" />
+              <div className="min-w-0 flex-1">
+                <p
+                  className={`text-sm font-medium leading-tight ${selected ? "text-purple-800 dark:text-purple-200" : "text-foreground"}`}
+                >
+                  {tool.name}
+                </p>
+                {tool.description && (
+                  <p className="text-xs text-muted-foreground mt-0.5 leading-tight line-clamp-2">{tool.description}</p>
+                )}
+              </div>
+            </label>
+          );
+        })}
+      </div>
+    );
   };
 
   return (
     <div className="border border-border rounded-lg overflow-hidden">
-      <button
-        type="button"
-        className="w-full flex items-center justify-between px-4 py-3 bg-muted hover:bg-accent transition-colors"
-        onClick={handleToggle}
-      >
-        <span className="text-sm font-medium text-foreground flex items-center gap-2">
-          <span className="inline-block w-2 h-2 rounded-full bg-info shrink-0" />
-          {serverName}
-          {selectedSet.size > 0 && (
-            <span className="ml-1 text-xs text-purple-600 font-semibold dark:text-purple-400">
-              {selectedSet.size} selected
-            </span>
-          )}
-        </span>
-        <span className="text-muted-foreground text-xs">{expanded ? "▲" : "▼"}</span>
-      </button>
-      {expanded && (
-        <div className="p-2">
-          {loading ? (
-            <div className="flex justify-center py-3">
-              <UiLoadingSpinner className="size-4" />
-            </div>
-          ) : tools.length === 0 ? (
-            <p className="text-xs text-muted-foreground px-2 py-2">No tools found for this server.</p>
-          ) : (
-            <div className="flex flex-col gap-1">
-              {tools.map((tool) => {
-                const selected = selectedSet.has(tool.name);
-                return (
-                  <button
-                    key={tool.name}
-                    type="button"
-                    onClick={() => onToggle({ server_id: serverId, tool_name: tool.name })}
-                    className={`flex items-start justify-between px-3 py-2 rounded-lg text-left transition-colors ${
-                      selected
-                        ? "bg-purple-50 border border-purple-300 dark:bg-purple-950 dark:border-purple-700"
-                        : "bg-card border border-border hover:bg-muted"
-                    }`}
-                  >
-                    <div className="min-w-0 flex-1">
-                      <p
-                        className={`text-sm font-medium leading-tight ${selected ? "text-purple-800 dark:text-purple-200" : "text-foreground"}`}
-                      >
-                        {tool.name}
-                      </p>
-                      {tool.description && (
-                        <p className="text-xs text-muted-foreground mt-0.5 leading-tight line-clamp-2">
-                          {tool.description}
-                        </p>
-                      )}
-                    </div>
-                    {selected && (
-                      <span className="text-purple-500 text-xs font-semibold ml-2 shrink-0 mt-0.5 dark:text-purple-400">
-                        ✓
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
+      <div className="flex items-center gap-3 pl-4 bg-muted">
+        <Checkbox
+          {...checkboxStateProps(groupState)}
+          disabled={visibleRefs.length === 0}
+          aria-label={`${searchActive ? "Select matching tools" : "Select all tools"} on ${serverName}`}
+          onCheckedChange={(checked) => onSetToolsSelected(visibleRefs, checked)}
+        />
+        <button
+          type="button"
+          aria-expanded={expanded}
+          className="flex-1 flex items-center justify-between pr-4 py-3 hover:bg-accent transition-colors"
+          onClick={onToggleExpanded}
+        >
+          <span className="text-sm font-medium text-foreground flex items-center gap-2">
+            {serverName}
+            {selectedCount > 0 && (
+              <span className="ml-1 text-xs text-purple-600 font-semibold dark:text-purple-400">
+                {selectedCount} selected
+              </span>
+            )}
+          </span>
+          <span className="text-muted-foreground text-xs">{expanded ? "▲" : "▼"}</span>
+        </button>
+      </div>
+      {expanded && <div className="p-2">{renderBody()}</div>}
     </div>
   );
 }
@@ -149,21 +212,29 @@ interface CreateToolsetModalProps {
   open: boolean;
   onClose: () => void;
   onSave: (name: string, description: string | undefined, tools: MCPToolsetTool[]) => Promise<void>;
-  accessToken: string | null;
   initialToolset?: MCPToolset;
 }
 
-function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset }: CreateToolsetModalProps) {
-  const form = useZodForm(toolsetSchema, {
-    defaultValues: {
-      toolset_name: initialToolset?.toolset_name || "",
-      description: initialToolset?.description || "",
-    },
-  });
+const toolsetFormDefaults = (toolset?: MCPToolset): ToolsetFormValues => ({
+  toolset_name: toolset?.toolset_name || "",
+  description: toolset?.description || "",
+});
+
+function CreateToolsetModal({ open, onClose, onSave, initialToolset }: CreateToolsetModalProps) {
+  const form = useZodForm(toolsetSchema, { defaultValues: toolsetFormDefaults(initialToolset) });
   const [selectedTools, setSelectedTools] = useState<MCPToolsetTool[]>(initialToolset?.tools || []);
   const [saving, setSaving] = useState(false);
-  const [serverSearch, setServerSearch] = useState("");
+  const [search, setSearch] = useState("");
+  const [debouncedSearch] = useDebouncedValue(search, { wait: SEARCH_DEBOUNCE_WAIT_MS });
+  const [expandedServerIds, setExpandedServerIds] = useState<ReadonlySet<string>>(() => new Set());
   const { data: mcpServers = [] } = useMCPServers();
+  const serverIds = React.useMemo(() => mcpServers.map((s) => s.server_id), [mcpServers]);
+  // Searching needs every server's catalog; otherwise only expanded servers are fetched.
+  const fetchServerIds = React.useMemo(
+    () => (debouncedSearch.trim() ? new Set(serverIds) : expandedServerIds),
+    [debouncedSearch, serverIds, expandedServerIds],
+  );
+  const toolsByServer = useMCPServerTools(serverIds, fetchServerIds);
   const serverPrefixById = React.useMemo(
     () => new Map(mcpServers.map((s) => [s.server_id, s.alias || s.server_name || s.server_id])),
     [mcpServers],
@@ -171,21 +242,30 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
 
   React.useEffect(() => {
     if (open) {
-      form.reset({
-        toolset_name: initialToolset?.toolset_name || "",
-        description: initialToolset?.description || "",
-      });
+      form.reset(toolsetFormDefaults(initialToolset));
       setSelectedTools(initialToolset?.tools || []);
-      setServerSearch("");
+      setSearch("");
+      setExpandedServerIds(new Set());
     }
   }, [open, initialToolset, form]);
 
   const handleToggleTool = (tool: MCPToolsetTool) => {
-    setSelectedTools((prev) => {
-      const exists = prev.some((t) => t.server_id === tool.server_id && t.tool_name === tool.tool_name);
-      return exists
-        ? prev.filter((t) => !(t.server_id === tool.server_id && t.tool_name === tool.tool_name))
-        : [...prev, tool];
+    setSelectedTools((prev) => toggleTool(prev, tool));
+  };
+
+  const handleSetToolsSelected = (tools: MCPToolsetTool[], selected: boolean) => {
+    setSelectedTools((prev) => (selected ? selectTools(prev, tools) : deselectTools(prev, tools)));
+  };
+
+  const handleToggleExpanded = (serverId: string) => {
+    setExpandedServerIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(serverId)) {
+        next.delete(serverId);
+      } else {
+        next.add(serverId);
+      }
+      return next;
     });
   };
 
@@ -199,10 +279,12 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
     }
   };
 
-  const filteredServers = mcpServers.filter((s) => {
-    const q = serverSearch.toLowerCase();
-    return !q || (s.alias || "").toLowerCase().includes(q) || (s.server_name || "").toLowerCase().includes(q);
-  });
+  const searchActive = search.trim() !== "";
+  const serverViews = buildServerViews(mcpServers, toolsByServer, search);
+  const { matchingTools, pendingServerCount } = searchActive
+    ? summarizeSearch(serverViews)
+    : { matchingTools: [], pendingServerCount: 0 };
+  const matchingState = selectionState(selectedTools, matchingTools);
 
   return (
     <Dialog open={open} onOpenChange={(open) => !open && onClose()}>
@@ -229,32 +311,65 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
             </div>
             <InputGroup className="mb-2">
               <InputGroupInput
-                placeholder="Search MCP servers..."
-                value={serverSearch}
-                onChange={(e) => setServerSearch(e.target.value)}
+                placeholder="Search tools or servers..."
+                aria-label="Search tools or servers"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
               />
-              {serverSearch && (
+              {search && (
                 <InputGroupAddon align="inline-end">
-                  <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setServerSearch("")}>
+                  <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setSearch("")}>
                     <X />
                   </InputGroupButton>
                 </InputGroupAddon>
               )}
             </InputGroup>
+            {searchActive && (
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <p className="text-xs text-muted-foreground" aria-live="polite">
+                  {matchingTools.length} matching {matchingTools.length === 1 ? "tool" : "tools"}
+                  {pendingServerCount > 0 &&
+                    ` · loading ${pendingServerCount} ${pendingServerCount === 1 ? "server" : "servers"}…`}
+                </p>
+                <div className="flex gap-1 shrink-0">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={matchingTools.length === 0 || matchingState === "all"}
+                    onClick={() => handleSetToolsSelected(matchingTools, true)}
+                  >
+                    Select all matching
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={matchingState === "none"}
+                    onClick={() => handleSetToolsSelected(matchingTools, false)}
+                  >
+                    Deselect all matching
+                  </Button>
+                </div>
+              </div>
+            )}
             <div className="space-y-2 overflow-y-auto" style={{ maxHeight: 300 }}>
-              {filteredServers.length === 0 ? (
+              {serverViews.length === 0 ? (
                 <p className="text-muted-foreground text-sm">
-                  {mcpServers.length === 0 ? "No MCP servers configured" : "No servers match your search"}
+                  {mcpServers.length === 0 ? "No MCP servers configured" : "No tools or servers match your search"}
                 </p>
               ) : (
-                filteredServers.map((server) => (
-                  <MCPToolList
+                serverViews.map(({ server, serverName, state, visibleTools }) => (
+                  <ServerToolGroup
                     key={server.server_id}
                     serverId={server.server_id}
-                    serverName={server.alias || server.server_name || server.server_id}
-                    accessToken={accessToken}
+                    serverName={serverName}
+                    state={state}
+                    visibleTools={visibleTools}
+                    expanded={searchActive || expandedServerIds.has(server.server_id)}
+                    searchActive={searchActive}
                     selectedTools={selectedTools}
-                    onToggle={handleToggleTool}
+                    onToggleExpanded={() => handleToggleExpanded(server.server_id)}
+                    onToggleTool={handleToggleTool}
+                    onSetToolsSelected={handleSetToolsSelected}
                   />
                 ))
               )}
@@ -463,19 +578,13 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
         size="compact"
       />
 
-      <CreateToolsetModal
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        onSave={handleCreate}
-        accessToken={accessToken}
-      />
+      <CreateToolsetModal open={createOpen} onClose={() => setCreateOpen(false)} onSave={handleCreate} />
 
       {editToolset && (
         <CreateToolsetModal
           open={!!editToolset}
           onClose={() => setEditToolset(null)}
           onSave={handleUpdate}
-          accessToken={accessToken}
           initialToolset={editToolset}
         />
       )}
