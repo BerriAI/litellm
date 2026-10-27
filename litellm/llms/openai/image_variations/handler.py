@@ -151,7 +151,7 @@ class OpenAIImageVariationsHandler:
     ) -> ImageResponse:
         try:
             provider_config: Final = ProviderConfigManager.get_provider_image_variation_config(
-                model=model or "",  # openai defaults to dall-e-2
+                model=model or "",
                 provider=LlmProviders.OPENAI,
             )
 

@@ -762,7 +762,6 @@ ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES: Final = {
 # Used for web search interception across providers
 LITELLM_WEB_SEARCH_TOOL_NAME: Final = "litellm_web_search"
 
-DEFAULT_IMAGE_ENDPOINT_MODEL: Final = "dall-e-2"
 DEFAULT_VIDEO_ENDPOINT_MODEL: Final = "sora-2"
 
 DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS: Final = get_env_int("DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS", 8)

@@ -560,11 +560,8 @@ class BaseLLMAIOHTTPHandler:
         organization: str | None = None,
         headers: dict | None = None,
     ) -> ImageResponse:
-        if model is None:
-            raise ValueError("model is required for non-openai image variations")
-
         provider_config: Final = ProviderConfigManager.get_provider_image_variation_config(
-            model=model,  # openai defaults to dall-e-2
+            model=model or "",
             provider=LlmProviders(custom_llm_provider),
         )
 
