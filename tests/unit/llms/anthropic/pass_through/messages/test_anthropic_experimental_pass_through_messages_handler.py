@@ -6,6 +6,7 @@ import uuid
 from typing import Any, Dict, Final, List
 
 import httpx
+import responses
 import respx
 import pytest
 from fastapi.testclient import TestClient
@@ -1709,16 +1710,20 @@ async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_bet
 @pytest.mark.asyncio
 @pytest.mark.parametrize("client_headers", _CLIENT_BETA_HEADERS)
 async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_beta_to_vertex(
-    local_beta_headers_config, client_headers
-):
+    local_beta_headers_config: None, client_headers: dict[str, str]
+) -> None:
     """Vertex rawPredict takes the beta as the `anthropic-beta` header and 400s on `safeguards` without it, so the beta rides along with the field."""
     from litellm.llms.anthropic.pass_through.messages import handler
-    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
     safeguards, safeguard_results = _claude_code_auto_mode_request()
     captured: dict[str, object] = {}
 
-    with patch.object(VertexBase, "_ensure_access_token", return_value=("test-token", "test-project")):
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as oauth:
+        oauth.add(
+            responses.POST,
+            "https://oauth2.googleapis.com/token",
+            json={"access_token": "test-token", "expires_in": 3600},
+        )
         response = await handler.anthropic_messages(
             max_tokens=16,
             messages=[{"role": "user", "content": "hi"}],
@@ -1726,7 +1731,14 @@ async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_bet
             custom_llm_provider="vertex_ai",
             vertex_project="test-project",
             vertex_location="global",
-            vertex_credentials="{}",
+            vertex_credentials=json.dumps(
+                {
+                    "type": "authorized_user",
+                    "client_id": "synthetic-client",
+                    "client_secret": "synthetic-secret",
+                    "refresh_token": "synthetic-refresh",
+                }
+            ),
             client=_upstream_answering_with(safeguard_results, captured),
             safeguards=safeguards,
             extra_headers=client_headers,
