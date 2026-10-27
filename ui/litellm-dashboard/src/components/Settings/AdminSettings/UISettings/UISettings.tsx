@@ -1,5 +1,6 @@
 "use client";
 
+import { useTerminology } from "@/contexts/TerminologyContext";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { useUpdateUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUpdateUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -51,6 +52,7 @@ function SettingRow({
 }
 
 export default function UISettings() {
+  const term = useTerminology();
   const { accessToken } = useAuthorized();
   const { data, isLoading, isError, error } = useUISettings();
   const { mutate: updateSettings, isPending: isUpdating, error: updateError } = useUpdateUISettings(accessToken);
@@ -379,9 +381,13 @@ export default function UISettings() {
               checked={Boolean(values.require_auth_for_public_ai_hub)}
               disabled={isUpdating}
               onCheckedChange={handleToggleRequireAuthForPublicAIHub}
-              ariaLabel={requireAuthForPublicAIHubProperty?.description ?? "Require authentication for public AI Hub"}
-              label="Require authentication for public AI Hub"
-              description={requireAuthForPublicAIHubProperty?.description}
+              ariaLabel={term(
+                requireAuthForPublicAIHubProperty?.description ?? "Require authentication for public AI Hub",
+              )}
+              label={term("Require authentication for public AI Hub")}
+              description={
+                requireAuthForPublicAIHubProperty?.description && term(requireAuthForPublicAIHubProperty.description)
+              }
             />
             <SettingRow
               checked={Boolean(values.forward_client_headers_to_llm_api)}

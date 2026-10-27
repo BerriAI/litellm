@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { labelText, routeOf, sectionText, type MenuGroup } from "@/components/leftnav";
+import { keepTerminology, type Term } from "@/lib/terminology";
 
 export type PaletteScope = "keys" | "global";
 
@@ -22,7 +23,7 @@ const matchRank = (item: PaletteNavItem, query: string): number => {
   return -1;
 };
 
-export const flattenNavItems = (groups: readonly MenuGroup[]): PaletteNavItem[] =>
+export const flattenNavItems = (groups: readonly MenuGroup[], term: Term = keepTerminology): PaletteNavItem[] =>
   groups.flatMap((group) => {
     const flattenItems = (items: MenuGroup["items"]): PaletteNavItem[] =>
       items.flatMap((item) => {
@@ -31,8 +32,8 @@ export const flattenNavItems = (groups: readonly MenuGroup[]): PaletteNavItem[] 
         return [
           {
             key: item.key,
-            label: labelText(item),
-            section: sectionText(group.groupLabel),
+            label: term(labelText(item)),
+            section: term(sectionText(group.groupLabel)),
             route: routeOf(item),
             icon: item.icon,
           },

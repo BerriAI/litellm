@@ -1,5 +1,6 @@
 "use client";
 
+import { useTerminology } from "@/contexts/TerminologyContext";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -40,6 +41,7 @@ export function DashboardHeader({
   navigationTrigger?: ReactNode;
   deploymentHealth?: ReactNode;
 }) {
+  const term = useTerminology();
   const { title } = getBreadcrumb(usePathname());
   const isDesktop = useMediaQuery("(min-width: 768px)", { initializeWithValue: false });
   const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
@@ -66,7 +68,7 @@ export function DashboardHeader({
           </BreadcrumbItem>
           <BreadcrumbSeparator className="max-md:hidden" />
           <BreadcrumbItem className="min-w-0">
-            <BreadcrumbPage className="truncate">{title}</BreadcrumbPage>
+            <BreadcrumbPage className="truncate">{term(title)}</BreadcrumbPage>
           </BreadcrumbItem>
         </BreadcrumbList>
       </Breadcrumb>

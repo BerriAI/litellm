@@ -1,5 +1,6 @@
 "use client";
 
+import { useTerminology } from "@/contexts/TerminologyContext";
 import React, { useMemo, useState } from "react";
 import { ArrowRight, Bot, Monitor, Terminal } from "lucide-react";
 import { StackedUsageChart } from "@/components/shared/charts";
@@ -84,6 +85,7 @@ function AgentItem({
   color: string | undefined;
   onOpen?: (agent: AgentRow) => void;
 }) {
+  const term = useTerminology();
   const openRow = onOpen && agent.tags.length > 0 ? () => onOpen(agent) : undefined;
   const content = (
     <>
@@ -106,7 +108,7 @@ function AgentItem({
             <ArrowRight aria-hidden="true" className="size-3 transition-transform group-hover:translate-x-0.5" />
           </span>
         ) : (
-          <span className="block truncate text-xs text-muted-foreground">{agent.description}</span>
+          <span className="block truncate text-xs text-muted-foreground">{term(agent.description)}</span>
         )}
       </span>
       <span className="text-right">

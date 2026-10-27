@@ -1,3 +1,4 @@
+import { useTerminology } from "@/contexts/TerminologyContext";
 import React, { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -44,6 +45,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
   isLoading = false,
   accessToken,
 }) => {
+  const term = useTerminology();
   const [parameterValues, setParameterValues] = useState<Record<string, string>>({});
   const [competitorMode, setCompetitorMode] = useState<"ai" | "manual">("ai");
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
@@ -260,7 +262,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
                   className="grid-cols-2"
                 >
                   <label className="flex cursor-pointer items-center justify-center gap-2 rounded-md border border-input px-3 py-2 text-sm">
-                    <RadioGroupItem value="ai" />✨ Use AI
+                    <RadioGroupItem value="ai" />✨ {term("Use AI")}
                   </label>
                   <label className="flex cursor-pointer items-center justify-center gap-2 rounded-md border border-input px-3 py-2 text-sm">
                     <RadioGroupItem value="manual" />

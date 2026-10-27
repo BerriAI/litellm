@@ -1,3 +1,4 @@
+import { useTerminology } from "@/contexts/TerminologyContext";
 import React from "react";
 import { Control, UseFormReturn } from "react-hook-form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -37,27 +38,35 @@ export const KeyTypeSelect = ({
   id: string;
   value: string;
   onChange: (value: string) => void;
-}) => (
-  <Select
-    items={Object.fromEntries(KEY_TYPE_OPTIONS.map((option) => [option.value, option.label]))}
-    value={value}
-    onValueChange={(next: string | null) => next != null && onChange(next)}
-  >
-    <SelectTrigger id={id} className="w-full">
-      <SelectValue placeholder="Select key type" />
-    </SelectTrigger>
-    <SelectContent>
-      {KEY_TYPE_OPTIONS.map((option) => (
-        <SelectItem key={option.value} value={option.value}>
-          <div className="py-1">
-            <div className="font-medium">{option.label}</div>
-            <div className="mt-0.5 text-[11px] text-muted-foreground">{option.hint}</div>
-          </div>
-        </SelectItem>
-      ))}
-    </SelectContent>
-  </Select>
-);
+}) => {
+  const term = useTerminology();
+  const keyTypeOptions = KEY_TYPE_OPTIONS.map((option) => ({
+    ...option,
+    label: term(option.label),
+    hint: term(option.hint),
+  }));
+  return (
+    <Select
+      items={Object.fromEntries(keyTypeOptions.map((option) => [option.value, option.label]))}
+      value={value}
+      onValueChange={(next: string | null) => next != null && onChange(next)}
+    >
+      <SelectTrigger id={id} className="w-full">
+        <SelectValue placeholder="Select key type" />
+      </SelectTrigger>
+      <SelectContent>
+        {keyTypeOptions.map((option) => (
+          <SelectItem key={option.value} value={option.value}>
+            <div className="py-1">
+              <div className="font-medium">{option.label}</div>
+              <div className="mt-0.5 text-[11px] text-muted-foreground">{option.hint}</div>
+            </div>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+};
 
 const SKILLS_HINT =
   "Enabled skills are visible to every key. Grant disabled (private) Claude Code plugins to this key here.";

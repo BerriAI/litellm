@@ -1,6 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
+import { TerminologyProvider } from "@/contexts/TerminologyContext";
 import Sidebar, { menuGroups, getBreadcrumb } from "./leftnav";
 
 vi.mock("../utils/roles", async (importOriginal) => {
@@ -64,10 +65,12 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useTeams: mockUseTeams,
 }));
 
+const uiConfig = vi.hoisted(() => ({ data: { admin_ui_disabled: false, use_si_terminology: false } }));
+
 vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => {
   return {
     useUIConfig: () => ({
-      data: { admin_ui_disabled: false },
+      data: uiConfig.data,
       isLoading: false,
     }),
   };
@@ -149,6 +152,20 @@ describe("Sidebar (leftnav)", () => {
     });
     mockUseThemeImpl = unbrandedTheme;
     navState.pathname = "/ui/api-keys";
+    uiConfig.data = { admin_ui_disabled: false, use_si_terminology: false };
+  });
+
+  it("uses SI terminology in section and page labels when the proxy asks for it", () => {
+    uiConfig.data = { admin_ui_disabled: false, use_si_terminology: true };
+    renderWithProviders(
+      <TerminologyProvider>
+        <Sidebar {...defaultProps} />
+      </TerminologyProvider>,
+    );
+
+    expect(screen.getByText("SI GATEWAY")).toBeInTheDocument();
+    expect(screen.getByText("SI Hub")).toBeInTheDocument();
+    expect(screen.queryByText("AI Hub")).not.toBeInTheDocument();
   });
 
   it("should link the logo to the UI home route rather than the proxy origin", () => {

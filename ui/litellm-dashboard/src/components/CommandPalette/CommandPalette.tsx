@@ -7,6 +7,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { useTerminology } from "@/contexts/TerminologyContext";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { keyDetailHref } from "@/utils/entityLinks";
 import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
@@ -68,7 +69,8 @@ function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void })
   const isInitialKeyLoad = keyResults.isFetching && !keyResults.data;
   const isLoadingKeys = scope === "keys" && (isPendingQuery || hasPlaceholderKeyResults || isInitialKeyLoad);
   const visibleGroups = useVisibleMenuGroups();
-  const navItems = useMemo(() => flattenNavItems(visibleGroups), [visibleGroups]);
+  const term = useTerminology();
+  const navItems = useMemo(() => flattenNavItems(visibleGroups, term), [visibleGroups, term]);
   const navMatches = useMemo(
     () => (scope === "global" || trimmedQuery ? matchNavItems(navItems, query) : []),
     [navItems, query, scope, trimmedQuery],
