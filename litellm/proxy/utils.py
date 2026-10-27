@@ -1543,13 +1543,18 @@ def _proxy_only_error_logged_metadata_keys(*, authenticated: bool, past_pre_call
 
 
 def _is_logged_metadata_value(key: str, value: object) -> bool:
-    return key != "tags" or (isinstance(value, list) and all(isinstance(item, str) for item in value))
+    if key != "tags":
+        return True
+    tags: Final = cast(list[object], value) if isinstance(value, list) else None  # cast-ok: isinstance checked the list
+    return tags is not None and all(isinstance(item, str) for item in tags)
 
 
-def _proxy_only_error_log_metadata(value: object, logged_keys: frozenset[str]) -> dict[str, object] | None:
+def _proxy_only_error_log_metadata(
+    value: object, logged_keys: frozenset[str]
+) -> dict[str, object] | None:  # mutable-ok: router attribution stamps the logged metadata in place
+    metadata: Final = _as_str_mapping(value)
     if not isinstance(value, Mapping):
         return None
-    metadata: Final = _as_str_mapping(value)
     return {
         key: value for key, value in metadata.items() if key in logged_keys and _is_logged_metadata_value(key, value)
     }
@@ -3936,6 +3941,7 @@ class ProxyLogging:
         """
         litellm_logging_obj: Logging | None = request_data.get("litellm_logging_obj", None)
         set_up_by_request: Final = litellm_logging_obj is not None
+        request_fields: Final = cast(Mapping[str, object], request_data)  # cast-ok: request bodies are str-keyed JSON
         logged_metadata_keys: Final = _proxy_only_error_logged_metadata_keys(
             authenticated=error_type != ProxyErrorTypes.auth_error, past_pre_call=set_up_by_request
         )
@@ -3951,7 +3957,9 @@ class ProxyLogging:
                 original_function=route or "IGNORE_THIS",
                 rules_obj=litellm.utils.Rules(),
                 start_time=datetime.now(),
-                **_proxy_only_error_log_fields(request_data, logged_metadata_keys),
+                **_proxy_only_error_log_fields(  # pyright: ignore[reportArgumentType]  # the allowlist never carries is_async_call
+                    request_fields, logged_metadata_keys
+                ),
             )
             request_data["litellm_logging_obj"] = litellm_logging_obj  # rebind-ok: lifted then popped by the caller
             request_data.update({REJECTED_BEFORE_REQUEST_SETUP_KEY: REJECTED_BEFORE_REQUEST_SETUP})
@@ -3961,17 +3969,19 @@ class ProxyLogging:
 
         if litellm_logging_obj is not None:
             ## UPDATE LOGGING INPUT
-            _optional_params: Final = {}
-            _litellm_params: Final = {}
+            _optional_params: Final[dict[str, object]] = {}  # mutable-ok: filled below, then handed to the logger
+            _litellm_params: Final[dict[str, object]] = {}  # mutable-ok: filled below, then handed to the logger
 
             litellm_param_keys: Final = LoggedLiteLLMParams.__annotations__.keys()
-            for k, v in _proxy_only_error_log_fields(request_data, logged_metadata_keys).items():
+            for k, v in _proxy_only_error_log_fields(request_fields, logged_metadata_keys).items():
                 if k in litellm_param_keys:
                     _litellm_params[k] = v
                 elif k not in ("model", "user", "litellm_logging_obj"):
                     _optional_params[k] = v
 
-            existing: Final = _as_str_mapping(litellm_logging_obj.litellm_params)
+            existing: Final = _as_str_mapping(
+                litellm_logging_obj.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
+            )
             litellm_params: Final = {
                 **_litellm_params,
                 "metadata": {

@@ -796,14 +796,14 @@ def _strip_client_pricing_overrides(data: dict[str, object]) -> None:
         )
 
 
-def strip_client_guardrail_information(data: dict[str, object]) -> None:
+def strip_client_guardrail_information(data: dict[str, object]) -> None:  # mutable-ok: strips the request body in place
     """Guardrail hooks write this field and its cost is billed, so no key or team setting keeps a caller's value."""
     for metadata_key in ("metadata", "litellm_metadata"):
         if (
             isinstance(metadata := data.get(metadata_key), dict)
             and "standard_logging_guardrail_information" in metadata
         ):
-            metadata.pop("standard_logging_guardrail_information")
+            del metadata["standard_logging_guardrail_information"]
             verbose_proxy_logger.debug(
                 "Stripped client-supplied guardrail information from request body: %s", metadata_key
             )

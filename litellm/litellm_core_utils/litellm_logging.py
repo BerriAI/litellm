@@ -7137,7 +7137,7 @@ class StandardLoggingPayloadSetup:
                 for tags in (metadata.get("tags"), litellm_metadata.get("tags"))
                 if isinstance(tags, list) and tags
             ),
-            [],
+            (),
         )
         user_agent_tags: Final = StandardLoggingPayloadSetup._get_user_agent_tags(proxy_server_request)
         additional_header_tags: Final = StandardLoggingPayloadSetup._get_extra_header_tags(proxy_server_request)
