@@ -2,6 +2,7 @@ import { cloneElement, type MouseEventHandler, type ReactElement, type ReactNode
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { toSiTerminology } from "@/lib/terminology";
 import CreatedKeyDisplay, { buildAgentInstructions } from "./CreatedKeyDisplay";
 
 import { toast } from "@/lib/toast";
@@ -181,5 +182,12 @@ describe("buildAgentInstructions", () => {
         "Docs for everything else LiteLLM supports: https://docs.litellm.ai/docs/",
       ].join("\n"),
     );
+  });
+
+  it("rewrites only its own copy under SI terminology, never the gateway URL or the key", () => {
+    const lines = buildAgentInstructions("http://AI.example.com/", "sk-AI-1", toSiTerminology).split("\n");
+    expect(lines[0]).toBe("Use this LiteLLM SI gateway for model inference.");
+    expect(lines).toContain("Gateway URL: http://AI.example.com");
+    expect(lines).toContain("Virtual key: sk-AI-1");
   });
 });
