@@ -7,8 +7,6 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # untyped callback payload requires explicit narrowing
 
-from openai.types import Batch
-
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
@@ -19,7 +17,7 @@ from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSet
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting, budget_window_seconds
-from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
+from litellm.router_utils.batch_utils import batch_charged_once_marker_key, batch_id_to_charge_once
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import BudgetConfig, StandardLoggingPayload
 
@@ -131,17 +129,6 @@ def model_budget_start_time_cache_key(
     the longer one's window.
     """
     return f"{_BUDGET_START_TIME_KEY_PREFIXES[entity_type]}:{entity_id}:{budget_model}:{budget_duration}"
-
-
-def batch_charged_once_marker_key(spend_key: str, batch_id: str) -> str:
-    return f"{spend_key}:batch:{batch_id}"
-
-
-def batch_id_to_charge_once(call_type: object, response_obj: object, response_cost: float) -> str | None:
-    """A finished batch reports its whole cost on every poll, so its id is charged once per counter."""
-    if response_cost <= 0 or not is_batch_retrieve_call_type(call_type):
-        return None
-    return response_obj.id if isinstance(response_obj, Batch) else None
 
 
 def resolve_model_budget(model: str, model_max_budget: Mapping[str, object]) -> ResolvedModelBudget | None:
@@ -387,6 +374,8 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         self._redis_increment_queue_lock = asyncio.Lock()
         self._redis_increment_flush_lock = asyncio.Lock()
         self._detached_increment_operations = None
+        self._retired = False
+        self._flush_after_retire = None
         self.deployment_budget_config = None
 
     @with_service_target("model_budgets")

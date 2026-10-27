@@ -183,16 +183,16 @@ The following arguments are supported:
     * Numeric strings are parsed first as integers; if integer parsing fails, parsed as floats (e.g., `"16384"` -> 16384, `"0.75"` -> 0.75)
     * JSON strings (starting with `[` or `{`) are parsed as JSON objects/arrays
     * Non-convertible strings remain strings
-  * Non-string map values (if supplied) are passed through unchanged.
   * The provider merges these keys into the `litellm_params` payload sent to the API.
   * Note: the remote API may not echo back all custom parameters; this provider preserves `additional_litellm_params` in state when present in configuration.
 
-  **Special parameter: `additional_drop_params`**
-  * When `additional_drop_params` is provided as a JSON array string, it specifies parameters to remove from the final `litellm_params` before sending to the API
-  * This allows you to override or remove built-in parameters if needed
-  * The `additional_drop_params` key itself is not included in the final parameters
+  **`additional_drop_params`**
+  * Give it a JSON array string, such as `jsonencode(["store"])`. The provider sends the list to the proxy as the deployment's `additional_drop_params`, and the proxy applies it the same as `additional_drop_params` in a `model_list` entry. `terraform plan` fails on any other value, an empty value, or an entry that is not a name, and `null` entries are skipped
+  * Other keys on the resource, such as `vertex_location`, are sent unchanged
+  * When the configuration sets the list, refresh reads the stored list back from the proxy, so a list changed outside Terraform shows up as drift. A model whose configuration has no list keeps a list set outside Terraform out of the plan, but the proxy clears it on the next update
+  * When the proxy has no stored list, as on a model an older provider created, the next plan shows the list and every listed key the configuration sets as changes, since the next apply writes them
 
-  Example showing booleans, integers, floats, strings, and parameter dropping:
+  Example showing booleans, integers, floats, strings, JSON, and dropped request parameters:
 
   ```hcl
   resource "litellm_model" "with_additional" {
@@ -208,7 +208,7 @@ The following arguments are supported:
       "scale"                  = "0.75"                    # becomes float 0.75
       "note"                   = "for testing"             # stays string
       "complex_config"         = "{\"nested\": {\"value\": 42}}"  # parsed as JSON object
-      "additional_drop_params" = "[\"reasoningEffort\"]"   # removes reasoningEffort parameter
+      "additional_drop_params" = "[\"reasoning_effort\"]"  # proxy drops reasoning_effort from requests
     }
   }
   ```

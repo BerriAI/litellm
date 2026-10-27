@@ -120,6 +120,7 @@ type LiteLLMParams struct {
 	VertexProject                  string                 `json:"vertex_project,omitempty"`
 	VertexLocation                 string                 `json:"vertex_location,omitempty"`
 	VertexCredentials              string                 `json:"vertex_credentials,omitempty"`
+	AdditionalDropParams           interface{}            `json:"additional_drop_params,omitempty"`
 }
 
 // ModelInfo represents information about a model.

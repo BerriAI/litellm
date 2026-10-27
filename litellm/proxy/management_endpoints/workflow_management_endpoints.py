@@ -147,6 +147,34 @@ class _MessageCreateData(TypedDict, total=False):
     session_id: str
 
 
+class _EventTable(Protocol):
+    async def create(self, *, data: _EventCreateData) -> object: ...
+
+
+class _RunTable(Protocol):
+    async def update(self, *, where: Mapping[str, str], data: Mapping[str, str]) -> object: ...
+
+
+class _WorkflowTx(Protocol):
+    @property
+    def litellm_workflowevent(self) -> _EventTable: ...
+
+    @property
+    def litellm_workflowrun(self) -> _RunTable: ...
+
+
+async def _append_event_in_tx(
+    tx: _WorkflowTx, run_id: str, event_data: _EventCreateData, new_status: str | None
+) -> object:
+    event: Final = await tx.litellm_workflowevent.create(data=event_data)
+    if new_status:
+        await tx.litellm_workflowrun.update(
+            where={"run_id": run_id},
+            data={"status": new_status},
+        )
+    return event
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -387,12 +415,7 @@ async def append_workflow_event(
                 event_data["data"] = _json(data.data)
 
             async with prisma_client.db.tx() as tx:
-                event: object = await tx.litellm_workflowevent.create(data=event_data)
-                if new_status:
-                    await tx.litellm_workflowrun.update(
-                        where={"run_id": run_id},
-                        data={"status": new_status},
-                    )
+                event: object = await _append_event_in_tx(tx, run_id, event_data, new_status)
 
             return event
 

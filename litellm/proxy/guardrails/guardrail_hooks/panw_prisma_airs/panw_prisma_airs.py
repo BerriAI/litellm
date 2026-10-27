@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import HTTPException
 from pydantic import ConfigDict, TypeAdapter, ValidationError, field_validator
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -127,6 +128,21 @@ class _ResponsesInputItem(LiteLLMBaseModel):
 _ResponsesInput: TypeAlias = str | tuple[_ResponsesInputItem, ...] | None
 _RESPONSES_INPUT: Final[TypeAdapter[_ResponsesInput]] = TypeAdapter(_ResponsesInput)
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
+
+
+class _AirsToolEvent(TypedDict):
+    metadata: ReadOnly[Mapping[str, object]]
+    input: NotRequired[ReadOnly[str]]
+
+
+def _mcp_tool_input(mcp_arguments: object) -> str | None:
+    if mcp_arguments is not None and mcp_arguments != "":
+        serialized_args: Final = (
+            json.dumps(mcp_arguments) if isinstance(mcp_arguments, (dict, list)) else str(mcp_arguments)
+        )
+        if serialized_args.strip():
+            return serialized_args
+    return None
 
 
 if TYPE_CHECKING:
@@ -339,7 +355,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         is_response: bool = False,
         metadata: Mapping[str, object] | None = None,
         call_id: object = None,
-        tool_event: dict[str, Any] | None = None,
+        tool_event: _AirsToolEvent | None = None,
     ) -> dict[str, object]:
         """Call PANW Prisma AIRS API to scan content or a tool_event."""
 
@@ -894,7 +910,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             if not line.startswith("data: "):
                 continue
             try:
-                data = json.loads(line[6:])
+                data = _DECODED_ARGUMENTS.validate_python(json.loads(line[6:]))
             except (json.JSONDecodeError, ValueError):
                 continue
             if not isinstance(data, dict):
@@ -1744,6 +1760,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     def supports_scan_only_tool_results(self) -> bool:
         return False
 
+    def supports_structured_messages(self) -> bool:
+        return False
+
     @classmethod
     def _get_scannable_text_indices(
         cls,
@@ -1951,24 +1970,21 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         # "mcp_tool_name"/"mcp_arguments". Check canonical first, then fallback.
         mcp_tool_name: Final = request_data.get("mcp_tool_name") or self._mcp_name_fallback(request_data)
         if mcp_tool_name and input_type == "request":
-            mcp_tool_event: Final[dict[str, object]] = {
-                "metadata": {
-                    "ecosystem": "mcp",
-                    "method": "tools/call",
-                    "server_name": self._get_mcp_server_name(request_data, mcp_tool_name),
-                    "tool_invoked": mcp_tool_name,
-                },
+            mcp_tool_metadata: Final = {
+                "ecosystem": "mcp",
+                "method": "tools/call",
+                "server_name": self._get_mcp_server_name(request_data, mcp_tool_name),
+                "tool_invoked": mcp_tool_name,
             }
             mcp_arguments = request_data.get("mcp_arguments")
             if mcp_arguments is None:
                 mcp_arguments = request_data.get("arguments")
-            if mcp_arguments is not None and mcp_arguments != "":
-                if isinstance(mcp_arguments, (dict, list)):
-                    serialized_args = json.dumps(mcp_arguments)
-                else:
-                    serialized_args = str(mcp_arguments)
-                if serialized_args.strip():
-                    mcp_tool_event["input"] = serialized_args
+            mcp_tool_input: Final = _mcp_tool_input(mcp_arguments)
+            mcp_tool_event: Final[_AirsToolEvent] = (
+                {"metadata": mcp_tool_metadata}
+                if mcp_tool_input is None
+                else {"metadata": mcp_tool_metadata, "input": mcp_tool_input}
+            )
 
             mcp_scan_result: Final = await self._call_panw_api(
                 tool_event=mcp_tool_event,

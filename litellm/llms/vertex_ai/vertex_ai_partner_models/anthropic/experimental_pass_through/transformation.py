@@ -1,4 +1,5 @@
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Final
 
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.pass_through.messages.transformation import (
@@ -25,34 +26,92 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
     def should_strip_billing_metadata(self) -> bool:
         return True
 
+    @staticmethod
+    def _vertex_auth_parameters(
+        litellm_params: dict[str, object],  # mutable-ok: delegates to the existing Vertex parameter readers
+    ) -> tuple[str | None, str | None, str | None]:
+        return (
+            VertexBase.safe_get_vertex_ai_project(litellm_params),
+            VertexBase.safe_get_vertex_ai_location(litellm_params),
+            VertexBase.safe_get_vertex_ai_credentials(litellm_params),
+        )
+
     def validate_anthropic_messages_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
-        messages: list[Any],
-        optional_params: dict,
-        litellm_params: dict,
+        messages: Sequence[object],
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> tuple[dict, str | None]:
+    ) -> tuple[dict[str, str], str | None]:
         """
         OPTIONAL
 
         Validate the environment for the request
         """
-        # Work on a local copy — router shallow-copies litellm_params so the caller's
-        # headers dict may be the shared deployment extra_headers object.
-        headers = dict(headers)
-        vertex_ai_project: Final = VertexBase.safe_get_vertex_ai_project(litellm_params)
-        vertex_ai_location: Final = VertexBase.safe_get_vertex_ai_location(litellm_params)
-
-        vertex_credentials: Final = VertexBase.safe_get_vertex_ai_credentials(litellm_params)
+        vertex_ai_project, vertex_ai_location, vertex_credentials = self._vertex_auth_parameters(litellm_params)
         access_token, project_id = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_ai_project,
             custom_llm_provider="vertex_ai",
         )
-        headers["Authorization"] = f"Bearer {access_token}"
+        return self._finalize_vertex_messages_environment(
+            headers,
+            model,
+            messages,
+            optional_params,
+            api_base,
+            access_token,
+            project_id,
+            vertex_ai_project,
+            vertex_ai_location,
+        )
+
+    async def avalidate_anthropic_messages_environment(
+        self,
+        headers: dict[str, str],  # mutable-ok: mirrors the provider validation contract
+        model: str,
+        messages: Sequence[object],
+        optional_params: dict[str, object],  # mutable-ok: mirrors the provider validation contract
+        litellm_params: dict[str, object],  # mutable-ok: mirrors the provider validation contract
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict[str, str], str | None]:  # mutable-ok: the caller consumes request headers
+        vertex_ai_project, vertex_ai_location, vertex_credentials = self._vertex_auth_parameters(litellm_params)
+        access_token, project_id = await self._ensure_access_token_async(
+            credentials=vertex_credentials,
+            project_id=vertex_ai_project,
+            custom_llm_provider="vertex_ai",
+        )
+        return self._finalize_vertex_messages_environment(
+            headers,
+            model,
+            messages,
+            optional_params,
+            api_base,
+            access_token,
+            project_id,
+            vertex_ai_project,
+            vertex_ai_location,
+        )
+
+    def _finalize_vertex_messages_environment(
+        self,
+        headers: Mapping[str, str],
+        model: str,
+        messages: Sequence[object],
+        optional_params: dict,  # mutable-ok: preserves the existing provider optional-parameter contract
+        api_base: str | None,
+        access_token: str,
+        project_id: str,
+        vertex_ai_project: str | None,
+        vertex_ai_location: str | None,
+    ) -> tuple[dict[str, str], str | None]:  # mutable-ok: the caller consumes request headers
+        # Router shallow-copies litellm_params, so headers may be shared between requests.
+        request_headers: Final = dict(headers)
+        request_headers["Authorization"] = f"Bearer {access_token}"
 
         api_base = self.get_complete_vertex_url(
             custom_api_base=api_base,
@@ -64,14 +123,14 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             model=model,
         )
 
-        headers["content-type"] = "application/json"
+        request_headers["content-type"] = "application/json"
 
         # Add beta headers for Vertex AI
         tools: Final = optional_params.get("tools", [])
         beta_values: Final[set[str]] = set()
 
         # Get existing beta headers if any
-        existing_beta: Final = headers.get("anthropic-beta")
+        existing_beta: Final = request_headers.get("anthropic-beta")
         if existing_beta:
             beta_values.update(b.strip() for b in existing_beta.split(","))
 
@@ -116,9 +175,9 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value)
 
         if beta_values:
-            headers["anthropic-beta"] = ",".join(beta_values)
+            request_headers["anthropic-beta"] = ",".join(beta_values)
 
-        return headers, api_base
+        return request_headers, api_base
 
     def get_complete_url(
         self,

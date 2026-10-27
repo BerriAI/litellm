@@ -1,6 +1,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock
 
 import pytest
@@ -1238,6 +1239,23 @@ class TestFailClosed:
 
 class TestStreamingRehydration:
     @pytest.mark.asyncio
+    async def test_held_text_behind_a_chunk_that_cannot_be_copied_fails_closed(self):
+        guardrail: Final = _guardrail(event_hook="post_call")
+        _mock_post(guardrail, {"text": "", "carry": "[EMAIL"}, {"text": "a@b.com", "carry": ""})
+
+        async def stream():
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(index=0, delta=SimpleNamespace(content="[EMAIL"), finish_reason=None)]
+            )
+
+        with pytest.raises(AttributeError, match="model_copy"):
+            await _drain(
+                guardrail.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=None, response=stream(), request_data={"messages": []}
+                )
+            )
+
+    @pytest.mark.asyncio
     async def test_split_placeholder_is_not_emitted_in_fragments(self):
         """The window holds back a partial placeholder and releases it once complete."""
         guardrail = _guardrail(event_hook="post_call")
@@ -1975,6 +1993,20 @@ class TestProxyWiring:
 
 
 class TestStreamUsage:
+    @pytest.mark.asyncio
+    async def test_trailing_flush_survives_a_usage_chunk_with_no_choices(self):
+        guardrail, _ = _shielded({"[EMAIL_1]": "a@example.com"})
+        held: Final = ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="Mail [EMAI"))])
+        usage_chunk: Final = ModelResponseStream(
+            choices=[], usage=Usage(prompt_tokens=5, completion_tokens=7, total_tokens=12)
+        )
+
+        out: Final = await _restore_stream(guardrail, [held, usage_chunk])
+
+        assert out[1] is not None and out[1].choices == []
+        assert [chunk.choices[0].delta.content for chunk in out[2:]] == ["[EMAI"]
+        assert all(getattr(chunk, "usage", None) is None for chunk in out[2:])
+
     @pytest.mark.asyncio
     async def test_trailing_flush_does_not_repeat_usage(self):
         """With n>=2 and include_usage, the last chunk carries usage; a flush copied from it must not.

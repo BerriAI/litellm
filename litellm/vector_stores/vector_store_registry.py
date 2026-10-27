@@ -1,6 +1,6 @@
 # litellm/proxy/vector_stores/vector_store_registry.py
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import chain
 from typing import (
@@ -11,7 +11,7 @@ from typing import (
     get_args,
 )
 
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import remove_items_at_indices
@@ -34,6 +34,26 @@ else:
     PrismaClient = Any
 
 _DB_ROW: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+_ITEMS: Final = TypeAdapter(Sequence[object], config=ConfigDict(strict=True))
+_TOOL: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
+_STORE_ID_ITEMS: Final = TypeAdapter(list[object], config=ConfigDict(strict=True))
+
+
+def _named_store_ids(store_ids: object) -> tuple[str, ...]:
+    if isinstance(store_ids, str):
+        return (store_ids,)
+    try:
+        items: Final = _STORE_ID_ITEMS.validate_python(store_ids)
+    except ValidationError:
+        return ()
+    return tuple(store_id for store_id in items if isinstance(store_id, str))
+
+
+def _tool_vector_store_ids(tool: object) -> tuple[str, ...]:
+    try:
+        return _named_store_ids(_TOOL.validate_python(tool).get("vector_store_ids"))
+    except ValidationError:
+        return ()
 
 
 class VectorStoreIndexRegistry:
@@ -131,7 +151,7 @@ class VectorStoreRegistry:
 
         return VectorStoreToolParams(**kwargs)
 
-    def get_vector_store_ids_to_run(self, non_default_params: dict, tools: list[dict] | None = None) -> list[str]:
+    def get_vector_store_ids_to_run(self, non_default_params: dict, tools: object = None) -> list[str]:
         """
         Returns the vector store ids to run
 
@@ -175,7 +195,7 @@ class VectorStoreRegistry:
         tools_to_remove: Final[list[int]] = []
 
         for i, tool in enumerate(tools):
-            tool_vector_store_ids = tool.get("vector_store_ids", [])
+            tool_vector_store_ids = _tool_vector_store_ids(tool)
             if not tool_vector_store_ids:
                 continue
 
@@ -395,14 +415,15 @@ class VectorStoreRegistry:
 
         return vector_stores_to_run
 
-    def _get_vector_store_ids_from_tool_calls(self, tools: list[dict] | None, vector_store_ids: list[str]) -> list[str]:
+    def _get_vector_store_ids_from_tool_calls(self, tools: object, vector_store_ids: list[str]) -> list[str]:
         """
         Returns the vector store ids from the tool calls
         """
-        return [
-            *vector_store_ids,
-            *chain.from_iterable(tool["vector_store_ids"] for tool in tools or () if "vector_store_ids" in tool),
-        ]
+        try:
+            validated_tools: Final = _ITEMS.validate_python(tools)
+        except ValidationError:
+            return vector_store_ids
+        return [*vector_store_ids, *chain.from_iterable(_tool_vector_store_ids(tool) for tool in validated_tools)]
 
     def load_vector_stores_from_config(self, vector_stores_config: list[dict]):
         """

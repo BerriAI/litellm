@@ -1814,8 +1814,8 @@ def test_gemini_nullable_object_tool_schema_httpx(
             "type": "object",
             "required": ["source"],
             "properties": {"source": {"type": "string"}},
+            "nullable": True,
         },
-        {"type": "null"},
     ]
 
 

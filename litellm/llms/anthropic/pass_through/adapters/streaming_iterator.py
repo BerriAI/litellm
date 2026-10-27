@@ -16,6 +16,7 @@ from typing import (
     Protocol,
     cast,
     get_args,
+    runtime_checkable,
 )
 
 from pydantic import TypeAdapter
@@ -24,6 +25,7 @@ from typing_extensions import assert_never
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.exceptions import ContextWindowExceededError, MidStreamFallbackError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.llms.anthropic.pass_through.safeguards import StreamedSafeguardResults
 from litellm.llms.anthropic.pass_through.utils import anthropic_sse_frame
@@ -39,6 +41,7 @@ from litellm.types.llms.anthropic import (
     UsageDelta,
     UsageIteration,
 )
+from litellm.types.llms.openai import ChatCompletionRedactedThinkingBlock, ChatCompletionThinkingBlock
 from litellm.types.utils import AdapterCompletionStreamWrapper, ChatCompletionDeltaToolCall, Delta, Function
 
 if TYPE_CHECKING:
@@ -50,6 +53,7 @@ if TYPE_CHECKING:
 
 _STREAMING_DELTA_TYPES: Final = frozenset(get_args(StreamingContentBlockDeltaType))
 _SSE_EVENT: Final = TypeAdapter(Mapping[str, object])
+_THINKING_BLOCK: Final = TypeAdapter(ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock)
 
 
 class _UsageDeltaWithIterations(UsageDelta, total=False):
@@ -60,6 +64,19 @@ class _ChunkStream(Protocol):
     def __iter__(self) -> "Iterator[ModelResponseStream]": ...
 
     def __aiter__(self) -> "AsyncIterator[ModelResponseStream]": ...
+
+
+@runtime_checkable
+class _AsyncCloseable(Protocol):
+    async def aclose(self) -> None: ...
+
+
+@runtime_checkable
+class _FailureLoggingWaiter(Protocol):
+    @property
+    def has_dispatched_failure_logging(self) -> bool: ...
+
+    async def wait_for_failure_logging(self, timeout: float | None) -> None: ...
 
 
 def _optional_attr(obj: object, name: str) -> object:
@@ -104,6 +121,14 @@ def _delta_payload_field(delta_type: StreamingContentBlockDeltaType) -> str:
             return "signature"
         case _:
             assert_never(delta_type)
+
+
+def _first_thinking_block_index(chunk: "ModelResponseStream") -> int | None:
+    delta: Final = _optional_attr(chunk.choices[0], "delta") if chunk.choices else None
+    blocks: Final = _optional_attr_sequence(delta, "thinking_blocks")
+    first_block: Final = as_str_mapping(blocks[0]) if blocks else None
+    index: Final = first_block.get("index") if first_block is not None else None
+    return index if isinstance(index, int) else None
 
 
 def _optional_str_attr(obj: object, name: str) -> str | None:
@@ -177,6 +202,22 @@ class _CombinedChunkSplitter:
         self._buffer: deque[ModelResponseStream] = deque()
         self._held_calls: Mapping[int, tuple[ModelResponseStream, _ToolCallPart]] = MappingProxyType({})
         self._live_call_index: int | None = None
+        self._closed = False
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if isinstance(self._stream, _AsyncCloseable):
+            await self._stream.aclose()
+
+    @property
+    def has_dispatched_failure_logging(self) -> bool:
+        return isinstance(self._stream, _FailureLoggingWaiter) and self._stream.has_dispatched_failure_logging is True
+
+    async def wait_for_failure_logging(self, timeout: float | None) -> None:
+        if isinstance(self._stream, _FailureLoggingWaiter):
+            await self._stream.wait_for_failure_logging(timeout=timeout)
 
     @property
     def chunks(self) -> "list[ModelResponseStream] | None":
@@ -373,13 +414,44 @@ class _CombinedChunkSplitter:
             finish_delta.thinking_blocks = None
         return [content_chunk, finish_chunk]
 
+    @staticmethod
+    def _with_thinking_block(
+        chunk: "ModelResponseStream",
+        block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+        *,
+        keep_role: bool,
+    ) -> "ModelResponseStream":
+        piece: Final = copy.deepcopy(chunk)
+        role: Final = getattr(piece.choices[0].delta, "role", None) if keep_role else None
+        thinking: Final = block.get("thinking") if block["type"] == "thinking" else None
+        piece.choices[0].delta = Delta(role=role, reasoning_content=thinking or None, thinking_blocks=[block])
+        return piece
+
+    @staticmethod
+    def _split_thinking_blocks(chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
+        """Anthropic streams one content block per thinking block, so a delta carrying several is split per block."""
+        choices: Final = _optional_attr_sequence(chunk, "choices")
+        if len(choices) != 1:
+            return (chunk,)
+        delta: Final = _optional_attr(choices[0], "delta")
+        blocks: Final = _optional_attr_sequence(delta, "thinking_blocks")
+        if len(blocks) < 2 or _optional_attr(delta, "content") or _optional_attr(delta, "tool_calls"):
+            return (chunk,)
+        return tuple(
+            _CombinedChunkSplitter._with_thinking_block(
+                chunk, _THINKING_BLOCK.validate_python(block), keep_role=position == 0
+            )
+            for position, block in enumerate(blocks)
+        )
+
     def _expand(self, chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
         split_chunks: Final = tuple(
             split_chunk
             for combined_chunk in self._split(chunk)
             for split_chunk in self._split_by_payload_kind(combined_chunk)  # comprehension-ok: flattens nested splits
         )
-        return tuple(itertools.chain.from_iterable(self._route_tool_calls(split_chunk) for split_chunk in split_chunks))
+        block_chunks: Final = tuple(itertools.chain.from_iterable(map(self._split_thinking_blocks, split_chunks)))
+        return tuple(itertools.chain.from_iterable(map(self._route_tool_calls, block_chunks)))
 
     def __iter__(self) -> "Iterator[ModelResponseStream]":
         return self
@@ -458,7 +530,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     sent_first_chunk: bool = False
     sent_content_block_start: bool = False
     sent_content_block_finish: bool = False
-    current_content_block_type: Literal["text", "tool_use", "thinking"] = "text"
+    current_content_block_type: Literal["text", "tool_use", "thinking", "redacted_thinking"] = "text"
+    current_thinking_block_index: int | None = None
     sent_last_message: bool = False
     holding_chunk: ContentBlockDelta | None = None
     holding_stop_reason_chunk: MessageBlockDelta | None = None
@@ -479,7 +552,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # Wrap the upstream stream so chunks that carry both content and a
         # finish_reason (fake-streamed providers) are split into two — see
         # _CombinedChunkSplitter.
-        super().__init__(_CombinedChunkSplitter(completion_stream))
+        combined_chunk_splitter: Final = _CombinedChunkSplitter(completion_stream)
+        super().__init__(combined_chunk_splitter)
+        self._combined_chunk_splitter: Final = combined_chunk_splitter
         self.model = model
         self._message_id: str = f"msg_{uuid.uuid4()}"
         if litellm_logging_obj is not None:
@@ -1177,6 +1252,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 # For non-dict chunks, forward the original value unchanged
                 yield chunk
 
+    async def aclose(self) -> None:
+        await self._combined_chunk_splitter.aclose()
+
     async def async_anthropic_sse_wrapper(self) -> AsyncIterator[bytes]:
         """
         Async version of anthropic_sse_wrapper.
@@ -1201,7 +1279,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if provider_error is e:
                     raise
                 raise provider_error from e
-            if logging_obj is not None:
+            stream_has_dispatched_failure_logging: Final = self._combined_chunk_splitter.has_dispatched_failure_logging
+            if stream_has_dispatched_failure_logging:
+                await self._combined_chunk_splitter.wait_for_failure_logging(timeout=None)
+            elif logging_obj is not None:
                 try:
                     await logging_obj.dispatch_failure_handlers(
                         exception=provider_error,
@@ -1254,13 +1335,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         Also gates re-emission after a block transition: when an upstream
         chunk both *triggers* a new content block (its type differs from the
         active block) and *carries* delta content, that content belongs to
-        the new block. The synthesized ``content_block_start`` only ever
-        carries an empty body — see
-        ``_translate_streaming_openai_chunk_to_anthropic_content_block``,
-        which returns an empty ``TextBlock``/``ToolUseBlock``/thinking block —
-        so the trigger chunk's delta must be re-queued or the first token of
-        the new block (the first non-empty text/thinking delta, or bundled
-        tool arguments) is silently dropped.
+        the new block. The synthesized ``content_block_start`` from
+        ``_translate_streaming_openai_chunk_to_anthropic_content_block``
+        carries an empty text, tool-use or unsigned thinking body, and only a
+        signed thinking block's text rides on the start because its delta is
+        a ``signature_delta``. So the trigger chunk's delta must be re-queued
+        or the first token of the new block (the first non-empty text or
+        unsigned thinking delta, or bundled tool arguments) is silently
+        dropped.
 
         Delta types outside ``StreamingContentBlockDeltaType`` — the closed
         set the translate layer can produce — are treated as empty. The
@@ -1301,9 +1383,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # open a block: the emitted {"type": "thinking", "thinking": ""} gets
         # replayed as history and Anthropic rejects it (LIT-6357). A signed
         # entry opens the block so the client receives the replay signature.
-        thinking_blocks: Final = getattr(delta, "thinking_blocks", None)
-        if thinking_blocks and any(
-            isinstance(b, dict) and not is_empty_unsigned_thinking_block(b) for b in thinking_blocks
+        if any(
+            isinstance(b, dict) and not is_empty_unsigned_thinking_block(b)
+            for b in attribute_items(delta, "thinking_blocks")
         ):
             return False
         return True
@@ -1352,8 +1434,21 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 original_name: Final = self.tool_name_mapping.get(truncated_name, truncated_name)
                 tool_block["name"] = original_name
 
+        thinking_block_index: Final = _first_thinking_block_index(chunk)
+        previous_thinking_block_index: Final = self.current_thinking_block_index
+        if thinking_block_index is not None or block_type != self.current_content_block_type:
+            self.current_thinking_block_index = thinking_block_index
+
         if block_type != self.current_content_block_type:
             self.current_content_block_type = block_type
+            self.current_content_block_start = content_block_start
+            return True
+
+        if (
+            thinking_block_index is not None
+            and previous_thinking_block_index is not None
+            and thinking_block_index != previous_thinking_block_index
+        ):
             self.current_content_block_start = content_block_start
             return True
 
@@ -1402,4 +1497,7 @@ class AnthropicSSEStream(AsyncIterator[bytes]):
         return await self._byte_stream.__anext__()
 
     async def aclose(self) -> None:
-        await self._byte_stream.aclose()
+        try:
+            await self._byte_stream.aclose()
+        finally:
+            await self._anthropic_wrapper.aclose()

@@ -16,6 +16,7 @@ import litellm
 from litellm import AmazonInvokeConfig
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import _get_provider_request_id
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.bedrock.chat.invoke_handler import (
     AmazonOpenAICompatibleStreamDecoder,
@@ -864,14 +865,16 @@ async def test_async_invoke_streaming_non_200_forwards_bedrock_response_headers(
 
 
 def _event_stream_frame(event_type: str, payload: bytes) -> bytes:
+    return _typed_event_stream_frame(
+        {":event-type": event_type, ":content-type": "application/json", ":message-type": "event"}, payload
+    )
+
+
+def _typed_event_stream_frame(frame_headers: Mapping[str, str], payload: bytes) -> bytes:
     def header(name: str, value: str) -> bytes:
         return bytes([len(name)]) + name.encode() + bytes([7]) + struct.pack(">H", len(value)) + value.encode()
 
-    headers: Final = (
-        header(":event-type", event_type)
-        + header(":content-type", "application/json")
-        + header(":message-type", "event")
-    )
+    headers: Final = b"".join(header(name, value) for name, value in frame_headers.items())
     prelude: Final = struct.pack(">II", 12 + len(headers) + len(payload) + 4, len(headers))
     body: Final = prelude + struct.pack(">I", binascii.crc32(prelude)) + headers + payload
     return body + struct.pack(">I", binascii.crc32(body))
@@ -1367,6 +1370,87 @@ def test_iter_bytes_keeps_a_stream_whose_unknown_event_sits_beside_known_frames(
     assert "stop" in finish_reasons
 
 
+_STREAM_FAILURE_BODIES: Final = (
+    pytest.param(
+        _converse_event_frame("internalServerException", {"message": _UPSTREAM_REJECTION}), 500, id="exception-event"
+    ),
+    pytest.param(
+        _typed_event_stream_frame(
+            {
+                ":exception-type": "throttlingException",
+                ":content-type": "application/json",
+                ":message-type": "exception",
+            },
+            json.dumps({"message": _UPSTREAM_REJECTION}).encode(),
+        ),
+        429,
+        id="exception-message",
+    ),
+    pytest.param(_unknown_event_frame(), 502, id="no-known-event"),
+    pytest.param(b"", 502, id="no-events"),
+    pytest.param(_CONVERSE_CONTENT_FRAMES[0] + _truncated_frame(), 502, id="undecoded-tail"),
+)
+
+
+def _stream_headers(request_id: str | None) -> httpx.Headers:
+    request_id_header: Final = {} if request_id is None else {"x-amzn-RequestId": request_id}
+    return httpx.Headers(
+        {"content-type": "application/vnd.amazon.eventstream", "retry-after": "7", **request_id_header}
+    )
+
+
+def _assert_carries_only_the_request_id(error: BedrockError, status: int, request_id: str | None) -> None:
+    assert error.status_code == status
+    assert _get_provider_request_id(error) == request_id
+    if request_id is None:
+        assert error.headers is None
+        return
+    assert dict(error.headers or {}) == {"x-amzn-requestid": request_id}
+    assert dict(error.response.headers) == {"x-amzn-requestid": request_id}
+
+
+@pytest.mark.parametrize("request_id", ("req-stream-1", None))
+@pytest.mark.parametrize(("body", "status"), _STREAM_FAILURE_BODIES)
+def test_iter_bytes_stream_error_carries_only_the_provider_request_id_header(
+    body: bytes, status: int, request_id: str | None
+) -> None:
+    decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
+
+    with pytest.raises(BedrockError) as exc_info:
+        list(decoder.iter_bytes(iter([body]), response_headers=_stream_headers(request_id)))
+
+    _assert_carries_only_the_request_id(exc_info.value, status, request_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("body", "status"), _STREAM_FAILURE_BODIES)
+async def test_aiter_bytes_stream_error_carries_only_the_provider_request_id_header(body: bytes, status: int) -> None:
+    async def _chunks() -> AsyncIterator[bytes]:
+        yield body
+
+    decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
+
+    with pytest.raises(BedrockError) as exc_info:
+        _ = [chunk async for chunk in decoder.aiter_bytes(_chunks(), response_headers=_stream_headers("req-stream-2"))]
+
+    _assert_carries_only_the_request_id(exc_info.value, status, "req-stream-2")
+
+
+@pytest.mark.parametrize("request_id", ("req-\u00fc-1", "req-\udcfc-1"), ids=("latin-1", "surrogate-escaped"))
+def test_iter_bytes_streams_and_fails_normally_with_a_non_ascii_provider_request_id(request_id: str) -> None:
+    decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
+    headers: Final = {"content-type": "application/vnd.amazon.eventstream", "x-amzn-RequestId": request_id}
+
+    chunks: Final = list(decoder.iter_bytes(iter(_CONVERSE_CONTENT_FRAMES), response_headers=headers))
+    with pytest.raises(BedrockError) as exc_info:
+        list(decoder.iter_bytes(iter([_unknown_event_frame()]), response_headers=headers))
+
+    texts: Final = [chunk.choices[0].delta.content for chunk in chunks if isinstance(chunk, ModelResponseStream)]
+    assert "".join(text or "" for text in texts) == "hi"
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.headers is None
+
+
 def _assert_exception_event_surfaced_with_its_modeled_status(error: BaseException, event_type: str) -> None:
     assert not isinstance(error, litellm.BadGatewayError)
     assert getattr(error, "status_code", None) == _modeled_status(event_type)
@@ -1796,3 +1880,84 @@ async def test_converse_stream_thinking_merges_into_content_with_think_tags() ->
         "Hi I am Anthropic, I am a helpful assistant"
     )
     assert [getattr(chunk.choices[0].delta, "reasoning_content", None) for chunk in chunks] == [None] * len(chunks)
+
+
+_PLACE_JSON_MODE_REQUEST: Final = json.dumps(
+    {
+        "tools": [
+            {
+                "name": "json_tool_call",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}, "country": {"type": "string"}},
+                    "required": ["city", "country"],
+                    "additionalProperties": True,
+                },
+            }
+        ]
+    }
+)
+
+_CUT_JSON_TOOL_STREAM: Final = b"".join(
+    _bedrock_event_stream_frame(event)
+    for event in (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_cut_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [],
+                "stop_reason": None,
+                "usage": {"input_tokens": 528, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": "toolu_cut_1", "name": "json_tool_call", "input": {}},
+        },
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": '{"city"'}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": ': "Paris", '}},
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '"country": "France"}'},
+        },
+    )
+)
+
+
+def _cut_json_tool_stream_decoder() -> AWSEventStreamDecoder:
+    return _stream_decoder(
+        "anthropic",
+        model="anthropic.claude-haiku-5-5",
+        json_mode=True,
+        sync_stream=True,
+        response_format_schema=response_format_schema_from_request(_PLACE_JSON_MODE_REQUEST, json_mode=True),
+    )
+
+
+def _streamed_content(chunks: Sequence[object]) -> str:
+    return "".join(
+        chunk.choices[0].delta.content or ""
+        for chunk in chunks
+        if isinstance(chunk, ModelResponseStream) and chunk.choices
+    )
+
+
+def test_anthropic_invoke_stream_cut_before_the_json_tool_block_ends_sends_the_held_close() -> None:
+    chunks: Final = list(_cut_json_tool_stream_decoder().iter_bytes(iter([_CUT_JSON_TOOL_STREAM])))
+
+    assert json.loads(_streamed_content(chunks)) == {"city": "Paris", "country": "France"}
+
+
+@pytest.mark.asyncio
+async def test_async_anthropic_invoke_stream_cut_before_the_json_tool_block_ends_sends_the_held_close() -> None:
+    async def _chunks() -> AsyncIterator[bytes]:
+        yield _CUT_JSON_TOOL_STREAM
+
+    chunks: Final = [chunk async for chunk in _cut_json_tool_stream_decoder().aiter_bytes(_chunks())]
+
+    assert json.loads(_streamed_content(chunks)) == {"city": "Paris", "country": "France"}

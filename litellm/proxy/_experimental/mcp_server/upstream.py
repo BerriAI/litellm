@@ -207,6 +207,8 @@ async def prepare_upstream_client(
     protocol_version: MCPUpstreamProtocol,
     sampling_callback: SamplingCallback | None = None,
     elicitation_callback: ElicitationCallback | None = None,
+    upstream_transport: httpx2.AsyncBaseTransport | None = None,
+    for_tool_listing: bool = False,
 ) -> MCPClient:
     transport: Final[MCPTransportType] = server.transport or MCPTransport.sse
     server_spec: Final = None if transport == MCPTransport.stdio else to_server_spec_fail_closed(server)
@@ -263,6 +265,7 @@ async def prepare_upstream_client(
                 server_url=server.url or "",
                 transport_type=transport,
                 protocol_version=protocol_version,
+                upstream_transport=upstream_transport,
                 auth_type=server.auth_type,
                 timeout=timeout,
                 extra_headers=resolved_headers,
@@ -270,6 +273,7 @@ async def prepare_upstream_client(
                 sampling_callback=sampling_callback,
                 elicitation_callback=elicitation_callback,
             ),
+            for_tool_listing=for_tool_listing,
         )
     aws_auth: Final = (
         MCPSigV4Auth(
@@ -304,6 +308,7 @@ async def prepare_upstream_client(
             server_url=server.url or "",
             transport_type=transport,
             protocol_version=protocol_version,
+            upstream_transport=upstream_transport,
             auth_type=server.auth_type,
             auth_value=auth_value,
             auth_header_name=auth_header_name,
@@ -313,4 +318,5 @@ async def prepare_upstream_client(
             sampling_callback=sampling_callback,
             elicitation_callback=elicitation_callback,
         ),
+        for_tool_listing=for_tool_listing,
     )

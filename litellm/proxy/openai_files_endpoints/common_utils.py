@@ -4,6 +4,7 @@ import mimetypes
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -17,6 +18,7 @@ from typing import (
 )
 
 from pydantic import TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.batches.batch_utils import batch_cost_is_final
 from litellm.constants import MAX_FILE_LIST_LIMIT
@@ -43,6 +45,7 @@ FILE_LIST_CONTINUATION_CHUNK_SIZE: Final = 500
 
 BATCH_CREATE_HIDDEN_PARAM: Final = "batch_create"
 LITELLM_EXECUTED_BATCH_ID_PREFIX: Final = "litellm_batch_"
+EXPLICIT_CREDENTIAL_KEYS: Final = frozenset({"api_key", "api_base", "litellm_credential_name"})
 
 
 def validate_file_list_limit(limit: int | None) -> None:
@@ -474,10 +477,59 @@ async def get_authorized_credentials_for_model(
     )
 
 
+def deployment_drop_params(
+    llm_router: Optional["Router"], model_id: str, request: Mapping[str, object]
+) -> Mapping[str, bool | str]:
+    deployment: Final = (
+        llm_router.get_credential_deployment(model_id=model_id)
+        if llm_router is not None and "drop_params" not in request
+        else None
+    )
+    drop_params: Final = deployment.litellm_params.drop_params if deployment is not None else None
+    return MappingProxyType({}) if drop_params is None else MappingProxyType({"drop_params": drop_params})
+
+
+def _key_allowlist_covers(public_model_name: str, key_model_allowlist: Sequence[str]) -> bool:
+    from litellm.proxy.auth.auth_checks import model_matches_any_wildcard_pattern_in_list
+
+    if public_model_name in key_model_allowlist:
+        return True
+    if model_matches_any_wildcard_pattern_in_list(model=public_model_name, allowed_model_list=key_model_allowlist):
+        return True
+    return any(
+        model_matches_any_wildcard_pattern_in_list(model=key_model, allowed_model_list=(public_model_name,))
+        for key_model in key_model_allowlist
+    )
+
+
+_CONFIG_FILE_RANK: Final = datetime.min.replace(tzinfo=timezone.utc)
+_UNKNOWN_CREATION_TIME: Final = datetime.max.replace(tzinfo=timezone.utc)
+
+
+class _RouterDeployment(TypedDict):
+    model_name: ReadOnly[NotRequired[str]]
+    model_info: ReadOnly[Mapping[str, object]]
+
+
+def _team_deployment_rank(model_info: Mapping[str, object], deployment_id: str) -> tuple[datetime, str]:
+    if model_info.get("db_model") is not True:
+        return _CONFIG_FILE_RANK, ""
+    created_at: Final = model_info.get("created_at")
+    if not isinstance(created_at, datetime):
+        return _UNKNOWN_CREATION_TIME, deployment_id
+    return (created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)), deployment_id
+
+
+def _by_team_deployment_rank(order: tuple[tuple[datetime, str], str]) -> tuple[datetime, str]:
+    return order[0]
+
+
 def get_team_provider_credentials(
     llm_router: Optional["Router"],
     user_api_key_dict: "UserAPIKeyAuth",
     custom_llm_provider: str,
+    *,
+    include_accessible_deployments: bool = True,
 ) -> dict | None:
     """
     Resolve upstream credentials for a provider-scoped file operation
@@ -490,12 +542,15 @@ def get_team_provider_credentials(
        global one.
     2. Fallback: any deployment the caller is granted access to for this
        provider, expanding wildcard routes and the all-proxy-models sentinel.
+       Skipped when ``include_accessible_deployments`` is False.
 
     Credential lookup is scoped to both the team's allowlist and the key's own
     model allowlist (``user_api_key_dict.models``), so neither a team nor a
     restricted key within a team can resolve a provider key for a deployment
     it isn't authorized to use. A key restricted to an explicit model list
-    only narrows the team scope; sentinel-bearing keys (all-proxy-models /
+    only narrows the team scope, matching a wildcard on either side the way
+    request authorization does (a key allowed ``gpt-4o`` may use the team's
+    ``openai/*`` deployment); sentinel-bearing keys (all-proxy-models /
     all-team-models) defer to the team scope instead of widening past it.
     Returns None when the router is unavailable or no authorized deployment
     matches, so the caller can fall back to default credential resolution.
@@ -531,33 +586,52 @@ def get_team_provider_credentials(
         if key_is_restricted
         else ()
     )
-    key_model_allowlist_set: Final = frozenset(key_model_allowlist)
 
-    def _key_may_use(public_model_name: str | None) -> bool:
-        if not key_model_allowlist_set:
+    def _key_may_use(public_model_name: object) -> bool:
+        if not key_model_allowlist:
             return True
-        return public_model_name is not None and public_model_name in key_model_allowlist_set
+        return isinstance(public_model_name, str) and _key_allowlist_covers(public_model_name, key_model_allowlist)
 
-    def _provider_credentials(model_id: str) -> dict | None:
+    def _provider_credentials(model_id: str) -> dict[str, object] | None:
         credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)
         if credentials is not None and credentials.get("custom_llm_provider") == custom_llm_provider:
             return {key: value for key, value in credentials.items() if key != "model"}
         return None
 
-    # 1. Prefer the team's own BYOK deployment, matched by model_info.team_id.
+    def _usable_team_deployment_order(deployment: _RouterDeployment) -> tuple[tuple[datetime, str], str] | None:
+        model_info: Final[Mapping[str, object]] = deployment["model_info"]
+        if model_info.get("team_id") != team_id:
+            return None
+        if not _key_may_use(model_info.get("team_public_model_name") or deployment.get("model_name")):
+            return None
+        deployment_id: Final = model_info.get("id")
+        if not isinstance(deployment_id, str):
+            return None
+        return _team_deployment_rank(model_info, deployment_id), deployment_id
+
+    # 1. Prefer the team's own BYOK deployment, matched by model_info.team_id. Config file
+    #    deployments win, kept in file order by the stable sort, then DB ones oldest first, then
+    #    by lowest id, so adding a deployment never moves the team off the one it already uses,
+    #    and every worker picks the same one in any DB load or edit order.
     if team_id is not None:
-        for deployment in llm_router.model_list or []:
-            model_info = deployment.get("model_info") or {}
-            if model_info.get("team_id") != team_id:
-                continue
-            deployment_id = model_info.get("id")
-            if deployment_id is None:
-                continue
-            if not _key_may_use(model_info.get("team_public_model_name") or deployment.get("model_name")):
-                continue
-            credentials = _provider_credentials(deployment_id)
-            if credentials is not None:
-                return credentials
+        team_deployment_orders: Final = sorted(
+            (
+                order
+                for deployment in llm_router.model_list or []
+                if (order := _usable_team_deployment_order(deployment)) is not None
+            ),
+            key=_by_team_deployment_rank,
+        )
+        team_deployment_ids: Final = tuple(deployment_id for _, deployment_id in team_deployment_orders)
+        team_credentials: Final = next(
+            (credentials for credentials in map(_provider_credentials, team_deployment_ids) if credentials is not None),
+            None,
+        )
+        if team_credentials is not None:
+            return team_credentials
+
+    if not include_accessible_deployments:
+        return None
 
     # 2. Fall back to deployments the caller is allowed to access. The key's
     #    effective allowlist (sentinels and access groups already expanded by
@@ -594,6 +668,42 @@ def get_team_provider_credentials(
     return None
 
 
+HTTP_HEADER_VALUE: Final = re.compile(r"[\x21-\x7e]+(?:[ \t]+[\x21-\x7e]+)*")
+
+
+def _non_blank_string(value: object) -> str | None:
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _request_api_key(data: Mapping[str, object]) -> str | None:
+    from fastapi import HTTPException
+
+    import litellm
+
+    api_key: Final = _non_blank_string(data.get("api_key"))
+    if api_key is None or HTTP_HEADER_VALUE.fullmatch(api_key):
+        return api_key
+    if data.get("drop_params") is True or litellm.drop_params is True:
+        return None
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": "The request's provider api_key is not a valid HTTP header value. Remove surrounding "
+            "whitespace and non-ASCII characters, or set drop_params to send the request without it."
+        },
+    )
+
+
+def explicit_request_credentials(data: Mapping[str, object]) -> Mapping[str, str]:
+    api_key: Final = _request_api_key(data)
+    if api_key is None:
+        return MappingProxyType({})
+    api_base: Final = _non_blank_string(data.get("api_base"))
+    if api_base is None:
+        return MappingProxyType({"api_key": api_key})
+    return MappingProxyType({"api_key": api_key, "api_base": api_base})
+
+
 def apply_team_provider_credentials(
     data: dict,  # mutable-ok: credentials are merged into the request payload in place, same contract as prepare_data_with_credentials
     llm_router: Optional["Router"],
@@ -605,6 +715,9 @@ def apply_team_provider_credentials(
     ``get_team_provider_credentials`` and merge them into ``data`` in-place.
     Leaves ``data`` untouched when no authorized deployment matches, so the
     caller falls back to environment-variable credentials exactly as before.
+    An ``api_key`` the request carries itself (a provider key forwarded with
+    ``forward_llm_provider_auth_headers``) replaces the deployment's, and the
+    request's ``api_base`` replaces the deployment's only alongside that key.
     """
     credentials: Final = get_team_provider_credentials(
         llm_router=llm_router,
@@ -613,7 +726,7 @@ def apply_team_provider_credentials(
     )
     if credentials is None:
         return
-    prepare_data_with_credentials(data=data, credentials=credentials)
+    prepare_data_with_credentials(data=data, credentials={**credentials, **explicit_request_credentials(data)})
 
 
 def add_internal_model_credentials(
