@@ -5437,3 +5437,64 @@ async def test_health_services_endpoint_langfuse_missing_keys_errors(monkeypatch
     with pytest.raises(ProxyException, match="auth_check failed") as raised:
         await health_services_endpoint(service="langfuse")
     assert "connection refused by lf.internal.example" in str(raised.value.message)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admin", [False, True])
+async def test_unsaved_chatgpt_account_probe_requires_proxy_admin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, admin: bool
+) -> None:
+    from starlette.requests import Request
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("CHATGPT_AUTH_FILE", str(tmp_path / "missing-default-auth.json"))
+    auth_file: Final = tmp_path / "auth.json"
+    auth_file.write_text(
+        json.dumps({"access_token": "token-probe", "account_id": "acct-probe", "expires_at": 4102444800})
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    output: Final = {
+        "id": "msg_probe",
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+    }
+    response: Final = {
+        "id": "resp_probe",
+        "object": "response",
+        "created_at": 1700000000,
+        "status": "completed",
+        "model": "gpt-6.1-sol",
+        "output": [output],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.post("https://chatgpt.com/backend-api/codex/responses").respond(
+            200,
+            text="data: " + json.dumps({"type": "response.completed", "response": response}) + "\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+        call: Final = health_test_model_connection(
+            request=Request({"type": "http", "headers": []}),
+            mode="responses",
+            litellm_params={"model": "chatgpt/gpt-6.1-sol", "chatgpt_auth_file": str(auth_file)},
+            model_info={},
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN if admin else LitellmUserRoles.INTERNAL_USER, token="test-key"
+            ),
+        )
+        if admin:
+            result: Final = await call
+            assert result["status"] == "success"
+            assert upstream.calls.last.request.headers["Authorization"] == "Bearer token-probe"
+            assert upstream.calls.last.request.headers["ChatGPT-Account-Id"] == "acct-probe"
+            assert isinstance(json.loads(upstream.calls.last.request.content)["input"], list)
+        else:
+            with pytest.raises(ProxyException) as error:
+                await call
+            assert error.value.code == "403"
+            assert len(upstream.calls) == 0
