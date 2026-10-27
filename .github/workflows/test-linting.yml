@@ -524,6 +524,9 @@ jobs:
       - name: check_provider_folders_documented
         run: uv run --no-sync python ./tests/code_coverage_tests/check_provider_folders_documented.py
 
+      - name: check_provider_endpoints_support_generated
+        run: uv run --no-sync python scripts/generate_provider_endpoints_support.py --check
+
       - name: check_prisma_binary_cache
         run: uv run --no-sync python ./tests/code_coverage_tests/check_prisma_binary_cache.py
 
