@@ -1712,6 +1712,7 @@ def test_public_skill_hub_echoes_registered_installation_preference(preference):
                         "url": "https://plugins.example.com/security-review-1.0.0.zip",
                         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
                     },
+                    serve_archive=False,
                     installation_preference=preference,
                 ),
                 user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),

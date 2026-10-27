@@ -4316,6 +4316,7 @@ def test_neighbouring_team_routes_stay_closed(route):
         "/claude-code/marketplace.json",
         "/claude-code/plugins",
         "/claude-code/plugins/my-skill",
+        "/claude-code/plugins/my-skill/archive.zip",
     ],
 )
 def test_claude_code_marketplace_routes_open_to_internal_users(route):

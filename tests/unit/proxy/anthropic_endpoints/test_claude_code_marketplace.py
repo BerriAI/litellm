@@ -4,10 +4,16 @@ Unit tests for claude_code_marketplace.py source validation.
 Covers the git-subdir and archive source types added alongside the existing github and url types.
 """
 
+import io
 import json
+import struct
+import tracemalloc
+import zipfile
+import zlib
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
@@ -15,12 +21,14 @@ from pydantic import ValidationError
 import litellm
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable, ProxyException, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints import claude_code_marketplace
+from litellm.proxy.anthropic_endpoints.claude_code_endpoints import claude_code_plugin_archive as plugin_archive
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
     delete_plugin,
     disable_plugin,
     enable_plugin,
     get_marketplace,
     get_plugin,
+    get_plugin_archive,
     list_plugins,
     register_plugin,
     update_plugin,
@@ -107,11 +115,56 @@ _ARCHIVE_SOURCE = {
 }
 
 
+def _zip_bytes(files: dict[str, bytes]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    return buffer.getvalue()
+
+
+_REAL_BUILD_ARCHIVE = plugin_archive.build_archive
+
+
+_PLUGIN_ZIP = plugin_archive.normalize_archive(
+    _zip_bytes({".claude-plugin/plugin.json": b"{}", "skills/s/SKILL.md": b"# s"}), strip_top_level=False
+)
+_BUILT = plugin_archive.BuiltArchive(_PLUGIN_ZIP, plugin_archive.sha256_hex(_PLUGIN_ZIP), None)
+
+
+@pytest.mark.asyncio
+async def test_plugin_archive_get_enforces_download_limit_while_reading(monkeypatch):
+    seen: dict[str, object] = {}
+
+    async def _fake_async_safe_get(client, url: str, **kwargs):
+        seen["client"] = client
+        seen["url"] = url
+        seen["kwargs"] = kwargs
+        return httpx.Response(200, content=b"ok")
+
+    monkeypatch.setattr(plugin_archive, "async_safe_get", _fake_async_safe_get)
+
+    body = await plugin_archive._get("https://example.com/plugin.zip", {"Authorization": "Bearer token"})
+
+    assert body == b"ok"
+    assert seen["url"] == "https://example.com/plugin.zip"
+    assert seen["kwargs"] == {
+        "headers": {"Authorization": "Bearer token"},
+        "max_response_bytes": plugin_archive.MAX_DOWNLOAD_BYTES,
+    }
+
+
 @pytest.fixture(autouse=True)
-def _patch_proxy_globals(monkeypatch):
+def _patch_proxy_globals(monkeypatch, tmp_path):
     """Scope prisma_client/master_key mutations to each test via monkeypatch."""
     monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", _make_mock_prisma())
     monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(
+        plugin_archive,
+        "build_archive",
+        AsyncMock(side_effect=plugin_archive.ArchiveBuildError("offline in unit tests")),
+    )
+    monkeypatch.setenv("LITELLM_PLUGIN_ARCHIVE_DIR", str(tmp_path))
 
 
 @pytest.mark.asyncio
@@ -374,6 +427,7 @@ async def test_get_marketplace_emits_installation_preference(preference):
         request=RegisterPluginRequest(
             name="s3-skill",
             source=_ARCHIVE_SOURCE,
+            serve_archive=False,
             installation_preference=preference,
         ),
         user_api_key_dict=_USER,
@@ -390,9 +444,11 @@ async def test_get_marketplace_emits_installation_preference(preference):
     "build_request",
     [
         lambda preference: RegisterPluginRequest(
-            name="s3-skill", source=_ARCHIVE_SOURCE, installation_preference=preference
+            name="s3-skill", source=_ARCHIVE_SOURCE, serve_archive=False, installation_preference=preference
         ),
-        lambda preference: UpdatePluginRequest(source=_ARCHIVE_SOURCE, installation_preference=preference),
+        lambda preference: UpdatePluginRequest(
+            source=_ARCHIVE_SOURCE, serve_archive=False, installation_preference=preference
+        ),
     ],
     ids=["register", "update"],
 )
@@ -417,7 +473,7 @@ async def test_get_marketplace_omits_installation_preference_when_unset():
 async def test_update_plugin_propagates_installation_preference_to_get_and_list():
     name = "updated-install-plugin"
     await register_plugin(
-        request=RegisterPluginRequest(name=name, source=_ARCHIVE_SOURCE),
+        request=RegisterPluginRequest(name=name, source=_ARCHIVE_SOURCE, serve_archive=False),
         user_api_key_dict=_USER,
     )
 
@@ -425,6 +481,7 @@ async def test_update_plugin_propagates_installation_preference_to_get_and_list(
         plugin_name=name,
         request=UpdatePluginRequest(
             source=_ARCHIVE_SOURCE,
+            serve_archive=False,
             installation_preference="auto_install",
         ),
         user_api_key_dict=_USER,
@@ -442,13 +499,15 @@ async def test_update_plugin_propagates_installation_preference_to_get_and_list(
 async def test_update_plugin_without_installation_preference_clears_it():
     name = "cleared-install-plugin"
     await register_plugin(
-        request=RegisterPluginRequest(name=name, source=_ARCHIVE_SOURCE, installation_preference="auto_install"),
+        request=RegisterPluginRequest(
+            name=name, source=_ARCHIVE_SOURCE, serve_archive=False, installation_preference="auto_install"
+        ),
         user_api_key_dict=_USER,
     )
 
     await update_plugin(
         plugin_name=name,
-        request=UpdatePluginRequest(source=_ARCHIVE_SOURCE),
+        request=UpdatePluginRequest(source=_ARCHIVE_SOURCE, serve_archive=False),
         user_api_key_dict=_USER,
     )
 
@@ -484,7 +543,12 @@ async def test_stored_unknown_installation_preference_is_not_served(stored_value
 @pytest.mark.asyncio
 async def test_register_accepts_the_camel_case_installation_preference_key():
     request = RegisterPluginRequest.model_validate(
-        {"name": "s3-skill", "source": _ARCHIVE_SOURCE, "installationPreference": "auto_install"}
+        {
+            "name": "s3-skill",
+            "source": _ARCHIVE_SOURCE,
+            "serve_archive": False,
+            "installationPreference": "auto_install",
+        }
     )
 
     response = await register_plugin(request=request, user_api_key_dict=_USER)
@@ -506,14 +570,18 @@ _UNPINNED_ARCHIVE_SOURCE = {"source": "archive", "url": "https://artifacts.examp
 async def _assert_preference_refused(source, preference):
     with pytest.raises(HTTPException) as register_error:
         await register_plugin(
-            request=RegisterPluginRequest(name="no-op-plugin", source=source, installation_preference=preference),
+            request=RegisterPluginRequest(
+                name="no-op-plugin", source=source, serve_archive=False, installation_preference=preference
+            ),
             user_api_key_dict=_USER,
         )
-    await register_plugin(request=RegisterPluginRequest(name="no-op-plugin", source=source), user_api_key_dict=_USER)
+    await register_plugin(
+        request=RegisterPluginRequest(name="no-op-plugin", source=source, serve_archive=False), user_api_key_dict=_USER
+    )
     with pytest.raises(HTTPException) as update_error:
         await update_plugin(
             plugin_name="no-op-plugin",
-            request=UpdatePluginRequest(source=source, installation_preference=preference),
+            request=UpdatePluginRequest(source=source, serve_archive=False, installation_preference=preference),
             user_api_key_dict=_USER,
         )
 
@@ -539,7 +607,10 @@ async def test_self_installing_preference_needs_the_archive_sha256(preference):
 async def test_available_preference_is_accepted_on_an_unpinned_archive():
     response = await register_plugin(
         request=RegisterPluginRequest(
-            name="listed-plugin", source=_UNPINNED_ARCHIVE_SOURCE, installation_preference="available"
+            name="listed-plugin",
+            source=_UNPINNED_ARCHIVE_SOURCE,
+            serve_archive=False,
+            installation_preference="available",
         ),
         user_api_key_dict=_USER,
     )
@@ -562,6 +633,7 @@ def test_plugin_request_rejects_both_preference_spellings(build_request):
         build_request(
             {
                 "source": _ARCHIVE_SOURCE,
+                "serve_archive": False,
                 "installation_preference": "auto_install",
                 "installationPreference": "available",
             }
@@ -581,7 +653,9 @@ def test_plugin_request_rejects_both_preference_spellings(build_request):
     [("installation_preference", "installationPreference"), ("installationPreference", "installation_preference")],
 )
 def test_plugin_request_reads_the_spelling_that_carries_a_value(build_request, null_key, value_key):
-    request = build_request({"source": _ARCHIVE_SOURCE, null_key: None, value_key: "auto_install"})
+    request = build_request(
+        {"source": _ARCHIVE_SOURCE, "serve_archive": False, null_key: None, value_key: "auto_install"}
+    )
 
     assert request.installation_preference == "auto_install"
 
@@ -697,7 +771,7 @@ async def test_register_plugin_unknown_source_type():
 @pytest.mark.asyncio
 async def test_archive_source_registers_and_is_served_verbatim_in_marketplace():
     response = await register_plugin(
-        request=RegisterPluginRequest(name="s3-skill", source=_ARCHIVE_SOURCE),
+        request=RegisterPluginRequest(name="s3-skill", source=_ARCHIVE_SOURCE, serve_archive=False),
         user_api_key_dict=_USER,
     )
 
@@ -713,7 +787,7 @@ async def test_archive_source_without_sha256_is_accepted():
     source = {"source": "archive", "url": "https://artifacts.example.com/plugin.zip"}
 
     response = await register_plugin(
-        request=RegisterPluginRequest(name="unpinned-skill", source=source),
+        request=RegisterPluginRequest(name="unpinned-skill", source=source, serve_archive=False),
         user_api_key_dict=_USER,
     )
 
@@ -730,7 +804,7 @@ async def test_update_plugin_to_archive_source():
 
     response = await update_plugin(
         plugin_name=name,
-        request=UpdatePluginRequest(source=_ARCHIVE_SOURCE),
+        request=UpdatePluginRequest(source=_ARCHIVE_SOURCE, serve_archive=False),
         user_api_key_dict=_USER,
     )
 
@@ -964,3 +1038,652 @@ def test_marketplace_response_rejects_unknown_installation_preference():
 
     with pytest.raises(ValidationError):
         MarketplaceResponse.model_validate(catalog)
+
+
+@pytest.fixture
+def archive_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("LITELLM_PLUGIN_ARCHIVE_DIR", str(tmp_path))
+    return tmp_path
+
+
+def _marketplace_request(base_url: str = "https://litellm.example.com/") -> MagicMock:
+    request = MagicMock()
+    request.base_url = base_url
+    return request
+
+
+def _patch_build(monkeypatch, built=_BUILT):
+    build = AsyncMock(return_value=built)
+    monkeypatch.setattr(plugin_archive, "build_archive", build)
+    return build
+
+
+@pytest.mark.asyncio
+async def test_archive_source_is_hosted_by_default(archive_dir, monkeypatch):
+    build = _patch_build(monkeypatch)
+
+    response = await register_plugin(
+        request=RegisterPluginRequest(name="s3-skill", source=_ARCHIVE_SOURCE), user_api_key_dict=_USER
+    )
+
+    build.assert_awaited_once()
+    assert response.plugin.serve_archive is True
+    manifest = await _read_stored_manifest("s3-skill")
+    assert manifest["archive_sha256"] == _BUILT.sha256
+    assert (archive_dir / "s3-skill.zip").read_bytes() == _PLUGIN_ZIP
+
+
+@pytest.mark.asyncio
+async def test_git_source_is_not_hosted_by_default(archive_dir, monkeypatch):
+    build = _patch_build(monkeypatch)
+
+    response = await register_plugin(
+        request=RegisterPluginRequest(name="git-skill", source=_GIT_SUBDIR_SOURCE), user_api_key_dict=_USER
+    )
+
+    build.assert_not_awaited()
+    assert response.plugin.serve_archive is False
+    assert not list(archive_dir.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_git_source_can_opt_in_to_hosting(archive_dir, monkeypatch):
+    build = _patch_build(monkeypatch, plugin_archive.BuiltArchive(_PLUGIN_ZIP, _BUILT.sha256, "a" * 40))
+
+    await register_plugin(
+        request=RegisterPluginRequest(name="git-skill", source=_GIT_SUBDIR_SOURCE, serve_archive=True),
+        user_api_key_dict=_USER,
+    )
+
+    build.assert_awaited_once_with(_GIT_SUBDIR_SOURCE)
+    assert (await _read_stored_manifest("git-skill"))["archive_ref"] == "a" * 40
+
+
+@pytest.mark.asyncio
+async def test_archive_source_can_opt_out_of_hosting(archive_dir, monkeypatch):
+    build = _patch_build(monkeypatch)
+
+    await register_plugin(
+        request=RegisterPluginRequest(name="s3-skill", source=_ARCHIVE_SOURCE, serve_archive=False),
+        user_api_key_dict=_USER,
+    )
+
+    build.assert_not_awaited()
+    assert (await _read_stored_manifest("s3-skill")).get("serve_archive") is None
+
+
+@pytest.mark.asyncio
+async def test_unbuildable_source_is_rejected_without_registering(archive_dir, monkeypatch):
+    monkeypatch.setattr(
+        plugin_archive, "build_archive", AsyncMock(side_effect=plugin_archive.ArchiveBuildError("no plugin.json"))
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await register_plugin(
+            request=RegisterPluginRequest(name="s3-skill", source=_ARCHIVE_SOURCE, serve_archive=True),
+            user_api_key_dict=_USER,
+        )
+
+    assert exc.value.status_code == 400
+    assert "no plugin.json" in exc.value.detail["error"]
+    table = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
+    assert await table.find_unique(where={"name": "s3-skill"}) is None
+
+
+@pytest.mark.asyncio
+async def test_marketplace_advertises_same_origin_archive(archive_dir, monkeypatch):
+    _patch_build(monkeypatch)
+    await register_plugin(
+        request=RegisterPluginRequest(name="s3-skill", source=_ARCHIVE_SOURCE), user_api_key_dict=_USER
+    )
+    await register_plugin(
+        request=RegisterPluginRequest(name="git-skill", source=_GIT_SUBDIR_SOURCE), user_api_key_dict=_USER
+    )
+
+    response = await get_marketplace(request=_marketplace_request())
+
+    entries = {p["name"]: p["source"] for p in json.loads(response.body)["plugins"]}
+    assert entries["s3-skill"] == {
+        "source": "archive",
+        "url": "https://litellm.example.com/claude-code/plugins/s3-skill/archive.zip",
+        "sha256": _BUILT.sha256,
+    }
+    assert entries["git-skill"] == _GIT_SUBDIR_SOURCE
+
+
+@pytest.mark.asyncio
+async def test_archive_download_returns_stored_zip(archive_dir, monkeypatch):
+    build = _patch_build(monkeypatch)
+    await register_plugin(
+        request=RegisterPluginRequest(name="s3-skill", source=_ARCHIVE_SOURCE), user_api_key_dict=_USER
+    )
+    build.reset_mock()
+
+    response = await get_plugin_archive("s3-skill", request=_marketplace_request())
+
+    assert response.media_type == "application/zip"
+    assert response.body == _PLUGIN_ZIP
+    build.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_archive_download_refetches_when_file_is_missing(archive_dir, monkeypatch):
+    build = _patch_build(monkeypatch)
+    await register_plugin(
+        request=RegisterPluginRequest(name="s3-skill", source=_ARCHIVE_SOURCE), user_api_key_dict=_USER
+    )
+    (archive_dir / "s3-skill.zip").unlink()
+    build.reset_mock()
+
+    response = await get_plugin_archive("s3-skill", request=_marketplace_request())
+
+    build.assert_awaited_once()
+    assert response.body == _PLUGIN_ZIP
+    assert (archive_dir / "s3-skill.zip").read_bytes() == _PLUGIN_ZIP
+
+
+@pytest.mark.asyncio
+async def test_archive_refetch_reuses_pinned_commit(archive_dir, monkeypatch):
+    build = _patch_build(monkeypatch, plugin_archive.BuiltArchive(_PLUGIN_ZIP, _BUILT.sha256, "b" * 40))
+    await register_plugin(
+        request=RegisterPluginRequest(name="git-skill", source=_GIT_SUBDIR_SOURCE, serve_archive=True),
+        user_api_key_dict=_USER,
+    )
+    (archive_dir / "git-skill.zip").unlink()
+    build.reset_mock()
+
+    await get_plugin_archive("git-skill", request=_marketplace_request())
+
+    build.assert_awaited_once_with(_GIT_SUBDIR_SOURCE, pinned_ref="b" * 40)
+
+
+@pytest.mark.asyncio
+async def test_archive_refetch_with_drifted_content_is_not_served(archive_dir, monkeypatch):
+    build = _patch_build(monkeypatch)
+    await register_plugin(
+        request=RegisterPluginRequest(name="s3-skill", source=_ARCHIVE_SOURCE), user_api_key_dict=_USER
+    )
+    (archive_dir / "s3-skill.zip").unlink()
+    build.return_value = plugin_archive.BuiltArchive(b"other", plugin_archive.sha256_hex(b"other"), None)
+
+    with pytest.raises(HTTPException) as exc:
+        await get_plugin_archive("s3-skill", request=_marketplace_request())
+
+    assert exc.value.status_code == 502
+    assert not (archive_dir / "s3-skill.zip").exists()
+
+
+@pytest.mark.asyncio
+async def test_archive_download_of_unhosted_plugin_is_404(archive_dir):
+    await register_plugin(
+        request=RegisterPluginRequest(name="git-skill", source=_GIT_SUBDIR_SOURCE), user_api_key_dict=_USER
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await get_plugin_archive("git-skill", request=_marketplace_request())
+
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_archive_download_hides_disabled_plugin_from_anonymous_callers(archive_dir, monkeypatch):
+    _patch_build(monkeypatch)
+    await register_plugin(
+        request=RegisterPluginRequest(name="s3-skill", source=_ARCHIVE_SOURCE), user_api_key_dict=_USER
+    )
+    await disable_plugin("s3-skill", user_api_key_dict=_USER)
+
+    with pytest.raises(HTTPException) as exc:
+        await get_plugin_archive("s3-skill", request=_marketplace_request())
+
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_plugin_removes_stored_archive(archive_dir, monkeypatch):
+    _patch_build(monkeypatch)
+    await register_plugin(
+        request=RegisterPluginRequest(name="s3-skill", source=_ARCHIVE_SOURCE), user_api_key_dict=_USER
+    )
+    prisma = litellm.proxy.proxy_server.prisma_client
+    prisma.db.litellm_claudecodeplugintable.delete = AsyncMock()
+
+    await delete_plugin("s3-skill", user_api_key_dict=_USER)
+
+    assert not (archive_dir / "s3-skill.zip").exists()
+
+
+def test_normalize_strips_github_wrapper_and_selects_subdir():
+    raw = _zip_bytes(
+        {
+            "repo-abc123/README.md": b"root",
+            "repo-abc123/plugins/p/.claude-plugin/plugin.json": b"{}",
+            "repo-abc123/plugins/p/skills/a/SKILL.md": b"# a",
+        }
+    )
+
+    data = plugin_archive.normalize_archive(raw, strip_top_level=True, subdir="plugins/p")
+
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        assert archive.namelist() == [".claude-plugin/plugin.json", "skills/a/SKILL.md"]
+
+
+def test_normalize_is_deterministic():
+    raw = _zip_bytes({"w/.claude-plugin/plugin.json": b"{}", "w/a.txt": b"a"})
+
+    assert plugin_archive.normalize_archive(raw, strip_top_level=True) == plugin_archive.normalize_archive(
+        raw, strip_top_level=True
+    )
+
+
+def test_normalize_unwraps_a_wrapped_archive_source():
+    raw = _zip_bytes({"my-plugin/.claude-plugin/plugin.json": b"{}"})
+
+    data = plugin_archive.normalize_archive(raw, strip_top_level=False)
+
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        assert archive.namelist() == [".claude-plugin/plugin.json"]
+
+
+def test_normalize_requires_plugin_json():
+    with pytest.raises(plugin_archive.ArchiveBuildError, match=r"plugin\.json"):
+        plugin_archive.normalize_archive(_zip_bytes({"README.md": b"x"}), strip_top_level=False)
+
+
+@pytest.mark.parametrize("member", ["../evil.txt", "/etc/passwd", "a/../../evil.txt"])
+def test_normalize_rejects_path_traversal(member):
+    raw = _zip_bytes({".claude-plugin/plugin.json": b"{}", member: b"x"})
+
+    with pytest.raises(plugin_archive.ArchiveBuildError, match="unsafe path"):
+        plugin_archive.normalize_archive(raw, strip_top_level=False)
+
+
+def test_normalize_rejects_symlinks():
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(".claude-plugin/plugin.json", b"{}")
+        link = zipfile.ZipInfo("link")
+        link.external_attr = 0o120777 << 16
+        archive.writestr(link, "/etc/passwd")
+
+    with pytest.raises(plugin_archive.ArchiveBuildError, match="symlink"):
+        plugin_archive.normalize_archive(buffer.getvalue(), strip_top_level=False)
+
+
+def test_normalize_rejects_oversized_plugin(monkeypatch):
+    monkeypatch.setattr(plugin_archive, "MAX_ARCHIVE_BYTES", 10)
+
+    with pytest.raises(plugin_archive.ArchiveBuildError, match="larger than"):
+        plugin_archive.normalize_archive(_zip_bytes({".claude-plugin/plugin.json": b"x" * 100}), strip_top_level=False)
+
+
+def _zip_with_understated_size(payload_bytes: int, declared_size: int) -> bytes:
+    payload = b"\0" * payload_bytes
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(".claude-plugin/plugin.json", b"{}")
+        archive.writestr("bomb.bin", payload)
+    raw = bytearray(buffer.getvalue())
+    crc = struct.pack("<I", zlib.crc32(payload[:declared_size]))
+    for signature, name_index, name_offset, crc_offset, size_offset in (
+        (b"PK\x03\x04", raw.index(b"bomb.bin"), 30, 14, 22),
+        (b"PK\x01\x02", raw.rindex(b"bomb.bin"), 46, 16, 24),
+    ):
+        start = name_index - name_offset
+        assert raw[start : start + 4] == signature
+        raw[start + crc_offset : start + crc_offset + 4] = crc
+        raw[start + size_offset : start + size_offset + 4] = struct.pack("<I", declared_size)
+    return bytes(raw)
+
+
+def test_normalize_does_not_expand_a_member_past_its_declared_size():
+    forged = _zip_with_understated_size(payload_bytes=50 * 1024 * 1024, declared_size=2)
+    tracemalloc.start()
+    try:
+        result = plugin_archive.normalize_archive(forged, strip_top_level=False)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert peak < 10 * 1024 * 1024
+    with zipfile.ZipFile(io.BytesIO(result)) as archive:
+        assert archive.read("bomb.bin") == b"\0\0"
+
+
+def test_normalize_rejects_a_member_whose_contents_do_not_match_its_checksum():
+    forged = _zip_with_understated_size(payload_bytes=4096, declared_size=2)
+    corrupted = forged.replace(struct.pack("<I", zlib.crc32(b"\0\0")), b"\x00\x00\x00\x00")
+
+    with pytest.raises(plugin_archive.ArchiveBuildError, match="corrupt"):
+        plugin_archive.normalize_archive(corrupted, strip_top_level=False)
+
+
+def test_normalize_rejects_unsupported_compression_methods():
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_BZIP2) as archive:
+        archive.writestr(".claude-plugin/plugin.json", b"{}")
+
+    with pytest.raises(plugin_archive.ArchiveBuildError, match="compression"):
+        plugin_archive.normalize_archive(buffer.getvalue(), strip_top_level=False)
+
+
+@pytest.mark.asyncio
+async def test_build_archive_verifies_declared_sha256(monkeypatch):
+    monkeypatch.setattr(plugin_archive, "build_archive", _REAL_BUILD_ARCHIVE)
+    monkeypatch.setattr(
+        plugin_archive, "_get", AsyncMock(return_value=_zip_bytes({".claude-plugin/plugin.json": b"{}"}))
+    )
+
+    with pytest.raises(plugin_archive.ArchiveBuildError, match="sha256"):
+        await _REAL_BUILD_ARCHIVE(_ARCHIVE_SOURCE)
+
+
+@pytest.mark.asyncio
+async def test_build_archive_rejects_non_github_git_hosts(monkeypatch):
+    monkeypatch.setattr(plugin_archive, "build_archive", _REAL_BUILD_ARCHIVE)
+    with pytest.raises(plugin_archive.ArchiveBuildError, match="GitHub"):
+        await _REAL_BUILD_ARCHIVE(
+            {"source": "git-subdir", "url": "https://gitlab.com/org/repo.git", "path": "plugins/p"}
+        )
+
+
+@pytest.mark.asyncio
+async def test_build_archive_from_github_pins_the_commit(monkeypatch):
+    monkeypatch.setattr(plugin_archive, "build_archive", _REAL_BUILD_ARCHIVE)
+    commit = "c" * 40
+    raw = _zip_bytes({"repo-c/plugins/my-plugin/.claude-plugin/plugin.json": b"{}"})
+
+    async def fake_get(url, headers=None):
+        return commit.encode() if "api.github.com" in url else raw
+
+    get = AsyncMock(side_effect=fake_get)
+    monkeypatch.setattr(plugin_archive, "_get", get)
+
+    built = await _REAL_BUILD_ARCHIVE(_GIT_SUBDIR_SOURCE.copy() | {"url": "https://github.com/org/repo.git"})
+
+    assert built.ref == commit
+    assert get.await_args_list[-1].args[0] == f"https://codeload.github.com/org/repo/zip/{commit}"
+
+
+@pytest.mark.asyncio
+async def test_default_hosting_surfaces_the_build_error_and_does_not_create_the_plugin(archive_dir):
+    """A hosted archive that cannot be built is an error for the admin, not a log line."""
+    with pytest.raises(HTTPException) as exc:
+        await register_plugin(
+            request=RegisterPluginRequest(name="s3-skill", source=_ARCHIVE_SOURCE), user_api_key_dict=_USER
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["error"] == "Cannot host plugin 's3-skill' as an archive: offline in unit tests"
+    table = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
+    assert await table.find_unique(where={"name": "s3-skill"}) is None
+
+
+@pytest.mark.asyncio
+async def test_update_with_an_unbuildable_archive_keeps_the_existing_plugin(archive_dir):
+    await register_plugin(
+        request=RegisterPluginRequest(name="s3-skill", source=_ARCHIVE_SOURCE, serve_archive=False),
+        user_api_key_dict=_USER,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await update_plugin(
+            plugin_name="s3-skill",
+            request=UpdatePluginRequest(source=_ARCHIVE_SOURCE),
+            user_api_key_dict=_USER,
+        )
+
+    assert exc.value.status_code == 400
+    assert (await _read_stored_manifest("s3-skill")).get("serve_archive") is None
+
+
+def test_normalize_limits_size_to_the_selected_subdirectory(monkeypatch):
+    monkeypatch.setattr(plugin_archive, "MAX_ARCHIVE_BYTES", 400)
+    raw = _zip_bytes(
+        {
+            "repo-abc/plugins/p/.claude-plugin/plugin.json": b"{}",
+            "repo-abc/docs/large.bin": b"x" * 5000,
+        }
+    )
+
+    data = plugin_archive.normalize_archive(raw, strip_top_level=True, subdir="plugins/p")
+
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        assert archive.namelist() == [".claude-plugin/plugin.json"]
+
+
+def test_normalize_ignores_unsafe_paths_outside_the_selected_subdirectory():
+    raw = _zip_bytes(
+        {
+            "repo-abc/plugins/p/.claude-plugin/plugin.json": b"{}",
+            "repo-abc/other/../../escape.txt": b"x",
+        }
+    )
+
+    data = plugin_archive.normalize_archive(raw, strip_top_level=True, subdir="plugins/p")
+
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        assert archive.namelist() == [".claude-plugin/plugin.json"]
+
+
+@pytest.mark.parametrize("name", ["../escape", "a/../../escape", "/etc/passwd"])
+def test_stored_archive_paths_cannot_leave_the_archive_directory(archive_dir, name):
+    with pytest.raises(plugin_archive.ArchiveBuildError, match="not a valid plugin name"):
+        plugin_archive.store_archive(name, b"x")
+
+    assert not any(archive_dir.parent.glob("escape.zip"))
+
+
+def test_store_archive_leaves_no_temp_file_when_the_write_fails(archive_dir, monkeypatch):
+    """A failed publish must not litter the archive dir with half-written .tmp files."""
+
+    def _boom(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(plugin_archive.os, "replace", _boom)
+
+    with pytest.raises(OSError, match="disk full"):
+        plugin_archive.store_archive("s3-skill", b"data")
+
+    assert list(archive_dir.iterdir()) == []
+
+
+def test_normalize_rejects_a_repository_archive_without_a_single_root():
+    raw = _zip_bytes({"one/.claude-plugin/plugin.json": b"{}", "two/README.md": b"x"})
+
+    with pytest.raises(plugin_archive.ArchiveBuildError, match="single top-level directory"):
+        plugin_archive.normalize_archive(raw, strip_top_level=True)
+
+
+def test_normalize_rejects_a_source_that_is_not_a_zip():
+    with pytest.raises(plugin_archive.ArchiveBuildError, match="not a valid ZIP archive"):
+        plugin_archive.normalize_archive(b"this is not a zip", strip_top_level=False)
+
+
+def test_normalize_rejects_an_oversized_rebuilt_archive(monkeypatch):
+    """The post-rebuild size check is the last line of defence against a compression bomb."""
+    monkeypatch.setattr(plugin_archive, "MAX_ARCHIVE_BYTES", 100)
+    monkeypatch.setattr(plugin_archive, "_write_zip", lambda _members: b"x" * 101)
+
+    with pytest.raises(plugin_archive.ArchiveBuildError, match="archive is larger than"):
+        plugin_archive.normalize_archive(_zip_bytes({".claude-plugin/plugin.json": b"{}"}), strip_top_level=False)
+
+
+@pytest.mark.asyncio
+async def test_plugin_archive_get_maps_an_ssrf_rejection_to_a_build_error(monkeypatch):
+    async def _blocked(*_args, **_kwargs):
+        raise plugin_archive.SSRFError("private IP")
+
+    monkeypatch.setattr(plugin_archive, "async_safe_get", _blocked)
+
+    with pytest.raises(plugin_archive.ArchiveBuildError, match=r"refusing to fetch .*: private IP"):
+        await plugin_archive._get("http://169.254.169.254/plugin.zip")
+
+
+@pytest.mark.asyncio
+async def test_plugin_archive_get_maps_a_transport_failure_to_a_build_error(monkeypatch):
+    async def _fails(*_args, **_kwargs):
+        raise httpx.ConnectTimeout("timed out")
+
+    monkeypatch.setattr(plugin_archive, "async_safe_get", _fails)
+
+    with pytest.raises(plugin_archive.ArchiveBuildError, match=r"could not fetch .*: timed out"):
+        await plugin_archive._get("https://example.com/plugin.zip")
+
+
+@pytest.mark.asyncio
+async def test_plugin_archive_get_rejects_a_non_200_response(monkeypatch):
+    async def _not_found(*_args, **_kwargs):
+        return httpx.Response(404, content=b"nope")
+
+    monkeypatch.setattr(plugin_archive, "async_safe_get", _not_found)
+
+    with pytest.raises(plugin_archive.ArchiveBuildError, match="returned HTTP 404"):
+        await plugin_archive._get("https://example.com/plugin.zip")
+
+
+@pytest.mark.asyncio
+async def test_plugin_archive_get_rejects_a_body_over_the_download_limit(monkeypatch):
+    """A client that ignores max_response_bytes still cannot hand us an oversized body."""
+    monkeypatch.setattr(plugin_archive, "MAX_DOWNLOAD_BYTES", 4)
+
+    async def _too_big(*_args, **_kwargs):
+        return httpx.Response(200, content=b"much too long")
+
+    monkeypatch.setattr(plugin_archive, "async_safe_get", _too_big)
+
+    with pytest.raises(plugin_archive.ArchiveBuildError, match=r"is larger than the .* plugin limit"):
+        await plugin_archive._get("https://example.com/plugin.zip")
+
+
+@pytest.mark.asyncio
+async def test_build_archive_rejects_a_malformed_github_repo(monkeypatch):
+    monkeypatch.setattr(plugin_archive, "build_archive", _REAL_BUILD_ARCHIVE)
+
+    with pytest.raises(plugin_archive.ArchiveBuildError, match="not a valid GitHub repository"):
+        await _REAL_BUILD_ARCHIVE({"source": "github", "repo": "not-a-repo"})
+
+
+@pytest.mark.asyncio
+async def test_build_archive_rejects_a_malformed_git_ref(monkeypatch):
+    monkeypatch.setattr(plugin_archive, "build_archive", _REAL_BUILD_ARCHIVE)
+
+    with pytest.raises(plugin_archive.ArchiveBuildError, match="not a valid git ref"):
+        await _REAL_BUILD_ARCHIVE({"source": "github", "repo": "org/repo", "ref": "main; rm -rf /"})
+
+
+@pytest.mark.asyncio
+async def test_build_archive_from_a_github_source_skips_ref_resolution_for_a_sha(monkeypatch):
+    """A 40-hex ref is already immutable, so no commits API round trip is needed."""
+    monkeypatch.setattr(plugin_archive, "build_archive", _REAL_BUILD_ARCHIVE)
+    commit = "d" * 40
+    raw = _zip_bytes({"repo-d/.claude-plugin/plugin.json": b"{}"})
+    get = AsyncMock(return_value=raw)
+    monkeypatch.setattr(plugin_archive, "_get", get)
+
+    built = await _REAL_BUILD_ARCHIVE({"source": "github", "repo": "org/repo", "ref": commit})
+
+    assert built.ref == commit
+    assert [call.args[0] for call in get.await_args_list] == [f"https://codeload.github.com/org/repo/zip/{commit}"]
+
+
+@pytest.mark.asyncio
+async def test_build_archive_rejects_a_ref_that_does_not_resolve_to_a_commit(monkeypatch):
+    monkeypatch.setattr(plugin_archive, "build_archive", _REAL_BUILD_ARCHIVE)
+    monkeypatch.setattr(plugin_archive, "_get", AsyncMock(return_value=b"Not Found"))
+
+    with pytest.raises(plugin_archive.ArchiveBuildError, match="could not resolve 'no-such-branch'"):
+        await _REAL_BUILD_ARCHIVE({"source": "github", "repo": "org/repo", "ref": "no-such-branch"})
+
+
+@pytest.mark.asyncio
+async def test_build_archive_from_an_archive_source_returns_the_normalized_zip(monkeypatch):
+    monkeypatch.setattr(plugin_archive, "build_archive", _REAL_BUILD_ARCHIVE)
+    raw = _zip_bytes({"my-plugin/.claude-plugin/plugin.json": b"{}"})
+    monkeypatch.setattr(plugin_archive, "_get", AsyncMock(return_value=raw))
+
+    built = await _REAL_BUILD_ARCHIVE(
+        {
+            "source": "archive",
+            "url": "https://example.com/plugin.zip",
+            "sha256": plugin_archive.sha256_hex(raw),
+        }
+    )
+
+    assert built.ref is None
+    assert built.sha256 == plugin_archive.sha256_hex(built.data)
+    with zipfile.ZipFile(io.BytesIO(built.data)) as archive:
+        assert archive.namelist() == [".claude-plugin/plugin.json"]
+
+
+@pytest.mark.asyncio
+async def test_archive_download_serves_the_zip_another_worker_wrote_while_we_waited(archive_dir, monkeypatch):
+    """The second read under the lock wins the race, so only one worker refetches."""
+    build = _patch_build(monkeypatch)
+    await register_plugin(
+        request=RegisterPluginRequest(name="s3-skill", source=_ARCHIVE_SOURCE), user_api_key_dict=_USER
+    )
+    build.reset_mock()
+    monkeypatch.setattr(plugin_archive, "read_stored_archive", MagicMock(side_effect=[None, _PLUGIN_ZIP]))
+
+    response = await get_plugin_archive("s3-skill", request=_marketplace_request())
+
+    assert response.body == _PLUGIN_ZIP
+    build.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_archive_refetch_failure_is_reported_as_a_bad_gateway(archive_dir, monkeypatch):
+    _patch_build(monkeypatch)
+    await register_plugin(
+        request=RegisterPluginRequest(name="s3-skill", source=_ARCHIVE_SOURCE), user_api_key_dict=_USER
+    )
+    (archive_dir / "s3-skill.zip").unlink()
+    monkeypatch.setattr(
+        plugin_archive, "build_archive", AsyncMock(side_effect=plugin_archive.ArchiveBuildError("upstream is gone"))
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await get_plugin_archive("s3-skill", request=_marketplace_request())
+
+    assert exc.value.status_code == 502
+    assert exc.value.detail["error"] == ("Could not rebuild the archive for plugin 's3-skill': upstream is gone")
+
+
+@pytest.mark.asyncio
+async def test_archive_download_of_a_plugin_with_no_source_in_its_manifest_is_404(archive_dir, monkeypatch):
+    _patch_build(monkeypatch)
+    await register_plugin(
+        request=RegisterPluginRequest(name="s3-skill", source=_ARCHIVE_SOURCE), user_api_key_dict=_USER
+    )
+    table = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
+    manifest = await _read_stored_manifest("s3-skill")
+    await table.update(
+        where={"name": "s3-skill"},
+        data={"manifest_json": json.dumps({k: v for k, v in manifest.items() if k != "source"})},
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await get_plugin_archive("s3-skill", request=_marketplace_request())
+
+    assert exc.value.status_code == 404
+    assert exc.value.detail["error"] == "Plugin 's3-skill' has no hosted archive"
+
+
+@pytest.mark.asyncio
+async def test_update_to_a_hosted_archive_publishes_the_new_zip(archive_dir, monkeypatch):
+    _patch_build(monkeypatch)
+    await register_plugin(
+        request=RegisterPluginRequest(name="s3-skill", source=_ARCHIVE_SOURCE, serve_archive=False),
+        user_api_key_dict=_USER,
+    )
+    assert not (archive_dir / "s3-skill.zip").exists()
+
+    response = await update_plugin(
+        plugin_name="s3-skill",
+        request=UpdatePluginRequest(source=_ARCHIVE_SOURCE, serve_archive=True),
+        user_api_key_dict=_USER,
+    )
+
+    assert response.plugin.serve_archive is True
+    assert (archive_dir / "s3-skill.zip").read_bytes() == _PLUGIN_ZIP
