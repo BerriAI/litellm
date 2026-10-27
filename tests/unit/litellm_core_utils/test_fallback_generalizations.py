@@ -369,7 +369,7 @@ def test_exact_entries_fill_only_missing_fields(restore_generalizations, monkeyp
                 "output_cost_per_token": 2e-6,
                 "litellm_provider": "openai",
                 "mode": "chat",
-                "max_tokens": 7,
+                "max_output_tokens": 7,
                 "supports_reasoning": False,
             },
             "acme-bare": {
@@ -398,7 +398,7 @@ def test_exact_entries_fill_only_missing_fields(restore_generalizations, monkeyp
                 "name": "acme-backfill",
                 "pattern": r"^acme-",
                 "fill_missing_for_providers": ["openai"],
-                "model_info": {"supports_reasoning": True, "max_tokens": 5},
+                "model_info": {"supports_reasoning": True, "max_output_tokens": 5},
             }
         ]
     )
@@ -406,10 +406,12 @@ def test_exact_entries_fill_only_missing_fields(restore_generalizations, monkeyp
 
     full = litellm.get_model_info("acme-full", custom_llm_provider="openai")
     assert full["supports_reasoning"] is False
+    assert full["max_output_tokens"] == 7
     assert full["max_tokens"] == 7
 
     bare = litellm.get_model_info("acme-bare", custom_llm_provider="openai")
     assert bare["supports_reasoning"] is True
+    assert bare["max_output_tokens"] == 5
     assert bare["max_tokens"] == 5
     assert bare["input_cost_per_token"] == 3e-6
     assert bare["key"] == "acme-bare"
@@ -525,7 +527,7 @@ def test_shipped_gemini_chat_baseline_loses_to_exact_entries(shipped_cost_map):
     model = "gemini-2.5-flash-lite"
     info = litellm.get_model_info(model, custom_llm_provider="gemini")
     entry = litellm.model_cost["gemini/gemini-2.5-flash-lite"]
-    assert info["max_tokens"] == entry["max_tokens"]
+    assert info["max_tokens"] == entry["max_output_tokens"]
     assert info["input_cost_per_token"] == entry["input_cost_per_token"]
     assert entry["input_cost_per_token"] > 0
 

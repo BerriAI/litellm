@@ -44,7 +44,7 @@ from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer, OpenAIEnc
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace
 from litellm.litellm_core_utils.url_utils import safe_get
-from litellm.llms.custom_httpx.http_handler import get_httpx_client
+from litellm.llms.custom_httpx.http_handler import get_httpx_client, header_value
 from litellm.rust_bridge.tokenizer import get_encoding
 from litellm.types.llms.anthropic import (
     AnthropicContentParamSource,
@@ -247,7 +247,7 @@ def get_image_dimensions(
             client: Final = get_httpx_client()
             response: Final[httpx.Response] = safe_get(client, data)
             max_bytes: Final = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
-            content_length: Final[str | None] = response.headers.get("Content-Length")
+            content_length: Final[str | None] = header_value(response.headers, "Content-Length")
             if content_length is not None and int(content_length) > max_bytes:
                 pass  # skip download; img_data stays None
             else:
@@ -261,6 +261,10 @@ def get_image_dimensions(
         _header, encoded = data.split(",", 1)
         img_data = base64.b64decode(encoded)
 
+    return _image_dimensions_from_bytes(img_data)
+
+
+def _image_dimensions_from_bytes(img_data: bytes) -> tuple[int, int]:
     img_type: Final = get_image_type(img_data)
 
     if img_type == "png":
@@ -307,8 +311,37 @@ def get_image_dimensions(
     return DEFAULT_IMAGE_WIDTH, DEFAULT_IMAGE_HEIGHT
 
 
+def _auto_image_dimensions(data: str) -> tuple[int, int] | None:
+    """Read bounded inline image data without fetching caller-supplied URLs."""
+    if not data.startswith("data:image/"):
+        return None
+    max_bytes: Final = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
+    max_encoded_length: Final = 4 * ((max_bytes + 2) // 3)
+    # Bound allocations before splitting or decoding the data URL, including its header.
+    if max_bytes <= 0 or len(data) > max_encoded_length + 128:
+        return None
+    header, separator, encoded = data.partition(",")
+    if not separator or len(header) > 128 or not header.endswith(";base64") or len(encoded) > max_encoded_length:
+        return None
+    try:
+        image_data: Final = base64.b64decode(encoded, validate=True)
+        if len(image_data) > max_bytes or get_image_type(image_data) not in (
+            "png",
+            "gif",
+            "jpeg",
+            "webp",
+        ):
+            return None
+        width, height = _image_dimensions_from_bytes(image_data)
+    except (ValueError, TypeError, struct.error):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+
 def calculate_img_tokens(
-    data,
+    data: str,
     mode: Literal["low", "high", "auto"] = "auto",
     base_tokens: int = 85,  # openai default - https://openai.com/pricing
     use_default_image_token_count: bool = False,
@@ -318,7 +351,8 @@ def calculate_img_tokens(
 
     Args:
         data (str): The URL or base64 encoded string of the image.
-        mode (Literal["low", "high", "auto"]): The mode to use for calculating the number of tokens.
+        mode (Literal["low", "high", "auto"]): Auto uses high-detail tiles for readable inline images;
+            URLs and unreadable images keep the base estimate without network I/O.
         base_tokens (int): The base number of tokens for an image.
         use_default_image_token_count (bool): When True, will NOT make a GET request to the image URL and instead return the default image dimensions.
 
@@ -328,18 +362,19 @@ def calculate_img_tokens(
     if use_default_image_token_count:
         verbose_logger.debug("Using default image token count: %s", DEFAULT_IMAGE_TOKEN_COUNT)
         return DEFAULT_IMAGE_TOKEN_COUNT
-    if mode == "low" or mode == "auto":
+    if mode == "low":
         return base_tokens
-    elif mode == "high":
-        # Run the async function using the helper
-        width, height = get_image_dimensions(
-            data=data,
-        )
-        resized_width, resized_height = resize_image_high_res(width=width, height=height)
-        tiles_needed_high_res = calculate_tiles_needed(resized_width=resized_width, resized_height=resized_height)
-        tile_tokens: Final = (base_tokens * 2) * tiles_needed_high_res
-        total_tokens: Final = base_tokens + tile_tokens
-        return total_tokens
+    if mode not in ("auto", "high"):
+        return None
+    dimensions: Final = _auto_image_dimensions(data) if mode == "auto" else get_image_dimensions(data=data)
+    if dimensions is None:
+        return base_tokens
+    width, height = dimensions
+    resized_width, resized_height = resize_image_high_res(width=width, height=height)
+    tiles_needed_high_res = calculate_tiles_needed(resized_width=resized_width, resized_height=resized_height)
+    tile_tokens: Final = (base_tokens * 2) * tiles_needed_high_res
+    total_tokens: Final = base_tokens + tile_tokens
+    return total_tokens
 
 
 TokenCounterFunction = Callable[[str], int]
