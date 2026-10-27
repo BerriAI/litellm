@@ -85,6 +85,33 @@ def _get_ImageEditRequestUtils() -> type["ImageEditRequestUtils"]:
     return _ImageEditRequestUtils_cache
 
 
+def _chatgpt_image_headers(model: str, params: GenericLiteLLMParams, headers: object) -> dict[str, str]:
+    from litellm.llms.chatgpt.common_utils import get_chatgpt_request_credential
+    from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
+
+    credential: Final = get_chatgpt_request_credential(params)
+    credential_headers: Final = (
+        {
+            "Authorization": f"Bearer {credential.access_token}",
+            **({"ChatGPT-Account-Id": credential.account_id} if credential.account_id else {}),
+        }
+        if credential is not None
+        else {}
+    )
+    auth_headers: Final = ChatGPTResponsesAPIConfig().validate_environment(
+        headers=credential_headers, model=model, litellm_params=params
+    )
+    return {
+        **{k: v for k, v in auth_headers.items() if k.lower() not in ("content-type", "accept")},
+        **{
+            k: v
+            for k, v in TypeAdapter(dict[str, str]).validate_python(headers).items()
+            if k.lower() not in ("authorization", "chatgpt-account-id", "cookie", "x-litellm-api-key")
+        },
+        "Accept": "application/json",
+    }
+
+
 ##### Image Generation #######################
 @client
 async def aimage_generation(*args, **kwargs) -> ImageResponse:
@@ -121,6 +148,12 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
             model=model,
             custom_llm_provider=provider_hints.get("custom_llm_provider"),
             api_base=provider_hints.get("api_base"),
+            litellm_params=(
+                GenericLiteLLMParams.model_validate(kwargs)
+                if provider_hints.get("custom_llm_provider") == "chatgpt"
+                or (isinstance(model, str) and model.startswith("chatgpt/"))
+                else None
+            ),
         )
 
         # Await normally
@@ -240,12 +273,18 @@ def image_generation(
         if extra_headers is not None:
             headers.update(extra_headers)
         model_response: ImageResponse = litellm.utils.ImageResponse()
+        chatgpt_params: Final = (
+            GenericLiteLLMParams.model_validate({**kwargs, "api_key": api_key, "extra_headers": headers})
+            if custom_llm_provider == "chatgpt" or (model is not None and model.startswith("chatgpt/"))
+            else None
+        )
         dynamic_api_key: str | None = None
         if model is not None or custom_llm_provider is not None:
             model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 api_base=api_base,
+                litellm_params=chatgpt_params,
             )
         else:
             model = "dall-e-2"
@@ -268,7 +307,10 @@ def image_generation(
             "size",
             "style",
         ]
-        non_default_params: Final = filter_out_litellm_params(kwargs, excluding=openai_params)
+        non_default_params: Final = filter_out_litellm_params(
+            kwargs,
+            excluding=[*openai_params, "extra_headers", "headers"] if chatgpt_params is not None else openai_params,
+        )
 
         image_generation_config: BaseImageGenerationConfig | None = None
         if custom_llm_provider is not None and custom_llm_provider in LlmProviders._member_map_.values():
@@ -490,7 +532,7 @@ def image_generation(
             or custom_llm_provider == LlmProviders.LITELLM_PROXY.value
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
-            if extra_headers is not None:
+            if extra_headers is not None and chatgpt_params is None:
                 optional_params["extra_headers"] = extra_headers
             # Forward OpenAI organization if present (set by proxy pre-call utils)
             organization: Final[str | None] = kwargs.get("organization", None)
@@ -506,7 +548,13 @@ def image_generation(
                 organization=organization,
                 aimg_generation=aimg_generation,
                 client=client,
-                headers=headers,
+                headers=(
+                    _chatgpt_image_headers(
+                        model, chatgpt_params.model_copy(update={"api_key": dynamic_api_key or api_key}), headers
+                    )
+                    if chatgpt_params is not None
+                    else headers
+                ),
                 litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "bedrock":
