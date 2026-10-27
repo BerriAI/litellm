@@ -8640,10 +8640,10 @@ class TestStreamingClientDisconnectBilling:
         through the translate_completion_output_params_streaming result to the
         inner chat stream's collected chunks or a disconnect bills nothing.
         """
-        from litellm.llms.anthropic.pass_through.adapters.streaming_iterator import (
+        from litellm.llms.anthropic.messages.adapters.streaming_iterator import (
             AnthropicSSEStream,
         )
-        from litellm.llms.anthropic.pass_through.adapters.transformation import (
+        from litellm.llms.anthropic.messages.adapters.transformation import (
             AnthropicAdapter,
         )
         from litellm.router import FallbackAwareAnthropicMessagesStream
@@ -9180,7 +9180,7 @@ def _apply_stream_usage_tracking(
 
     @pytest.mark.asyncio
     async def test_disconnect_bills_partial_default_route_messages_stream_through_the_responses_adapter(self):
-        from litellm.llms.anthropic.pass_through.responses_adapters.streaming_iterator import (
+        from litellm.llms.anthropic.messages.responses_adapters.streaming_iterator import (
             AnthropicResponsesStreamWrapper,
         )
         from litellm.router import FallbackAwareAnthropicMessagesStream
@@ -11897,7 +11897,7 @@ class TestResponseCostFromLoggingObjForBridgedMessages:
 
     def test_recomputed_cost_prices_the_reasoning_tokens_of_the_bridged_chat_completion(self):
         from litellm.types.utils import CompletionTokensDetailsWrapper, ModelResponse, Usage
-        from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+        from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 
         model = "dashscope/qwen-turbo"
         pricing = litellm.get_model_info(model)
