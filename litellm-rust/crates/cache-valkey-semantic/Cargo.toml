@@ -8,13 +8,13 @@ repository.workspace = true
 [dependencies]
 litellm-cache.workspace = true
 litellm-cache-redis.workspace = true
-redis = { version = "1.7.0", features = ["tls-rustls"] }
+redis = { workspace = true, features = ["tls-rustls"] }
 sha2.workspace = true
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 litellm-cache-testing.workspace = true
-redis-test = "1.0.4"
+redis-test.workspace = true
 rstest.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

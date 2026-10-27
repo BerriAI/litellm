@@ -351,9 +351,10 @@ def _ir_score_answer(question: DecisionsIRScoreQuestion, answer: ScoreAnswer) ->
             DecisionsIRScoreProbability(
                 value=index,
                 label=answer.legend.get(str(index), level.label),
-                probability=answer.probabilities.get(str(index), 0.0),
+                probability=answer.probabilities[str(index)],
             )
             for index, level in enumerate(question.levels)
+            if str(index) in answer.probabilities
         ),
         extra=MappingProxyType(answer.model_extra or {}),
     )
@@ -376,12 +377,14 @@ def _ir_answer(question: DecisionsIRQuestion, answer: DecisionAnswer | None) -> 
 
 
 def systemone_response_to_ir(response: DecisionsResponse, request: DecisionsIRRequest) -> DecisionsIRResponse:
-    usage: Final = response.usage or DecisionsUsage()
+    usage: Final = response.usage
     keyed_questions: Final = zip(systemone_keys(request.questions), request.questions, strict=True)
     return DecisionsIRResponse(
         model=response.model,
         answers=tuple(_ir_answer(question, response.answers.get(key)) for key, question in keyed_questions),
-        usage=DecisionsIRUsage(
+        usage=None
+        if usage is None
+        else DecisionsIRUsage(
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
             cached_tokens=usage.cached_tokens,
@@ -485,7 +488,9 @@ def ir_to_systemone_response(response: DecisionsIRResponse, request: DecisionsIR
             **response.extra,
             "model": response.model,
             "answers": {key: answer for key, answer in keyed_answers if answer is not None},
-            "usage": DecisionsUsage.model_validate(
+            "usage": None
+            if response.usage is None
+            else DecisionsUsage.model_validate(
                 {
                     **response.usage.extra,
                     "input_tokens": response.usage.input_tokens,
