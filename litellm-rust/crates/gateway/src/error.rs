@@ -8,6 +8,15 @@ pub enum Error {
     McpSetting(String),
     #[error(transparent)]
     Mcp(#[from] litellm_gateway_mcp::ConnectError),
+    #[error(transparent)]
+    Config(#[from] litellm_config::Error),
+    #[error("invalid Redis setting {setting}: {reason}")]
+    RedisInvalid {
+        setting: &'static str,
+        reason: &'static str,
+    },
+    #[error(transparent)]
+    RedisConnect(#[from] litellm_redis_client::ConnectError),
     #[error("MCP requires a configured master key")]
     Auth(#[from] litellm_gateway_auth::Error),
 }

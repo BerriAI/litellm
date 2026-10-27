@@ -2,6 +2,10 @@ use std::time::Duration;
 
 use redis::{Cmd, ToRedisArgs, ToSingleRedisArg};
 
+pub(crate) fn ping() -> Cmd {
+    redis::cmd("PING")
+}
+
 pub(crate) fn get(key: String) -> Cmd {
     redis::cmd("GET").arg(key).to_owned()
 }

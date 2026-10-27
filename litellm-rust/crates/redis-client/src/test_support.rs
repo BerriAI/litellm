@@ -56,13 +56,12 @@ impl Server {
         timeout: Duration,
         breaker: Option<Breaker>,
     ) -> RedisClient {
-        RedisClient::connect(RedisConfig {
+        RedisClient::new(RedisConfig {
             endpoint: self.endpoint(),
             namespace: Namespace::new(namespace),
             timeout,
             breaker,
         })
-        .await
         .unwrap()
     }
 
@@ -70,6 +69,20 @@ impl Server {
         match self {
             Self::Standalone(server) => server.restart().await.unwrap(),
             Self::Cluster(cluster) => cluster.restart().await.unwrap(),
+        }
+    }
+
+    pub(crate) async fn stop(&self) {
+        match self {
+            Self::Standalone(server) => server.stop().await.unwrap(),
+            Self::Cluster(cluster) => cluster.stop().await.unwrap(),
+        }
+    }
+
+    pub(crate) async fn resume(&self) {
+        match self {
+            Self::Standalone(server) => server.resume().await.unwrap(),
+            Self::Cluster(cluster) => cluster.resume().await.unwrap(),
         }
     }
 

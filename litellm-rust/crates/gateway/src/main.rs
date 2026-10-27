@@ -46,6 +46,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Logger::new(StderrSink { level }).install_global()?;
     let config = Config::load(settings.litellm_config)?;
     let inference = litellm_gateway::build_inference(&config)?;
+    let _redis = litellm_gateway::build_redis(&config).await?;
     let ui = match std::env::var_os("LITELLM_UI_PATH") {
         Some(directory) => {
             let ui_settings: UiSettings = settings::from_iter(std::env::vars_os())?;

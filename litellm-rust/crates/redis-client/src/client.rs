@@ -26,21 +26,25 @@ pub enum Ttl {
 }
 
 impl RedisClient {
-    pub async fn connect(config: RedisConfig) -> Result<Self, ConnectError> {
+    pub fn new(config: RedisConfig) -> Result<Self, ConnectError> {
         let connection = match &config.endpoint {
             Endpoint::Url(url) => {
-                Connection::standalone(url.as_str().into_connection_info()?, config.timeout).await?
+                Connection::standalone(url.as_str().into_connection_info()?, config.timeout)?
             }
             Endpoint::Host(host) => {
-                Connection::standalone(host.connection_info()?, config.timeout).await?
+                Connection::standalone(host.connection_info()?, config.timeout)?
             }
-            Endpoint::Cluster(cluster) => Connection::cluster(cluster, config.timeout).await?,
+            Endpoint::Cluster(cluster) => Connection::cluster(cluster, config.timeout)?,
         };
         Ok(Self {
             connection,
             namespace: config.namespace,
             breaker: config.breaker,
         })
+    }
+
+    pub async fn ping(&self) -> Result<(), Error> {
+        self.query(&commands::ping()).await
     }
 
     pub async fn get<T: FromRedisValue>(&self, key: &str) -> Result<Option<T>, Error> {
@@ -321,6 +325,35 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn a_client_created_while_redis_is_down_works_once_redis_is_up(
+        #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+    ) {
+        let server = Server::start(topology).await;
+        server.stop().await;
+
+        let client = server.client("", Duration::from_millis(500)).await;
+        let while_down = client.ping().await;
+        server.resume().await;
+
+        assert!(
+            matches!(while_down, Err(Error::Transport(_))),
+            "{while_down:?}"
+        );
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let recovered = loop {
+            match client.ping().await {
+                Ok(()) => break true,
+                Err(_) if Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(200)).await
+                }
+                Err(_) => break false,
+            }
+        };
+        assert!(recovered);
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn empty_batches_succeed_without_asking_redis(
         #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
     ) {
@@ -581,7 +614,7 @@ mod tests {
         let server = RedisServer::start().await.unwrap();
         let port = server.url().rsplit(':').next().unwrap().parse().unwrap();
         let connect = |endpoint| {
-            RedisClient::connect(RedisConfig {
+            RedisClient::new(RedisConfig {
                 endpoint,
                 namespace: Namespace::default(),
                 timeout: DEFAULT_TIMEOUT,
@@ -596,14 +629,9 @@ mod tests {
             tls: false,
             db: 3,
         }))
-        .await
         .unwrap();
-        let in_db_0 = connect(Endpoint::Url(server.url().to_owned()))
-            .await
-            .unwrap();
-        let via_url = connect(Endpoint::Url(format!("{}/3", server.url())))
-            .await
-            .unwrap();
+        let in_db_0 = connect(Endpoint::Url(server.url().to_owned())).unwrap();
+        let via_url = connect(Endpoint::Url(format!("{}/3", server.url()))).unwrap();
 
         in_db_3
             .set("k", "3", Duration::from_secs(60))

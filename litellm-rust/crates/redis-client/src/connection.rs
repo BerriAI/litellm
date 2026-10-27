@@ -3,7 +3,7 @@ use std::time::Duration;
 use redis::{
     Cmd, ConnectionInfo, Pipeline, RedisFuture, RedisResult, Value,
     aio::{ConnectionLike, ConnectionManager, ConnectionManagerConfig},
-    cluster::ClusterClientBuilder,
+    cluster::{ClusterClientBuilder, ClusterConfig},
     cluster_async::ClusterConnection,
 };
 
@@ -18,21 +18,16 @@ pub(crate) enum Connection {
 }
 
 impl Connection {
-    pub(crate) async fn standalone(info: ConnectionInfo, timeout: Duration) -> RedisResult<Self> {
+    pub(crate) fn standalone(info: ConnectionInfo, timeout: Duration) -> RedisResult<Self> {
         let config = ConnectionManagerConfig::new()
             .set_connection_timeout(Some(timeout))
             .set_response_timeout(Some(timeout))
             .set_number_of_retries(RETRIES as usize);
-        let manager = redis::Client::open(info)?
-            .get_connection_manager_with_config(config)
-            .await?;
+        let manager = ConnectionManager::new_lazy_with_config(redis::Client::open(info)?, config)?;
         Ok(Self::Standalone(manager))
     }
 
-    pub(crate) async fn cluster(
-        endpoint: &ClusterEndpoint,
-        timeout: Duration,
-    ) -> RedisResult<Self> {
+    pub(crate) fn cluster(endpoint: &ClusterEndpoint, timeout: Duration) -> RedisResult<Self> {
         let builder = ClusterClientBuilder::new(endpoint.addrs())
             .connection_timeout(timeout)
             .response_timeout(timeout)
@@ -45,8 +40,13 @@ impl Connection {
             Some(password) => builder.password(password),
             None => builder,
         };
+        let config = ClusterConfig::new()
+            .set_connection_timeout(timeout)
+            .set_response_timeout(timeout);
         Ok(Self::Cluster(
-            builder.build()?.get_async_connection().await?,
+            builder
+                .build()?
+                .get_pending_async_connection_with_config(config),
         ))
     }
 }
