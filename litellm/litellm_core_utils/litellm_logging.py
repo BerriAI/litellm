@@ -2732,9 +2732,10 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def record_native_bedrock_guardrail(self, result: object) -> None:
         """Bill the guardrail trace a Bedrock response carries when the deployment's ``guardrailConfig`` ran it, by
-        recording it as guardrail information on this call, the same entry the proxy-side Bedrock guardrail writes."""
+        recording it as guardrail information on this call, the same entry the proxy-side Bedrock guardrail writes.
+        A cache hit carries the original response's trace but made no Bedrock call, so it bills nothing."""
         trace: Final = bedrock_guardrail_trace(result)
-        if trace is None:
+        if trace is None or served_from_cache(result) or self.model_call_details.get("cache_hit") is True:
             return
         optional_params: Final = object_mapping(getattr(self, "optional_params", None)) or {}
         guardrail_config: Final = object_mapping(optional_params.get("guardrailConfig")) or {}

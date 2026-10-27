@@ -13666,3 +13666,30 @@ def test_record_native_bedrock_guardrail_bills_when_the_metadata_is_none() -> No
     (entry,) = logging_obj.model_call_details["litellm_params"]["metadata"]["standard_logging_guardrail_information"]
     assert entry["guardrail_usage"] == {"contentPolicyUnits": 2}
     assert entry["guardrail_cost"] > 0
+
+
+def test_record_native_bedrock_guardrail_bills_nothing_for_a_response_served_from_cache() -> None:
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="call-cache-hit",
+        function_id="fn",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"metadata": {}}
+    trace = {"guardrail": {"inputAssessment": {"gid": {"invocationMetrics": {"usage": {"contentPolicyUnits": 2}}}}}}
+    cached = litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "hi"}}], model="x")
+    setattr(cached, "trace", trace)
+    cached._hidden_params = {"cache_hit": True}
+
+    logging_obj.record_native_bedrock_guardrail(cached)
+    logging_obj.model_call_details["cache_hit"] = True
+    logging_obj.record_native_bedrock_guardrail({"trace": trace})
+
+    assert "standard_logging_guardrail_information" not in logging_obj.model_call_details["litellm_params"]["metadata"]
