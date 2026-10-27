@@ -658,6 +658,36 @@ def test_token_counter_tool_choice_adds_nothing_for_deepseek_v4(tool_choice: obj
     ) == token_counter_new(model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools)
 
 
+@pytest.mark.parametrize(
+    ("tool_choice", "expected_tool_choice"),
+    [
+        pytest.param({"type": "auto"}, None, id="anthropic-auto"),
+        pytest.param({"type": "any"}, None, id="anthropic-any"),
+        pytest.param({"type": "none"}, "none", id="anthropic-none"),
+        pytest.param(
+            {"type": "tool", "name": "get_weather"},
+            {"type": "function", "function": {"name": "get_weather"}},
+            id="anthropic-tool",
+        ),
+        pytest.param(
+            {"type": "function", "name": "get_weather"},
+            {"type": "function", "function": {"name": "get_weather"}},
+            id="responses-function",
+        ),
+    ],
+)
+def test_token_counter_counts_anthropic_tool_choices_like_openai_choices(
+    tool_choice: Mapping[str, object], expected_tool_choice: str | Mapping[str, object] | None
+) -> None:
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
+
+    assert token_counter_new(
+        model="gpt-4", messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice
+    ) == token_counter_new(
+        model="gpt-4", messages=list(_USER_MESSAGES), tools=tools, tool_choice=expected_tool_choice
+    )
+
+
 @pytest.mark.parametrize("model", ["DeepSeek-V4-Flash-0731", "databricks-qwen35-122b-a10b"])
 @pytest.mark.parametrize(
     "anthropic_tool",
