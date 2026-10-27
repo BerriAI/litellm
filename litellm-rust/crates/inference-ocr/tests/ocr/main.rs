@@ -1,3 +1,4 @@
+use litellm_host::protocol::InterceptRequest;
 use litellm_host::{
     interceptors::{RequestContext, WireRequest},
     lifecycle::CallEvent,
@@ -240,6 +241,26 @@ impl litellm_host::lifecycle::CallObserver for LocalOcrHost {
 impl litellm_host::interceptors::Interceptors<<Ocr as litellm_host::protocol::Protocol>::Error>
     for LocalOcrHost
 {
+    async fn handle(
+        &self,
+        request: InterceptRequest,
+    ) -> Result<(), <Ocr as litellm_host::protocol::Protocol>::Error> {
+        match request {
+            InterceptRequest::BeforeProviderRequest {
+                wire,
+                context,
+                reply,
+            } => reply.send(self.before_provider_request(*wire, *context).await?),
+            InterceptRequest::AfterProviderResponse { raw, reply } => {
+                reply.send(self.after_provider_response(raw).await?);
+            }
+            other => other.pass_through(),
+        }
+        Ok(())
+    }
+}
+
+impl LocalOcrHost {
     async fn before_provider_request(
         &self,
         wire: WireRequest,

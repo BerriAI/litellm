@@ -1,4 +1,6 @@
+use litellm_host::interceptors::InterceptPoints;
 use litellm_host::lifecycle::ExecutionEvent;
+use litellm_host::protocol::InterceptRequest;
 use std::{
     ops::ControlFlow,
     sync::{
@@ -109,6 +111,23 @@ struct Hooks {
 }
 
 impl Interceptors<TestError> for Hooks {
+    async fn handle(&self, request: InterceptRequest) -> Result<(), TestError> {
+        match request {
+            InterceptRequest::BeforeProviderRequest {
+                wire,
+                context,
+                reply,
+            } => reply.send(self.before_provider_request(*wire, *context).await?),
+            InterceptRequest::AfterProviderResponse { raw, reply } => {
+                reply.send(self.after_provider_response(raw).await?);
+            }
+            other => other.pass_through(),
+        }
+        Ok(())
+    }
+}
+
+impl Hooks {
     async fn before_provider_request(
         &self,
         wire: WireRequest,
@@ -630,6 +649,23 @@ struct ResponseGate {
 }
 
 impl Interceptors<TestError> for ResponseGate {
+    async fn handle(&self, request: InterceptRequest) -> Result<(), TestError> {
+        match request {
+            InterceptRequest::BeforeProviderRequest {
+                wire,
+                context,
+                reply,
+            } => reply.send(self.before_provider_request(*wire, *context).await?),
+            InterceptRequest::AfterProviderResponse { raw, reply } => {
+                reply.send(self.after_provider_response(raw).await?);
+            }
+            other => other.pass_through(),
+        }
+        Ok(())
+    }
+}
+
+impl ResponseGate {
     async fn before_provider_request(
         &self,
         wire: WireRequest,

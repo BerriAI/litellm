@@ -1,6 +1,6 @@
 use litellm_cache_response::CachePolicy;
 use litellm_host::{
-    interceptors::{ExecutionFacts, Interceptors, RawResponse},
+    interceptors::{ExecutionFacts, InterceptPoints, Interceptors, RawResponse},
     lifecycle::{CallEvent, ExecutionEvent},
     observation::ObservationSender,
 };

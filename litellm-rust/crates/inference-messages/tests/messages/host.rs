@@ -1,4 +1,5 @@
 use litellm_host::lifecycle::ExecutionEvent;
+use litellm_host::protocol::InterceptRequest;
 use std::sync::Mutex;
 
 use litellm_host::{
@@ -78,6 +79,28 @@ impl litellm_host::lifecycle::CallObserver for RecordingHost {
 impl litellm_host::interceptors::Interceptors<<Messages as litellm_host::protocol::Protocol>::Error>
     for RecordingHost
 {
+    async fn handle(
+        &self,
+        request: InterceptRequest,
+    ) -> Result<(), <Messages as litellm_host::protocol::Protocol>::Error> {
+        match request {
+            InterceptRequest::ResultReady { facts, reply } => {
+                reply.send(self.result_ready(facts).await?);
+            }
+            InterceptRequest::BeforeProviderRequest {
+                wire,
+                context,
+                reply,
+            } => reply.send(self.before_provider_request(*wire, *context).await?),
+            InterceptRequest::AfterProviderResponse { raw, reply } => {
+                reply.send(self.after_provider_response(raw).await?);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl RecordingHost {
     async fn result_ready(&self, facts: ExecutionFacts) -> Result<(), Error> {
         self.facts.lock().unwrap().push(facts);
         if self.reject_result {

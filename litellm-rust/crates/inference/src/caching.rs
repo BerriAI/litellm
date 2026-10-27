@@ -14,7 +14,8 @@ use litellm_cache_response::{
 use litellm_host::{
     call::{CallOutput, OutputOf},
     interceptors::{
-        Cost, ExecutionFacts, Interceptors, ProviderIdentity, ResultSource, WireRequest,
+        Cost, ExecutionFacts, InterceptPoints, Interceptors, ProviderIdentity, ResultSource,
+        WireRequest,
     },
     lifecycle::{CallEvent, ExecutionEvent},
     observation::ObservationSender,

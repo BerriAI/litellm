@@ -1,4 +1,5 @@
 use litellm_host::interceptors::RawResponse;
+use litellm_host::protocol::InterceptRequest;
 use litellm_host::{
     interceptors::{ExecutionFacts, ResultSource},
     lifecycle::ExecutionEvent,
@@ -334,6 +335,23 @@ async fn a_post_call_hook_failure_never_looks_safe_to_retry(
     use litellm_host::interceptors::{Interceptors, RequestContext, WireRequest};
     struct FailingHook;
     impl Interceptors<Error> for FailingHook {
+        async fn handle(&self, request: InterceptRequest) -> Result<(), Error> {
+            match request {
+                InterceptRequest::BeforeProviderRequest {
+                    wire,
+                    context,
+                    reply,
+                } => reply.send(self.before_provider_request(*wire, *context).await?),
+                InterceptRequest::AfterProviderResponse { raw, reply } => {
+                    reply.send(self.after_provider_response(raw).await?);
+                }
+                other => other.pass_through(),
+            }
+            Ok(())
+        }
+    }
+
+    impl FailingHook {
         async fn before_provider_request(
             &self,
             wire: WireRequest,

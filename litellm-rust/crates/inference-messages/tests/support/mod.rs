@@ -2,6 +2,7 @@
 //! secret source.
 
 #![allow(dead_code)] // each test binary compiles this module on its own and uses a different subset
+use litellm_host::protocol::InterceptRequest;
 
 use std::{
     ops::ControlFlow,
@@ -174,6 +175,23 @@ impl<P: litellm_host::protocol::Protocol> RecordingCall<P> {
 impl<P: litellm_host::protocol::Protocol> litellm_host::interceptors::Interceptors<P::Error>
     for RecordingCall<P>
 {
+    async fn handle(&self, request: InterceptRequest) -> Result<(), P::Error> {
+        match request {
+            InterceptRequest::BeforeProviderRequest {
+                wire,
+                context,
+                reply,
+            } => reply.send(self.before_provider_request(*wire, *context).await?),
+            InterceptRequest::AfterProviderResponse { raw, reply } => {
+                reply.send(self.after_provider_response(raw).await?);
+            }
+            other => other.pass_through(),
+        }
+        Ok(())
+    }
+}
+
+impl<P: litellm_host::protocol::Protocol> RecordingCall<P> {
     async fn before_provider_request(
         &self,
         wire: litellm_host::interceptors::WireRequest,
