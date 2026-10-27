@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+futures-util.workspace = true
 redis = { workspace = true, features = ["cluster-async", "connection-manager", "tokio-rustls-comp"] }
 thiserror.workspace = true
 
