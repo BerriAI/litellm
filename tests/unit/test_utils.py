@@ -2260,6 +2260,45 @@ class TestProxyFunctionCalling:
 
 
 @pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
+def test_get_model_info_derives_max_tokens_from_the_output_limit() -> None:
+    model: Final = "derived-max-tokens-chat-model"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "max_input_tokens": 400000,
+                "max_output_tokens": 128000,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    info: Final = litellm.get_model_info(model, custom_llm_provider="openai")
+    assert info["max_tokens"] == 128000
+    assert litellm.get_max_tokens(model) == 128000
+
+
+def test_get_model_info_derives_max_tokens_from_the_input_limit_when_the_row_has_no_output_limit() -> None:
+    model: Final = "derived-max-tokens-embedding-model"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "embedding",
+                "max_input_tokens": 8191,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    info: Final = litellm.get_model_info(model, custom_llm_provider="openai")
+    assert info["max_tokens"] == 8191
+    assert info["max_output_tokens"] is None
+
+
 def test_register_model_price_is_used_for_completion_cost() -> None:
     model: Final = "migration-custom-pricing-model"
     price: Final = {
@@ -8629,7 +8668,7 @@ def test_basic_trimming_no_max_tokens_specified():
     trimmed_messages = trim_messages(messages, model="gpt-4")
     print("trimmed messages for gpt-4")
     print(trimmed_messages)
-    assert (get_token_count(messages=trimmed_messages, model="gpt-4")) <= litellm.model_cost["gpt-4"]["max_tokens"]
+    assert (get_token_count(messages=trimmed_messages, model="gpt-4")) <= litellm.model_cost["gpt-4"]["max_input_tokens"]
 
 
 def test_multiple_messages_trimming():
