@@ -4,10 +4,9 @@ from functools import reduce
 from typing import Final
 
 import httpx
-
-import litellm
 from pydantic import TypeAdapter, ValidationError
 
+import litellm
 from litellm.constants import LITELLM_DETAILED_TIMING
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs, process_response_headers
 from litellm.litellm_core_utils.hidden_params import stamp_billable_usage_cost
