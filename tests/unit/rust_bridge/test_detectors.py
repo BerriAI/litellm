@@ -92,7 +92,7 @@ def _wrap_nested_level(value: object, depth: int) -> object:
         (detectors.prompt_management, {"model": "litellm_agent/gpt-5"}, True),
         (detectors.prompt_management, {"model": "gpt-5"}, False),
         (detectors.caller_client, {"client": object()}, True),
-        (detectors.caller_client, {"shared_session": object()}, True),
+        (detectors.caller_client, {"shared_session": object()}, False),
         (detectors.caller_client, {"client": None, "shared_session": None}, False),
         (detectors.caller_client, {}, False),
         (detectors.extra_body, {"extra_body": {"stream": True}}, True),

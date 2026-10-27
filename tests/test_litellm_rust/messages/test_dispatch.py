@@ -16,7 +16,7 @@ from litellm.messages.dispatch import (
 )
 from litellm.proxy import proxy_server
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import Feature, Route, RouteRule, Rules, Target
+from litellm.rust_bridge.catalog import MESSAGES_PYTHON_FEATURES, Feature, Route, RouteRule, Rules, Target
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, NATIVE_MESSAGES, NativeAmessages, NativeMessages
 from litellm.rust_bridge.public_call import NativeCall
@@ -226,6 +226,25 @@ def test_only_requests_that_pass_through_to_a_messages_api_reach_a_messages_targ
         rules=(RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED, targets=frozenset({Target.MESSAGES})),),
     )
     assert result is (native_result if passes_through else python_result)
+
+
+def test_proxy_cache_and_shared_session_keep_messages_native(monkeypatch: pytest.MonkeyPatch) -> None:
+    model: Final = "anthropic/claude-sonnet-4-5"
+    python_result: Final = response(model)
+    native_result: Final = response(model)
+    monkeypatch.setattr(litellm, "cache", Cache())
+    result: Final = _DISPATCH.run(
+        (16, MESSAGES, model),
+        {"shared_session": object()},
+        python=lambda *call_args, **call_kwargs: python_result,
+        binding=messages_binding(lambda request: native_result),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
+        rules=(
+            RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=MESSAGES_PYTHON_FEATURES),
+            RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),
+        ),
+    )
+    assert result is native_result
 
 
 DANGEROUS_TOOL_USE: Final = [{"type": "dangerous_tool_use", "classifier_context": {"permission_mode": "auto"}}]
@@ -457,7 +476,6 @@ ADVISOR_TOOL: Final = {"type": ANTHROPIC_ADVISOR_TOOL_TYPE, "name": "advisor", "
         (Feature.CALLER_CLIENT, "anthropic/claude-sonnet-4-5", {"client": object()}, {}),
         (Feature.TIMEOUT_VARIANTS, "anthropic/claude-sonnet-4-5", {"request_timeout": 5}, {}),
         (Feature.AGENTIC_LOOP_HOOK, "anthropic/claude-sonnet-4-5", {}, {"callbacks": [_Agentic()]}),
-        (Feature.RESPONSE_CACHE, "anthropic/claude-sonnet-4-5", {}, {"cache": Cache()}),
         (Feature.TLS_POLICY, "anthropic/claude-sonnet-4-5", {}, {"ssl_security_level": "DEFAULT@SECLEVEL=1"}),
         (Feature.MODIFY_PARAMS, "anthropic/claude-sonnet-4-5", {}, {"modify_params": True}),
         (
