@@ -269,9 +269,10 @@ class HuggingFaceEmbedding(BaseLLM):
         if client is None:
             client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders.HUGGINGFACE,
+                params={"timeout": timeout},
             )
 
-        response: Final = await client.post(api_base, headers=headers, data=json.dumps(data))
+        response: Final = await client.post(api_base, headers=headers, data=json.dumps(data), timeout=timeout)
 
         ## LOGGING
         logging_obj.post_call(
@@ -374,7 +375,7 @@ class HuggingFaceEmbedding(BaseLLM):
         ## COMPLETION CALL
         if client is None or not isinstance(client, HTTPHandler):
             client = HTTPHandler(concurrent_limit=1)
-        response: Final = client.post(embed_url, headers=headers, data=json.dumps(data))
+        response: Final = client.post(embed_url, headers=headers, data=json.dumps(data), timeout=timeout)
 
         ## LOGGING
         logging_obj.post_call(
