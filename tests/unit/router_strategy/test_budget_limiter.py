@@ -537,3 +537,36 @@ async def test_batch_charge_is_shared_across_workers_and_requires_redis_confirma
     await second._push_in_memory_increments_to_redis()
     assert float(await client.get("provider_spend:openai:1d")) == 0.5
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_async_filter_deployments_crossed_budget_raises_router_budget_limit_error() -> None:
+    from litellm.litellm_core_utils.bug_report import should_report_bug
+    from litellm.types.router import RouterBudgetLimitError, RouterErrors
+
+    limiter: Final = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config={"openai": {"budget_limit": 1.0, "time_period": "1d"}},
+    )
+    await limiter.dual_cache.async_set_cache(key="provider_spend:openai:1d", value=5.0)
+
+    deployments: Final = [
+        {
+            "model_name": "gpt-4",
+            "litellm_params": {"model": "openai/gpt-4"},
+            "model_info": {"id": "dep-1"},
+        }
+    ]
+
+    with pytest.raises(RouterBudgetLimitError) as exc_info:
+        await limiter.async_filter_deployments(
+            model="gpt-4",
+            healthy_deployments=deployments,
+            messages=None,
+            request_kwargs={"model": "gpt-4"},
+        )
+
+    assert RouterErrors.no_deployments_with_provider_budget_routing.value in str(exc_info.value)
+    assert exc_info.value.status_code == 429
+    assert isinstance(exc_info.value, ValueError)
+    assert should_report_bug(exc_info.value) is False

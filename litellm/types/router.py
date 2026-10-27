@@ -1141,6 +1141,14 @@ class RouterRateLimitErrorBasic(ValueError):
         super().__init__(_message)
 
 
+class RouterBudgetLimitError(ValueError):
+    """
+    Raised when all deployments for a model or provider have crossed their configured budget window.
+    """
+
+    status_code: Final = 429
+
+
 class RouterErrorTypes(str, enum.Enum):
     rate_limit_error = "rate_limit_error"
     all_deployments_in_cooldown = "all_deployments_in_cooldown"

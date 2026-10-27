@@ -26,7 +26,7 @@ from litellm.litellm_core_utils.bug_report import (
     strip_bug_report_notice,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
+from litellm.types.router import RouterBudgetLimitError, RouterRateLimitError, RouterRateLimitErrorBasic
 
 
 def test_build_bug_report_keeps_only_litellm_frames():
@@ -141,6 +141,7 @@ def test_bug_report_can_be_disabled(monkeypatch: pytest.MonkeyPatch):
         BadRequestError(message="bad input", llm_provider="openai", model="gpt-4"),
         RouterRateLimitError(model="gpt-4", cooldown_time=5.0, enable_pre_call_checks=False, cooldown_list=[]),
         RouterRateLimitErrorBasic(model="gpt-4"),
+        RouterBudgetLimitError("No deployments available - crossed budget: deployment over budget"),
         "not an exception",
     ],
 )
