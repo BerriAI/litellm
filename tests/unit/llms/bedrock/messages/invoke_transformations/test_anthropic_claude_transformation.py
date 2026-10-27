@@ -4173,7 +4173,7 @@ async def test_bedrock_messages_400_is_not_retried_unless_it_rejects_opt_in_nati
 
 @pytest.mark.parametrize("trace", ["enabled", "disabled"])
 def test_bedrock_messages_applies_the_deployment_guardrail_config_as_invoke_headers(trace: str) -> None:
-    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeMessagesConfig,
     )
 
@@ -4190,7 +4190,7 @@ def test_bedrock_messages_applies_the_deployment_guardrail_config_as_invoke_head
 
 
 def test_bedrock_messages_without_guardrail_config_sends_no_guardrail_headers() -> None:
-    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeMessagesConfig,
     )
 
