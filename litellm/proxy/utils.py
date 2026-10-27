@@ -2864,7 +2864,11 @@ class ProxyLogging:
 
         return data
 
-    def has_pre_call_guardrails(self, request_metadata: Mapping[str, object]) -> bool:
+    def has_pre_call_guardrails(
+        self,
+        request_metadata: Mapping[str, object],
+        event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call,
+    ) -> bool:
         """
         Whether anything configured would inspect the content of a request carrying this metadata.
 
@@ -2883,8 +2887,7 @@ class ProxyLogging:
             return True
         probe: Final = {"metadata": dict(request_metadata)}
         return any(
-            isinstance(callback, CustomGuardrail)
-            and callback.should_run_guardrail(data=probe, event_type=GuardrailEventHooks.pre_call)
+            isinstance(callback, CustomGuardrail) and callback.should_run_guardrail(data=probe, event_type=event_type)
             for callback in caps.resolved_callbacks
         )
 
