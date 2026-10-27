@@ -107,6 +107,20 @@ Session affinity, user-turn classification, adaptive routing, routing plugins, c
 
 When cache costs change the model, the routing decision reports `cause: prompt_cache_cost`. Its signals include the original model, classification cause and both estimated costs
 
+### Output token limits
+
+Set `max_tokens_from_tier_model` under `complexity_router_config` to choose how a routed request's output limit is determined:
+
+| Setting | Effective output limit |
+| --- | --- |
+| `true` (default) | Replace the caller's limit with the selected model group's ceiling |
+| `"clamp"` | Use the smaller of the caller's positive limit and the selected model group's ceiling |
+| `false` | Keep the caller's limit |
+
+Clamp reads `max_tokens`, `max_completion_tokens` and `max_output_tokens`. If several are supplied, it uses the smallest positive value. With no positive caller limit, it uses the model ceiling. For example, a caller requesting 100 tokens keeps that limit on a model with a 32,768-token ceiling; a request for 100,000 is capped at 32,768. Rerouting uses the original caller budget, and cache-aware cost estimates use the same effective limit.
+
+All modes preserve explicit output limits in a tier's own `litellm_params`. An unknown ceiling leaves the caller's value unchanged. In the dashboard, select **Respect caller budget** under **Advanced settings > Compatibility > Output token limit** to enable clamp.
+
 ### Capability forecasting
 
 Set `classifier_type: capability` to use
