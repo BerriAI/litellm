@@ -744,6 +744,18 @@ def canonicalize_url_identity(url: str) -> str:
     return urlunparse((scheme, netloc, parsed.path.rstrip("/"), "", "", ""))
 
 
+def canonical_origin(url: str) -> str | None:
+    """The scheme-and-authority identity of ``url``, or ``None`` when it has none.
+
+    Built on the shared URL canonicalizer so the lowercase-host and default-port rules match the
+    RFC 8414 issuer comparison the resolution path uses, instead of being re-derived here.
+    """
+    parsed: Final = urlparse(canonicalize_url_identity(url))
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
 def oauth_client_registration_matches(
     registered_issuer: str | None,
     registered_url: str | None,

@@ -37,10 +37,9 @@ runs at most once per row.
 """
 
 from typing import Final, Protocol
-from urllib.parse import urlparse
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._experimental.mcp_server.oauth_utils import canonicalize_url_identity
+from litellm.proxy._experimental.mcp_server.oauth_utils import canonical_origin
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.utils import PrismaClient
 
@@ -52,18 +51,6 @@ _DISCOVERY_ACTOR: Final = "mcp_oauth_discovery"
 _BACKFILL_ACTOR: Final = "mcp_oauth_issuer_stamp_backfill"
 
 _AUTH_TYPES_WITH_ISSUER_ANCHORING: Final = ("oauth2", "true_passthrough", "oauth_delegate")
-
-
-def _origin(url: str) -> str | None:
-    """The scheme-and-authority identity of ``url``, or ``None`` when it has none.
-
-    Built on the shared URL canonicalizer so the lowercase-host and default-port rules match the
-    RFC 8414 issuer comparison the resolution path uses, instead of being re-derived here.
-    """
-    parsed: Final = urlparse(canonicalize_url_identity(url))
-    if not parsed.scheme or not parsed.netloc:
-        return None
-    return f"{parsed.scheme}://{parsed.netloc}"
 
 
 class _MCPServerRow(Protocol):
@@ -100,8 +87,8 @@ def _is_stamped_issuer_row(row: _MCPServerRow) -> bool:
     )
     if not configured:
         return False
-    issuer_origin: Final = _origin(row.issuer or "")
-    return issuer_origin is not None and all(_origin(endpoint) == issuer_origin for endpoint in configured)
+    issuer_origin: Final = canonical_origin(row.issuer or "")
+    return issuer_origin is not None and all(canonical_origin(endpoint) == issuer_origin for endpoint in configured)
 
 
 async def backfill_discovery_stamped_issuers(prisma_client: PrismaClient) -> int:
