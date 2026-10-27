@@ -838,6 +838,30 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                     )}
                   </MountedFormField>
 
+                  {transportType === TRANSPORT.OPENAPI && (
+                    <MountedFormField
+                      label={
+                        <span className="text-sm font-medium text-foreground flex items-center">
+                          Tools list TTL (ms)
+                          <SimpleTooltip content="How long MCP clients on revision 2026-07-28 may cache this server's tools/list">
+                            <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+                          </SimpleTooltip>
+                        </span>
+                      }
+                      name="tools_ttl_ms"
+                    >
+                      {(control) => (
+                        <Input
+                          {...numberControl(control, 0)}
+                          min={0}
+                          step={1}
+                          placeholder="Optional"
+                          className="w-full rounded-lg"
+                        />
+                      )}
+                    </MountedFormField>
+                  )}
+
                   {/* Authentication - show for HTTP, SSE, and OpenAPI */}
                   {transportType !== "stdio" && transportType !== "" && (
                     <Collapsible defaultOpen className="mb-4">

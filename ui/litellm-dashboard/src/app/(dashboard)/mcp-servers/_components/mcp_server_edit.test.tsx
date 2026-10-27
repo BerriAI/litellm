@@ -179,6 +179,26 @@ describe("MCPServerEdit (stdio)", () => {
     );
 
     expect(screen.getByRole("tab", { name: "Server Configuration" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Tools list TTL (ms)")).not.toBeInTheDocument();
+  });
+
+  it("shows tools list TTL for an OpenAPI server", () => {
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          transport: "openapi",
+          url: null,
+          spec_path: "https://example.com/openapi.json",
+        }}
+        accessToken={null}
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    expect(screen.getByLabelText("Tools list TTL (ms)")).toBeInTheDocument();
   });
 
   it("should allow updating stdio transport configuration", async () => {

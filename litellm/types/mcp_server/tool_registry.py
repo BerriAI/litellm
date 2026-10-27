@@ -13,6 +13,8 @@ class MCPTool(LiteLLMBaseModel):
     input_schema: dict[str, Any]
     handler: Callable
     server_id: str | None = Field(default=None, frozen=True)
+    output_schema: dict[str, object] | None = None  # mutable-ok: SDK tools require a dict-shaped output schema
+    title: str | None = None
 
 
 class ToolSchema(LiteLLMBaseModel):

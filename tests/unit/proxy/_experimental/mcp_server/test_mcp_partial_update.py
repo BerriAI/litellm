@@ -91,6 +91,13 @@ async def test_partial_update_omits_unset_defaultful_fields():
 
 
 @pytest.mark.asyncio
+async def test_server_ttl_update_sets_clears_and_omits():
+    assert (await _run_update(UpdateMCPServerRequest(server_id="s", tools_ttl_ms=2400)))["tools_ttl_ms"] == 2400
+    assert (await _run_update(UpdateMCPServerRequest(server_id="s", tools_ttl_ms=None)))["tools_ttl_ms"] is None
+    assert "tools_ttl_ms" not in await _run_update(UpdateMCPServerRequest(server_id="s", allowed_tools=["tool"]))
+
+
+@pytest.mark.asyncio
 async def test_partial_update_null_tool_name_maps_clear_to_empty_json():
     """Explicit null on Json map fields must clear overrides (UI legacy)."""
     data = UpdateMCPServerRequest(
@@ -898,6 +905,38 @@ async def test_toolset_partial_update_clears_description_on_explicit_null():
     """The dump used to drop None, so a null description could never clear the stored
     one: the toolset kept a description its owner had deleted."""
     assert await _run_toolset_update({"toolset_id": "ts-1", "description": None}) == {"description": None}
+
+
+@pytest.mark.asyncio
+async def test_toolset_partial_update_persists_zero_ttl_and_clears_null_ttl():
+    assert await _run_toolset_update({"toolset_id": "ts-1", "tools_ttl_ms": 0}) == {"tools_ttl_ms": 0}
+    assert await _run_toolset_update({"toolset_id": "ts-1", "tools_ttl_ms": None}) == {"tools_ttl_ms": None}
+
+
+@pytest.mark.asyncio
+async def test_toolset_ttl_create_update_and_omission():
+    from litellm.proxy._experimental.mcp_server.toolset_db import create_mcp_toolset
+    from litellm.types.mcp_server.mcp_toolset import NewMCPToolsetRequest
+
+    mock_prisma = _mock_toolset_prisma()
+    created_row = MagicMock()
+    created_row.model_dump.return_value = {
+        "toolset_id": "ts-1",
+        "toolset_name": "ops",
+        "tools_ttl_ms": 1200,
+        "tools": "[]",
+    }
+    mock_prisma.db.litellm_mcptoolsettable.create = AsyncMock(return_value=created_row)
+
+    created = await create_mcp_toolset(
+        mock_prisma,
+        NewMCPToolsetRequest(toolset_name="ops", tools=[], tools_ttl_ms=1200),
+        "test-user",
+    )
+    assert mock_prisma.db.litellm_mcptoolsettable.create.call_args.kwargs["data"]["tools_ttl_ms"] == 1200
+    assert created.tools_ttl_ms == 1200
+    assert await _run_toolset_update({"toolset_id": "ts-1", "tools_ttl_ms": 2400}) == {"tools_ttl_ms": 2400}
+    assert await _run_toolset_update({"toolset_id": "ts-1"}) == {}
 
 
 @pytest.mark.asyncio

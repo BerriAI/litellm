@@ -70,6 +70,7 @@ class OperationContext:
     mcp_proxy_mode: bool = False
     wire_compat: WireCompat = WireCompat.LEGACY
     protocol_version: str | None = None
+    toolset_tools_ttl_ms: int | None = None
     incoming_bearer_token: SecretStr | None | EllipsisType = field(default=..., repr=False)
 
     def __post_init__(self) -> None:
