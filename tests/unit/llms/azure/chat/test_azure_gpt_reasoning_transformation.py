@@ -5,7 +5,7 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
-from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
+from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
 
 
 @pytest.fixture()

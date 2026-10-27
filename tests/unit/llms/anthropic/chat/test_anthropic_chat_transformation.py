@@ -31,7 +31,7 @@ from litellm.llms.anthropic.messages.native.transformation import (
 )
 from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
 from litellm.llms.bedrock.claude_platform.transformation import BedrockClaudePlatformConfig
-from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
@@ -6145,7 +6145,7 @@ def test_anthropic_messages_request_strips_billing_header_for_minimax():
 
 
 def test_translate_system_message_strips_billing_header_for_bedrock_invoke():
-    from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+    from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeConfig,
     )
 
@@ -6174,12 +6174,12 @@ def test_translate_system_message_strips_billing_header_for_bedrock_invoke():
             True,
         ),
         (
-            "litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation",
+            "litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation",
             "AmazonAnthropicClaudeConfig",
             True,
         ),
         (
-            "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation",
+            "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation",
             "AmazonAnthropicClaudeMessagesConfig",
             True,
         ),

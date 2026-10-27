@@ -2233,7 +2233,7 @@ LLMS_ALIAS_CASES: Final = (
     ("litellm.llms.oci.chat.generic", "", "_normalize_oci_finish_reason", "normalize_oci_finish_reason", False),
     ("litellm.llms.oci.chat.generic", "", "_synthesize_oci_tool_call_id", "synthesize_oci_tool_call_id", False),
     ("litellm.llms.ollama.common_utils", "", "_convert_image", "convert_image", False),
-    ("litellm.llms.openai.chat.gpt_5_transformation", "", "_get_effort_level", "get_effort_level", False),
+    ("litellm.llms.openai.chat.gpt_reasoning_transformation", "", "_get_effort_level", "get_effort_level", False),
     ("litellm.llms.openai.completion.utils", "", "_transform_prompt", "transform_prompt", False),
     (
         "litellm.llms.openai.cost_calculation",
@@ -4867,7 +4867,7 @@ LLMS_FORWARDER_CASES: Final = (
         False,
     ),
     (
-        "litellm.llms.openai.chat.gpt_5_transformation",
+        "litellm.llms.openai.chat.gpt_reasoning_transformation",
         "OpenAIGPT5Config",
         "_supports_reasoning_effort_level",
         "supports_reasoning_effort_level",

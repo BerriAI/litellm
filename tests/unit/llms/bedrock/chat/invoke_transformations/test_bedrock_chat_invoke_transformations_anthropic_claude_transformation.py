@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
 import litellm
-from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -188,7 +188,7 @@ def test_output_format_conversion_to_inline_schema():
     Bedrock Invoke doesn't support the output_format parameter, so LiteLLM converts it by
     embedding the schema directly into the user message content.
     """
-    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeMessagesConfig,
     )
 
@@ -265,7 +265,7 @@ def test_output_format_conversion_with_string_content():
     """
     Test that output_format conversion works when message content is a string (not a list).
     """
-    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeMessagesConfig,
     )
 
@@ -313,7 +313,7 @@ def test_output_format_with_no_schema():
     """
     Test that if output_format has no schema, the conversion is skipped gracefully.
     """
-    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeMessagesConfig,
     )
 
@@ -352,7 +352,7 @@ def test_opus_4_5_model_detection():
     Test that the _is_claude_opus_4_5 method correctly identifies Opus 4.5 models
     with various naming conventions.
     """
-    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeMessagesConfig,
     )
 
@@ -1526,7 +1526,7 @@ class TestBedrockAnthropicPromptCachingRegression:
         from litellm.llms.bedrock.chat.converse_transformation import (
             AmazonConverseConfig,
         )
-        from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+        from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
             AmazonAnthropicClaudeConfig,
         )
 
@@ -1610,7 +1610,7 @@ class TestBedrockAnthropicPromptCachingRegression:
         from litellm.llms.bedrock.chat.converse_transformation import (
             AmazonConverseConfig,
         )
-        from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+        from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
             AmazonAnthropicClaudeConfig,
         )
 
@@ -1688,7 +1688,7 @@ class TestBedrockAnthropic1MContextRegression:
         from litellm.llms.bedrock.chat.converse_transformation import (
             AmazonConverseConfig,
         )
-        from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+        from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
             AmazonAnthropicClaudeConfig,
         )
 
@@ -1753,7 +1753,7 @@ class TestBedrockAnthropic1MContextRegression:
         from litellm.llms.bedrock.chat.converse_transformation import (
             AmazonConverseConfig,
         )
-        from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+        from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
             AmazonAnthropicClaudeConfig,
         )
 
@@ -1807,7 +1807,7 @@ class TestBedrockAnthropic1MContextRegression:
         from litellm.llms.bedrock.chat.converse_transformation import (
             AmazonConverseConfig,
         )
-        from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+        from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
             AmazonAnthropicClaudeConfig,
         )
 
@@ -1867,7 +1867,7 @@ class TestBedrockAnthropicCombinedRegressions:
         from litellm.llms.bedrock.chat.converse_transformation import (
             AmazonConverseConfig,
         )
-        from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+        from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
             AmazonAnthropicClaudeConfig,
         )
 
