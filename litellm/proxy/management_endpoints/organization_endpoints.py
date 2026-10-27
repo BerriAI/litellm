@@ -504,9 +504,8 @@ async def new_organization(
 
         _budget: Final = await _table(BudgetRepository(prisma_client)).create(
             data={
-                **new_budget,
+                **build_budget_write_data(new_budget, user_api_key_dict.user_id or litellm_proxy_admin_name),
                 "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
             }
         )
 
