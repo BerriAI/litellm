@@ -2821,12 +2821,12 @@ class ProxyLogging:
         hook to consult, but it judges the payload the same way, so a proxy configured only with
         one of those still has something to say about every record.
         """
-        if request_metadata.get("_guardrail_pipelines"):
+        probe: Final = {**(request_body or {}), "metadata": dict(request_metadata)}
+        if any(pipeline.mode == "pre_call" for _, pipeline in _policy_pipelines(probe)):
             return True
         caps: Final = ProxyLogging.callback_capabilities()
         if caps.has_content_enforcer:
             return True
-        probe: Final = {**(request_body or {}), "metadata": dict(request_metadata)}
         return any(
             isinstance(callback, CustomGuardrail)
             and callback.should_run_guardrail(data=probe, event_type=GuardrailEventHooks.pre_call)

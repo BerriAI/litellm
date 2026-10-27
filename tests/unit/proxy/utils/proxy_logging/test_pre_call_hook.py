@@ -266,10 +266,14 @@ def test_has_pre_call_guardrails_is_false_without_callbacks(proxy_logging, monke
     assert proxy_logging.has_pre_call_guardrails({}) is False
 
 
-def test_has_pre_call_guardrails_is_true_for_a_configured_pipeline(proxy_logging, monkeypatch):
-    monkeypatch.setattr(litellm, "callbacks", [])
+@pytest.mark.parametrize(("mode", "expected"), [("pre_call", True), ("post_call", False)])
+def test_has_pre_call_guardrails_follows_the_pipeline_mode(proxy_logging, monkeypatch, mode, expected):
+    from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
 
-    assert proxy_logging.has_pre_call_guardrails({"_guardrail_pipelines": ["p1"]}) is True
+    monkeypatch.setattr(litellm, "callbacks", [])
+    pipeline: Final = GuardrailPipeline(mode=mode, steps=[PipelineStep(guardrail="g")])
+
+    assert proxy_logging.has_pre_call_guardrails({"_guardrail_pipelines": [("policy", pipeline)]}) is expected
 
 
 @pytest.mark.asyncio
