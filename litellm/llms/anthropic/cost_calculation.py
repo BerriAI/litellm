@@ -3,6 +3,7 @@ Helper util for handling anthropic-specific cost calculation
 - e.g.: prompt caching
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Optional
 
 from pydantic import ValidationError
@@ -64,7 +65,43 @@ def cost_per_token(
     except Exception:
         pass
 
-    return prompt_cost, completion_cost
+    advisor_prompt_cost, advisor_completion_cost = advisor_iterations_cost(usage)
+    return prompt_cost + advisor_prompt_cost, completion_cost + advisor_completion_cost
+
+
+def advisor_iterations_cost(usage: "Usage") -> tuple[float, float]:
+    """Prices each ``advisor_message`` iteration at the rate of the advisor model it names. Raises for an
+    iteration without a model or whose model has no cost map entry."""
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    def iteration_cost(iteration: Mapping[str, object]) -> tuple[float, float]:
+        advisor_model: Final = iteration.get("model")
+        if not isinstance(advisor_model, str) or not advisor_model:
+            raise ValueError("Anthropic advisor_message iteration has no model, so it cannot be priced")
+        litellm.get_model_info(model=advisor_model, custom_llm_provider="anthropic")
+        cache_read: Final = int(iteration.get("cache_read_input_tokens") or 0)
+        cache_write: Final = int(iteration.get("cache_creation_input_tokens") or 0)
+        text_input: Final = int(iteration.get("input_tokens") or 0)
+        return generic_cost_per_token(
+            model=advisor_model,
+            usage=Usage(
+                prompt_tokens=text_input + cache_read + cache_write,
+                completion_tokens=int(iteration.get("output_tokens") or 0),
+                prompt_tokens_details=PromptTokensDetailsWrapper(
+                    cached_tokens=cache_read, cache_creation_tokens=cache_write, text_tokens=text_input
+                ),
+                cache_creation_input_tokens=cache_write,
+                cache_read_input_tokens=cache_read,
+            ),
+            custom_llm_provider="anthropic",
+        )
+
+    costs: Final = tuple(
+        iteration_cost(iteration)
+        for iteration in getattr(usage, "iterations", None) or ()
+        if isinstance(iteration, Mapping) and iteration.get("type") == "advisor_message"
+    )
+    return sum(prompt for prompt, _ in costs), sum(completion for _, completion in costs)
 
 
 class _AnthropicServerToolUseProbe(LiteLLMBaseModel):
