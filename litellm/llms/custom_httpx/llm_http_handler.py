@@ -51,7 +51,7 @@ from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
-from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
+from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS, stored_control_options
 from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
@@ -779,6 +779,7 @@ class BaseLLMHTTPHandler:
         fake_stream = (
             fake_stream
             or optional_params.pop("fake_stream", False)
+            or stored_control_options(litellm_params).fake_stream is True
             or provider_config.should_fake_stream(model=model, custom_llm_provider=custom_llm_provider, stream=stream)
         )
 

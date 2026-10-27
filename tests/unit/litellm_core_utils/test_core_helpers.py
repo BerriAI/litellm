@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.core_helpers import (
     budget_reservation_from_metadata,
     drop_params_env_flag,
     drop_params_flag,
+    filter_internal_params,
     get_litellm_metadata_from_kwargs,
     get_or_create_metadata_bucket,
     get_parent_otel_span_from_kwargs,
@@ -192,6 +193,27 @@ class TestGetOrCreateMetadataBucket:
         assert bucket is request_data["litellm_metadata"]
 
 
+def test_filter_internal_params_drops_only_the_mcp_handler_keys() -> None:
+    rest_of_the_call: Final = {
+        "api_key": "sk-test",
+        "guardrails": ["default"],
+        "metadata": {"team": "search"},
+        "stream_chunk_size": 64,
+        "temperature": 0.2,
+    }
+
+    filtered: Final = filter_internal_params(
+        {
+            **rest_of_the_call,
+            "_skip_mcp_handler": True,
+            "skip_mcp_handler": True,
+            "mcp_handler_context": {"server": "docs"},
+        }
+    )
+
+    assert filtered == rest_of_the_call
+
+
 def test_reconstruct_model_name_prefers_deployment_value():
     """Ensure deployment metadata wins when reconstructing the model name."""
 
@@ -259,9 +281,7 @@ class TestMapFinishReasonAnthropic:
             ("content_filtered", "content_filter"),
         ],
     )
-    def test_anthropic_finish_reasons(
-        self, provider_reason: str, expected: str
-    ) -> None:
+    def test_anthropic_finish_reasons(self, provider_reason: str, expected: str) -> None:
         assert map_finish_reason(provider_reason) == expected
 
     def test_refusal(self):
@@ -333,9 +353,7 @@ class TestMapFinishReasonZhipu:
 
 
 class TestMapFinishReasonOpenAIPassthrough:
-    @pytest.mark.parametrize(
-        "reason", ["stop", "length", "tool_calls", "function_call", "content_filter"]
-    )
+    @pytest.mark.parametrize("reason", ["stop", "length", "tool_calls", "function_call", "content_filter"])
     def test_openai_values_pass_through(self, reason):
         assert map_finish_reason(reason) == reason
 
@@ -346,9 +364,7 @@ class TestMapFinishReasonGenericError:
         assert map_finish_reason("error") == "stop"
 
     def test_lowercase_error_does_not_warn(self, mocker):
-        warn = mocker.patch(
-            "litellm.litellm_core_utils.core_helpers.verbose_logger.warning"
-        )
+        warn = mocker.patch("litellm.litellm_core_utils.core_helpers.verbose_logger.warning")
         assert map_finish_reason("error") == "stop"
         warn.assert_not_called()
 
@@ -366,8 +382,7 @@ class TestFinishReasonMapOutputsAreValid:
         """Every value in _FINISH_REASON_MAP must be a valid OpenAI finish reason."""
         for provider_reason, openai_reason in _FINISH_REASON_MAP.items():
             assert openai_reason in VALID_OPENAI_FINISH_REASONS, (
-                f"Mapped value '{openai_reason}' (from '{provider_reason}') "
-                f"is not a valid OpenAI finish reason"
+                f"Mapped value '{openai_reason}' (from '{provider_reason}') is not a valid OpenAI finish reason"
             )
 
 
@@ -377,28 +392,18 @@ class TestRedactNestedMatchAndRegexKeys:
             "assessments": [
                 {
                     "sensitiveInformationPolicy": {
-                        "piiEntities": [
-                            {"type": "NAME", "match": "secret-name", "action": "BLOCKED"}
-                        ]
+                        "piiEntities": [{"type": "NAME", "match": "secret-name", "action": "BLOCKED"}]
                     },
-                    "wordPolicy": {
-                        "customWords": [{"match": "badword", "action": "BLOCKED"}]
-                    },
+                    "wordPolicy": {"customWords": [{"match": "badword", "action": "BLOCKED"}]},
                 }
             ],
             "regex": "should-redact-key-named-regex",
         }
         out = redact_nested_match_and_regex_keys(payload)
-        assert out["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0][
-            "match"
-        ] == "[REDACTED]"
-        assert out["assessments"][0]["wordPolicy"]["customWords"][0]["match"] == (
-            "[REDACTED]"
-        )
+        assert out["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0]["match"] == "[REDACTED]"
+        assert out["assessments"][0]["wordPolicy"]["customWords"][0]["match"] == ("[REDACTED]")
         assert out["regex"] == "[REDACTED]"
-        assert payload["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][
-            0
-        ]["match"] == "secret-name"
+        assert payload["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0]["match"] == "secret-name"
 
     def test_passes_through_none_and_str(self):
         assert redact_nested_match_and_regex_keys(None) is None
@@ -561,13 +566,17 @@ class TestIsExpectedClientError:
         assert is_expected_client_error(over_budget) is True
 
         litellm_limit = RateLimitError(
-            message="key over rpm", llm_provider="anthropic", model="claude-haiku-4-5",
+            message="key over rpm",
+            llm_provider="anthropic",
+            model="claude-haiku-4-5",
             category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
         )
         assert is_expected_client_error(litellm_limit) is True
 
         vendor_limit = RateLimitError(
-            message="rate limited upstream", llm_provider="anthropic", model="claude-haiku-4-5",
+            message="rate limited upstream",
+            llm_provider="anthropic",
+            model="claude-haiku-4-5",
             category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
         )
         assert is_expected_client_error(vendor_limit) is False
