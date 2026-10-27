@@ -480,6 +480,7 @@ REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_end_user_sp
 REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_agent_spend_update_buffer"
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_tag_spend_update_buffer"
 REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_window_spend_update_buffer"
+REDIS_TOOL_DISCOVERY_BUFFER_KEY: Final = "litellm_tool_discovery_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT: Final = get_env_int("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100)
 REDIS_SPEND_LOGS_BUFFER_KEY: Final = "litellm_spend_logs_buffer"
 REDIS_SPEND_LOGS_BUFFER_MAX_ROWS: Final = 100000
@@ -611,6 +612,7 @@ NON_LLM_CONNECTION_TIMEOUT: Final = get_env_int(
 )  # timeout for adjacent services (e.g. jwt auth)
 MAX_EXCEPTION_MESSAGE_LENGTH: Final = get_env_int("MAX_EXCEPTION_MESSAGE_LENGTH", 2000)
 MAX_STRING_LENGTH_PROMPT_IN_DB: Final = get_env_int("MAX_STRING_LENGTH_PROMPT_IN_DB", 2048)
+MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB: Final = 64 * 1024
 BEDROCK_MAX_POLICY_SIZE: Final = get_env_int("BEDROCK_MAX_POLICY_SIZE", 75)
 # One entry per distinct AWS credential-argument set. Per-user cost attribution passes the attributed
 # identity as aws_session_name, so this bounds how many attributed identities keep a cached STS session.
@@ -625,7 +627,7 @@ BEDROCK_MIN_THINKING_BUDGET_TOKENS: Final = get_env_int("BEDROCK_MIN_THINKING_BU
 # Anthropic's Messages API rejects thinking.budget_tokens < 1024.
 ANTHROPIC_MIN_THINKING_BUDGET_TOKENS: Final = 1024
 REPLICATE_POLLING_DELAY_SECONDS: Final = get_env_float("REPLICATE_POLLING_DELAY_SECONDS", 0.5)
-DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS: Final = get_env_int("DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS", 4096)
+DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS: Final = get_env_int("DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS", 128000)
 DEFAULT_OCI_CHAT_MAX_TOKENS: Final = 4096
 TOGETHER_AI_4_B: Final = get_env_int("TOGETHER_AI_4_B", 4)
 TOGETHER_AI_8_B: Final = get_env_int("TOGETHER_AI_8_B", 8)
@@ -860,6 +862,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "heroku",
     "oci",
     "morph",
+    "opencode_go",
     "lambda_ai",
     "inception",
     "vercel_ai_gateway",
@@ -1115,6 +1118,7 @@ openai_compatible_providers: Final[list[str]] = [
     "v0",
     "helicone",
     "morph",
+    "opencode_go",
     "lambda_ai",
     "inception",
     "hyperbolic",
@@ -1841,6 +1845,7 @@ LITELLM_UI_SESSION_DURATION: Final = os.getenv("LITELLM_UI_SESSION_DURATION", "2
 
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME: Final = "db_spend_update_job"
+TOOL_DISCOVERY_COMMIT_JOB_NAME: Final = "tool_discovery_commit_job"
 DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME: Final = "db_daily_tag_spend_update_job"
 PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME: Final = "prometheus_emit_budget_metrics"
 CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME: Final = "cloudzero_export_usage_data"

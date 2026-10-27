@@ -270,10 +270,9 @@ def _openai_choice_answer(question: DecisionsIRChoiceQuestion, answer: Decisions
         name=question.name,
         choice=answer.choice,
         probabilities=tuple(
-            OpenAIChoiceProbability(
-                value=option.value, probability=probabilities.get(systemone_choice_key(option.value), 0.0)
-            )
+            OpenAIChoiceProbability(value=option.value, probability=probabilities[systemone_choice_key(option.value)])
             for option in question.choices
+            if systemone_choice_key(option.value) in probabilities
         ),
         confidence=answer.confidence,
     )
@@ -285,10 +284,9 @@ def _openai_score_answer(question: DecisionsIRScoreQuestion, answer: DecisionsIR
         name=question.name,
         score=answer.score,
         probabilities=tuple(
-            OpenAIScoreProbability(
-                value=index, label=decisions_text(level.label), probability=probabilities.get(index, 0.0)
-            )
+            OpenAIScoreProbability(value=index, label=decisions_text(level.label), probability=probabilities[index])
             for index, level in enumerate(question.levels)
+            if index in probabilities
         ),
         confidence=answer.confidence,
     )
@@ -311,6 +309,7 @@ def _openai_answer(question: DecisionsIRQuestion, answer: DecisionsIRAnswer) -> 
 def ir_to_openai_response(
     response: DecisionsIRResponse, request: DecisionsIRRequest, requested_model: str
 ) -> OpenAIDecisionResponse:
+    usage: Final = response.usage or DecisionsIRUsage()
     return OpenAIDecisionResponse(
         model=response.model or requested_model,
         answers=tuple(
@@ -318,14 +317,14 @@ def ir_to_openai_response(
             for question, answer in zip(request.questions, response.answers, strict=True)
         ),
         usage=OpenAIDecisionUsage(
-            input_tokens=response.usage.input_tokens,
+            input_tokens=usage.input_tokens,
             input_tokens_details=OpenAIDecisionInputTokensDetails(
-                cached_tokens=response.usage.cached_tokens,
-                cache_write_tokens=response.usage.cache_write_tokens,
+                cached_tokens=usage.cached_tokens,
+                cache_write_tokens=usage.cache_write_tokens,
             ),
-            output_tokens=response.usage.output_tokens,
-            output_tokens_details=OpenAIDecisionOutputTokensDetails(reasoning_tokens=response.usage.reasoning_tokens),
-            total_tokens=response.usage.input_tokens + response.usage.output_tokens,
+            output_tokens=usage.output_tokens,
+            output_tokens_details=OpenAIDecisionOutputTokensDetails(reasoning_tokens=usage.reasoning_tokens),
+            total_tokens=usage.input_tokens + usage.output_tokens,
         ),
     )
 

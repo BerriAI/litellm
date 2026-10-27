@@ -165,8 +165,6 @@ class TraceSpan:
 
 
 class TraceSink:
-    """The Langfuse OTLP endpoint for both the app's own exporter and litellm's: keeps every span it receives."""
-
     def __init__(self) -> None:
         self.lock: Final = threading.Lock()
         self.spans: Final[list[TraceSpan]] = []  # mutable-ok: spans accumulate as both exporters deliver
@@ -183,7 +181,6 @@ class TraceSink:
         return Reply(body=b"")
 
     def traces(self, marker: str, calls: tuple[str, ...]) -> Mapping[str, tuple[TraceSpan, ...]]:
-        """Every span of each app trace, keyed by call, once the app root and a litellm generation both landed."""
         with self.lock:
             snapshot: Final = tuple(self.spans)
         roots: Final = {
@@ -205,7 +202,6 @@ class TraceSink:
 
 
 def _trace_values(spans: tuple[TraceSpan, ...], keys: tuple[str, ...]) -> Iterator[tuple[str, str]]:
-    """Every (key, value) pair of the given trace-level keys that any span of the trace carries."""
     for span in spans:
         yield from ((key, span.attributes[key]) for key in keys if key in span.attributes)
 
@@ -351,12 +347,16 @@ def test_sdk_call_inside_an_app_trace_leaves_the_app_trace_name_and_io_alone(
             output: Final = child.communicate(input=b"", timeout=60)[0].decode()
     assert sorted(call for call, spans in traces.items() if _logged(spans)) == sorted(calls), output
     for call, spans in traces.items():
-        app: Final = {
-            "langfuse.trace.name": f"checkout-{marker}-{call}",
-            "langfuse.trace.input": json.dumps({"cart": f"{marker}-{call}"}),
-            "langfuse.trace.output": json.dumps({"order": f"{marker}-{call}"}),
-        }
-        root: Final = next(span for span in spans if not span.parent_span_id)
-        assert {key: root.attributes.get(key) for key in app} == app, (call, root.attributes)
-        written: Final = set(_trace_values(spans, (*app, "langfuse.trace.tags")))
-        assert written == set(app.items()), (call, written)
+        _assert_the_app_trace_fields_stand(marker, call, spans)
+
+
+def _assert_the_app_trace_fields_stand(marker: str, call: str, spans: tuple[TraceSpan, ...]) -> None:
+    app: Final = {
+        "langfuse.trace.name": f"checkout-{marker}-{call}",
+        "langfuse.trace.input": json.dumps({"cart": f"{marker}-{call}"}),
+        "langfuse.trace.output": json.dumps({"order": f"{marker}-{call}"}),
+    }
+    root: Final = next(span for span in spans if not span.parent_span_id)
+    assert {key: root.attributes.get(key) for key in app} == app, (call, root.attributes)
+    written: Final = set(_trace_values(spans, (*app, "langfuse.trace.tags")))
+    assert written == set(app.items()), (call, written)

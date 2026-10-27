@@ -99,6 +99,8 @@ _CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names
     {"cookie", "proxy-authorization"}
 )
 _TRANSPORT_ONLY_CREDENTIAL_KEYS: Final = frozenset({"provider_specific_header", "headers", "api_key"})
+_REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_REQUEST_ENTRIES: Final = TypeAdapter(tuple[object, ...])
 
 # Matches any header of the form x-<something>-session-id (case-insensitive).
 # Excludes the two explicit litellm headers which are handled with higher priority.
@@ -289,6 +291,9 @@ _DESTINATION_ONLY_CALLBACK_VARS: Final[frozenset[str]] = frozenset({CAPTURE_MESS
 _CALLBACK_CREDENTIAL_KEYS: Final = frozenset(StandardCallbackDynamicParams.__annotations__) | frozenset(
     {TRUSTED_CALLBACK_VARS_FIELD}
 )
+_HEADERS_THAT_CANNOT_CHANGE_PROVIDER_AUTH: Final = frozenset(
+    {*(f"x-litellm-{key}" for key in StandardLoggingUserAPIKeyMetadata.__annotations__), *ANTHROPIC_API_HEADERS}
+)
 service_logger_obj: Final = ServiceLogging()  # used for tracking latency on OTEL
 # Bounded dedup for stale-alias warnings (FIFO eviction when over cap).
 _MAX_STALE_ALIAS_WARNING_KEYS: Final = 10_000
@@ -334,6 +339,7 @@ LITELLM_METADATA_ROUTES: Final = (
     "/v1/messages",
     "responses",
     "files",
+    "interactions",
 )
 
 LITELLM_TRACE_CONTROL_METADATA_FIELDS: Final = frozenset(
@@ -353,6 +359,7 @@ LITELLM_TRACE_CONTROL_METADATA_FIELDS: Final = frozenset(
 _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "weights",
     "_router_weights",
+    "_encrypted_content_affinity_pinned",
     "fallback_depth",
     "_target_order",
     "attempted_targets",
@@ -1415,13 +1422,14 @@ def clean_headers(
         Cleaned headers dict
     """
     from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+    from litellm.llms.chatgpt.common_utils import is_chatgpt_oauth_key
 
     clean_headers: Final = {}
     litellm_key_lower: Final = litellm_key_header_name.lower() if litellm_key_header_name is not None else None
     for header, value in headers.items():
         header_lower = header.lower()
 
-        if header_lower == "authorization" and is_anthropic_oauth_key(value):
+        if header_lower == "authorization" and (is_anthropic_oauth_key(value) or is_chatgpt_oauth_key(value)):
             if authenticated_with_header is None or authenticated_with_header.lower() != "authorization":
                 clean_headers[header] = value
             continue
@@ -1448,9 +1456,47 @@ def clean_headers(
     return clean_headers
 
 
+def _request_fields(value: object) -> Mapping[str, object]:
+    try:
+        return _REQUEST_FIELDS.validate_python(value)
+    except PydanticValidationError:
+        return MappingProxyType({})
+
+
+def _request_entries(value: object) -> tuple[object, ...]:
+    if value is None:
+        return ()
+    try:
+        return _REQUEST_ENTRIES.validate_python(value)
+    except PydanticValidationError:
+        return (value,)
+
+
+def _carries_a_caller_header(headers: object) -> bool:
+    return any(name.lower() not in _HEADERS_THAT_CANNOT_CHANGE_PROVIDER_AUTH for name in _request_fields(headers))
+
+
+def _caller_credential_fields(data: Mapping[str, object]) -> tuple[str, ...]:
+    """Names of the request fields through which the caller can change how the provider authenticates the call:
+    ``api_key``, ``organization``, and ``headers``, ``extra_headers`` or a ``provider_specific_header`` entry's
+    ``extra_headers`` that carry any header besides the key and user details the proxy adds under
+    ``add_user_information_to_llm_headers`` and the ``anthropic-version`` and ``anthropic-beta`` headers."""
+    carried: Final = {
+        "api_key": "api_key" in data,
+        "extra_headers": _carries_a_caller_header(data.get("extra_headers")),
+        "headers": _carries_a_caller_header(data.get("headers")),
+        "organization": "organization" in data,
+        "provider_specific_header": any(
+            _carries_a_caller_header(_request_fields(entry).get("extra_headers"))
+            for entry in _request_entries(data.get("provider_specific_header"))
+        ),
+    }
+    return tuple(name for name, sent in sorted(carried.items()) if sent)
+
+
 def _is_credential_header(header: str) -> bool:
     """Whether `header` carries a caller credential rather than request context."""
-    return header.lower() in _CREDENTIAL_HEADER_NAMES
+    return header.lower().removeprefix("x-pass-") in _CREDENTIAL_HEADER_NAMES
 
 
 def redact_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
@@ -2602,6 +2648,8 @@ async def add_litellm_data_to_request(
     data[_metadata_variable_name]["used_client_oauth_token"] = add_provider_specific_headers_to_request(
         data=data, headers=_headers
     )
+    caller_fields: Final = _caller_credential_fields(_REQUEST_FIELDS.validate_python(data))
+    data["proxy_server_request"]["caller_credential_fields"] = caller_fields  # rebind-ok: data is an out-param
 
     ## Cache Controls
     cache_control_header: Final = _headers.get("Cache-Control", None)
@@ -4276,7 +4324,11 @@ _ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
         LlmProviders.VERTEX_AI.value,
     )
 )
+_NATIVE_MESSAGES_ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
+    (LlmProviders.AZURE_AI.value, LlmProviders.DATABRICKS.value)
+)
 _ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_FORWARD_PROVIDERS))
+_CHATGPT_OAUTH_CREDENTIAL_PROVIDERS: Final = LlmProviders.CHATGPT.value
 
 
 def add_provider_specific_headers_to_request(
@@ -4284,6 +4336,7 @@ def add_provider_specific_headers_to_request(
     headers: Mapping[str, str],
 ) -> bool:
     from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+    from litellm.llms.chatgpt.common_utils import select_chatgpt_client_credential_headers
 
     anthropic_api_headers: Final = {header: headers[header] for header in ANTHROPIC_API_HEADERS if header in headers}
     anthropic_oauth_credential_headers: Final = {
@@ -4291,6 +4344,8 @@ def add_provider_specific_headers_to_request(
         for header, value in headers.items()
         if header.lower() == "authorization" and is_anthropic_oauth_key(value)
     }
+    chatgpt_oauth_credential_headers: Final = dict(select_chatgpt_client_credential_headers(headers))
+
     typesafe_danger_zone_headers: Final = {
         header: value
         for header, value in headers.items()
@@ -4304,7 +4359,7 @@ def add_provider_specific_headers_to_request(
                 custom_llm_provider=_ANTHROPIC_API_HEADER_PROVIDERS, extra_headers=anthropic_api_headers
             ),
             ProviderSpecificHeader(
-                custom_llm_provider=LlmProviders.DATABRICKS.value,
+                custom_llm_provider=_NATIVE_MESSAGES_ANTHROPIC_API_HEADER_PROVIDERS,
                 extra_headers=anthropic_api_headers,
                 native_anthropic_messages_only=True,
             ),
@@ -4315,13 +4370,17 @@ def add_provider_specific_headers_to_request(
             ProviderSpecificHeader(
                 custom_llm_provider=LlmProviders.TYPESAFE.value, extra_headers=typesafe_danger_zone_headers
             ),
+            ProviderSpecificHeader(
+                custom_llm_provider=_CHATGPT_OAUTH_CREDENTIAL_PROVIDERS,
+                extra_headers=chatgpt_oauth_credential_headers,
+            ),
         )
         if scoped_header["extra_headers"]
     ]
 
     if scoped_headers:
         data["provider_specific_header"] = scoped_headers[0] if len(scoped_headers) == 1 else scoped_headers
-    return bool(anthropic_oauth_credential_headers)
+    return bool(anthropic_oauth_credential_headers or chatgpt_oauth_credential_headers)
 
 
 def _add_otel_traceparent_to_data(data: dict, request: Request):

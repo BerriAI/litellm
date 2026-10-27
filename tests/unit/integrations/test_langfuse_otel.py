@@ -11,7 +11,7 @@ import pytest
 from openai.types.responses import ResponseFunctionToolCall
 from opentelemetry import trace
 from opentelemetry.context import Context
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import SpanLimits, TracerProvider
 from opentelemetry.trace import Span
 
 import litellm
@@ -523,6 +523,22 @@ class TestLangfuseOtelIntegration:
             # Endpoint assertion removed as side effect is gone
 
 
+def _exported_auth_headers(exporter):
+    import requests_mock
+    from opentelemetry.sdk.trace.export import SpanExportResult
+
+    with requests_mock.Mocker() as collector:
+        collector.post(requests_mock.ANY, status_code=200)
+        assert exporter.export(()) is SpanExportResult.SUCCESS
+    return [
+        (
+            request.url,
+            {name: request.headers[name] for name in ("Authorization", "x-langfuse-ingestion-version")},
+        )
+        for request in collector.request_history
+    ]
+
+
 class TestLangfuseOtelKeyDynamicConfig:
     """Key/team-scoped Langfuse credentials must define the full export target
     (OTLP endpoint + auth), not just auth headers on the init-time exporter."""
@@ -627,15 +643,15 @@ class TestLangfuseOtelKeyDynamicConfig:
 
         exporter = span_processors[0].span_exporter
         assert isinstance(exporter, OTLPSpanExporter)
-        assert exporter._endpoint == "https://langfuse.example.com/api/public/otel/v1/traces"
-
         import base64
 
         expected_auth = base64.b64encode(b"key_public:key_secret").decode()
-        assert exporter._headers == {
-            "Authorization": f"Basic {expected_auth}",
-            "x-langfuse-ingestion-version": "4",
-        }
+        assert _exported_auth_headers(exporter) == [
+            (
+                "https://langfuse.example.com/api/public/otel/v1/traces",
+                {"Authorization": f"Basic {expected_auth}", "x-langfuse-ingestion-version": "4"},
+            )
+        ]
 
     def test_key_dynamic_params_reuse_cached_provider(self):
         with self._clean_env():
@@ -688,10 +704,12 @@ class TestLangfuseOtelKeyDynamicConfig:
         provider = next(iter(logger._tracer_provider_cache.values())).provider
         exporter = provider._active_span_processor._span_processors[0].span_exporter
         assert isinstance(exporter, OTLPSpanExporter)
-        assert exporter._headers == {
-            "Authorization": f"Basic {secret}",
-            "x-langfuse-ingestion-version": "4",
-        }
+        assert _exported_auth_headers(exporter) == [
+            (
+                "https://langfuse.example.com/api/public/otel/v1/traces",
+                {"Authorization": f"Basic {secret}", "x-langfuse-ingestion-version": "4"},
+            )
+        ]
 
 
 class TestLangfuseOtelResponsesAPI:
@@ -923,7 +941,7 @@ class TestLangfuseOtelResponsesAPI:
             output_json = output_calls[0].args[2]
             output_data = json.loads(output_json)
 
-            # Verify output contains both reasoning summaries and the message
+            # Verify output contains reasoning and message
             assert isinstance(output_data, list)
             assert len(output_data) == 3
 
@@ -1306,8 +1324,6 @@ def _carrying(parent: Span, key: str = "metadata") -> Mapping[str, object]:
 
 
 class TestDerivedTraceFieldsOnlyOnTracesLitellmStarts:
-    """litellm derives a trace's name, io and tags only when its own span opened the trace."""
-
     def test_a_span_under_an_inbound_traceparent_joins_the_caller_trace(self) -> None:
         span: Final = _TRACER.start_span(
             "litellm_request", context=trace.set_span_in_context(trace.NonRecordingSpan(CALLER))
@@ -1395,6 +1411,9 @@ ERROR_KEYS: Final = (
     "error.stack_trace",
 )
 SPAN_ATTRIBUTE_LIMIT: Final = 128
+_LIMITED_TRACER: Final = TracerProvider(span_limits=SpanLimits(max_span_attributes=SPAN_ATTRIBUTE_LIMIT)).get_tracer(
+    "langfuse-otel-limit-tests"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1404,9 +1423,7 @@ class ExportedSpan:
 
 
 def _exported_full_span(filler: int, *, joins_caller: bool, failed: bool) -> ExportedSpan:
-    """A span already holding ``filler`` attributes, after langfuse_otel stamps a chat call and, when ``failed``, the
-    error attributes a failed call adds."""
-    span: Final = _TRACER.start_span(
+    span: Final = _LIMITED_TRACER.start_span(
         "litellm_request",
         context=trace.set_span_in_context(trace.NonRecordingSpan(CALLER)) if joins_caller else Context(),
     )
@@ -1420,9 +1437,6 @@ def _exported_full_span(filler: int, *, joins_caller: bool, failed: bool) -> Exp
 
 
 class TestDerivedTraceFieldsAtTheSpanAttributeLimit:
-    """The derived trace fields take only room a span has to spare, so a full span exports what it would without
-    them."""
-
     @pytest.mark.parametrize("failed", [False, True])
     @pytest.mark.parametrize("filler", range(SPAN_ATTRIBUTE_LIMIT - 30, SPAN_ATTRIBUTE_LIMIT + 1))
     def test_trace_fields_never_evict_or_drop_another_attribute(self, filler: int, failed: bool) -> None:

@@ -41,9 +41,6 @@ class LangfuseOpenTelemetryV2(OpenTelemetryV2):
         super().log_pre_api_call(model, messages, kwargs)
 
     def _derives_trace_name(self, root: "Span", kwargs: Mapping[str, object]) -> bool:
-        """Whether this call may name the request root after its call type: the call is not one litellm made for
-        its own features, this logger's provider started the root with no parent, and neither the caller nor an
-        earlier call in the request has named it."""
         return (
             internal_call_origin(None, kwargs) is None
             and isinstance(root, ReadableSpan)
