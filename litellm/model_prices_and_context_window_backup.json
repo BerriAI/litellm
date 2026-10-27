@@ -61658,7 +61658,12 @@
         "prompt_cache_min_tokens": 512,
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html",
         "thinking_always_on": true,
-        "supports_forced_tool_use": false
+        "supports_forced_tool_use": false,
+        "token_count_model": {
+            "model": "anthropic.claude-opus-5-5",
+            "litellm_provider": "bedrock_mantle",
+            "region": "us-east-1"
+        }
     },
     "bedrock_mantle/anthropic.claude-sonnet-5-5": {
         "bedrock_converse_supports_strict_tools": false,
@@ -68993,7 +68998,12 @@
         "supports_xhigh_reasoning_effort": true,
         "thinking_always_on": true,
         "supports_forced_tool_use": false,
-        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html",
+        "token_count_model": {
+            "model": "anthropic.claude-opus-5-5",
+            "litellm_provider": "bedrock_mantle",
+            "region": "us-gov-west-1"
+        }
     },
     "bedrock_mantle/us-gov-west-1/anthropic.claude-sonnet-5-5": {
         "bedrock_converse_supports_strict_tools": false,
