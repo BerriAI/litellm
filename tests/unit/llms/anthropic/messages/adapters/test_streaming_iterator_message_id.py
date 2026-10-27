@@ -7,9 +7,12 @@ to be keyed on that same value rather than on the provider's own completion id.
 
 import datetime
 import json
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from typing import Final
 
 import pytest
 import respx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.llms.anthropic.messages.adapters.handler import (
@@ -18,6 +21,153 @@ from litellm.llms.anthropic.messages.adapters.handler import (
 from litellm.llms.anthropic.messages.adapters.streaming_iterator import (
     AnthropicStreamWrapper,
 )
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.utils import ModelResponseStream
+
+
+_EVENT: Final = TypeAdapter(Mapping[str, object])
+_MESSAGES: Final = TypeAdapter(list[AllMessageValues])
+_TOOLS: Final = TypeAdapter(list[ChatCompletionToolParam])
+_BLOCK_PROMPTS: Final[tuple[list[AllMessageValues], ...]] = (
+    [{"role": "user", "content": [{"type": "text", "text": "Count every word. " * 100}]}],
+    [{"role": "tool", "content": [{"type": "text", "text": "Count every word. " * 100}], "tool_call_id": "call_1"}],
+    [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "https://image.example/test.png", "detail": "high"}}
+            ],
+        }
+    ],
+)
+
+
+def _assert_estimated_start_and_provider_final_usage(raw_events: Sequence[bytes], request_body: bytes) -> None:
+    request: Final = _EVENT.validate_json(request_body)
+    events: Final = tuple(_EVENT.validate_json(chunk.decode().split("data: ", 1)[1]) for chunk in raw_events)
+    start: Final = _EVENT.validate_python(
+        next(event for event in events if event["type"] == "message_start")["message"]
+    )
+    final: Final = next(event for event in events if event["type"] == "message_delta")
+    expected: Final = litellm.token_counter(
+        model="kimi-k2",
+        messages=_MESSAGES.validate_python(request["messages"]),
+        tools=_TOOLS.validate_python(request["tools"]),
+    )
+    assert expected > 0
+    assert start["usage"] == {
+        "input_tokens": expected,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+    }
+    assert final["usage"] == {"input_tokens": 3, "output_tokens": 4}
+
+
+def test_sync_message_start_estimates_prompt_without_replacing_provider_usage(respx_mock: respx.MockRouter) -> None:
+    stream: Final = LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
+        max_tokens=16,
+        messages=MESSAGES,
+        system="Reply with a short greeting.",
+        tools=[{"name": "greet", "description": "Greet a person", "input_schema": {"type": "object"}}],
+        model="groq/kimi-k2",
+        stream=True,
+        custom_llm_provider="groq",
+    )
+    _assert_estimated_start_and_provider_final_usage(list(stream), respx_mock.calls.last.request.content)
+
+
+@pytest.mark.asyncio
+async def test_async_message_start_estimates_prompt_without_replacing_provider_usage(
+    respx_mock: respx.MockRouter,
+) -> None:
+    stream: Final = await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
+        max_tokens=16,
+        messages=MESSAGES,
+        system="Reply with a short greeting.",
+        tools=[{"name": "greet", "description": "Greet a person", "input_schema": {"type": "object"}}],
+        model="groq/kimi-k2",
+        stream=True,
+        custom_llm_provider="groq",
+    )
+    raw: Final = [chunk async for chunk in stream]
+    _assert_estimated_start_and_provider_final_usage(raw, respx_mock.calls.last.request.content)
+
+
+class _FailingUpstream:
+    def __iter__(self) -> Iterator[ModelResponseStream]:
+        raise RuntimeError("upstream failed before its first chunk")
+
+    def __aiter__(self) -> AsyncIterator[ModelResponseStream]:
+        raise RuntimeError("upstream failed before its first chunk")
+
+
+@pytest.mark.parametrize("messages", _BLOCK_PROMPTS)
+def test_sync_initial_estimate_counts_content_blocks(
+    messages: list[AllMessageValues], respx_mock: respx.MockRouter
+) -> None:
+    image: Final = respx_mock.get("https://image.example/test.png").respond(503)
+    wrapper: Final = AnthropicStreamWrapper(iter([]), model="gpt-4o", completion_request={"messages": messages})
+    expected: Final = litellm.token_counter(model="gpt-4o", messages=messages, use_default_image_token_count=True)
+    first: Final = _EVENT.validate_python(next(wrapper))
+    message: Final = _EVENT.validate_python(first["message"])
+    assert message["usage"] == {
+        "input_tokens": expected,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+    }
+    assert not image.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("messages", _BLOCK_PROMPTS)
+async def test_async_initial_estimate_counts_content_blocks(
+    messages: list[AllMessageValues], respx_mock: respx.MockRouter
+) -> None:
+    image: Final = respx_mock.get("https://image.example/test.png").respond(503)
+    wrapper: Final = AnthropicStreamWrapper(iter([]), model="gpt-4o", completion_request={"messages": messages})
+    expected: Final = litellm.token_counter(model="gpt-4o", messages=messages, use_default_image_token_count=True)
+    first: Final = _EVENT.validate_python(await anext(wrapper))
+    message: Final = _EVENT.validate_python(first["message"])
+    assert message["usage"] == {
+        "input_tokens": expected,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+    }
+    assert not image.called
+
+
+@pytest.mark.parametrize("prompt", [{}, {"messages": []}, {"messages": "invalid"}])
+def test_sync_initial_estimate_fallback_does_not_consume_upstream(prompt: Mapping[str, object]) -> None:
+    wrapper: Final = AnthropicStreamWrapper(_FailingUpstream(), model="kimi-k2", completion_request=prompt)
+    first: Final = _EVENT.validate_python(next(wrapper))
+    message: Final = _EVENT.validate_python(first["message"])
+    assert message["usage"] == {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+    }
+    assert list(wrapper) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prompt", [{}, {"messages": []}, {"messages": "invalid"}])
+async def test_async_initial_estimate_fallback_does_not_consume_upstream(prompt: Mapping[str, object]) -> None:
+    wrapper: Final = AnthropicStreamWrapper(_FailingUpstream(), model="kimi-k2", completion_request=prompt)
+    first: Final = _EVENT.validate_python(await anext(wrapper))
+    message: Final = _EVENT.validate_python(first["message"])
+    assert message["usage"] == {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+    }
+    with pytest.raises(RuntimeError, match="upstream failed before its first chunk"):
+        [chunk async for chunk in wrapper]
+
 
 MESSAGES = [{"role": "user", "content": "hello"}]
 

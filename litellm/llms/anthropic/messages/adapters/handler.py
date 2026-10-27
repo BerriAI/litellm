@@ -806,6 +806,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=True,
+                completion_request=completion_kwargs,
                 litellm_logging_obj=logging_obj,
                 safeguards_evaluator=safeguards_evaluator,
             )
@@ -952,6 +953,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=False,
+                completion_request=completion_kwargs,
                 litellm_logging_obj=logging_obj,
             )
             if transformed_stream is not None:

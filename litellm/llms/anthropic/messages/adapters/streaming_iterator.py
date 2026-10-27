@@ -22,6 +22,7 @@ from typing import (
 from pydantic import TypeAdapter
 from typing_extensions import assert_never
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.exceptions import ContextWindowExceededError, MidStreamFallbackError
@@ -41,19 +42,25 @@ from litellm.types.llms.anthropic import (
     UsageDelta,
     UsageIteration,
 )
-from litellm.types.llms.openai import ChatCompletionRedactedThinkingBlock, ChatCompletionThinkingBlock
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionRedactedThinkingBlock,
+    ChatCompletionThinkingBlock,
+    ChatCompletionToolParam,
+)
 from litellm.types.utils import AdapterCompletionStreamWrapper, ChatCompletionDeltaToolCall, Delta, Function
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
     from litellm.llms.anthropic.messages.safeguards import SafeguardsEvaluator
-    from litellm.types.llms.openai import AllMessageValues
     from litellm.types.utils import ModelResponseStream
 
 
 _STREAMING_DELTA_TYPES: Final = frozenset(get_args(StreamingContentBlockDeltaType))
 _SSE_EVENT: Final = TypeAdapter(Mapping[str, object])
 _THINKING_BLOCK: Final = TypeAdapter(ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock)
+_PROMPT_MESSAGES: Final = TypeAdapter(list[AllMessageValues])
+_PROMPT_TOOLS: Final = TypeAdapter(list[ChatCompletionToolParam])
 
 
 class _UsageDeltaWithIterations(UsageDelta, total=False):
@@ -548,6 +555,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         iterations_usage: list[UsageIteration] | None = None,
         litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
         safeguards_evaluator: "SafeguardsEvaluator | None" = None,
+        completion_request: Mapping[str, object] | None = None,
     ):
         # Wrap the upstream stream so chunks that carry both content and a
         # finish_reason (fake-streamed providers) are split into two — see
@@ -556,6 +564,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         super().__init__(combined_chunk_splitter)
         self._combined_chunk_splitter: Final = combined_chunk_splitter
         self.model = model
+        self.completion_request: Final = completion_request
         self._message_id: str = f"msg_{uuid.uuid4()}"
         if litellm_logging_obj is not None:
             litellm_logging_obj.record_streamed_anthropic_message_id(self._message_id)
@@ -752,24 +761,37 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
     def _create_initial_usage_delta(self) -> UsageDelta:
         """
-        Create the initial UsageDelta for the message_start event.
+        Estimate prompt tokens for message_start without consuming upstream chunks.
 
-        Initializes cache token fields (cache_creation_input_tokens, cache_read_input_tokens)
-        to 0 to indicate to clients (like Claude Code) that prompt caching is supported.
-
-        The actual cache token values will be provided in the message_delta event at the
-        end of the stream, since Bedrock Converse API only returns usage data in the final
-        response chunk.
-
-        Returns:
-            UsageDelta with all token counts initialized to 0.
+        Output and cache counts start at zero. Provider usage in message_delta
+        remains authoritative. Failed estimates fall back to zero.
         """
         return UsageDelta(
-            input_tokens=0,
+            input_tokens=self._estimate_initial_input_tokens(),
             output_tokens=0,
             cache_creation_input_tokens=0,
             cache_read_input_tokens=0,
         )
+
+    def _estimate_initial_input_tokens(self) -> int:
+        try:
+            request: Final = self.completion_request or {}
+            messages: Final = _PROMPT_MESSAGES.validate_python(request.get("messages", self.messages))
+            if not messages:
+                return 0
+            materialized_messages: Final = cast(  # cast-ok: JSON-mode serialization preserves validated message types and materializes iterable content
+                list[AllMessageValues], _PROMPT_MESSAGES.dump_python(messages, mode="json")
+            )
+            model: Final = request.get("model", self.model)
+            tools: Final = request.get("tools")
+            return litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]  # token_counter's public signature is partially untyped
+                model=model if isinstance(model, str) else self.model,
+                messages=materialized_messages,
+                tools=_PROMPT_TOOLS.validate_python(tools) if tools is not None else None,
+                use_default_image_token_count=True,
+            )
+        except Exception:  # noqa: BLE001  # prompt estimation must not interrupt the stream
+            return 0
 
     def __next__(self):
         from .transformation import LiteLLMAnthropicMessagesAdapter
