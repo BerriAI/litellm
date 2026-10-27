@@ -33,6 +33,7 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
+    bedrock_invoke_guardrail_headers,
 )
 from litellm.llms.bedrock.common_utils import (
     BedrockError,
@@ -151,8 +152,14 @@ class AmazonAnthropicClaudeMessagesConfig(
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict, str | None]:
+        raw_guardrail_config: Final = litellm_params.get("guardrailConfig")  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # litellm_params is an untyped dict param
+        guardrail_headers: Final = (
+            ()
+            if raw_guardrail_config is None
+            else tuple(bedrock_invoke_guardrail_headers(raw_guardrail_config).items())  # pyright: ignore[reportUnknownArgumentType]  # read from the untyped dict param
+        )
         owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
-        return merge_bedrock_invoke_headers(headers, (), metadata_headers, owned_names), api_base
+        return merge_bedrock_invoke_headers(headers, guardrail_headers, metadata_headers, owned_names), api_base  # pyright: ignore[reportUnknownArgumentType]  # headers is an untyped dict param
 
     def sign_request(
         self,

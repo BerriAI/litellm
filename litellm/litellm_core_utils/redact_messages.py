@@ -14,7 +14,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final
 
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import REDACTED_BY_LITELLM
@@ -120,11 +120,55 @@ def _redacted_streaming_response_copy(streaming_response: object) -> object:
     return _redact_streaming_response(redacted_response)
 
 
+BEDROCK_GUARDRAIL_TRACE_FIELDS: Final = ("trace", "amazon-bedrock-trace")
+_MATCHED_TEXT_KEYS: Final = frozenset({"match", "regex"})
+_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def _without_matched_text(trace: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    redacted: Final = dict(copy.deepcopy(trace))
+    stack: Final[list[JsonValue]] = [redacted]  # mutable-ok: iterative walk, recursive_detector bans recursion here
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            for key in _MATCHED_TEXT_KEYS & node.keys():
+                node[key] = "[REDACTED]"
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return redacted
+
+
+def _redacted_bedrock_trace(trace: object) -> object:
+    try:
+        return _without_matched_text(_JSON_OBJECT.validate_python(trace))
+    except ValidationError:
+        return trace
+
+
+def _redact_bedrock_guardrail_trace(response: object) -> None:
+    """A Bedrock guardrail trace echoes the matched text of its sensitive-information and word findings back."""
+    mapping: Final = _as_mapping(response)
+    if isinstance(response, dict):
+        traces: Final = {
+            field: _redacted_bedrock_trace(value)
+            for field, value in (mapping or {}).items()
+            if field in BEDROCK_GUARDRAIL_TRACE_FIELDS
+        }
+        response.update(traces)
+        return
+    for field, value in ((name, getattr(response, name, None)) for name in BEDROCK_GUARDRAIL_TRACE_FIELDS):
+        if value is not None:
+            setattr(response, field, _redacted_bedrock_trace(value))
+
+
 def _redact_streaming_response(streaming_response):
     if hasattr(streaming_response, "choices"):
         for choice in streaming_response.choices:
             _redact_choice_content(choice)
         redact_vertex_ai_metadata_from_logged_object(streaming_response)
+        if isinstance(streaming_response, litellm.ModelResponse):
+            _redact_bedrock_guardrail_trace(streaming_response)
     elif isinstance(streaming_response, litellm.ResponsesAPIResponse):
         return perform_redaction({}, streaming_response)
     elif hasattr(streaming_response, "output"):
@@ -351,6 +395,7 @@ def _redact_standard_logging_object(
             if isinstance(response.get("choices"), list):
                 _redact_model_response_dict_choices(response["choices"], redacted_str)
             redact_vertex_ai_metadata_from_logged_object(response)
+            _redact_bedrock_guardrail_trace(response)
         elif isinstance(response, str):
             standard_logging_object["response"] = redacted_str
         else:
@@ -523,11 +568,13 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
                 for choice in _result.choices:
                     _redact_choice_content(choice)
             redact_vertex_ai_metadata_from_logged_object(_result)
+            _redact_bedrock_guardrail_trace(_result)
         elif isinstance(_result, dict) and "choices" in _result:
             # Handle dict representation of ModelResponse (e.g., from model_dump())
             if _result.get("choices") is not None:
                 _redact_model_response_dict_choices(_result["choices"], REDACTED_BY_LITELLM)
             redact_vertex_ai_metadata_from_logged_object(_result)
+            _redact_bedrock_guardrail_trace(_result)
         elif isinstance(_result, dict) and "output" in _result:
             return _redacted_responses_api_response(_result, redact_instructions=redact_streaming_responses)
         elif isinstance(_result, litellm.ResponsesAPIResponse):
