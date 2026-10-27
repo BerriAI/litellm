@@ -4,8 +4,8 @@ from typing import Final
 
 from fastapi import APIRouter
 
-from litellm.proxy._experimental.mcp_server.stdio_gate import is_mcp_stdio_enabled
 from litellm.proxy.common_utils.html_forms.default_credentials_hint import should_hide_default_credentials_hint
+from litellm.proxy.mcp_server.stdio_gate import is_mcp_stdio_enabled
 from litellm.types.proxy.discovery_endpoints.ui_discovery_endpoints import (
     UiDiscoveryEndpoints,
 )
@@ -33,9 +33,15 @@ async def get_ui_config():
 
     is_control_plane: Final = len(proxy_config.worker_registry) > 0
 
+    raw_gateway_base_url: Final[str | None] = os.getenv("LITELLM_GATEWAY_URL")
+    gateway_base_url: Final[str | None] = (
+        raw_gateway_base_url.strip().rstrip("/") or None if raw_gateway_base_url is not None else None
+    )
+
     return UiDiscoveryEndpoints(
         server_root_path=get_server_root_path(),
         proxy_base_url=get_proxy_base_url(),
+        gateway_base_url=gateway_base_url,
         auto_redirect_to_sso=sso_configured and auto_redirect_ui_login_to_sso,
         admin_ui_disabled=admin_ui_disabled,
         sso_configured=sso_configured,

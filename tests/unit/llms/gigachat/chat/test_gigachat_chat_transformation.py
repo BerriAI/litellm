@@ -88,8 +88,7 @@ class TestGetCompleteUrl:
             litellm_params={},
             stream=False,
         )
-        # get_api_base passes the value through without stripping the slash
-        assert url == "https://custom.example.com//chat/completions"
+        assert url == "https://custom.example.com/chat/completions"
 
     def test_uses_api_base_from_get_api_base_when_none(self):
         url = self.config.get_complete_url(

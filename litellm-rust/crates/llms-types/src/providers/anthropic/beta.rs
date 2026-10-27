@@ -195,9 +195,10 @@ impl AnthropicBeta {
 
     fn rejected_by(&self) -> &'static [BetaProvider] {
         match self {
-            Self::AdvancedToolUse20251120 | Self::ContextManagement20250627 => {
-                &[BetaProvider::BedrockConverse]
+            Self::AdvancedToolUse20251120 => {
+                &[BetaProvider::BedrockConverse, BetaProvider::Databricks]
             }
+            Self::ContextManagement20250627 => &[BetaProvider::BedrockConverse],
             Self::AdvisorTool20260301 | Self::Compact20260904 => &[
                 BetaProvider::AzureAi,
                 BetaProvider::BedrockConverse,
@@ -231,12 +232,14 @@ impl AnthropicBeta {
                 BetaProvider::Bedrock,
                 BetaProvider::BedrockMantle,
                 BetaProvider::VertexAi,
+                BetaProvider::Databricks,
             ],
             Self::Compact20260112 => &[BetaProvider::AzureAi, BetaProvider::BedrockConverse],
-            Self::ComputerUse20250124 | Self::ComputerUse20251124 | Self::Context1m20250807 => &[],
-            Self::DangerousToolUse20260903 => {
-                &[BetaProvider::BedrockConverse, BetaProvider::Databricks]
-            }
+            Self::ComputerUse20250124
+            | Self::ComputerUse20251124
+            | Self::Context1m20250807
+            | Self::ThinkingBindingControls20260801 => &[],
+            Self::DangerousToolUse20260903 => &[BetaProvider::BedrockConverse],
             Self::Effort20251124 => &[BetaProvider::VertexAi],
             Self::FastMode20260201 | Self::Oauth20250420 => &[
                 BetaProvider::AzureAi,
@@ -244,6 +247,7 @@ impl AnthropicBeta {
                 BetaProvider::Bedrock,
                 BetaProvider::BedrockMantle,
                 BetaProvider::VertexAi,
+                BetaProvider::Databricks,
             ],
             Self::FineGrainedToolStreaming20250514 => {
                 &[BetaProvider::AzureAi, BetaProvider::VertexAi]
@@ -271,7 +275,6 @@ impl AnthropicBeta {
                 BetaProvider::Databricks,
             ],
             Self::StructuredOutputs20251113 => &[BetaProvider::Bedrock, BetaProvider::VertexAi],
-            Self::ThinkingBindingControls20260801 => &[BetaProvider::AzureAi],
             Self::ThinkingDisplayUpdates20260818 => &[BetaProvider::Databricks],
             Self::ToolSearchTool20251019 => &[
                 BetaProvider::Anthropic,

@@ -12,8 +12,10 @@ from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.prompt_templates.common_utils import schema_fragment_ref
+
 # anthropic SDK ``lib/_parse/_transform.py`` SupportedStringFormats, checked 2026-10-13
-_SUPPORTED_STRING_FORMATS: Final = frozenset(
+NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
     {"date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid"}
 )
 
@@ -106,15 +108,31 @@ def _note_value(value: object) -> object:
     return value if value is None or isinstance(value, (str, int, float)) else json.dumps(value)
 
 
+def _keeps_min_items(schema: Mapping[str, object]) -> bool:
+    """Claude's grammar enforces ``minItems`` of 0 or 1 and rejects anything larger."""
+    value: Final = schema.get("minItems")
+    return isinstance(value, int) and not isinstance(value, bool) and value in (0, 1)
+
+
+def _dropped_constraints(schema: Mapping[str, object]) -> frozenset[str]:
+    return frozenset(_CONSTRAINT_NOTES) - ({"minItems"} if _keeps_min_items(schema) else frozenset())
+
+
 def _constraint_notes(schema: Mapping[str, object]) -> Iterator[str]:
+    dropped: Final = _dropped_constraints(schema)
     for key, label in _CONSTRAINT_NOTES.items():
-        if schema.get(key, False) is not False:
+        if key in dropped and schema.get(key, False) is not False:
             yield label.format(_note_value(schema[key]))
 
 
-def _unsupported_format(schema: Mapping[str, object]) -> str | None:
+def _may_be_string(declared_type: object) -> bool:
+    return declared_type is None or "string" in _declared_types(declared_type)
+
+
+def _unsupported_format(schema: Mapping[str, object], declared_type: object) -> str | None:
+    """Claude rejects string formats outside its list, while numeric formats such as ``int64`` pass through."""
     value: Final = schema.get("format")
-    if isinstance(value, str) and value not in _SUPPORTED_STRING_FORMATS:
+    if _may_be_string(declared_type) and isinstance(value, str) and value not in NATIVE_OUTPUT_STRING_FORMATS:
         return value
     return None
 
@@ -159,6 +177,8 @@ def _shape_nested(key: str, value: object) -> object:
         return _shape_if_schema(value)
     if key == "allOf":
         return _shape_each(value)
+    if key == "$ref" and isinstance(value, str):
+        return schema_fragment_ref(value)
     return value
 
 
@@ -172,13 +192,13 @@ def shape_claude_output_schema(schema: Mapping[str, object]) -> dict[str, object
     drops_type: Final = _enum_conflicts_with_declared_type(schema)
     declared_type: Final = None if drops_type else schema.get("type")
     object_fields: Final = _object_fields(declared_type, schema)
-    unsupported_format: Final = _unsupported_format(schema)
+    unsupported_format: Final = _unsupported_format(schema, declared_type)
     notes: Final = (
         *_constraint_notes(schema),
         *(() if unsupported_format is None else (f"format: {unsupported_format}",)),
     )
     dropped: Final = frozenset(
-        (*_CONSTRAINT_NOTES, "anyOf", "oneOf")
+        (*_dropped_constraints(schema), "anyOf", "oneOf")
         + (("type",) if drops_type else ())
         + (("additionalProperties",) if object_fields else ())
         + (("description",) if notes else ())

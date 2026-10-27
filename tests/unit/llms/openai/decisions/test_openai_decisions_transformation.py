@@ -116,6 +116,25 @@ def test_answers_openai_did_not_return_are_refusals() -> None:
     assert [answer.name for answer in response.answers] == ["damaged", None, "severity", "fraud"]
 
 
+def test_a_box_answer_from_openai_keeps_its_box_instead_of_becoming_a_refusal() -> None:
+    request: Final = {
+        "input": _OPENAI_REQUEST["input"],
+        "questions": [{"type": "box", "name": "crack", "instructions": "Where is the crack?"}],
+    }
+    box: Final = {"top": 0.1, "bottom": 0.4, "left": 0.2, "right": 0.6}
+    payload: Final = {**_OPENAI_RESPONSE, "answers": [{"type": "box", "name": "crack", "box": box, "confidence": 0.7}]}
+    ir: Final = _openai_ir(request)
+
+    response: Final = ir_to_openai_response(OpenAIDecisionsConfig().parse_response(payload, ir), ir, "requested")
+
+    assert response.answers[0].model_dump(mode="json") == {
+        "type": "box",
+        "name": "crack",
+        "box": box,
+        "confidence": 0.7,
+    }
+
+
 def test_a_systemone_request_becomes_an_openai_request_with_questions_named_by_their_keys() -> None:
     request: Final = _SYSTEMONE_BODY.validate_python(
         {
@@ -179,6 +198,32 @@ def test_systemone_questions_without_instructions_become_valid_openai_questions(
     body: Final = ir_to_openai_request("gpt-6-luna", systemone_request_to_ir(request))
 
     assert all(question.instructions for question in _OPENAI_BODY.validate_python(body).questions)
+
+
+def test_systemone_images_reach_openai_as_input_images_ahead_of_the_state() -> None:
+    request: Final = _SYSTEMONE_BODY.validate_python(
+        {
+            "state": {"ticket": 1234},
+            "questions": {"damaged": {"type": "noul", "instructions": "Is the item damaged?"}},
+            "images": ["data:image/png;base64,AA==", {"content_type": "image/webp", "base64": "BB=="}],
+        }
+    )
+
+    assert ir_to_openai_request("gpt-6-luna", systemone_request_to_ir(request)) == {
+        "model": "gpt-6-luna",
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_image", "image_url": "data:image/png;base64,AA=="},
+                    {"type": "input_image", "image_url": "data:image/webp;base64,BB=="},
+                    {"type": "input_text", "text": '{"ticket": 1234}'},
+                ],
+            }
+        ],
+        "questions": [{"type": "predicate", "name": "damaged", "instructions": "Is the item damaged?"}],
+    }
 
 
 @pytest.mark.parametrize(
@@ -254,3 +299,55 @@ def test_an_openai_response_becomes_systemone_answers_with_the_callers_score_lab
     }
     assert response.usage is not None
     assert (response.usage.cached_tokens, response.usage.cache_write_tokens) == (256, 64)
+
+
+@pytest.mark.parametrize(
+    ("choice_probabilities", "score_probabilities"),
+    (
+        ((), ()),
+        (
+            ({"value": True, "probability": 0.8},),
+            ({"value": 1, "label": "major", "probability": 0.8},),
+        ),
+        (
+            (
+                {"value": True, "probability": 0.0},
+                {"value": "escalate", "probability": 0.8},
+            ),
+            (
+                {"value": 0, "label": "minor", "probability": 0.0},
+                {"value": 1, "label": "major", "probability": 0.8},
+            ),
+        ),
+        (
+            ({"value": True, "probability": 0.0},),
+            ({"value": 1, "label": "major", "probability": 0.0},),
+        ),
+    ),
+    ids=("empty", "missing", "explicit_zero", "only_zero"),
+)
+def test_openai_probabilities_preserve_missing_entries_and_explicit_zeros(
+    choice_probabilities: tuple[Mapping[str, object], ...],
+    score_probabilities: tuple[Mapping[str, object], ...],
+) -> None:
+    ir: Final = _openai_ir(_OPENAI_REQUEST)
+    payload: Final = {
+        **_OPENAI_RESPONSE,
+        "answers": [
+            _PREDICATE_ANSWER,
+            {**_CHOICE_ANSWER, "probabilities": choice_probabilities},
+            {
+                "type": "score",
+                "name": "severity",
+                "score": 1,
+                "confidence": 0.8,
+                "probabilities": score_probabilities,
+            },
+            _REFUSAL_ANSWER,
+        ],
+    }
+
+    response: Final = ir_to_openai_response(OpenAIDecisionsConfig().parse_response(payload, ir), ir, "requested")
+
+    assert response.answers[1].model_dump(mode="json")["probabilities"] == list(choice_probabilities)
+    assert response.answers[2].model_dump(mode="json")["probabilities"] == list(score_probabilities)

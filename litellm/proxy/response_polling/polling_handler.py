@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid4
@@ -14,6 +16,8 @@ from litellm.caching.redis_cache import RedisCache
 from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStatus
 
 _RESPONSE_POLLING_TARGET: Final = "response_polling"
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_JSON_LIST: Final = TypeAdapter(list[object])
 
 
 class ResponsePollingHandler:
@@ -153,7 +157,7 @@ class ResponsePollingHandler:
             return
 
         # Parse existing ResponsesAPIResponse from cache
-        state: Final = json.loads(cached_state)
+        state: Final = _JSON_OBJECT.validate_python(json.loads(cached_state))
 
         # Update status (using OpenAI native status values)
         if status:
@@ -215,7 +219,7 @@ class ResponsePollingHandler:
             ttl=self.ttl,
         )
 
-        output_count: Final = len(state.get("output", []))
+        output_count: Final = len(_JSON_LIST.validate_python(state.get("output", [])))
         verbose_proxy_logger.debug(
             "Updated polling state for %s: status=%s, output_items=%s", polling_id, state["status"], output_count
         )
@@ -230,7 +234,7 @@ class ResponsePollingHandler:
         cached_state: Final = await self.redis_cache.async_get_cache(cache_key)
 
         if cached_state:
-            return json.loads(cached_state)
+            return _JSON_OBJECT.validate_python(json.loads(cached_state))
 
         return None
 
@@ -304,10 +308,7 @@ def should_use_polling_for_request(
         # Otherwise, check ALL deployments for this model_name in router
         elif llm_router is not None:
             try:
-                # Get all deployment indices for this model name
-                indices: Final = llm_router.model_name_to_deployment_indices.get(model, [])
-                for idx in indices:
-                    deployment_dict = llm_router.model_list[idx]
+                for deployment_dict in llm_router.deployments_named(model) or ():
                     litellm_params = deployment_dict.get("litellm_params", {})
 
                     # Check custom_llm_provider first

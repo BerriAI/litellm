@@ -2,38 +2,45 @@
 
 import datetime
 import json
+from collections.abc import Mapping, Sequence
 from contextlib import ExitStack
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 from unittest.mock import patch as patch_ctx
 
 import pytest
 from fastapi import HTTPException
 
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.ptu_pricing import ptu_terms
+from litellm.llms.gemini.cost_calculator import cost_per_web_search_request
 from litellm.proxy._types import (
     LiteLLM_ProxyModelTable,
+    LiteLLM_TeamTable,
     LitellmUserRoles,
+    ProxyException,
     ReconcileOutcome,
     UserAPIKeyAuth,
 )
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.proxy.auth.auth_checks import is_model_cost_zero
-from litellm.llms.gemini.cost_calculator import cost_per_web_search_request
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _PTU_ZEROED_PRICING_FIELDS,
     _SEARCH_CONTEXT_SIZES,
     _is_nonzero_price,
     _merged_ptu_model_info,
-    _update_team_model_in_db,
     _ptu_priced_deployment,
     _ptu_zeroed_pricing,
     _raise_if_ptu_cost_attribution_disabled,
+    _raise_if_ptu_share_teams_missing,
+    _update_team_model_in_db,
     _validate_ptu_model_info,
     add_new_model,
     update_db_model,
 )
 from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
-from litellm.types.utils import PromptTokensDetailsWrapper
+from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
 from litellm.router import Router
+from litellm.types.proxy.management_endpoints.model_management_endpoints import PatchModelRequest
 from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
     Deployment,
@@ -42,7 +49,7 @@ from litellm.types.router import (
     updateDeployment,
     updateLiteLLMParams,
 )
-from litellm.types.utils import Usage
+from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
 
 async def _passthrough_row(update_data):
@@ -113,6 +120,21 @@ def test_model_info_allows_partial_delta_for_patch():
     info = ModelInfo(id="x", ptu_count=5)
     assert info.ptu_count == 5
     assert info.cost_per_ptu_per_hour is None
+
+
+@pytest.mark.parametrize("share", [True, "2", 2.5, float("inf")])
+def test_model_info_rejects_a_share_that_is_not_a_whole_number(share):
+    with pytest.raises(ValueError, match="ptu_shares"):
+        ModelInfo(id="x", ptu_shares={"team-a": share})
+
+
+def test_model_info_keeps_whole_number_shares_and_refuses_a_fractional_count():
+    assert ModelInfo(id="x", ptu_shares={"team-a": 2}).ptu_shares == {"team-a": 2}
+    written_as_float = ModelInfo(id="x", ptu_shares={"team-a": 2.0}).ptu_shares
+    assert written_as_float == {"team-a": 2}
+    assert written_as_float is not None and type(written_as_float["team-a"]) is int
+    with pytest.raises(ValueError, match="ptu_count"):
+        ModelInfo(id="x", ptu_count=100.5)
 
 
 def test_validate_helper_no_ptu_is_noop():
@@ -639,7 +661,7 @@ class TestAddNewModelPtuGate:
         monkeypatch.delenv(PTU_COST_ATTRIBUTION_ENV_VAR, raising=False)
 
     @staticmethod
-    def _patched_proxy(model_id: str):
+    def _patched_proxy(model_id: str, prisma_client: MagicMock | None = None):
         """Patch everything /model/new touches except the PTU gate, and hand back the DB writers."""
         db_row = LiteLLM_ProxyModelTable(
             model_id=model_id,
@@ -666,7 +688,7 @@ class TestAddNewModelPtuGate:
         proxy_server = "litellm.proxy.proxy_server"
         endpoints = "litellm.proxy.management_endpoints.model_management_endpoints"
         return (add_model_to_db, add_team_model_to_db), [
-            patch(f"{proxy_server}.prisma_client", MagicMock()),
+            patch(f"{proxy_server}.prisma_client", prisma_client if prisma_client is not None else MagicMock()),
             patch(f"{proxy_server}.store_model_in_db", True),
             patch(f"{proxy_server}.proxy_config", mock_proxy_config),
             patch(f"{proxy_server}.proxy_logging_obj", MagicMock()),
@@ -1184,6 +1206,80 @@ class TestPtuDeploymentsAreNotBilledPerToken:
         for blob in ("model_info", "litellm_params"):
             assert json.loads(written[blob])["input_cost_per_token"] == 0, blob
 
+    @pytest.mark.parametrize("field,activating", [
+        ("input_cost_per_token", False), ("cache_read_input_token_cost", False),
+        ("input_cost_per_second", False), ("tiered_pricing", False), ("search_context_cost_per_query", False),
+        ("input_cost_per_token", True), ("cache_read_input_token_cost", True),
+        ("tiered_pricing", True), ("search_context_cost_per_query", True),
+    ])
+    def test_removing_ptu_managed_pricing_is_rejected(self, field: str, activating: bool) -> None:
+        original: Final = _deployment_without_ptu() if activating else _deployment_with_stored_ptu()
+        configured: Final = original.model_copy(update={
+            "litellm_params": original.litellm_params.model_copy(update={"input_cost_per_second": 0.0}),
+        })
+        with pytest.raises(HTTPException) as exc:
+            update_db_model(
+                db_model=configured if activating else _ptu_priced_deployment(configured),
+                updated_patch=PatchModelRequest(
+                    litellm_params_to_remove=(field,),
+                    model_info=_deployment_with_stored_ptu().model_info if activating else None,
+                ),
+            )
+        assert exc.value.status_code == 400
+        assert field in exc.value.detail
+        assert "ptu_count and cost_per_ptu_per_hour" in exc.value.detail
+
+    @pytest.mark.parametrize("mode,field", [
+        ("extra", "temperature"), ("disabled", "input_cost_per_token"),
+        ("disabled", "input_cost_per_second"), ("cleared", "input_cost_per_token"),
+        ("cleared", "input_cost_per_second"), ("activating", "input_cost_per_second"),
+        ("ordinary", "input_cost_per_second"),
+        ("ordinary", "input_cost_per_token_above_123k_tokens"),
+        ("ordinary", "regional_endpoint_uplift_multiplier"),
+    ])
+    def test_allowed_ptu_removals_stay_absent_after_another_save(
+        self, monkeypatch: pytest.MonkeyPatch, mode: str, field: str
+    ) -> None:
+        original: Final = (
+            _deployment_without_ptu() if mode in ("activating", "ordinary")
+            else _ptu_priced_deployment(_deployment_with_stored_ptu())
+        )
+        rate: Final = 0.5 if mode in ("activating", "ordinary") else 0.0
+        price_field: Final = field if mode == "ordinary" else "input_cost_per_second"
+        configured: Final = original.model_copy(update={
+            "litellm_params": original.litellm_params.model_copy(update={
+                "temperature": 0.4, price_field: rate,
+            }),
+            "model_info": original.model_info.model_copy(update={price_field: rate}),
+        })
+        if mode == "disabled":
+            monkeypatch.delenv(PTU_COST_ATTRIBUTION_ENV_VAR)
+        incoming_info: Final = (
+            ModelInfo(ptu_count=None, cost_per_ptu_per_hour=None) if mode == "cleared"
+            else _deployment_with_stored_ptu().model_info if mode == "activating" else ModelInfo()
+        )
+        patch: Final = PatchModelRequest(
+            litellm_params_to_remove=(field,),
+            model_info=incoming_info.model_copy(update={price_field: rate}),
+        )
+        written: Final = update_db_model(db_model=configured, updated_patch=patch)
+        assert json.loads(written["model_info"]).get("ptu_count") == (
+            None if mode in ("cleared", "ordinary") else 15
+        )
+        reloaded: Final = Deployment.model_validate({
+            "model_name": written["model_name"], "litellm_params": json.loads(written["litellm_params"]),
+            "model_info": json.loads(written["model_info"]),
+        })
+        saved_again: Final = update_db_model(
+            db_model=reloaded, updated_patch=updateDeployment(
+                model_name="renamed", model_info=ModelInfo.model_validate({price_field: rate}),
+            )
+        )
+        retried: Final = update_db_model(db_model=reloaded, updated_patch=patch)
+        for result in (written, saved_again, retried):
+            assert field not in json.loads(result["litellm_params"])
+            assert field not in json.loads(result["model_info"])
+
     def test_a_patch_pricing_a_ptu_deployment_is_refused(self):
         with pytest.raises(HTTPException) as exc:
             update_db_model(
@@ -1284,3 +1380,144 @@ class TestPtuDeploymentsAreNotBilledPerToken:
 
         assert "input_cost_per_token" in str(exc.value)
         add_team_model_to_db.assert_not_called()
+
+
+_SHARED_START = "2026-08-01T00:00:00Z"
+
+
+def test_validate_helper_accepts_shares_in_place_of_a_team_id():
+    shared = {
+        "ptu_count": 5,
+        "cost_per_ptu_per_hour": 2.0,
+        "ptu_effective_from": _SHARED_START,
+        "ptu_shares": {"team-a": 3, "team-b": 2},
+    }
+
+    _validate_ptu_model_info(shared)
+
+    assert ptu_terms(shared) is not None
+
+
+def test_validate_helper_refuses_shares_that_do_not_add_up_to_the_count():
+    with pytest.raises(HTTPException) as exc:
+        _validate_ptu_model_info(
+            {
+                "ptu_count": 5,
+                "cost_per_ptu_per_hour": 2.0,
+                "ptu_effective_from": _SHARED_START,
+                "ptu_shares": {"team-a": 3, "team-b": 1},
+            }
+        )
+    assert exc.value.status_code == 400
+    assert "4 of 5 allocated" in exc.value.detail
+
+
+def test_validate_helper_refuses_shares_declared_without_a_count_and_rate():
+    with pytest.raises(HTTPException) as exc:
+        _validate_ptu_model_info({"ptu_shares": {"team-a": 3, "team-b": 2}, "ptu_effective_from": _SHARED_START})
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "ptu_count and cost_per_ptu_per_hour are required when ptu_shares is set"
+
+
+class _TeamLookup:
+    def __init__(self, existing: frozenset[str]) -> None:
+        self.existing: Final = existing
+        self.looked_up: tuple[str, ...] = ()
+        self.batch_sizes: tuple[int, ...] = ()
+
+    async def find_unique(self, *, where: Mapping[str, object]) -> LiteLLM_TeamTable | None:
+        raise AssertionError(f"one lookup per team is what the review asked to avoid: {where}")
+
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[LiteLLM_TeamTable]:
+        team_filter: Final = where["team_id"]
+        assert isinstance(team_filter, Mapping)
+        requested: Final = tuple(str(team_id) for team_id in cast(Sequence[object], team_filter["in"]))
+        self.looked_up = (*self.looked_up, *requested)
+        self.batch_sizes = (*self.batch_sizes, len(requested))
+        return tuple(LiteLLM_TeamTable(team_id=team_id) for team_id in requested if team_id in self.existing)
+
+
+def _shared_model_info(shares: Mapping[str, int]) -> Mapping[str, object]:
+    return {
+        "ptu_count": sum(shares.values()),
+        "cost_per_ptu_per_hour": 2.0,
+        "ptu_effective_from": _SHARED_START,
+        "ptu_shares": dict(shares),
+    }
+
+
+@pytest.mark.asyncio
+async def test_share_team_check_refuses_a_team_that_does_not_exist():
+    with pytest.raises(HTTPException) as exc:
+        await _raise_if_ptu_share_teams_missing(
+            _shared_model_info({"team-a": 3, "ghost-team": 2}), lambda: _TeamLookup(frozenset({"team-a"}))
+        )
+    assert exc.value.status_code == 400
+    assert exc.value.detail == {"error": "Team id=ghost-team does not exist in db"}
+
+
+@pytest.mark.asyncio
+async def test_share_team_check_accepts_shares_naming_existing_teams():
+    lookup: Final = _TeamLookup(frozenset({"team-a", "team-b"}))
+    await _raise_if_ptu_share_teams_missing(_shared_model_info({"team-a": 3, "team-b": 2}), lambda: lookup)
+    assert lookup.looked_up == ("team-a", "team-b")
+
+
+@pytest.mark.asyncio
+async def test_share_team_check_splits_a_share_list_longer_than_one_in_list_chunk():
+    team_ids: Final = tuple(f"team-{index}" for index in range(IN_LIST_CHUNK_SIZE + 1))
+    lookup: Final = _TeamLookup(frozenset(team_ids))
+    await _raise_if_ptu_share_teams_missing(_shared_model_info(dict.fromkeys(team_ids, 1)), lambda: lookup)
+    assert lookup.looked_up == team_ids
+    assert max(lookup.batch_sizes) <= IN_LIST_CHUNK_SIZE
+
+
+@pytest.mark.asyncio
+async def test_share_team_check_leaves_a_team_id_holder_to_the_team_model_check():
+    lookup: Final = _TeamLookup(frozenset())
+    await _raise_if_ptu_share_teams_missing(
+        {"team_id": "team-a", "ptu_count": 5, "cost_per_ptu_per_hour": 2.0, "ptu_effective_from": _SHARED_START},
+        lambda: lookup,
+    )
+    assert lookup.looked_up == ()
+
+
+@pytest.mark.asyncio
+async def test_model_new_refuses_shares_naming_a_team_that_does_not_exist(monkeypatch):
+    monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "true")
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    (add_model_to_db, add_team_model_to_db), patches = TestAddNewModelPtuGate._patched_proxy(
+        "ptu-shared-model", prisma_client=prisma_client
+    )
+    admin = UserAPIKeyAuth(user_id="test-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    base = TestAddNewModelPtuGate._ptu_deployment("ptu-shared-model")
+    shared = base.model_copy(
+        update={"model_info": base.model_info.model_copy(update={"team_id": None, "ptu_shares": {"ghost-team": 15}})}
+    )
+
+    with ExitStack() as stack:
+        for active_patch in patches:
+            stack.enter_context(active_patch)
+        with pytest.raises(ProxyException, match="Team id=ghost-team does not exist in db") as exc:
+            await add_new_model(model_params=shared, user_api_key_dict=admin)
+
+    assert exc.value.code == "400"
+    prisma_client.db.litellm_teamtable.find_many.assert_awaited_once_with(where={"team_id": {"in": ["ghost-team"]}})
+    add_model_to_db.assert_not_called()
+    add_team_model_to_db.assert_not_called()
+
+
+def test_validate_helper_refuses_a_team_id_beside_shares():
+    with pytest.raises(HTTPException) as exc:
+        _validate_ptu_model_info(
+            {
+                "team_id": "team-a",
+                "ptu_count": 5,
+                "cost_per_ptu_per_hour": 2.0,
+                "ptu_effective_from": _SHARED_START,
+                "ptu_shares": {"team-a": 5},
+            }
+        )
+    assert exc.value.status_code == 400
+    assert "cannot both be set" in exc.value.detail

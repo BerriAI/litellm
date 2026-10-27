@@ -1,3 +1,4 @@
+from typing import Final
 from unittest.mock import AsyncMock, Mock
 
 import httpx
@@ -39,13 +40,8 @@ def test_predibase_transform_request_non_stream():
     assert "stream" not in request_data["parameters"]
 
 
-def test_predibase_transform_request_custom_prompt(monkeypatch):
+def test_predibase_transform_request_custom_prompt():
     config = PredibaseConfig()
-
-    monkeypatch.setattr(
-        "litellm.llms.predibase.chat.transformation.custom_prompt",
-        lambda **kwargs: "custom-prompt",
-    )
 
     request_data = config.transform_request(
         model="predibase-model",
@@ -54,16 +50,16 @@ def test_predibase_transform_request_custom_prompt(monkeypatch):
         litellm_params={
             "custom_prompt_dict": {
                 "predibase-model": {
-                    "roles": {},
-                    "initial_prompt_value": "",
-                    "final_prompt_value": "",
+                    "roles": {"user": {"pre_message": "<user>", "post_message": "</user>"}},
+                    "initial_prompt_value": "<s>",
+                    "final_prompt_value": "</s>",
                 }
             }
         },
         headers={},
     )
 
-    assert request_data["inputs"] == "custom-prompt"
+    assert request_data["inputs"] == "<s><user>hello</user></s>"
 
 
 def test_predibase_get_complete_url_stream_and_non_stream():
@@ -87,6 +83,19 @@ def test_predibase_get_complete_url_stream_and_non_stream():
 
     assert non_stream_url.endswith("/generate")
     assert stream_url.endswith("/generate_stream")
+
+
+@pytest.mark.parametrize(("model", "stream"), [("generate", False), ("generate_stream", True)])
+def test_predibase_get_complete_url_appends_the_route_to_a_model_named_like_it(model: str, stream: bool) -> None:
+    url: Final = PredibaseConfig().get_complete_url(
+        api_base="https://serving.example.com",
+        api_key="test-key",
+        model=model,
+        optional_params={"stream": stream},
+        litellm_params={"predibase_tenant_id": "tenant-123"},
+    )
+
+    assert url.endswith(f"/llms/{model}/{model}")
 
 
 def test_predibase_get_complete_url_missing_tenant_id():
