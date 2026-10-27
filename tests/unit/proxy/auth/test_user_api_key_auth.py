@@ -2282,3 +2282,49 @@ async def test_non_object_metadata_is_served_like_unset_mappings_whatever_the_ba
     )
     assert mapped == unset
     assert mapped[1] == "usecase-deployment"
+
+
+@pytest.mark.parametrize(
+    ("expiry", "expected_max_budget"),
+    [
+        ("2026-01-02T00:00:00Z", 105.0),
+        ("2025-12-31T00:00:00Z", 100.0),
+    ],
+)
+@pytest.mark.asyncio
+async def test_auth_object_uses_effective_user_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    expiry: str,
+    expected_max_budget: float,
+) -> None:
+    import asyncio
+    from datetime import datetime, timezone
+
+    import litellm.proxy.auth.user_api_key_auth as user_api_key_auth_module
+    from litellm.proxy.auth.user_api_key_auth import _return_user_api_key_auth_obj
+
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        user_api_key_auth_module.user_api_key_service_logger_obj,
+        "async_service_success_hook",
+        AsyncMock(),
+    )
+    user: Final = LiteLLM_UserTable(
+        user_id="user-1",
+        max_budget=100.0,
+        metadata={"temp_budget_increase": 5.0, "temp_budget_expiry": expiry},
+    )
+
+    auth: Final = await _return_user_api_key_auth_obj(
+        user_obj=user,
+        api_key="sk-test",
+        parent_otel_span=None,
+        valid_token_dict={"user_id": "user-1"},
+        route="/v1/chat/completions",
+        start_time=now,
+        now=now,
+    )
+    await asyncio.sleep(0)
+
+    assert auth.user_max_budget == expected_max_budget
+    assert user.max_budget == 100.0

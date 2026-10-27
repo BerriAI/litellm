@@ -5,10 +5,12 @@ Canonical definition for ``litellm_usertable``. Re-exported from
 ``litellm.proxy._types`` for backwards compatibility.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Final
 
 from pydantic import ConfigDict, Field, model_validator
 
+from litellm.models.budget import metadata_temp_budget_increase
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization_membership import (
     LiteLLM_OrganizationMembershipTable,
@@ -32,7 +34,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     spend: float = 0.0
     user_email: str | None = None
     models: list = []
-    metadata: dict | None = None
+    metadata: dict[str, object] | None = None
     max_parallel_requests: int | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
@@ -60,10 +62,17 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
             values.update({"teams": []})
         return values
 
-    def is_over_budget(self) -> bool:
-        if self.max_budget is None:
+    def is_over_budget(self, now: datetime | None = None) -> bool:
+        budget_now: Final = now if now is not None else datetime.now(timezone.utc)
+        max_budget: Final = self.effective_max_budget(now=budget_now)
+        if max_budget is None:
             return False
-        return self.spend >= self.max_budget
+        return self.spend >= max_budget
+
+    def effective_max_budget(self, now: datetime) -> float | None:
+        if self.max_budget is None:
+            return None
+        return self.max_budget + metadata_temp_budget_increase(metadata=self.metadata, now=now)
 
     def has_model_access(self, model_name: str) -> bool:
         if not self.models:

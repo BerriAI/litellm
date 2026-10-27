@@ -220,6 +220,31 @@ def test_a_temp_budget_needs_both_halves_or_neither():
     assert both.temp_budget_increase == 10
 
 
+def test_user_temp_budget_request_requires_a_valid_pair():
+    from datetime import datetime, timezone
+
+    from pydantic import ValidationError
+
+    from litellm.types.proxy.management_endpoints.user_requests import UpdateUserRequest
+
+    message = "temp_budget_increase and temp_budget_expiry must be set together"
+    with pytest.raises(ValidationError, match=message):
+        UpdateUserRequest(user_id="user-1", temp_budget_increase=5.0)
+
+    with pytest.raises(ValidationError, match=message):
+        UpdateUserRequest(user_id="user-1", temp_budget_expiry="2030-01-01T00:00:00Z")
+
+    with pytest.raises(ValidationError):
+        UpdateUserRequest(user_id="user-1", temp_budget_increase=-1.0, temp_budget_expiry="2030-01-01T00:00:00Z")
+
+    request = UpdateUserRequest(
+        user_id="user-1",
+        temp_budget_increase=5.0,
+        temp_budget_expiry=datetime(2030, 1, 1, tzinfo=timezone.utc),
+    )
+    assert request.temp_budget_increase == 5.0
+
+
 def test_an_empty_max_budget_is_read_as_no_limit():
     from litellm.proxy._types import GenerateKeyRequest
 

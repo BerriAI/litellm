@@ -1316,11 +1316,14 @@ async def _check_user_team_limits(
             user_id_upsert=False,
         )
 
-        if user_obj is not None and user_obj.max_budget is not None and data.max_budget > user_obj.max_budget:
+        user_max_budget: Final = (
+            user_obj.effective_max_budget(now=datetime.now(timezone.utc)) if user_obj is not None else None
+        )
+        if user_max_budget is not None and data.max_budget > user_max_budget:
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"max budget higher than user max. User max budget={user_obj.max_budget}. User role={user_api_key_dict.user_role}"
+                    "error": f"max budget higher than user max. User max budget={user_max_budget}. User role={user_api_key_dict.user_role}"
                 },
             )
 

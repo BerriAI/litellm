@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
@@ -73,6 +74,16 @@ class UpdateUserRequest(UpdateUserRequestNoUserIDorEmail):
     # else they will get overwritten
     user_id: str | None = None
     user_email: str | None = None
+    temp_budget_increase: float | None = Field(
+        default=None,
+        ge=0,
+        allow_inf_nan=False,
+        description="Temporary increase added to the user's max budget until temp_budget_expiry.",
+    )
+    temp_budget_expiry: datetime | None = Field(
+        default=None,
+        description="UTC expiry for temp_budget_increase.",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -80,6 +91,12 @@ class UpdateUserRequest(UpdateUserRequestNoUserIDorEmail):
         if values.get("user_id") is None and values.get("user_email") is None:
             raise ValueError("Either user id or user email must be provided")
         return values
+
+    @model_validator(mode="after")
+    def validate_temp_budget(self) -> "UpdateUserRequest":
+        if (self.temp_budget_increase is None) != (self.temp_budget_expiry is None):
+            raise ValueError("temp_budget_increase and temp_budget_expiry must be set together")
+        return self
 
 
 class LiteLLM_UserTableWithKeyCount(LiteLLM_UserTable):

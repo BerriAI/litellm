@@ -472,6 +472,7 @@ async def _get_budget_counters(
     end_user_id: str | None = None,
     end_user_object: object = None,
     apply_user_budget_to_team_keys: bool = False,
+    now: datetime | None = None,
 ) -> list[_BudgetCounter]:
     counters: Final[list[_BudgetCounter]] = []
 
@@ -521,18 +522,20 @@ async def _get_budget_counters(
         )
 
     is_team_key: Final = team_object is not None and team_object.team_id is not None
+    budget_now: Final = now if now is not None else datetime.now(timezone.utc)
+    user_budget: Final = user_object.effective_max_budget(now=budget_now) if user_object is not None else None
     if (
         (not is_team_key or apply_user_budget_to_team_keys)
         and user_object is not None
         and user_object.user_id is not None
-        and user_object.max_budget is not None
-        and user_object.max_budget > 0
+        and user_budget is not None
+        and user_budget > 0
     ):
         counters.append(
             _BudgetCounter(
                 counter_key=f"spend:user:{user_object.user_id}",
                 source_cache_key=user_object.user_id,
-                max_budget=float(user_object.max_budget),
+                max_budget=float(user_budget),
                 fallback_spend=float(user_object.spend or 0.0),
                 entity_type="User",
                 entity_id=user_object.user_id,

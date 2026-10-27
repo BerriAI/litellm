@@ -5,12 +5,42 @@ Canonical definition for ``litellm_budgettable``. Re-exported from
 ``litellm.proxy._types`` for backwards compatibility.
 """
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Final
 
-from pydantic import ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
+
+
+class _MetadataTempBudgetIncrease(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    increase: float = Field(allow_inf_nan=False)
+    expiry: datetime
+
+
+def active_temp_budget_increase(increase: float | None, expiry: datetime | None, now: datetime) -> float:
+    if increase is None or expiry is None:
+        return 0.0
+    normalized_expiry: Final = expiry.replace(tzinfo=timezone.utc) if expiry.tzinfo is None else expiry
+    return 0.0 if normalized_expiry <= now else increase
+
+
+def metadata_temp_budget_increase(metadata: Mapping[str, object] | None, now: datetime) -> float:
+    if metadata is None:
+        return 0.0
+    try:
+        parsed: Final = _MetadataTempBudgetIncrease.model_validate(
+            {
+                "increase": metadata.get("temp_budget_increase"),
+                "expiry": metadata.get("temp_budget_expiry"),
+            }
+        )
+    except (TypeError, ValidationError):
+        return 0.0
+    return active_temp_budget_increase(increase=parsed.increase, expiry=parsed.expiry, now=now)
 
 
 class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
@@ -37,14 +67,11 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(protected_namespaces=())
 
     def active_temp_budget_increase(self, now: datetime) -> float:
-        if self.temp_budget_increase is None or self.temp_budget_expiry is None:
-            return 0.0
-        expiry: Final = (
-            self.temp_budget_expiry.replace(tzinfo=timezone.utc)
-            if self.temp_budget_expiry.tzinfo is None
-            else self.temp_budget_expiry
+        return active_temp_budget_increase(
+            increase=self.temp_budget_increase,
+            expiry=self.temp_budget_expiry,
+            now=now,
         )
-        return 0.0 if expiry <= now else self.temp_budget_increase
 
     def effective_max_budget(self, now: datetime) -> float | None:
         if self.max_budget is None:

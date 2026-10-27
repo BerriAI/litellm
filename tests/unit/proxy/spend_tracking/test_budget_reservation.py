@@ -311,6 +311,37 @@ async def test_team_member_reservation_counter_adds_temp_increase_to_live_team_d
 
 
 @pytest.mark.asyncio
+async def test_user_reservation_counter_uses_temporary_increase_with_zero_base_budget() -> None:
+    from litellm.proxy.spend_tracking.budget_reservation import _get_budget_counters
+
+    user_id: Final = "user-temp"
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    user: Final = LiteLLM_UserTable(
+        user_id=user_id,
+        max_budget=0.0,
+        spend=0.0,
+        metadata={
+            "temp_budget_increase": 5.0,
+            "temp_budget_expiry": "2026-01-02T00:00:00+00:00",
+        },
+    )
+    counters: Final = await _get_budget_counters(
+        request_body={"model": "gpt-4o"},
+        valid_token=UserAPIKeyAuth(user_id=user_id),
+        team_object=None,
+        user_object=user,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        now=now,
+    )
+    user_counters: Final = tuple(counter for counter in counters if counter.entity_type == "User")
+
+    assert len(user_counters) == 1
+    assert user_counters[0].max_budget == 5.0
+
+
+@pytest.mark.asyncio
 async def test_reservation_starts_unbound_to_any_callback():
     reservation: Final = await _reserve("/v1/responses")
 

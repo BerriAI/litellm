@@ -15,7 +15,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import partial
 from itertools import chain
 from types import MappingProxyType
@@ -1087,6 +1087,7 @@ async def common_checks(
     request: Request,
     skip_budget_checks: bool = False,
     project_object: LiteLLM_ProjectTableCachedObj | None = None,
+    now: datetime | None = None,
 ) -> bool:
     """
     Common checks across jwt + key-based auth.
@@ -1362,15 +1363,19 @@ async def common_checks(
 
         async def _user_max_budget_check() -> None:
             # 4.1 personal budget
-            if user_object is None or user_object.max_budget is None:
+            if user_object is None:
                 return
             is_team_key: Final = team_object is not None and team_object.team_id is not None
             if is_team_key and general_settings.get("apply_user_budget_to_team_keys") is not True:
                 return
 
+            budget_now: Final = now if now is not None else datetime.now(timezone.utc)
+            user_budget: Final = user_object.effective_max_budget(now=budget_now)
+            if user_budget is None:
+                return
+
             from litellm.proxy.proxy_server import get_current_spend
 
-            user_budget: Final = user_object.max_budget
             user_spend: Final = await get_current_spend(
                 counter_key=f"spend:user:{user_object.user_id}",
                 fallback_spend=user_object.spend or 0.0,

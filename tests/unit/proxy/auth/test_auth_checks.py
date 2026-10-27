@@ -947,6 +947,59 @@ async def test_virtual_key_max_budget_check(
 
 
 @pytest.mark.parametrize(
+    ("expiry", "expected_error", "expected_max_budget"),
+    [
+        ("2026-01-02T00:00:00Z", False, None),
+        ("2025-12-31T00:00:00Z", True, 100.0),
+    ],
+)
+@pytest.mark.asyncio
+async def test_user_max_budget_check_uses_active_temporary_increase(
+    monkeypatch: pytest.MonkeyPatch,
+    expiry: str,
+    expected_error: bool,
+    expected_max_budget: float | None,
+) -> None:
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.get_current_spend",
+        AsyncMock(return_value=104.0),
+    )
+    user: Final = LiteLLM_UserTable(
+        user_id="user-1",
+        max_budget=100.0,
+        spend=104.0,
+        metadata={"temp_budget_increase": 5.0, "temp_budget_expiry": expiry},
+    )
+    check: Final = common_checks(
+        request_body={"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]},
+        team_object=None,
+        user_object=user,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={},
+        route="/v1/chat/completions",
+        llm_router=None,
+        proxy_logging_obj=AsyncMock(),
+        valid_token=UserAPIKeyAuth(token="test-token", user_id="user-1"),
+        request=MagicMock(),
+        now=now,
+    )
+
+    if expected_error:
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await check
+        assert exc_info.value.max_budget == expected_max_budget
+    else:
+        assert await check is True
+
+
+@pytest.mark.parametrize(
     "model, team_models, expect_to_work",
     [
         ("gpt-4", ["gpt-4"], True),  # exact match

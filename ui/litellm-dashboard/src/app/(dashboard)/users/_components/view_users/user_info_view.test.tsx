@@ -180,6 +180,34 @@ describe("UserInfoView", () => {
     expect(screen.getByText(/of \$3,000,000\.00/)).toBeInTheDocument();
   });
 
+  it("adds a live temporary budget increase to the overview budget and shows its expiry", async () => {
+    mockUserGetInfoV2.mockResolvedValue({
+      ...MOCK_USER_DATA,
+      max_budget: 100,
+      metadata: { temp_budget_increase: 25, temp_budget_expiry: "2999-01-01T00:00:00" },
+    });
+
+    render(<UserInfoView {...defaultProps} />);
+
+    expect(await screen.findByText(/of \$125\.00/)).toBeInTheDocument();
+    expect(screen.getByText(/Includes \$25\.00 temporary increase until/)).toBeInTheDocument();
+    expect(screen.getByText(/\+\$25\.0000 until/)).toBeInTheDocument();
+  });
+
+  it("ignores an expired temporary budget increase but still shows that it expired", async () => {
+    mockUserGetInfoV2.mockResolvedValue({
+      ...MOCK_USER_DATA,
+      max_budget: 100,
+      metadata: { temp_budget_increase: 25, temp_budget_expiry: "2000-01-01T00:00:00+00:00" },
+    });
+
+    render(<UserInfoView {...defaultProps} />);
+
+    expect(await screen.findByText(/of \$100\.00/)).toBeInTheDocument();
+    expect(screen.queryByText(/temporary increase until/)).not.toBeInTheDocument();
+    expect(screen.getByText(/\+\$25\.0000 expired/)).toBeInTheDocument();
+  });
+
   it("should render teams in a table with team names", async () => {
     render(<UserInfoView {...defaultProps} />);
 

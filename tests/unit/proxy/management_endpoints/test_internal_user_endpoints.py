@@ -4024,6 +4024,157 @@ async def test_ghsa_wvg4_proxy_admin_can_update_user_budget(mocker):
 
 
 @pytest.mark.asyncio
+async def test_admin_user_update_stores_temp_budget_in_metadata(mocker: MockerFixture) -> None:
+    from datetime import datetime, timezone
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    existing_user: Final = LiteLLM_UserTable(
+        user_id="target-user",
+        max_budget=100.0,
+        metadata={"source": "test"},
+    )
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=existing_user)
+    prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": "target-user"})
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._schedule_user_update_audit_log",
+        new=AsyncMock(),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.evict_and_broadcast",
+        new=AsyncMock(),
+    )
+    expiry: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    admin: Final = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    await _update_single_user_helper(
+        user_request=UpdateUserRequest(
+            user_id="target-user",
+            temp_budget_increase=5.0,
+            temp_budget_expiry=expiry,
+        ),
+        user_api_key_dict=admin,
+    )
+
+    update_data: Final = prisma_client.update_data.call_args.kwargs["data"]
+    assert "max_budget" not in update_data
+    assert update_data["metadata"] == {
+        "source": "test",
+        "temp_budget_increase": 5.0,
+        "temp_budget_expiry": expiry.isoformat(),
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "metadata_update",
+    [False, True],
+    ids=["top-level-fields", "raw-metadata"],
+)
+async def test_non_admin_cannot_self_escalate_temp_budget(
+    mocker: MockerFixture,
+    metadata_update: bool,
+) -> None:
+    from datetime import datetime, timezone
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    existing_metadata: Final = (
+        {
+            "temp_budget_increase": 2.0,
+            "temp_budget_expiry": "2030-01-01T00:00:00+00:00",
+        }
+        if metadata_update
+        else None
+    )
+    existing_user: Final = LiteLLM_UserTable(user_id="user-1", metadata=existing_metadata)
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=existing_user)
+    prisma_client.update_data = mocker.AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    caller: Final = UserAPIKeyAuth(user_id="user-1", user_role=LitellmUserRoles.INTERNAL_USER)
+    user_request: Final = (
+        UpdateUserRequest(
+            user_id="user-1",
+            metadata={
+                "temp_budget_increase": 5.0,
+                "temp_budget_expiry": "2030-01-02T00:00:00+00:00",
+            },
+        )
+        if metadata_update
+        else UpdateUserRequest(
+            user_id="user-1",
+            temp_budget_increase=5.0,
+            temp_budget_expiry=datetime(2030, 1, 2, tzinfo=timezone.utc),
+        )
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _update_single_user_helper(user_request=user_request, user_api_key_dict=caller)
+
+    assert exc_info.value.status_code == 403
+    assert "temp_budget_" in str(exc_info.value.detail)
+    prisma_client.update_data.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "send_unchanged_metadata",
+    [True, False],
+    ids=["unchanged-metadata", "metadata-omits-budget"],
+)
+async def test_non_admin_can_update_metadata_without_changing_temp_budget(
+    mocker: MockerFixture,
+    send_unchanged_metadata: bool,
+) -> None:
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    existing_metadata: Final = {
+        "temp_budget_increase": 2.0,
+        "temp_budget_expiry": "2030-01-01T00:00:00+00:00",
+        "source": "test",
+    }
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(
+        return_value=LiteLLM_UserTable(user_id="user-1", metadata=existing_metadata)
+    )
+    prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": "user-1"})
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._schedule_user_update_audit_log",
+        new=AsyncMock(),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.evict_and_broadcast",
+        new=AsyncMock(),
+    )
+    caller: Final = UserAPIKeyAuth(user_id="user-1", user_role=LitellmUserRoles.INTERNAL_USER)
+
+    user_request: Final = (
+        UpdateUserRequest(user_id="user-1", metadata=existing_metadata)
+        if send_unchanged_metadata
+        else UpdateUserRequest(user_id="user-1", metadata={"source": "updated"})
+    )
+    await _update_single_user_helper(user_request=user_request, user_api_key_dict=caller)
+
+    update_data: Final = prisma_client.update_data.call_args.kwargs["data"]
+    if send_unchanged_metadata:
+        assert update_data["metadata"] == existing_metadata
+    else:
+        assert update_data["metadata"] == {"source": "updated"}
+
+
+@pytest.mark.asyncio
 async def test_admin_user_update_spend_invalidates_counter(mocker):
     """A direct /user/update spend change must invalidate the cross-pod
     spend counter so enforcement re-reads the new DB value."""

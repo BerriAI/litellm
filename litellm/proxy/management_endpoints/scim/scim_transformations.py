@@ -132,7 +132,9 @@ class ScimTransformations:
         """
         metadata: Final = user.metadata or {}
         if "scim_metadata" in metadata:
-            scim_metadata: Final[LiteLLM_UserScimMetadata] = LiteLLM_UserScimMetadata(**metadata["scim_metadata"])
+            scim_metadata: Final[LiteLLM_UserScimMetadata] = LiteLLM_UserScimMetadata.model_validate(
+                metadata["scim_metadata"]
+            )
             if scim_metadata.familyName and len(scim_metadata.familyName) > 0:
                 return scim_metadata.familyName
 
@@ -147,7 +149,9 @@ class ScimTransformations:
         """
         metadata: Final = user.metadata or {}
         if "scim_metadata" in metadata:
-            scim_metadata: Final[LiteLLM_UserScimMetadata] = LiteLLM_UserScimMetadata(**metadata["scim_metadata"])
+            scim_metadata: Final[LiteLLM_UserScimMetadata] = LiteLLM_UserScimMetadata.model_validate(
+                metadata["scim_metadata"]
+            )
             if scim_metadata.givenName and len(scim_metadata.givenName) > 0:
                 return scim_metadata.givenName
 

@@ -1498,6 +1498,10 @@ async def _update_single_user_helper(
     if existing_user_row is not None:
         existing_user_row = LiteLLM_UserTable.model_validate(existing_user_row.model_dump(exclude_none=True))
 
+    existing_metadata: Final = (
+        cast(dict, getattr(existing_user_row, "metadata", {}) or {}) if existing_user_row is not None else {}
+    )
+
     # Prevent budget self-escalation (GHSA-wvg4-6222-3q4r): non-admin callers
     # must not be able to raise their own budget/spend fields.
     # can_user_call_user_update() already restricts non-admins to self-updates,
@@ -1513,7 +1517,15 @@ async def _update_single_user_helper(
         # because `_update_internal_user_params` drops empty values, and `object_permission: {}` is
         # precisely the clear-my-own-ceiling case this must refuse.
         _sent_fields: Final = user_request.fields_set() if hasattr(user_request, "fields_set") else set()
-        _protected_fields: Final = ("max_budget", "model_max_budget", "soft_budget", "spend", "object_permission")
+        _protected_fields: Final = (
+            "max_budget",
+            "model_max_budget",
+            "soft_budget",
+            "spend",
+            "object_permission",
+            "temp_budget_increase",
+            "temp_budget_expiry",
+        )
         for _field in _protected_fields:
             if _field in non_default_values or _field in _sent_fields:
                 raise HTTPException(
@@ -1522,10 +1534,16 @@ async def _update_single_user_helper(
                         "error": f"Non-admin users cannot modify '{_field}' on their own record. Contact your proxy admin."
                     },
                 )
-
-    existing_metadata: Final = (
-        cast(dict, getattr(existing_user_row, "metadata", {}) or {}) if existing_user_row is not None else {}
-    )
+        incoming_metadata: Final = user_request.metadata
+        if isinstance(incoming_metadata, Mapping):
+            for _field in ("temp_budget_increase", "temp_budget_expiry"):
+                if _field in incoming_metadata and incoming_metadata[_field] != existing_metadata.get(_field):
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": f"Non-admin users cannot modify '{_field}' on their own record. Contact your proxy admin."
+                        },
+                    )
 
     non_default_values = prepare_metadata_fields(
         data=user_request,
@@ -1688,6 +1706,8 @@ async def user_update(
         - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
         - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
         - max_budget: Optional[float] - Specify max budget for a given user.
+        - temp_budget_increase: Optional[float] - Add a temporary increase to the user's max budget.
+        - temp_budget_expiry: Optional[datetime] - Set the UTC expiry for temp_budget_increase.
         - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
         - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
         - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)

@@ -40,6 +40,7 @@ from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_event, phase_span, seed_request_identity
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
+from litellm.models.budget import metadata_temp_budget_increase
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_from_headers
 from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
@@ -4328,8 +4329,10 @@ async def _return_user_api_key_auth_obj(
     route: str,
     start_time: datetime,
     user_role: LitellmUserRoles | None = None,
+    now: datetime | None = None,
 ) -> UserAPIKeyAuth:
     end_time: Final = datetime.now(timezone.utc)
+    budget_now: Final = now if now is not None else end_time
 
     asyncio.create_task(
         user_api_key_service_logger_obj.async_service_success_hook(
@@ -4356,7 +4359,7 @@ async def _return_user_api_key_auth_obj(
             user_rpm_limit=user_obj.rpm_limit,
             user_email=user_obj.user_email,
             user_spend=getattr(user_obj, "spend", None),
-            user_max_budget=getattr(user_obj, "max_budget", None),
+            user_max_budget=user_obj.effective_max_budget(now=budget_now),
             user_model_max_budget=getattr(user_obj, "model_max_budget", None),
         )
     if user_obj is not None and is_user_proxy_admin(user_obj=user_obj):
@@ -4404,14 +4407,11 @@ def get_api_key_from_custom_header(request: Request, custom_litellm_key_header_n
 
 
 def _get_temp_budget_increase(valid_token: UserAPIKeyAuth):
-    valid_token_metadata: Final = valid_token.metadata
-    if "temp_budget_increase" in valid_token_metadata and "temp_budget_expiry" in valid_token_metadata:
-        expiry = datetime.fromisoformat(valid_token_metadata["temp_budget_expiry"])
-        if expiry.tzinfo is None:
-            expiry = expiry.replace(tzinfo=timezone.utc)
-        if expiry > datetime.now(timezone.utc):
-            return valid_token_metadata["temp_budget_increase"]
-    return None
+    temp_budget_increase: Final = metadata_temp_budget_increase(
+        metadata=valid_token.metadata,
+        now=datetime.now(timezone.utc),
+    )
+    return temp_budget_increase if temp_budget_increase != 0.0 else None
 
 
 def _update_key_budget_with_temp_budget_increase(

@@ -2,7 +2,7 @@
 Tests for backend domain models.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Final
 
 import pytest
@@ -14,6 +14,8 @@ from litellm.models.budget import (
     LiteLLM_BudgetTable,
     LiteLLM_BudgetTableFull,
     LiteLLM_TeamMemberTable,
+    active_temp_budget_increase,
+    metadata_temp_budget_increase,
 )
 from litellm.models.config import LiteLLM_Config
 from litellm.models.credentials import CreateCredentialItem, CredentialItem
@@ -97,6 +99,47 @@ class TestBudget:
         expired = LiteLLM_BudgetTable(max_budget=None, temp_budget_increase=50.0, temp_budget_expiry=now)
         assert expired.active_temp_budget_increase(now=now) == 0.0
         assert LiteLLM_BudgetTable(max_budget=None).active_temp_budget_increase(now=now) == 0.0
+
+    @pytest.mark.parametrize(
+        ("expiry", "expected"),
+        [
+            (datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc), 0.0),
+            (datetime(2025, 12, 31, 23, 59, tzinfo=timezone.utc), 0.0),
+            (datetime(2026, 1, 1, 1, 0), 5.0),
+            (datetime(2026, 1, 1, 2, 0, tzinfo=timezone(timedelta(hours=1))), 5.0),
+        ],
+    )
+    def test_active_temp_budget_increase_normalizes_expiry(
+        self, expiry: datetime, expected: float
+    ) -> None:
+        now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+        assert active_temp_budget_increase(increase=5.0, expiry=expiry, now=now) == expected
+
+    @pytest.mark.parametrize(
+        "metadata",
+        [
+            {"temp_budget_increase": 5.0},
+            {"temp_budget_expiry": "2030-01-01T00:00:00Z"},
+            {"temp_budget_increase": 5.0, "temp_budget_expiry": "not-a-datetime"},
+            {"temp_budget_increase": float("inf"), "temp_budget_expiry": "2030-01-01T00:00:00Z"},
+            {"temp_budget_increase": float("nan"), "temp_budget_expiry": "2030-01-01T00:00:00Z"},
+        ],
+    )
+    def test_metadata_temp_budget_increase_rejects_malformed_values(
+        self, metadata: dict[str, object]
+    ) -> None:
+        now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+        assert metadata_temp_budget_increase(metadata=metadata, now=now) == 0.0
+
+    def test_metadata_temp_budget_increase_accepts_isoformat_expiry(self) -> None:
+        now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+        assert metadata_temp_budget_increase(
+            metadata={"temp_budget_increase": 5.0, "temp_budget_expiry": "2026-01-01T02:00:00+01:00"},
+            now=now,
+        ) == 5.0
 
 
 class TestCredentials:
@@ -315,6 +358,37 @@ class TestUser:
 
         assert user.is_over_budget()
         assert not user_no_budget.is_over_budget()
+
+    def test_effective_max_budget_uses_active_metadata_increase(self) -> None:
+        now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        expiry: Final = datetime(2026, 1, 2, tzinfo=timezone.utc)
+        user: Final = LiteLLM_UserTable(
+            user_id="u1",
+            max_budget=100.0,
+            metadata={"temp_budget_increase": 5.0, "temp_budget_expiry": expiry.isoformat()},
+        )
+
+        assert user.effective_max_budget(now=now) == 105.0
+        assert user.effective_max_budget(now=expiry) == 100.0
+        assert user.max_budget == 100.0
+
+    def test_is_over_budget_uses_effective_max_budget(self) -> None:
+        now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        active_user: Final = LiteLLM_UserTable(
+            user_id="u1",
+            max_budget=100.0,
+            spend=104.0,
+            metadata={"temp_budget_increase": 5.0, "temp_budget_expiry": "2026-01-02T00:00:00Z"},
+        )
+        expired_user: Final = LiteLLM_UserTable(
+            user_id="u2",
+            max_budget=100.0,
+            spend=104.0,
+            metadata={"temp_budget_increase": 5.0, "temp_budget_expiry": "2025-12-31T00:00:00Z"},
+        )
+
+        assert not active_user.is_over_budget(now=now)
+        assert expired_user.is_over_budget(now=now)
 
     def test_has_model_access(self):
         user_with_models = LiteLLM_UserTable(user_id="u1", models=["gpt-4"])

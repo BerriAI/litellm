@@ -48,6 +48,7 @@ import ScopedSavingsTab from "@/components/shared/ScopedSavingsTab";
 import { AutoRouterUsageView } from "@/app/(dashboard)/cost-optimization/_components/AutoRouterBenchmarksTab";
 import { useActivityDateRange } from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
 import { BudgetPeriodTooltip } from "@/components/shared/BudgetPeriodTooltip";
+import { TempBudgetIncreaseDetail, UserBudgetLimit } from "./UserTempBudget";
 
 interface UserInfoViewProps {
   userId: string;
@@ -519,9 +520,7 @@ export default function UserInfoView({
               </p>
               <div className="mt-2">
                 <h3 className="text-lg font-medium">${formatNumberWithCommas(userData.spend || 0, 2)}</h3>
-                <p>
-                  of {userData.max_budget !== null ? `$${formatNumberWithCommas(userData.max_budget, 2)}` : "Unlimited"}
-                </p>
+                <UserBudgetLimit maxBudget={userData.max_budget} metadata={userData.metadata} />
               </div>
             </Card>
 
@@ -693,6 +692,8 @@ export default function UserInfoView({
                       : "Unlimited"}
                   </p>
                 </div>
+
+                <TempBudgetIncreaseDetail metadata={userData.metadata} />
 
                 <div>
                   <p className="font-medium">Budget Reset</p>

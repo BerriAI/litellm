@@ -1923,6 +1923,19 @@ def test_get_temp_budget_increase_tz_aware_expiry():
     assert _get_temp_budget_increase(expired_token) is None
 
 
+def test_get_temp_budget_increase_ignores_malformed_expiry():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import _get_temp_budget_increase
+
+    token = UserAPIKeyAuth(
+        max_budget=100,
+        spend=0,
+        metadata={"temp_budget_increase": 100, "temp_budget_expiry": "not-a-datetime"},
+    )
+
+    assert _get_temp_budget_increase(token) is None
+
+
 def test_update_key_budget_with_temp_budget_increase():
     from datetime import datetime, timedelta
 

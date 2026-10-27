@@ -18903,6 +18903,8 @@ export interface paths {
          *         - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
          *         - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
          *         - max_budget: Optional[float] - Specify max budget for a given user.
+         *         - temp_budget_increase: Optional[float] - Add a temporary increase to the user's max budget.
+         *         - temp_budget_expiry: Optional[datetime] - Set the UTC expiry for temp_budget_increase.
          *         - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
          *         - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
          *         - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
@@ -48981,6 +48983,16 @@ export interface components {
             } | null;
             /** Team Id */
             team_id?: string | null;
+            /**
+             * Temp Budget Expiry
+             * @description UTC expiry for temp_budget_increase.
+             */
+            temp_budget_expiry?: string | null;
+            /**
+             * Temp Budget Increase
+             * @description Temporary increase added to the user's max budget until temp_budget_expiry.
+             */
+            temp_budget_increase?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** User Alias */
