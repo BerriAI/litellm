@@ -268,7 +268,7 @@ def sanitize_for_log(value: object) -> str:
 
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
-from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
+from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES, STREAM_USAGE_INJECTED_FIELD
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.router import BaggageMappedTagsStamp, holds_api_key_secret_reference
 from litellm.types.services import ServiceTypes
@@ -334,6 +334,7 @@ LITELLM_METADATA_ROUTES: Final = (
     "/v1/messages",
     "responses",
     "files",
+    "interactions",
 )
 
 LITELLM_TRACE_CONTROL_METADATA_FIELDS: Final = frozenset(
@@ -353,6 +354,7 @@ LITELLM_TRACE_CONTROL_METADATA_FIELDS: Final = frozenset(
 _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "weights",
     "_router_weights",
+    "_encrypted_content_affinity_pinned",
     "fallback_depth",
     "_target_order",
     "attempted_targets",
@@ -1415,13 +1417,14 @@ def clean_headers(
         Cleaned headers dict
     """
     from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+    from litellm.llms.chatgpt.common_utils import is_chatgpt_oauth_key
 
     clean_headers: Final = {}
     litellm_key_lower: Final = litellm_key_header_name.lower() if litellm_key_header_name is not None else None
     for header, value in headers.items():
         header_lower = header.lower()
 
-        if header_lower == "authorization" and is_anthropic_oauth_key(value):
+        if header_lower == "authorization" and (is_anthropic_oauth_key(value) or is_chatgpt_oauth_key(value)):
             if authenticated_with_header is None or authenticated_with_header.lower() != "authorization":
                 clean_headers[header] = value
             continue
@@ -1450,7 +1453,7 @@ def clean_headers(
 
 def _is_credential_header(header: str) -> bool:
     """Whether `header` carries a caller credential rather than request context."""
-    return header.lower() in _CREDENTIAL_HEADER_NAMES
+    return header.lower().removeprefix("x-pass-") in _CREDENTIAL_HEADER_NAMES
 
 
 def redact_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
@@ -2370,7 +2373,15 @@ def refresh_proxy_server_request_body_snapshot(
     if not isinstance(proxy_server_request, dict):
         return
     _body_snapshot_exclude: Final = (
-        frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj", VECTOR_STORE_CALLER_METADATA_KWARG})
+        frozenset(
+            {
+                "secret_fields",
+                "proxy_server_request",
+                "litellm_logging_obj",
+                VECTOR_STORE_CALLER_METADATA_KWARG,
+                STREAM_USAGE_INJECTED_FIELD,
+            }
+        )
         | _TRANSPORT_ONLY_CREDENTIAL_KEYS
         | _CALLBACK_CREDENTIAL_KEYS
     )
@@ -4268,7 +4279,11 @@ _ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
         LlmProviders.VERTEX_AI.value,
     )
 )
+_NATIVE_MESSAGES_ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
+    (LlmProviders.AZURE_AI.value, LlmProviders.DATABRICKS.value)
+)
 _ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_FORWARD_PROVIDERS))
+_CHATGPT_OAUTH_CREDENTIAL_PROVIDERS: Final = LlmProviders.CHATGPT.value
 
 
 def add_provider_specific_headers_to_request(
@@ -4276,6 +4291,7 @@ def add_provider_specific_headers_to_request(
     headers: Mapping[str, str],
 ) -> bool:
     from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+    from litellm.llms.chatgpt.common_utils import select_chatgpt_client_credential_headers
 
     anthropic_api_headers: Final = {header: headers[header] for header in ANTHROPIC_API_HEADERS if header in headers}
     anthropic_oauth_credential_headers: Final = {
@@ -4283,6 +4299,8 @@ def add_provider_specific_headers_to_request(
         for header, value in headers.items()
         if header.lower() == "authorization" and is_anthropic_oauth_key(value)
     }
+    chatgpt_oauth_credential_headers: Final = dict(select_chatgpt_client_credential_headers(headers))
+
     typesafe_danger_zone_headers: Final = {
         header: value
         for header, value in headers.items()
@@ -4296,7 +4314,7 @@ def add_provider_specific_headers_to_request(
                 custom_llm_provider=_ANTHROPIC_API_HEADER_PROVIDERS, extra_headers=anthropic_api_headers
             ),
             ProviderSpecificHeader(
-                custom_llm_provider=LlmProviders.DATABRICKS.value,
+                custom_llm_provider=_NATIVE_MESSAGES_ANTHROPIC_API_HEADER_PROVIDERS,
                 extra_headers=anthropic_api_headers,
                 native_anthropic_messages_only=True,
             ),
@@ -4307,13 +4325,17 @@ def add_provider_specific_headers_to_request(
             ProviderSpecificHeader(
                 custom_llm_provider=LlmProviders.TYPESAFE.value, extra_headers=typesafe_danger_zone_headers
             ),
+            ProviderSpecificHeader(
+                custom_llm_provider=_CHATGPT_OAUTH_CREDENTIAL_PROVIDERS,
+                extra_headers=chatgpt_oauth_credential_headers,
+            ),
         )
         if scoped_header["extra_headers"]
     ]
 
     if scoped_headers:
         data["provider_specific_header"] = scoped_headers[0] if len(scoped_headers) == 1 else scoped_headers
-    return bool(anthropic_oauth_credential_headers)
+    return bool(anthropic_oauth_credential_headers or chatgpt_oauth_credential_headers)
 
 
 def _add_otel_traceparent_to_data(data: dict, request: Request):

@@ -8673,6 +8673,184 @@
       }
     }
   },
+  "codex_passthrough": {
+    "components": {
+      "schemas": {
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/backend-api/codex/{endpoint}": {
+        "get": {
+          "description": "Forward a client's ChatGPT subscription with separate LiteLLM authentication.",
+          "operationId": "codex_passthrough_route_backend_api_codex__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "enum": [
+                  "models",
+                  "responses"
+                ],
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Codex Passthrough Route",
+          "tags": [
+            "codex_passthrough"
+          ]
+        },
+        "post": {
+          "description": "Forward a client's ChatGPT subscription with separate LiteLLM authentication.",
+          "operationId": "codex_passthrough_route_backend_api_codex__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "enum": [
+                  "models",
+                  "responses"
+                ],
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                },
+                "text/event-stream": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Unmodified Codex response or server-sent events"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Codex Passthrough Route",
+          "tags": [
+            "codex_passthrough"
+          ]
+        }
+      }
+    }
+  },
   "compliance": {
     "components": {
       "schemas": {
@@ -11407,7 +11585,7 @@
       },
       "/systemone": {
         "post": {
-          "description": "Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).\nTypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break\nthese rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
+          "description": "Judge a `state` against one or more named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).\nTypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break\nthese rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "systemone_systemone_post",
           "requestBody": {
             "content": {
@@ -11813,7 +11991,6 @@
                         ]
                       },
                       "description": "Named noul, choice and score questions. Each key becomes a key in the answers",
-                      "maxProperties": 128,
                       "minProperties": 1,
                       "propertyNames": {
                         "minLength": 1
@@ -12814,7 +12991,7 @@
       },
       "/v1/systemone": {
         "post": {
-          "description": "Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).\nTypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break\nthese rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
+          "description": "Judge a `state` against one or more named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).\nTypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break\nthese rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "systemone_v1_systemone_post",
           "requestBody": {
             "content": {
@@ -13220,7 +13397,6 @@
                         ]
                       },
                       "description": "Named noul, choice and score questions. Each key becomes a key in the answers",
-                      "maxProperties": 128,
                       "minProperties": 1,
                       "propertyNames": {
                         "minLength": 1
@@ -22860,6 +23036,25 @@
           "title": "Body_image_edit_api_openai_deployments__model__images_edits_post",
           "type": "object"
         },
+        "CacheWriteTokensDetails": {
+          "additionalProperties": true,
+          "properties": {
+            "ttl_12h_tokens": {
+              "title": "Ttl 12H Tokens",
+              "type": "integer"
+            },
+            "ttl_30m_tokens": {
+              "title": "Ttl 30M Tokens",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "ttl_30m_tokens",
+            "ttl_12h_tokens"
+          ],
+          "title": "CacheWriteTokensDetails",
+          "type": "object"
+        },
         "CachedTokensDetails": {
           "properties": {
             "audio_tokens": {
@@ -24353,6 +24548,27 @@
                 }
               ],
               "title": "Audio Tokens"
+            },
+            "cache_write_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cache Write Tokens"
+            },
+            "cache_write_tokens_details": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CacheWriteTokensDetails"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "cached_tokens": {
               "default": 0,
@@ -28240,6 +28456,9 @@
                       },
                       {
                         "$ref": "#/components/schemas/OutputToolSearchCall"
+                      },
+                      {
+                        "$ref": "#/components/schemas/ResponseCompactionItem"
                       }
                     ]
                   },
@@ -57892,163 +58111,6 @@
           "summary": "Delete Tool Policy Override",
           "tags": [
             "tools"
-          ]
-        }
-      }
-    }
-  },
-  "usage_ai": {
-    "components": {
-      "schemas": {
-        "ChatMessage": {
-          "properties": {
-            "content": {
-              "title": "Content",
-              "type": "string"
-            },
-            "role": {
-              "enum": [
-                "user",
-                "assistant"
-              ],
-              "title": "Role",
-              "type": "string"
-            }
-          },
-          "required": [
-            "role",
-            "content"
-          ],
-          "title": "ChatMessage",
-          "type": "object"
-        },
-        "HTTPValidationError": {
-          "properties": {
-            "detail": {
-              "items": {
-                "$ref": "#/components/schemas/ValidationError"
-              },
-              "title": "Detail",
-              "type": "array"
-            }
-          },
-          "title": "HTTPValidationError",
-          "type": "object"
-        },
-        "UsageAIChatRequest": {
-          "properties": {
-            "messages": {
-              "description": "Chat messages (user/assistant history)",
-              "items": {
-                "$ref": "#/components/schemas/ChatMessage"
-              },
-              "title": "Messages",
-              "type": "array"
-            },
-            "model": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Model to use for AI chat",
-              "title": "Model"
-            }
-          },
-          "required": [
-            "messages"
-          ],
-          "title": "UsageAIChatRequest",
-          "type": "object"
-        },
-        "ValidationError": {
-          "properties": {
-            "ctx": {
-              "title": "Context",
-              "type": "object"
-            },
-            "input": {
-              "title": "Input"
-            },
-            "loc": {
-              "items": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "integer"
-                  }
-                ]
-              },
-              "title": "Location",
-              "type": "array"
-            },
-            "msg": {
-              "title": "Message",
-              "type": "string"
-            },
-            "type": {
-              "title": "Error Type",
-              "type": "string"
-            }
-          },
-          "required": [
-            "loc",
-            "msg",
-            "type"
-          ],
-          "title": "ValidationError",
-          "type": "object"
-        }
-      }
-    },
-    "paths": {
-      "/usage/ai/chat": {
-        "post": {
-          "description": "AI chat about usage data. Streams SSE events with the AI response.\nThe AI agent has access to tools that query aggregated daily activity data.",
-          "operationId": "usage_ai_chat_usage_ai_chat_post",
-          "requestBody": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UsageAIChatRequest"
-                }
-              }
-            },
-            "required": true
-          },
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {}
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Usage Ai Chat",
-          "tags": [
-            "usage_ai"
           ]
         }
       }
