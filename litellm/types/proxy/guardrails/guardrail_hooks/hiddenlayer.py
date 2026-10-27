@@ -30,6 +30,16 @@ class HiddenlayerGuardrailConfigModel(GuardrailConfigModel):
         description="The Hiddenlayer Secret Key for the Hiddenlayer API.. If not provided, the `HIDDENLAYER_CLIENT_SECRET` environment variable is checked.",
     )
 
+    auth_url: str | None = Field(
+        default=None,
+        description="The URL of the Hiddenlayer OAuth server. If not provided, the `HIDDENLAYER_AUTH_URL` environment variable is checked or https://auth.hiddenlayer.ai is used.",
+    )
+
+    ssl_verify: bool | str | None = Field(
+        default=None,
+        description="SSL verification for calls to Hiddenlayer. Set to false to disable it or to a CA bundle path to trust a private CA. Defaults to the proxy-wide SSL settings.",
+    )
+
     version: int | None = Field(default=2, description="Hiddenlayer guardrail version to use.")
 
     @staticmethod
