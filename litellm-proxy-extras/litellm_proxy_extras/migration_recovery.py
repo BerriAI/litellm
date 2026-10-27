@@ -1,7 +1,7 @@
 import hashlib
 import re
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
@@ -10,6 +10,7 @@ from uuid import uuid4
 from litellm_proxy_extras import prisma_toolchain
 from litellm_proxy_extras._logging import logger
 from litellm_proxy_extras.migration_lock import MigrationCoordinator
+from litellm_proxy_extras.migration_sources import PACKAGE_DIR, shipped_migrations
 
 if TYPE_CHECKING:
     import psycopg
@@ -80,10 +81,15 @@ def recover_completed_migration(coordinator: MigrationCoordinator, schema: str, 
 
 
 def migration_files(directory: Path) -> tuple[tuple[str, str], ...]:
-    return tuple(
-        (path.parent.name, hashlib.sha256(path.read_bytes()).hexdigest())
-        for path in sorted((directory / "migrations").glob("*/migration.sql"))
-    )
+    return _checksums(sorted((directory / "migrations").glob("*/migration.sql")))
+
+
+def shipped_migration_files() -> tuple[tuple[str, str], ...]:
+    return _checksums(migration / "migration.sql" for migration in shipped_migrations())
+
+
+def _checksums(scripts: Iterable[Path]) -> tuple[tuple[str, str], ...]:
+    return tuple((path.parent.name, hashlib.sha256(path.read_bytes()).hexdigest()) for path in scripts)
 
 
 def baseline_current_schema(
@@ -95,12 +101,11 @@ def baseline_current_schema(
 ) -> None:
     from psycopg import sql
 
-    packaged_dir: Final = Path(__file__).parent
     migrations: Final = migration_files(migrations_dir)
     if (
         not migrations
-        or migrations != migration_files(packaged_dir)
-        or (migrations_dir / "schema.prisma").read_bytes() != (packaged_dir / "schema.prisma").read_bytes()
+        or migrations != shipped_migration_files()
+        or (migrations_dir / "schema.prisma").read_bytes() != (PACKAGE_DIR / "schema.prisma").read_bytes()
     ):
         raise RuntimeError("Cannot automatically baseline an existing database with custom migration history.")
 

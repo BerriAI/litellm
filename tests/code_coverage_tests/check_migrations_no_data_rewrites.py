@@ -29,7 +29,7 @@ INDEX` blocks writes to the table until the build finishes, and `CREATE INDEX
 CONCURRENTLY` is refused by Postgres on a partitioned parent, which LiteLLM_SpendLogs
 is wherever the operator ran db_scripts/partition_spend_logs.sql. The migration job builds
 those indexes after `migrate deploy`, concurrently and per partition, from the list in
-litellm_proxy_extras/request_log_indexes.py, so that list is where a new one goes.
+litellm_proxy_extras/spend_logs/request_log_indexes.py, so that list is where a new one goes.
 
 Flagged, per statement, by its leading keyword:
 
@@ -118,12 +118,14 @@ from __future__ import annotations
 import re
 import sys
 from collections.abc import Iterator, Mapping
+from itertools import chain
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MIGRATIONS_DIR = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras" / "migrations"
+EXTRAS_DIR = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras"
+MIGRATION_SOURCES = (EXTRAS_DIR / "migrations", EXTRAS_DIR / "spend_logs" / "migrations")
 
 GRANDFATHERED = frozenset(
     {
@@ -220,7 +222,7 @@ statement with the bound spelled out:
 
 An index on a request-log table is not a migration, and no marker exempts one. Declare it with `@@index` in
 schema.prisma and add it to REQUEST_LOG_INDEXES in
-litellm_proxy_extras/request_log_indexes.py under the name Prisma derives for it; the
+litellm_proxy_extras/spend_logs/request_log_indexes.py under the name Prisma derives for it; the
 migration job builds it after `migrate deploy`, concurrently on a plain table and per
 partition on a partitioned one, which no single migration statement can do.
 
@@ -238,7 +240,8 @@ class Violation:
     consequence: str = "rewrites existing rows at boot"
 
     def render(self) -> str:
-        location = f"{MIGRATIONS_DIR.relative_to(REPO_ROOT)}/{self.migration}/migration.sql"
+        source = next((s for s in MIGRATION_SOURCES if (s / self.migration).is_dir()), MIGRATION_SOURCES[0])
+        location = f"{source.relative_to(REPO_ROOT)}/{self.migration}/migration.sql"
         return f"{location}:{self.line}: {self.keyword} {self.consequence}"
 
 
@@ -623,7 +626,7 @@ def consequence_of(found: str) -> str:
     if found.startswith("CREATE INDEX"):
         return (
             "blocks writes until the build finishes, or fails on a partitioned table; "
-            "add it to REQUEST_LOG_INDEXES in litellm_proxy_extras/request_log_indexes.py instead"
+            "add it to REQUEST_LOG_INDEXES in litellm_proxy_extras/spend_logs/request_log_indexes.py instead"
         )
     return "rewrites existing rows at boot"
 
@@ -1051,12 +1054,18 @@ def stale_grandfathers(found: Mapping[str, tuple[Violation, ...]]) -> tuple[str,
     return tuple(sorted((*clean, *missing)))
 
 
+def shipped_migrations(migration_sources: tuple[Path, ...] = MIGRATION_SOURCES) -> tuple[Path, ...]:
+    candidates = chain.from_iterable(source.iterdir() for source in migration_sources)
+    return tuple(sorted((path for path in candidates if (path / "migration.sql").is_file()), key=lambda p: p.name))
+
+
 def main() -> int:
-    if not MIGRATIONS_DIR.is_dir():
-        print(f"migrations directory not found: {MIGRATIONS_DIR}", file=sys.stderr)
+    missing = tuple(source for source in MIGRATION_SOURCES if not source.is_dir())
+    if missing:
+        print(f"migrations directory not found: {missing[0]}", file=sys.stderr)
         return 2
 
-    directories = tuple(sorted(path for path in MIGRATIONS_DIR.iterdir() if (path / "migration.sql").is_file()))
+    directories = shipped_migrations()
     found = {directory.name: scan_migration(directory) for directory in directories}
     violations = tuple(
         violation for name, results in found.items() if name not in GRANDFATHERED for violation in results

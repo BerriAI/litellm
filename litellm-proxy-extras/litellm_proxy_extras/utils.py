@@ -1,8 +1,8 @@
+import functools
 import glob
 import os
 import random
 import re
-import shutil
 import subprocess
 import tempfile
 import threading
@@ -28,7 +28,8 @@ from litellm_proxy_extras.replica_identity import (
     REPLICA_IDENTITY_FULL_ENV_VAR,
     apply_replica_identity_full,
 )
-from litellm_proxy_extras.request_log_indexes import ensure_request_log_indexes, filter_request_log_index_diff
+from litellm_proxy_extras.migration_sources import materialize_prisma_dir
+from litellm_proxy_extras.spend_logs.request_log_indexes import ensure_request_log_indexes, filter_request_log_index_diff
 
 if TYPE_CHECKING:
     import psycopg
@@ -224,6 +225,11 @@ def _redact_command_error(error: subprocess.CalledProcessError) -> str:
     return str(subprocess.CalledProcessError(error.returncode, redacted_command))
 
 
+@functools.lru_cache(maxsize=1)
+def _default_prisma_dir() -> str:
+    return str(materialize_prisma_dir(Path(tempfile.mkdtemp(prefix="litellm_prisma_"))))
+
+
 def _get_prisma_command() -> str:
     """Get the Prisma command to use, bypassing Python wrapper in offline mode."""
     if str_to_bool(os.getenv("PRISMA_OFFLINE_MODE")):
@@ -255,29 +261,14 @@ class ProxyExtrasDBManager:
     @staticmethod
     def _get_prisma_dir() -> str:
         """
-        Get the path to the migrations directory
+        The flat Prisma directory (schema.prisma plus migrations/) merged from every migration source.
 
-        Set os.environ["LITELLM_MIGRATION_DIR"] to a custom migrations directory, to support baselining db in read-only fs.
+        Set os.environ["LITELLM_MIGRATION_DIR"] to choose where it is written, e.g. a mounted volume on a read-only fs.
         """
-        custom_migrations_dir = os.getenv("LITELLM_MIGRATION_DIR")
-        pkg_migrations_dir = os.path.dirname(__file__)
+        custom_migrations_dir: Final = os.getenv("LITELLM_MIGRATION_DIR")
         if custom_migrations_dir:
-            # If migrations_dir exists, copy contents
-            if os.path.exists(custom_migrations_dir):
-                # Copy contents instead of directory itself
-                for item in os.listdir(pkg_migrations_dir):
-                    src_path = os.path.join(pkg_migrations_dir, item)
-                    dst_path = os.path.join(custom_migrations_dir, item)
-                    if os.path.isdir(src_path):
-                        shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
-                    else:
-                        shutil.copy2(src_path, dst_path)
-            else:
-                # If directory doesn't exist, create it and copy everything
-                shutil.copytree(pkg_migrations_dir, custom_migrations_dir)
-            return custom_migrations_dir
-
-        return pkg_migrations_dir
+            return str(materialize_prisma_dir(Path(custom_migrations_dir)))
+        return _default_prisma_dir()
 
     @staticmethod
     def _create_baseline_migration(schema_path: str) -> bool:

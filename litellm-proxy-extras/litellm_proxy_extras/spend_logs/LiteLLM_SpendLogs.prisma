@@ -1,0 +1,44 @@
+model LiteLLM_SpendLogs {
+  request_id          String @id
+  call_type           String
+  api_key             String  @default ("") // Hashed API Token. Not the actual Virtual Key. Equivalent to 'token' column in LiteLLM_VerificationToken
+  spend               Float    @default(0.0)
+  total_tokens        Int     @default(0)
+  prompt_tokens       Int     @default(0)
+  completion_tokens   Int     @default(0)
+  startTime           DateTime // Assuming start_time is a DateTime field
+  endTime             DateTime // Assuming end_time is a DateTime field
+  request_duration_ms Int?
+  completionStartTime DateTime? // Assuming completionStartTime is a DateTime field
+  model               String   @default("")
+  model_id            String?   @default("") // the model id stored in proxy model db
+  model_group         String?   @default("") // public model_name / model_group
+  custom_llm_provider String?   @default("") // litellm used custom_llm_provider
+  api_base            String?   @default("")
+  user                String?   @default("")
+  metadata            Json?     @default("{}") // project_id stored here
+  cache_hit           String?   @default("")
+  cache_key           String?   @default("")
+  request_tags        Json?     @default("[]")
+  team_id             String? 
+  organization_id     String?
+  end_user            String?
+  requester_ip_address String?
+  messages            Json?     @default("{}")
+  response            Json?     @default("{}")
+  session_id          String?
+  status              String?
+  mcp_namespaced_tool_name String? 
+  billing_agent_id    String?
+  agent_id            String?
+  proxy_server_request Json?     @default("{}")
+  litellm_call_id     String?
+  created_at          DateTime   @default(now()) @map("created_at")
+  updated_at          DateTime   @default(now()) @updatedAt @map("updated_at")
+  @@index([startTime])
+  @@index([startTime, request_id])
+  @@index([end_user])
+  @@index([session_id])
+  @@index([litellm_call_id])
+  @@index([api_key, startTime])
+}

@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Final
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MIGRATIONS_DIR = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras" / "migrations"
+EXTRAS_DIR = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras"
+MIGRATION_SOURCES: Final = (EXTRAS_DIR / "migrations", EXTRAS_DIR / "spend_logs" / "migrations")
 GRANDFATHERED_THROUGH: Final = "20261009000000_add_credential_display_name"
 LOCK_TIMEOUT_LINE: Final = "SET LOCAL lock_timeout = '10s';"
 LOCK_TIMEOUT_RE: Final = re.compile(
@@ -41,17 +42,19 @@ def scan_migration(directory: Path) -> tuple[str, ...]:
     )
 
 
-def scan_migrations(migrations_dir: Path) -> tuple[str, ...]:
-    directories: Final = tuple(sorted(path for path in migrations_dir.iterdir() if (path / "migration.sql").is_file()))
+def scan_migrations(migration_sources: tuple[Path, ...]) -> tuple[str, ...]:
+    candidates: Final = chain.from_iterable(source.iterdir() for source in migration_sources)
+    directories: Final = tuple(sorted(path for path in candidates if (path / "migration.sql").is_file()))
     return tuple(chain.from_iterable(scan_migration(directory) for directory in directories))
 
 
 def main() -> int:
-    if not MIGRATIONS_DIR.is_dir():
-        sys.stderr.write(f"migrations directory not found: {MIGRATIONS_DIR}\n")
+    missing: Final = tuple(source for source in MIGRATION_SOURCES if not source.is_dir())
+    if missing:
+        sys.stderr.write(f"migrations directory not found: {missing[0]}\n")
         return 2
 
-    violations: Final = scan_migrations(MIGRATIONS_DIR)
+    violations: Final = scan_migrations(MIGRATION_SOURCES)
     for violation in violations:
         sys.stdout.write(f"{violation}\n")
 

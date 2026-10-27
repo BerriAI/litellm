@@ -251,8 +251,10 @@ def create_migration(
     import testing.postgresql
 
     try:
-        migrations_dir = (
-            root_dir / "litellm-proxy-extras" / "litellm_proxy_extras" / "migrations"
+        extras_dir = root_dir / "litellm-proxy-extras" / "litellm_proxy_extras"
+        migration_sources = (
+            extras_dir / "migrations",
+            extras_dir / "spend_logs" / "migrations",
         )
         schema_path = root_dir / "schema.prisma"
 
@@ -267,7 +269,8 @@ def create_migration(
                 # Copy existing migrations to temp directory
                 if temp_migrations_dir.exists():
                     shutil.rmtree(temp_migrations_dir)
-                shutil.copytree(migrations_dir, temp_migrations_dir)
+                for source in migration_sources:
+                    shutil.copytree(source, temp_migrations_dir, dirs_exist_ok=True)
 
                 # Apply existing migrations to temp database
                 os.environ["DATABASE_URL"] = db_url
@@ -317,7 +320,13 @@ def create_migration(
                     # Generate timestamp and create migration directory
                     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
                     migration_name = migration_name or "unnamed_migration"
-                    migration_dir = migrations_dir / f"{timestamp}_{migration_name}"
+                    # LiteLLM_SpendLogs migrations live in spend_logs/ so that folder can carry its own code owner
+                    destination = (
+                        migration_sources[1]
+                        if "LiteLLM_SpendLogs" in diff_sql
+                        else migration_sources[0]
+                    )
+                    migration_dir = destination / f"{timestamp}_{migration_name}"
                     migration_dir.mkdir(parents=True, exist_ok=True)
 
                     # Write the SQL to migration.sql
