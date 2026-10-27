@@ -1,7 +1,6 @@
-import asyncio
 from typing import Annotated, Final
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import ConfigDict
 
 from litellm._uuid import uuid4
@@ -51,6 +50,7 @@ async def update_user_banner(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     repository: UserBannerRepositoryDependency,
     audit: UserBannerAuditDependency,
+    background_tasks: BackgroundTasks,
 ) -> UpdateUserBannerResponse:
     """
     Publish, edit, or unpublish the dashboard banner.
@@ -72,6 +72,6 @@ async def update_user_banner(
 
     await repository.save_banner(banner)
 
-    asyncio.create_task(audit(before, banner, user_api_key_dict))
+    background_tasks.add_task(audit, before, banner, user_api_key_dict)
 
     return UpdateUserBannerResponse(message="User banner updated successfully", banner=banner)

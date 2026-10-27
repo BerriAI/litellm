@@ -1,4 +1,4 @@
-For proxy dependency wiring and database lifetime changes, follow [proxy-dependencies](litellm-rust/.agents/skills/proxy-dependencies/SKILL.md) alongside [database-access](.agents/skills/database-access/SKILL.md)
+For proxy dependency wiring and database lifetime changes, follow [proxy-dependencies](.agents/skills/proxy-dependencies/SKILL.md) alongside [database-access](.agents/skills/database-access/SKILL.md)
 
 Do not write comments unless they are any of:
 - absolutely necessary to explain some very complex business logic (in which case, keep it concise and clear)

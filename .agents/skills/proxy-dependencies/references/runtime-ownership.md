@@ -3,8 +3,8 @@
 ## Current foundation
 
 - Prisma startup still owns connection setup, authentication refresh, health checks and migrations
-- Lifespan enters `_db.lifespan` with the initialized client adapted by `from_prisma`
-- The `Database` handle provides typed repositories and `aclose`, without exposing Prisma to handlers
+- Lifespan enters `_db.lifespan` with the initialized client wrapped in `Database`
+- Feature providers build repositories from the `Database` handle, so handlers never see Prisma
 - The existing shutdown sequence drains requests, jobs, logging, spend and audit work before disconnect
 - `_db.lifespan` alone closes the handle, including startup or shutdown failure
 - No parallel disconnect fallback belongs in proxy shutdown
@@ -13,6 +13,9 @@
 ## Adding a backend
 
 - Keep domain operations in repositories and conversion at the native bridge
+- Add the backend as one more handle on `Database`, and let each feature provider pick which repository implementation to build
+- Expose typed operations across the bridge, never a function that accepts SQL text, table names or column names from Python
+- Map dynamic filters and sort keys to closed Rust enums that select static SQL, and pass every value as a bind parameter
 - Define who creates, borrows and closes each pool, including startup-failure cleanup
 - Initialize native resources in the serving process, respecting the existing native runtime's fork restrictions
 - Await native shutdown instead of depending on Python garbage collection

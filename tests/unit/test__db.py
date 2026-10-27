@@ -12,7 +12,7 @@ from litellm import _db
 async def test_lifespan_closes_database_when_owner_fails(failure):
     prisma: Final = MagicMock()
     prisma.disconnect = AsyncMock()
-    database: Final = _db.from_prisma(prisma)
+    database: Final = _db.Database(prisma=prisma)
 
     async def fail():
         async with _db.lifespan(database) as current:

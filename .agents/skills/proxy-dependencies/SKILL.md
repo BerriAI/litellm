@@ -5,7 +5,7 @@ description: Inject typed repositories and services into Python proxy handlers, 
 
 # Proxy dependencies
 
-- Follow the root [database-access skill](../../../../.agents/skills/database-access/SKILL.md) for queries, repository extraction and backend migration
+- Follow the root [database-access skill](../database-access/SKILL.md) for queries, repository extraction and backend migration
 - This skill owns dependency wiring and resource lifetime, not SQL or schema ownership
 
 ## Handler contracts
@@ -19,8 +19,9 @@ description: Inject typed repositories and services into Python proxy handlers, 
 
 ## Database ownership
 
-- `litellm._db.Database` exposes typed repositories and an async close operation
-- `from_prisma` adopts an already initialized client without opening a second pool
+- `litellm._db.Database` holds one handle per backend and an async close operation, never a field per feature
+- It wraps the already initialized Prisma client without opening a second pool
+- Feature modules build their repositories from that handle in their own providers, `_db` never imports a repository
 - FastAPI lifespan enters `_db.lifespan` and publishes its handle in request state
 - Drain database consumers before exiting that context, which alone closes the handle
 - Do not keep a parallel Prisma disconnect fallback in proxy shutdown

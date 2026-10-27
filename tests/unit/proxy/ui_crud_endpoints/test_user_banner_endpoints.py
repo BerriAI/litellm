@@ -58,7 +58,7 @@ def _mock_prisma(monkeypatch, record=None):
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=record)
     mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
-    monkeypatch.setitem(app.dependency_overrides, get_database, lambda: _db.from_prisma(mock_prisma))
+    monkeypatch.setitem(app.dependency_overrides, get_database, lambda: _db.Database(prisma=mock_prisma))
     return mock_prisma
 
 

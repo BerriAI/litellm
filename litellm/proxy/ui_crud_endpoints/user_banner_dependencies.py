@@ -6,7 +6,7 @@ from fastapi import Depends
 from litellm.models.user_banner import UserBanner
 from litellm.proxy._types import LitellmTableNames, UserAPIKeyAuth
 from litellm.proxy.deps import DatabaseDependency
-from litellm.repositories.user_banner_repository import USER_BANNER_ROW_ID, UserBannerStore
+from litellm.repositories.user_banner_repository import USER_BANNER_ROW_ID, UserBannerRepository, UserBannerStore
 
 
 class UserBannerAudit(Protocol):
@@ -14,7 +14,7 @@ class UserBannerAudit(Protocol):
 
 
 async def get_user_banner_repository(database: DatabaseDependency) -> UserBannerStore | None:
-    return None if database is None else database.user_banners
+    return None if database is None else UserBannerRepository(database.prisma)
 
 
 async def get_user_banner_audit() -> UserBannerAudit:

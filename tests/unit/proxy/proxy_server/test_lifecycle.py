@@ -118,7 +118,7 @@ async def test_database_lifespan_disconnects_prisma_after_proxy_shutdown(monkeyp
     monkeypatch.setattr(litellm, "cache", None, raising=False)
     monkeypatch.setattr(litellm, "success_callback", [], raising=False)
 
-    async with _db.lifespan(_db.from_prisma(fake_prisma)):
+    async with _db.lifespan(_db.Database(prisma=fake_prisma)):
         await proxy_shutdown_event()
         fake_prisma.disconnect.assert_not_awaited()
 
@@ -225,7 +225,7 @@ async def test_proxy_shutdown_drains_gateway_requests_before_disconnecting(monke
     monkeypatch.setattr(litellm, "cache", None, raising=False)
     monkeypatch.setattr(litellm, "success_callback", [], raising=False)
 
-    async with _db.lifespan(_db.from_prisma(fake_prisma)):
+    async with _db.lifespan(_db.Database(prisma=fake_prisma)):
         await proxy_shutdown_event()
 
     assert calls == ["flush", "disconnect"]
@@ -266,7 +266,7 @@ async def test_proxy_shutdown_drains_audit_writes_beside_the_gateway_flush_befor
     monkeypatch.setattr(litellm, "success_callback", [], raising=False)
 
     track_audit_task(asyncio.create_task(_audit_write_that_finishes_after_the_flush_starts()))
-    async with _db.lifespan(_db.from_prisma(fake_prisma)):
+    async with _db.lifespan(_db.Database(prisma=fake_prisma)):
         await asyncio.wait_for(proxy_shutdown_event(), timeout=2.0)
 
     assert calls == ["flush", "audit", "disconnect"]
@@ -338,7 +338,7 @@ async def test_database_lifespan_propagates_disconnect_error_after_shutdown(monk
     monkeypatch.setattr(litellm, "success_callback", [], raising=False)
 
     with pytest.raises(RuntimeError, match="db gone"):
-        async with _db.lifespan(_db.from_prisma(fake_prisma)):
+        async with _db.lifespan(_db.Database(prisma=fake_prisma)):
             await proxy_shutdown_event()
 
 

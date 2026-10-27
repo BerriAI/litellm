@@ -3,7 +3,7 @@
 ## Existing pattern
 
 - `get_database` reads the lifespan-owned handle from request state
-- A feature provider selects the narrow repository, such as `database.user_banners`
+- A feature provider builds its narrow repository from the backend handle, such as `UserBannerRepository(database.prisma)`
 - A handler receives `UserBannerStore | None`, never a Prisma client
 - `UserBannerRepository` keeps the existing Prisma table, serialization and configuration-sync behavior
 - The banner audit provider binds the legacy audit callable at request time, without performing audit I/O
@@ -17,7 +17,8 @@
 - Banner GET without a database returns the default disabled banner
 - Banner PATCH checks the admin role before returning the existing missing-database error
 - Invalid stored banner data falls back to the default, but storage failures still propagate
-- Banner writes finish before the success audit is scheduled
+- Banner writes finish before the success audit is queued as a FastAPI background task
+- Queue post-response work with `BackgroundTasks`, not bare `asyncio.create_task`, so the in-flight drain waits for it before the database closes
 - Do not move background work into an awaited provider merely to remove an import
 
 ## Verification

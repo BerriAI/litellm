@@ -1552,7 +1552,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         )
 
     database: Final = await resources.enter_async_context(
-        _db.lifespan(None if prisma_client is None else _db.from_prisma(prisma_client))
+        _db.lifespan(None if prisma_client is None else _db.Database(prisma=prisma_client))
     )
 
     await migrate_if_requested(

@@ -1,7 +1,5 @@
 # Rust workspace rules
 
-For proxy dependency wiring and database lifetime changes, follow [.agents/skills/proxy-dependencies/SKILL.md](.agents/skills/proxy-dependencies/SKILL.md) alongside the root database-access skill
-
 For diagnostic tracing changes, follow [.agents/skills/rust-tracing/SKILL.md](.agents/skills/rust-tracing/SKILL.md)
 
 For string-valued enums and their Serde conversions, follow [.agents/skills/rust-string-enums/SKILL.md](.agents/skills/rust-string-enums/SKILL.md)
