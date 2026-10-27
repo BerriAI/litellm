@@ -2,9 +2,40 @@
 
 import os
 import subprocess
+from collections.abc import Sequence
 from typing import Final
 
 from litellm._logging import verbose_logger
+
+_SPEND_LOGS_TABLE: Final = '"LiteLLM_SpendLogs"'
+_SPEND_LOGS_PKEY: Final = '"LiteLLM_SpendLogs_pkey"'
+
+
+def _is_spend_logs_pkey_rewrite(command: str) -> bool:
+    """
+    True when a suggested command only rewrites the LiteLLM_SpendLogs primary
+    key (DROP and/or ADD of LiteLLM_SpendLogs_pkey).
+
+    schema.prisma declares request_id as a single-column @id, but with
+    use_spend_logs_partitioning the deployed table is partitioned by
+    "startTime" and its primary key must include the partition key - so the
+    startup migrate diff always proposes this rewrite, and running it on a
+    partitioned table is invalid. The quoted table name keeps
+    LiteLLM_SpendLogs_legacy and partition child tables out of the match.
+    """
+    return _SPEND_LOGS_TABLE in command and _SPEND_LOGS_PKEY in command
+
+
+def filter_spend_logs_pkey_rewrite(
+    sql_commands: Sequence[str], use_spend_logs_partitioning: bool
+) -> list[str]:  # mutable-ok: fresh filtered list for the caller
+    """
+    Drop the SpendLogs primary-key rewrite from the suggested commands when
+    spend-log partitioning is on; every other detected drift still surfaces.
+    """
+    if not use_spend_logs_partitioning:
+        return list(sql_commands)
+    return [command for command in sql_commands if not _is_spend_logs_pkey_rewrite(command)]
 
 
 def extract_sql_commands(diff_output: str) -> list[str]:
@@ -44,7 +75,9 @@ def extract_sql_commands(diff_output: str) -> list[str]:
     return sql_commands
 
 
-def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
+def check_prisma_schema_diff_helper(
+    db_url: str, use_spend_logs_partitioning: bool = False
+) -> tuple[bool, list[str]]:  # mutable-ok: command list mirrors extract_sql_commands
     """Checks for differences between current database and Prisma schema.
 
     Never raises: a diff that cannot be produced, because the runner is missing,
@@ -86,7 +119,9 @@ def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
             env=os.environ.copy(),
         )
 
-        sql_commands: Final = extract_sql_commands(result.stdout)
+        sql_commands: Final = filter_spend_logs_pkey_rewrite(
+            extract_sql_commands(result.stdout), use_spend_logs_partitioning
+        )
 
         if sql_commands:
             print("Changes to DB Schema detected")  # noqa: T201
@@ -108,13 +143,13 @@ def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
         return False, []
 
 
-def check_prisma_schema_diff(db_url: str | None = None) -> None:
+def check_prisma_schema_diff(db_url: str | None = None, use_spend_logs_partitioning: bool = False) -> None:
     """Main function to run the Prisma schema diff check."""
     if db_url is None:
         db_url = os.getenv("DATABASE_URL")
         if db_url is None:
             raise Exception("DATABASE_URL not set")
-    has_diff, message = check_prisma_schema_diff_helper(db_url)
+    has_diff, message = check_prisma_schema_diff_helper(db_url, use_spend_logs_partitioning)
     if has_diff:
         verbose_logger.exception(
             "🚨🚨🚨 prisma schema out of sync with db. Consider running these sql_commands to sync the two - %s",
