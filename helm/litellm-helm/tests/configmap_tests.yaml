@@ -1,0 +1,43 @@
+suite: test proxy configmap
+templates:
+  - configmap-litellm.yaml
+tests:
+  - it: should render no labels or annotations by default
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - notExists:
+          path: metadata.labels
+      - notExists:
+          path: metadata.annotations
+  - it: should add the configured labels and annotations
+    set:
+      proxyConfigMap:
+        create: true
+        labels:
+          vault-injection: enabled
+        annotations:
+          vault.security.banzaicloud.io/vault-role: vault-injector
+          vault.security.banzaicloud.io/vault-skip-verify: "true"
+    asserts:
+      - equal:
+          path: metadata.labels
+          value:
+            vault-injection: enabled
+      - equal:
+          path: metadata.annotations
+          value:
+            vault.security.banzaicloud.io/vault-role: vault-injector
+            vault.security.banzaicloud.io/vault-skip-verify: "true"
+      - exists:
+          path: data["config.yaml"]
+  - it: should render no ConfigMap when create is false, even with labels set
+    set:
+      proxyConfigMap:
+        create: false
+        name: my-existing-config
+        labels:
+          vault-injection: enabled
+    asserts:
+      - hasDocuments:
+          count: 0
