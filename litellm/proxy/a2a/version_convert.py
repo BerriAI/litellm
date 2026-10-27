@@ -24,7 +24,8 @@ The two wire shapes:
   ``Task`` result is a bare object without ``kind``.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
 from typing import Final, Literal
 
 from pydantic import BaseModel
@@ -38,6 +39,26 @@ JsonDict = dict[str, object]
 
 _V1_SEND_ENVELOPE_KEYS: Final = frozenset({"message", "task"})
 _V1_STREAM_ENVELOPE_KEYS: Final = frozenset({"message", "task", "statusUpdate", "artifactUpdate"})
+
+A2A_PASCAL_TO_WIRE: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "SendMessage": "message/send",
+        "SendStreamingMessage": "message/stream",
+        "GetTask": "tasks/get",
+        "ListTasks": "tasks/list",
+        "CancelTask": "tasks/cancel",
+        "SubscribeToTask": "tasks/resubscribe",
+        "CreateTaskPushNotificationConfig": "tasks/pushNotificationConfig/set",
+        "GetTaskPushNotificationConfig": "tasks/pushNotificationConfig/get",
+        "ListTaskPushNotificationConfigs": "tasks/pushNotificationConfig/list",
+        "DeleteTaskPushNotificationConfig": "tasks/pushNotificationConfig/delete",
+        "GetExtendedAgentCard": "agent/getAuthenticatedExtendedCard",
+    }
+)
+_STREAMING_WIRE_METHODS: Final = frozenset({"message/stream", "tasks/resubscribe"})
+A2A_STREAMING_METHODS: Final = _STREAMING_WIRE_METHODS | frozenset(
+    pascal for pascal, wire in A2A_PASCAL_TO_WIRE.items() if wire in _STREAMING_WIRE_METHODS
+)
 
 
 def _dump_03(model: BaseModel) -> JsonDict:

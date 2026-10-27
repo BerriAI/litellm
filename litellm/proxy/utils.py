@@ -179,6 +179,7 @@ from litellm.proxy._types import (
     SpecialModelNames,
     UserAPIKeyAuth,
 )
+from litellm.proxy.a2a.version_convert import A2A_STREAMING_METHODS
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import CeilingResolver, resolve_agent_access_group_ceiling
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
@@ -721,12 +722,6 @@ def _ran_or_runs_outside_pipelines(
     )
 
 
-# The A2A JSON-RPC methods answered with a stream, as both protocol versions spell them
-_A2A_STREAMING_METHODS: Final = frozenset(
-    ("message/stream", "tasks/resubscribe", "SendStreamingMessage", "SubscribeToTask")
-)
-
-
 def _post_call_steps_named_before_headers(
     data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth
 ) -> frozenset[str]:
@@ -735,7 +730,7 @@ def _post_call_steps_named_before_headers(
     headers go out: every step of a whole response, and of a streamed one the steps of
     the pipelines that hold the stream until they finish.
     """
-    if data.get("stream") is not True and data.get("method") not in _A2A_STREAMING_METHODS:
+    if data.get("stream") is not True and data.get("method") not in A2A_STREAMING_METHODS:
         return pipeline_managed_guardrail_names(data, "post_call")
     gated: Final = _stream_gated_pipelines(data, user_api_key_dict)
     return frozenset() if _pipelines_stream_live(gated) else _pipeline_step_guardrail_names(gated)

@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.llms.a2a.common_utils import resolve_a2a_hop_auth_header
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.a2a.version_convert import (
+    A2A_PASCAL_TO_WIRE,
     A2AVersion,
     normalize_agent_card,
     normalize_jsonrpc_response,
@@ -64,21 +65,6 @@ _SSE_KEEPALIVE_HEADERS: Final[Mapping[str, str]] = MappingProxyType(
         "X-Accel-Buffering": "no",
     }
 )
-
-_PASCAL_TO_WIRE: Final[Mapping[str, str]] = {
-    "SendMessage": "message/send",
-    "SendStreamingMessage": "message/stream",
-    "GetTask": "tasks/get",
-    "ListTasks": "tasks/list",
-    "CancelTask": "tasks/cancel",
-    "SubscribeToTask": "tasks/resubscribe",
-    "CreateTaskPushNotificationConfig": "tasks/pushNotificationConfig/set",
-    "GetTaskPushNotificationConfig": "tasks/pushNotificationConfig/get",
-    "ListTaskPushNotificationConfigs": "tasks/pushNotificationConfig/list",
-    "DeleteTaskPushNotificationConfig": "tasks/pushNotificationConfig/delete",
-    "GetExtendedAgentCard": "agent/getAuthenticatedExtendedCard",
-}
-
 
 _DECODED_JSON: Final = TypeAdapter(object)
 
@@ -132,7 +118,7 @@ def _served_version(agent: "AgentResponse", request: Request, original_method: s
     configured: Final = (agent.agent_card_params or {}).get("protocolVersion")
     if configured in ("0.3", "1.0"):
         return configured
-    if original_method in _PASCAL_TO_WIRE:
+    if original_method in A2A_PASCAL_TO_WIRE:
         return "1.0"
     return "1.0" if request.headers.get("a2a-version", "").startswith("1.") else "0.3"
 
@@ -699,7 +685,7 @@ async def invoke_agent_a2a(
         params = body.get("params", {})
 
         if method:
-            method = _PASCAL_TO_WIRE.get(method, method)
+            method = A2A_PASCAL_TO_WIRE.get(method, method)
 
         if isinstance(params, dict):
             # extract any litellm params from the params - eg. 'guardrails'
