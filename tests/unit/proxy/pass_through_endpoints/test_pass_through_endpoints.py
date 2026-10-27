@@ -7988,6 +7988,35 @@ async def test_websocket_passthrough_counts_client_text_when_the_upstream_ends_w
     ]
 
 
+class _DrainStallingUpstreamWebSocket(SpeakingUpstreamWebSocket):
+    """Takes the client's Close, then stalls in send the way a full write buffer does, so the session ends while the
+    relay is still inside that send"""
+
+    async def send(self, message: str | bytes) -> None:
+        await super().send(message)
+        if message == SPEAK_CLOSE_FRAME:
+            await asyncio.Event().wait()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_websocket_passthrough_bills_a_client_frame_whose_send_is_cancelled_after_reaching_the_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session: Final = await _relay_and_capture_spend(
+        monkeypatch,
+        _DrainStallingUpstreamWebSocket(),
+        _speak_client(),
+        DEEPGRAM_SPEAK_TARGET,
+        "/deepgram/v1/speak",
+        count_client_text=len,
+    )
+
+    assert [log["response_cost"] for log in session.spend_logs] == [
+        pytest.approx(SPEAK_SESSION_CLIENT_LENGTH * _aura_2_usd_per_character())
+    ]
+
+
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("local_model_cost_map")
 async def test_deepgram_speak_session_logs_character_spend_once_and_never_the_spoken_text(

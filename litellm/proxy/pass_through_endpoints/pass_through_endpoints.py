@@ -2641,9 +2641,18 @@ async def websocket_passthrough_request(
                 "WebSocket passthrough (%s): Upstream connection established successfully", endpoint
             )
 
+            async def send_upstream(frame: str | bytes) -> None:
+                nonlocal client_text_count
+                billed: Final = 0 if count_client_text is None else count_client_text(frame)
+                try:
+                    await upstream_ws.send(frame)
+                except asyncio.CancelledError:
+                    client_text_count += billed  # rebind-ok: the frame can already be on the wire when the cancel lands
+                    raise
+                client_text_count += billed  # rebind-ok: the session total grows with each delivered frame
+
             async def forward_client_to_upstream() -> None:
                 """Forward messages from client to upstream WebSocket"""
-                nonlocal client_text_count
                 try:
                     while True:
                         message = await websocket.receive()
@@ -2712,13 +2721,9 @@ async def websocket_passthrough_request(
                                     )
                                     # Not a JSON message or doesn't contain setup data
 
-                            await upstream_ws.send(_rewrite_vertex_live_setup_model(text_data, setup_model_rewriter))
-                            if count_client_text is not None:
-                                client_text_count += count_client_text(text_data)
+                            await send_upstream(_rewrite_vertex_live_setup_model(text_data, setup_model_rewriter))
                         elif bytes_data is not None:
-                            await upstream_ws.send(bytes_data)
-                            if count_client_text is not None:
-                                client_text_count += count_client_text(bytes_data)
+                            await send_upstream(bytes_data)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
