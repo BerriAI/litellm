@@ -43,7 +43,7 @@ pytestmark: Final = pytest.mark.usefixtures("local_model_cost_map")
         pytest.param("https://gateway.internal/deepgram/v1/speak", "POST", False, id="http passthrough to a speak url"),
     ],
 )
-def test_is_deepgram_speak_route(url_route: str, request_method: str, expected: bool):
+def test_is_deepgram_speak_route(url_route: str, request_method: str, expected: bool) -> None:
     assert DeepgramSpeakPassthroughLoggingHandler.is_deepgram_speak_route(url_route, request_method) is expected
 
 
@@ -70,7 +70,7 @@ def _handler_cost(upstream_url: str, characters: object) -> float | None:
     return response_cost
 
 
-def test_handler_bills_spoken_characters_at_the_aura_2_rate_and_names_the_voice():
+def test_handler_bills_spoken_characters_at_the_aura_2_rate_and_names_the_voice() -> None:
     logging_obj: Final = _logging_obj()
 
     handler_result: Final = DeepgramSpeakPassthroughLoggingHandler.deepgram_speak_passthrough_handler(
@@ -91,7 +91,7 @@ def test_handler_bills_spoken_characters_at_the_aura_2_rate_and_names_the_voice(
     )
 
 
-def test_handler_bills_an_aura_1_voice_at_the_aura_1_rate():
+def test_handler_bills_an_aura_1_voice_at_the_aura_1_rate() -> None:
     assert _handler_cost(AURA_1_URL, 1000) == pytest.approx(1000 * AURA_1_USD_PER_CHARACTER)
 
 
@@ -99,12 +99,12 @@ def test_handler_bills_an_aura_1_voice_at_the_aura_1_rate():
     "characters",
     [pytest.param(0, id="nothing spoken"), pytest.param(None, id="no count")],
 )
-def test_handler_bills_zero_for_a_session_without_speak_text(characters: object):
+def test_handler_bills_zero_for_a_session_without_speak_text(characters: object) -> None:
     assert _handler_cost(AURA_2_URL, characters) == 0.0
 
 
 @pytest.mark.parametrize("model", ["flux-tts-en", "aura-3-x-en", "aura-x", "nova-3"])
-def test_handler_reports_no_cost_rather_than_a_wrong_one_for_an_unpriced_voice(model: str):
+def test_handler_reports_no_cost_rather_than_a_wrong_one_for_an_unpriced_voice(model: str) -> None:
     assert _handler_cost(f"wss://api.deepgram.com/v1/speak?model={model}", 1000) is None
 
 
@@ -126,7 +126,7 @@ class _CapturingLogger(CustomLogger):
 )
 async def test_success_handler_dispatches_deepgram_speak_and_logs_character_based_spend(
     monkeypatch: pytest.MonkeyPatch, characters: int, expected_cost: float
-):
+) -> None:
     """Drives the shared passthrough success handler the way the relay does at socket close and reads what a spend
     logger receives"""
     capturing_logger: Final = _CapturingLogger()

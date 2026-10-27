@@ -344,7 +344,7 @@ def test_deepgram_listen_addon_pricing_models(upstream_url: str, expected: tuple
 )
 def test_aura_rows_bill_speech_per_character_at_the_published_rate(
     pricing_model: str, usd_per_thousand_characters: float
-):
+) -> None:
     """Pay as you go rates from https://deepgram.com/pricing, checked 2026-10-26"""
     prompt_cost, completion_cost = litellm.cost_per_token(
         model=pricing_model, custom_llm_provider="deepgram", call_type="speech", prompt_characters=1000
@@ -384,7 +384,7 @@ SPEAK_BASE: Final = "wss://api.deepgram.com/v1/speak"
         ),
     ],
 )
-def test_deepgram_speak_websocket_target(api_base: str | None, query_string: str, expected: str):
+def test_deepgram_speak_websocket_target(api_base: str | None, query_string: str, expected: str) -> None:
     assert deepgram_speak_websocket_target(api_base=api_base, query_string=query_string) == expected
 
 
@@ -392,7 +392,7 @@ def test_deepgram_speak_websocket_target(api_base: str | None, query_string: str
     "query_string",
     ["", "model=aura-2-thalia-en", "model=aura-2-thalia-en&model=aura-2-zeus-en", "encoding=mulaw&model=aura-luna-en"],
 )
-def test_the_authorized_speak_model_is_the_only_model_the_upstream_target_carries(query_string: str):
+def test_the_authorized_speak_model_is_the_only_model_the_upstream_target_carries(query_string: str) -> None:
     """The key is checked against deepgram_speak_requested_model, so the upstream must use exactly that voice"""
     target: Final = deepgram_speak_websocket_target(api_base=None, query_string=query_string)
 
@@ -421,7 +421,9 @@ def test_the_authorized_speak_model_is_the_only_model_the_upstream_target_carrie
         pytest.param("nova-3", "nova-3", id="listen model"),
     ],
 )
-def test_deepgram_speak_registry_key_names_the_aura_generation_row_else_the_voice(model: str, expected_family: str):
+def test_deepgram_speak_registry_key_names_the_aura_generation_row_else_the_voice(
+    model: str, expected_family: str
+) -> None:
     target: Final = deepgram_speak_websocket_target(api_base=None, query_string=f"model={model}")
 
     assert deepgram_speak_registry_key(target) == f"deepgram/{expected_family}"
@@ -438,19 +440,19 @@ def test_deepgram_speak_registry_key_names_the_aura_generation_row_else_the_voic
         pytest.param("nova-3", False, id="a listen model has no speech row"),
     ],
 )
-def test_deepgram_speak_is_priced(model: str, expected: bool):
+def test_deepgram_speak_is_priced(model: str, expected: bool) -> None:
     assert deepgram_speak_is_priced(f"{SPEAK_BASE}?model={model}") is expected
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
-def test_deepgram_speak_is_not_priced_once_its_family_row_is_gone(monkeypatch: pytest.MonkeyPatch):
+def test_deepgram_speak_is_not_priced_once_its_family_row_is_gone(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delitem(litellm.model_cost, "deepgram/aura-2")
 
     assert deepgram_speak_is_priced(f"{SPEAK_BASE}?model=aura-2-thalia-en") is False
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
-def test_a_cost_map_row_named_after_a_new_voice_prices_it_at_that_rate(monkeypatch: pytest.MonkeyPatch):
+def test_a_cost_map_row_named_after_a_new_voice_prices_it_at_that_rate(monkeypatch: pytest.MonkeyPatch) -> None:
     """The 1008 refusal tells the operator to add the voice's row, so adding it must be enough"""
     url: Final = f"{SPEAK_BASE}?model=aura-3-foo-en"
     monkeypatch.setitem(
@@ -488,5 +490,5 @@ def test_a_cost_map_row_named_after_a_new_voice_prices_it_at_that_rate(monkeypat
         pytest.param("1" * 5_000, 0, id="integer longer than the parser allows"),
     ],
 )
-def test_deepgram_speak_characters_counts_speak_text_and_never_raises(frame: str | bytes, expected: int):
+def test_deepgram_speak_characters_counts_speak_text_and_never_raises(frame: str | bytes, expected: int) -> None:
     assert deepgram_speak_characters(frame) == expected
