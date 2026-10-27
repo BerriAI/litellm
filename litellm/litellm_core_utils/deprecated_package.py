@@ -19,7 +19,7 @@ class _AliasLoader(importlib.abc.Loader):
         return self.module
 
     def exec_module(self, module: ModuleType) -> None:
-        module.__spec__ = self.spec
+        self.module.__spec__ = self.spec
 
 
 @dataclass(frozen=True, slots=True)

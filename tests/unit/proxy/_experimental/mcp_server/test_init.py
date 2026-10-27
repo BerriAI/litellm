@@ -39,7 +39,7 @@ def test_old_stdio_gate_import_leaves_the_mcp_server_unloaded(monkeypatch: pytes
             monkeypatch.delitem(sys.modules, name)
     monkeypatch.delitem(sys.modules, "litellm.proxy.mcp_server.server")
 
-    with pytest.warns(DeprecationWarning):
+    with pytest.warns(DeprecationWarning, match="litellm.proxy.mcp_server"):
         old_stdio_gate = importlib.import_module(f"{OLD_PACKAGE}.stdio_gate")
 
     assert old_stdio_gate is litellm.proxy.mcp_server.stdio_gate
