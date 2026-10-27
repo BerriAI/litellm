@@ -517,6 +517,29 @@ class TestUseResponsesApiBridgeFlag:
         assert upstream.call_count == 1
         assert json.loads(upstream.calls[0].request.read())["max_tool_calls"] == 5
 
+    def test_bridge_still_honors_additional_drop_params_for_a_responses_field_it_cannot_translate(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    ):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        upstream: Final = _databricks_chat_upstream(respx_mock)
+
+        response: Final = litellm.responses(
+            model="databricks/my-custom-model",
+            input="Hello",
+            max_tool_calls=5,
+            additional_drop_params=["max_tool_calls"],
+            api_base="https://example.databricks.test/serving-endpoints",
+            api_key="fake-databricks-api-key",
+            num_retries=0,
+        )
+
+        assert upstream.call_count == 1
+        assert json.loads(upstream.calls[0].request.read()) == {
+            "model": "my-custom-model",
+            "messages": [{"role": "user", "content": "Hello"}],
+        }
+        assert response.output[0].content[0].text == "Answer"
+
     def test_bridge_still_quietly_drops_responses_fields_it_already_handles(
         self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
     ):

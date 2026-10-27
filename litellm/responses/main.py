@@ -639,6 +639,16 @@ def _chat_completion_request_fields(allowed_openai_params: Sequence[str] | None)
     ).difference(_RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED)
 
 
+_ADDITIONAL_DROP_PARAMS: Final = TypeAdapter(list[str])
+
+
+def _explicitly_dropped_fields(kwargs: Mapping[str, object]) -> frozenset[str]:
+    try:
+        return frozenset(_ADDITIONAL_DROP_PARAMS.validate_python(kwargs.get("additional_drop_params")))
+    except ValidationError:
+        return frozenset()
+
+
 def _bridge_kwargs(
     kwargs: Mapping[str, object],
     responses_api_provider_config: BaseResponsesAPIConfig | None,
@@ -647,9 +657,8 @@ def _bridge_kwargs(
     forwarded_keys: Final = _chat_completion_request_fields(allowed_openai_params)
     if responses_api_provider_config is not None:
         return MappingProxyType({key: value for key, value in kwargs.items() if key in forwarded_keys})
-    untranslatable: Final = tuple(
-        sorted(key for key in _RESPONSES_REQUEST_FIELDS.difference(forwarded_keys) if kwargs.get(key) is not None)
-    )
+    candidate_keys: Final = _RESPONSES_REQUEST_FIELDS.difference(forwarded_keys, _explicitly_dropped_fields(kwargs))
+    untranslatable: Final = tuple(sorted(key for key in candidate_keys if kwargs.get(key) is not None))
     if untranslatable and not drops_unsupported_params(kwargs.get("drop_params")):
         return _UntranslatableResponsesFields(untranslatable)
     dropped_keys: Final = _RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED.union(untranslatable)
