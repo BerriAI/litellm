@@ -82,6 +82,7 @@ import {
   clientDateRangePatch,
   clientPanelPatch,
   dateRangeFromParams,
+  defaultUsageDateRange,
   dateRangePatch,
   entitySelectionPatch,
   selectedEntitiesFromParams,
@@ -108,22 +109,23 @@ interface UsagePageProps {
   teams: Team[];
   organizations: Organization[];
   teamsLoading?: boolean;
+  defaultTimeRange?: string;
 }
 
-const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoading = false }) => {
+const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoading = false, defaultTimeRange }) => {
   const { accessToken, userRole, userId: userID, premiumUser, isLoading: authorizationLoading } = useAuthorized();
   const [gatewayActivityData, setGatewayActivityData] = useState<FetchedGatewayActivity | null>(null);
 
-  // Create initial dates outside of state to prevent recreation
-  const initialFromDate = useMemo(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), []);
-  const initialToDate = useMemo(() => new Date(), []);
+  const defaultRange = useMemo(() => defaultUsageDateRange(defaultTimeRange), [defaultTimeRange]);
 
   const [urlParams, setUrlParams] = useQueryStates(usageUrlParsers);
   const { range, from, to } = urlParams;
   const dateValue = useMemo<DateRangePickerValue>(
-    () => dateRangeFromParams({ range, from, to }) ?? { from: initialFromDate, to: initialToDate },
-    [range, from, to, initialFromDate, initialToDate],
+    () => dateRangeFromParams({ range, from, to }) ?? defaultRange.value,
+    [range, from, to, defaultRange],
   );
+
+  const presetShortLabel = range ?? (from === null && to === null ? defaultRange.preset : null);
 
   const { client_range, client_from, client_to } = urlParams;
   const clientDateValue = useMemo<DateRangePickerValue>(
@@ -481,7 +483,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
             </div>
           )}
           <div className="flex items-center gap-2">
-            <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} presetShortLabel={urlParams.range} />
+            <AdvancedDatePicker
+              value={dateValue}
+              onValueChange={handleDateChange}
+              presetShortLabel={presetShortLabel}
+            />
             <Button variant="outline" onClick={() => void copyToClipboard(window.location.href, "Link copied")}>
               <Link2 />
               Copy Share Link
@@ -815,7 +821,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
           startTime={clientStartTime}
           endTime={clientEndTime}
           dateValue={clientDateValue}
-          presetShortLabel={client_range ?? (clientInheritsRange ? urlParams.range : null)}
+          presetShortLabel={client_range ?? (clientInheritsRange ? presetShortLabel : null)}
           onDateChange={(value, preset) => void setUrlParams(clientDateRangePatch(value, preset), { scroll: false })}
           agent={clientInheritsRange ? clientAgent : null}
           daily={clientInheritsRange ? tagDaily : []}

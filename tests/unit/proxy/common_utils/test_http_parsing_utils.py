@@ -65,6 +65,100 @@ def _starlette_request(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [b"[]", b'[["model", "test"]]', b"null", b'"s"', b"1", b"true", b"false"],
+)
+@pytest.mark.parametrize("path", ["/v1/messages", "/vertex_ai/v1/messages", "/lens/datasets"])
+async def test_read_request_body_rejects_non_object_json(body: bytes, path: str) -> None:
+    request: Final = _starlette_request(body, "application/json", path)
+
+    for _ in range(2):
+        with pytest.raises(ProxyException) as exc_info:
+            await read_request_body(request)
+        assert exc_info.value.code == "400"
+        assert exc_info.value.type == "invalid_request_error"
+        assert exc_info.value.param == "request_body"
+        assert exc_info.value.message == "Invalid JSON payload: expected an object"
+        assert _safe_get_request_parsed_body(request) is None
+    assert await request.body() == body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [b"[1e400]", b"1e400", b"[NaN]"])
+async def test_read_request_body_rejects_non_objects_from_json_fallback(body: bytes) -> None:
+    with pytest.raises(ProxyException) as exc_info:
+        await read_request_body(_starlette_request(body, "application/json"))
+    assert exc_info.value.code == "400"
+    assert exc_info.value.message == "Invalid JSON payload: expected an object"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body, invalid_unicode",
+    [
+        (b"[]", False),
+        (b"null", False),
+        (b'"value"', False),
+        (b"[1e400]", False),
+        (b'"\\ud800"', True),
+        (b'["\\ud800"]', True),
+        (b'{"value":"\\ud800"}', True),
+    ],
+)
+@pytest.mark.parametrize("dispatch", ["custom", "provider", "lens"])
+async def test_pass_through_body_validation_preserves_bytes(dispatch: str, body: bytes, invalid_unicode: bool) -> None:
+    from fastapi.routing import APIRoute
+    from litellm.proxy.lens.adapter import lens_request
+    from litellm.proxy.lens.buffering import LensRoute
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import vertex_proxy_route
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import create_pass_through_route
+
+    path: Final = {"custom": "/v1/messages", "provider": "/vertex_ai/predict", "lens": "/lens/datasets"}[dispatch]
+    route: Final = {
+        "custom": APIRoute(path, create_pass_through_route(path, "https://upstream.test"), methods=["POST"]),
+        "provider": APIRoute("/vertex_ai/{endpoint:path}", vertex_proxy_route, methods=["POST"]),
+        "lens": LensRoute("/lens/{path:path}", lens_request, methods=["POST"]),
+    }[dispatch]
+    incoming: Final = _starlette_request(body, "application/json", path)
+    _, dispatched_scope = route.matches(incoming.scope)
+    request: Final = Request({**incoming.scope, **dispatched_scope}, incoming.receive)
+
+    for _ in range(2):
+        if invalid_unicode:
+            with pytest.raises(ProxyException) as exc_info:
+                await read_request_body(request)
+            assert exc_info.value.code == "400"
+        else:
+            assert await read_request_body(request) == {}
+    assert await request.body() == body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("optional", [False, True])
+@pytest.mark.parametrize("body", [b"null", b" \nnull\t", b"[]", b'"value"'])
+async def test_null_body_respects_the_dispatched_body_requirement(optional: bool, body: bytes) -> None:
+    from fastapi.routing import APIRoute
+    from litellm.proxy.management_endpoints.key_management_endpoints import generate_key_fn
+    from litellm.proxy.spend_tracking.spend_management_endpoints import global_spend_end_users
+
+    endpoint: Final = global_spend_end_users if optional else generate_key_fn
+    route: Final = APIRoute("/audit", endpoint, methods=["POST"])
+    incoming: Final = _starlette_request(body, "application/json", "/audit")
+    _, dispatched_scope = route.matches(incoming.scope)
+    request: Final = Request({**incoming.scope, **dispatched_scope}, incoming.receive)
+
+    if optional and body.strip() == b"null":
+        assert await read_request_body(request) == {}
+        assert await request.json() is None
+    else:
+        with pytest.raises(ProxyException) as exc_info:
+            await read_request_body(request)
+        assert exc_info.value.code == "400"
+    assert await request.body() == body
+
+
+@pytest.mark.asyncio
 async def test_read_request_body_marks_body_received_once_with_its_size(monkeypatch: pytest.MonkeyPatch):
     events: list[tuple[str, dict[str, str | int]]] = []  # mutable-ok: recorder for the injected phase_event double
 
@@ -131,14 +225,20 @@ async def test_read_raw_json_body_is_none_for_form_bodies():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("content_type", ["application/x-protobuf", "application/protobuf; charset=binary"])
-async def test_protobuf_body_is_not_parsed_as_json(content_type):
-    # OTLP trace exports (POST /v1/traces) are binary protobuf; arbitrary bytes like these
-    # used to hit the JSON surrogate-repair path and fail auth with a 400.
-    body = b"\n\xa2\x01\n\x1c\n\x0cservice.name\x12\x0c\n\nswarm\xed\xa0\x80\xff"
-    request = _starlette_request(body, content_type)
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"\n\xa2\x01\n\x1c\n\x0cservice.name\x12\x0c\n\nswarm\xed\xa0\x80\xff",
+        pytest.param(b"100000000", id="protobuf-also-json-number"),
+    ],
+)
+async def test_protobuf_body_is_not_parsed_as_json(content_type: str, body: bytes) -> None:
+    request: Final = _starlette_request(body, content_type)
 
     assert await read_request_body(request) == {}
-    assert await request.body() == body  # body is still readable by the endpoint
+    assert await read_request_body(request) == {}
+    assert await read_raw_json_body(request) == body
+    assert await request.body() == body
 
 
 @pytest.mark.asyncio
