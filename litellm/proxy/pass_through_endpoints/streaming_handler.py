@@ -408,11 +408,15 @@ class PassThroughStreamingHandler:
                 request_mapping: Final = _REQUEST_BODY.validate_python(request_body)
                 error_event: Final = parse_anthropic_error_event(complete_frames)
                 if error_event is not None:
-                    await AnthropicPassthroughLoggingHandler.log_error_frame_as_failure(
-                        attempt_logging_obj=litellm_logging_obj,
+                    error_type, message, status_code = error_event
+                    await PassThroughStreamingHandler.schedule_stream_failure_logging(
+                        litellm_logging_obj=litellm_logging_obj,
+                        endpoint_type=endpoint_type,
                         request_body=request_mapping,
-                        all_chunks=raw_bytes,
-                        error_event=error_event,
+                        raw_bytes=raw_bytes,
+                        exception=anthropic_error_frame_exception(
+                            error_type, message, status_code, str(litellm_logging_obj.model)
+                        ),
                     )
                     return
                 if not litellm_logging_obj.model_call_details["prompt_cache_response_complete"]:
@@ -424,7 +428,7 @@ class PassThroughStreamingHandler:
                     consumer_closed: Final = (
                         litellm_logging_obj.model_call_details.get("anthropic_stream_end") == "closed"
                     )
-                    await litellm_logging_obj.dispatch_failure_handlers(
+                    await litellm_logging_obj.dispatch_attempt_failure_handlers(
                         litellm.APIError(
                             status_code=499 if consumer_closed else 502,
                             message=(
@@ -436,7 +440,6 @@ class PassThroughStreamingHandler:
                             model=str(litellm_logging_obj.model),
                         ),
                         "",
-                        prefer_async_handlers=True,
                     )
                     return
             # TinyFish billing is owned by the detached poller; the $0 fallback below is only for streams with no run_id

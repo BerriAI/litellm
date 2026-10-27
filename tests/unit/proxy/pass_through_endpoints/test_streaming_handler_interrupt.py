@@ -759,6 +759,7 @@ async def test_chunk_processor_logs_failure_not_success_on_mid_stream_exception(
 def _anthropic_stream_dropping_after(frames: tuple[bytes, ...]) -> httpx.Response:
     mock: Final = MagicMock(spec=httpx.Response)
     mock.status_code = 200
+    mock.headers = httpx.Headers()
 
     async def _aiter_bytes() -> AsyncIterator[bytes]:
         for frame in frames:
