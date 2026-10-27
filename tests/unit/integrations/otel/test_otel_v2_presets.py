@@ -2,13 +2,19 @@
 event loop: the preset does no network I/O, and a custom exporter mints the JWT
 lazily on its first export (in the BatchSpanProcessor worker thread)."""
 
+import json
+
 import httpx
 import pytest
+import requests_mock
+import respx
+from opentelemetry.sdk.trace.export import SpanExportResult
 
 from litellm.integrations.otel.plumbing import providers
 from litellm.integrations.otel.model.config import ExporterSpec
 from litellm.integrations.otel.presets import agentops as agentops_mod
 from litellm.integrations.otel.presets.agentops import (
+    _AGENTOPS_AUTH_ENDPOINT,
     _AGENTOPS_ENDPOINT,
     _AGENTOPS_EXPORTER_KIND,
     _build_agentops_exporter,
@@ -75,55 +81,49 @@ def test_dynamic_cred_presets_tag_exporter_with_matching_owner(monkeypatch):
         )
 
 
-def test_agentops_exporter_mints_jwt_lazily(monkeypatch):
-    pytest.importorskip("opentelemetry.exporter.otlp.proto.http.trace_exporter")
-    monkeypatch.setattr(
-        agentops_mod, "_fetch_agentops_jwt", lambda _k: {"token": "jwt-xyz"}
-    )
-    spec = ExporterSpec(
-        kind=_AGENTOPS_EXPORTER_KIND,
-        endpoint=_AGENTOPS_ENDPOINT,
-        options={"api_key": "ak"},
-    )
-    exporter = _build_agentops_exporter(spec)
-
-    # No auth header until the first export triggers the (off-loop) fetch.
-    assert "Authorization" not in exporter._session.headers
-    exporter._ensure_authenticated()
-    assert exporter._session.headers["Authorization"] == "Bearer jwt-xyz"
-
-    # Cached: a second resolution does not re-fetch.
-    calls = []
-    monkeypatch.setattr(
-        agentops_mod,
-        "_fetch_agentops_jwt",
-        lambda k: calls.append(k) or {"token": "again"},
-    )
-    exporter._ensure_authenticated()
-    assert calls == []
-
-
-def test_agentops_exporter_tolerates_fetch_failure(monkeypatch):
-    pytest.importorskip("opentelemetry.exporter.otlp.proto.http.trace_exporter")
-
-    def _raise(_k):
-        raise RuntimeError("auth down")
-
-    monkeypatch.setattr(agentops_mod, "_fetch_agentops_jwt", _raise)
-    exporter = _build_agentops_exporter(
+def _agentops_exporter():
+    return _build_agentops_exporter(
         ExporterSpec(
             kind=_AGENTOPS_EXPORTER_KIND,
             endpoint=_AGENTOPS_ENDPOINT,
             options={"api_key": "ak"},
         )
     )
-    exporter._ensure_authenticated()  # must not raise
-    assert "Authorization" not in exporter._session.headers
+
+
+def test_agentops_exporter_mints_the_jwt_once_on_first_export_and_sends_it_with_every_batch():
+    pytest.importorskip("opentelemetry.exporter.otlp.proto.http.trace_exporter")
+    with respx.mock() as auth, requests_mock.Mocker() as collector:
+        token_route = auth.post(_AGENTOPS_AUTH_ENDPOINT).respond(200, json={"token": "jwt-xyz"})
+        collector.post(_AGENTOPS_ENDPOINT, status_code=200)
+        exporter = _agentops_exporter()
+        assert token_route.call_count == 0, "building the exporter must not fetch the JWT"
+
+        results = [exporter.export(()), exporter.export(())]
+
+    assert results == [SpanExportResult.SUCCESS, SpanExportResult.SUCCESS]
+    assert [json.loads(call.request.content) for call in token_route.calls] == [{"api_key": "ak"}]
+    assert [request.headers.get("Authorization") for request in collector.request_history] == [
+        "Bearer jwt-xyz",
+        "Bearer jwt-xyz",
+    ]
+
+
+def test_agentops_exporter_still_exports_without_auth_when_the_jwt_fetch_fails():
+    pytest.importorskip("opentelemetry.exporter.otlp.proto.http.trace_exporter")
+    with respx.mock() as auth, requests_mock.Mocker() as collector:
+        auth.post(_AGENTOPS_AUTH_ENDPOINT).mock(side_effect=httpx.ConnectError("auth down"))
+        collector.post(_AGENTOPS_ENDPOINT, status_code=200)
+
+        result = _agentops_exporter().export(())
+
+    assert result is SpanExportResult.SUCCESS
+    assert [request.headers.get("Authorization") for request in collector.request_history] == [None]
 
 
 def test_fetch_jwt_uses_owned_client_not_shared_pool(monkeypatch):
     """The fetch owns a short-lived client and closes it, rather than closing
-    the process-wide cached ``_get_httpx_client`` pool shared by other callers."""
+    the process-wide cached ``get_httpx_client`` pool shared by other callers."""
     closed = {"n": 0}
 
     class _FakeResponse:
@@ -146,7 +146,7 @@ def test_fetch_jwt_uses_owned_client_not_shared_pool(monkeypatch):
             return _FakeResponse()
 
     monkeypatch.setattr(httpx, "Client", _FakeClient)
-    assert not hasattr(agentops_mod, "_get_httpx_client")
+    assert not hasattr(agentops_mod, "get_httpx_client")
 
     result = _fetch_agentops_jwt("api-key")
     assert result == {"token": "jwt-123"}
@@ -212,3 +212,69 @@ def test_newrelic_preset_unset_content_knob_keeps_default(monkeypatch):
     from litellm.integrations.otel.presets.newrelic import newrelic_preset
 
     assert newrelic_preset().capture_span_content is False
+
+
+def test_signoz_preset_reads_env_endpoint_and_key(monkeypatch):
+    monkeypatch.setenv("SIGNOZ_INGESTION_ENDPOINT", "https://ingest.eu.signoz.cloud:443")
+    monkeypatch.setenv("SIGNOZ_INGESTION_KEY", "env-ingestion-key")
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.presets.signoz import signoz_preset
+
+    cfg = signoz_preset()
+    spec = next(e for e in cfg.exporters if e.owner == ExporterOwner.SIGNOZ)
+    assert spec.kind == "otlp_http"
+    assert spec.endpoint == "https://ingest.eu.signoz.cloud:443"
+    assert spec.headers == "signoz-ingestion-key=env-ingestion-key"
+    assert spec.requires_headers is True
+    assert "genai" in cfg.mapper_names
+
+
+def test_signoz_preset_without_key_is_self_hosted(monkeypatch):
+    # A self-hosted collector accepts unauthenticated OTLP, so requiring headers
+    # would drop exports that would have succeeded.
+    monkeypatch.setenv("SIGNOZ_INGESTION_ENDPOINT", "http://signoz-collector.internal:4318")
+    monkeypatch.delenv("SIGNOZ_INGESTION_KEY", raising=False)
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.presets.signoz import signoz_preset
+
+    cfg = signoz_preset()
+    spec = next(e for e in cfg.exporters if e.owner == ExporterOwner.SIGNOZ)
+    assert spec.endpoint == "http://signoz-collector.internal:4318"
+    assert spec.headers is None
+    assert spec.requires_headers is False
+
+
+def test_signoz_preset_has_no_default_endpoint(monkeypatch):
+    # No region table and no default host: the preset never invents a destination.
+    monkeypatch.delenv("SIGNOZ_INGESTION_ENDPOINT", raising=False)
+    monkeypatch.delenv("SIGNOZ_INGESTION_KEY", raising=False)
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.presets.signoz import signoz_preset
+
+    cfg = signoz_preset()
+    spec = next(e for e in cfg.exporters if e.owner == ExporterOwner.SIGNOZ)
+    assert spec.endpoint is None
+
+
+def test_signoz_preset_endpoint_passed_through_verbatim(monkeypatch):
+    # The plumbing appends the signal path, so pre-appending would double it.
+    monkeypatch.setenv("SIGNOZ_INGESTION_ENDPOINT", "https://ingest.us.signoz.cloud:443/v1/traces")
+    monkeypatch.delenv("SIGNOZ_INGESTION_KEY", raising=False)
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.plumbing.providers import _otlp_traces_endpoint
+    from litellm.integrations.otel.presets.signoz import signoz_preset
+
+    cfg = signoz_preset()
+    spec = next(e for e in cfg.exporters if e.owner == ExporterOwner.SIGNOZ)
+    assert spec.endpoint == "https://ingest.us.signoz.cloud:443/v1/traces"
+    assert _otlp_traces_endpoint(spec.endpoint) == "https://ingest.us.signoz.cloud:443/v1/traces"
+
+
+def test_signoz_preset_accepts_the_factory_call_shape(monkeypatch):
+    monkeypatch.setenv("SIGNOZ_INGESTION_ENDPOINT", "http://127.0.0.1:1")
+    monkeypatch.delenv("SIGNOZ_INGESTION_KEY", raising=False)
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
+
+    cfg = PRESET_BY_CALLBACK["signoz"](allow_missing_credentials=True)
+    assert any(e.owner == ExporterOwner.SIGNOZ for e in cfg.exporters)

@@ -15,6 +15,7 @@ const TREATMENT_BY_ASSET: Readonly<Record<string, LogoTreatment>> = {
   "lago.svg": "invert",
   "lambda.svg": "invert",
   "langflow.svg": "invert",
+  "litellm_monogram.svg": "invert",
   "lmstudio.svg": "invert",
   "moonshot.svg": "invert",
   "nebius.svg": "invert",

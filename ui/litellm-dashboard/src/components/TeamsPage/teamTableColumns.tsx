@@ -3,8 +3,8 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { Copy, KeyRound, Layers, MoreHorizontal, Pencil, Trash2, Users } from "lucide-react";
 
-import { DataTableSortHeader } from "@/components/shared/DataTable";
-import { DateCell, IdentityCell, SpendBudgetCell } from "@/components/shared/table_cells";
+import { DataTableMultiSortHeader, DataTableSortHeader } from "@/components/shared/DataTable";
+import { DateCell, IdentityCell } from "@/components/shared/table_cells";
 import { buttonVariants } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -20,6 +20,7 @@ import { copyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils";
 
 import { Team } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
+import { TeamMemberSpendBudgetCell } from "./TeamMemberSpendBudgetCell";
 
 interface ResourceTone {
   icon: typeof Users;
@@ -174,9 +175,10 @@ export const getTeamTableColumns = ({
       id: "organization_alias",
       accessorKey: "organization_id",
       meta: { title: "Organization" },
-      header: "Organization",
+      header: ({ column }) => <DataTableSortHeader column={column} title="Organization" />,
+      sortDescFirst: false,
       size: 160,
-      enableSorting: false,
+      enableSorting: true,
       cell: (info) => {
         const orgId = info.getValue() as string | null;
         if (!orgId) return <span className="text-muted-foreground">—</span>;
@@ -202,7 +204,16 @@ export const getTeamTableColumns = ({
           </div>
         ),
       },
-      header: "Resources",
+      header: ({ table }) => (
+        <DataTableMultiSortHeader
+          table={table}
+          fields={[
+            { id: "members", label: "Members" },
+            { id: "models", label: "Models" },
+            { id: "keys_count", label: "Keys" },
+          ]}
+        />
+      ),
       size: 210,
       enableSorting: false,
       cell: ({ row }) => <ResourcesCell team={row.original} />,
@@ -210,16 +221,23 @@ export const getTeamTableColumns = ({
     {
       id: "spend",
       accessorKey: "spend",
-      meta: { title: "Spend / Budget", skeleton: "meter" },
-      header: "Spend / Budget",
+      meta: { title: "Spend / Budget", skeleton: "meter", numeric: true },
+      header: ({ table }) => (
+        <DataTableMultiSortHeader
+          table={table}
+          fields={[
+            { id: "spend", label: "Spend" },
+            { id: "max_budget", label: "Budget" },
+          ]}
+        />
+      ),
       size: 200,
       enableSorting: false,
       cell: ({ row }) => (
-        <SpendBudgetCell
-          spend={row.original.spend}
-          maxBudget={row.original.max_budget}
-          spendDecimals={2}
-          budgetDecimals={2}
+        <TeamMemberSpendBudgetCell
+          teamSpend={row.original.spend}
+          teamMaxBudget={row.original.max_budget}
+          callerMembership={row.original.caller_membership}
         />
       ),
     },
@@ -234,24 +252,36 @@ export const getTeamTableColumns = ({
     },
     {
       id: "members",
-      meta: { title: "Members" },
-      header: "Members",
+      accessorFn: teamMemberCount,
+      meta: { title: "Members", numeric: true },
+      header: ({ column }) => <DataTableSortHeader column={column} title="Members" />,
+      sortDescFirst: true,
       size: 110,
-      enableSorting: false,
+      enableSorting: true,
       cell: ({ row }) => <span className="text-sm tabular-nums">{teamMemberCount(row.original)}</span>,
     },
     {
       id: "models",
-      meta: { title: "Models" },
-      header: "Models",
+      accessorFn: teamModelCount,
+      meta: { title: "Models", numeric: true },
+      header: ({ column }) => <DataTableSortHeader column={column} title="Models" />,
+      sortDescFirst: true,
       size: 100,
-      enableSorting: false,
+      enableSorting: true,
       cell: ({ row }) => <span className="text-sm tabular-nums">{teamModelCount(row.original)}</span>,
     },
     {
       id: "rate_limits",
       meta: { title: "Rate Limits", skeleton: "twoLine" },
-      header: "Rate Limits",
+      header: ({ table }) => (
+        <DataTableMultiSortHeader
+          table={table}
+          fields={[
+            { id: "tpm_limit", label: "TPM" },
+            { id: "rpm_limit", label: "RPM" },
+          ]}
+        />
+      ),
       size: 140,
       enableSorting: false,
       cell: ({ row }) => (
@@ -265,9 +295,10 @@ export const getTeamTableColumns = ({
       id: "updated_at",
       accessorKey: "updated_at",
       meta: { title: "Updated" },
-      header: "Updated",
+      header: ({ column }) => <DataTableSortHeader column={column} title="Updated" />,
+      sortDescFirst: false,
       size: 130,
-      enableSorting: false,
+      enableSorting: true,
       cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback="Never" />,
     },
     {

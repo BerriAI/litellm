@@ -419,8 +419,9 @@ To run *many* tenants from a single config, call the module with
 ```hcl
 module "litellm" {
   for_each = toset(["acme", "globex"])
-  source   = "github.com/BerriAI/litellm//terraform/litellm/aws?ref=<tag>"
-  tenant   = each.key
+  source    = "github.com/BerriAI/litellm//terraform/litellm/aws?ref=<tag>"
+  image_tag = "<litellm release tag>"
+  tenant    = each.key
   env      = "prod"
   region   = "us-west-2"
   azs      = ["us-west-2a", "us-west-2b"]
@@ -485,6 +486,8 @@ provider "aws" {
 module "litellm" {
   source = "github.com/BerriAI/litellm//terraform/litellm/aws?ref=<tag>"
 
+  image_tag = "<litellm release tag>" # a git ref ships no image default, a registry version does
+
   region = "us-west-2"
   tenant = "acme"
   env    = "prod"
@@ -499,12 +502,20 @@ top — set org-wide tags there, per-deployment tags via the `tags` input.
 
 ## Image pulls
 
-The defaults pull from `ghcr.io/berriai/litellm-<component>:v1.86.0-dev`,
+The defaults pull `ghcr.io/berriai/litellm-<component>:${image_tag}`,
 which is anonymous-readable. There are four images: `litellm-gateway`,
 `litellm-backend`, `litellm-ui`, and `litellm-migrations` (slim image used
 only by the one-off migration task — runs `prisma migrate deploy` against
-the writer DB and exits). Bump them together when bumping LiteLLM. To pull
-from a private registry:
+the writer DB and exits). A published module version (Terraform Registry
+`BerriAI/litellm/aws`) ships with `image_tag` stamped to its own release
+tag, so bumping the module version bumps all four images with it. A git
+ref of this monorepo has no published images of its own, so there
+`image_tag` is required. Set `image_tag` to pin a different LiteLLM
+release, or
+`image_registry` to pull the same four images from a mirror. Set
+`gateway_image` / `backend_image` / `ui_image` / `migrations_image` only
+for a per-component override (custom build, different tag). To pull from a
+private registry:
 
 - **ECR (same account)**: the execution role already has
   `AmazonECSTaskExecutionRolePolicy`, which grants ECR pull for repos in

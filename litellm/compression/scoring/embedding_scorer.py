@@ -6,7 +6,7 @@ Computes cosine similarity between the query embedding and each message embeddin
 
 import math
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import Final
 
 from litellm.caching.dual_cache import DualCache
 
@@ -75,7 +75,7 @@ def embedding_score_messages(
     # Filter out empty texts — replace with a placeholder to maintain indexing
     processed_texts: Final = [t if t.strip() else "empty" for t in texts]
 
-    kwargs: dict[str, Any] = {
+    kwargs: dict[str, object] = {
         "model": model,
         "input": processed_texts,
         "caching": cache is not None,
