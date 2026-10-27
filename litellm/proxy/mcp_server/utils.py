@@ -266,6 +266,15 @@ def server_applies_tool_allowlist(mcp_server: object) -> bool:
     return is_server_tool_allowlist_enforced(mcp_server) or bool(allowed_tools)
 
 
+def is_tool_allowed_for_server(tool_name: str, server: MCPServer) -> bool:
+    """Evaluate server tool policy for a bare name, with explicit denials taking precedence."""
+    if match_known_tool_name(tool_name, server, server.disallowed_tools or ()) is not None:
+        return False
+    return not server_applies_tool_allowlist(server) or (
+        match_known_tool_name(tool_name, server, server.allowed_tools or ()) is not None
+    )
+
+
 def validate_and_normalize_mcp_server_payload(payload: McpServerPayloadLike) -> None:
     """
     Validate and normalize MCP server payload fields (server_name, alias, and
