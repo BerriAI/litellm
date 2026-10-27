@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import React from "react";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import useAuthorized from "./useAuthorized";
@@ -8,8 +8,6 @@ import useAuthorized from "./useAuthorized";
 vi.unmock("@/app/(dashboard)/hooks/useAuthorized");
 
 const replaceMock = vi.fn();
-
-const UI_CONFIG_DELAY_MS = 50;
 
 const uiConfigResponse = {
   server_root_path: "/llmproxy",
@@ -19,13 +17,18 @@ const uiConfigResponse = {
   sso_configured: false,
 };
 
+let uiConfigGate = Promise.withResolvers<typeof uiConfigResponse>();
+
 const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
   const url = typeof input === "string" ? input : input.toString();
-  if (!url.includes("/litellm/.well-known/litellm-ui-config")) {
+  if (url.endsWith("/ui/litellm-runtime-config.json")) {
+    return { ok: false } as Response;
+  }
+  if (!url.endsWith("/.well-known/litellm-ui-config")) {
     throw new Error(`unexpected fetch: ${url}`);
   }
-  await new Promise((resolve) => setTimeout(resolve, UI_CONFIG_DELAY_MS));
-  return { ok: true, json: async () => uiConfigResponse } as unknown as Response;
+  const config = await uiConfigGate.promise;
+  return { ok: true, json: async () => config } as unknown as Response;
 });
 
 const wrapper = ({ children }: { children: React.ReactNode }) => {
@@ -37,6 +40,7 @@ describe("useAuthorized under SERVER_ROOT_PATH", () => {
   const originalLocation = window.location;
 
   beforeEach(() => {
+    uiConfigGate = Promise.withResolvers<typeof uiConfigResponse>();
     vi.stubGlobal("fetch", fetchMock);
     Object.defineProperty(window, "location", {
       value: {
@@ -62,6 +66,7 @@ describe("useAuthorized under SERVER_ROOT_PATH", () => {
 
   it("sends an unauthenticated visitor to a login URL that keeps the server root path", async () => {
     renderHook(() => useAuthorized(), { wrapper });
+    await act(async () => uiConfigGate.resolve(uiConfigResponse));
 
     await waitFor(() => {
       expect(replaceMock).toHaveBeenCalled();
@@ -77,8 +82,11 @@ describe("useAuthorized under SERVER_ROOT_PATH", () => {
     renderHook(() => useAuthorized(), { wrapper });
 
     expect(replaceMock).not.toHaveBeenCalled();
-    await new Promise((resolve) => setTimeout(resolve, UI_CONFIG_DELAY_MS / 2));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(/\/\.well-known\/litellm-ui-config$/));
+    });
     expect(replaceMock).not.toHaveBeenCalled();
+    await act(async () => uiConfigGate.resolve(uiConfigResponse));
 
     await waitFor(() => {
       expect(replaceMock).toHaveBeenCalled();
