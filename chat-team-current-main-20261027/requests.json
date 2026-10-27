@@ -1,0 +1,53 @@
+[
+  {
+    "path": "/responses",
+    "model": "team-chat-proof",
+    "teamId": "team-proof-research",
+    "inputCount": 1,
+    "files": [
+      {
+        "filename": "document.txt",
+        "dataLength": 151
+      }
+    ],
+    "previousResponseIdPresent": false,
+    "status": 200
+  },
+  {
+    "path": "/responses",
+    "model": "team-chat-proof",
+    "teamId": "team-proof-research",
+    "inputCount": 1,
+    "files": [],
+    "previousResponseIdPresent": true,
+    "status": 200
+  },
+  {
+    "path": "/responses",
+    "model": "team-chat-proof",
+    "teamId": "team-proof-clinical",
+    "inputCount": 5,
+    "files": [
+      {
+        "filename": "document.txt",
+        "dataLength": 151
+      }
+    ],
+    "previousResponseIdPresent": false,
+    "status": 200
+  },
+  {
+    "path": "/responses",
+    "model": "team-chat-proof",
+    "teamId": "team-proof-clinical",
+    "inputCount": 1,
+    "files": [
+      {
+        "filename": "document.txt",
+        "dataLength": 151
+      }
+    ],
+    "previousResponseIdPresent": false,
+    "status": 200
+  }
+]

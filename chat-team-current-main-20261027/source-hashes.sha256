@@ -1,0 +1,6 @@
+5b49657c1c59b86e1b81f4145d94ce2fd06dde364fd5f8da0dfd558e95290c90  ui/litellm-dashboard/src/app/chat/page.tsx
+db0c20c2dd4407f668b07c57122b90512482126dc7fb9756407d38baba54bc35  ui/litellm-dashboard/src/components/chat/ChatModelPicker.tsx
+b9efb55749445f62417afcace8982037fea70b03bcfe3b06faba11bdffba8261  ui/litellm-dashboard/src/components/chat/runChatRequest.ts
+47ddfd15545ac23a5aa1191c98fda77cbe6ba870ad0cadb90ef3955d1d1a0035  ui/litellm-dashboard/src/components/chat/imageHelpers.ts
+cbcf5850080cac9cbe47a8fb18a603c04b546d8d071ace07b357213d4b7ce49e  litellm/proxy/auth/ui_session_models.py
+0a23d02185a785aa541bfd03ed48921440160c0fe7b04f243afb0b8634e209c3  litellm/proxy/auth/user_api_key_auth.py

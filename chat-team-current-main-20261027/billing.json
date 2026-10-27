@@ -1,0 +1,50 @@
+{
+  "user": {
+    "user_id": "team-proof-user",
+    "spend": 0.00372
+  },
+  "teams": [
+    {
+      "team_id": "team-proof-research",
+      "spend": 0.001445
+    },
+    {
+      "team_id": "team-proof-clinical",
+      "spend": 0.002275
+    }
+  ],
+  "requests": [
+    {
+      "team_id": "team-proof-research",
+      "user": "team-proof-user",
+      "model": "openai/gpt-5.5",
+      "spend": 0.0008500000000000001,
+      "completion_tokens": 21,
+      "prompt_tokens": 44
+    },
+    {
+      "team_id": "team-proof-research",
+      "user": "team-proof-user",
+      "model": "openai/gpt-5.5",
+      "spend": 0.000595,
+      "completion_tokens": 9,
+      "prompt_tokens": 65
+    },
+    {
+      "team_id": "team-proof-clinical",
+      "user": "team-proof-user",
+      "model": "openai/gpt-5.5",
+      "spend": 0.001095,
+      "completion_tokens": 21,
+      "prompt_tokens": 93
+    },
+    {
+      "team_id": "team-proof-clinical",
+      "user": "team-proof-user",
+      "model": "openai/gpt-5.5",
+      "spend": 0.00118,
+      "completion_tokens": 32,
+      "prompt_tokens": 44
+    }
+  ]
+}
