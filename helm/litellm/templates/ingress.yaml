@@ -122,7 +122,9 @@
   at "/" Prefix would swallow the whole backend management API) instead of
   adding to it.
 */}}
-{{- $builtinPathKeys := list "/test|Exact" "/debug/memory/summary|Exact" "/|Prefix" -}}
+{{- $backendCatchAllPath := ternary "/*" "/" (eq $controller "alb") -}}
+{{- $backendCatchAllType := ternary "ImplementationSpecific" "Prefix" (eq $controller "alb") -}}
+{{- $builtinPathKeys := list "/test|Exact" "/debug/memory/summary|Exact" (printf "%s|%s" $backendCatchAllPath $backendCatchAllType) -}}
 {{- if $hasComponentHosts }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -265,10 +267,10 @@ spec:
             precedence over a default, and before the backend catch-all.
             Position only decides the match on controllers that honour manifest
             order: the AWS Load Balancer Controller (ingress.controller=alb)
-            sorts Exact paths first and Prefix paths longest-first, but keeps
-            ImplementationSpecific paths in manifest order, which is what the
-            /*.txt rule above already depends on. ingress-nginx ignores order
-            and serves the longest matching location.
+            sorts all Prefix paths ahead of ImplementationSpecific paths. Both
+            /*.txt and the ALB catch-all use ImplementationSpecific so their
+            manifest order is preserved. ingress-nginx serves the longest
+            matching location.
           */}}
           {{- range $idx, $extra := .Values.ingress.extraPaths }}
           {{- if not (kindIs "map" $extra) }}
@@ -288,7 +290,7 @@ spec:
           {{- end }}
           {{- $pathType := include "litellm.ingress.pathType" (dict "controller" $controller "path" $extra.path "pathType" $requestedPathType) }}
           {{- if eq $extra.path "/" }}
-          {{- fail (printf "ingress.extraPaths[%d]: path / is already routed in both directions, Exact to ui and Prefix to backend, so no pathType leaves a request for an entry here to capture" $idx) }}
+          {{- fail (printf "ingress.extraPaths[%d]: path / is already routed to ui, with unmatched paths routed to backend" $idx) }}
           {{- end }}
           {{- if has (printf "%s|%s" $extra.path $pathType) $builtinPathKeys }}
           {{- fail (printf "ingress.extraPaths[%d]: path %s with pathType %s is already routed by this chart, and a duplicate would take it over rather than add to it" $idx $extra.path $pathType) }}
@@ -302,8 +304,8 @@ spec:
                   number: {{ $target.port }}
           {{- end }}
           # --- Catch-all → backend (management API: /key/*, /user/*, /team/*, ...) ---
-          - path: /
-            pathType: Prefix
+          - path: {{ $backendCatchAllPath | quote }}
+            pathType: {{ $backendCatchAllType }}
             backend:
               service:
                 name: {{ $backendName }}

@@ -11,8 +11,8 @@ tests:
       - equal:
           path: spec.rules[0].http.paths[-1]
           value:
-            path: /
-            pathType: Prefix
+            path: /*
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: RELEASE-NAME-litellm-backend
@@ -48,8 +48,8 @@ tests:
       - equal:
           path: spec.rules[0].http.paths[-1]
           value:
-            path: /
-            pathType: Prefix
+            path: /*
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: RELEASE-NAME-litellm-backend
@@ -218,7 +218,7 @@ tests:
           service: gateway
     asserts:
       - failedTemplate:
-          errorMessage: "ingress.extraPaths[0]: path / is already routed in both directions, Exact to ui and Prefix to backend, so no pathType leaves a request for an entry here to capture"
+          errorMessage: "ingress.extraPaths[0]: path / is already routed to ui, with unmatched paths routed to backend"
 
   - it: rejects a root entry that would take over the UI root
     set:
@@ -229,7 +229,7 @@ tests:
           service: gateway
     asserts:
       - failedTemplate:
-          errorMessage: "ingress.extraPaths[0]: path / is already routed in both directions, Exact to ui and Prefix to backend, so no pathType leaves a request for an entry here to capture"
+          errorMessage: "ingress.extraPaths[0]: path / is already routed to ui, with unmatched paths routed to backend"
 
   # A root ImplementationSpecific entry duplicates no built-in pair, so the
   # duplicate check alone would admit it. It is still dead: the built-in
@@ -244,7 +244,7 @@ tests:
           service: gateway
     asserts:
       - failedTemplate:
-          errorMessage: "ingress.extraPaths[0]: path / is already routed in both directions, Exact to ui and Prefix to backend, so no pathType leaves a request for an entry here to capture"
+          errorMessage: "ingress.extraPaths[0]: path / is already routed to ui, with unmatched paths routed to backend"
 
   - it: rejects an entry that would take over a UI prefix
     set:
