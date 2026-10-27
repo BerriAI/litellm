@@ -71,6 +71,7 @@ from litellm.proxy.mcp_server.legacy_callbacks import ElicitationCallback
 from litellm.proxy.mcp_server.mcp_context import active_mcp_request_ctx_var
 from litellm.proxy.mcp_server.mcp_server_manager import (
     ListedToolsCaller,
+    MCPServerConfig,
     MCPServerManager,
     _deserialize_json_dict,
     _deserialize_json_list,
@@ -1075,6 +1076,50 @@ class TestMCPServerManager:
         server = next(iter(manager.config_mcp_servers.values()))
         assert server.alias == "friendly_alias"
         assert server.server_name == "validserver"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "allowed_entry,denied_entry,expect_warning",
+        [
+            ("read_status", "read_status", True),
+            ("policy-read_status", "read_status", True),
+            ("read_status", "policy-read_status", True),
+            ("policy-read_status", "policy-read_status", True),
+            ("read_status", "READ_STATUS", False),
+            ("read_status", "delete_records", False),
+        ],
+    )
+    async def test_config_tool_policy_overlap_warns_without_changing_lists(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        allowed_entry: str,
+        denied_entry: str,
+        expect_warning: bool,
+    ) -> None:
+        monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+        manager: Final = MCPServerManager()
+        config: Final[dict[str, MCPServerConfig]] = {
+            "policy_server": {
+                "alias": "policy",
+                "transport": MCPTransport.stdio,
+                "command": "python",
+                "allowed_tools": [allowed_entry],
+                "disallowed_tools": [denied_entry],
+            }
+        }
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await manager.load_servers_from_config(config)
+
+        server: Final = next(iter(manager.config_mcp_servers.values()))
+        warnings: Final = tuple(
+            message for message in caplog.messages if "both allowed_tools and disallowed_tools" in message
+        )
+        assert len(warnings) == int(expect_warning)
+        assert all("will be blocked" in message for message in warnings)
+        assert server.allowed_tools == [allowed_entry]
+        assert server.disallowed_tools == [denied_entry]
 
     def _oauth2_config(self, **overrides):
         base = {
@@ -6431,53 +6476,42 @@ class TestMCPServerManager:
         )
 
     @pytest.mark.asyncio
-    async def test_pre_call_tool_check_allowed_tools_takes_precedence(self):
-        """Test that allowed_tools list takes precedence over disallowed_tools list"""
-        manager = MCPServerManager()
-
-        # Create server with both allowed_tools and disallowed_tools
-        # Note: The logic in check_allowed_or_banned_tools prioritizes allowed_tools
-        server = MCPServer(
+    @pytest.mark.parametrize("tool_name,denied", [("tool1", False), ("tool2", True), ("tool3", True)])
+    async def test_pre_call_tool_check_disallowed_tools_takes_precedence(
+        self, tool_name: str, denied: bool
+    ) -> None:
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(
             server_id="test-server",
             name="test-server",
             transport=MCPTransport.stdio,
             allowed_tools=["tool1", "tool2"],
-            disallowed_tools=["tool2", "tool3"],  # tool2 is in both lists
+            disallowed_tools=["tool2", "tool3"],
         )
-
-        # Mock dependencies - set object_permission and object_permission_id to None
-        # so permission checks return None (no restrictions)
         user_api_key_auth: Final = UserAPIKeyAuth()
-        proxy_logging_obj = _mock_proxy_logging()
-
-        # Mock the async methods that pre_call_tool_check calls
-        proxy_logging_obj.create_mcp_request_object_from_kwargs = MagicMock(return_value={})
-        proxy_logging_obj.convert_mcp_to_llm_format = MagicMock(return_value={})
-        proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
-
-        # tool2 should be allowed since it's in allowed_tools (takes precedence)
-        await manager.pre_call_tool_check(
-            name="tool2",
-            arguments={"param": "value"},
-            server_name="test-server",
-            user_api_key_auth=user_api_key_auth,
-            proxy_logging_obj=proxy_logging_obj,
-            server=server,
-        )
-
-        # tool3 should be blocked since it's not in allowed_tools
-        with pytest.raises(HTTPException) as exc_info:
+        if not denied:
             await manager.pre_call_tool_check(
-                name="tool3",
-                arguments={"param": "value"},
+                name=tool_name,
+                arguments={},
                 server_name="test-server",
                 user_api_key_auth=user_api_key_auth,
-                proxy_logging_obj=proxy_logging_obj,
+                proxy_logging_obj=None,
+                server=server,
+            )
+            return
+
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.pre_call_tool_check(
+                name=tool_name,
+                arguments={},
+                server_name="test-server",
+                user_api_key_auth=user_api_key_auth,
+                proxy_logging_obj=None,
                 server=server,
             )
 
         assert exc_info.value.status_code == 403
-        assert "Tool tool3 is not allowed for server test-server" in exc_info.value.detail["error"]
+        assert f"Tool {tool_name} is not allowed for server test-server" in exc_info.value.detail["error"]
 
     async def test_get_tools_from_server_add_prefix(self):
         """Verify _get_tools_from_server respects add_prefix True/False."""
