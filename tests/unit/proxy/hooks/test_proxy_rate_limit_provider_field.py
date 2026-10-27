@@ -43,6 +43,7 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.exceptions import RateLimitError
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.batch_rate_limiter import (
     BatchFileUsage,
     PROXY_BatchRateLimiter,
@@ -61,14 +62,12 @@ from litellm.proxy.hooks.parallel_request_limiter import (
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3,
 )
-from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import (
     PROXY_LLM_PROVIDER_FALLBACK,
     resolve_llm_provider_for_rate_limit,
 )
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.agents import AgentResponse
-
 
 # ---------------------------------------------------------------------------
 # Helper class itself
@@ -830,6 +829,7 @@ async def test_max_iterations_limiter_populates_provider():
 
     with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry") as mock_registry:
         mock_registry.get_agent_by_id.return_value = _make_iter_agent(max_iterations=1)
+        mock_registry.stable_agent_id.return_value = "agent-iter"
 
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
@@ -867,6 +867,7 @@ async def test_max_iterations_limiter_unknown_model_falls_back():
 
     with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry") as mock_registry:
         mock_registry.get_agent_by_id.return_value = _make_iter_agent(max_iterations=1)
+        mock_registry.stable_agent_id.return_value = "agent-iter"
 
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
@@ -913,7 +914,8 @@ async def test_max_budget_per_session_limiter_populates_provider():
 
     with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry") as mock_registry:
         mock_registry.get_agent_by_id.return_value = _make_session_budget_agent(max_budget=1.0)
-        with patch.object(handler, "_get_current_spend", new=AsyncMock(return_value=5.0)):
+        mock_registry.stable_agent_id.return_value = "agent-session-budget"
+        with patch.object(handler, "_get_agent_spend", new=AsyncMock(return_value=5.0)):
             with pytest.raises(HTTPException) as exc_info:
                 await handler.async_pre_call_hook(
                     user_api_key_dict=user_api_key_dict,
@@ -938,7 +940,8 @@ async def test_max_budget_per_session_limiter_unknown_model_falls_back():
 
     with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry") as mock_registry:
         mock_registry.get_agent_by_id.return_value = _make_session_budget_agent(max_budget=1.0)
-        with patch.object(handler, "_get_current_spend", new=AsyncMock(return_value=5.0)):
+        mock_registry.stable_agent_id.return_value = "agent-session-budget"
+        with patch.object(handler, "_get_agent_spend", new=AsyncMock(return_value=5.0)):
             with pytest.raises(HTTPException) as exc_info:
                 await handler.async_pre_call_hook(
                     user_api_key_dict=user_api_key_dict,
