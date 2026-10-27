@@ -34,6 +34,22 @@ fn inference() -> Arc<Gateway> {
 }
 
 #[rstest]
+#[case::configured("custom_auth: auth.user_api_key_auth", false)]
+#[case::null("custom_auth: null", true)]
+#[case::absent("master_key: key", true)]
+fn custom_auth_is_left_to_the_python_proxy(#[case] setting: &str, #[case] builds: bool) {
+    let config =
+        Config::from_yaml(&format!("model_list: []\ngeneral_settings:\n  {setting}\n")).unwrap();
+    match litellm_gateway::build_inference(&config) {
+        Ok(_) => assert!(builds),
+        Err(error) => {
+            assert!(!builds);
+            assert!(matches!(error, litellm_gateway::Error::CustomAuth));
+        }
+    }
+}
+
+#[rstest]
 #[case::authorized("/v1/messages", Some("Bearer gateway-key"), Some("gateway-key"), 400)]
 #[case::missing_token("/v1/messages", None, Some("gateway-key"), 401)]
 #[case::wrong_token("/v1/messages", Some("Bearer wrong"), Some("gateway-key"), 401)]

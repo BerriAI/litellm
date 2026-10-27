@@ -4,6 +4,8 @@ pub enum Error {
     Http(#[from] litellm_http::Error),
     #[error("environment_variables values must be strings, numbers or booleans")]
     Environment,
+    #[error("general_settings.custom_auth is only supported by the Python proxy")]
+    CustomAuth,
     #[error("MCP host does not yet support configured setting {0}")]
     McpSetting(String),
     #[error(transparent)]

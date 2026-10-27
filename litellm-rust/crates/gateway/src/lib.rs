@@ -17,7 +17,7 @@ use axum::{
 use http_body_util::BodyExt;
 
 use litellm_config::Config;
-use litellm_gateway_auth::Auth;
+use litellm_gateway_auth::{Auth, Bearer};
 use litellm_gateway_inference::{Gateway, ModelRouter};
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution, SslVerify,
@@ -29,6 +29,14 @@ use litellm_tracing::ByteChunk;
 use uuid::Uuid;
 
 pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
+    if config
+        .general_settings
+        .additional_fields
+        .get("custom_auth")
+        .is_some_and(|value| !value.is_null())
+    {
+        return Err(Error::CustomAuth);
+    }
     let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
     let environment = secrets::environment_values(&config.environment_variables)?;
     let lookup = |name: &str| {
@@ -138,7 +146,7 @@ pub fn router(
         .route_layer(axum::middleware::from_fn(auth::bind_session_owner))
         .route_layer(axum::middleware::from_fn_with_state(
             auth,
-            litellm_gateway_auth::authenticate,
+            litellm_gateway_auth::authenticate::<Bearer>,
         ))
         .layer(axum::middleware::from_fn(log_request));
     let health = Router::new().route("/health/readiness", axum::routing::get(readiness));

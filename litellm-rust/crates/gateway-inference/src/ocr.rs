@@ -1,4 +1,4 @@
-use litellm_gateway_auth::AuthenticatedRequest;
+use litellm_gateway_auth::Caller;
 use std::sync::Arc;
 
 use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
@@ -15,16 +15,16 @@ use crate::{
 
 pub(crate) async fn create(
     State(gateway): State<Arc<Gateway>>,
-    identity: AuthenticatedRequest,
+    caller: Caller,
     headers: HeaderMap,
     body: InferenceBody,
 ) -> Result<impl IntoResponse, Error> {
-    handle(&gateway, &identity, &headers, body).await.map(Json)
+    handle(&gateway, &caller, &headers, body).await.map(Json)
 }
 
 async fn handle(
     gateway: &Gateway,
-    identity: &AuthenticatedRequest,
+    caller: &Caller,
     headers: &HeaderMap,
     InferenceBody {
         fields: body,
@@ -36,7 +36,7 @@ async fn handle(
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
     let deployment = request::resolve_deployment(gateway, &body)?;
-    request::authorize_model(identity, deployment, &body).await?;
+    request::authorize_model(caller, deployment, &body)?;
     let document = match upload {
         Some(upload) => OcrDocumentInput::Bytes {
             bytes: upload.bytes,

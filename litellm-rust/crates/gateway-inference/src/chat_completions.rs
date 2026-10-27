@@ -1,4 +1,4 @@
-use litellm_gateway_auth::AuthenticatedRequest;
+use litellm_gateway_auth::Caller;
 use std::sync::Arc;
 
 use axum::{
@@ -13,15 +13,15 @@ use crate::{Error, Gateway, JsonObject, request};
 
 pub(crate) async fn create(
     State(gateway): State<Arc<Gateway>>,
-    identity: AuthenticatedRequest,
+    caller: Caller,
     JsonObject(body): JsonObject,
 ) -> Result<impl IntoResponse, Error> {
-    handle(&gateway, &identity, body).await
+    handle(&gateway, &caller, body).await
 }
 
 pub(crate) async fn create_from_model_path(
     State(gateway): State<Arc<Gateway>>,
-    identity: AuthenticatedRequest,
+    caller: Caller,
     Path(model): Path<String>,
     JsonObject(body): JsonObject,
 ) -> Result<impl IntoResponse, Error> {
@@ -32,17 +32,17 @@ pub(crate) async fn create_from_model_path(
             .collect(),
         Some(_) => body,
     };
-    handle(&gateway, &identity, body).await
+    handle(&gateway, &caller, body).await
 }
 
 async fn handle(
     gateway: &Gateway,
-    identity: &AuthenticatedRequest,
+    caller: &Caller,
     body: Map<String, Value>,
 ) -> Result<Response, Error> {
     let deployment = request::resolve_deployment(gateway, &body)?;
-    request::authorize_model(identity, deployment, &body).await?;
-    let (body, cache_options) = crate::caching::prepare(identity, body)?;
+    request::authorize_model(caller, deployment, &body)?;
+    let (body, cache_options) = crate::caching::prepare(caller, body)?;
     let route = gateway.chat_completions.clone();
     let route = match &gateway.cache {
         Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
