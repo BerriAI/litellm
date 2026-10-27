@@ -401,6 +401,68 @@ async def test_systemone_uses_evaluation_pricing(respx_mock: respx.MockRouter, d
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("base_url", "expected_api_base"),
+    [
+        ("https://onprem.example/v1", "https://onprem.example/v1"),
+        ("", "https://fallback.example/v1"),
+        (None, "https://fallback.example/v1"),
+        (123, "https://fallback.example/v1"),
+    ],
+)
+async def test_openai_decisions_honors_base_url_alias(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    base_url: str | int | None,
+    expected_api_base: str,
+) -> None:
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://fallback.example/v1")
+    route: Final = respx_mock.post(f"{expected_api_base}/decisions").respond(json=_OPENAI_RESPONSE)
+    response: Final = await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_key="backend-secret-key",
+        base_url=base_url,
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer backend-secret-key"
+    assert response._hidden_params["model"] == "openai/gpt-6-luna"
+
+
+@pytest.mark.asyncio
+async def test_openai_systemone_honors_base_url_alias(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://onprem.example/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    response: Final = await litellm.asystemone(
+        model="openai/gpt-6-luna",
+        state="The package arrived broken.",
+        questions=_QUESTIONS,
+        api_key="backend-secret-key",
+        base_url="https://onprem.example/v1",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer backend-secret-key"
+    assert response._hidden_params["model"] == "openai/gpt-6-luna"
+
+
+@pytest.mark.asyncio
+async def test_openai_decisions_api_base_wins_over_base_url_alias(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_key="test-key",
+        api_base="https://api.openai.com/v1",
+        base_url="https://onprem.example/v1",
+    )
+
+    assert route.called
+
+
+@pytest.mark.asyncio
 async def test_systemone_falls_back_to_plain_pricing_without_decisions_row(
     respx_mock: respx.MockRouter,
 ) -> None:
@@ -3799,3 +3861,35 @@ def test_nace_upstream_failures_preserve_status_and_message(
         )
     assert getattr(error.value, "status_code") == status
     assert upstream.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize(
+    "usage", [None, {"input_tokens": 0, "output_tokens": 0}, {"input_tokens": 12, "output_tokens": 1}]
+)
+async def test_native_decisions_distinguishes_missing_usage_from_reported_zero(
+    is_async: bool, usage: dict[str, int] | None, respx_mock: respx.MockRouter
+) -> None:
+    body = {
+        **{key: value for key, value in _RESPONSE.items() if key != "usage"},
+        "model": "jev-1.13.0",
+        **({"usage": usage} if usage is not None else {}),
+    }
+    respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=body)
+    params = {"model": "typesafe/jev-1.13.0", "state": "review", "questions": _QUESTIONS, "api_key": "synthetic-key"}
+    response = await litellm.adecisions(**params) if is_async else litellm.decisions(**params)
+
+    assert isinstance(response, DecisionsResponse)
+    if usage is None:
+        assert response.usage is None
+        assert response._hidden_params.get("response_cost") is None
+        with pytest.raises(ValueError, match="provider did not report usage"):
+            litellm.completion_cost(completion_response=response)
+    else:
+        assert response.usage is not None
+        assert response.usage.input_tokens == usage["input_tokens"]
+        assert response.usage.output_tokens == usage["output_tokens"]
+        expected = litellm.completion_cost(completion_response=response)
+        assert response._hidden_params["response_cost"] == pytest.approx(expected)
+        assert (expected == 0) == (usage["input_tokens"] == usage["output_tokens"] == 0)

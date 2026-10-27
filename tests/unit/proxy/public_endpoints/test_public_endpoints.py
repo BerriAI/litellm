@@ -1431,6 +1431,30 @@ async def test_get_autorouter_presets_fetches_once_per_process(monkeypatch, rese
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("flag", ["LITELLM_LOCAL_AUTOROUTER_PRESETS", "LITELLM_OFFLINE_MODE"])
+async def test_get_autorouter_presets_local_flags_serve_bundled_without_fetching(
+    monkeypatch, reset_autorouter_presets_cache, flag
+):
+    from litellm.proxy.public_endpoints.public_endpoints import (
+        _load_bundled_autorouter_presets,
+        get_autorouter_presets,
+    )
+
+    monkeypatch.delenv("LITELLM_LOCAL_AUTOROUTER_PRESETS", raising=False)
+    monkeypatch.setenv(flag, "True")
+    calls = []
+
+    async def fake_fetch(url):
+        calls.append(url)
+        raise AssertionError("no fetch when the bundled catalog is forced")
+
+    presets = await get_autorouter_presets(url="https://example.test/presets.json", fetch=fake_fetch)
+
+    assert presets == _load_bundled_autorouter_presets()
+    assert calls == []
+
+
+@pytest.mark.asyncio
 async def test_get_autorouter_presets_single_flight_on_concurrent_cold_start(
     monkeypatch, reset_autorouter_presets_cache
 ):

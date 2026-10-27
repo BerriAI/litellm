@@ -7693,6 +7693,47 @@ class TestMCPDcrBridgeDualCredential:
         assert "invalid_token" in str(exc_info.value.headers)
 
 
+@pytest.mark.parametrize("public_path", ["/toolset/analysis/mcp", "/analysis/mcp", "/mcp", "/mcp/", "/mcp/proxy"])
+@pytest.mark.parametrize("root_path", ["", "/litellm"])
+@pytest.mark.parametrize("invalid_token", [False, True])
+def test_gateway_challenge_metadata_contains_the_public_resource(
+    public_path: str, root_path: str, invalid_token: bool,
+) -> None:
+    from mcp.shared.auth_utils import check_resource_allowed
+    from starlette.requests import Request
+    from starlette.types import Scope
+
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import _gateway_dcr_challenge
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_aggregate_protected_resource_response,
+        oauth_protected_resource_root,
+    )
+
+    scope: Final[Scope] = {
+        "type": "http", "method": "POST", "scheme": "https", "path": "/mcp",
+        "root_path": root_path, "_original_path": f"{root_path}{public_path}",
+        "headers": [(b"host", b"gateway.example.com")],
+    }
+    request: Final = Request(scope)
+    challenge: Final = _gateway_dcr_challenge(request, "/mcp", None, invalid_token)
+    header: Final = (challenge.headers or {})["WWW-Authenticate"]
+    metadata_url: Final = header.split('resource_metadata="', 1)[1].split('"', 1)[0]
+    toolset: Final = public_path in ("/toolset/analysis/mcp", "/analysis/mcp")
+    assert metadata_url == (
+        f"https://gateway.example.com{root_path}/.well-known/oauth-protected-resource"
+        + ("" if toolset else "/mcp")
+    )
+    metadata: Final = (
+        oauth_protected_resource_root(request) if toolset else _build_aggregate_protected_resource_response(request)
+    )
+    assert check_resource_allowed(
+        requested_resource=f"https://gateway.example.com{root_path}{public_path}",
+        configured_resource=metadata["resource"],
+    )
+    assert challenge.status_code == 401
+    assert ('error="invalid_token"' in header) is invalid_token
+
+
 @pytest.mark.asyncio
 class TestAggregateGatewayDcrChallenge:
     """The mcp_gateway_dcr front door: a 401 on the aggregate /mcp scope must
@@ -10906,7 +10947,19 @@ async def test_catalog_refresh_reads_current_user_org_without_losing_resource_sc
 @pytest.mark.asyncio
 @pytest.mark.parametrize("current_groups", [[], ["replacement-group"]])
 async def test_catalog_refresh_uses_current_virtual_key_policy_and_keeps_session_scope(monkeypatch, current_groups):
-    permission = LiteLLM_ObjectPermissionTable(object_permission_id="current-policy", mcp_servers=["current-server"])
+    from litellm.proxy import proxy_server
+    from litellm.types.mcp_server.mcp_toolset import MCPToolset
+
+    permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="current-policy", mcp_toolsets=["session-toolset"]
+    )
+    toolset: Final = MCPToolset(
+        toolset_id="session-toolset", toolset_name="session-toolset",
+        tools=[{"server_id": "current-server", "tool_name": "read"}],
+    )
+    tables: Final = SimpleNamespace(litellm_mcptoolsettable=SimpleNamespace(find_many=AsyncMock(return_value=[toolset])))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=tables, writer_db=tables))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
     current = UserAPIKeyAuth(
         object_permission=permission,
         object_permission_id="current-policy",
@@ -10931,7 +10984,10 @@ async def test_catalog_refresh_uses_current_virtual_key_policy_and_keeps_session
     caller.mcp_toolset_id = "session-toolset"
     refreshed = await MCPRequestHandler.refresh_catalog_authority(caller)
     reload_key.assert_awaited_once_with("owned-key-hash", check_db_only=True)
-    assert refreshed.object_permission == permission
+    assert refreshed.object_permission == permission.model_copy(update={
+        "mcp_servers": ["current-server"], "mcp_toolsets": [],
+        "mcp_tool_permissions": {"current-server": ["read"]},
+    })
     assert refreshed.object_permission_id == "current-policy"
     assert (refreshed.team_id, refreshed.org_id, refreshed.project_id, refreshed.user_id) == (
         "new-team",

@@ -20,7 +20,7 @@ const RELEASE: LatestReleaseInfo = {
   new_features: 12,
   bug_fixes: 30,
   other_updates: 8,
-  release_url: "https://github.com/BerriAI/litellm/releases/tag/v1.103.0",
+  release_url: "https://docs.litellm.ai/release_notes/v1.103.0/v1-103-0",
 };
 
 const bell = (unread: number) =>
