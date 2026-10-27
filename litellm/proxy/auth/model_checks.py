@@ -266,12 +266,12 @@ def _hydrate_litellm_credential_name(
     if not credential_values:
         return litellm_params
 
-    litellm_params = litellm_params.model_copy()
-    for key, value in credential_values.items():
-        if key in _CREDENTIAL_LITELLM_PARAM_FIELDS and getattr(litellm_params, key, None) is None:
-            setattr(litellm_params, key, value)
-    litellm_params.litellm_credential_name = None
-    return litellm_params
+    updates: Final = {
+        key: value
+        for key, value in credential_values.items()
+        if key in _CREDENTIAL_LITELLM_PARAM_FIELDS and CredentialAccessor.is_unset(getattr(litellm_params, key, None))
+    }
+    return litellm_params.model_copy(update={**updates, "litellm_credential_name": None})
 
 
 def _is_routing_segment(

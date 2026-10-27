@@ -764,7 +764,7 @@ def _named_credential_values(kwargs: Mapping[str, object]) -> Mapping[str, objec
         {
             key: value
             for key, value in credential_api_key_secret_reference(credential.credential_values).items()
-            if key not in kwargs
+            if credential_accessor.is_unset(kwargs.get(key))
         }
     )
 
@@ -831,7 +831,7 @@ def load_credentials_from_list(kwargs: dict[str, object]) -> None:
 
 def _credential_updates(kwargs: Mapping[str, object]) -> Mapping[str, object]:
     credential_values: Final = _named_credential_values(kwargs)
-    api_key: Final = kwargs.get("api_key", credential_values.get("api_key"))
+    api_key: Final = credential_values.get("api_key", kwargs.get("api_key"))
     if not isinstance(api_key, AdminApiKeySecretReference):
         return credential_values
     secret: Final = _secret_behind_api_key_reference(
@@ -841,7 +841,7 @@ def _credential_updates(kwargs: Mapping[str, object]) -> Mapping[str, object]:
         upstream=MappingProxyType(
             {
                 "model": kwargs.get("model"),
-                **{key: kwargs.get(key, credential_values.get(key)) for key in API_KEY_UPSTREAM_PARAMS},
+                **{key: credential_values.get(key, kwargs.get(key)) for key in API_KEY_UPSTREAM_PARAMS},
             }
         ),
     )

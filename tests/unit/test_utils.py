@@ -7181,6 +7181,36 @@ def test_load_credentials_from_list_fills_kwargs_from_the_loaded_credential_with
     assert _credential_warnings(caplog) == []
 
 
+@pytest.mark.parametrize("unset_value", [None, "", " \t"])
+@pytest.mark.parametrize("secret_reference", [False, True])
+def test_blank_deployment_params_use_the_named_credentials_endpoint_and_key(
+    monkeypatch: pytest.MonkeyPatch, unset_value: str | None, secret_reference: bool
+) -> None:
+    monkeypatch.setenv("RELAY_TOKEN", "stored-key")
+    api_key: Final = "oidc/env/RELAY_TOKEN" if secret_reference else "stored-key"
+    credential: Final = CredentialItem(
+        credential_name="relay",
+        credential_values={"api_base": "https://credential.example/v1", "api_key": api_key},
+        credential_info={},
+    )
+    monkeypatch.setattr(litellm, "credential_list", [credential])
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post("https://credential.example/v1/chat/completions").respond(200, json=_MISTRAL_REPLY)
+        response: Final = litellm.completion(
+            model="openai/credential-test-model",
+            messages=[{"role": "user", "content": "ping"}],
+            litellm_credential_name="relay",
+            api_base=unset_value,
+            api_key=unset_value,
+        )
+        authorization: Final = upstream.calls.last.request.headers["Authorization"]
+
+    assert response.choices[0].message.content == "pong"
+    assert authorization == "Bearer stored-key"
+    assert credential.credential_values == {"api_base": "https://credential.example/v1", "api_key": api_key}
+
+
 _MISTRAL_CHAT_URL: Final = "https://api.mistral.ai/v1/chat/completions"
 _MISTRAL_REPLY: Final = {
     "id": "chatcmpl-oidc",
@@ -7569,7 +7599,6 @@ _CALLER_HOST_REFERENCE_REFUSAL: Final = "sends it only to that credential's own 
         ("https://api.mistral.ai/v1", "https://api.mistral.ai@caller.example/v1"),
         ("https://api.mistral.ai/v1", "https://api.mistral.ai:8443/v1"),
         ("https://api.mistral.ai/v1", "http://[api.mistral.ai/v1"),
-        ("https://mistral-gateway.example/v1", None),
     ],
     ids=[
         "another host",
@@ -7578,7 +7607,6 @@ _CALLER_HOST_REFERENCE_REFUSAL: Final = "sends it only to that credential's own 
         "userinfo trick",
         "another port",
         "unparseable",
-        "call clears the api_base",
     ],
 )
 def test_a_named_credentials_oidc_api_key_never_goes_to_an_api_base_the_credential_does_not_set(
