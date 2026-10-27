@@ -17,6 +17,7 @@ from litellm_proxy_extras import prisma_toolchain
 from litellm_proxy_extras._logging import logger
 from litellm_proxy_extras._redaction import _redact_credentials
 from litellm_proxy_extras.migration_lock import held_migration_lock
+from litellm_proxy_extras.migration_sources import materialize_prisma_dir
 from litellm_proxy_extras.prisma_toolchain import (
     PRISMA_COMMAND_TIMEOUT_ENV_VAR,
     PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR,
@@ -28,8 +29,10 @@ from litellm_proxy_extras.replica_identity import (
     REPLICA_IDENTITY_FULL_ENV_VAR,
     apply_replica_identity_full,
 )
-from litellm_proxy_extras.migration_sources import materialize_prisma_dir
-from litellm_proxy_extras.spend_logs.request_log_indexes import ensure_request_log_indexes, filter_request_log_index_diff
+from litellm_proxy_extras.spend_logs.request_log_indexes import (
+    ensure_request_log_indexes,
+    filter_request_log_index_diff,
+)
 
 if TYPE_CHECKING:
     import psycopg
@@ -721,7 +724,7 @@ class ProxyExtrasDBManager:
     def _prisma_schema_param(url: str) -> Optional[str]:
         """The `schema` query param Prisma uses to pick its target schema,
         or None when the URL does not set one."""
-        from urllib.parse import urlparse, parse_qsl
+        from urllib.parse import parse_qsl, urlparse
 
         return next(
             (v for k, v in parse_qsl(urlparse(url).query) if k == "schema"),

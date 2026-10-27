@@ -69,7 +69,8 @@ class TestSchemaCopy:
         (tmp_path / "schema.prisma").write_text("model LiteLLM_Other {\n  id String @id\n}\n", encoding="utf-8")
         (tmp_path / "spend_logs").mkdir()
         found: Final = checker.schema_copy_drift(tmp_path / "schema.prisma", tmp_path / "spend_logs")
-        assert found == ("schema.prisma has no `model LiteLLM_SpendLogs` block",) or "no `model LiteLLM_SpendLogs`" in found[0]
+        assert len(found) == 1
+        assert "no `model LiteLLM_SpendLogs` block" in found[0]
 
 
 class TestExitCode:

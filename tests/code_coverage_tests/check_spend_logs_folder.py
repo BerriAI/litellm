@@ -22,11 +22,15 @@ TABLE_RE: Final = re.compile(r"\bLiteLLM_SpendLogs\b", re.IGNORECASE)
 MODEL_BLOCK_RE: Final = re.compile(r"^model LiteLLM_SpendLogs \{\n.*?^\}\n", re.MULTILINE | re.DOTALL)
 
 
+def _shown(path: Path) -> Path:
+    return path.relative_to(REPO_ROOT) if path.is_relative_to(REPO_ROOT) else path
+
+
 def misplaced_migrations(shared_migrations: Path) -> tuple[str, ...]:
     scripts: Final = sorted(shared_migrations.glob("*/migration.sql"))
     return tuple(
         f"{script.parent.name}/migration.sql mentions LiteLLM_SpendLogs; move the migration to "
-        f"{SPEND_LOGS_DIR.relative_to(REPO_ROOT)}/migrations/"
+        f"{_shown(SPEND_LOGS_DIR)}/migrations/"
         for script in scripts
         if TABLE_RE.search(script.read_text(encoding="utf-8"))
     )
@@ -36,11 +40,10 @@ def schema_copy_drift(schema: Path, spend_logs_dir: Path) -> tuple[str, ...]:
     block: Final = MODEL_BLOCK_RE.search(schema.read_text(encoding="utf-8"))
     copy: Final = spend_logs_dir / "LiteLLM_SpendLogs.prisma"
     if block is None:
-        return (f"{schema.relative_to(REPO_ROOT)} has no `model LiteLLM_SpendLogs` block",)
+        return (f"{_shown(schema)} has no `model LiteLLM_SpendLogs` block",)
     if not copy.is_file() or copy.read_text(encoding="utf-8") != block.group():
         return (
-            f"{copy.relative_to(REPO_ROOT)} must equal the `model LiteLLM_SpendLogs` block in "
-            f"{schema.relative_to(REPO_ROOT)}; copy the block over",
+            f"{_shown(copy)} must equal the `model LiteLLM_SpendLogs` block in {_shown(schema)}; copy the block over",
         )
     return ()
 
