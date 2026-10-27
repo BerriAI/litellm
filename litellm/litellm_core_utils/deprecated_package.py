@@ -6,6 +6,7 @@ import sys
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import partial
 from types import ModuleType
 from typing import Final
 
@@ -13,12 +14,16 @@ from typing import Final
 @dataclass(frozen=True, slots=True)
 class _AliasLoader(importlib.abc.Loader):
     new_dotted: str
+    canonical_spec: importlib.machinery.ModuleSpec
+    old_dotted: str
 
     def create_module(self, spec: importlib.machinery.ModuleSpec) -> ModuleType:
         return importlib.import_module(self.new_dotted)
 
     def exec_module(self, module: ModuleType) -> None:
-        pass
+        module.__spec__ = self.canonical_spec  # rebind-ok: [LIT011] restore import metadata overwritten by importlib
+        if self.canonical_spec.submodule_search_locations is not None:
+            _alias_attributes(self.old_dotted, self.new_dotted)
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,9 +45,20 @@ class _AliasFinder(importlib.abc.MetaPathFinder):
             return None
         return importlib.util.spec_from_loader(
             fullname,
-            _AliasLoader(new_dotted),
+            _AliasLoader(new_dotted, new_spec, fullname),
             is_package=new_spec.submodule_search_locations is not None,
         )
+
+
+def _deprecated_attribute(old_name: str, new_name: str, name: str) -> ModuleType:
+    if importlib.util.find_spec(f"{new_name}.{name}") is None:
+        raise AttributeError(f"module {old_name!r} has no attribute {name!r}")
+    return importlib.import_module(f"{old_name}.{name}")
+
+
+def _alias_attributes(old_name: str, new_name: str) -> None:
+    if "__getattr__" not in vars(sys.modules[old_name]):
+        sys.modules[old_name].__getattr__ = partial(_deprecated_attribute, old_name, new_name)
 
 
 def alias_deprecated_package(old_name: str, new_package: ModuleType) -> None:
@@ -54,3 +70,4 @@ def alias_deprecated_package(old_name: str, new_package: ModuleType) -> None:
     finder: Final = _AliasFinder(old_name, new_package.__name__)
     if finder not in sys.meta_path:
         sys.meta_path.insert(0, finder)
+    _alias_attributes(old_name, new_package.__name__)
