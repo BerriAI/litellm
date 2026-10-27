@@ -7,12 +7,18 @@ import sys
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeAlias
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
-Schema = Mapping[str, Mapping[str, str]]
+Schema: TypeAlias = Mapping[str, Mapping[str, str]]
 MODELS: Final = re.compile(r"^[ \t]*model\s+(\w+)\s*\{(.*?)^[ \t]*\}", re.MULTILINE | re.DOTALL)
+
+
+class _Options(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    base_ref: str | None
+    base_commit: str | None
 
 
 def parse_model_fields(schema: str) -> Schema:
@@ -54,12 +60,20 @@ def check_breaking_changes(old_schema: Schema, new_schema: Schema) -> tuple[str,
 
 def main() -> int:
     parser: Final = argparse.ArgumentParser()
-    parser.add_argument("--base-ref", required=True)
-    options: Final = parser.parse_args()
-    base_ref: Final = TypeAdapter(str).validate_python(options.base_ref)
-    base: Final = subprocess.run(
-        ("git", "merge-base", "HEAD", base_ref), capture_output=True, text=True, check=True
-    ).stdout.strip()
+    baseline: Final = parser.add_mutually_exclusive_group(required=True)
+    baseline.add_argument("--base-ref")
+    baseline.add_argument("--base-commit")
+    options: Final = _Options.model_validate(vars(parser.parse_args()))
+    base: Final = (
+        options.base_commit
+        if options.base_commit is not None
+        else subprocess.run(
+            ("git", "merge-base", "HEAD", TypeAdapter(str).validate_python(options.base_ref)),
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    )
     previous: Final = subprocess.run(
         ("git", "show", f"{base}:schema.prisma"), capture_output=True, text=True, check=True
     ).stdout
@@ -69,7 +83,7 @@ def main() -> int:
     if changes:
         sys.stderr.write("\n".join(changes) + "\n")
         return 1
-    sys.stdout.write(f"Schema compatibility passed against merge base {base}\n")
+    sys.stdout.write(f"Schema compatibility passed against baseline {base}\n")
     return 0
 
 

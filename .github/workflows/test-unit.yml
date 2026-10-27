@@ -955,12 +955,36 @@ jobs:
         timeout-minutes: ${{ matrix.shard == 'db-and-spend' && 10 || 3 }}
         with:
           persist-credentials: false
-          fetch-depth: ${{ matrix.shard == 'db-and-spend' && '0' || '1' }}
+          fetch-depth: 1
 
       - name: Detect relevant changes
         id: changes
         timeout-minutes: 2
         uses: ./.github/actions/detect-changes
+
+      - name: Fetch schema comparison baseline
+        if: matrix.shard == 'db-and-spend' && steps.changes.outputs.decision != 'skip'
+        timeout-minutes: 3
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CHECKED_OUT_SHA: ${{ github.sha }}
+        run: |
+          for attempt in 1 2 3; do
+            if baseline="$(gh api "repos/${REPO}/compare/${DEFAULT_BRANCH}...${CHECKED_OUT_SHA}?per_page=1" --jq '.merge_base_commit.sha')" \
+              && [[ "$baseline" =~ ^[0-9a-f]{40}$ ]] \
+              && git fetch --no-tags --depth=1 origin "$baseline"; then
+              printf 'SCHEMA_BASE_COMMIT=%s\n' "$baseline" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "Schema baseline fetch failed, retrying attempt $((attempt + 1))/3"
+              sleep "$((attempt * 5))"
+            fi
+          done
+          echo "::error::Could not resolve and fetch the schema baseline after 3 attempts"
+          exit 1
 
       - name: Set up Python
         if: steps.changes.outputs.decision != 'skip'
@@ -994,7 +1018,6 @@ jobs:
         env:
           RUST_BRIDGE_ARTIFACT: ${{ needs.rust-bridge.outputs.artifact }}
           UNIT_SHARD: ${{ matrix.shard }}
-          SCHEMA_BASE_REF: origin/${{ github.event.repository.default_branch }}
         run: |
           diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
           if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
@@ -1007,7 +1030,7 @@ jobs:
           fi
           uv run --no-sync python -c 'import os, sys; print(sys.version); assert f"{sys.version_info.major}.{sys.version_info.minor}" == os.environ["UV_PYTHON"]'
           if [ "$UNIT_SHARD" = "db-and-spend" ]; then
-            uv run --no-sync python scripts/check_schema_compatibility.py --base-ref "$SCHEMA_BASE_REF"
+            uv run --no-sync python scripts/check_schema_compatibility.py --base-commit "$SCHEMA_BASE_COMMIT"
           fi
 
       - name: Cache Prisma binaries
