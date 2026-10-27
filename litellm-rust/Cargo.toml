@@ -109,6 +109,7 @@ serde_with = { version = "=3.21.0", default-features = false, features = ["std",
 sha2 = "0.10"
 syn = { version = "2", default-features = false }
 sqlx = { version = "0.9.0", default-features = false, features = ["json", "macros", "postgres", "runtime-tokio", "chrono", "tls-rustls-ring-native-roots"] }
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 proc-macro2 = "1"
 quote = "1"
 subtle = "2"

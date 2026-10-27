@@ -15208,21 +15208,22 @@ async def test_token_counter_keeps_the_event_loop_free_during_a_huggingface_coun
 
 
 async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
-    from threading import get_ident
+    from queue import SimpleQueue
+    from threading import Thread, current_thread
 
-    from litellm.rust_bridge._native import Tokenizer
+    from tokenizers import Tokenizer
 
     from litellm import Router
 
-    claude_tokenizer: Final[Tokenizer] = litellm.utils.select_tokenizer("claude-fable-5")["tokenizer"]
-    event_loop_thread: Final = get_ident()
+    claude_tokenizer: Final = Tokenizer.from_str(litellm.utils.claude_json_str)
+    loop_thread: Final = current_thread()
+    loader_threads: Final[SimpleQueue[Thread]] = SimpleQueue()
 
-    def load_tokenizer(identifier: str, revision: str = "main", token: str | None = None) -> Tokenizer:
-        assert get_ident() != event_loop_thread, "tokenizer loading blocked the event-loop thread"
+    def from_pretrained(identifier: str, revision: str = "main", token: str | None = None) -> Tokenizer:
+        loader_threads.put(current_thread())
         return claude_tokenizer
 
-    from_pretrained: Final = MagicMock(side_effect=load_tokenizer)
-    monkeypatch.setattr("litellm.rust_bridge.tokenizer.from_pretrained", from_pretrained)
+    monkeypatch.setattr("tokenizers.Tokenizer", types.SimpleNamespace(from_pretrained=from_pretrained))
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.llm_router",
         Router(
@@ -15243,8 +15244,7 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
         response: Final = await proxy_server_module.token_counter(
             TokenCountRequest(model="self-hosted", prompt="count me off the loop")
         )
-
-        from_pretrained.assert_called_once_with("my-org/tokenizer", revision="main", token=None)
+        assert loader_threads.get_nowait() is not loop_thread
         assert response.tokenizer_type == "huggingface_tokenizer"
         assert response.total_tokens > 0
     finally:

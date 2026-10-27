@@ -5,13 +5,19 @@ Based on the test patterns from other rerank providers and the current Vertex AI
 
 import json
 import os
+from datetime import datetime, timedelta
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import responses
+import respx
 
+import litellm
 from litellm.llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
 from litellm.types.rerank import RerankResponse
+from litellm.utils import ProviderConfigManager
 
 
 class TestVertexAIRerankTransform:
@@ -646,3 +652,83 @@ class TestVertexAIRerankTransform:
         second_call = mock_ensure_access_token.call_args_list[1]
         assert first_call.kwargs["credentials"] == "path/to/credentials.json"
         assert second_call.kwargs["credentials"] == "path/to/credentials.json"
+
+
+@pytest.fixture
+def clear_vertex_rerank_cache(request: pytest.FixtureRequest) -> None:
+    ProviderConfigManager._get_vertex_ai_rerank_config_cached.cache_clear()
+    request.addfinalizer(
+        ProviderConfigManager._get_vertex_ai_rerank_config_cached.cache_clear
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("clear_vertex_rerank_cache")
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_rerank_reuses_scoped_credentials_and_refreshes_expired_tokens(
+    is_async: bool,
+) -> None:
+    now: Final = datetime(2025, 1, 1)
+    credentials: Final = tuple(
+        json.dumps(
+            {
+                "type": "authorized_user",
+                "client_id": identity,
+                "client_secret": "synthetic-client-secret",
+                "refresh_token": f"synthetic-refresh-{identity}",
+            }
+        )
+        for identity in ("first-principal", "second-principal")
+    )
+    with (
+        patch("litellm.disable_aiohttp_transport", True),
+        patch("google.auth._helpers.utcnow", return_value=now) as clock,
+        responses.RequestsMock(assert_all_requests_are_fired=False) as token_http,
+        respx.mock as rank_http,
+    ):
+        for token in ("initial", "other-credential", "other-project", "renewed"):
+            token_http.post(
+                "https://oauth2.googleapis.com/token",
+                json={"access_token": token, "expires_in": 3600, "token_type": "Bearer"},
+            )
+        rank_http.post(
+            url__regex=r"https://discoveryengine\.googleapis\.com/v1/projects/[^/]+/"
+            r"locations/global/rankingConfigs/default_ranking_config:rank"
+        ).respond(200, json={"records": [{"id": "0", "score": 0.9}]})
+
+        async def rank(
+            credential: str, project: str, expected_token: str, refresh_count: int
+        ) -> None:
+            params: Final = {
+                "model": "vertex_ai/semantic-ranker-default@latest",
+                "query": f"Query for {expected_token}",
+                "documents": ["A relevant document"],
+                "vertex_credentials": credential,
+                "vertex_project": project,
+                "caching": False,
+                "num_retries": 0,
+            }
+            result: Final = (
+                await litellm.arerank(**params)
+                if is_async
+                else litellm.rerank(**params)
+            )
+            assert isinstance(result, RerankResponse)
+            assert result.results[0]["index"] == 0
+            assert len(token_http.calls) == refresh_count
+            request: Final = rank_http.calls.last.request
+            assert request.headers["Authorization"] == f"Bearer {expected_token}"
+            assert request.headers["X-Goog-User-Project"] == project
+            assert str(request.url) == (
+                f"https://discoveryengine.googleapis.com/v1/projects/{project}/"
+                "locations/global/rankingConfigs/default_ranking_config:rank"
+            )
+            assert json.loads(request.content)["query"] == params["query"]
+
+        await rank(credentials[0], "first-project", "initial", 1)
+        await rank(credentials[0], "first-project", "initial", 1)
+        await rank(credentials[1], "first-project", "other-credential", 2)
+        await rank(credentials[0], "second-project", "other-project", 3)
+        await rank(credentials[0], "first-project", "initial", 3)
+        clock.return_value = now + timedelta(hours=2)
+        await rank(credentials[0], "first-project", "renewed", 4)
