@@ -44,7 +44,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.llms.openai import OpenAIWebSearchOptions
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import get_model_info
 
 if TYPE_CHECKING:
@@ -89,6 +89,32 @@ def _proxy_router_fallback() -> "Router | None":
     except Exception:
         return None
     return _proxy_router
+
+
+def _store_response_cost_before_usage_flattening(completion_response: object, kwargs: Mapping[str, object]) -> None:
+    """Price the response while ``completion_response`` still carries its full usage breakdown.
+
+    ``translate_completion_output_params`` flattens the OpenAI-shaped usage into the
+    Anthropic response TypedDict, dropping ``completion_tokens_details.image_tokens``.
+    The proxy recomputes the ``x-litellm-response-cost`` header from the translated
+    response whenever the async success handler has not stored a cost yet, and that
+    recompute prices image output tokens at the text rate. Recording the usage and its
+    cost here, from the untouched ModelResponse, makes the header and the spend row
+    price the same tokens.
+    """
+    litellm_logging_obj: Final = litellm_logging_obj_from_kwargs(kwargs)
+    if litellm_logging_obj is None:
+        return
+    model_response: Final = cast(ModelResponse, completion_response)  # cast-ok: adapter returns ModelResponse
+    usage: Final = getattr(model_response, "usage", None)
+    if not isinstance(usage, Usage):
+        return
+    try:
+        response_cost: Final = litellm_logging_obj._response_cost_calculator(result=model_response)  # pyright: ignore[reportPrivateUsage]  # as the HTTP streaming iterator does
+    except Exception:  # noqa: BLE001  # pricing lookup failures vary by provider; never fail the response over them
+        verbose_logger.exception("Anthropic Adapter - failed to pre-compute response cost")
+        return
+    litellm_logging_obj.record_partial_usage_for_failure(usage, response_cost or 0.0)
 
 
 def _router_or_proxy_fallback(requested: "Router | None") -> "Router | None":
@@ -813,6 +839,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
+            _store_response_cost_before_usage_flattening(
+                completion_response,
+                cast(Mapping[str, object], kwargs),  # cast-ok: framework kwargs are a string-keyed request mapping
+            )
             _record_bridged_model_response(logging_obj, completion_response)
             anthropic_response: Final = ANTHROPIC_ADAPTER.translate_completion_output_params(
                 cast(ModelResponse, completion_response),
@@ -958,6 +988,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
+            _store_response_cost_before_usage_flattening(
+                completion_response,
+                cast(Mapping[str, object], kwargs),  # cast-ok: framework kwargs are a string-keyed request mapping
+            )
             _record_bridged_model_response(logging_obj, completion_response)
             anthropic_response: Final = ANTHROPIC_ADAPTER.translate_completion_output_params(
                 cast(ModelResponse, completion_response),
