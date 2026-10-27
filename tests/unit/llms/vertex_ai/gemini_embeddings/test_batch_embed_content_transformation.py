@@ -21,8 +21,10 @@ from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     _build_part_for_input,
-    file_reference_name,
     _is_multimodal_input,
+    _source_mime_type,
+    file_reference_name,
+    flatten_media_sources,
     process_embed_content_response,
     process_response,
     transform_openai_input_gemini_content,
@@ -305,7 +307,8 @@ class TestProcessResponse:
         assert result.usage.prompt_tokens > 0
 
     def test_nested_empty_list_raises(self):
-        with pytest.raises(ValueError, match="must not be empty"):
+        # local input validation: a 400 BadRequestError, not a ValueError that surfaces as a 500
+        with pytest.raises(BadRequestError, match="must not be empty"):
             transform_openai_input_gemini_content(
                 input=[[]],
                 model="gemini-embedding-2-preview",
@@ -313,7 +316,9 @@ class TestProcessResponse:
             )
 
     def test_nested_non_string_element_raises(self):
-        with pytest.raises(BadRequestError, match="must be strings or file content blocks, got list"):
+        with pytest.raises(
+            BadRequestError, match="must be strings, text content blocks, or file content blocks, got list"
+        ):
             transform_openai_input_gemini_content(
                 input=[[["doubly", "nested"]]],
                 model="gemini-embedding-2-preview",
@@ -519,7 +524,8 @@ class TestFileContentBlocks:
         assert parts[1] == {"text": "a solid color clip"}
 
     def test_embed_content_path_still_rejects_nested_lists(self) -> None:
-        with pytest.raises(ValueError, match="Nested"):
+        # local input validation: a 400 BadRequestError, not a ValueError that surfaces as a 500
+        with pytest.raises(BadRequestError, match="Nested"):
             transform_openai_input_gemini_embed_content(
                 input=[[_file_block(file_data=VIDEO_DATA_URI), "a solid color clip"]],
                 model=self.MODEL,
@@ -548,9 +554,7 @@ class TestFileContentBlocks:
             ({"type": "image_url", "image_url": {"url": IMAGE_DATA_URI}}, "Input should be 'file'"),
         ],
     )
-    def test_malformed_block_answers_400_naming_the_field(
-        self, block: dict[str, object], named_in_error: str
-    ) -> None:
+    def test_malformed_block_answers_400_naming_the_field(self, block: dict[str, object], named_in_error: str) -> None:
         with pytest.raises(BadRequestError, match=named_in_error):
             _build_part_for_input(block)
 
@@ -652,3 +656,178 @@ def test_gemini_embedding(respx_mock: respx.MockRouter) -> None:
     expected_prompt_tokens: Final = litellm.token_counter(model="gemini/gemini-embedding-001", text="Hello, world!")
     assert response.usage.prompt_tokens == expected_prompt_tokens
     assert response.usage.total_tokens == expected_prompt_tokens
+
+
+TEXT_BLOCK_DATA_PREFIX: Final = {
+    "type": "text",
+    "text": "data:application/octet-stream;base64,SGVsbG8= and surrounding prose",
+}
+TEXT_BLOCK_GCS: Final = {"type": "text", "text": "gs://my-bucket/build/output.txt"}
+TEXT_BLOCK_FILES: Final = {"type": "text", "text": "files/README.md is the docs entry point"}
+
+
+def _text_block(**overrides: object) -> dict[str, object]:
+    block: Final = {"type": "text", "text": "some plain text"}
+    block.update(overrides)
+    return block
+
+
+class TestTypedTextBlocks:
+    """A {"type": "text"} block is embedded verbatim: no media prefix detection runs on it.
+
+    Regression for #46719: text chunks that happen to start with data:, gs:// or
+    files/ were read as media, with no way for the caller to say they are text.
+    """
+
+    def test_data_url_prefixed_text_is_embedded_as_text(self) -> None:
+        part: Final = _build_part_for_input(TEXT_BLOCK_DATA_PREFIX)
+        assert part == {"text": TEXT_BLOCK_DATA_PREFIX["text"]}
+
+    def test_gcs_prefixed_text_is_embedded_as_text(self) -> None:
+        part: Final = _build_part_for_input(TEXT_BLOCK_GCS)
+        assert part == {"text": TEXT_BLOCK_GCS["text"]}
+
+    def test_files_prefixed_text_is_embedded_as_text(self) -> None:
+        part: Final = _build_part_for_input(TEXT_BLOCK_FILES)
+        assert part == {"text": TEXT_BLOCK_FILES["text"]}
+
+    def test_text_block_keeps_detection_for_other_elements(self) -> None:
+        parts: Final = [_build_part_for_input(element) for element in [TEXT_BLOCK_DATA_PREFIX, IMAGE_DATA_URI]]
+        assert parts == [
+            {"text": TEXT_BLOCK_DATA_PREFIX["text"]},
+            {"inline_data": {"mime_type": "image/png", "data": IMAGE_DATA_URI.split(",", 1)[1]}},
+        ]
+
+    def test_text_block_is_not_multimodal(self) -> None:
+        assert _is_multimodal_input([_text_block(text="data:image/png;base64,iVBORw0KGgo=")]) is False
+
+    def test_mixed_input_with_text_block_is_multimodal(self) -> None:
+        assert _is_multimodal_input([_text_block(), IMAGE_DATA_URI]) is True
+
+    def test_empty_text_block_embeds_like_an_empty_string(self) -> None:
+        assert _build_part_for_input(_text_block(text="")) == {"text": ""}
+
+    def test_text_block_with_extra_keys_is_rejected(self) -> None:
+        with pytest.raises(BadRequestError):
+            _build_part_for_input(_text_block(cache_control={"type": "ephemeral"}))
+
+    def test_text_block_with_extra_keys_is_dropped_under_drop_params(self) -> None:
+        part: Final = _build_part_for_input(_text_block(cache_control={"type": "ephemeral"}), drop_params=True)
+        assert part == {"text": "some plain text"}
+
+    def test_text_block_missing_text_is_rejected(self) -> None:
+        with pytest.raises(BadRequestError):
+            _build_part_for_input({"type": "text"})
+
+    def test_text_block_non_string_text_is_rejected(self) -> None:
+        with pytest.raises(BadRequestError):
+            _build_part_for_input(_text_block(text=123))
+
+    def test_nested_group_with_text_block_builds_one_combined_request(self) -> None:
+        body: Final = transform_openai_input_gemini_content(
+            input=[[TEXT_BLOCK_GCS, "plain chunk"]],
+            model="gemini-embedding-001",
+            optional_params={},
+        )
+        assert body["requests"] == [
+            {
+                "model": "models/gemini-embedding-001",
+                "content": {"parts": [{"text": TEXT_BLOCK_GCS["text"]}, {"text": "plain chunk"}]},
+            }
+        ]
+
+
+class TestTextBlocksAreNeverFileReferences:
+    def test_flatten_media_sources_skips_text_blocks(self) -> None:
+        sources: Final = flatten_media_sources([TEXT_BLOCK_FILES, "a red bus"])
+        assert sources == ("a red bus",)
+
+
+class TestLocalValidationIsClientError:
+    """Local input validation failures are BadRequestError (400), not ValueError-turned-500.
+
+    No request was sent when they raise, so surfacing them as APIConnectionError
+    makes retry logic retry a permanent input error until its time limit (#46719).
+    """
+
+    def test_unsupported_data_url_mime_is_a_client_error(self) -> None:
+        with pytest.raises(BadRequestError) as excinfo:
+            transform_openai_input_gemini_content(
+                input=["data:application/octet-stream;base64,SGVsbG8="],
+                model="gemini-embedding-001",
+                optional_params={},
+            )
+        assert "Unsupported MIME type for embedding" in str(excinfo.value)
+
+    def test_gcs_unresolvable_extension_is_a_client_error(self) -> None:
+        with pytest.raises(BadRequestError) as excinfo:
+            transform_openai_input_gemini_content(
+                input=["gs://my-bucket/build/output.txt"],
+                model="gemini-embedding-001",
+                optional_params={},
+            )
+        assert "Unable to infer MIME type from GCS URL" in str(excinfo.value)
+
+    def test_gcs_mime_type_override_skips_inference(self) -> None:
+        part: Final = _build_part_for_input(_file_block(file_id="gs://my-bucket/build/output.txt", format="text/plain"))
+        assert part == {"file_data": {"mime_type": "text/plain", "file_uri": "gs://my-bucket/build/output.txt"}}
+
+    def test_source_mime_type_soft_probe_still_returns_none(self) -> None:
+        assert _source_mime_type("data:application/octet-stream;base64,SGVsbG8=", None, {}) is None
+        assert _source_mime_type("gs://my-bucket/build/output.txt", None, {}) is None
+
+    def test_empty_nested_group_is_a_client_error(self) -> None:
+        with pytest.raises(BadRequestError):
+            transform_openai_input_gemini_content(
+                input=[["a red bus"], []],
+                model="gemini-embedding-001",
+                optional_params={},
+            )
+
+    def test_embed_content_nested_input_is_a_client_error(self) -> None:
+        with pytest.raises(BadRequestError):
+            transform_openai_input_gemini_embed_content(
+                input=[["a red bus", IMAGE_DATA_URI]],
+                model="gemini-embedding-001",
+                optional_params={},
+            )
+
+
+class TestTextBlockTokenAccounting:
+    """A text block must count its text exactly like the same text as a bare string."""
+
+    def _predictions(self) -> VertexAIBatchEmbeddingsResponseObject:
+        return VertexAIBatchEmbeddingsResponseObject(embeddings=[{"values": [0.1, 0.2]}])
+
+    def test_text_block_counts_like_the_same_bare_string(self) -> None:
+        chunk: Final = "the quick brown fox starts a chunk"
+        via_block: Final = process_response(
+            input=[_text_block(text=chunk), IMAGE_DATA_URI],
+            model_response=EmbeddingResponse(),
+            model="gemini-embedding-001",
+            _predictions=self._predictions(),
+        )
+        via_string: Final = process_response(
+            input=[chunk, IMAGE_DATA_URI],
+            model_response=EmbeddingResponse(),
+            model="gemini-embedding-001",
+            _predictions=self._predictions(),
+        )
+        assert via_block.usage.prompt_tokens == via_string.usage.prompt_tokens
+        assert via_block.usage.prompt_tokens > 0
+
+    def test_embed_content_fallback_counts_text_block_like_a_bare_string(self) -> None:
+        text: Final = "hello world this is plain text"
+        via_block: Final = process_embed_content_response(
+            input=[_text_block(text=text)],
+            model_response=EmbeddingResponse(),
+            model="gemini-embedding-001",
+            response_json={"embedding": {"values": [0.1, 0.2]}},
+        )
+        via_string: Final = process_embed_content_response(
+            input=[text],
+            model_response=EmbeddingResponse(),
+            model="gemini-embedding-001",
+            response_json={"embedding": {"values": [0.1, 0.2]}},
+        )
+        assert via_block.usage.prompt_tokens == via_string.usage.prompt_tokens > 0
