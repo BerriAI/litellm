@@ -16811,6 +16811,35 @@ async def _find_model_by_id(
     return all_models, search_total_count
 
 
+async def _models_with_stored_param_keys(
+    models: Sequence[Mapping[str, object]], model_id: str, prisma_client: PrismaClient
+) -> Sequence[Mapping[str, object]]:
+    visible_model: Final = next(
+        (model for model in models if _with_get(model.get("model_info", {})).get("id") == model_id), None
+    )
+    if visible_model is None:
+        return models
+    stored: Final = await ModelRepository(WriterPinnedClient(prisma_client.db)).table.find_unique(
+        where={"model_id": model_id}
+    )
+    if stored is None:
+        return models
+    raw_params: Final = _UNTYPED_VALUE.validate_python(stored.litellm_params)
+    stored_params: Final = (
+        _LITELLM_PARAMS_COPY.validate_json(raw_params)
+        if isinstance(raw_params, str)
+        else _LITELLM_PARAMS_COPY.validate_python(raw_params)
+    )
+    visible_params: Final = _LITELLM_PARAMS_COPY.validate_python(visible_model.get("litellm_params", {}))
+    editor_model: Final = MappingProxyType(
+        {
+            **visible_model,
+            "litellm_params": {key: value for key, value in visible_params.items() if key in stored_params},
+        }
+    )
+    return tuple(editor_model if model is visible_model else model for model in models)
+
+
 @router.get(
     "/v2/model/info",
     tags=["model management"],
@@ -16828,6 +16857,10 @@ async def model_info_v2(
     size: int = Query(50, description="Page size", ge=1),
     search: str | None = fastapi.Query(None, description="Search model names (case-insensitive partial match)"),
     modelId: str | None = fastapi.Query(None, description="Search for a specific model by its unique ID"),
+    use_stored_params: bool = fastapi.Query(
+        False,
+        description="With modelId, omit runtime-only litellm_params defaults from a DB-stored model's editor view.",
+    ),
     teamId: str | None = fastapi.Query(
         None,
         description="Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids",
@@ -16879,6 +16912,7 @@ async def model_info_v2(
         page / size: Pagination controls (defaults: page=1, size=50).
         search: Case-insensitive partial match on model name or team public name.
         modelId: Return a single deployment by LiteLLM model id.
+        use_stored_params: With modelId, return only persisted litellm_params keys, retaining normal redaction.
         teamId: Filter to models with direct access or team membership for this team id.
         sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, or status.
         blocked: Filter by routing status (false = active, true = paused).
@@ -16914,6 +16948,9 @@ async def model_info_v2(
     ```
     """
     global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
+
+    if use_stored_params is True and not isinstance(modelId, str):
+        raise HTTPException(status_code=400, detail="use_stored_params requires modelId")
 
     # Return empty data array when no models are configured (graceful handling for fresh installs)
     if llm_router is None or not llm_router.model_list:
@@ -17050,6 +17087,14 @@ async def model_info_v2(
     # Translate `model_name` to the public name for team-scoped rows.
     all_models = [_translate_model_name_for_response(m) for m in all_models]
 
+    if use_stored_params is True and isinstance(modelId, str):
+        return _paginate_models_response(
+            all_models=await _models_with_stored_param_keys(all_models, modelId, prisma_client),
+            page=page,
+            size=size,
+            total_count=search_total_count,
+            search=search,
+        )
     return _paginate_models_response(
         all_models=all_models,
         page=page,
@@ -17563,7 +17608,7 @@ def _filter_v1_model_info_deployments(
     return [model for model in all_models if _deployment_matches_allowed_model_names(model, allowed_model_names)]
 
 
-def _translate_model_name_for_response(model: dict) -> dict:
+def _translate_model_name_for_response(model: dict) -> dict[str, object]:
     """For team-scoped DB rows, replace `model_name` with the public name
     in `model_info.team_public_model_name` before returning. The DB column
     and the in-memory router index keep the internal mangled name
@@ -21846,8 +21891,7 @@ async def toolset_mcp_route(toolset_name: str, request: Request):
                 detail=f"Toolset '{toolset_name}' not found",
             )
 
-        scope: Final = dict(request.scope)
-        scope["path"] = "/mcp"
+        scope: Final = {**request.scope, "_original_path": request.scope.get("path", ""), "path": "/mcp"}
 
         token: Final = mcp_active_toolset_id.set(toolset.toolset_id)
         try:

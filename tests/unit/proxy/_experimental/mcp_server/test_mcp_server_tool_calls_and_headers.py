@@ -280,7 +280,7 @@ async def test_mcp_server_tool_call_relays_upstream_auth_error_as_iserror(
     send = AsyncMock()
     response = OAuthScopeResponse(send, "https://gateway.example", "/mcp/pt")
     request = Request({"type": "http", "headers": [], SCOPE_RESPONSE_KEY: response})
-    await response({"type": "http.response.start", "status": 200, "headers": []})
+    headers: Final = asyncio.create_task(response({"type": "http.response.start", "status": 200, "headers": []}))
     try:
         from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
         from litellm.proxy._experimental.mcp_server.server import (
@@ -328,6 +328,7 @@ async def test_mcp_server_tool_call_relays_upstream_auth_error_as_iserror(
     info_calls = [str(c.args[0]) for c in mock_logger.info.call_args_list if c.args]
     assert any("Upstream auth failure" in m for m in info_calls)
     response.allow()
+    await headers
     await response({"type": "http.response.body", "body": b"tool error"})
     start = send.await_args_list[0].args[0]
     assert start["status"] == (403 if required_scope is not None else 200)

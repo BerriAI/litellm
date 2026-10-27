@@ -86,3 +86,31 @@ def test_speech_calls_the_elevenlabs_streaming_endpoint_only_when_stream_is_requ
     sent_url: Final = respx_mock.calls[0].request.url
     assert sent_url.path == expected_path
     assert sent_url.params["output_format"] == "mp3_44100_128"
+
+
+@pytest.mark.parametrize(
+    ("response_format", "expected_output_format"),
+    [("wav", "wav_24000"), ("pcm", "pcm_24000")],
+)
+def test_speech_maps_wav_and_pcm_to_elevenlabs_output_formats(
+    respx_mock: respx.MockRouter,
+    response_format: str,
+    expected_output_format: str,
+) -> None:
+    api_base: Final = "http://localhost:12346"
+    mock_route: Final = respx_mock.post(url__regex=rf"{api_base}/v1/text-to-speech/.*").mock(
+        return_value=httpx.Response(status_code=200, content=b"audio", headers={"content-type": "audio/mpeg"})
+    )
+
+    litellm.speech(
+        model="elevenlabs/eleven_multilingual_v2",
+        input="hi",
+        voice="21m00Tcm4TlvDq8ikWAM",
+        response_format=response_format,
+        api_base=api_base,
+        api_key="fake_elevenlabs_api_key",
+    )
+
+    assert mock_route.called
+    request_url: Final = httpx.URL(str(respx_mock.calls[0].request.url))
+    assert request_url.params["output_format"] == expected_output_format

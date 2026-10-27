@@ -736,7 +736,9 @@ def is_request_body_safe(
 
 def _reject_request_credential_params(litellm_params: Mapping[str, object], *, manages_deployments: bool) -> None:
     if manages_deployments:
-        reject_server_owned_wif_fields(litellm_params)
+        reject_server_owned_wif_fields(
+            MappingProxyType({key: value for key, value in litellm_params.items() if key != "chatgpt_auth_file"})
+        )
     else:
         reject_server_owned_wif_params(litellm_params)
         reject_federated_credential_reference(litellm_params)
