@@ -20,9 +20,7 @@ class _AliasLoader(Loader):
         return self._target
 
     def exec_module(self, module: ModuleType) -> None:
-        module.__spec__ = (
-            self._spec
-        )  # rebind-ok: the import system swapped in the alias spec while loading the shared module
+        module.__spec__ = self._spec  # rebind-ok: the loader restores the spec the import system replaced
 
 
 class _RenamedPackageFinder(MetaPathFinder):
