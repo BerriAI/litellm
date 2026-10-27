@@ -5,11 +5,19 @@ registered at startup and defers to the lazily loaded handler per call."""
 from typing import Final
 
 from fastapi import APIRouter, Depends, Request, Response
+from fastapi.requests import HTTPConnection
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
-router: Final = APIRouter()
+
+def _llm_passthrough_route_enabled(connection: HTTPConnection) -> None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import check_llm_passthrough_route_enabled
+
+    check_llm_passthrough_route_enabled(connection)
+
+
+router: Final = APIRouter(dependencies=[Depends(_llm_passthrough_route_enabled)])
 
 
 @router.api_route(

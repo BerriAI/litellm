@@ -555,3 +555,77 @@ def test_vertex_pass_through_forwards_a_request_without_betas_despite_a_malforme
 
     assert (response.status_code, response.json()) == (200, _VERTEX_CLAUDE_REPLY)
     assert "anthropic-beta" not in upstream.calls.last.request.headers
+
+
+_VERTEX_PASS_THROUGH_PATH: Final = (
+    "/vertex_ai/v1/projects/p/locations/global/publishers/google/models/gemini-2.5-flash:generateContent"
+)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/gemini/v1beta/models/gemini-2.5-flash:generateContent",
+        "/openai_passthrough/v1/responses",
+        "/cohere/v1/chat",
+        _VERTEX_PASS_THROUGH_PATH,
+    ],
+)
+def test_a_passthrough_route_left_off_the_allowlist_answers_404_before_auth(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "allowed_llm_passthrough_routes", [])
+
+    response: Final = TestClient(proxy_server.app).post(path, json={})
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Not Found"}
+
+
+@pytest.mark.parametrize("allowed_routes", [None, ["/vertex_ai/"]], ids=["unset", "allowlisted"])
+def test_a_passthrough_route_the_operator_serves_reaches_its_handler(
+    monkeypatch: pytest.MonkeyPatch, allowed_routes: list[str] | None
+) -> None:
+    from litellm.proxy import proxy_server
+
+    if allowed_routes is None:
+        monkeypatch.delitem(proxy_server.general_settings, "allowed_llm_passthrough_routes", raising=False)
+    else:
+        monkeypatch.setitem(proxy_server.general_settings, "allowed_llm_passthrough_routes", allowed_routes)
+    client: Final = TestClient(proxy_server.app)
+
+    response: Final = client.post(_VERTEX_PASS_THROUGH_PATH, json={})
+
+    assert response.status_code == 401
+    assert "No Vertex AI credential is configured" in response.json()["detail"]
+    if allowed_routes is not None:
+        assert client.post("/gemini/v1beta/models/gemini-2.5-flash:generateContent", json={}).status_code == 404
+
+
+def test_a_passthrough_websocket_left_off_the_allowlist_closes_as_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    from starlette.websockets import WebSocketDisconnect
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "allowed_llm_passthrough_routes", [])
+
+    with pytest.raises(WebSocketDisconnect) as closed:
+        with TestClient(proxy_server.app).websocket_connect("/deepgram/listen"):
+            pass
+
+    assert (closed.value.code, closed.value.reason) == (1008, "Not Found")
+
+
+def test_a_malformed_passthrough_allowlist_is_refused_rather_than_read_as_characters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "allowed_llm_passthrough_routes", "/vertex_ai")
+
+    response: Final = TestClient(proxy_server.app).post(_VERTEX_PASS_THROUGH_PATH, json={})
+
+    assert response.status_code == 500
+    assert "allowed_llm_passthrough_routes must be a list of strings" in response.text

@@ -23,7 +23,8 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, cast
 
 import httpx
 import openai
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket, WebSocketException
+from fastapi.requests import HTTPConnection
 from fastapi.responses import StreamingResponse
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from starlette.websockets import WebSocketState
@@ -151,7 +152,43 @@ else:
     ProxyConfig = Any  # rebind-ok: runtime fallback
 
 vertex_llm_base: Final = VertexBase()
-router: Final = APIRouter()
+
+
+_ALLOWED_LLM_PASSTHROUGH_ROUTES_SETTING: Final = "allowed_llm_passthrough_routes"
+_ALLOWED_LLM_PASSTHROUGH_ROUTES: Final[TypeAdapter[frozenset[str] | None]] = TypeAdapter(frozenset[str] | None)
+
+
+def check_llm_passthrough_route_enabled(connection: HTTPConnection) -> None:
+    """Answer 404 for a provider pass-through route the operator has not enabled.
+
+    `general_settings.allowed_llm_passthrough_routes` lists the route prefixes
+    the proxy serves, such as `["/vertex_ai"]`; an empty list turns every
+    provider pass-through route off. Unset, every route stays on. A route that
+    is off answers like a path the proxy does not have, so an unconfigured
+    provider never fails with a 500 or forwards the request without a
+    credential.
+    """
+    try:
+        allowed_routes: Final = _ALLOWED_LLM_PASSTHROUGH_ROUTES.validate_python(
+            _proxy_general_settings().get(_ALLOWED_LLM_PASSTHROUGH_ROUTES_SETTING)
+        )
+    except ValidationError as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"general_settings.{_ALLOWED_LLM_PASSTHROUGH_ROUTES_SETTING} must be a list of strings",
+        ) from error
+    if allowed_routes is None:
+        return
+    route_path: Final[str] = getattr(connection.scope.get("route"), "path", "")
+    route_prefix: Final = "/" + route_path.lstrip("/").split("/", 1)[0]
+    if route_prefix in frozenset("/" + allowed.strip("/") for allowed in allowed_routes):
+        return
+    if connection.scope["type"] == "websocket":
+        raise WebSocketException(code=1008, reason="Not Found")  # policy violation
+    raise HTTPException(status_code=404, detail="Not Found")
+
+
+router: Final = APIRouter(dependencies=[Depends(check_llm_passthrough_route_enabled)])
 _DECODED_JSON: Final = TypeAdapter(object)
 default_vertex_config: Final = None
 passthrough_endpoint_router: Final = PassthroughEndpointRouter()
