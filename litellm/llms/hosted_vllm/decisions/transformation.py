@@ -9,6 +9,8 @@ class HostedVLLMDecisionsConfig(BaseDecisionsConfig):
     api_key_env = ("HOSTED_VLLM_API_KEY",)
     api_base_env = ("HOSTED_VLLM_API_BASE",)
     api_key_required = False
+    supports_images = True
+    inlines_remote_images = True
     health_check_questions = MappingProxyType(
         {
             "reachable": MappingProxyType(
