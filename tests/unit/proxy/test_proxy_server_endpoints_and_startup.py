@@ -1838,6 +1838,12 @@ async def test_proxy_startup_says_a_lingering_migrate_from_variable_can_be_delet
 
 
 class _PrismaClientWhoseDatabaseRejectsQueries:
+    def __init__(self) -> None:
+        self.disconnect_calls = 0
+
+    async def disconnect(self) -> None:
+        self.disconnect_calls += 1
+
     class _Database:
         async def query_raw(self, query, *args):
             raise RuntimeError("permission denied for table LiteLLM_CredentialsTable")
@@ -1852,7 +1858,8 @@ async def test_proxy_startup_stops_when_the_requested_migration_fails(monkeypatc
     from litellm.proxy.proxy_server import proxy_startup_event
 
     _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _PrismaClientWhoseDatabaseRejectsQueries())
+    prisma: Final = _PrismaClientWhoseDatabaseRejectsQueries()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
     monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", PUBLICLY_KNOWN_KEY)
 
     with (
@@ -1865,6 +1872,7 @@ async def test_proxy_startup_stops_when_the_requested_migration_fails(monkeypatc
     notices = [record.getMessage() for record in caplog.records if "LITELLM_MIGRATE_FROM_MASTER_KEY" in record.message]
     assert len(notices) == 1
     assert "Could not migrate stored values" in notices[0]
+    assert prisma.disconnect_calls == 1
 
 
 @pytest.mark.asyncio
@@ -15587,4 +15595,3 @@ async def test_spend_capture_rate_check_job_clears_the_gauge_once_the_setting_is
         call(api_provider="openai", capture_rate=0.97),
         call(api_provider="openai", capture_rate=None),
     ]
-
