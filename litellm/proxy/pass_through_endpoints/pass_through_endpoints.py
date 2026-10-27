@@ -94,6 +94,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
+    strip_client_guardrail_information,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import normalize_route_for_root_path
@@ -582,10 +583,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
 
         litellm_metadata: Final = litellm_params_in_body.pop("litellm_metadata", None)
         metadata: Final = litellm_params_in_body.pop("metadata", None)
-        if litellm_metadata:
-            _metadata.update(litellm_metadata)
-        if metadata:
-            _metadata.update(metadata)
+        for client_metadata in (litellm_metadata, metadata):
+            if isinstance(client_metadata, dict):
+                _metadata.update(client_metadata)
 
         _metadata = _update_metadata_with_tags_in_header(
             request=request,
@@ -1028,6 +1028,9 @@ async def pass_through_request(
             _get_masked_values(upstream_headers),
             _parsed_body,
         )
+
+        if _parsed_body is not None:
+            strip_client_guardrail_information(_parsed_body)
 
         ### COLLECT GUARDRAILS FOR PASSTHROUGH ENDPOINT ###
         # Passthrough endpoints are opt-in only for guardrails

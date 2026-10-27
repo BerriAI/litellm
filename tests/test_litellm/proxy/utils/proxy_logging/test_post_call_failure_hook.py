@@ -263,6 +263,80 @@ async def test_handle_logging_proxy_only_path_no_logging_obj_creates_one(
 
 
 @pytest.mark.asyncio
+async def test_handle_logging_proxy_only_path_merges_allowlisted_metadata(proxy_logging, make_user_api_key_auth):
+    logging_obj = MagicMock()
+    logging_obj.call_type = "acompletion"
+    logging_obj.model_call_details = {}
+    logging_obj.litellm_params = {"metadata": {"preexisting": "logged"}}
+    logging_obj.async_failure_handler = AsyncMock()
+    guardrail_info: Final = [
+        {
+            "guardrail_name": "local-block",
+            "guardrail_status": "guardrail_intervened",
+            "guardrail_cost": 0.25,
+        }
+    ]
+
+    await proxy_logging._handle_logging_proxy_only_error(
+        request_data={
+            "litellm_logging_obj": logging_obj,
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {
+                "tags": ["checkout"],
+                "standard_logging_guardrail_information": guardrail_info,
+                "spend_logs_metadata": {"caller": "dropped"},
+            },
+        },
+        user_api_key_dict=make_user_api_key_auth(key_alias="frozen"),
+        route="/chat/completions",
+        original_exception=HTTPException(status_code=403, detail="blocked"),
+    )
+
+    metadata: Final = logging_obj.update_environment_variables.call_args.kwargs["litellm_params"]["metadata"]
+    assert {
+        key: metadata.get(key)
+        for key in ("preexisting", "user_api_key_alias", "tags", "standard_logging_guardrail_information")
+    } == {
+        "preexisting": "logged",
+        "user_api_key_alias": "frozen",
+        "tags": ["checkout"],
+        "standard_logging_guardrail_information": guardrail_info,
+    }
+    assert "spend_logs_metadata" not in metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("error_type", "logged_tags"), [(ProxyErrorTypes.auth_error, []), (None, ["checkout"])])
+async def test_proxy_only_failure_log_keeps_caller_tags_only_after_auth(
+    proxy_logging, monkeypatch, error_type: ProxyErrorTypes | None, logged_tags: list[str]
+):
+    recorded: list[dict] = []
+
+    class _RecordingLogger(CustomLogger):
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            recorded.append(kwargs)
+
+    monkeypatch.setattr(litellm, "callbacks", [_RecordingLogger()])
+    proxy_logging.alert_types = []
+
+    await proxy_logging.post_call_failure_hook(
+        request_data={
+            "model": "internal-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {"tags": ["checkout"]},
+        },
+        original_exception=HTTPException(status_code=401, detail="Invalid proxy server token passed"),
+        user_api_key_dict=UserAPIKeyAuth(request_route="/chat/completions"),
+        error_type=error_type,
+        route="/chat/completions",
+    )
+
+    assert len(recorded) == 1
+    assert recorded[0]["standard_logging_object"]["request_tags"] == logged_tags
+
+
+@pytest.mark.asyncio
 async def test_handle_logging_proxy_only_path_propagates_async_failure_raises(proxy_logging, make_user_api_key_auth):
     logging_obj = MagicMock()
     logging_obj.call_type = "acompletion"
