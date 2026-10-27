@@ -377,3 +377,18 @@ def test_sync_non_enumerated_delta_fields_only_on_first_chunk():
     assert getattr(chunks[0].choices[0].delta, "annotations", None) == annotations
     for c in chunks[1:]:
         assert getattr(c.choices[0].delta, "annotations", None) is None
+
+
+@pytest.mark.parametrize("replay", ["async", "sync"])
+@pytest.mark.asyncio
+async def test_a_replayed_stream_keeps_cached_choice_provider_extras_on_the_finish_chunk(replay):
+    cached = _async_payload()
+    cached["choices"][0]["stop_reason"] = "eos"
+    cached["choices"][0]["token_ids"] = [9]
+
+    chunks = await _collect_async(cached) if replay == "async" else list(convert_to_streaming_response(cached))
+
+    assert len(chunks) > 1
+    assert [getattr(c.choices[0], "stop_reason", None) for c in chunks] == [None] * (len(chunks) - 1) + ["eos"]
+    assert [getattr(c.choices[0], "token_ids", None) for c in chunks] == [None] * (len(chunks) - 1) + [[9]]
+    assert chunks[-1].choices[0].finish_reason == "stop"

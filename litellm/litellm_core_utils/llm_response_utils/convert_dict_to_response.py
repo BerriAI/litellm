@@ -25,6 +25,7 @@ from litellm.types.llms.openai import (
     OpenAIModerationResponse,
 )
 from litellm.types.utils import (
+    STREAMING_CHOICE_OPENAI_FIELDS,
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
@@ -58,6 +59,7 @@ _MESSAGE_FIELDS: Final[frozenset] = frozenset(Message.model_fields.keys())
 _CHOICES_FIELDS: Final[frozenset] = frozenset(Choices.model_fields.keys())
 _CHOICES_EXPLICIT_KWARGS: Final[frozenset] = _CHOICES_FIELDS | {"enhancements"}
 _MODEL_RESPONSE_FIELDS: Final[frozenset] = frozenset(ModelResponse.model_fields.keys()) | {"usage"}
+_CACHED_CHOICE_RESERVED_KEYS: Final[frozenset] = STREAMING_CHOICE_OPENAI_FIELDS | {"message", "finish_details"}
 
 
 def _normalize_images_for_message(
@@ -146,6 +148,10 @@ def _split_assembled_content_for_replay(content: str | None) -> list[str]:
     return _REPLAY_CONTENT_SLICE_RE.findall(content)
 
 
+def _cached_choice_provider_extras(choice: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in choice.items() if key not in _CACHED_CHOICE_RESERVED_KEYS}
+
+
 def _clear_later_replay_slice_metadata(choice: StreamingChoices) -> None:
     # Rebuild the delta as content-only so every accumulate-able field (role,
     # tool_calls, reasoning_content, thinking_blocks, audio, images,
@@ -157,6 +163,12 @@ def _clear_later_replay_slice_metadata(choice: StreamingChoices) -> None:
     choice.logprobs = None
     if hasattr(choice, "enhancements"):
         del choice.enhancements
+
+
+def _clear_cached_choice_provider_extras(choice: StreamingChoices) -> None:
+    for key in tuple(choice.__pydantic_extra__ or {}):
+        if key not in STREAMING_CHOICE_OPENAI_FIELDS:
+            delattr(choice, key)
 
 
 def _first_replay_delta(
@@ -243,7 +255,13 @@ async def convert_to_streaming_response_async(
 
         logprobs = choice.get("logprobs", None)
 
-        choice = StreamingChoices(finish_reason=finish_reason, index=idx, delta=delta, logprobs=logprobs)
+        choice = StreamingChoices(
+            finish_reason=finish_reason,
+            index=idx,
+            delta=delta,
+            logprobs=logprobs,
+            **_cached_choice_provider_extras(choice),
+        )
         choice_list.append(choice)
 
     model_response_object.choices = choice_list
@@ -299,6 +317,8 @@ async def convert_to_streaming_response_async(
         slice_chunk.choices[0].delta.content = piece
         if i > 0:
             _clear_later_replay_slice_metadata(slice_chunk.choices[0])
+        if i != last_idx:
+            _clear_cached_choice_provider_extras(slice_chunk.choices[0])
         slice_chunk.choices[0].finish_reason = original_finish_reason if i == last_idx else None
         if i == last_idx and original_usage is not None:
             setattr(slice_chunk, "usage", original_usage)
@@ -340,6 +360,7 @@ def convert_to_streaming_response(
             delta=delta,
             logprobs=logprobs,
             enhancements=enhancements,
+            **_cached_choice_provider_extras(choice),
         )
 
         choice_list.append(choice)
@@ -386,6 +407,8 @@ def convert_to_streaming_response(
         slice_chunk.choices[0].delta.content = piece
         if i > 0:
             _clear_later_replay_slice_metadata(slice_chunk.choices[0])
+        if i != last_idx:
+            _clear_cached_choice_provider_extras(slice_chunk.choices[0])
         slice_chunk.choices[0].finish_reason = original_finish_reason if i == last_idx else None
         if i == last_idx and original_usage is not None:
             setattr(slice_chunk, "usage", original_usage)
