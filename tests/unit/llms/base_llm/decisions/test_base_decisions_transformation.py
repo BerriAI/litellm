@@ -355,3 +355,49 @@ def test_invalid_provider_response_is_an_api_error(payload: object, provider: st
     with pytest.raises(BaseLLMException, match="unexpected response") as error:
         config.transform_decisions_response("drex-v2.0", provider, httpx.Response(200, json=payload), request)
     assert error.value.status_code == 500
+
+
+@pytest.mark.parametrize(
+    ("probabilities", "expected"),
+    (
+        ({}, ()),
+        ({"1": 0.8}, ((1, "medium", 0.8),)),
+        ({"0": 0.0, "1": 0.8}, ((0, "low", 0.0), (1, "medium", 0.8))),
+        ({"2": 0.0}, ((2, "high", 0.0),)),
+    ),
+    ids=("empty", "missing", "explicit_zero", "only_zero"),
+)
+def test_score_probabilities_preserve_missing_entries_and_explicit_zeros(
+    probabilities: Mapping[str, float], expected: tuple[tuple[int, str, float], ...]
+) -> None:
+    ir: Final = systemone_request_to_ir(
+        _SYSTEMONE_BODY.validate_python(
+            {
+                "state": "Classify the fixture.",
+                "questions": {"score": {"type": "score", "criteria": ["low", "medium", "high"]}},
+            }
+        )
+    )
+    payload: Final = {
+        "model": "fixture",
+        "answers": {
+            "score": {
+                "type": "score",
+                "score": 1,
+                "confidence": 0.8,
+                "legend": {"0": "low", "1": "medium", "2": "high"},
+                "probabilities": probabilities,
+            }
+        },
+        "usage": {"input_tokens": 0, "output_tokens": 0},
+    }
+
+    response: Final = parse_systemone_response(payload, ir)
+    answer: Final = response.answers[0]
+
+    assert isinstance(answer, DecisionsIRScoreAnswer)
+    assert tuple((item.value, item.label, item.probability) for item in answer.probabilities) == expected
+    assert (
+        ir_to_systemone_response(response, ir).model_dump(mode="json")["answers"]["score"]["probabilities"]
+        == probabilities
+    )

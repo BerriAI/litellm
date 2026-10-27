@@ -351,9 +351,10 @@ def _ir_score_answer(question: DecisionsIRScoreQuestion, answer: ScoreAnswer) ->
             DecisionsIRScoreProbability(
                 value=index,
                 label=answer.legend.get(str(index), level.label),
-                probability=answer.probabilities.get(str(index), 0.0),
+                probability=answer.probabilities[str(index)],
             )
             for index, level in enumerate(question.levels)
+            if str(index) in answer.probabilities
         ),
         extra=MappingProxyType(answer.model_extra or {}),
     )
