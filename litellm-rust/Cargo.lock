@@ -3656,6 +3656,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-circuit-breaker"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "rstest",
+]
+
+[[package]]
 name = "litellm-config"
 version = "0.1.0"
 dependencies = [
@@ -4300,6 +4308,7 @@ name = "litellm-redis-client"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "litellm-circuit-breaker",
  "litellm-redis-testing",
  "redis",
  "rstest",

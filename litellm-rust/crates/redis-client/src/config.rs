@@ -2,6 +2,8 @@ use std::time::Duration;
 
 use redis::{ConnectionAddr, ConnectionInfo, IntoConnectionInfo, RedisConnectionInfo, RedisResult};
 
+use litellm_circuit_breaker::Breaker;
+
 use crate::Namespace;
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -10,6 +12,7 @@ pub struct RedisConfig {
     pub endpoint: Endpoint,
     pub namespace: Namespace,
     pub timeout: Duration,
+    pub breaker: Option<Breaker>,
 }
 
 pub enum Endpoint {

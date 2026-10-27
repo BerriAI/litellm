@@ -1,5 +1,9 @@
-use std::time::Duration;
+use std::{
+    future::Future,
+    time::{Duration, Instant},
+};
 
+use litellm_circuit_breaker::{Admission, Breaker, Failure};
 use redis::{Cmd, FromRedisValue, IntoConnectionInfo, ToRedisArgs, ToSingleRedisArg, Value};
 
 use crate::{
@@ -11,6 +15,7 @@ use crate::{
 pub struct RedisClient {
     pub(crate) connection: Connection,
     namespace: Namespace,
+    breaker: Option<Breaker>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -34,6 +39,7 @@ impl RedisClient {
         Ok(Self {
             connection,
             namespace: config.namespace,
+            breaker: config.breaker,
         })
     }
 
@@ -110,10 +116,13 @@ impl RedisClient {
     ) -> Result<T, Error> {
         let keys = self.keys(keys);
         let args = args.to_redis_args();
-        Ok(script
-            .invocation(&keys, &args)
-            .invoke_async(&mut self.connection.clone())
-            .await?)
+        self.guarded(async {
+            Ok(script
+                .invocation(&keys, &args)
+                .invoke_async(&mut self.connection.clone())
+                .await?)
+        })
+        .await
     }
 
     pub fn pipeline(&self) -> Pipeline {
@@ -121,7 +130,23 @@ impl RedisClient {
     }
 
     pub async fn run(&self, pipeline: &Pipeline) -> Vec<Result<Value, Error>> {
-        pipeline.run(&self.connection).await
+        let admission = match self.admit() {
+            Ok(admission) => admission,
+            Err(_) => {
+                return (0..pipeline.len())
+                    .map(|_| Err(Error::BreakerOpen))
+                    .collect();
+            }
+        };
+        let results = pipeline.run(&self.connection).await;
+        let transport = results.iter().find_map(|result| {
+            result
+                .as_ref()
+                .err()
+                .filter(|error| matches!(error, Error::Transport(_)))
+        });
+        settle(admission, transport);
+        results
     }
 
     fn key(&self, key: &str) -> String {
@@ -133,7 +158,40 @@ impl RedisClient {
     }
 
     async fn query<T: FromRedisValue>(&self, command: &Cmd) -> Result<T, Error> {
-        Ok(command.query_async(&mut self.connection.clone()).await?)
+        self.guarded(async { Ok(command.query_async(&mut self.connection.clone()).await?) })
+            .await
+    }
+
+    async fn guarded<T>(&self, call: impl Future<Output = Result<T, Error>>) -> Result<T, Error> {
+        let admission = self.admit()?;
+        let result = call.await;
+        settle(admission, result.as_ref().err());
+        result
+    }
+
+    fn admit(&self) -> Result<Option<Admission>, Error> {
+        self.breaker
+            .as_ref()
+            .map(|breaker| {
+                breaker
+                    .admit(Instant::now())
+                    .map_err(|_| Error::BreakerOpen)
+            })
+            .transpose()
+    }
+}
+
+fn settle(admission: Option<Admission>, error: Option<&Error>) {
+    let Some(admission) = admission else {
+        return;
+    };
+    match error {
+        None => admission.succeeded(),
+        Some(Error::Transport(error)) if error.is_timeout() => {
+            admission.failed(Failure::Timeout, Instant::now())
+        }
+        Some(Error::Transport(_)) => admission.failed(Failure::Hard, Instant::now()),
+        Some(Error::Server(_) | Error::Decode(_) | Error::BreakerOpen) => drop(admission),
     }
 }
 
@@ -143,6 +201,8 @@ mod tests {
 
     use litellm_redis_testing::RedisServer;
     use rstest::rstest;
+
+    use litellm_circuit_breaker::{Breaker, Config, State};
 
     use super::{RedisClient, Ttl};
     use crate::{
@@ -399,6 +459,122 @@ mod tests {
         assert_eq!(client.get::<i64>("shared").await.unwrap(), Some(1000));
     }
 
+    fn breaker(failure_threshold: u32) -> Breaker {
+        Breaker::new(
+            Config {
+                failure_threshold,
+                recovery_timeout: Duration::from_millis(200),
+                timeout_min_duration: Duration::ZERO,
+            },
+            Box::new(|_| {}),
+        )
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn an_open_breaker_rejects_without_waiting_on_redis_and_a_probe_closes_it(
+        #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+    ) {
+        let server = Server::start(topology).await;
+        let breaker = breaker(2);
+        let client = server
+            .guarded_client("", Duration::from_millis(300), Some(breaker.clone()))
+            .await;
+
+        server.freeze().await;
+        let first = client.get::<String>("k").await;
+        let second = client.get::<String>("k").await;
+        let started = Instant::now();
+        let third = client.get::<String>("k").await;
+        let rejected_in = started.elapsed();
+        server.thaw().await;
+
+        assert!(matches!(first, Err(Error::Transport(_))), "{first:?}");
+        assert!(matches!(second, Err(Error::Transport(_))), "{second:?}");
+        assert!(matches!(third, Err(Error::BreakerOpen)), "{third:?}");
+        assert!(rejected_in < Duration::from_millis(50), "{rejected_in:?}");
+
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let recovered = loop {
+            match client.get::<String>("k").await {
+                Ok(value) => break Some(value),
+                Err(_) if Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(50)).await
+                }
+                Err(_) => break None,
+            }
+        };
+        assert_eq!(recovered, Some(None));
+        assert!(
+            matches!(breaker.state(), State::Closed { .. }),
+            "{:?}",
+            breaker.state()
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn rejected_commands_never_open_the_breaker(
+        #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+    ) {
+        let server = Server::start(topology).await;
+        let breaker = breaker(2);
+        let client = server
+            .guarded_client("", DEFAULT_TIMEOUT, Some(breaker.clone()))
+            .await;
+        client.rpush("list", "item").await.unwrap();
+
+        let rejected = [
+            client.incr_by("list", 1).await,
+            client.incr_by("list", 1).await,
+            client.incr_by("list", 1).await,
+        ];
+
+        assert!(
+            matches!(rejected[2], Err(Error::Server(_))),
+            "{:?}",
+            rejected[2]
+        );
+        assert!(
+            matches!(breaker.state(), State::Closed { hard: 0, .. }),
+            "{:?}",
+            breaker.state()
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn an_open_breaker_fails_every_pipeline_op_without_sending(
+        #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+    ) {
+        let server = Server::start(topology).await;
+        let client = server
+            .guarded_client("", Duration::from_millis(300), Some(breaker(1)))
+            .await;
+        let pipeline = client.pipeline().incr_by("a", 1).incr_by("c", 1);
+
+        server.freeze().await;
+        let failed = client.run(&pipeline).await;
+        let rejected = client.run(&pipeline).await;
+        server.thaw().await;
+
+        assert!(
+            matches!(failed[0], Err(Error::Transport(_))),
+            "{:?}",
+            failed[0]
+        );
+        assert!(
+            matches!(rejected[0], Err(Error::BreakerOpen)),
+            "{:?}",
+            rejected[0]
+        );
+        assert!(
+            matches!(rejected[1], Err(Error::BreakerOpen)),
+            "{:?}",
+            rejected[1]
+        );
+    }
+
     #[rstest]
     #[tokio::test]
     async fn a_host_endpoint_connects_to_its_database() {
@@ -409,6 +585,7 @@ mod tests {
                 endpoint,
                 namespace: Namespace::default(),
                 timeout: DEFAULT_TIMEOUT,
+                breaker: None,
             })
         };
         let in_db_3 = connect(Endpoint::Host(HostEndpoint {

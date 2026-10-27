@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use litellm_circuit_breaker::Breaker;
 use litellm_redis_testing::{RedisCluster, RedisServer};
 use redis::cluster_routing::{Route, RoutingInfo, SingleNodeRoutingInfo, SlotAddr};
 
@@ -46,10 +47,20 @@ impl Server {
     }
 
     pub(crate) async fn client(&self, namespace: &str, timeout: Duration) -> RedisClient {
+        self.guarded_client(namespace, timeout, None).await
+    }
+
+    pub(crate) async fn guarded_client(
+        &self,
+        namespace: &str,
+        timeout: Duration,
+        breaker: Option<Breaker>,
+    ) -> RedisClient {
         RedisClient::connect(RedisConfig {
             endpoint: self.endpoint(),
             namespace: Namespace::new(namespace),
             timeout,
+            breaker,
         })
         .await
         .unwrap()

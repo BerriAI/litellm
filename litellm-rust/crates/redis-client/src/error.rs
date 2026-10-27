@@ -8,6 +8,8 @@ pub enum Error {
     Server(#[source] RedisError),
     #[error("Redis replied with a value of a different type")]
     Decode(#[source] RedisError),
+    #[error("the Redis circuit breaker is open, so the command was not sent")]
+    BreakerOpen,
 }
 
 #[derive(Debug, thiserror::Error)]

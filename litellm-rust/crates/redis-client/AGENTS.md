@@ -12,6 +12,13 @@
 - Never swallow an error or turn it into a miss. The caller picks the fallback
 - Reads return `Option<T>`: a missing key is `None`, and a value that doesn't decode to `T` (`"15.0"` as `i64`) is `Decode`
 
+## Circuit breaker
+- The `litellm-circuit-breaker` `Breaker` is injected through `RedisConfig::breaker` and shared by every clone. `None` turns it off
+- Every public call (each command, `eval`, one `run` of a pipeline) takes one admission through `guarded` / `admit` in `client.rs`. Never call the connection around it
+- `Transport` counts as a failure (`Timeout` when `is_timeout()`, else `Hard`). `Server` and `Decode` count as nothing, since Redis answered and the request was bad. A probe that gets one still reopens, through the dropped-probe rule in `circuit-breaker`. A pipeline counts one failure if any op came back `Transport`, else one success
+- An open breaker returns `Error::BreakerOpen` without touching the socket
+- Python doesn't count MASTERDOWN, TRYAGAIN or READONLY as health failures. Here they are `Transport` and do count
+
 ## Namespace
 - Applied once, here, to every key. A key that already starts with `{namespace}:` is left alone, matching `RedisCache.check_and_fix_namespace`
 - The rule never changes, because Python and Rust pods share keys in the same Redis
