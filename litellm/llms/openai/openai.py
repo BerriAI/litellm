@@ -355,6 +355,12 @@ _NO_EXTRA_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
 _SDK_OPTION_KEYS: Final = frozenset(("extra_headers", "extra_query", "extra_body"))
 
 
+def _as_mapping(value: object) -> Mapping[str, object]:
+    if not isinstance(value, dict):
+        return types.MappingProxyType({})
+    return types.MappingProxyType({key: item for key, item in value.items()})
+
+
 def _raw_chat_response(
     result: ChatCompletion | Stream[ChatCompletionChunk] | AsyncStream[ChatCompletionChunk],
 ) -> LegacyAPIResponse[ChatCompletion]:
@@ -374,6 +380,41 @@ def _request_without_sdk_transform(
         timeout=timeout,
     )
     return body, options
+
+
+def _image_generation_logged_body(data: Mapping[str, object]) -> dict[str, object]:
+    extra_body: Final = {
+        key: item for key, item in _as_mapping(data.get("extra_body")).items() if key != "extra_headers"
+    }
+    extra_query: Final = dict(_as_mapping(data.get("extra_query")))
+    return {  # mutable-ok: loggers isinstance-check this payload as a dict
+        **{key: item for key, item in data.items() if key not in _SDK_OPTION_KEYS},
+        **({} if not extra_query else {"extra_query": extra_query}),
+        **({} if not extra_body else {"extra_body": extra_body}),
+    }
+
+
+def _image_generation_request_data(
+    data: Mapping[str, object], headers: Mapping[str, object] | None
+) -> tuple[dict[str, object], Mapping[str, object]]:
+    extra_body_source: Final = _as_mapping(data.get("extra_body"))
+    extra_headers: Final = types.MappingProxyType(
+        {
+            **_as_mapping(extra_body_source.get("extra_headers")),
+            **_as_mapping(data.get("extra_headers")),
+            **_as_mapping(headers),
+        }
+    )
+    logged_body: Final = _image_generation_logged_body(data)
+    request_data: Final = types.MappingProxyType(
+        dict(
+            (
+                *logged_body.items(),
+                *((("extra_headers", extra_headers),) if extra_headers else ()),
+            )
+        )
+    )
+    return logged_body, request_data
 
 
 class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
@@ -1500,6 +1541,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 client=client,
             )
 
+            logged_body, request_data = _image_generation_request_data(data, headers)
             logging_obj.pre_call(
                 input=prompt,
                 api_key=openai_aclient.api_key,
@@ -1507,11 +1549,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     "headers": {"Authorization": f"Bearer {openai_aclient.api_key}"},
                     "api_base": str(openai_aclient.base_url),
                     "acompletion": True,
-                    "complete_input_dict": data,
+                    "complete_input_dict": logged_body,
                 },
             )
 
-            request_data: Final = {**data, "extra_headers": headers} if headers else data
             raw_response: Final = await openai_aclient.images.with_raw_response.generate(
                 **request_data, timeout=timeout
             )
@@ -1520,7 +1561,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             logging_obj.post_call(
                 input=prompt,
                 api_key=api_key,
-                additional_args={"complete_input_dict": data},
+                additional_args={"complete_input_dict": logged_body},
                 original_response=stringified_response,
             )
             image_response: Final[ImageResponse] = convert_to_model_response_object(
@@ -1535,6 +1576,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             logging_obj.post_call(
                 input=prompt,
                 api_key=api_key,
+                additional_args={"complete_input_dict": _image_generation_logged_body(data)},
                 original_response=str(e),
             )
             raise e
@@ -1589,6 +1631,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 client=client,
             )
 
+            logged_body, request_data = _image_generation_request_data(data, headers)
+
             ## LOGGING
             logging_obj.pre_call(
                 input=prompt,
@@ -1597,12 +1641,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     "headers": {"Authorization": f"Bearer {openai_client.api_key}"},
                     "api_base": openai_client._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                     "acompletion": True,
-                    "complete_input_dict": data,
+                    "complete_input_dict": logged_body,
                 },
             )
 
             ## COMPLETION CALL
-            request_data: Final = {**data, "extra_headers": headers} if headers else data
             raw_response: Final = openai_client.images.with_raw_response.generate(**request_data, timeout=timeout)
 
             response: Final = raw_response.parse().model_dump()
@@ -1610,7 +1653,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             logging_obj.post_call(
                 input=prompt,
                 api_key=api_key,
-                additional_args={"complete_input_dict": data},
+                additional_args={"complete_input_dict": logged_body},
                 original_response=response,
             )
             image_response: Final[ImageResponse] = convert_to_model_response_object(
@@ -1625,7 +1668,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             logging_obj.post_call(
                 input=prompt,
                 api_key=api_key,
-                additional_args={"complete_input_dict": data},
+                additional_args={"complete_input_dict": _image_generation_logged_body(data)},
                 original_response=str(e),
             )
             raise e
@@ -1634,7 +1677,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             logging_obj.post_call(
                 input=prompt,
                 api_key=api_key,
-                additional_args={"complete_input_dict": data},
+                additional_args={"complete_input_dict": _image_generation_logged_body(data)},
                 original_response=str(e),
             )
             if hasattr(e, "status_code"):
