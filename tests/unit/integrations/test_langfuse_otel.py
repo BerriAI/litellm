@@ -941,7 +941,7 @@ class TestLangfuseOtelResponsesAPI:
             output_json = output_calls[0].args[2]
             output_data = json.loads(output_json)
 
-            # Verify output contains both reasoning summaries and the message
+            # Verify output contains reasoning and message
             assert isinstance(output_data, list)
             assert len(output_data) == 3
 
@@ -1324,8 +1324,6 @@ def _carrying(parent: Span, key: str = "metadata") -> Mapping[str, object]:
 
 
 class TestDerivedTraceFieldsOnlyOnTracesLitellmStarts:
-    """litellm derives a trace's name, io and tags only when its own span opened the trace."""
-
     def test_a_span_under_an_inbound_traceparent_joins_the_caller_trace(self) -> None:
         span: Final = _TRACER.start_span(
             "litellm_request", context=trace.set_span_in_context(trace.NonRecordingSpan(CALLER))
@@ -1422,8 +1420,6 @@ class ExportedSpan:
 
 
 def _exported_full_span(filler: int, *, joins_caller: bool, failed: bool) -> ExportedSpan:
-    """A span already holding ``filler`` attributes, after langfuse_otel stamps a chat call and, when ``failed``, the
-    error attributes a failed call adds."""
     span: Final = _TRACER.start_span(
         "litellm_request",
         context=trace.set_span_in_context(trace.NonRecordingSpan(CALLER)) if joins_caller else Context(),
@@ -1438,9 +1434,6 @@ def _exported_full_span(filler: int, *, joins_caller: bool, failed: bool) -> Exp
 
 
 class TestDerivedTraceFieldsAtTheSpanAttributeLimit:
-    """The derived trace fields take only room a span has to spare, so a full span exports what it would without
-    them."""
-
     @pytest.mark.parametrize("failed", [False, True])
     @pytest.mark.parametrize("filler", range(SPAN_ATTRIBUTE_LIMIT - 30, SPAN_ATTRIBUTE_LIMIT + 1))
     def test_trace_fields_never_evict_or_drop_another_attribute(self, filler: int, failed: bool) -> None:

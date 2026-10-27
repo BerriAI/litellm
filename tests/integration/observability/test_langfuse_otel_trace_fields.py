@@ -41,7 +41,6 @@ class SpanRecord:
     dropped_attributes: int = 0
 
     def tags(self) -> tuple[object, ...]:
-        """The trace tags Langfuse ingestion reads from the raw attribute."""
         raw: Final = self.attributes.get("langfuse.trace.tags")
         if isinstance(raw, tuple):
             return raw
@@ -79,9 +78,6 @@ def _span_records(body: bytes) -> tuple[SpanRecord, ...]:
 
 
 class LangfuseSink:
-    """The Langfuse OTLP endpoint: keeps every accepted generation and root span, or answers 503 during a scripted
-    outage."""
-
     def __init__(self) -> None:
         self.lock: Final = threading.Lock()
         self.outage: Final = threading.Event()
@@ -128,8 +124,6 @@ class LangfuseSink:
 
 
 class OtlpSink:
-    """A generic OTLP endpoint: keeps every span it receives."""
-
     def __init__(self) -> None:
         self.lock: Final = threading.Lock()
         self.spans: Final[list[SpanRecord]] = []  # mutable-ok: spans accumulate as the exporter delivers them
@@ -142,7 +136,6 @@ class OtlpSink:
         return Reply(body=b"")
 
     def root_of_request(self, marker: str) -> SpanRecord:
-        """The root span of the one trace whose spans carry the marker."""
 
         def roots() -> tuple[SpanRecord, ...]:
             with self.lock:
@@ -167,7 +160,6 @@ def _chat_completion(marker: str, text: str = "langfuse-otel scripted reply") ->
 
 
 def _provider(request: Request) -> Reply:
-    """Scripted provider: the three surfaces echo the caller marker, a `fail-` marker answers 500, embeddings succeed."""
     if request.method != "POST" or not request.body:
         return Reply(body=b'{"object": "list", "data": []}')
     body: Final = json.loads(request.body)
@@ -192,8 +184,6 @@ def _provider(request: Request) -> Reply:
 
 
 def _langfuse_config(directory: Path, name: str, settings: Mapping[str, object], provider_url: str) -> Path:
-    """The integration config with `langfuse_otel`, plus an opt-in post_call `llm_as_a_judge` guardrail whose judge
-    model is served by the scripted provider."""
     base: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     judge: Final = {
         "model_name": JUDGE_MODEL,
@@ -300,8 +290,6 @@ class SharedRig:
 
 @pytest.fixture(scope="module")
 def v2_after_otel(tmp_path_factory: pytest.TempPathFactory) -> Iterator[SharedRig]:
-    """OTel v2 with the generic `otel` callback listed before `langfuse_otel`, so the request root belongs to the
-    generic exporter."""
     otel: Final = OtlpSink()
     with wire_server(otel.respond) as destination:
         environment: Final = {
@@ -339,7 +327,6 @@ def _chat(
 
 
 def _trace_fields(spans: tuple[SpanRecord, ...]) -> Iterator[str]:
-    """Every trace-level key any of the spans carries."""
     for record in spans:
         yield from (key for key in record.attributes if key in TRACE_FIELDS)
 
@@ -654,7 +641,6 @@ def _chat_with_tools(
 @pytest.mark.parametrize(("tools", "prefix"), product((30, 33, 34, 35, 36, 40), ("", "fail-")))
 def test_trace_fields_never_evict_or_drop_another_attribute_of_a_full_span(v1: Rig, tools: int, prefix: str) -> None:
     run: Final = uuid.uuid4().hex
-    # Both requests carry a caller trace id, so the joined one's traceparent adds no key the derived one lacks.
     derived: Final = _chat_with_tools(v1, f"{prefix}lit8281-full-{tools}-{run}", tools, {"trace_id": uuid.uuid4().hex})
     joined: Final = _chat_with_tools(
         v1,

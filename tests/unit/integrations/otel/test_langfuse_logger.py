@@ -66,8 +66,8 @@ def _logger(*, capture: str = "span_only", mappers: Sequence[str] = ("genai", "l
     return build_otel_v2_logger(config=cfg, tracer_provider=tracer_provider), exporter
 
 
-def _start_root(logger, parent_context: Context | None = None):
-    root = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME, parent_context)
+def _start_root(logger: OpenTelemetryV2, parent_context: Context | None = None):
+    root: Final = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME, parent_context)
     set_request_root_span(root)
     return root
 
@@ -466,14 +466,16 @@ def _root_trace_name_after(
 
 @pytest.mark.parametrize("later", [JUDGE_PARAMS, UNNAMED], ids=["litellm-sub-call", "untagged-call"])
 @pytest.mark.parametrize("caller", CALLER_NAMES, ids=["body", "header"])
-def test_a_later_call_in_the_request_keeps_the_caller_trace_name_on_the_root(caller, later):
+def test_a_later_call_in_the_request_keeps_the_caller_trace_name_on_the_root(
+    caller: Mapping[str, object], later: Mapping[str, object]
+) -> None:
     logger, _ = _logger()
 
     assert _root_trace_name_after(logger, (("acompletion", caller), ("acompletion", later))) == "from-caller"
 
 
 @pytest.mark.parametrize("caller", CALLER_NAMES, ids=["body", "header"])
-def test_a_caller_trace_name_replaces_the_name_an_earlier_call_derived(caller):
+def test_a_caller_trace_name_replaces_the_name_an_earlier_call_derived(caller: Mapping[str, object]) -> None:
     logger, _ = _logger()
 
     assert _root_trace_name_after(logger, (("acompletion", JUDGE_PARAMS), ("acompletion", caller))) == "from-caller"
@@ -505,7 +507,7 @@ def test_a_root_another_vendor_started_gets_no_derived_trace_name():
 
 
 @pytest.mark.parametrize("caller", CALLER_NAMES, ids=["body", "header"])
-def test_a_root_another_vendor_started_still_gets_the_caller_trace_name(caller):
+def test_a_root_another_vendor_started_still_gets_the_caller_trace_name(caller: Mapping[str, object]) -> None:
     logger, _ = _logger()
     other_vendor, _ = _logger(mappers=("genai",))
 

@@ -44,7 +44,6 @@ LANGFUSE_CLOUD_EU_ENDPOINT: Final = "https://cloud.langfuse.com/api/public/otel"
 LANGFUSE_CLOUD_US_ENDPOINT: Final = "https://us.cloud.langfuse.com/api/public/otel"
 LANGFUSE_INGESTION_VERSION_HEADER: Final = "x-langfuse-ingestion-version"
 LANGFUSE_INGESTION_VERSION: Final = "4"
-# The attributes ``OpenTelemetry._record_exception_on_span`` adds to a failed call's span after these.
 _ERROR_ATTRIBUTES: Final = frozenset(
     {
         ErrorAttributes.ERROR_CODE,
@@ -77,13 +76,11 @@ def _preset_cache_key(kwargs: Mapping[str, object]) -> object:
 
 
 def _mask_flag(value: object) -> bool:
-    """A mask flag as the classic langfuse callback reads it: "true" / "false" strings parse, anything else by truthiness."""
     parsed: Final = str_to_bool(value) if isinstance(value, str) else None
     return bool(value) if parsed is None else parsed
 
 
 def _caller_tag_list(value: object) -> tuple[str, ...]:
-    """Caller tags as Langfuse ingestion reads a raw tags value: a list, a JSON array string, a comma list or one tag."""
     parsed: Final = (
         safe_json_loads(value, default=value) if isinstance(value, str) and value.strip().startswith("[") else value
     )
@@ -100,7 +97,6 @@ def _parent_of(span: object) -> trace.SpanContext | None:
 
 
 def _litellm_proxy_span(kwargs: Mapping[str, object]) -> trace.Span | None:
-    """The proxy request span another OTel callback opened for this request, when the request carries one."""
     litellm_params: Final = _as_gettable(kwargs.get("litellm_params")) or {}
     carried: Final = (
         (_as_gettable(litellm_params.get(key)) or {}).get("litellm_parent_otel_span")
@@ -117,12 +113,6 @@ def _litellm_proxy_span(kwargs: Mapping[str, object]) -> trace.Span | None:
 
 
 def _starts_its_own_trace(span: object, kwargs: Mapping[str, object]) -> bool:
-    """Whether the trace `span` belongs to was started by litellm rather than by the app calling it.
-
-    litellm writes onto the app's own span when one is active, and otherwise parents its span to an inbound
-    traceparent, a caller-provided span or its proxy request span. The trace is litellm's only when its span has no
-    parent, or hangs off a proxy request span that has none.
-    """
     if span is trace.get_current_span():
         return False
     parent: Final = _parent_of(span)
@@ -233,14 +223,12 @@ class LangfuseOtelLogger(OpenTelemetry):
 
     @staticmethod
     def _observation_output(response_obj: _Gettable | None) -> str | None:
-        """Serialized observation output, or None when the response yields nothing."""
         if not response_obj or not hasattr(response_obj, "get"):
             return None
         return _extract_output_items(response_obj) or _extract_choices_output(response_obj)
 
     @staticmethod
     def _trace_tags(kwargs: Mapping[str, object], metadata: Mapping[str, object]) -> tuple[str, ...]:
-        """Order-preserving dedupe of caller tags, request tags and langfuse_default_tags expansions."""
         caller_tags: Final = metadata.get("tags")
         request_tags: Final = (_as_gettable(kwargs.get("standard_logging_object")) or {}).get("request_tags")
         default_tags: Final = litellm.langfuse_default_tags
@@ -330,8 +318,6 @@ class LangfuseOtelLogger(OpenTelemetry):
         input_json: str | None,
         output_json: str | None,
     ) -> None:
-        """Set the derived trace name, tags, input and output into the room ``span``'s attribute limit leaves next
-        to the error attributes a failed call adds after them, so they never evict or drop another attribute."""
         from litellm.integrations.otel.emitter import carried_keys, span_attribute_limit
 
         tags: Final = LangfuseOtelLogger._trace_tags(kwargs, metadata)
