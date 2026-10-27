@@ -12,6 +12,7 @@ import respx
 import litellm
 from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.ollama.common_utils import OllamaError
 from litellm.llms.ollama.completion.transformation import (
     OllamaConfig,
     OllamaTextCompletionResponseIterator,
@@ -990,3 +991,42 @@ def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
         )
         == "http://gateway.example.com/ollama/api/generate"
     )
+
+
+class TestOllamaTransformResponseMalformedBody:
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {},
+            {"choices": None},
+            {"error": {"message": "upstream broke"}},
+        ],
+    )
+    def test_transform_response_non_completion_body_raises(self, body):
+        # A 200 whose body is not a generation response must raise instead of
+        # returning an empty successful completion.
+        config = OllamaConfig()
+
+        raw_response = MagicMock()
+        raw_response.status_code = 200
+        raw_response.text = json.dumps(body)
+        raw_response.headers = {}
+        raw_response.json.return_value = body
+
+        model_response = ModelResponse(
+            id="test_id",
+            choices=[{"message": Message(content="")}],
+        )
+
+        with pytest.raises(OllamaError):
+            config.transform_response(
+                model="llama2",
+                raw_response=raw_response,
+                model_response=model_response,
+                logging_obj=MagicMock(),
+                request_data={},
+                messages=[],
+                optional_params={},
+                litellm_params={},
+                encoding=MagicMock(),
+            )
