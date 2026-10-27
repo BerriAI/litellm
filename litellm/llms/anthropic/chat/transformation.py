@@ -2937,6 +2937,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if context_management is not None:
             provider_specific_fields["context_management"] = context_management
 
+        input_transformations: Final = completion_response.get("input_transformations")
+        if input_transformations is not None:
+            provider_specific_fields["input_transformations"] = input_transformations
+
         if web_search_results is not None:
             provider_specific_fields["web_search_results"] = web_search_results
             provider_specific_fields["web_search_calls"] = self._build_web_search_calls(

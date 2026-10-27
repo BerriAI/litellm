@@ -416,3 +416,33 @@ def test_drop_params_forwards_a_non_object_message_item_as_sent_on_the_native_re
 
     assert request["messages"][1] == 7
     assert request["messages"][2]["content"][0]["content"] == [{"type": "text", "text": "sunny"}]
+
+
+def test_native_response_keeps_input_transformations() -> None:
+    input_transformations: Final[list[JsonValue]] = [{"type": "thinking_block_binding", "count": 2}]
+    upstream: Final[dict[str, JsonValue]] = {
+        "id": "msg_test",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-6",
+        "content": [{"type": "text", "text": "ok"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 19, "output_tokens": 42},
+        "input_transformations": input_transformations,
+    }
+    logging_obj: Final = Logging(
+        model="claude-sonnet-4-6",
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="test-call",
+        function_id="test-function",
+    )
+
+    response: Final = AnthropicMessagesConfig().transform_anthropic_messages_response(
+        model="claude-sonnet-4-6", raw_response=httpx.Response(200, json=upstream), logging_obj=logging_obj
+    )
+
+    assert response["input_transformations"] == input_transformations

@@ -9804,3 +9804,54 @@ def test_transform_request_tool_config_point_without_tools_drops_the_key():
     assert "cache_control_injection_points" not in data
     assert "tools" not in data
     assert litellm_params["metadata"] == {}
+
+
+_INPUT_TRANSFORMATIONS: Final = [{"type": "thinking_block_binding", "count": 2}]
+
+
+def _input_transformations_response() -> dict:
+    return {
+        "id": "msg_input_transformations",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-6",
+        "content": [{"type": "text", "text": "ok"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 12, "output_tokens": 3},
+        "input_transformations": _INPUT_TRANSFORMATIONS,
+    }
+
+
+def test_chat_response_surfaces_input_transformations_in_provider_specific_fields():
+    result = AnthropicConfig().transform_response(
+        model="claude-sonnet-4-6",
+        raw_response=httpx.Response(200, json=_input_transformations_response()),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert result.choices[0].message.provider_specific_fields["input_transformations"] == _INPUT_TRANSFORMATIONS
+
+
+def test_chat_response_without_input_transformations_adds_no_key():
+    completion_response = _input_transformations_response()
+    del completion_response["input_transformations"]
+    result = AnthropicConfig().transform_response(
+        model="claude-sonnet-4-6",
+        raw_response=httpx.Response(200, json=completion_response),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert "input_transformations" not in result.choices[0].message.provider_specific_fields
