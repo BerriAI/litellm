@@ -570,6 +570,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         self.iterations_usage = iterations_usage
         self._refusal_text: str = ""
         self.sent_compaction_block: bool = False
+        self._current_chunk_is_finish: bool = False
         # Per-phase flags so the compaction block's start/delta/stop events
         # are emitted (and the public state machine is advanced) in
         # lock-step with the caller actually consuming each event. Pre-
@@ -814,7 +815,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     continue
 
                 should_start_new_block = self._should_start_new_content_block(chunk)
-                is_opening_first_block = self.sent_content_block_start is False
+                is_opening_first_block = self.sent_content_block_start is False and not self._current_chunk_is_finish
                 if is_opening_first_block and self._is_blank_delta(chunk):
                     continue
                 if is_opening_first_block:
@@ -914,19 +915,22 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                 if processed_chunk["type"] == "message_delta" and self.sent_content_block_finish is False:
                     # Queue both the content_block_stop and the message_delta
-                    self.chunk_queue.append(
-                        {
-                            "type": "content_block_stop",
-                            "index": self.current_content_block_index,
-                        }
-                    )
-                    self.sent_content_block_finish = True
+                    if self.sent_content_block_start:
+                        self.chunk_queue.append(
+                            {
+                                "type": "content_block_stop",
+                                "index": self.current_content_block_index,
+                            }
+                        )
+                        self.sent_content_block_finish = True
                     if processed_chunk.get("delta", {}).get("stop_reason") is not None:
                         self.holding_stop_reason_chunk = processed_chunk
                     else:
                         processed_chunk = self._augment_message_delta_usage(processed_chunk)
                         self.chunk_queue.append(processed_chunk)
-                    return self.chunk_queue.popleft()
+                    if self.chunk_queue:
+                        return self.chunk_queue.popleft()
+                    continue
                 elif self.holding_chunk is not None:
                     self.chunk_queue.append(self.holding_chunk)
                     if processed_chunk.get("type") == "message_delta":
@@ -958,7 +962,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     # valid Anthropic order (... -> content_block_stop ->
                     # message_delta). Emit ``content_block_stop`` here if
                     # the active content block was not already closed.
-                    if not self.sent_content_block_finish:
+                    if self.sent_content_block_start and not self.sent_content_block_finish:
                         self.chunk_queue.append(
                             {
                                 "type": "content_block_stop",
@@ -987,14 +991,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             # Anthropic SSE ordering is preserved (content_block_stop ->
             # message_delta).
             if self.holding_stop_reason_chunk is not None:
-                if not self.sent_content_block_finish:
-                    self.sent_content_block_finish = True
-                    self.chunk_queue.append(self._augment_message_delta_usage(self.holding_stop_reason_chunk))
-                    self.holding_stop_reason_chunk = None
-                    return {
-                        "type": "content_block_stop",
-                        "index": self.current_content_block_index,
-                    }
                 held: Final = self._augment_message_delta_usage(self.holding_stop_reason_chunk)
                 self.holding_stop_reason_chunk = None
                 return held
@@ -1049,7 +1045,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     continue
 
                 should_start_new_block = self._should_start_new_content_block(chunk)
-                is_opening_first_block = self.sent_content_block_start is False
+                is_opening_first_block = self.sent_content_block_start is False and not self._current_chunk_is_finish
                 if is_opening_first_block and self._is_blank_delta(chunk):
                     continue
                 if is_opening_first_block:
@@ -1141,19 +1137,22 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                     if processed_chunk["type"] == "message_delta" and self.sent_content_block_finish is False:
                         # Queue both the content_block_stop and the holding chunk
-                        self.chunk_queue.append(
-                            {
-                                "type": "content_block_stop",
-                                "index": self.current_content_block_index,
-                            }
-                        )
-                        self.sent_content_block_finish = True
+                        if self.sent_content_block_start:
+                            self.chunk_queue.append(
+                                {
+                                    "type": "content_block_stop",
+                                    "index": self.current_content_block_index,
+                                }
+                            )
+                            self.sent_content_block_finish = True
                         if processed_chunk.get("delta", {}).get("stop_reason") is not None:
                             self.holding_stop_reason_chunk = processed_chunk
                         else:
                             processed_chunk = self._augment_message_delta_usage(processed_chunk)
                             self.chunk_queue.append(processed_chunk)
-                        return self.chunk_queue.popleft()
+                        if self.chunk_queue:
+                            return self.chunk_queue.popleft()
+                        continue
                     elif self.holding_chunk is not None:
                         # Queue both chunks
                         self.chunk_queue.append(self.holding_chunk)
@@ -1186,7 +1185,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     # valid Anthropic order (... -> content_block_stop ->
                     # message_delta). Emit ``content_block_stop`` here if
                     # the active content block was not already closed.
-                    if not self.sent_content_block_finish:
+                    if self.sent_content_block_start and not self.sent_content_block_finish:
                         self.chunk_queue.append(
                             {
                                 "type": "content_block_stop",
@@ -1220,14 +1219,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             # Anthropic SSE ordering is preserved (content_block_stop ->
             # message_delta).
             if self.holding_stop_reason_chunk is not None:
-                if not self.sent_content_block_finish:
-                    self.sent_content_block_finish = True
-                    self.chunk_queue.append(self._augment_message_delta_usage(self.holding_stop_reason_chunk))
-                    self.holding_stop_reason_chunk = None
-                    return {
-                        "type": "content_block_stop",
-                        "index": self.current_content_block_index,
-                    }
                 held: Final = self._augment_message_delta_usage(self.holding_stop_reason_chunk)
                 self.holding_stop_reason_chunk = None
                 return held
@@ -1406,7 +1397,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
-        if chunk.choices[0].finish_reason is not None:
+        self._current_chunk_is_finish = chunk.choices[0].finish_reason is not None
+        if self._current_chunk_is_finish:
             return False
 
         refusal_text: Final = openai_chat_refusal_text(chunk.choices[0].delta)
