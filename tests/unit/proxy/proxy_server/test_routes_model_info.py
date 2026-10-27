@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from typing import Final
@@ -24,6 +25,7 @@ import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy import proxy_server
+from litellm.proxy._types import LiteLLM_ProxyModelTable
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
 from .conftest import normalize  # type: ignore[import-not-found]
@@ -204,6 +206,80 @@ def test_v2_model_info_invalid_page_returns_422(client, auth_as, empty_router):
         response = client.get("/v2/model/info", params={"page": 0})
     assert response.status_code == 422
     assert "detail" in response.json()
+
+
+@pytest.mark.parametrize("encoded", [False, True])
+def test_deleted_model_params_stay_absent_after_reload_and_another_save(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    mock_prisma: MagicMock,
+    encoded: bool,
+) -> None:
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import PatchModelRequest
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment, updateLiteLLMParams
+
+    configured: Final = {
+        "model": "openai/test-model", "api_key": "synthetic-runtime-secret",
+        "use_litellm_proxy": True, "use_in_pass_through": True, "use_chat_completions_api": False,
+        "litellm_image_enabled": True, "timeout": 30, "input_cost_per_token": 0.003,
+        "team_id": "param-only-team", "temperature": 0, "metadata": {},
+    }
+    original: Final = Deployment(
+        model_name="editor-model", litellm_params=LiteLLM_Params.model_validate(configured),
+        model_info=ModelInfo(id="editor-model", team_id="owner-team", access_groups=["retained-group"]),
+    )
+    removals: Final = ("litellm_image_enabled", "use_litellm_proxy", "input_cost_per_token", "team_id")
+    deleted: Final = update_db_model(
+        db_model=original,
+        updated_patch=PatchModelRequest(
+            litellm_params=updateLiteLLMParams(max_retries=0), litellm_params_to_remove=removals,
+            model_info=ModelInfo(id="editor-model", input_cost_per_token=0.003),
+        ),
+    )
+    saved_params: Final = json.loads(deleted["litellm_params"])
+    saved_info: Final = json.loads(deleted["model_info"])
+    assert saved_params == {**{key: value for key, value in configured.items() if key not in removals}, "max_retries": 0}
+    assert "input_cost_per_token" not in saved_info
+    assert saved_info["team_id"] == "owner-team"
+    assert saved_info["access_groups"] == ["retained-group"]
+    reloaded: Final = Deployment.model_validate(
+        {"model_name": original.model_name, "litellm_params": saved_params, "model_info": saved_info}
+    )
+    router: Final = litellm.Router(model_list=[{
+        "model_name": "editor-model", "litellm_params": saved_params,
+        "model_info": {"id": "editor-model", "db_model": True},
+    }])
+    stored_params: Final = {**saved_params, "api_key": "synthetic-stored-secret"}
+    mock_prisma.db.litellm_proxymodeltable.find_unique.return_value = LiteLLM_ProxyModelTable(
+        model_id="editor-model", model_name="editor-model",
+        litellm_params=json.dumps(stored_params) if encoded else stored_params,
+        model_info={"id": "editor-model"},
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+
+    with auth_as():
+        normal: Final = client.get("/v2/model/info", params={"modelId": "editor-model"})
+        editor: Final = client.get("/v2/model/info", params={"modelId": "editor-model", "use_stored_params": "true"})
+
+    assert normal.status_code == editor.status_code == 200, editor.text
+    normal_params: Final = normal.json()["data"][0]["litellm_params"]
+    assert "use_litellm_proxy" in normal_params
+    assert editor.json()["data"][0]["litellm_params"] == {
+        key: value for key, value in normal_params.items() if key in saved_params
+    }
+    assert editor.json()["data"][0]["litellm_params"]["use_chat_completions_api"] is False
+    assert "synthetic-runtime-secret" not in editor.text
+    assert "synthetic-stored-secret" not in editor.text
+    assert "use_litellm_proxy" in router.model_list[0]["litellm_params"]
+
+    saved_again: Final = update_db_model(
+        db_model=reloaded, updated_patch=updateDeployment(litellm_params=updateLiteLLMParams(rpm=10, timeout=None))
+    )
+    persisted: Final = json.loads(saved_again["litellm_params"])
+    assert persisted == {**saved_params, "rpm": 10}
 
 
 def test_v2_model_info_in_openapi_schema():

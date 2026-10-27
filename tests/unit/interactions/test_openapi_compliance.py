@@ -1,41 +1,56 @@
 """
 OpenAPI compliance tests for Google Interactions API.
 
-Validates that our SDK requests/responses match the OpenAPI spec at:
-https://ai.google.dev/static/api/interactions.openapi.json
+Validates that our SDK requests/responses match the OpenAPI spec snapshot in
+interactions.openapi.json, taken from https://ai.google.dev/static/api/interactions.openapi.json
+(litellm/types/interactions/README.md says how to refresh it). The scheduled
+interactions-spec-canary workflow runs the same tests against the live spec by passing
+--interactions-spec-url, so a change Google makes shows up there, not in every PR.
 
 Run with: pytest tests/unit/interactions/test_openapi_compliance.py -v
 """
 
 import json
-import os
 import re
-from typing import Any, Dict
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, Final, get_args
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 from openapi_core import OpenAPI
+from pydantic import BaseModel, TypeAdapter
 
 OPENAPI_SPEC_URL = "https://ai.google.dev/static/api/interactions.openapi.json"
+OPENAPI_SPEC_SNAPSHOT: Final = Path(__file__).with_name("interactions.openapi.json")
+SPEC_URL_OPTION: Final = TypeAdapter(str | None)
 
 
-def _load_openapi_spec_dict() -> Dict[str, Any]:
-    """
-    Load the OpenAPI spec JSON.
+@dataclass(frozen=True, slots=True)
+class LoadedSpec:
+    source: str
+    spec: Dict[str, Any]
 
-    In CI or offline environments, network access may not be available.
-    In that case, gracefully skip these tests instead of erroring.
-    """
-    try:
-        response = httpx.get(OPENAPI_SPEC_URL, timeout=5.0)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:  # pragma: no cover - defensive, env-dependent
-        pytest.skip(
-            f"Skipping Google Interactions OpenAPI compliance tests - "
-            f"unable to load spec from {OPENAPI_SPEC_URL}: {e}"
-        )
+
+def _status_enum_of(model: type[BaseModel]) -> type[Enum]:
+    annotation: Final = model.model_fields["status"].annotation
+    candidates: Final = (annotation, *get_args(annotation))
+    return next(candidate for candidate in candidates if isinstance(candidate, type) and issubclass(candidate, Enum))
+
+
+def _requested_spec_url(request: pytest.FixtureRequest) -> str | None:
+    return SPEC_URL_OPTION.validate_python(request.config.getoption("interactions_spec_url"))
+
+
+def _load_openapi_spec(live_url: str | None) -> LoadedSpec:
+    if live_url is None:
+        return LoadedSpec(source=str(OPENAPI_SPEC_SNAPSHOT), spec=json.loads(OPENAPI_SPEC_SNAPSHOT.read_text()))
+    with httpx.Client(transport=httpx.HTTPTransport(retries=3), timeout=30.0) as client:
+        response: Final = client.get(live_url)
+    response.raise_for_status()
+    return LoadedSpec(source=str(response.url), spec=response.json())
 
 
 def _model_create_request_schema(spec_dict: Dict[str, Any]) -> Dict[str, Any]:
@@ -65,15 +80,31 @@ def _declared_type_value(variant_schema: Dict[str, Any]) -> Any:
 
 
 @pytest.fixture(scope="module")
-def spec_dict() -> Dict[str, Any]:
-    """Load raw spec dict for manual validation."""
-    return _load_openapi_spec_dict()
+def loaded_spec(request: pytest.FixtureRequest) -> LoadedSpec:
+    return _load_openapi_spec(_requested_spec_url(request))
+
+
+@pytest.fixture(scope="module")
+def spec_dict(loaded_spec: LoadedSpec) -> Dict[str, Any]:
+    return loaded_spec.spec
 
 
 @pytest.fixture(scope="module")
 def openapi_spec(spec_dict: Dict[str, Any]) -> OpenAPI:
     """Load the OpenAPI spec as an OpenAPI object."""
     return OpenAPI.from_dict(spec_dict)
+
+
+def test_spec_comes_from_the_requested_source(loaded_spec: LoadedSpec, request: pytest.FixtureRequest) -> None:
+    assert loaded_spec.source == (_requested_spec_url(request) or str(OPENAPI_SPEC_SNAPSHOT))
+
+
+def test_interaction_status_export_carries_the_interaction_models_statuses() -> None:
+    from litellm.types.interactions import InteractionStatus, generated
+
+    exported: Final = frozenset(member.value for member in InteractionStatus)
+    modelled: Final = frozenset(member.value for member in _status_enum_of(generated.Interaction))
+    assert exported == modelled, sorted(exported ^ modelled)
 
 
 class TestRequestCompliance:
@@ -249,27 +280,24 @@ class TestResponseCompliance:
             assert field in schema["properties"], f"Output field '{field}' not in spec"
             print(f"✓ Output field '{field}' exists in spec")
 
-    def test_status_enum_values(self, spec_dict):
-        """Verify status enum values match spec."""
-        # `status` is an output-only field; validate against the response schema.
-        schema = spec_dict["components"]["schemas"]["Interaction"]
-        status_prop = schema["properties"]["status"]
-        # Google Interactions API uses lowercase status values (updated Feb 2026).
-        # Keep this an exact match: this test intentionally breaks CI when
-        # Google changes the live spec — that breakage is how we get notified
-        # to review the change.
-        expected_statuses = [
-            "in_progress",
-            "requires_action",
-            "completed",
-            "failed",
-            "cancelled",
-            "incomplete",
-            "budget_exceeded",
-            "queued",
-        ]
-        assert status_prop["enum"] == expected_statuses
-        print(f"✓ Status enum values: {expected_statuses}")
+    @pytest.mark.parametrize(
+        "schema_name",
+        [
+            "Interaction",
+            "InteractionStatusUpdate",
+            "CreateModelInteractionParams",
+            "CreateAgentInteractionParams",
+            "UrlContextResult",
+        ],
+    )
+    def test_status_enum_values(self, spec_dict, schema_name):
+        from litellm.types.interactions import generated
+
+        schema = spec_dict["components"]["schemas"][schema_name]
+        spec_statuses: Final = frozenset(schema["properties"]["status"]["enum"])
+        parsed_statuses: Final = frozenset(member.value for member in _status_enum_of(getattr(generated, schema_name)))
+        assert spec_statuses
+        assert spec_statuses <= parsed_statuses, sorted(spec_statuses - parsed_statuses)
 
     def test_usage_schema(self, spec_dict):
         """Verify Usage schema fields."""

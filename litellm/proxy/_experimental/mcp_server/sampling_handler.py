@@ -222,7 +222,7 @@ def _select_model_by_priority(
         input_cost = info.get("input_cost_per_token") or 0.0
         output_cost = info.get("output_cost_per_token") or 0.0
         total_cost = input_cost + output_cost
-        max_output = info.get("max_output_tokens") or info.get("max_tokens") or 0
+        max_output = info.get("max_output_tokens") or 0
         output_tps = info.get("output_tokens_per_second") or 0.0
         scored.append(
             _ScoredModel(

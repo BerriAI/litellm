@@ -20,6 +20,7 @@ from litellm.integrations.langfuse.langfuse_mock_client import (
     should_use_langfuse_mock,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     filter_exceptions_from_params,
     reconstruct_model_name,
     safe_deep_copy,
@@ -1268,11 +1269,11 @@ def log_provider_specific_information_as_span(
     *,
     tracing: "LangfuseTracing",
     parent: "LangfuseObservation",
-    enrichments: Mapping[str, Any],
+    enrichments: Mapping[str, object],
 ):
     """Logs provider-specific information as spans under the generation."""
 
-    _hidden_params: Final[Mapping[str, object] | None] = enrichments.get("hidden_params", None)
+    _hidden_params: Final = as_str_mapping(enrichments.get("hidden_params", None))
     if _hidden_params is None:
         return
 

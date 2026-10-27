@@ -11,6 +11,7 @@ from typing import Final, Literal
 
 from pydantic import JsonValue
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 
@@ -236,9 +237,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_region_name=aws_region_name,
         )
-        endpoint: Final = f"{base_url}/model/{encoded_model_id}/count-tokens"
-
-        return endpoint
+        return join_api_base(base_url, f"model/{encoded_model_id}/count-tokens")
 
     def transform_bedrock_response_to_anthropic(
         self, bedrock_response: Mapping[str, JsonValue]

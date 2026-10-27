@@ -3,11 +3,12 @@ Unit Tests for the max parallel request limiter v3 for the proxy
 """
 
 import asyncio
+import contextvars
 import itertools
 import logging
 import sys
 import time
-from collections.abc import Awaitable, Callable, Iterator, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Final, List, Optional
@@ -55,6 +56,7 @@ from litellm.types.mcp import MCPPreCallRequestObject, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from litellm.types.utils import (
+    CallTypes,
     EmbeddingResponse,
     ModelResponse,
     PromptTokensDetailsWrapper,
@@ -4208,6 +4210,175 @@ async def test_completed_responses_post_call_releases_parallel_slot() -> None:
 
 
 @pytest.mark.asyncio
+async def test_mcp_tool_call_inside_admitted_request_reuses_its_parallel_slot() -> None:
+    api_key: Final = hash_token("sk-mcp-auto-execute")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1)
+    parallel_key: Final = f"{{api_key:{api_key}}}:max_parallel_requests"
+    owner_call_id: Final = "mcp-auto-execute-owner"
+
+    async def in_flight() -> int:
+        return handler._gauge_in_flight_from_cache_value(
+            await local_cache.async_get_cache(key=parallel_key)
+        )
+
+    def mcp_tool_call() -> dict[str, object]:
+        return {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Tool: add"}],
+            "mcp_server_name": "math",
+        }
+
+    async def pre_call(data: dict[str, object], call_type: str) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=data,
+            call_type=call_type,
+        )
+
+    async def pre_call_from_another_request(
+        data: dict[str, object], call_type: str
+    ) -> None:
+        await contextvars.Context().run(asyncio.create_task, pre_call(data, call_type))
+
+    await pre_call(
+        {"model": "gpt-4o-mini", "input": "add 2 and 3", "litellm_call_id": owner_call_id},
+        CallTypes.aresponses.value,
+    )
+    await pre_call(mcp_tool_call(), CallTypes.call_mcp_tool.value)
+    await pre_call(mcp_tool_call(), CallTypes.call_mcp_tool.value)
+    assert await in_flight() == 1
+
+    with pytest.raises(HTTPException):
+        await pre_call_from_another_request(
+            mcp_tool_call(), CallTypes.call_mcp_tool.value
+        )
+
+    await handler.async_log_success_event(
+        kwargs={"litellm_call_id": owner_call_id},
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    assert await in_flight() == 0
+    await pre_call_from_another_request(
+        {"model": "gpt-4o-mini", "input": "next request"},
+        CallTypes.aresponses.value,
+    )
+    assert await in_flight() == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stream", "in_flight_after_first_round_logs"),
+    [(False, 1), (True, 0)],
+    ids=["non_stream_round_logged_late_keeps_slot", "stream_logged_at_its_end_releases_slot"],
+)
+async def test_first_round_logged_after_tool_call_reuse_releases_only_at_request_end(
+    stream: bool, in_flight_after_first_round_logs: int
+) -> None:
+    reused_at: Final = datetime(2026, 1, 5, 12, 0, 0)
+    api_key: Final = hash_token(f"sk-mcp-late-round-log-{stream}")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=lambda: reused_at,
+    )
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1)
+    parallel_key: Final = f"{{api_key:{api_key}}}:max_parallel_requests"
+    owner_call_id: Final = f"mcp-late-round-log-{stream}"
+
+    async def in_flight() -> int:
+        return handler._gauge_in_flight_from_cache_value(
+            await local_cache.async_get_cache(key=parallel_key)
+        )
+
+    async def pre_call(data: dict[str, object], call_type: str) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=data,
+            call_type=call_type,
+        )
+
+    async def round_logged(ended_at: datetime) -> None:
+        await handler.async_log_success_event(
+            kwargs={"litellm_call_id": owner_call_id, "stream": stream},
+            response_obj=None,
+            start_time=None,
+            end_time=ended_at,
+        )
+
+    await pre_call(
+        {
+            "model": "claude-haiku-5-5",
+            "messages": [{"role": "user", "content": "add 2 and 3"}],
+            "litellm_call_id": owner_call_id,
+        },
+        CallTypes.anthropic_messages.value,
+    )
+    await pre_call(
+        {"model": "MCP: add", "messages": [{"role": "user", "content": "Tool: add"}], "mcp_server_name": "math"},
+        CallTypes.call_mcp_tool.value,
+    )
+
+    await round_logged(reused_at - timedelta(seconds=1))
+    assert await in_flight() == in_flight_after_first_round_logs
+
+    await round_logged(reused_at + timedelta(seconds=1))
+    assert await in_flight() == 0
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_call_reusing_request_slot_keeps_request_max_parallel_headers() -> None:
+    api_key: Final = hash_token("sk-mcp-reuse-headers")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=2)
+    data: Final[dict[str, object]] = {
+        "model": "gpt-4o-mini",
+        "input": "add 2 and 3",
+        "litellm_call_id": "mcp-reuse-headers-owner",
+    }
+    for request_data, call_type in (
+        (data, CallTypes.aresponses.value),
+        (
+            {"model": "MCP: add", "messages": [{"role": "user", "content": "Tool: add"}], "mcp_server_name": "math"},
+            CallTypes.call_mcp_tool.value,
+        ),
+    ):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=request_data,
+            call_type=call_type,
+        )
+    response: Final = ModelResponse(
+        id="mcp-reuse-headers",
+        object="chat.completion",
+        created=0,
+        model="gpt-4o-mini",
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        choices=[],
+    )
+    response._hidden_params = {}
+
+    await handler.async_post_call_success_hook(
+        data=data, user_api_key_dict=user_api_key_dict, response=response
+    )
+
+    headers: Final = response._hidden_params["additional_headers"]
+    assert headers["x-ratelimit-api_key-limit-max_parallel_requests"] == 2
+    assert headers["x-ratelimit-api_key-remaining-max_parallel_requests"] == 1
+
+
+@pytest.mark.asyncio
 async def test_concurrent_success_callbacks_release_parallel_slot_once_when_redis_fails() -> None:
     from unittest.mock import AsyncMock
 
@@ -4472,6 +4643,140 @@ async def test_success_event_releases_parallel_slot_v3(monkeypatch):
         data={"model": "gpt-3.5-turbo"},
         call_type="",
     )
+
+
+_SSE_KEEPALIVE_CALLBACK_TIME: Final = datetime(2026, 1, 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("after_ping", [False, True], ids=["fast", "pinged"])
+@pytest.mark.parametrize("fails", [False, True], ids=["success", "failure"])
+@pytest.mark.parametrize("preadmitted", [False, True], ids=["producer-admission", "existing-admission"])
+async def test_sse_keepalive_releases_parallel_capacity(
+    after_ping: bool, fails: bool, preadmitted: bool
+) -> None:
+    from fastapi.responses import StreamingResponse
+
+    from litellm.proxy.common_request_processing import open_sse_before_first_byte
+    from litellm.proxy.common_utils.sse_keepalive import SSE_COMMENT_PING_BYTES
+
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    api_key: Final = hash_token("sk-keepalive-release")
+    auth: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1)
+    counter: Final = f"{{api_key:{api_key}}}:max_parallel_requests"
+
+    async def request(call_id: str) -> None:
+        data: Final = {"model": "test-model", "litellm_call_id": call_id}
+        upstream_answers: Final = asyncio.Event()
+        if not after_ping:
+            upstream_answers.set()
+
+        async def admit() -> None:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=auth, cache=cache, data=data, call_type="acompletion"
+            )
+
+        async def failure(exc: Exception) -> None:
+            await handler.async_post_call_failure_hook(
+                request_data=data, original_exception=exc, user_api_key_dict=auth
+            )
+
+        async def stream() -> AsyncGenerator[bytes, None]:
+            yield b"data: [DONE]\n\n"
+            await handler.async_log_success_event(
+                kwargs={
+                    "litellm_call_id": call_id,
+                    "standard_logging_object": {"metadata": {"user_api_key_hash": api_key}},
+                },
+                response_obj=ModelResponse(usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)),
+                start_time=_SSE_KEEPALIVE_CALLBACK_TIME,
+                end_time=_SSE_KEEPALIVE_CALLBACK_TIME,
+            )
+
+        async def produce() -> StreamingResponse:
+            if not preadmitted:
+                await admit()
+            await upstream_answers.wait()
+            if fails:
+                raise HTTPException(status_code=502, detail="upstream failed")
+            return StreamingResponse(stream())
+
+        if preadmitted:
+            await admit()
+        response_call: Final = open_sse_before_first_byte(
+            produce(), 0.001 if after_ping else 60.0, on_late_failure=failure
+        )
+        if fails and not after_ping:
+            with pytest.raises(HTTPException) as rejected:
+                await response_call
+            assert rejected.value.status_code == 502
+            await failure(rejected.value)
+            return
+        response: Final = await response_call
+        first: Final = await anext(response.body_iterator)
+        if after_ping:
+            upstream_answers.set()
+        rest: Final = tuple([chunk async for chunk in response.body_iterator])
+        assert first == (SSE_COMMENT_PING_BYTES if after_ping else b"data: [DONE]\n\n")
+        if fails:
+            error_frame: Final = rest[-2]
+            assert isinstance(error_frame, bytes) and b"upstream failed" in error_frame
+            assert rest[-1] == b"data: [DONE]\n\n"
+        elif after_ping:
+            assert rest[-1] == b"data: [DONE]\n\n"
+        else:
+            assert rest == ()
+
+    for index in range(3):
+        await contextvars.Context().run(asyncio.create_task, request(f"keepalive-{index}"))
+        assert handler._gauge_in_flight_from_cache_value(await cache.async_get_cache(counter)) == 0
+
+
+@pytest.mark.asyncio
+async def test_sse_keepalive_rejects_overlap_and_reuses_completed_capacity() -> None:
+    from fastapi.responses import StreamingResponse
+
+    from litellm.proxy.common_request_processing import open_sse_before_first_byte
+
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    api_key: Final = hash_token("sk-keepalive-overlap")
+    auth: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1)
+    admitted: Final = asyncio.Event()
+    finish: Final = asyncio.Event()
+
+    async def request(call_id: str) -> None:
+        async def stream() -> AsyncGenerator[bytes, None]:
+            await finish.wait()
+            yield b"data: [DONE]\n\n"
+            await handler.async_post_call_success_hook(
+                data={"litellm_call_id": call_id}, user_api_key_dict=auth, response=ModelResponse()
+            )
+
+        async def produce() -> StreamingResponse:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=auth,
+                cache=cache,
+                data={"model": "test-model", "litellm_call_id": call_id},
+                call_type="acompletion",
+            )
+            admitted.set()
+            return StreamingResponse(stream())
+
+        response: Final = await open_sse_before_first_byte(produce(), 60.0)
+        assert tuple([chunk async for chunk in response.body_iterator]) == (b"data: [DONE]\n\n",)
+
+    first: Final = contextvars.Context().run(asyncio.create_task, request("first"))
+    await admitted.wait()
+    try:
+        with pytest.raises(HTTPException) as rejected:
+            await contextvars.Context().run(asyncio.create_task, request("overlapping"))
+        assert rejected.value.status_code == 429
+    finally:
+        finish.set()
+        await first
+    await contextvars.Context().run(asyncio.create_task, request("after-completion"))
 
 
 @pytest.mark.asyncio
