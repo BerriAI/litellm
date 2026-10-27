@@ -1728,9 +1728,10 @@ class CustomStreamWrapper:
                         model_response.choices[0].delta = plain_delta if plain_delta is not None else Delta()
                         plain_delta_created = plain_delta is not None  # rebind-ok: the first chunk builds its delta
                 else:
-                    self._usage_chunk_upstream_attributes = upstream_non_openai_attributes(
-                        ModelResponseStream, original_chunk
-                    )
+                    if isinstance(original_chunk, BaseModel):
+                        self._usage_chunk_upstream_attributes = upstream_non_openai_attributes(
+                            ModelResponseStream, original_chunk
+                        )
                     if self.send_stream_usage is True:
                         model_response.choices = []
                         return model_response

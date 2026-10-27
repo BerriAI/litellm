@@ -9,7 +9,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import TypeIs  # noqa: TID251  # narrows a duck-typed value to the Protocol its caller reads
 
 import litellm
@@ -679,9 +679,7 @@ def process_response_headers(
     return {**additional_headers, **({"request-id": request_id} if request_id is not None else {})}
 
 
-def _upstream_non_openai_keys(
-    response_type: "type[ModelResponseStream]", original_chunk: "ModelResponseStream"
-) -> tuple[str, ...]:
+def _upstream_non_openai_keys(response_type: type[BaseModel], original_chunk: BaseModel) -> tuple[str, ...]:
     # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
     expected_keys: Final = frozenset(response_type.model_fields) | frozenset({"usage"})
     return tuple(
@@ -691,13 +689,11 @@ def _upstream_non_openai_keys(
     )
 
 
-def _dump_keys(original_chunk: "ModelResponseStream", keys: tuple[str, ...]) -> Mapping[str, object]:
-    return original_chunk.model_dump(include=frozenset(keys))
+def _dump_keys(original_chunk: BaseModel, keys: tuple[str, ...]) -> Mapping[str, object]:
+    return original_chunk.model_dump(include=MappingProxyType(dict.fromkeys(keys, True)))
 
 
-def upstream_non_openai_attributes(
-    response_type: "type[ModelResponseStream]", original_chunk: "ModelResponseStream"
-) -> Mapping[str, object]:
+def upstream_non_openai_attributes(response_type: type[BaseModel], original_chunk: BaseModel) -> Mapping[str, object]:
     keys: Final = _upstream_non_openai_keys(response_type, original_chunk)
     return MappingProxyType(_dump_keys(original_chunk, keys) if keys else {})
 

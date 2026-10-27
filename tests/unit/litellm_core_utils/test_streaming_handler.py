@@ -1026,7 +1026,7 @@ async def test_final_usage_chunk_keeps_provider_fields_from_usage_only_chunk(syn
             messages=[{"role": "user", "content": "Hey"}],
             stream=True,
             call_type="completion",
-            start_time=time.time(),
+            start_time=datetime.datetime.now(),
             litellm_call_id="usage-fields",
             function_id="usage-fields",
         ),
