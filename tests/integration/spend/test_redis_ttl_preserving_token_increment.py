@@ -7,6 +7,7 @@ from redis import Redis
 
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCache
+from litellm.proxy.hooks.parallel_request_limiter_v3 import OpenWindowIncrementOperation
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
 )
@@ -63,3 +64,43 @@ async def test_async_increment_tokens_with_ttl_preservation() -> None:
     finally:
         await redis_cache.async_delete_cache(key_with_ttl)
         await redis_cache.async_delete_cache(key_without_ttl)
+
+
+@pytest.mark.asyncio
+async def test_open_window_token_increment_charges_only_scopes_whose_window_is_open() -> None:
+    redis_host: Final = os.environ["REDIS_HOST"]
+    redis_port: Final = int(os.environ["REDIS_PORT"])
+    redis_cache: Final = RedisCache(host=redis_host, port=redis_port)
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=redis_cache))
+    )
+    suffix: Final = uuid.uuid4().hex[:8]
+    limited: Final = f"{{user:limited-{suffix}}}"
+    unlimited: Final = f"{{user:unlimited-{suffix}}}"
+    ungated: Final = f"{{team:ungated-{suffix}}}"
+
+    with Redis(host=redis_host, port=redis_port) as raw:
+        try:
+            assert raw.set(f"{limited}:window", "1", ex=60) is True
+            assert raw.set(f"{limited}:tokens", "5", ex=60) is True
+            await handler.async_increment_tokens_with_ttl_preservation(
+                pipeline_operations=[
+                    RedisPipelineIncrementOperation(key=f"{ungated}:tokens", increment_value=20, ttl=60),
+                    *(
+                        OpenWindowIncrementOperation(
+                            key=f"{scope}:tokens", increment_value=20, ttl=60, open_window_key=f"{scope}:window"
+                        )
+                        for scope in (limited, unlimited)
+                    ),
+                ]
+            )
+
+            assert raw.mget([f"{limited}:tokens", f"{unlimited}:tokens", f"{unlimited}:window"]) == [b"25", None, None]
+            assert raw.get(f"{ungated}:tokens") == b"20"
+            assert 0 < raw.ttl(f"{limited}:tokens") <= 60
+            assert 0 < raw.ttl(f"{ungated}:tokens") <= 60
+        finally:
+            raw.delete(
+                *(f"{scope}:{suffix_key}" for scope in (limited, unlimited) for suffix_key in ("window", "tokens")),
+                f"{ungated}:tokens",
+            )

@@ -140,6 +140,20 @@ def test_caller_without_the_summary_model_sees_the_edit_error(compacting: Rig) -
         assert len(compacting.backend_calls(received)) == 1
 
 
+def test_caller_over_the_summary_models_tpm_limit_sees_the_edit_error(compacting: Rig) -> None:
+    with compacting.gateway.scenario() as scenario:
+        key: Final = scenario.key(model_tpm_limit={CLASSIFIER_MODEL: 1})
+        within_nonce: Final = nonce()
+        compacting.register(within_nonce, chat_backend(tool_id(within_nonce), stream=False), summarizing_or_classifying)
+        within: Final = applied_edit(json_body(compacting.post(long_request(within_nonce), key=key)))
+        assert within["type"] == "compact_20260112" and "error" not in within, within
+        over_nonce: Final = nonce()
+        compacting.register(over_nonce, chat_backend(tool_id(over_nonce), stream=False), summarizing_or_classifying)
+        over: Final = json_body(compacting.post(long_request(over_nonce), key=key))
+        assert applied_edit(over)["error"] == "summary_model_rate_limit_exceeded", over
+        assert compacting.classifier_calls(compacting.received(over_nonce)) == ()
+
+
 def assert_summarized_and_classified_on_their_models(rig: Rig, request_nonce: str, body: dict[str, JsonValue]) -> str:
     received: Final = rig.received(request_nonce)
     targets: Final = [request.target for request in received]

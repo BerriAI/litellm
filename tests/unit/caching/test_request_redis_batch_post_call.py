@@ -26,8 +26,10 @@ from litellm.caching.redis_batch import (
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    OPEN_WINDOW_TOKEN_INCREMENT_SCRIPT,
     PARALLEL_RELEASE_SCRIPT,
     TOKEN_INCREMENT_SCRIPT,
+    OpenWindowIncrementOperation,
     ParallelSlotAcquisition,
     PROXY_MaxParallelRequestsHandler_v3,
     RequestRateLimiterStash,
@@ -225,6 +227,67 @@ async def test_a_failed_operation_fails_only_its_owner_and_the_owner_applies_its
     assert redis_cache.alone == [("INCRBYFLOAT", "{api_key:k1}:tokens", 10)]
     assert await limiter.internal_usage_cache.dual_cache.in_memory_cache.async_get_cache("{api_key:k1}:tokens") == 10
     assert await limiter.internal_usage_cache.dual_cache.in_memory_cache.async_get_cache("{team:t1}:tokens") is None
+
+
+def _open_window_op(scope: str) -> OpenWindowIncrementOperation:
+    return OpenWindowIncrementOperation(
+        key=scope + ":tokens", increment_value=10, ttl=60, open_window_key=scope + ":window"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_group_with_open_window_charges_rides_the_post_call_pipeline_as_one_script():
+    client = FakeClient(_ok_replies)
+    redis_cache = PostCallFakeRedisCache(client)
+    limiter = _limiter(redis_cache)
+
+    with request_redis_batch_scope():
+        await limiter.async_increment_tokens_with_ttl_preservation(
+            [*_token_ops("{team:t1}:tokens"), _open_window_op("{api_key:k1}")]
+        )
+        await limiter.async_increment_tokens_with_ttl_preservation(_token_ops("{user:u1}:tokens"))
+        await flush_post_call_redis_batches()
+
+    assert len(client.pipelines) == 1
+    assert [command for command in client.pipelines[0].commands if command[0] == "EVALSHA"] == [
+        (
+            "EVALSHA",
+            sha_of(OPEN_WINDOW_TOKEN_INCREMENT_SCRIPT),
+            4,
+            "{team:t1}:tokens",
+            "{team:t1}:tokens",
+            "{api_key:k1}:window",
+            "{api_key:k1}:tokens",
+            10,
+            60,
+            10,
+            60,
+        ),
+        ("EVALSHA", sha_of(TOKEN_INCREMENT_SCRIPT), 1, "{user:u1}:tokens", 10, 60),
+    ]
+    assert redis_cache.alone == []
+
+
+@pytest.mark.asyncio
+async def test_a_failed_open_window_script_falls_back_to_the_plain_increment():
+    def replies(command: tuple[object, ...]) -> object:
+        if command[0] == "EVALSHA" and command[1] == sha_of(OPEN_WINDOW_TOKEN_INCREMENT_SCRIPT):
+            return Exception("ERR Lua")
+        return _ok_replies(command)
+
+    client = FakeClient(replies)
+    redis_cache = PostCallFakeRedisCache(client)
+    limiter = _limiter(redis_cache)
+
+    with request_redis_batch_scope():
+        await limiter.async_increment_tokens_with_ttl_preservation(
+            [*_token_ops("{team:t1}:tokens"), _open_window_op("{user:u1}")]
+        )
+        await flush_post_call_redis_batches()
+
+    assert redis_cache.alone == [("INCRBYFLOAT", "{team:t1}:tokens", 10), ("INCRBYFLOAT", "{user:u1}:tokens", 10)]
+    assert await limiter.internal_usage_cache.dual_cache.in_memory_cache.async_get_cache("{team:t1}:tokens") == 10
+    assert await limiter.internal_usage_cache.dual_cache.in_memory_cache.async_get_cache("{user:u1}:tokens") == 10
 
 
 @pytest.mark.asyncio
