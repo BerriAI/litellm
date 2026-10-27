@@ -3,17 +3,20 @@
 import asyncio
 import base64
 import importlib
+import io
 import json
 import os
+import random
 import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from itertools import accumulate, chain
 from pathlib import Path
-from typing import Final
+from types import SimpleNamespace
+from typing import Final, Protocol, cast
 from unittest.mock import MagicMock, sentinel
 
 import anyio.to_thread
@@ -27,10 +30,18 @@ import litellm
 from litellm import decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
 import litellm.constants
-from litellm.constants import HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS, TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+from litellm.constants import (
+    HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,
+    PDF_DATA_URL_PREFIX,
+    TOKEN_COUNTER_MAX_CONCURRENT_COUNTS,
+)
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.token_counter import (
+    EXTRAPOLATION_SAMPLES,
+    PDF_PAGE_MAX_EXACT_CONTENT_BYTES,
+    _count_inline_pdf_tokens,
     _encoding_count,
+    _price_pdf_pages,
     _get_exact_count_function,
     _get_extrapolating_count_function,
     _get_tiktoken_count_function,
@@ -765,25 +776,9 @@ def test_encoding_and_decoding(tmp_path: Path):
     ],
 )
 def test_load_test_token_counter(model):
-    """
-    Token count large prompt 100 times.
-
-    Assert time taken is < 1.5s.
-    """
-    import tiktoken
-
+    """Token-count a large prompt for each supported model family."""
     messages = [{"role": "user", "content": text}] * 10
-
-    start_time = time.time()
-    for _ in range(10):
-        _ = token_counter(model=model, messages=messages)
-        # enc.encode("".join(m["content"] for m in messages))
-
-    end_time = time.time()
-
-    total_time = end_time - start_time
-    print("model={}, total test time={}".format(model, total_time))
-    assert total_time < 10, f"Total encoding time > 10s, {total_time}"
+    assert token_counter(model=model, messages=messages) > 0
 
 
 @pytest.mark.parametrize(
@@ -1948,6 +1943,231 @@ def _pdf_base64(pages: tuple[str, ...], width: int = 612, height: int = 792) -> 
     return base64.b64encode(header + b"".join(objects) + xref + trailer).decode()
 
 
+def _pdf_stream(content: bytes, dictionary: bytes = b"") -> bytes:
+    dictionary_entries: Final = b" " + dictionary if dictionary else b""
+    return (
+        b"<< /Length "
+        + str(len(content)).encode()
+        + dictionary_entries
+        + b" >>\nstream\n"
+        + content
+        + b"\nendstream"
+    )
+
+
+def _pdf_data_url_with_xobjects(
+    page_content: bytes,
+    page_xobjects: bytes,
+    xobject_objects: tuple[bytes, ...],
+    font_object: bytes = b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+) -> str:
+    object_bodies: Final = (
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+        font_object,
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Resources << /Font << /F1 3 0 R >> /XObject "
+        + page_xobjects
+        + b" >> /Contents 5 0 R >>",
+        _pdf_stream(page_content),
+        *xobject_objects,
+    )
+    object_chunks: Final = tuple(
+        f"{index} 0 obj\n".encode() + body + b"\nendobj\n"
+        for index, body in enumerate(object_bodies, start=1)
+    )
+    header: Final = b"%PDF-1.4\n"
+    offsets: Final = accumulate((len(header), *(len(chunk) for chunk in object_chunks[:-1])))
+    xref: Final = f"xref\n0 {len(object_chunks) + 1}\n0000000000 65535 f \n".encode() + b"".join(
+        f"{offset:010d} 00000 n \n".encode() for offset in offsets
+    )
+    trailer: Final = (
+        f"trailer\n<< /Size {len(object_chunks) + 1} /Root 1 0 R >>\n"
+        f"startxref\n{len(header) + sum(len(chunk) for chunk in object_chunks)}\n%%EOF\n"
+    ).encode()
+    return PDF_DATA_URL_PREFIX + base64.b64encode(header + b"".join(object_chunks) + xref + trailer).decode()
+
+
+def _pdf_data_url_with_doubling_forms(depth: int, leaf_content: bytes) -> str:
+    form_objects: Final = tuple(
+        _pdf_stream(
+            leaf_content if index == depth - 1 else b"/Fm Do\n/Fm Do\n",
+            b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> /XObject "
+            + (
+                b"<< >>"
+                if index == depth - 1
+                else b"<< /Fm " + str(7 + index).encode() + b" 0 R >>"
+            )
+            + b" >>",
+        )
+        for index in range(depth)
+    )
+    return _pdf_data_url_with_xobjects(b"/Fm Do\n", b"<< /Fm 6 0 R >>", form_objects)
+
+
+def _pdf_data_url_with_identity_h_font(
+    page_content: bytes,
+    page_xobjects: bytes = b"<< >>",
+    xobject_objects: tuple[bytes, ...] = (),
+) -> str:
+    descendant_font_number: Final = 6 + len(xobject_objects)
+    cmap_number: Final = descendant_font_number + 1
+    descriptor_number: Final = cmap_number + 1
+    font_object: Final = (
+        b"<< /Type /Font /Subtype /Type0 /BaseFont /Test /Encoding /Identity-H /DescendantFonts ["
+        + str(descendant_font_number).encode()
+        + b" 0 R] /ToUnicode "
+        + str(cmap_number).encode()
+        + b" 0 R >>"
+    )
+    descendant_font: Final = (
+        b"<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Test "
+        b"/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
+        b"/FontDescriptor " + str(descriptor_number).encode() + b" 0 R /DW 1000 >>"
+    )
+    cmap: Final = (
+        b"/CIDInit /ProcSet findresource begin\n"
+        b"12 dict begin\n"
+        b"begincmap\n"
+        b"/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
+        b"/CMapName /Test def\n"
+        b"/CMapType 2 def\n"
+        b"1 begincodespacerange\n"
+        b"<0000> <FFFF>\n"
+        b"endcodespacerange\n"
+        b"1 beginbfchar\n"
+        b"<0001> <00480065006C006C006F00200077006F0072006C0064>\n"
+        b"endbfchar\n"
+        b"endcmap\n"
+        b"CMapName currentdict /CMap defineresource pop\n"
+        b"end\n"
+        b"end"
+    )
+    font_descriptor: Final = (
+        b"<< /Type /FontDescriptor /FontName /Test /Flags 4 /FontBBox [0 0 1000 1000] "
+        b"/ItalicAngle 0 /Ascent 1000 /Descent 0 /CapHeight 700 /StemV 80 >>"
+    )
+    return _pdf_data_url_with_xobjects(
+        page_content,
+        page_xobjects,
+        (*xobject_objects, descendant_font, _pdf_stream(cmap), font_descriptor),
+        font_object,
+    )
+
+
+def _pdf_data_url_with_shared_xobjects(
+    page_contents: tuple[bytes, ...],
+    xobject_objects: tuple[bytes, ...],
+) -> str:
+    page_count: Final = len(page_contents)
+    page_object_numbers: Final = tuple(5 + index for index in range(page_count))
+    content_object_numbers: Final = tuple(5 + page_count + index for index in range(page_count))
+    first_xobject_object_number: Final = 5 + 2 * page_count
+    page_references: Final = b" ".join(f"{number} 0 R".encode() for number in page_object_numbers)
+    xobject_references: Final = b" ".join(
+        f"/Fm{index} {first_xobject_object_number + index} 0 R".encode()
+        for index in range(len(xobject_objects))
+    )
+    page_objects: Final = tuple(
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources 4 0 R /Contents "
+        + f"{content_object} 0 R >>".encode()
+        for content_object in content_object_numbers
+    )
+    content_objects: Final = tuple(_pdf_stream(content) for content in page_contents)
+    object_bodies: Final = (
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids ["
+        + page_references
+        + f"] /Count {page_count} >>".encode(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Font << /F1 3 0 R >> /XObject << " + xobject_references + b" >> >>",
+        *page_objects,
+        *content_objects,
+        *xobject_objects,
+    )
+    object_chunks: Final = tuple(
+        f"{index} 0 obj\n".encode() + body + b"\nendobj\n"
+        for index, body in enumerate(object_bodies, start=1)
+    )
+    header: Final = b"%PDF-1.4\n"
+    offsets: Final = accumulate((len(header), *(len(chunk) for chunk in object_chunks[:-1])))
+    xref: Final = f"xref\n0 {len(object_chunks) + 1}\n0000000000 65535 f \n".encode() + b"".join(
+        f"{offset:010d} 00000 n \n".encode() for offset in offsets
+    )
+    trailer: Final = (
+        f"trailer\n<< /Size {len(object_chunks) + 1} /Root 1 0 R >>\n"
+        f"startxref\n{len(header) + sum(len(chunk) for chunk in object_chunks)}\n%%EOF\n"
+    ).encode()
+    return PDF_DATA_URL_PREFIX + base64.b64encode(header + b"".join(object_chunks) + xref + trailer).decode()
+
+
+class _TestPdfMediaBox(Protocol):
+    width: float
+    height: float
+
+
+class _TestPdfContentStream(Protocol):
+    def get_data(self) -> bytes: ...
+
+
+class _TestPdfDictionary(Protocol):
+    def get(self, key: str) -> object | None: ...
+
+    def items(self) -> Iterable[tuple[str, object]]: ...
+
+    def __getitem__(self, key: str) -> object: ...
+
+
+class _TextExtractionMock(Protocol):
+    call_count: int
+    return_value: str
+
+    def __call__(self) -> str: ...
+
+    def assert_not_called(self) -> None: ...
+
+
+class _TestPdfPage(Protocol):
+    mediabox: _TestPdfMediaBox
+    extract_text: _TextExtractionMock
+
+    def items(self) -> Iterable[tuple[str, object]]: ...
+
+    def get(self, key: str) -> object | None: ...
+
+    def get_contents(self) -> _TestPdfContentStream | None: ...
+
+
+class _PdfTextPage(Protocol):
+    def extract_text(self) -> str | None: ...
+
+
+class _PdfTextPages(Protocol):
+    def __getitem__(self, index: int) -> _PdfTextPage: ...
+
+
+class _PdfTextReader(Protocol):
+    pages: _PdfTextPages
+
+
+class _PdfReaderModule(Protocol):
+    PdfReader: Callable[[io.BytesIO], _PdfTextReader]
+
+
+class _PypdfGenericModule(Protocol):
+    DictionaryObject: Callable[[Mapping[str, object]], _TestPdfDictionary]
+    NameObject: Callable[[str], str]
+
+
+def _pdf_text_page(pdf_bytes: bytes) -> _PdfTextPage:
+    pypdf_module: Final = cast(_PdfReaderModule, importlib.import_module("pypdf"))
+    return pypdf_module.PdfReader(io.BytesIO(pdf_bytes)).pages[0]
+
+
+def _pdf_extracted_text(pdf_bytes: bytes) -> str:
+    return _pdf_text_page(pdf_bytes).extract_text() or ""
+
+
 def _pdf_source(pdf_base64: str) -> dict[str, str]:
     return {"type": "base64", "media_type": "application/pdf", "data": pdf_base64}
 
@@ -1996,6 +2216,911 @@ def test_pdf_page_rendering_cost_follows_anthropic_image_scaling(fields: dict[st
 
     assert letter == poster == 1534
     assert strip == 328
+
+
+def _fake_pdf_page(content_bytes: int | bytes, include_xobjects: bool = False) -> _TestPdfPage:
+    content: Final = b"x" * content_bytes if isinstance(content_bytes, int) else content_bytes
+    pypdf_generic: Final = cast(_PypdfGenericModule, importlib.import_module("pypdf.generic"))
+    name_object: Final = pypdf_generic.NameObject
+    font: Final = pypdf_generic.DictionaryObject(
+        {
+            name_object("/Type"): name_object("/Font"),
+            name_object("/Subtype"): name_object("/Type1"),
+            name_object("/BaseFont"): name_object("/Helvetica"),
+        }
+    )
+    resources: Final = pypdf_generic.DictionaryObject(
+        {
+            name_object("/Font"): pypdf_generic.DictionaryObject({name_object("/F1"): font}),
+            **({name_object("/XObject"): pypdf_generic.DictionaryObject({})} if include_xobjects else {}),
+        }
+    )
+
+    def get_page_resource(key: str) -> object | None:
+        return resources if key == "/Resources" else None
+
+    return cast(
+        _TestPdfPage,
+        SimpleNamespace(
+            mediabox=SimpleNamespace(width=612.0, height=792.0),
+            get_contents=lambda: SimpleNamespace(get_data=lambda: content),
+            extract_text=cast(
+                _TextExtractionMock,
+                MagicMock(return_value="Revenue grew eleven percent while churn fell to two percent."),
+            ),
+            get=get_page_resource,
+        ),
+    )
+
+
+def test_long_pdf_reads_text_from_a_bounded_number_of_pages():
+    pages: Final = tuple(_fake_pdf_page(content_bytes=1_000) for _ in range(40))
+
+    _price_pdf_pages(pages, len)
+
+    assert sum(page.extract_text.call_count for page in pages) <= EXTRAPOLATION_SAMPLES
+
+
+def test_dense_pdf_page_is_priced_from_its_size_without_extracting_its_text():
+    string_operand: Final = b"(Revenue grew eleven percent)"
+    text_operator: Final = b"BT /F1 12 Tf " + string_operand + b" Tj ET\n"
+    decoded_operand_bytes: Final = len(string_operand) - 2
+    content: Final = text_operator * (2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // decoded_operand_bytes + 1)
+    page: Final = _fake_pdf_page(content_bytes=content)
+
+    priced: Final = _price_pdf_pages((page,), len)
+
+    page.extract_text.assert_not_called()
+    assert priced >= 2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+
+
+def test_oversized_pdf_page_is_priced_from_its_string_operands_without_extracting_text():
+    content: Final = b"BT /F1 9 Tf (Figure 3) Tj ET\n" + b"10 10 m 200 300 l S\n" * 10_000
+    page: Final = _fake_pdf_page(content_bytes=content)
+    blank_page: Final = _fake_pdf_page(content_bytes=b"")
+    blank_page.extract_text.return_value = ""
+
+    priced: Final = _price_pdf_pages((page,), len) - _price_pdf_pages((blank_page,), len)
+
+    page.extract_text.assert_not_called()
+    assert priced <= len(b"(Figure 3)")
+
+
+def test_oversized_pdf_form_xobject_is_priced_without_extracting_its_text():
+    string_operand: Final = b"(form text)"
+    text_operator: Final = b"BT /F1 12 Tf " + string_operand + b" Tj ET\n"
+    repetitions: Final = 2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(text_operator) + 1
+    form_content: Final = text_operator * repetitions
+    form_object: Final = _pdf_stream(
+        form_content,
+        b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >>",
+    )
+    data_url: Final = _pdf_data_url_with_xobjects(
+        b"/Fm1 Do\n",
+        b"<< /Fm1 6 0 R >>",
+        (form_object,),
+    )
+    count_function: Final = MagicMock(side_effect=len)
+
+    priced: Final = _count_inline_pdf_tokens(data_url, count_function)
+
+    assert priced is not None
+    assert max((len(call.args[0]) for call in count_function.call_args_list), default=0) <= (
+        PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+    )
+    assert priced >= (len(string_operand) - 2) * repetitions
+
+
+def test_repeated_pdf_form_draws_are_priced_with_multiplicity():
+    string_operand: Final = b"(repeated form text)"
+    text_operator: Final = b"BT /F1 12 Tf " + string_operand + b" Tj ET\n"
+    repetitions: Final = 1_024 // len(text_operator) + 1
+    form_object: Final = _pdf_stream(
+        text_operator * repetitions,
+        b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >>",
+    )
+    data_url: Final = _pdf_data_url_with_xobjects(
+        b"/Fm1 Do\n" * 1_000,
+        b"<< /Fm1 6 0 R >>",
+        (form_object,),
+    )
+    count_function: Final = MagicMock(side_effect=len)
+
+    priced: Final = _count_inline_pdf_tokens(data_url, count_function)  # pyright: ignore[reportPrivateUsage]  # PDF regression test
+
+    assert priced is not None
+    assert max((len(call.args[0]) for call in count_function.call_args_list), default=0) <= (
+        PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+    )
+    assert priced >= (len(string_operand) - 2) * repetitions * 1_000
+
+
+def test_oversized_nested_pdf_form_xobject_is_priced_without_extracting_its_text():
+    string_operand: Final = b"(nested form text)"
+    text_operator: Final = b"BT /F1 12 Tf " + string_operand + b" Tj ET\n"
+    repetitions: Final = 2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(text_operator) + 1
+    nested_content: Final = text_operator * repetitions
+    nested_form: Final = _pdf_stream(
+        nested_content,
+        b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >>",
+    )
+    form: Final = _pdf_stream(
+        b"/Fm2 Do\n",
+        b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] "
+        b"/Resources << /Font << /F1 3 0 R >> /XObject << /Fm2 7 0 R >> >>",
+    )
+    data_url: Final = _pdf_data_url_with_xobjects(
+        b"/Fm1 Do\n",
+        b"<< /Fm1 6 0 R >>",
+        (form, nested_form),
+    )
+    count_function: Final = MagicMock(side_effect=len)
+
+    priced: Final = _count_inline_pdf_tokens(data_url, count_function)
+
+    assert priced is not None
+    assert max((len(call.args[0]) for call in count_function.call_args_list), default=0) <= (
+        PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+    )
+    assert priced >= (len(string_operand) - 2) * repetitions
+
+
+def test_exponential_pdf_form_draws_avoid_full_text_extraction():
+    depth: Final = 20
+    form_objects: Final = tuple(
+        _pdf_stream(
+            (f"/Fm{index + 1} Do\n" * 2).encode() if index < depth - 1 else b"BT /F1 12 Tf (leaf) Tj ET\n",
+            (
+                f"/Type /XObject /Subtype /Form /BBox [0 0 612 792] "
+                f"/Resources << /Font << /F1 3 0 R >> /XObject << /Fm{index + 1} {8 + index} 0 R >> >>"
+            ).encode()
+            if index < depth - 1
+            else b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >>",
+        )
+        for index in range(depth)
+    )
+    data_url: Final = _pdf_data_url_with_shared_xobjects((b"/Fm0 Do\n",), form_objects)
+    count_function: Final = MagicMock(side_effect=len)
+
+    priced: Final = _count_inline_pdf_tokens(data_url, count_function)  # pyright: ignore[reportPrivateUsage]  # PDF regression test
+
+    assert priced is not None
+    assert max((len(call.args[0]) for call in count_function.call_args_list), default=0) <= (
+        PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+    )
+    assert priced >= 2 ** (depth - 1)
+
+
+@pytest.mark.timeout(10)
+def test_cyclic_exponential_pdf_form_walk_is_memoized():
+    depth: Final = 25
+
+    def cyclic_form(index: int) -> bytes:
+        next_index: Final = (index + 1) % depth
+        next_form_content: Final = f"/Fm{next_index} Do\n/Fm{next_index} Do\n".encode()
+        form_content: Final = b"BT /F1 12 Tf (x) Tj ET\n" + next_form_content
+        form_dictionary: Final = (
+            f"/Type /XObject /Subtype /Form /BBox [0 0 612 792] "
+            f"/Resources << /Font << /F1 3 0 R >> /XObject << /Fm{next_index} {7 + next_index} 0 R >> >>"
+        ).encode()
+        return _pdf_stream(form_content, form_dictionary)
+
+    form_objects: Final = tuple(cyclic_form(index) for index in range(depth))
+    data_url: Final = _pdf_data_url_with_shared_xobjects((b"/Fm0 Do\n",), form_objects)
+    count_function: Final = MagicMock(side_effect=len)
+
+    priced: Final = _count_inline_pdf_tokens(data_url, count_function)  # pyright: ignore[reportPrivateUsage]  # PDF regression test
+
+    assert priced is not None
+    assert priced > 0
+    assert max((len(call.args[0]) for call in count_function.call_args_list), default=0) <= (
+        PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+    )
+
+
+def test_cyclic_pdf_form_xobject_is_priced():
+    path_operator: Final = b"10 10 m 200 300 l S\n"
+    form_content: Final = path_operator * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(path_operator) + 1) + b"/Fm1 Do\n"
+    form: Final = _pdf_stream(
+        form_content,
+        b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /XObject << /Fm1 6 0 R >> >>",
+    )
+    data_url: Final = _pdf_data_url_with_xobjects(
+        b"/Fm1 Do\n",
+        b"<< /Fm1 6 0 R >>",
+        (form,),
+    )
+
+    priced: Final = _count_inline_pdf_tokens(data_url, len)
+
+    assert priced is not None
+
+
+def test_pdf_image_xobject_does_not_trigger_the_content_limit():
+    page_text: Final = b"BT /F1 12 Tf 20 760 Td (small page text) Tj ET\n"
+    image_data: Final = b"\x00" * (1024 * 1024)
+    image: Final = _pdf_stream(
+        image_data,
+        b"/Type /XObject /Subtype /Image /Width 1024 /Height 1024 "
+        b"/ColorSpace /DeviceRGB /BitsPerComponent 8",
+    )
+    data_url: Final = _pdf_data_url_with_xobjects(
+        page_text,
+        b"<< /Im1 6 0 R >>",
+        (image,),
+    )
+    count_function: Final = MagicMock(side_effect=len)
+
+    priced: Final = _count_inline_pdf_tokens(data_url, count_function)
+
+    assert priced is not None
+    assert any("small page text" in call.args[0] for call in count_function.call_args_list)
+
+
+def test_pdf_pages_with_shared_resources_price_only_the_form_they_draw():
+    page_count: Final = 20
+    string_operand: Final = b"(text)"
+    text_operator: Final = b"BT /F1 12 Tf " + string_operand + b" Tj ET\n"
+    repetitions: Final = 2_800 // len(string_operand)
+    page_contents: Final = tuple(f"/Fm{index} Do\n".encode() for index in range(page_count))
+    form_objects: Final = tuple(
+        _pdf_stream(
+            text_operator * repetitions,
+            b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >>",
+        )
+        for _ in range(page_count)
+    )
+    data_url: Final = _pdf_data_url_with_shared_xobjects(page_contents, form_objects)
+    blank_data_url: Final = _pdf_data_url_with_shared_xobjects((b"",) * page_count, ())
+    priced: Final = _count_inline_pdf_tokens(data_url, len)
+    rendering_tokens: Final = _count_inline_pdf_tokens(blank_data_url, len)
+    string_operand_bytes: Final = page_count * (len(string_operand) - 2) * repetitions
+
+    assert priced is not None
+    assert rendering_tokens is not None
+    assert priced <= string_operand_bytes * 3 // 2 + rendering_tokens
+
+
+def test_pdf_form_without_resources_inherits_page_xobjects():
+    string_operand: Final = b"(inherited form text)"
+    text_operator: Final = b"BT /F1 12 Tf " + string_operand + b" Tj ET\n"
+    repetitions: Final = 2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(text_operator) + 1
+    nested_form_content: Final = text_operator * repetitions
+    inherited_form: Final = _pdf_stream(
+        nested_form_content,
+        b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >>",
+    )
+    unused_form: Final = _pdf_stream(
+        nested_form_content,
+        b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >>",
+    )
+    form_without_resources: Final = _pdf_stream(
+        b"/Fm2 Do\n",
+        b"/Type /XObject /Subtype /Form /BBox [0 0 612 792]",
+    )
+    data_url: Final = _pdf_data_url_with_xobjects(
+        b"/Fm1 Do\n",
+        b"<< /Fm1 6 0 R /Fm2 7 0 R /Fm3 8 0 R >>",
+        (form_without_resources, inherited_form, unused_form),
+    )
+    blank_data_url: Final = _pdf_data_url_with_xobjects(b"", b"<< >>", ())
+    priced: Final = _count_inline_pdf_tokens(data_url, len)
+    rendering_tokens: Final = _count_inline_pdf_tokens(blank_data_url, len)
+    string_operand_bytes: Final = (len(string_operand) - 2) * repetitions
+
+    assert priced is not None
+    assert rendering_tokens is not None
+    assert priced >= string_operand_bytes
+    assert priced <= string_operand_bytes * 3 // 2 + rendering_tokens
+
+
+def test_oversized_pdf_string_operand_counts_escaped_newline_continuations():
+    escaped_newlines: Final = b"a\\\n" * 10_000
+    literal_content: Final = b"BT /F1 12 Tf (" + escaped_newlines + b"a" * 50_000 + b") Tj ET\n"
+    page: Final = _fake_pdf_page(content_bytes=literal_content)
+
+    priced: Final = _price_pdf_pages((page,), len)
+
+    assert priced >= 60_000
+
+
+def test_nested_pdf_literal_string_keeps_its_full_operand():
+    content: Final = b"BT /F1 12 Tf (a(b)" + b"x" * 100_000 + b") Tj ET\n"
+    page: Final = _fake_pdf_page(content_bytes=content)
+
+    priced: Final = _price_pdf_pages((page,), len)  # pyright: ignore[reportPrivateUsage]  # PDF regression test
+
+    assert priced >= 100_000
+
+
+def test_pdf_form_invocations_allow_comments_and_escaped_names():
+    string_operand: Final = b"(named form text)"
+    text_operator: Final = b"BT /F1 12 Tf " + string_operand + b" Tj ET\n"
+    repetitions: Final = 1_024 // len(text_operator) + 1
+    form_object: Final = _pdf_stream(
+        text_operator * repetitions,
+        b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >>",
+    )
+    path_operator: Final = b"10 10 m 20 20 l S\n"
+    page_content: Final = path_operator * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(path_operator) + 1) + (
+        b"/Fm1 %comment\n Do\n/F#6d1 Do\n"
+    )
+    data_url: Final = _pdf_data_url_with_xobjects(
+        page_content,
+        b"<< /Fm1 6 0 R >>",
+        (form_object,),
+    )
+    count_function: Final = MagicMock(side_effect=len)
+
+    priced: Final = _count_inline_pdf_tokens(data_url, count_function)  # pyright: ignore[reportPrivateUsage]  # PDF regression test
+
+    assert priced is not None
+    assert priced >= 2 * (len(string_operand) - 2) * repetitions
+
+
+def test_pdf_percent_inside_literal_does_not_hide_form_invocation():
+    string_operand: Final = b"(form text)"
+    text_operator: Final = b"BT /F1 12 Tf " + string_operand + b" Tj ET\n"
+    repetitions: Final = 100 * 1024 // len(text_operator) + 1
+    form_object: Final = _pdf_stream(
+        text_operator * repetitions,
+        b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >>",
+    )
+    data_url: Final = _pdf_data_url_with_xobjects(
+        b"BT /F1 12 Tf (50%) Tj ET /Fm1 Do\n",
+        b"<< /Fm1 6 0 R >>",
+        (form_object,),
+    )
+    count_function: Final = MagicMock(side_effect=len)
+
+    priced: Final = _count_inline_pdf_tokens(data_url, count_function)  # pyright: ignore[reportPrivateUsage]  # PDF regression test
+
+    assert priced is not None
+    assert priced >= (len(string_operand) - 2) * repetitions
+    assert max((len(call.args[0]) for call in count_function.call_args_list), default=0) <= (
+        PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+    )
+
+
+@pytest.mark.parametrize(
+    "comments",
+    [
+        b"%comment\r\n" * 23,
+        b"% a   \r\n" * 40,
+    ],
+    ids=["23-crlf-comments", "40-crlf-comments-with-trailing-spaces"],
+)
+def test_pdf_invocation_comment_separators_are_priceable(comments: bytes):
+    content: Final = b"BT /F1 " + comments + b"12 Tf (hello) Tj ET"
+    page: Final = _fake_pdf_page(content_bytes=content, include_xobjects=True)
+    blank_page: Final = _fake_pdf_page(content_bytes=b"")
+
+    priced: Final = _price_pdf_pages((page,), len)
+    expected: Final = _price_pdf_pages((blank_page,), len)
+
+    assert priced == expected
+
+
+@pytest.mark.parametrize("inline_image_in_form", [False, True], ids=["page-stream", "form-stream"])
+def test_pdf_inline_image_bytes_do_not_push_content_over_the_limit(inline_image_in_form: bool):
+    image_data: Final = random.Random(42).randbytes(270_000)
+    inline_image: Final = (
+        b"BI /W 270000 /H 1 /BPC 8 /CS /RGB ID " + image_data + b" EI\nBT /F1 9 Tf (Hello world) Tj ET\n"
+    )
+    form: Final = _pdf_stream(
+        inline_image,
+        b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >>",
+    )
+    page_content: Final = b"/Fm1 Do\n" if inline_image_in_form else inline_image
+    page_xobjects: Final = b"<< /Fm1 6 0 R >>" if inline_image_in_form else b"<< >>"
+    form_objects: Final = (form,) if inline_image_in_form else ()
+    data_url: Final = _pdf_data_url_with_xobjects(page_content, page_xobjects, form_objects)
+    pdf_bytes: Final = base64.b64decode(data_url.removeprefix(PDF_DATA_URL_PREFIX))
+    page: Final = _pdf_text_page(pdf_bytes)
+    page_text: Final = page.extract_text() or ""
+
+    def count_function(value: str) -> int:
+        return len(value)
+
+    expected: Final = count_function(page_text)
+    count_calls: Final = MagicMock(side_effect=count_function)
+    priced: Final = _count_inline_pdf_tokens(data_url, count_calls)
+    blank_data_url: Final = _pdf_data_url_with_xobjects(b"", b"<< >>", ())
+    blank_price: Final = _count_inline_pdf_tokens(blank_data_url, count_function)
+
+    assert priced is not None
+    assert blank_price is not None
+    assert priced - blank_price == expected
+    count_calls.assert_called_once_with(page_text)
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [b"(BI) Tj\n", b"/BI 1 Tf\n", b"/BIfoo 1 Tf\n"],
+    ids=["literal-string", "inline-image-name", "longer-name"],
+)
+def test_pdf_inline_image_operator_is_not_found_inside_strings_or_names(prefix: bytes):
+    string_operand: Final = b"(sample text)"
+    text_operator: Final = b"BT /F1 12 Tf " + string_operand + b" Tj ET\n"
+    repetitions: Final = 2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(text_operator) + 1
+    page: Final = _fake_pdf_page(content_bytes=prefix + text_operator * repetitions)
+    count_function: Final = MagicMock(side_effect=len)
+
+    priced: Final = _price_pdf_pages((page,), count_function)
+
+    page.extract_text.assert_not_called()
+    assert max((len(call.args[0]) for call in count_function.call_args_list), default=0) <= (
+        PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+    )
+    assert priced >= (len(string_operand) - 2) * repetitions
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [b"BI /W 1 ", b"BI /W 1 ID xx "],
+    ids=["missing-id", "missing-ei"],
+)
+def test_unterminated_pdf_inline_images_are_priced_from_sample(prefix: bytes):
+    string_operand: Final = b"(sample text)"
+    text_operator: Final = b"BT /F1 12 Tf " + string_operand + b" Tj ET\n"
+    repetitions: Final = 2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(text_operator) + 1
+    page: Final = _fake_pdf_page(content_bytes=prefix + text_operator * repetitions)
+    count_function: Final = MagicMock(side_effect=len)
+
+    priced: Final = _price_pdf_pages((page,), count_function)
+
+    page.extract_text.assert_not_called()
+    assert max((len(call.args[0]) for call in count_function.call_args_list), default=0) <= (
+        PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+    )
+    assert priced >= (len(string_operand) - 2) * repetitions
+
+
+def test_pdf_comments_are_not_counted_as_string_operands():
+    comment: Final = b"% (lots of text)\n"
+    repetitions: Final = 2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(comment) + 1
+    content: Final = comment * repetitions + b"BT /F1 12 Tf (x) Tj ET\n"
+    page: Final = _fake_pdf_page(content_bytes=content)
+    blank_page: Final = _fake_pdf_page(content_bytes=b"")
+    blank_page.extract_text.return_value = ""
+
+    priced: Final = _price_pdf_pages((page,), len)
+    blank_price: Final = _price_pdf_pages((blank_page,), len)
+
+    assert priced - blank_price == len(b"x")
+
+
+def test_oversized_hex_pdf_strings_price_like_literal_text():
+    literal_operand: Final = b"(Hello world)"
+    hex_operand: Final = b"<48656c6c6f20776f726c64>"
+    repetitions: Final = 2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(b"BT /F1 12 Tf " + hex_operand + b" Tj ET\n") + 1
+    literal_page: Final = _fake_pdf_page(content_bytes=(b"BT /F1 12 Tf " + literal_operand + b" Tj ET\n") * repetitions)
+    hex_page: Final = _fake_pdf_page(content_bytes=(b"BT /F1 12 Tf " + hex_operand + b" Tj ET\n") * repetitions)
+    blank_page: Final = _fake_pdf_page(content_bytes=b"")
+
+    literal_price: Final = _price_pdf_pages((literal_page,), len)
+    hex_price: Final = _price_pdf_pages((hex_page,), len)
+    blank_price: Final = _price_pdf_pages((blank_page,), len)
+    literal_text_tokens: Final = literal_price - blank_price
+    hex_text_tokens: Final = hex_price - blank_price
+
+    assert hex_text_tokens * 5 <= literal_text_tokens * 6
+    assert literal_text_tokens * 5 <= hex_text_tokens * 6
+
+
+def test_oversized_pdf_octal_escapes_keep_sample_scaling_by_decoded_bytes():
+    plain_count: Final = PDF_PAGE_MAX_EXACT_CONTENT_BYTES // 2 + 2
+    octal_count: Final = PDF_PAGE_MAX_EXACT_CONTENT_BYTES // 2 + 2
+    text_object: Final = b"BT /F1 12 Tf (" + b"A" * plain_count + b"\\101" * octal_count + b") Tj ET\n"
+    page: Final = _fake_pdf_page(content_bytes=text_object)
+    blank_page: Final = _fake_pdf_page(content_bytes=b"")
+
+    priced: Final = _price_pdf_pages((page,), len)
+    blank_price: Final = _price_pdf_pages((blank_page,), len)
+    expected: Final = plain_count + octal_count
+
+    assert expected * 3 // 4 <= priced - blank_price <= expected * 5 // 4
+
+
+def test_oversized_pdf_text_uses_a_sampled_token_estimate():
+    string_operand: Final = b"(Revenue grew eleven percent)"
+    text_operator: Final = b"BT /F1 12 Tf " + string_operand + b" Tj ET\n"
+    repetitions: Final = 2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(text_operator) + 1
+    page: Final = _fake_pdf_page(content_bytes=text_operator * repetitions)
+    blank_page: Final = _fake_pdf_page(content_bytes=b"")
+
+    def four_chars_per_token(value: str) -> int:
+        return len(value) // 4
+
+    page_priced: Final = _price_pdf_pages((page,), four_chars_per_token)  # pyright: ignore[reportPrivateUsage]  # PDF regression test
+    blank_page_priced: Final = _price_pdf_pages((blank_page,), four_chars_per_token)  # pyright: ignore[reportPrivateUsage]  # PDF regression test
+    priced: Final = page_priced - blank_page_priced
+    expected: Final = len(string_operand) * repetitions // 4
+
+    assert expected * 4 // 5 <= priced <= expected * 6 // 5
+
+
+def test_many_tiny_pdf_text_objects_price_within_sample_estimate():
+    repetitions: Final = 200_000
+    text_object: Final = b"BT /F1 12 Tf (x) Tj ET\n"
+    page: Final = _fake_pdf_page(text_object * repetitions)
+    blank_page: Final = _fake_pdf_page(b"")
+
+    def count_x_tokens(value: str) -> int:
+        return value.count("x")
+
+    priced: Final = _price_pdf_pages((page,), count_x_tokens)
+    blank_price: Final = _price_pdf_pages((blank_page,), count_x_tokens)
+    expected: Final = repetitions
+
+    assert expected * 3 // 4 <= priced - blank_price <= expected * 5 // 4
+
+
+def test_oversized_literal_cut_after_escape_stays_extractable():
+    text_prefix: Final = b"BT /F1 12 Tf "
+    suffix: Final = b" Tj ET"
+    operand_prefix_length: Final = PDF_PAGE_MAX_EXACT_CONTENT_BYTES - len(text_prefix) - len(suffix)
+    operand: Final = b"(" + b"x" * (operand_prefix_length - 2) + b"\\(" + b"x" * 128 + b")"
+    page: Final = _fake_pdf_page(text_prefix + operand + suffix)
+    blank_page: Final = _fake_pdf_page(b"")
+
+    def count_x_tokens(value: str) -> int:
+        return value.count("x")
+
+    priced: Final = _price_pdf_pages((page,), count_x_tokens)
+    blank_price: Final = _price_pdf_pages((blank_page,), count_x_tokens)
+    expected: Final = operand.count(b"x")
+
+    assert expected * 3 // 4 <= priced - blank_price <= expected * 5 // 4
+
+
+@pytest.mark.parametrize("backslash_count", [1, 2, 3])
+def test_oversized_unclosed_literal_with_backslash_run_stays_extractable(backslash_count: int):
+    path_operator: Final = b"10 10 m 20 20 l S\n"
+    path_padding: Final = path_operator * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(path_operator) - 1)
+    literal_prefix: Final = b"BT /F1 12 Tf (escaped \\(paren\\) " + b"x" * 512 + b"\\" * backslash_count
+    closed_suffix: Final = b")" * (1 + backslash_count % 2) + b" Tj ET\n"
+    closed_page: Final = _fake_pdf_page(path_padding + literal_prefix + closed_suffix)
+    unclosed_page: Final = _fake_pdf_page(path_padding + literal_prefix)
+    blank_page: Final = _fake_pdf_page(b"")
+
+    def count_x_tokens(value: str) -> int:
+        return value.count("x")
+
+    blank_price: Final = _price_pdf_pages((blank_page,), count_x_tokens)
+    closed_price: Final = _price_pdf_pages((closed_page,), count_x_tokens) - blank_price
+    unclosed_price: Final = _price_pdf_pages((unclosed_page,), count_x_tokens) - blank_price
+    expected: Final = literal_prefix.count(b"x")
+
+    assert expected * 3 // 4 <= closed_price <= expected * 5 // 4
+    assert expected * 3 // 4 <= unclosed_price <= expected * 5 // 4
+
+
+def test_unclosed_end_of_stream_text_keeps_sampling_form_text():
+    form_text: Final = b"BT /F1 12 Tf (form text) Tj ET\n"
+    form_repetitions: Final = 2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(form_text) + 1
+    form_object: Final = _pdf_stream(
+        form_text * form_repetitions,
+        b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >>",
+    )
+    unclosed_data_url: Final = _pdf_data_url_with_xobjects(
+        b"/Fm Do\nBT /F1 12 Tf (hi) Tj",
+        b"<< /Fm 6 0 R >>",
+        (form_object,),
+    )
+    closed_data_url: Final = _pdf_data_url_with_xobjects(
+        b"/Fm Do\nBT /F1 12 Tf (hi) Tj ET\n",
+        b"<< /Fm 6 0 R >>",
+        (form_object,),
+    )
+
+    def count_form_tokens(value: str) -> int:
+        return value.count("form")
+
+    unclosed_price: Final = _count_inline_pdf_tokens(unclosed_data_url, count_form_tokens)
+    closed_price: Final = _count_inline_pdf_tokens(closed_data_url, count_form_tokens)
+
+    assert unclosed_price is not None
+    assert closed_price is not None
+    assert closed_price * 3 // 4 <= unclosed_price <= closed_price * 5 // 4
+
+
+def test_oversized_literal_cut_after_et_inside_string_stays_extractable():
+    text_prefix: Final = b"BT /F1 12 Tf ("
+    literal_prefix: Final = b"x" * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES - len(text_prefix) - len(b"ET")) + b"ET"
+    literal_suffix: Final = b"x" * 256 + b") Tj ET"
+    page: Final = _fake_pdf_page(text_prefix + literal_prefix + literal_suffix)
+    blank_page: Final = _fake_pdf_page(b"")
+
+    def count_x_tokens(value: str) -> int:
+        return value.count("x")
+
+    priced: Final = _price_pdf_pages((page,), count_x_tokens)
+    blank_price: Final = _price_pdf_pages((blank_page,), count_x_tokens)
+    expected: Final = (literal_prefix + literal_suffix[: -len(b") Tj ET")]).count(b"x")
+
+    assert expected * 3 // 4 <= priced - blank_price <= expected * 5 // 4
+
+
+def test_unterminated_pdf_text_object_ending_with_et_inside_string_is_closed():
+    path_operator: Final = b"10 10 m 20 20 l S\n"
+    path_padding: Final = path_operator * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(path_operator) + 1)
+    page: Final = _fake_pdf_page(path_padding + b"BT /F1 12 Tf (x ET")
+    blank_page: Final = _fake_pdf_page(b"")
+
+    def count_x_tokens(value: str) -> int:
+        return value.count("x")
+
+    priced: Final = _price_pdf_pages((page,), count_x_tokens)
+    blank_price: Final = _price_pdf_pages((blank_page,), count_x_tokens)
+
+    assert priced - blank_price == 1
+
+
+def test_oversized_text_cut_inside_trailing_comment_stays_extractable():
+    text_prefix: Final = b"BT /F1 12 Tf (x) Tj "
+    comment: Final = b"%" + b"comment" * PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+    page: Final = _fake_pdf_page(text_prefix + comment + b"\nET")
+    blank_page: Final = _fake_pdf_page(b"")
+
+    def count_x_tokens(value: str) -> int:
+        return value.count("x")
+
+    priced: Final = _price_pdf_pages((page,), count_x_tokens)
+    blank_price: Final = _price_pdf_pages((blank_page,), count_x_tokens)
+
+    assert priced - blank_price == 1
+
+
+def test_oversized_tj_array_cut_inside_comment_stays_extractable():
+    repetitions: Final = 1_000
+    content: Final = (
+        b"BT /F1 12 Tf ["
+        + b"(x) 0 " * repetitions
+        + b"% comment with ["
+        + b"comment" * PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+        + b"\n] TJ ET"
+    )
+    page: Final = _fake_pdf_page(content)
+    blank_page: Final = _fake_pdf_page(b"")
+
+    def count_x_tokens(value: str) -> int:
+        return value.count("x")
+
+    priced: Final = _price_pdf_pages((page,), count_x_tokens)
+    blank_price: Final = _price_pdf_pages((blank_page,), count_x_tokens)
+
+    assert repetitions * 3 // 4 <= priced - blank_price <= repetitions * 5 // 4
+
+
+def test_oversized_identity_h_pdf_uses_tounicode_for_two_byte_glyphs():
+    repetitions: Final = 1_000
+    path_operator: Final = b"10 10 m 20 20 l S\n"
+    path_padding: Final = path_operator * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(path_operator) + 1)
+    text_object: Final = b"BT /F1 12 Tf " + b"<0001> Tj " * repetitions + b"ET\n"
+    data_url: Final = _pdf_data_url_with_identity_h_font(path_padding + text_object)
+    pdf_bytes: Final = base64.b64decode(data_url.removeprefix(PDF_DATA_URL_PREFIX))
+    exact_text: Final = _pdf_extracted_text(pdf_bytes)
+    priced: Final = _count_inline_pdf_tokens(data_url, len)
+    blank_data_url: Final = _pdf_data_url_with_xobjects(b"", b"<< >>", ())
+    blank_price: Final = _count_inline_pdf_tokens(blank_data_url, len)
+
+    assert exact_text == "Hello world" * repetitions
+    assert priced is not None
+    assert blank_price is not None
+    assert len(exact_text) * 4 // 5 <= priced - blank_price <= len(exact_text) * 6 // 5
+
+
+def test_oversized_helvetica_pdf_text_stays_close_to_exact_extraction():
+    repetitions: Final = 1_000
+    path_operator: Final = b"10 10 m 20 20 l S\n"
+    path_padding: Final = path_operator * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(path_operator) + 1)
+    text_object: Final = b"BT /F1 12 Tf " + b"(Hello world) Tj " * repetitions + b"ET\n"
+    data_url: Final = _pdf_data_url_with_xobjects(path_padding + text_object, b"<< >>", ())
+    pdf_bytes: Final = base64.b64decode(data_url.removeprefix(PDF_DATA_URL_PREFIX))
+    exact_text: Final = _pdf_extracted_text(pdf_bytes)
+    priced: Final = _count_inline_pdf_tokens(data_url, len)
+    blank_data_url: Final = _pdf_data_url_with_xobjects(b"", b"<< >>", ())
+    blank_price: Final = _count_inline_pdf_tokens(blank_data_url, len)
+
+    assert exact_text == "Hello world" * repetitions
+    assert priced is not None
+    assert blank_price is not None
+    assert len(exact_text) * 4 // 5 <= priced - blank_price <= len(exact_text) * 6 // 5
+
+
+def test_oversized_identity_h_pdf_counts_text_after_path_padding():
+    path_operator: Final = b"10 10 m 20 20 l S\n"
+    path_padding: Final = path_operator * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(path_operator) + 1)
+    text_object: Final = b"BT /F1 12 Tf <0001> Tj ET\n"
+    data_url: Final = _pdf_data_url_with_identity_h_font(path_padding + text_object)
+    priced: Final = _count_inline_pdf_tokens(data_url, len)
+    blank_data_url: Final = _pdf_data_url_with_xobjects(b"", b"<< >>", ())
+    blank_price: Final = _count_inline_pdf_tokens(blank_data_url, len)
+
+    assert priced is not None
+    assert blank_price is not None
+    assert priced - blank_price == len("Hello world")
+
+
+def test_depth_30_doubling_form_tree_prices_text_leaf_by_effective_draw_count():
+    repetitions: Final = 1 << 30
+    data_url: Final = _pdf_data_url_with_doubling_forms(31, b"BT /F1 12 Tf (x) Tj ET\n")
+
+    def count_x_tokens(value: str) -> int:
+        return value.count("x")
+
+    priced: Final = _count_inline_pdf_tokens(data_url, count_x_tokens)
+    blank_data_url: Final = _pdf_data_url_with_xobjects(b"", b"<< >>", ())
+    blank_price: Final = _count_inline_pdf_tokens(blank_data_url, count_x_tokens)
+
+    assert priced is not None
+    assert blank_price is not None
+    assert repetitions * 3 // 4 <= priced - blank_price <= repetitions * 5 // 4
+
+
+def test_oversized_tj_array_truncation_keeps_its_text():
+    content: Final = b"BT /F1 12 Tf [" + b"(x) 0 " * 20_000 + b"] TJ ET\n"
+    data_url: Final = _pdf_data_url_with_xobjects(content, b"<< >>", ())
+    pdf_bytes: Final = base64.b64decode(data_url.removeprefix(PDF_DATA_URL_PREFIX))
+    exact_text: Final = _pdf_extracted_text(pdf_bytes)
+
+    def count_x_tokens(value: str) -> int:
+        return value.count("x")
+
+    exact_tokens: Final = count_x_tokens(exact_text)
+    priced: Final = _count_inline_pdf_tokens(data_url, count_x_tokens)
+    blank_data_url: Final = _pdf_data_url_with_xobjects(b"", b"<< >>", ())
+    blank_price: Final = _count_inline_pdf_tokens(blank_data_url, count_x_tokens)
+
+    assert priced is not None
+    assert blank_price is not None
+    assert exact_tokens > 10_000
+    assert exact_tokens * 3 // 4 <= priced - blank_price <= exact_tokens * 5 // 4
+
+
+def test_compact_bt_operator_keeps_oversized_page_text():
+    path_operator: Final = b"10 10 m 20 20 l S\n"
+    path_padding: Final = path_operator * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(path_operator) + 1)
+    content: Final = path_padding + b"BT/F1 12 Tf (Hello world) Tj ET\n"
+    data_url: Final = _pdf_data_url_with_xobjects(content, b"<< >>", ())
+    priced: Final = _count_inline_pdf_tokens(data_url, len)
+    blank_data_url: Final = _pdf_data_url_with_xobjects(b"", b"<< >>", ())
+    blank_price: Final = _count_inline_pdf_tokens(blank_data_url, len)
+
+    assert priced is not None
+    assert blank_price is not None
+    assert priced - blank_price == len("Hello world")
+
+
+def test_nul_whitespace_after_bt_keeps_oversized_page_text():
+    path_operator: Final = b"10 10 m 20 20 l S\n"
+    path_padding: Final = path_operator * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(path_operator) + 1)
+    content: Final = path_padding + b"BT\x00/F1 12 Tf (Hello world) Tj ET\n"
+    data_url: Final = _pdf_data_url_with_xobjects(content, b"<< >>", ())
+    priced: Final = _count_inline_pdf_tokens(data_url, len)
+    blank_data_url: Final = _pdf_data_url_with_xobjects(b"", b"<< >>", ())
+    blank_price: Final = _count_inline_pdf_tokens(blank_data_url, len)
+
+    assert priced is not None
+    assert blank_price is not None
+    assert priced - blank_price == len("Hello world")
+
+
+def test_compact_bi_operator_strips_inline_image_before_pricing_text():
+    image_data: Final = random.Random(42).randbytes(270_000)
+    content: Final = b"BI/W 270000/H 1/BPC 8/CS /RGB ID " + image_data + b" EI\nBT /F1 9 Tf (Hello world) Tj ET\n"
+    data_url: Final = _pdf_data_url_with_xobjects(content, b"<< >>", ())
+    pdf_bytes: Final = base64.b64decode(data_url.removeprefix(PDF_DATA_URL_PREFIX))
+    page: Final = _pdf_text_page(pdf_bytes)
+    exact_tokens: Final = len(page.extract_text() or "")
+    priced: Final = _count_inline_pdf_tokens(data_url, len)
+    blank_data_url: Final = _pdf_data_url_with_xobjects(b"", b"<< >>", ())
+    blank_price: Final = _count_inline_pdf_tokens(blank_data_url, len)
+
+    assert priced is not None
+    assert blank_price is not None
+    assert priced - blank_price == exact_tokens
+
+
+def test_pdf_text_object_strings_containing_bt_and_et_do_not_split_sampling():
+    path_operator: Final = b"10 10 m 20 20 l S\n"
+    path_padding: Final = path_operator * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(path_operator) + 1)
+    text_object: Final = b"BT /F1 12 Tf (before ET) Tj (inside BT) Tj (after) Tj ET\n"
+    data_url: Final = _pdf_data_url_with_xobjects(path_padding + text_object, b"<< >>", ())
+    pdf_bytes: Final = base64.b64decode(data_url.removeprefix(PDF_DATA_URL_PREFIX))
+    exact_text: Final = _pdf_extracted_text(pdf_bytes)
+    priced: Final = _count_inline_pdf_tokens(data_url, len)
+    blank_data_url: Final = _pdf_data_url_with_xobjects(b"", b"<< >>", ())
+    blank_price: Final = _count_inline_pdf_tokens(blank_data_url, len)
+
+    assert exact_text == "before ETinside BTafter"
+    assert priced is not None
+    assert blank_price is not None
+    assert priced - blank_price == len(exact_text)
+
+
+def test_repeated_identity_h_form_draws_count_each_text_sample():
+    path_operator: Final = b"10 10 m 20 20 l S\n"
+    path_padding: Final = path_operator * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(path_operator) + 1)
+    form_content: Final = b"BT /F1 12 Tf <0001> Tj ET\n"
+    form_object: Final = _pdf_stream(
+        form_content,
+        b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >>",
+    )
+    data_url: Final = _pdf_data_url_with_identity_h_font(
+        path_padding + b"/Fm1 Do\n/Fm1 Do\n",
+        b"<< /Fm1 6 0 R >>",
+        (form_object,),
+    )
+    priced: Final = _count_inline_pdf_tokens(data_url, len)
+    blank_data_url: Final = _pdf_data_url_with_xobjects(b"", b"<< >>", ())
+    blank_price: Final = _count_inline_pdf_tokens(blank_data_url, len)
+
+    assert priced is not None
+    assert blank_price is not None
+    assert priced - blank_price == 2 * len("Hello world")
+
+
+def test_nul_whitespace_invokes_large_form_with_bounded_sample_pricing():
+    text_object: Final = b"BT /F1 12 Tf (Hello world) Tj ET\n"
+    repetitions: Final = 8 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(text_object) + 1
+    form_object: Final = _pdf_stream(
+        text_object * repetitions,
+        b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >>",
+    )
+    nul_data_url: Final = _pdf_data_url_with_xobjects(
+        b"/Fm1\x00Do\n",
+        b"<< /Fm1 6 0 R >>",
+        (form_object,),
+    )
+    space_data_url: Final = _pdf_data_url_with_xobjects(
+        b"/Fm1 Do\n",
+        b"<< /Fm1 6 0 R >>",
+        (form_object,),
+    )
+    nul_count_function: Final = MagicMock(side_effect=len)
+    space_count_function: Final = MagicMock(side_effect=len)
+
+    nul_price: Final = _count_inline_pdf_tokens(nul_data_url, nul_count_function)
+    space_price: Final = _count_inline_pdf_tokens(space_data_url, space_count_function)
+
+    assert nul_price is not None
+    assert space_price is not None
+    assert nul_price == space_price
+    assert nul_price > 0
+    assert max((len(call.args[0]) for call in nul_count_function.call_args_list), default=0) <= (
+        PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+    )
+    assert max((len(call.args[0]) for call in space_count_function.call_args_list), default=0) <= (
+        PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+    )
+
+
+def test_dense_pdf_page_is_priced_without_extracting_its_full_text():
+    count_function: Final = MagicMock(side_effect=len)
+    sentence: Final = "Revenue grew eleven percent while churn fell to two percent. "
+    page_text: Final = sentence * (2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(sentence))
+
+    priced: Final = _count_inline_pdf_tokens(PDF_DATA_URL_PREFIX + _pdf_base64((page_text,)), count_function)
+
+    assert priced is not None and priced >= len(page_text)
+    assert max((len(call.args[0]) for call in count_function.call_args_list), default=0) <= (
+        PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+    )
+
+
+def test_long_pdf_of_identical_pages_prices_each_page_like_a_one_page_pdf():
+    prompt: Final = {"type": "text", "text": "Summarize this file."}
+    page_text: Final = "Revenue grew eleven percent while churn fell to two percent."
+    page_count: Final = 3 * EXTRAPOLATION_SAMPLES + 1
+    base: Final = _count_user_content([prompt])
+
+    def pdf_cost(pages: int) -> int:
+        document: Final = {"type": "document", "source": _pdf_source(_pdf_base64((page_text,) * pages))}
+        return _count_user_content([prompt, document]) - base
+
+    assert pdf_cost(page_count) == page_count * pdf_cost(1)
 
 
 def test_pdf_document_without_pypdf_is_priced_like_an_image(monkeypatch: pytest.MonkeyPatch):

@@ -1,0 +1,152 @@
+from functools import reduce
+from types import SimpleNamespace
+from typing import Final
+
+import pytest
+
+from litellm.litellm_core_utils.token_counter import (
+    _PDF_EMPTY_RESOURCES,
+    PDF_TEXT_OBJECT,
+    _pdf_bounded_text_samples,
+    _PdfStreamMetrics,
+    _price_pdf_pages,
+)
+
+
+class _PdfBenchmarkForm:
+    def get_data(self) -> bytes:
+        return b"q Q\n"
+
+    def get(self, key: str) -> str | None:
+        return "/Form" if key == "/Subtype" else None
+
+    def items(self) -> tuple[tuple[str, object], ...]:
+        return ()
+
+
+def _pdf_page(content: bytes, with_form: bool = False) -> SimpleNamespace:
+    xobjects: Final = {"/Fm1": _PdfBenchmarkForm()} if with_form else {}
+    resources: Final = {"/XObject": xobjects}
+    return SimpleNamespace(
+        mediabox=SimpleNamespace(width=612.0, height=792.0),
+        get_contents=lambda: SimpleNamespace(get_data=lambda: content),
+        extract_text=lambda: "",
+        get=lambda key: resources if key == "/Resources" else None,
+    )
+
+
+def _pdf_doubling_form_metrics(depth: int, leaf_content: bytes) -> _PdfStreamMetrics:
+    leaf_metrics: Final = _PdfStreamMetrics(
+        content=leaf_content,
+        content_bytes=len(leaf_content),
+        operand_bytes=0,
+        resources=_PDF_EMPTY_RESOURCES,
+        forms=(),
+    )
+    return reduce(
+        lambda child, _: _PdfStreamMetrics(
+            content=b"/Fm Do\n/Fm Do\n",
+            content_bytes=0,
+            operand_bytes=0,
+            resources=_PDF_EMPTY_RESOURCES,
+            forms=(child, child),
+        ),
+        range(depth),
+        leaf_metrics,
+    )
+
+
+@pytest.mark.benchmark
+def test_unterminated_pdf_literal_string_scan():  # test-quality-ok: CodSpeed performance benchmark
+    page: Final = _pdf_page(b"(" * (4 * 1024 * 1024))
+
+    _price_pdf_pages((page,), len)
+
+
+@pytest.mark.benchmark
+def test_pdf_string_operand_scan_after_escaped_parentheses():  # test-quality-ok: CodSpeed performance benchmark
+    path_operator: Final = b"10 10 m 20 20 l S\n"
+    padding_repetitions: Final = 64 * 1024 // len(path_operator)
+    padding_bytes: Final = padding_repetitions * len(path_operator)
+    padding: Final = path_operator * padding_repetitions + b" " * (64 * 1024 - padding_bytes)
+    page: Final = _pdf_page(padding + b"%" + b"\\(" * 8_192 + path_operator * 1_000)
+
+    _price_pdf_pages((page,), len)
+
+
+@pytest.mark.benchmark
+def test_pdf_invocation_scan_ignores_unterminated_comments():  # test-quality-ok: CodSpeed performance benchmark
+    page: Final = _pdf_page(b"/a %" * (4 * 1024 * 1024 // 4), with_form=True)
+
+    priced: Final = _price_pdf_pages((page,), len)
+
+    assert priced > 0
+
+
+@pytest.mark.benchmark
+def test_pdf_inline_image_scan_repeated_bi_without_id():  # test-quality-ok: CodSpeed performance benchmark
+    page: Final = _pdf_page(b"BI " * 1_000_000)
+
+    _price_pdf_pages((page,), len)
+
+
+@pytest.mark.benchmark
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"BT " * 1_000_000,
+        b"BT (" * 1_000_000,
+        b"BT " + b"(ET) " * 1_000_000,
+    ],
+    ids=["repeated-bt", "repeated-open-literal", "repeated-et-literal"],
+)
+def test_pdf_text_object_scan(content: bytes):  # test-quality-ok: CodSpeed performance benchmark
+    tuple(PDF_TEXT_OBJECT.finditer(content))
+
+
+@pytest.mark.benchmark
+def test_pdf_16m_text_object_stream_is_capped():  # test-quality-ok: CodSpeed performance benchmark
+    text_object: Final = b"BT (x) Tj ET\n"
+    repetitions: Final = 16 * 1024 * 1024 // len(text_object) + 1
+    page: Final = _pdf_page(text_object * repetitions)
+
+    _price_pdf_pages((page,), len)
+
+
+@pytest.mark.benchmark
+def test_pdf_textless_doubling_form_tree_skips_subtrees():  # test-quality-ok: CodSpeed performance benchmark
+    metrics: Final = _pdf_doubling_form_metrics(30, b"q Q\n")
+
+    _pdf_bounded_text_samples(metrics)
+
+
+@pytest.mark.benchmark
+def test_pdf_text_leaf_doubling_form_tree_stays_within_sample_cap():  # test-quality-ok: CodSpeed performance benchmark
+    metrics: Final = _pdf_doubling_form_metrics(30, b"BT (x) Tj ET\n")
+
+    _pdf_bounded_text_samples(metrics)
+
+
+@pytest.mark.benchmark
+@pytest.mark.parametrize("repetitions", [100_000, 1_000_000], ids=["100k", "1m"])
+def test_pdf_inline_image_scan_no_ei(repetitions: int):  # test-quality-ok: CodSpeed performance benchmark
+    page: Final = _pdf_page(b"BI /W 1 " + b" ID x" * repetitions)
+
+    _price_pdf_pages((page,), len)
+
+
+@pytest.mark.benchmark
+@pytest.mark.parametrize(
+    "comments",
+    [
+        b"%comment\r\n" * 23,
+        b"% a   \r\n" * 40,
+    ],
+    ids=["23-crlf-comments", "40-crlf-comments-with-trailing-spaces"],
+)
+def test_pdf_invocation_scan_with_crlf_comments(comments: bytes):  # test-quality-ok: CodSpeed performance benchmark
+    page: Final = _pdf_page(b"BT /F1 " + comments + b"12 Tf (hello) Tj ET", with_form=True)
+
+    priced: Final = _price_pdf_pages((page,), len)
+
+    assert priced > 0
