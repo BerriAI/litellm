@@ -195,6 +195,29 @@ jobs:
 
       - run: python tests/unit/rust_bridge/native_route_wheel_test.py dist/*.whl
 
+      - name: Build and install the gateway binary wheel
+        run: |
+          uv build --package litellm-gateway --wheel --out-dir gateway-dist
+          python .github/scripts/verify_linux_native_wheel.py gateway-dist/*.whl --gateway
+          uv venv .venv-gateway
+          uv pip install --python .venv-gateway gateway-dist/*.whl
+
+      - name: Smoke test the installed gateway binary
+        run: |
+          printf 'model_list: []\n' > "$RUNNER_TEMP/gateway-config.yaml"
+          LITELLM_CONFIG="$RUNNER_TEMP/gateway-config.yaml" HOST=127.0.0.1 PORT=4010 \
+            .venv-gateway/bin/litellm-gateway > "$RUNNER_TEMP/gateway.log" 2>&1 &
+          gateway_pid=$!
+          trap 'kill "$gateway_pid" 2>/dev/null || true; cat "$RUNNER_TEMP/gateway.log"' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:4010/health/readiness; then
+              exit 0
+            fi
+            kill -0 "$gateway_pid"
+            sleep 1
+          done
+          exit 1
+
       - name: Run pytest tests/test_litellm_rust with the compiled extension
         run: make test-rust-extension
 

@@ -1,0 +1,36 @@
+[project]
+name = "litellm-gateway"
+version = "0.1.0"
+description = "Native gateway binary for the LiteLLM Proxy"
+requires-python = ">=3.10, <3.16"
+license = "MIT"
+
+[project.urls]
+Repository = "https://github.com/BerriAI/litellm"
+
+[build-system]
+requires = ["maturin==1.15.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+manifest-path = "crates/gateway/Cargo.toml"
+bindings = "bin"
+profile = "release"
+strip = true
+
+[tool.uv]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "Cargo.toml" },
+    { file = "Cargo.lock" },
+    { file = "crates/**/*" },
+    { file = "../rust-toolchain.toml" },
+    { file = "../.cargo/config.toml" },
+]
+
+[tool.commitizen]
+version = "0.1.0"
+version_files = [
+    "pyproject.toml:^version",
+    "../pyproject.toml:litellm-gateway==",
+]

@@ -57,26 +57,30 @@ def _write_wheel(
     dist_info: str = _DIST_INFO,
     duplicate_wheel: bool = False,
     native_bytes: bytes = b"synthetic native extension",
+    gateway: bool = False,
 ) -> Path:
-    wheel: Final = tmp_path / f"litellm-1.100.0-{filename_tag}.whl"
+    distribution: Final = "litellm_gateway" if gateway else "litellm"
+    metadata_directory: Final = f"{distribution}-1.100.0.dist-info" if gateway else dist_info
+    native_member: Final = f"{distribution}-1.100.0.data/scripts/litellm-gateway" if gateway else _NATIVE_MEMBER
+    wheel: Final = tmp_path / f"{distribution}-1.100.0-{filename_tag}.whl"
     with zipfile.ZipFile(wheel, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(_NATIVE_MEMBER, native_bytes)
+        archive.writestr(native_member, native_bytes)
         archive.writestr(
-            f"{dist_info}/METADATA",
-            "Metadata-Version: 2.1\nName: litellm\nVersion: 1.100.0\n",
+            f"{metadata_directory}/METADATA",
+            f"Metadata-Version: 2.1\nName: {distribution}\nVersion: 1.100.0\n",
         )
         archive.writestr(
-            f"{dist_info}/RECORD",
-            f"{_NATIVE_MEMBER},,\n{dist_info}/WHEEL,,\n",
+            f"{metadata_directory}/RECORD",
+            f"{native_member},,\n{metadata_directory}/WHEEL,,\n",
         )
         if metadata_tags is not None:
             wheel_metadata: Final = (
                 "Wheel-Version: 1.0\nGenerator: regression-test\nRoot-Is-Purelib: false\n"
                 + "".join(f"Tag: {tag}\n" for tag in metadata_tags)
             )
-            archive.writestr(f"{dist_info}/WHEEL", wheel_metadata)
+            archive.writestr(f"{metadata_directory}/WHEEL", wheel_metadata)
             if duplicate_wheel:
-                archive.writestr(f"{dist_info}/WHEEL", wheel_metadata)
+                archive.writestr(f"{metadata_directory}/WHEEL", wheel_metadata)
     return wheel
 
 
@@ -106,6 +110,7 @@ def _run_verifier(
     wheel: Path,
     *,
     exposes_panic: bool = False,
+    gateway: bool = False,
 ) -> int:
     native_module: Final = (
         _NativeModuleWithPanicHook("litellm.rust_bridge._native")
@@ -114,11 +119,12 @@ def _run_verifier(
     )
 
     def _fake_load_native_module(_: Path) -> ModuleType:
+        assert not gateway, "A standalone binary must not be imported as a Python extension"
         return native_module
 
     environment: Final = MappingProxyType({"GITHUB_STEP_SUMMARY": str(wheel.parent / "summary.md")})
     return verifier.main(
-        (str(_MODULE_PATH), str(wheel)),
+        (str(_MODULE_PATH), str(wheel)) + (("--gateway",) if gateway else ()),
         environment,
         _fake_load_native_module,
         _fake_subprocess_run,
@@ -210,3 +216,29 @@ def test_vocabulary_is_packaged_once(tmp_path: Path, embedded: bool) -> None:
         archive.writestr("litellm/litellm_core_utils/tokenizers/" + "a" * 40, ranks)
 
     assert _run_verifier(wheel) == (1 if embedded else 0)
+
+
+@pytest.mark.parametrize("gateway", (False, True), ids=("extension", "gateway"))
+@pytest.mark.parametrize("size", (48_000_000, 48_000_001), ids=("at-limit", "over-limit"))
+def test_enforces_uncompressed_native_size_limit(tmp_path: Path, gateway: bool, size: int) -> None:
+    tag: Final = "py3-none-linux_x86_64" if gateway else _EXPECTED_TAG
+    wheel: Final = _write_wheel(
+        tmp_path, filename_tag=tag, metadata_tags=(tag,), native_bytes=b"x" * size, gateway=gateway
+    )
+
+    assert _run_verifier(wheel, gateway=gateway) == (0 if size == 48_000_000 else 1)
+    summary: Final = (tmp_path / "summary.md").read_text()
+    assert f"| {'Gateway binary' if gateway else 'Native extension'} | 48.00 MB |" in summary
+
+
+def test_keeps_both_artifact_reports_in_summary(tmp_path: Path) -> None:
+    extension: Final = _write_wheel(tmp_path, filename_tag=_EXPECTED_TAG)
+    gateway: Final = _write_wheel(
+        tmp_path, filename_tag="py3-none-linux_x86_64", metadata_tags=("py3-none-linux_x86_64",), gateway=True
+    )
+
+    assert _run_verifier(extension) == 0
+    assert _run_verifier(gateway, gateway=True) == 0
+    summary: Final = (tmp_path / "summary.md").read_text()
+    assert "## Native wheel build report" in summary
+    assert "## Gateway wheel build report" in summary

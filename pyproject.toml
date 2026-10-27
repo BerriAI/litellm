@@ -85,6 +85,7 @@ proxy = [
     "httpx2>=2.10.0,<3",
     "pydantic>=2.12.0,<3",
     "litellm-proxy-extras==0.4.111",
+    "litellm-gateway==0.1.0",
     "litellm-enterprise==0.1.79",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
@@ -383,9 +384,10 @@ brotli = "2026-10-22T14:01:00Z"
 [tool.uv.sources]
 litellm-proxy-extras = { workspace = true }
 litellm-enterprise = { workspace = true }
+litellm-gateway = { workspace = true }
 
 [tool.uv.workspace]
-members = ["enterprise", "litellm-proxy-extras"]
+members = ["enterprise", "litellm-proxy-extras", "litellm-rust"]
 
 [tool.commitizen]
 version = "1.108.0"

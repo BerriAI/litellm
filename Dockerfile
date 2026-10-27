@@ -76,6 +76,7 @@ ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
 COPY pyproject.toml uv.lock ./
 COPY enterprise/pyproject.toml enterprise/
 COPY litellm-proxy-extras/pyproject.toml litellm-proxy-extras/
+COPY litellm-rust/pyproject.toml litellm-rust/
 
 # Install third-party dependencies (cached unless pyproject.toml/uv.lock change)
 RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \
