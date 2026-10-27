@@ -174,13 +174,15 @@ function gateway(
     if (path.endsWith("/ui/litellm-runtime-config.json")) return json({});
     if (path.endsWith("/management/v1/users/me")) return json({ ...signedInUser, user_email: null });
     requests.push(recorded);
-    if (path.endsWith("/litellm-ui-config"))
-      return json({
+    if (path.endsWith("/litellm-ui-config")) {
+      const uiConfig = {
         proxy_base_url: MANAGEMENT,
         server_root_path: "",
         admin_ui_disabled: false,
         use_si_terminology: options.useSiTerminology,
-      });
+      };
+      return json(uiConfig);
+    }
     if (path.endsWith("/health/readiness/details")) return json({ status: "healthy" });
     if (path.endsWith("/sso/get/ui_settings")) {
       if (typeof settings === "function") return settings(request);
