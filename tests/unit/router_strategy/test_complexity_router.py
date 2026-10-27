@@ -7820,6 +7820,80 @@ class TestClassificationMode:
         assert pure.routing_decision["cause"] == "user_turn_continuation"
         assert hybrid.model == "gpt-4o-mini"
 
+    CODEX_USER_AGENT = "codex-tui/0.164.0 (Ubuntu 22.4.0; x86_64) screen (codex-tui; 0.164.0)"
+    COMPACTION_PROMPT = {"role": "user", "content": "Hello! Summarize the conversation so far."}
+    COMPACTION_SUMMARY = {
+        "role": "user",
+        "content": "Another language model started to solve this problem and produced a summary of its thinking "
+        "process. You also have access to the state of the tools that were used by that language model.\nHi.",
+    }
+
+    def _codex_kwargs(self, session_id: str, request_kind: str, transport: str = "client_metadata") -> dict:
+        turn_metadata = json.dumps({"session_id": session_id, "request_kind": request_kind})
+        carrier = (
+            {"client_metadata": {"x-codex-turn-metadata": turn_metadata}}
+            if transport == "client_metadata"
+            else {"proxy_server_request": {"headers": {"x-codex-turn-metadata": turn_metadata}}}
+        )
+        return {"metadata": {"session_id": session_id, "user_agent": self.CODEX_USER_AGENT}, **carrier}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("transport", ["client_metadata", "header"])
+    async def test_codex_compaction_request_replays_held_decision(
+        self, mock_router_instance, user_turn_config, transport
+    ):
+        """Codex's compaction call carries a synthetic user prompt; it must hold the session's
+        decision instead of classifying the prompt as a new human ask."""
+        router = self._router(mock_router_instance, user_turn_config)
+        session = f"codex-compact-{transport}"
+        await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._codex_kwargs(session, "turn"), messages=[self.REASONING_ASK]
+        )
+        with patch.object(router, "_classify_and_route", wraps=router._classify_and_route) as spy:
+            compaction = await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs=self._codex_kwargs(session, "compaction", transport),
+                messages=[self.REASONING_ASK, self.ASSISTANT_ANSWER, self.COMPACTION_PROMPT],
+            )
+        assert spy.call_count == 0
+        assert compaction.model == "o1-preview"
+        assert compaction.routing_decision["cause"] == "user_turn_continuation"
+
+    @pytest.mark.asyncio
+    async def test_codex_post_compaction_summary_is_a_continuation(self, mock_router_instance, user_turn_config):
+        """The first request after a mid-turn compaction ends on Codex's summary fragment, which
+        is not a human ask, so the held decision carries on."""
+        router = self._router(mock_router_instance, user_turn_config)
+        await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._codex_kwargs("codex-summary", "turn"), messages=[self.REASONING_ASK]
+        )
+        resumed = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._codex_kwargs("codex-summary", "turn"),
+            messages=[self.REASONING_ASK, self.COMPACTION_SUMMARY],
+        )
+        assert resumed.model == "o1-preview"
+        assert resumed.routing_decision["cause"] == "user_turn_continuation"
+
+    @pytest.mark.asyncio
+    async def test_codex_human_ask_after_compaction_reclassifies(self, mock_router_instance, user_turn_config):
+        router = self._router(mock_router_instance, user_turn_config)
+        await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._codex_kwargs("codex-next", "turn"), messages=[self.REASONING_ASK]
+        )
+        await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._codex_kwargs("codex-next", "compaction"),
+            messages=[self.REASONING_ASK, self.ASSISTANT_ANSWER, self.COMPACTION_PROMPT],
+        )
+        next_ask = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._codex_kwargs("codex-next", "turn"),
+            messages=[self.REASONING_ASK, self.COMPACTION_SUMMARY, self.SIMPLE_ASK],
+        )
+        assert next_ask.model == "gpt-4o-mini"
+        assert next_ask.routing_decision["cause"] != "user_turn_continuation"
+
     @pytest.mark.asyncio
     async def test_session_affinity_wins_when_both_knobs_are_on(self, mock_router_instance, user_turn_config):
         """With session_affinity also on, the pin short-circuits new asks too and keeps its own
