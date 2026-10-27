@@ -1122,7 +1122,7 @@ def _should_route_jwt_to_oauth2_override(token: str, jwt_handler: JWTHandler) ->
 def get_bearer_token(
     api_key: str,
 ) -> str:
-    if api_key.startswith("Token "):
+    if api_key.startswith("Token "):  # Deepgram SDKs send their key as `Token <key>`
         return api_key[len("Token ") :]
     if api_key.startswith("Bearer "):  # ensure Bearer token passed in
         api_key = api_key.replace("Bearer ", "")  # extract the token
