@@ -112,6 +112,13 @@ def _heuristic_v2_artifact() -> TrainedTierArtifact:
     )
 
 
+def _answer_deployments_named(router: MagicMock) -> None:
+    """Make a mock router answer `deployments_named` from its own `model_list`, the way Router answers from its index."""
+    router.deployments_named.side_effect = lambda name: (
+        tuple(deployment for deployment in router.model_list if deployment["model_name"] == name) or None
+    )
+
+
 @pytest.fixture
 def mock_router_instance():
     """Create a mock LiteLLM Router instance."""
@@ -1064,6 +1071,11 @@ class TestCustomDimensions:
                 {"patterns": [r"\bCREATE\s{1,4}TABLE\b", r"\bALTER\s{1,4}TABLE\b"]},
                 "create table widgets (id integer); ALTER TABLE widgets ADD label text;",
                 id="regex",
+            ),
+            pytest.param(
+                {"patterns": [r"\b(?P<verb>create|alter)\s{1,4}?table\b"]},
+                "CREATE TABLE widgets (id integer)",
+                id="named-group-alternation-lazy-repeat",
             ),
         ],
     )
@@ -3176,7 +3188,7 @@ class TestCapabilityClassifier:
             {"model_name": "efficient-model", "litellm_params": {"input_cost_per_token": 0.000001}},
             {"model_name": "capable-model", "litellm_params": {"input_cost_per_token": 0.00001}},
         ]
-        mock_router_instance.model_name_to_deployment_indices = {"efficient-model": [0], "capable-model": [1]}
+        _answer_deployments_named(mock_router_instance)
         router: Final = self._router(
             mock_router_instance,
             adaptive=True,
@@ -5665,7 +5677,7 @@ class TestAdaptiveSoftFloors:
                 "model_info": {"adaptive_router_preferences": {"quality_tier": 3, "strengths": []}},
             },
         ]
-        router.model_name_to_deployment_indices = {"cheap": [0], "premium": [1]}
+        _answer_deployments_named(router)
         return router
 
     @pytest.fixture
@@ -6824,7 +6836,7 @@ class TestTierModelAffinity:
     ) -> ComplexityRouter:
         mock_router_instance.cache = DualCache()
         mock_router_instance.model_list = []
-        mock_router_instance.model_name_to_deployment_indices = {}
+        _answer_deployments_named(mock_router_instance)
         return ComplexityRouter(
             model_name="affinity-router",
             litellm_router_instance=mock_router_instance,
@@ -7542,7 +7554,7 @@ class TestSessionAffinity:
                 "model_info": {},
             },
         ]
-        mock_router_instance.model_name_to_deployment_indices = {"cheap": [0]}
+        _answer_deployments_named(mock_router_instance)
         router = ComplexityRouter(
             model_name="hybrid",
             litellm_router_instance=mock_router_instance,
@@ -7807,6 +7819,102 @@ class TestClassificationMode:
         assert pure.model == "o1-preview"
         assert pure.routing_decision["cause"] == "user_turn_continuation"
         assert hybrid.model == "gpt-4o-mini"
+
+    CODEX_USER_AGENT = "codex-tui/0.164.0 (Ubuntu 22.4.0; x86_64) screen (codex-tui; 0.164.0)"
+    COMPACTION_PROMPT = {"role": "user", "content": "Hello! Summarize the conversation so far."}
+    COMPACTION_SUMMARY = {
+        "role": "user",
+        "content": "Another language model started to solve this problem and produced a summary of its thinking "
+        "process. You also have access to the state of the tools that were used by that language model.\nHi.",
+    }
+
+    def _codex_kwargs(
+        self, session_id: str, request_kind: str, transport: str = "client_metadata"
+    ) -> dict[str, object]:
+        turn_metadata: Final = json.dumps({"session_id": session_id, "request_kind": request_kind})
+        carrier: Final = (
+            {"client_metadata": {"x-codex-turn-metadata": turn_metadata}}
+            if transport == "client_metadata"
+            else {"proxy_server_request": {"headers": {"x-codex-turn-metadata": turn_metadata}}}
+        )
+        return {"metadata": {"session_id": session_id, "user_agent": self.CODEX_USER_AGENT}, **carrier}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("transport", ["client_metadata", "header"])
+    async def test_codex_compaction_request_replays_held_decision(
+        self, mock_router_instance, user_turn_config, transport
+    ):
+        """Codex's compaction call carries a synthetic user prompt; it must hold the session's
+        decision instead of classifying the prompt as a new human ask."""
+        router = self._router(mock_router_instance, user_turn_config)
+        session = f"codex-compact-{transport}"
+        await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._codex_kwargs(session, "turn"), messages=[self.REASONING_ASK]
+        )
+        compaction = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._codex_kwargs(session, "compaction", transport),
+            messages=[self.REASONING_ASK, self.ASSISTANT_ANSWER, self.COMPACTION_PROMPT],
+        )
+        assert compaction.model == "o1-preview"
+        assert compaction.routing_decision["cause"] == "user_turn_continuation"
+
+    @pytest.mark.asyncio
+    async def test_codex_post_compaction_summary_is_a_continuation(self, mock_router_instance, user_turn_config):
+        """The first request after a mid-turn compaction ends on Codex's summary fragment, which
+        is not a human ask, so the held decision carries on."""
+        router = self._router(mock_router_instance, user_turn_config)
+        await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._codex_kwargs("codex-summary", "turn"),
+            messages=[self.REASONING_ASK],
+        )
+        resumed = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._codex_kwargs("codex-summary", "turn"),
+            messages=[self.REASONING_ASK, self.COMPACTION_SUMMARY],
+        )
+        assert resumed.model == "o1-preview"
+        assert resumed.routing_decision["cause"] == "user_turn_continuation"
+
+    @pytest.mark.asyncio
+    async def test_codex_summary_quoting_escalation_keyword_keeps_held_tier(
+        self, mock_router_instance, user_turn_config
+    ):
+        router = self._router(mock_router_instance, user_turn_config)
+        await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._codex_kwargs("codex-quote", "turn"), messages=[self.SIMPLE_ASK]
+        )
+        quoted_summary: Final = {
+            "role": "user",
+            "content": f"{self.COMPACTION_SUMMARY['content']} The user said LITELLM ESCALATE",
+        }
+        resumed = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._codex_kwargs("codex-quote", "turn"),
+            messages=[self.SIMPLE_ASK, quoted_summary],
+        )
+        assert resumed.model == "gpt-4o-mini"
+        assert resumed.routing_decision["cause"] == "user_turn_continuation"
+
+    @pytest.mark.asyncio
+    async def test_codex_human_ask_after_compaction_reclassifies(self, mock_router_instance, user_turn_config):
+        router = self._router(mock_router_instance, user_turn_config)
+        await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._codex_kwargs("codex-next", "turn"), messages=[self.REASONING_ASK]
+        )
+        await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._codex_kwargs("codex-next", "compaction"),
+            messages=[self.REASONING_ASK, self.ASSISTANT_ANSWER, self.COMPACTION_PROMPT],
+        )
+        next_ask = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._codex_kwargs("codex-next", "turn"),
+            messages=[self.REASONING_ASK, self.COMPACTION_SUMMARY, self.SIMPLE_ASK],
+        )
+        assert next_ask.model == "gpt-4o-mini"
+        assert next_ask.routing_decision["cause"] != "user_turn_continuation"
 
     @pytest.mark.asyncio
     async def test_session_affinity_wins_when_both_knobs_are_on(self, mock_router_instance, user_turn_config):
@@ -11346,7 +11454,7 @@ class TestClientHousekeepingCalls:
                 "model_info": {"adaptive_router_preferences": {"quality_tier": 3, "strengths": []}},
             },
         ]
-        adaptive_instance.model_name_to_deployment_indices = {"cheap": [0], "premium": [1]}
+        _answer_deployments_named(adaptive_instance)
         router = ComplexityRouter(
             model_name="hybrid",
             litellm_router_instance=adaptive_instance,
@@ -13437,7 +13545,7 @@ class TestPlanModeTierFloor:
                 "model_info": {"adaptive_router_preferences": {"quality_tier": 3, "strengths": []}},
             },
         ]
-        adaptive_instance.model_name_to_deployment_indices = {"cheap": [0], "premium": [1]}
+        _answer_deployments_named(adaptive_instance)
         router = ComplexityRouter(
             model_name="hybrid",
             litellm_router_instance=adaptive_instance,
@@ -14936,7 +15044,7 @@ class TestModalityRouting:
         elif path == "adaptive_pick_rewritten":
             config["adaptive"] = True
             mock_router_instance.model_list = []
-            mock_router_instance.model_name_to_deployment_indices = {}
+            _answer_deployments_named(mock_router_instance)
         router = self._router(mock_router_instance, config, vision)
         result = await router.async_pre_routing_hook(model="m", request_kwargs=request_kwargs, messages=messages)
         assert result.model == expected_model

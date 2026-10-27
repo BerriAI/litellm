@@ -7,9 +7,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
-from litellm.proxy._experimental.mcp_server.ui_session_utils import (
-    is_ui_session_credential,
-)
 from litellm.proxy._types import (
     LiteLLM_TeamMembership,
     LiteLLM_TeamTableCachedObj,
@@ -33,6 +30,7 @@ from litellm.proxy.auth.resolvers.grants import (
     user_models,
 )
 from litellm.proxy.auth.team_grants import team_grants
+from litellm.proxy.mcp_server.ui_session_utils import is_ui_session_credential
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupTeam,
 )

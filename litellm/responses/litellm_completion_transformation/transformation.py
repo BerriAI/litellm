@@ -2062,7 +2062,19 @@ class LiteLLMCompletionResponsesConfig:
         - ItemReference
         """
         if input_item.get("type") == "web_search_call":
-            search: Final = ResponseFunctionWebSearch.model_validate(input_item)
+            try:
+                search: Final = ResponseFunctionWebSearch.model_validate(input_item)
+            except ValidationError as exc:
+                errors: Final = exc.errors(include_url=False, include_input=False)
+                if len(errors) != 1 or errors[0]["type"] != "missing" or errors[0]["loc"] != ("action",):
+                    raise
+                replay: Final = ResponseFunctionWebSearch.model_construct(None, **input_item)
+                return [
+                    GenericChatCompletionMessage(
+                        role="assistant",
+                        content="Hosted web search: " + replay.model_dump_json(exclude_none=True),
+                    )
+                ]
             return [
                 GenericChatCompletionMessage(
                     role="assistant",
@@ -3663,18 +3675,20 @@ class LiteLLMCompletionResponsesConfig:
                     if count is not None
                 }
             )
-            response_usage.input_tokens_details = InputTokensDetails(
-                cached_tokens=prompt_details.cached_tokens if prompt_details.cached_tokens is not None else 0,
-                text_tokens=prompt_details.text_tokens,
-                audio_tokens=prompt_details.audio_tokens,
-                image_tokens=prompt_details.image_tokens,
-                video_tokens=prompt_details.video_tokens,
-                cached_tokens_details=(
-                    cached_tokens_details if isinstance(cached_tokens_details, CachedTokensDetails) else None
-                ),
-                **cache_write_extra,
-                **cache_type_extra,
-                **grounding_request_counts,
+            response_usage.input_tokens_details = InputTokensDetails.model_validate(
+                {
+                    "cached_tokens": prompt_details.cached_tokens if prompt_details.cached_tokens is not None else 0,
+                    "text_tokens": prompt_details.text_tokens,
+                    "audio_tokens": prompt_details.audio_tokens,
+                    "image_tokens": prompt_details.image_tokens,
+                    "video_tokens": prompt_details.video_tokens,
+                    "cached_tokens_details": (
+                        cached_tokens_details if isinstance(cached_tokens_details, CachedTokensDetails) else None
+                    ),
+                    **cache_write_extra,
+                    **cache_type_extra,
+                    **grounding_request_counts,
+                }
             )
 
         # Translate completion_tokens_details to output_tokens_details

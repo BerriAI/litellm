@@ -50,12 +50,13 @@ export async function generateChatImages({
   signal?: AbortSignal;
   teamId?: string;
 }): Promise<ChatImageAttachment[]> {
-  const client = new OpenAI({
+  const clientOptions = {
     apiKey: accessToken,
     baseURL: getGatewayBaseUrl(),
     dangerouslyAllowBrowser: true,
     defaultHeaders: teamId ? { "x-litellm-team-id": teamId } : undefined,
-  });
+  };
+  const client = new OpenAI(clientOptions);
   const response = await client.images.generate({ model, prompt }, { signal });
   const mimeType = `image/${response.output_format ?? "png"}`;
   const images = (response.data ?? []).flatMap((image, index): ChatImageAttachment[] => {

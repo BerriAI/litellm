@@ -25,7 +25,6 @@ import { runChatRequest } from "@/components/chat/runChatRequest";
 import { readChatAttachment, MAX_CHAT_ATTACHMENTS, CHAT_ATTACHMENT_ACCEPT } from "@/components/chat/attachmentHelpers";
 import ChatFileChip from "@/components/chat/ChatFileChip";
 import { useQueryState } from "nuqs";
-import { recordChatQuery } from "@/lib/telemetry/chat";
 
 const LOCALSTORAGE_MODEL_KEY = "litellm_chat_selected_model";
 
@@ -81,7 +80,6 @@ export default function ChatConversationPage() {
   const router = useRouter();
   const {
     accessToken,
-    userId,
     conversations,
     selectedMCPServers,
     setSelectedMCPServers,
@@ -323,7 +321,6 @@ export default function ChatConversationPage() {
         onUpdate: (updates: AssistantMessageUpdate) => updateLastAssistantMessage(convId, updates),
       };
       try {
-        void recordChatQuery(userId);
         await runChatRequest(request);
       } finally {
         if (abortControllerRef.current === requestController) {
@@ -343,7 +340,6 @@ export default function ChatConversationPage() {
       mode,
       attachments,
       accessToken,
-      userId,
       createConversation,
       appendMessage,
       updateLastAssistantMessage,

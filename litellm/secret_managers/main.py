@@ -24,6 +24,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 oidc_cache: Final = DualCache()
 
 _PARSED_LITERAL: Final = TypeAdapter(object)
+_SECRET_MANAGER_CLIENT: Final = TypeAdapter(object)
 
 
 @lru_cache(maxsize=128)
@@ -383,7 +384,7 @@ def get_secret(
     try:
         if _should_read_secret_from_secret_manager() and litellm.secret_manager_client is not None:
             try:
-                client: Final = litellm.secret_manager_client
+                client: Final = _SECRET_MANAGER_CLIENT.validate_python(litellm.secret_manager_client)
                 key_manager = "local"
                 if key_management_system is not None:
                     key_manager = key_management_system.value
