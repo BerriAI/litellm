@@ -22,6 +22,7 @@ from litellm.router_strategy.complexity_router.jev_classifier import (
     DEFAULT_JEV_INSTRUCTIONS,
     HttpJevClassifierClient,
     JevChoiceAnswer,
+    JevSystemOneRequest,
     JevSystemOneResponse,
     JevUsage,
     build_jev_request,
@@ -976,3 +977,137 @@ def test_switching_to_deployed_classifier_does_not_copy_legacy_credentials() -> 
     )
     assert write.effective is not None
     assert write.effective["opensource_classifier_config"] == {"deployment_name": "registered"}
+
+
+class _StateRecorder:
+    def __init__(self) -> None:
+        self.states: tuple[str, ...] = ()
+
+    async def evaluate(
+        self, request: JevSystemOneRequest, timeout_s: float, request_kwargs: Mapping[str, object] | None = None
+    ) -> JevSystemOneResponse:
+        self.states = (*self.states, request.state)
+        return JevSystemOneResponse(answers={"tier": _answer()})
+
+
+_DEFAULT_JEV_STATE_BUDGET: Final = 24576
+
+
+def _words(label: str, count: int) -> str:
+    return " ".join(f"{label}{i % 997}" for i in range(count))
+
+
+def _budget_router(
+    recorder: _StateRecorder,
+    model_list: list[dict[str, object]] | None = None,  # mutable-ok: litellm.Router takes a list
+    jev_config: Mapping[str, object] | None = None,
+) -> ComplexityRouter:
+    return ComplexityRouter(
+        "jev-budget",
+        litellm.Router(model_list=model_list or []),
+        {"classifier_type": "jev", "jev_classifier_config": dict(jev_config or {}), "tiers": {"SIMPLE": "cheap"}},
+        jev_client=recorder,
+        derive_savings_baseline=False,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("system_prompt", ["caller constraints", f"RULES {_words('rule', 5000)} END"])
+async def test_jev_state_within_the_budget_is_sent_unchanged(system_prompt: str) -> None:
+    recorder: Final = _StateRecorder()
+    router: Final = _budget_router(recorder)
+    messages: Final = (
+        {"role": "user", "content": "earlier question about the retry path"},
+        {"role": "assistant", "content": "noted"},
+        {"role": "user", "content": "rewrite it"},
+    )
+    outcome: Final = await router.aclassify("rewrite it", system_prompt=system_prompt, messages=messages)
+    assert outcome.cause == "jev_classifier"
+    assert recorder.states == (router._classifier_context_payload("rewrite it", system_prompt, None, messages),)
+
+
+@pytest.mark.asyncio
+async def test_jev_oversized_current_ask_is_cut_to_the_budget_keeping_both_ends() -> None:
+    recorder: Final = _StateRecorder()
+    ask: Final = f"ASK-HEAD {_words('ask', 60_000)} ASK-TAIL"
+    outcome: Final = await _budget_router(recorder).aclassify(
+        ask, system_prompt="caller constraints", messages=[{"role": "user", "content": ask}]
+    )
+    state: Final = recorder.states[0]
+    assert outcome.cause == "jev_classifier"
+    assert litellm.token_counter(text=state) <= _DEFAULT_JEV_STATE_BUDGET
+    assert "caller constraints" in state
+    assert ("ASK-HEAD" in state, "ASK-TAIL" in state, len(state) < len(ask)) == (True, True, True)
+
+
+@pytest.mark.asyncio
+async def test_jev_oversized_system_prompt_is_cut_before_the_current_ask() -> None:
+    recorder: Final = _StateRecorder()
+    ask: Final = "rewrite the retry path and prove it cannot livelock"
+    system_prompt: Final = f"SYS-HEAD {_words('rule', 60_000)} SYS-TAIL"
+    outcome: Final = await _budget_router(recorder).aclassify(ask, system_prompt=system_prompt)
+    state: Final = recorder.states[0]
+    assert outcome.cause == "jev_classifier"
+    assert litellm.token_counter(text=state) <= _DEFAULT_JEV_STATE_BUDGET
+    assert f"Classify this message:\n{ask}" in state
+    assert ("SYS-HEAD" in state, "SYS-TAIL" in state, len(state) < len(system_prompt)) == (True, True, True)
+
+
+@pytest.mark.asyncio
+async def test_jev_cuts_the_system_prompt_to_its_floor_then_the_ask_when_both_are_oversized() -> None:
+    recorder: Final = _StateRecorder()
+    ask: Final = f"ASK-HEAD {_words('ask', 60_000)} ASK-TAIL"
+    outcome: Final = await _budget_router(recorder).aclassify(
+        ask, system_prompt=f"SYS-HEAD {_words('rule', 60_000)} SYS-TAIL"
+    )
+    state: Final = recorder.states[0]
+    system_block: Final = state.split("\nClassify this message:\n")[0]
+    assert outcome.cause == "jev_classifier"
+    assert litellm.token_counter(text=state) <= _DEFAULT_JEV_STATE_BUDGET
+    assert ("SYS-HEAD" in system_block, "SYS-TAIL" in system_block, len(system_block) < 200) == (True, True, True)
+    assert ("ASK-HEAD" in state, "ASK-TAIL" in state) == (True, True)
+
+
+@pytest.mark.asyncio
+async def test_jev_state_budget_follows_the_decision_deployment_window() -> None:
+    recorder: Final = _StateRecorder()
+    router: Final = _budget_router(
+        recorder,
+        model_list=[
+            {
+                "model_name": "decision",
+                "litellm_params": {"model": "azure_ai/decision-1"},
+                "model_info": {"max_input_tokens": 4000},
+            }
+        ],
+        jev_config={"deployment_name": "decision"},
+    )
+    outcome: Final = await router.aclassify(f"ASK-HEAD {_words('ask', 10_000)} ASK-TAIL")
+    state: Final = recorder.states[0]
+    assert outcome.cause == "jev_classifier"
+    assert litellm.token_counter(text=state) <= 3000
+    assert ("ASK-HEAD" in state, "ASK-TAIL" in state) == (True, True)
+
+
+@pytest.mark.asyncio
+async def test_jev_state_budget_defaults_quietly_for_an_unmapped_decision_deployment(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    recorder: Final = _StateRecorder()
+    router: Final = _budget_router(
+        recorder,
+        model_list=[
+            {
+                "model_name": "decision",
+                "litellm_params": {"model": "azure_ai/decision-1", "api_base": "https://decision.test"},
+            }
+        ],
+        jev_config={"deployment_name": "decision"},
+    )
+    with caplog.at_level("WARNING"):
+        outcome: Final = await router.aclassify(f"ASK-HEAD {_words('ask', 60_000)} ASK-TAIL")
+    state: Final = recorder.states[0]
+    assert outcome.cause == "jev_classifier"
+    assert litellm.token_counter(text=state) <= _DEFAULT_JEV_STATE_BUDGET
+    assert ("ASK-HEAD" in state, "ASK-TAIL" in state) == (True, True)
+    assert caplog.records == []

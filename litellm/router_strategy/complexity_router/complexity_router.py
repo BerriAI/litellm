@@ -496,6 +496,21 @@ _CODEX_REMINDER_MARKERS: Final = _DEFAULT_REMINDER_MARKERS + (
 _TRUNCATION_MARKER: Final = "..."
 _TRUNCATION_HEAD_FRACTION: Final = 0.3
 _MIN_QUOTED_TURN_CHARS: Final = 120
+# The input window assumed for a decision deployment that declares none: azure_ai/Microsoft-Decision-1's
+# question limit, the smallest documented for a hosted JEV provider other than the 16k baseten models,
+# which the cost map declares.
+_JEV_DEFAULT_INPUT_TOKENS: Final = 32768
+# Share of that window the state may spend. The rest carries the question (instructions and criteria)
+# and the tokenizer gap: Microsoft-Decision-1's 32768 limit has accepted states that
+# litellm.token_counter put at ~36.5k tokens, but no provider promises its count runs lower than ours.
+# Its separate 64000 pre-check estimates about four characters per token, which a state cut to this
+# budget, or to the precut below, stays under.
+_JEV_STATE_WINDOW_FRACTION: Final = 0.75
+_JEV_STATE_FIT_ATTEMPTS: Final = 3
+# Characters per token above which text is cut before it is counted. Prose runs at 4-6, so text past
+# this many characters per budget token cannot fit, and counting it whole cost ~0.6 s on a 900k
+# character ask.
+_JEV_PRECUT_CHARS_PER_TOKEN: Final = 10
 
 _CLASSIFIER_CIRCUIT_OPEN_SIGNAL: Final = "classifier-circuit-open"
 
@@ -2312,11 +2327,19 @@ class ComplexityRouter(CustomLogger):
             )
         )
         timeout_s: Final = config.timeout_ms / 1000
+        instructions: Final = config.instructions or DEFAULT_JEV_INSTRUCTIONS
         request: Final = build_jev_request(
-            prompt=self._classifier_context_payload(prompt, system_prompt, request_kwargs, messages),
+            prompt=await self._jev_state_within_budget(
+                prompt,
+                system_prompt,
+                request_kwargs,
+                messages,
+                question_text="\n".join((instructions, *(f"{name}: {text}" for name, text in criteria.items()))),
+                budget_tokens=self._jev_state_token_budget(config.deployment_name),
+            ),
             system_prompt=None,
             model=config.model,
-            instructions=config.instructions or DEFAULT_JEV_INSTRUCTIONS,
+            instructions=instructions,
             criteria=criteria,
         )
         try:
@@ -2551,6 +2574,98 @@ class ComplexityRouter(CustomLogger):
             tier=tier, score=None, signals=("classifier-failed:default-model",), cause="default_model_fallback"
         )
 
+    def _jev_state_token_budget(self, deployment_name: str | None) -> int:
+        """Tokens the JEV state may spend: a share of the decision deployment's input window.
+
+        The core router may pick any member of the deployment's group, so the smallest declared window
+        applies, and a member that declares none, like a provider reached without a deployment, is held
+        to _JEV_DEFAULT_INPUT_TOKENS.
+        """
+        window, any_undeclared = (
+            self._group_window_facts(deployment_name) if deployment_name is not None else (None, True)
+        )
+        limits: Final = (
+            *((window,) if window is not None else ()),
+            *((_JEV_DEFAULT_INPUT_TOKENS,) if any_undeclared else ()),
+        )
+        return int(min(limits) * _JEV_STATE_WINDOW_FRACTION)
+
+    async def _jev_state_within_budget(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        request_kwargs: Mapping[str, object] | None,
+        messages: Sequence[Mapping[str, object]] | None,
+        question_text: str,
+        budget_tokens: int,
+    ) -> str:
+        """The JEV state for this request, cut to fit budget_tokens together with question_text.
+
+        Only the prior turns have a budget of their own, so a long current ask or caller system prompt
+        reached the decision deployment whole. The deployment rejects a state over its limit with a 4xx
+        that no retry or other region clears, so the request routed on the heuristic scorer, and the
+        requests that lost the classifier were the largest ones. The system text is cut first, being
+        context rather than the thing classified, then the ask; both keep their two ends (_truncate),
+        and neither goes below the shortest text worth quoting, so a short system prompt survives a
+        long ask whole.
+
+        UTF-8 bytes bound the token count from above, so a state whose bytes fit is sent untouched and
+        never tokenized, which is every ordinary request. Otherwise each text is first cut, uncounted, to
+        _JEV_PRECUT_CHARS_PER_TOKEN characters per budget token, then the state is counted off the event
+        loop and the overflow converted to characters at the state's own ratio. The cut is measured
+        again because that ratio is an average, and the text kept can tokenize more densely than the
+        text removed. When counting fails, bytes stand in for tokens, which over-cuts but never
+        overflows.
+        """
+        import litellm
+        from litellm.litellm_core_utils.token_counter import offload_token_count
+
+        quoted_system: Final = self._classifier_caller_constraints(system_prompt, request_kwargs)
+        precut_chars: Final = budget_tokens * _JEV_PRECUT_CHARS_PER_TOKEN
+        prompt_chars = min(len(prompt), precut_chars)  # rebind-ok: each fit attempt narrows it
+        system_prompt_chars = min(len(quoted_system), precut_chars) if quoted_system else 0  # rebind-ok: as above
+        payload = self._classifier_context_payload(  # rebind-ok: rebuilt from the narrowed caps
+            prompt,
+            system_prompt,
+            request_kwargs,
+            messages,
+            prompt_chars=prompt_chars,
+            system_prompt_chars=system_prompt_chars,
+        )
+        for _ in range(_JEV_STATE_FIT_ATTEMPTS):
+            measured = f"{payload}\n{question_text}"
+            byte_bound = len(measured.encode())
+            if byte_bound <= budget_tokens:
+                return payload
+            try:
+                tokens = await offload_token_count(litellm.token_counter)(text=measured)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # token_counter's custom_tokenizer is a bare dict
+            except Exception as e:  # noqa: BLE001  # best-effort: an uncountable state is cut by its bytes instead
+                verbose_router_logger.debug("ComplexityRouter: jev state token count failed. Got - %s", e)
+                tokens = byte_bound
+            if tokens <= budget_tokens:
+                return payload
+            excess_chars = -(-(tokens - budget_tokens) * len(measured) // tokens) + 2 * len(_TRUNCATION_MARKER)
+            kept_system_chars = max(
+                system_prompt_chars - excess_chars, min(system_prompt_chars, _MIN_QUOTED_TURN_CHARS)
+            )
+            kept_prompt_chars = max(
+                prompt_chars - (excess_chars - (system_prompt_chars - kept_system_chars)),
+                min(prompt_chars, _MIN_QUOTED_TURN_CHARS),
+            )
+            if (kept_system_chars, kept_prompt_chars) == (system_prompt_chars, prompt_chars):
+                return payload
+            system_prompt_chars = kept_system_chars
+            prompt_chars = kept_prompt_chars
+            payload = self._classifier_context_payload(
+                prompt,
+                system_prompt,
+                request_kwargs,
+                messages,
+                prompt_chars=prompt_chars,
+                system_prompt_chars=system_prompt_chars,
+            )
+        return payload
+
     def _classifier_caller_constraints(
         self, system_prompt: str | None, request_kwargs: Mapping[str, object] | None
     ) -> str | None:
@@ -2573,7 +2688,14 @@ class ComplexityRouter(CustomLogger):
         messages: Sequence[Mapping[str, object]] | None,
         *,
         encrypted_task: bool = False,
+        prompt_chars: int | None = None,
+        system_prompt_chars: int | None = None,
     ) -> str:
+        """The classifier's user message for this request.
+
+        prompt_chars and system_prompt_chars cap the current ask and the quoted system text after the
+        prior turns are chosen, since a turn repeating the ask is excluded by matching its full text.
+        """
         include_assistant: Final = self.config.classifier_context_include_assistant_turns
         marker_pairs: Final = self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
         context_enabled: Final = bool(messages) and self.config.classifier_context_window_size > 0
@@ -2595,9 +2717,16 @@ class ComplexityRouter(CustomLogger):
             and len(tuple(islice(_iter_context_turns_newest_first(messages or (), include_assistant, marker_pairs), 2)))
             > 1
         )
+        caller_constraints: Final = self._classifier_caller_constraints(system_prompt, request_kwargs)
         return self._build_classifier_user_payload(
-            prompt="The delegated task in the following agent_message." if encrypted_task else prompt,
-            system_prompt=self._classifier_caller_constraints(system_prompt, request_kwargs),
+            prompt="The delegated task in the following agent_message."
+            if encrypted_task
+            else prompt
+            if prompt_chars is None
+            else _truncate(prompt, prompt_chars),
+            system_prompt=caller_constraints
+            if caller_constraints is None or system_prompt_chars is None
+            else _truncate(caller_constraints, system_prompt_chars),
             prior_turns=prior_turns,
             messages=messages,
             has_prior_conversation=has_prior_conversation,
