@@ -4000,10 +4000,10 @@ async def test_billed_personal_key_auth_produces_team_rpm_descriptors(monkeypatc
     from litellm.models.budget import LiteLLM_BudgetTable
     from litellm.models.team_membership import LiteLLM_TeamMembership
     from litellm.proxy import proxy_server
-    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
-    from litellm.proxy.auth import auth_checks
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 
     server: Final = MCPServer(
         server_id="math_a",

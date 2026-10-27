@@ -44,14 +44,6 @@ from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.models.credentials import CredentialItem
 from litellm.models.project import LiteLLM_ProjectTable
-from litellm.proxy._experimental.mcp_server.db import (
-    rotate_mcp_server_credentials_master_key,
-    rotate_mcp_user_credentials_master_key,
-    rotate_mcp_user_env_vars_master_key,
-)
-from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
-    rotate_sso_identity_assertions_master_key,
-)
 from litellm.proxy._types import *
 from litellm.proxy._types import Litellm_EntityType, LiteLLM_VerificationToken, hash_token
 from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
@@ -153,6 +145,14 @@ from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.proxy.mcp_server.db import (
+    rotate_mcp_server_credentials_master_key,
+    rotate_mcp_user_credentials_master_key,
+    rotate_mcp_user_env_vars_master_key,
+)
+from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
+    rotate_sso_identity_assertions_master_key,
+)
 from litellm.proxy.search_endpoints.search_tool_registry import rotate_search_tools_master_key
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.spend_counter_batch import SPEND_COUNTERS_TARGET

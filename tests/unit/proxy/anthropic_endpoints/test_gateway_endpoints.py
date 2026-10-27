@@ -20,27 +20,27 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from litellm.caching.dual_cache import DualCache
-from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
-    MintedProxyCredential,
-    ProxyCredentialMintFailure,
-)
-from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
-    SessionRefreshOpened,
-    open_session_refresh_bearer,
-    session_keys_from_master_key,
-)
-from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
-    SESSION_REFRESH_PREFIX,
-    MintedSessionToken,
-    SessionPrincipal,
-    mint_session_refresh_token,
-)
 from litellm.proxy._types import ProxyException
 from litellm.proxy.anthropic_endpoints import gateway_endpoints
 from litellm.proxy.management_endpoints.ui_sso import (
     _get_cli_sso_flow_cache_key,
     _hash_cli_sso_secret,
     _set_cli_sso_flow,
+)
+from litellm.proxy.mcp_server.gateway_dcr_flow import (
+    MintedProxyCredential,
+    ProxyCredentialMintFailure,
+)
+from litellm.proxy.mcp_server.outbound_credentials.session_credentials import (
+    SessionRefreshOpened,
+    open_session_refresh_bearer,
+    session_keys_from_master_key,
+)
+from litellm.proxy.mcp_server.outbound_credentials.session_token import (
+    SESSION_REFRESH_PREFIX,
+    MintedSessionToken,
+    SessionPrincipal,
+    mint_session_refresh_token,
 )
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 

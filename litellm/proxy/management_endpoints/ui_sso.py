@@ -72,17 +72,6 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._experimental.mcp_server.outbound_credentials.login_assertion_exchange import (
-    exchange_login_assertion_if_configured,
-)
-from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
-    GOOGLE_REFRESH_TOKEN_PARAMS,
-    MICROSOFT_REFRESH_TOKEN_SCOPE,
-    SSOIdentityAssertion,
-    assertion_from_sso_login,
-    ema_assertion_retention_enabled,
-    retain_sso_identity_assertion_for_ema,
-)
 from litellm.proxy._types import (
     CommonProxyErrors,
     LiteLLM_UserTable,
@@ -142,6 +131,17 @@ from litellm.proxy.management_endpoints.types import (
     CustomOpenID,
     get_litellm_user_role,
     is_valid_litellm_user_role,
+)
+from litellm.proxy.mcp_server.outbound_credentials.login_assertion_exchange import (
+    exchange_login_assertion_if_configured,
+)
+from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
+    GOOGLE_REFRESH_TOKEN_PARAMS,
+    MICROSOFT_REFRESH_TOKEN_SCOPE,
+    SSOIdentityAssertion,
+    assertion_from_sso_login,
+    ema_assertion_retention_enabled,
+    retain_sso_identity_assertion_for_ema,
 )
 from litellm.proxy.utils import (
     PrismaClient,

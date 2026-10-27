@@ -9,14 +9,14 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._experimental.mcp_server.ui_session_utils import (
-    is_ui_session_credential,
-    resolve_ui_session_team_ids,
-)
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LitellmUserRoles,
     UserAPIKeyAuth,
+)
+from litellm.proxy.mcp_server.ui_session_utils import (
+    is_ui_session_credential,
+    resolve_ui_session_team_ids,
 )
 from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore

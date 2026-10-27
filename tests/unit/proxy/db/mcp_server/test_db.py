@@ -3,8 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-
-from litellm.proxy._experimental.mcp_server.db import (
+from litellm.proxy.mcp_server.db import (
     approve_mcp_server,
     get_mcp_servers_by_team,
     reject_mcp_server,

@@ -17,7 +17,6 @@ import respx
 from mcp.types import CallToolResult, ListToolsResult, TextContent
 from mcp.types import Tool as MCPTool
 
-
 # Import required modules
 import litellm
 from litellm.exceptions import GuardrailRaisedException, MidStreamFallbackError
@@ -25,15 +24,15 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.langfuse.langfuse import langfuse_trace_id, langfuse_trace_metadata
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.xai.common_utils import xai_reported_cost_in_usd
-from litellm.proxy._experimental.mcp_server import mcp_server_manager
-from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListOk
+from litellm.proxy.mcp_server import mcp_server_manager
+from litellm.proxy.mcp_server.faults.list_outcomes import ServerListOk
 from litellm.proxy.utils import _estimate_dispatched_failure_usage, _failure_fields_to_lift
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.responses.mcp.mcp_streaming_iterator import MCPEnhancedStreamingIterator
 from litellm.types.llms.openai import (
+    OpenAIMcpServerTool,
     ResponsesAPIResponse,
     ResponsesAPIStreamingResponse,
-    OpenAIMcpServerTool,
     ToolParam,
 )
 from litellm.types.utils import ModelResponse, StandardLoggingPayload, Usage
@@ -1079,10 +1078,11 @@ async def test_aresponses_mcp_call_does_not_forward_admission_authorization(
     import types
     from unittest.mock import AsyncMock
 
-    from mcp.types import CallToolResult, TextContent, Tool as MCPTool
+    from mcp.types import CallToolResult, TextContent
+    from mcp.types import Tool as MCPTool
 
-    from litellm.proxy._experimental.mcp_server import mcp_server_manager
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.mcp_server import mcp_server_manager
     from litellm.types.mcp import MCPAuth, MCPTransport
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -1185,6 +1185,7 @@ async def test_no_duplicate_mcp_tools_in_streaming_e2e():
     sent to the LLM to ensure no duplication occurs.
     """
     from unittest.mock import AsyncMock, patch
+
     from litellm.responses.mcp.litellm_proxy_mcp_handler import (
         LiteLLM_Proxy_MCP_Handler,
     )
@@ -1715,7 +1716,7 @@ async def _auto_execute_through_mcp_server(
         sys.modules, "litellm.proxy.proxy_server", SimpleNamespace(proxy_logging_obj=None, prisma_client=None)
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         SimpleNamespace(
             catalog=SimpleNamespace(operation=nullcontext),
             get_registry=MagicMock(return_value={}),
@@ -2042,7 +2043,7 @@ def _serve_the_demo_mcp_listing(monkeypatch: pytest.MonkeyPatch) -> _ListingReco
         sys.modules, "litellm.proxy.proxy_server", SimpleNamespace(proxy_logging_obj=None, prisma_client=None)
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         SimpleNamespace(
             catalog=SimpleNamespace(operation=nullcontext),
             get_registry=MagicMock(return_value={}),
@@ -2054,11 +2055,11 @@ def _serve_the_demo_mcp_listing(monkeypatch: pytest.MonkeyPatch) -> _ListingReco
         ),
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.operations._get_allowed_mcp_servers",
+        "litellm.proxy.mcp_server.operations._get_allowed_mcp_servers",
         AsyncMock(return_value=[demo_server]),
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.catalog.get_filtered_server_tools",
+        "litellm.proxy.mcp_server.catalog.get_filtered_server_tools",
         AsyncMock(return_value=(ListToolsResult(tools=[echo_tool]), ServerListOk(tool_count=1))),
     )
     listing_recorder: Final = _ListingRecorder()

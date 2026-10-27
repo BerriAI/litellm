@@ -31,7 +31,6 @@ from starlette.datastructures import URL
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
-from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import SSOIdentityAssertion
 from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.management_endpoints.sso.saml_sso import (
     _SAML_AUTHN_REQUEST_CACHE_PREFIX,
@@ -42,6 +41,7 @@ from litellm.proxy.management_endpoints.sso.saml_sso import (
     SAMLAuthHandler,
 )
 from litellm.proxy.management_endpoints.types import CustomOpenID
+from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import SSOIdentityAssertion
 
 
 def _shared_cache(store: InMemoryCache | None = None) -> DualCache:

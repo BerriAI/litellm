@@ -10,7 +10,6 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import iter_items
-from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 from litellm.proxy._types import (
     CommonProxyErrors,
     LiteLLM_AccessGroupTable,
@@ -37,6 +36,7 @@ from litellm.proxy.management_helpers.resource_display_names import (
     key_display_names,
     mcp_server_display_names,
 )
+from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 from litellm.proxy.utils import PrismaClient, get_prisma_client_or_throw
 from litellm.repositories.table_repositories import AccessGroupRepository, TeamRepository
 from litellm.types.access_group import (

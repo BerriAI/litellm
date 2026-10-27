@@ -37,15 +37,15 @@ from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
 )
 from litellm.llms.pass_through.guardrail_translation.handler import PassThroughEndpointHandler
-from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import (
-    MCPGuardrailTranslationHandler,
-)
 from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail import (
     unified_guardrail as unified_module,
 )
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
+)
+from litellm.proxy.mcp_server.guardrail_translation.handler import (
+    MCPGuardrailTranslationHandler,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponsesAPIResponse

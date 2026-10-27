@@ -24,7 +24,6 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
-from litellm.proxy._experimental.mcp_server.tool_search import MCP_TOOL_SEARCH_SETTINGS_KEY
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.validation_error_body import public_validation_errors
@@ -40,6 +39,7 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
     TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION,
 )
+from litellm.proxy.mcp_server.tool_search import MCP_TOOL_SEARCH_SETTINGS_KEY
 from litellm.proxy.spend_tracking.ptu_feature_flag import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
     is_ptu_cost_attribution_enabled,
