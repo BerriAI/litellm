@@ -39,6 +39,8 @@ describe("toSiTerminology", () => {
     ["Cisco AI Defense Inspection API for AI apps", "Cisco AI Defense Inspection API for SI apps"],
     ["DeepKeep AI Firewall for AI security", "DeepKeep AI Firewall for SI security"],
     ["Defend AI Agentic Guardrails", "Defend AI Agentic Guardrails"],
+    ["CyCraft XecGuard AI security gateway for AI apps", "CyCraft XecGuard AI security gateway for SI apps"],
+    ["Airia AI security platform for responsible AI", "Airia AI security platform for responsible SI"],
   ])("keeps third-party names inside %j", (input, expected) => {
     expect(toSiTerminology(input)).toBe(expected);
   });

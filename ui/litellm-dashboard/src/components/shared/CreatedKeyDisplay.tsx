@@ -1,5 +1,3 @@
-import { useTerminology } from "@/contexts/TerminologyContext";
-import { keepTerminology, type Term } from "@/lib/terminology";
 import React, { useState } from "react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { ChevronDown, ChevronUp } from "lucide-react";
@@ -13,14 +11,14 @@ interface CreatedKeyDisplayProps {
   apiKey: string;
 }
 
-export const buildAgentInstructions = (baseUrl: string, apiKey: string, term: Term = keepTerminology): string => {
+export const buildAgentInstructions = (baseUrl: string, apiKey: string): string => {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
   const endpointIntroduction =
     "LiteLLM is a gateway that exposes OpenAI and Anthropic compatible APIs. " +
     `Send the virtual key as a Bearer token (Authorization: Bearer ${apiKey}) to:`;
 
   return [
-    term("Use this LiteLLM AI gateway for model inference."),
+    "Use this LiteLLM AI gateway for model inference.",
     "",
     `Gateway URL: ${normalizedBaseUrl}`,
     `Virtual key: ${apiKey}`,
@@ -43,12 +41,11 @@ export const buildAgentInstructions = (baseUrl: string, apiKey: string, term: Te
  * Used on the Virtual Keys page and in the Add Agent wizard.
  */
 const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
-  const term = useTerminology();
   const [copied, setCopied] = useState(false);
   const [instructionsCopied, setInstructionsCopied] = useState(false);
   const [showInstructions, setShowInstructions] = useState(false);
   const baseUrl = getProxyBaseUrl().replace(/\/+$/, "");
-  const instructions = buildAgentInstructions(baseUrl, apiKey, term);
+  const instructions = buildAgentInstructions(baseUrl, apiKey);
 
   const handleCopy = () => {
     setCopied(true);
