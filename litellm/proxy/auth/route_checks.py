@@ -7,6 +7,7 @@ from fastapi import HTTPException, Request, status
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
+    MODEL_LIST_ROUTES,
     UI_TEAM_ID,
     CommonProxyErrors,
     KeyManagementRoutes,
@@ -93,8 +94,7 @@ _SELF_SCOPED_CREDENTIAL_ROUTES: Final = (
 
 _UNBILLED_ROUTES: Final[frozenset[str]] = frozenset(
     {
-        "/models",
-        "/v1/models",
+        *MODEL_LIST_ROUTES,
         "/utils/token_counter",
         "/utils/transform_request",
         "/responses/input_tokens",
@@ -160,7 +160,7 @@ class RouteChecks:
                 if allowed_route in LiteLLMRoutes._member_names_:
                     if RouteChecks.check_route_access(
                         route=route,
-                        allowed_routes=LiteLLMRoutes._member_map_[allowed_route].value,
+                        allowed_routes=LiteLLMRoutes[allowed_route].value,
                     ):
                         if (
                             allowed_route in _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS

@@ -7,7 +7,6 @@ import type { Conversation, MCPEvent } from "@/components/chat/types";
 import ChatConversationPage from "./page";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }));
-vi.mock("@/lib/telemetry/chat", () => ({ recordChatQuery: vi.fn(async () => {}) }));
 
 const userId = "mcp-replay-user";
 const storageKey = `litellm_chat_history_v1:${userId}`;
