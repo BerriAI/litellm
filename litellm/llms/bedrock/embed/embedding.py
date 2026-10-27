@@ -20,7 +20,6 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
 )
-from litellm.secret_managers.main import get_secret
 from litellm.types.llms.bedrock import (
     AmazonEmbeddingRequest,
     CohereEmbeddingRequest,
@@ -70,6 +69,9 @@ class BedrockEmbedding(BaseAWSLLM):
         self,
         optional_params: dict,  # mutable-ok: the implementation pops the aws_* keys out of the caller's dict in place
         bearer_token: None = None,
+        *,
+        model: str | None = None,
+        model_id: str | None = None,
     ) -> tuple[Credentials, str]: ...
 
     @overload
@@ -77,31 +79,25 @@ class BedrockEmbedding(BaseAWSLLM):
         self,
         optional_params: dict,  # mutable-ok: the implementation pops the aws_* keys out of the caller's dict in place
         bearer_token: str,
+        *,
+        model: str | None = None,
+        model_id: str | None = None,
     ) -> tuple[None, str]: ...
 
     def _load_credentials(
         self,
         optional_params: dict,
         bearer_token: str | None = None,
+        *,
+        model: str | None = None,
+        model_id: str | None = None,
     ) -> tuple[Credentials | None, str]:
         auth_params: Final = pop_aws_auth_params(optional_params)
-        aws_region_name = optional_params.pop("aws_region_name", None)
-
-        ### SET REGION NAME ###
-        if aws_region_name is None:
-            # check env #
-            litellm_aws_region_name: Final = get_secret("AWS_REGION_NAME", None)
-
-            if litellm_aws_region_name is not None and isinstance(litellm_aws_region_name, str):
-                aws_region_name = litellm_aws_region_name
-
-            standard_aws_region_name: Final = get_secret("AWS_REGION", None)
-            if standard_aws_region_name is not None and isinstance(standard_aws_region_name, str):
-                aws_region_name = standard_aws_region_name
-
-            if aws_region_name is None:
-                aws_region_name = "us-west-2"
-
+        aws_region_name: Final = self._get_aws_region_name(
+            optional_params={"aws_region_name": optional_params.pop("aws_region_name", None)},
+            model=model,
+            model_id=model_id,
+        )
         credentials: Final[Credentials | None] = (
             None if bearer_token is not None else self.resolve_credentials(auth_params, aws_region_name)
         )
@@ -409,18 +405,13 @@ class BedrockEmbedding(BaseAWSLLM):
         litellm_params: dict,
         api_key: str | None = None,
     ) -> EmbeddingResponse:
+        unencoded_model_id: Final = optional_params.pop("model_id", None) or model  # default to model if not passed
         credentials, aws_region_name = self._load_credentials(
-            optional_params, bearer_token=bedrock_bearer_token(api_key)
+            optional_params, bearer_token=bedrock_bearer_token(api_key), model=model, model_id=unencoded_model_id
         )
 
         ### TRANSFORMATION ###
-        unencoded_model_id: Final = optional_params.pop("model_id", None) or model  # default to model if not passed
         modelId: Final = urllib.parse.quote(unencoded_model_id, safe="")
-        aws_region_name = self._get_aws_region_name(
-            optional_params={"aws_region_name": aws_region_name},
-            model=model,
-            model_id=unencoded_model_id,
-        )
         # Check async invoke needs to be used
         has_async_invoke: Final = "async_invoke/" in model
         if has_async_invoke:

@@ -1,6 +1,7 @@
 import json
 import asyncio
 import os
+from pathlib import Path
 from typing import Final
 from unittest.mock import Mock, patch
 from unittest.mock import AsyncMock, MagicMock
@@ -187,6 +188,47 @@ def test_bedrock_cohere_embedding_returns_the_scripted_vector(respx_mock: respx.
 
     assert json.loads(route.calls.last.request.read()) == {"input_type": "search_document", "texts": ["hello"]}
     assert response.data == [{"object": "embedding", "index": 0, "embedding": [0.3, 0.2, 0.1]}]
+
+
+@pytest.mark.parametrize(
+    "env,model_id,expected_region",
+    [
+        pytest.param({"AWS_DEFAULT_REGION": "ap-south-1"}, None, "ap-south-1", id="boto3-session-region"),
+        pytest.param(
+            {"AWS_REGION": "us-east-1"},
+            "arn:aws:bedrock:eu-central-1:123456789012:application-inference-profile/abc123",
+            "eu-central-1",
+            id="model-arn-region-beats-env",
+        ),
+    ],
+)
+def test_bedrock_embedding_sends_to_the_same_region_as_chat(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    env: dict[str, str],
+    model_id: str | None,
+    expected_region: str,
+) -> None:
+    for name in ("AWS_REGION_NAME", "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_PROFILE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "no-aws-config"))
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    route: Final = respx_mock.post(url__regex=r"^https://bedrock-runtime\.[a-z0-9-]+\.amazonaws\.com/").mock(
+        return_value=httpx.Response(200, json=titan_embedding_response)
+    )
+    model_id_param: Final = {} if model_id is None else {"model_id": model_id}
+
+    litellm.embedding(
+        model="bedrock/amazon.titan-embed-text-v2:0",
+        input=["hello"],
+        api_key="test-bearer-token",
+        **model_id_param,
+    )
+
+    sent_to: Final = route.calls.last.request.url
+    assert sent_to.host == f"bedrock-runtime.{expected_region}.amazonaws.com", str(sent_to)
 
 
 @pytest.mark.asyncio
