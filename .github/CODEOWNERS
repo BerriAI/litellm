@@ -3,8 +3,7 @@
 /helm/ @yassin-berriai
 /terraform/ @yassin-berriai
 
-# LiteLLM_SpendLogs schema and migration review (owner reviews every schema.prisma copy and every migration)
+# Every schema.prisma change (tables, columns, indexes, including LiteLLM_SpendLogs) needs this review
 /schema.prisma @kerry-berri
 /litellm/proxy/schema.prisma @kerry-berri
 /litellm-proxy-extras/litellm_proxy_extras/schema.prisma @kerry-berri
-/litellm-proxy-extras/litellm_proxy_extras/migrations/ @kerry-berri
