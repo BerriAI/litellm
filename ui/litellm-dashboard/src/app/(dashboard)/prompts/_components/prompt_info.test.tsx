@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import PromptInfoView from "./prompt_info";
 import * as networking from "@/components/networking";
+import { useUserLookup } from "@/app/(dashboard)/hooks/users/useUsers";
 
 vi.mock("@/components/networking", () => ({
   getPromptInfo: vi.fn(),
@@ -16,6 +17,22 @@ vi.mock("./prompt_editor_view/PromptCodeSnippets", () => ({
     <div data-testid="prompt-code-snippets" data-environment={environment} />
   ),
 }));
+
+vi.mock("@/app/(dashboard)/hooks/users/useUsers", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/app/(dashboard)/hooks/users/useUsers")>();
+  return { ...actual, useUserLookup: vi.fn() };
+});
+
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
+const mockUseUserLookup = vi.mocked(useUserLookup);
+
+beforeEach(() => {
+  mockUseUserLookup.mockReturnValue({ data: null } as ReturnType<typeof useUserLookup>);
+});
 
 const promptWithoutTemplate = {
   prompt_spec: {
@@ -57,6 +74,25 @@ describe("PromptInfoView environment scoping", () => {
 
     await screen.findByRole("tab", { name: "Raw JSON" });
     expect(networking.getPromptInfo).toHaveBeenCalledWith("sk-test", "support-reply", undefined);
+  });
+
+  it("shows the creator alias as a link to the user page", async () => {
+    mockUseUserLookup.mockReturnValue({
+      data: { user_alias: "Alice", user_email: "alice@example.com" },
+    } as ReturnType<typeof useUserLookup>);
+    vi.mocked(networking.getPromptInfo)
+      .mockReset()
+      .mockResolvedValue({
+        ...promptWithoutTemplate,
+        prompt_spec: { ...promptWithoutTemplate.prompt_spec, created_by: "prompt-user-1" },
+      });
+
+    render(<PromptInfoView promptId="support-reply" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />);
+
+    expect(await screen.findByRole("link", { name: "Alice" })).toHaveAttribute(
+      "href",
+      expect.stringContaining("/users?user=prompt-user-1"),
+    );
   });
 });
 

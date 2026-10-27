@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { renderWithProviders, screen } from "../../../../../tests/test-utils";
 import { ProjectDetail } from "./ProjectDetailsPage";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
+import { useUserLookup } from "@/app/(dashboard)/hooks/users/useUsers";
 
 const mockUseProjectDetails = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/projects/useProjectDetails", () => ({
@@ -24,12 +25,18 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
   useUISettings: () => mockUseUISettings(),
 }));
 
-vi.mock("./ProjectModals/EditProjectModal", () => ({
-  EditProjectModal: ({ isOpen }: { isOpen: boolean }) => (isOpen ? <div data-testid="edit-modal" /> : null),
+vi.mock("@/app/(dashboard)/hooks/users/useUsers", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/app/(dashboard)/hooks/users/useUsers")>();
+  return { ...actual, useUserLookup: vi.fn() };
+});
+
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ push: vi.fn() }),
 }));
 
-vi.mock("@/components/common_components/DefaultProxyAdminTag", () => ({
-  default: ({ userId }: { userId: string }) => <span>{userId}</span>,
+vi.mock("./ProjectModals/EditProjectModal", () => ({
+  EditProjectModal: ({ isOpen }: { isOpen: boolean }) => (isOpen ? <div data-testid="edit-modal" /> : null),
 }));
 
 vi.mock("./ProjectKeysSection", () => ({
@@ -69,9 +76,11 @@ const yAxisTickLabels = (container: HTMLElement) =>
 
 describe("ProjectDetail", () => {
   const onBack = vi.fn();
+  const mockUseUserLookup = vi.mocked(useUserLookup);
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseUserLookup.mockReturnValue({ data: null } as ReturnType<typeof useUserLookup>);
     mockUseTeam.mockReturnValue({ data: undefined, isLoading: false });
     mockUseAuthorized.mockReturnValue({ userId: "admin-user", userRole: "Admin", isViewOnly: false });
     mockUseUISettings.mockReturnValue({ data: { values: {} } });
@@ -111,6 +120,21 @@ describe("ProjectDetail", () => {
     it("should render", () => {
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
       expect(screen.getByText("My Project")).toBeInTheDocument();
+    });
+
+    it("shows the creator alias as a link to the user page", () => {
+      mockUseUserLookup.mockImplementation(
+        (userId) =>
+          ({
+            data: userId === "user-1" ? { user_alias: "Alice", user_email: "alice@example.com" } : null,
+          }) as ReturnType<typeof useUserLookup>,
+      );
+      renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
+
+      expect(screen.getByRole("link", { name: "Alice" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/users?user=user-1"),
+      );
     });
 
     it("should display the project alias as the page title", () => {

@@ -3,10 +3,12 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { ReactNode } from "react";
 import { useInfiniteUsers, useUserEmailLookup, useUserLookup } from "./useUsers";
-import { userListCall } from "@/components/networking";
-import type { UserListResponse } from "@/components/networking";
+import { userGetInfoV2, userListCall } from "@/components/networking";
+import type { UserInfoV2Response, UserListResponse } from "@/components/networking";
+import { ApiError } from "@/lib/http/client";
 
 vi.mock("@/components/networking", () => ({
+  userGetInfoV2: vi.fn(),
   userListCall: vi.fn(),
 }));
 
@@ -54,6 +56,23 @@ const buildUserListResponse = (page: number, totalPages: number, userCount = 2):
     sso_user_id: null,
     budget_duration: null,
   })),
+});
+
+const buildUserInfoV2Response = (userId: string): UserInfoV2Response => ({
+  user_id: userId,
+  user_email: "alice@example.com",
+  user_alias: "Alice",
+  user_role: "Internal User",
+  spend: 0,
+  max_budget: null,
+  models: [],
+  budget_duration: null,
+  budget_reset_at: null,
+  metadata: null,
+  created_at: null,
+  updated_at: null,
+  sso_user_id: null,
+  teams: [],
 });
 
 describe("useInfiniteUsers", () => {
@@ -299,22 +318,77 @@ describe("useUserLookup", () => {
     React.createElement(QueryClientProvider, { client: queryClient }, children);
 
   it("fetches exactly the requested user by id", async () => {
-    vi.mocked(userListCall).mockResolvedValue(buildUserListResponse(1, 1, 1));
+    const exactUser = buildUserInfoV2Response("user-1-0");
+    vi.mocked(userGetInfoV2).mockResolvedValue(exactUser);
 
     const { result } = renderHook(() => useUserLookup("user-1-0"), { wrapper });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(userListCall).toHaveBeenCalledWith("test-access-token", ["user-1-0"], 1, 1);
+    expect(userGetInfoV2).toHaveBeenCalledWith("test-access-token", "user-1-0");
+    expect(userListCall).not.toHaveBeenCalled();
+    expect(result.current.data).toMatchObject(exactUser);
     expect(result.current.data?.user_id).toBe("user-1-0");
   });
 
-  it("resolves to null when the proxy returns a different user than requested", async () => {
-    vi.mocked(userListCall).mockResolvedValue(buildUserListResponse(1, 1, 1));
+  it("falls back when user info returns a different user id", async () => {
+    const response = buildUserListResponse(1, 1);
+    const exactUser = { ...response.users[0], user_id: "a b", user_alias: "Right User" };
+    vi.mocked(userGetInfoV2).mockResolvedValue(buildUserInfoV2Response("a+b"));
+    vi.mocked(userListCall).mockResolvedValue({
+      ...response,
+      page_size: 100,
+      users: [exactUser],
+    });
 
-    const { result } = renderHook(() => useUserLookup("someone-else"), { wrapper });
+    const { result } = renderHook(() => useUserLookup("a b"), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toMatchObject({ user_id: "a b", user_alias: "Right User" });
+    expect(userListCall).toHaveBeenCalledWith("test-access-token", ["a b"], 1, 100);
+  });
+
+  it("falls back to the exact user list match when the user info endpoint returns a 404", async () => {
+    const response = buildUserListResponse(1, 1);
+    const exactUser = { ...response.users[1], user_id: "bob", user_alias: "Bob" };
+    vi.mocked(userListCall).mockResolvedValue({
+      ...response,
+      page_size: 100,
+      users: [{ ...response.users[0], user_id: "bob2" }, exactUser],
+    });
+    vi.mocked(userGetInfoV2).mockRejectedValue(new ApiError("Not Found", 404, {}));
+
+    const { result } = renderHook(() => useUserLookup("bob"), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toMatchObject(exactUser);
+    expect(userListCall).toHaveBeenCalledWith("test-access-token", ["bob"], 1, 100);
+  });
+
+  it("resolves to null when the user list contains only a substring match", async () => {
+    const response = buildUserListResponse(1, 1);
+    vi.mocked(userListCall).mockResolvedValue({
+      ...response,
+      page_size: 100,
+      users: [{ ...response.users[0], user_id: "bob2" }],
+    });
+    vi.mocked(userGetInfoV2).mockRejectedValue(new ApiError("Not Found", 404, {}));
+
+    const { result } = renderHook(() => useUserLookup("bob"), { wrapper });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data).toBeNull();
+    expect(userListCall).toHaveBeenCalledWith("test-access-token", ["bob"], 1, 100);
+  });
+
+  it("rethrows errors other than 404", async () => {
+    const serverError = new ApiError("Internal Server Error", 500, {});
+    vi.mocked(userGetInfoV2).mockRejectedValue(serverError);
+
+    const { result } = renderHook(() => useUserLookup("user-1-0"), { wrapper });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.error).toBe(serverError);
+    expect(userListCall).not.toHaveBeenCalled();
   });
 
   it("does not query without a user id", async () => {
@@ -322,7 +396,7 @@ describe("useUserLookup", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(result.current.fetchStatus).toBe("idle");
-    expect(userListCall).not.toHaveBeenCalled();
+    expect(userGetInfoV2).not.toHaveBeenCalled();
   });
 
   it("does not query for a non-admin role", async () => {
@@ -332,7 +406,7 @@ describe("useUserLookup", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(result.current.fetchStatus).toBe("idle");
-    expect(userListCall).not.toHaveBeenCalled();
+    expect(userGetInfoV2).not.toHaveBeenCalled();
   });
 });
 
