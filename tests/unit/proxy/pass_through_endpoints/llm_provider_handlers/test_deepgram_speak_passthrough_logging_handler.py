@@ -113,7 +113,7 @@ class _CapturingLogger(CustomLogger):
         super().__init__()
         self.payloads: list[StandardLoggingPayload] = []  # mutable-ok: the logger appends each payload it receives
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         self.payloads.append(kwargs["standard_logging_object"])
 
 
