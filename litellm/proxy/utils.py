@@ -1484,6 +1484,19 @@ object rather than ``True`` because ``request_data`` is the client body: JSON ca
 client can neither hide a guardrail block nor force a row by sending the key or a ``litellm_call_id`` itself."""
 
 _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
+_PROXY_ONLY_ERROR_NON_OPTIONAL_PARAM_KEYS: Final = frozenset(
+    {
+        "model",
+        "user",
+        "litellm_logging_obj",
+        "litellm_params",
+        "optional_params",
+        "standard_callback_dynamic_params",
+        "start_time",
+        "completion_start_time",
+        "call_type",
+    }
+)
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
 
 
@@ -3909,7 +3922,7 @@ class ProxyLogging:
             for k, v in request_data.items():
                 if k in litellm_param_keys:
                     _litellm_params[k] = v
-                elif k not in ("model", "user", "litellm_logging_obj"):
+                elif k not in _PROXY_ONLY_ERROR_NON_OPTIONAL_PARAM_KEYS:
                     _optional_params[k] = v
 
             attribution: Final = _stamp_deployment_attribution(
