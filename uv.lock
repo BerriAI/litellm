@@ -4540,7 +4540,7 @@ wheels = [
 
 [[package]]
 name = "litellm"
-version = "1.106.4"
+version = "1.106.5"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
