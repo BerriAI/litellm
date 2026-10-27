@@ -7693,6 +7693,47 @@ class TestMCPDcrBridgeDualCredential:
         assert "invalid_token" in str(exc_info.value.headers)
 
 
+@pytest.mark.parametrize("public_path", ["/toolset/analysis/mcp", "/analysis/mcp", "/mcp", "/mcp/", "/mcp/proxy"])
+@pytest.mark.parametrize("root_path", ["", "/litellm"])
+@pytest.mark.parametrize("invalid_token", [False, True])
+def test_gateway_challenge_metadata_contains_the_public_resource(
+    public_path: str, root_path: str, invalid_token: bool,
+) -> None:
+    from mcp.shared.auth_utils import check_resource_allowed
+    from starlette.requests import Request
+    from starlette.types import Scope
+
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import _gateway_dcr_challenge
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_aggregate_protected_resource_response,
+        oauth_protected_resource_root,
+    )
+
+    scope: Final[Scope] = {
+        "type": "http", "method": "POST", "scheme": "https", "path": "/mcp",
+        "root_path": root_path, "_original_path": f"{root_path}{public_path}",
+        "headers": [(b"host", b"gateway.example.com")],
+    }
+    request: Final = Request(scope)
+    challenge: Final = _gateway_dcr_challenge(request, "/mcp", None, invalid_token)
+    header: Final = (challenge.headers or {})["WWW-Authenticate"]
+    metadata_url: Final = header.split('resource_metadata="', 1)[1].split('"', 1)[0]
+    toolset: Final = public_path in ("/toolset/analysis/mcp", "/analysis/mcp")
+    assert metadata_url == (
+        f"https://gateway.example.com{root_path}/.well-known/oauth-protected-resource"
+        + ("" if toolset else "/mcp")
+    )
+    metadata: Final = (
+        oauth_protected_resource_root(request) if toolset else _build_aggregate_protected_resource_response(request)
+    )
+    assert check_resource_allowed(
+        requested_resource=f"https://gateway.example.com{root_path}{public_path}",
+        configured_resource=metadata["resource"],
+    )
+    assert challenge.status_code == 401
+    assert ('error="invalid_token"' in header) is invalid_token
+
+
 @pytest.mark.asyncio
 class TestAggregateGatewayDcrChallenge:
     """The mcp_gateway_dcr front door: a 401 on the aggregate /mcp scope must

@@ -6461,8 +6461,29 @@ def _search_tool_deny_by_default(general_settings: Mapping[str, object]) -> bool
         return True
 
 
+def _is_dashboard_session(valid_token: UserAPIKeyAuth | None) -> bool:
+    return valid_token is not None and valid_token.team_id == UI_TEAM_ID
+
+
+def _is_search_tool_strict_identity(valid_token: UserAPIKeyAuth) -> bool:
+    if not _is_dashboard_session(valid_token):
+        return _is_strict_grant_identity(valid_token)
+    return valid_token.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    )
+
+
+def _search_tool_strict_layers(
+    valid_token: UserAPIKeyAuth, team_object: LiteLLM_TeamTable | None
+) -> frozenset[GrantLayer]:
+    if _is_dashboard_session(valid_token):
+        return frozenset(("user",))
+    return _strict_grant_layers(True, valid_token, team_object)
+
+
 def is_search_tool_deny_by_default_applied(valid_token: UserAPIKeyAuth, general_settings: Mapping[str, object]) -> bool:
-    return _search_tool_deny_by_default(general_settings) and _is_strict_grant_identity(valid_token)
+    return _search_tool_deny_by_default(general_settings) and _is_search_tool_strict_identity(valid_token)
 
 
 def _search_tool_denied(object_type: GrantLayer, message: str) -> ProxyException:
@@ -6506,12 +6527,12 @@ async def resolve_search_tool_grants(
     load_team_object: TeamObjectLoader,
 ) -> SearchToolGrants:
     """
-    Without `general_settings.search_tool_deny_by_default`, or for the master key and dashboard sessions,
+    Without `general_settings.search_tool_deny_by_default`, or for the master key and admin dashboard sessions,
     the key and team lists only restrict when nonempty. With it, the identities `_strict_grant_layers` names
     must each list the tool, and a missing record, `null`, `[]`, or a team or user that fails to load grants nothing
     """
     if not is_search_tool_deny_by_default_applied(valid_token, general_settings):
-        team_object: Final = await load_team_object()
+        team_object: Final = await load_team_object() if not _is_dashboard_session(valid_token) else None
         return SearchToolGrants(
             grants=MappingProxyType(
                 {"key": valid_token.object_permission, "team": team_object.object_permission if team_object else None}
@@ -6521,8 +6542,10 @@ async def resolve_search_tool_grants(
 
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
-    strict_team_object: Final = await _strict_team_object(load_team_object)
-    strict_layers: Final = _strict_grant_layers(True, valid_token, strict_team_object)
+    strict_team_object: Final = (
+        await _strict_team_object(load_team_object) if not _is_dashboard_session(valid_token) else None
+    )
+    strict_layers: Final = _search_tool_strict_layers(valid_token, strict_team_object)
     if prisma_client is None:
         return SearchToolGrants(grants=MappingProxyType({}), strict_layers=strict_layers)
     user_object: Final = (
@@ -6607,7 +6630,7 @@ def check_unregistered_search_fallback(
     """The unregistered provider fallback names no search tool that a grant could list, so deny-by-default denies it"""
     if not is_search_tool_deny_by_default_applied(valid_token, general_settings):
         return True
-    layer: Final = min(_strict_grant_layers(True, valid_token, None), key=("key", "team", "user").index)
+    layer: Final = min(_search_tool_strict_layers(valid_token, None), key=("key", "team", "user").index)
     raise _search_tool_denied(
         layer,
         "No registered search tool is available and search_tool_deny_by_default is enabled",
