@@ -38,7 +38,9 @@ class _SupportsTokenEncode(Protocol):
     def encode(self, text: str) -> list[int]: ...
 
 
-def get_hf_task_embedding_for_model(model: str, task_type: str | None, api_base: str) -> object:
+def get_hf_task_embedding_for_model(
+    model: str, task_type: str | None, api_base: str, timeout: float | httpx.Timeout | None = None
+) -> object:
     if task_type is not None:
         if task_type in get_args(hf_tasks_embeddings):
             return task_type
@@ -46,7 +48,7 @@ def get_hf_task_embedding_for_model(model: str, task_type: str | None, api_base:
             raise Exception(f"Invalid task_type={task_type}. Expected one of={hf_tasks_embeddings}")
     http_client: Final = HTTPHandler(concurrent_limit=1)
 
-    model_info: Final = http_client.get(url=f"{api_base}/api/models/{model}")
+    model_info: Final = http_client.get(url=f"{api_base}/api/models/{model}", timeout=timeout)
 
     model_info_dict: Final = decoded_json_object(_DECODED_JSON.validate_python(model_info.json()))
 
@@ -55,7 +57,9 @@ def get_hf_task_embedding_for_model(model: str, task_type: str | None, api_base:
     return pipeline_tag
 
 
-async def async_get_hf_task_embedding_for_model(model: str, task_type: str | None, api_base: str) -> object:
+async def async_get_hf_task_embedding_for_model(
+    model: str, task_type: str | None, api_base: str, timeout: float | httpx.Timeout | None = None
+) -> object:
     if task_type is not None:
         if task_type in get_args(hf_tasks_embeddings):
             return task_type
@@ -65,7 +69,7 @@ async def async_get_hf_task_embedding_for_model(model: str, task_type: str | Non
         llm_provider=litellm.LlmProviders.HUGGINGFACE,
     )
 
-    model_info: Final = await http_client.get(url=f"{api_base}/api/models/{model}")
+    model_info: Final = await http_client.get(url=f"{api_base}/api/models/{model}", timeout=timeout)
 
     model_info_dict: Final = decoded_json_object(_DECODED_JSON.validate_python(model_info.json()))
 
@@ -107,8 +111,11 @@ class HuggingFaceEmbedding(BaseLLM):
         embed_url: str,
         input: list,
         optional_params: dict,
+        timeout: float | httpx.Timeout | None = None,
     ) -> dict:
-        hf_task = await async_get_hf_task_embedding_for_model(model=model, task_type=task_type, api_base=HF_HUB_URL)
+        hf_task = await async_get_hf_task_embedding_for_model(
+            model=model, task_type=task_type, api_base=HF_HUB_URL, timeout=timeout
+        )
 
         data: Final = self._transform_input_on_pipeline_tag(input=input, pipeline_tag=hf_task)
 
@@ -148,6 +155,7 @@ class HuggingFaceEmbedding(BaseLLM):
         call_type: Literal["sync", "async"],
         optional_params: dict,
         embed_url: str,
+        timeout: float | httpx.Timeout | None = None,
     ) -> dict:
         data: dict = {}
 
@@ -165,9 +173,13 @@ class HuggingFaceEmbedding(BaseLLM):
             task_type: Final = optional_params.pop("input_type", None)
 
             if call_type == "sync":
-                hf_task: Final = get_hf_task_embedding_for_model(model=model, task_type=task_type, api_base=HF_HUB_URL)
+                hf_task: Final = get_hf_task_embedding_for_model(
+                    model=model, task_type=task_type, api_base=HF_HUB_URL, timeout=timeout
+                )
             elif call_type == "async":
-                return self._async_transform_input(model=model, task_type=task_type, embed_url=embed_url, input=input)
+                return self._async_transform_input(
+                    model=model, task_type=task_type, embed_url=embed_url, input=input, timeout=timeout
+                )
 
             data = self._transform_input_on_pipeline_tag(input=input, pipeline_tag=hf_task)
 
@@ -253,6 +265,7 @@ class HuggingFaceEmbedding(BaseLLM):
             call_type="sync",
             optional_params=optional_params,
             embed_url=api_base,
+            timeout=timeout,
         )
 
         ## LOGGING
@@ -322,7 +335,9 @@ class HuggingFaceEmbedding(BaseLLM):
             litellm_params=litellm_params,
         )
         task_type: Final = optional_params.get("input_type", None)
-        task: Final = get_hf_task_embedding_for_model(model=model, task_type=task_type, api_base=HF_HUB_URL)
+        task: Final = get_hf_task_embedding_for_model(
+            model=model, task_type=task_type, api_base=HF_HUB_URL, timeout=timeout
+        )
         # print_verbose(f"{model}, {task}")
         embed_url = ""
         if model.startswith(("http://", "https://")):
@@ -360,6 +375,7 @@ class HuggingFaceEmbedding(BaseLLM):
             call_type="sync",
             optional_params=optional_params,
             embed_url=embed_url,
+            timeout=timeout,
         )
 
         ## LOGGING
