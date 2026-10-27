@@ -97,8 +97,13 @@ from litellm.litellm_core_utils.internal_call_metadata import (
     is_unbilled_non_inference_call,
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
+    bedrock_guardrail_trace,
     cost_breakdown_with_guardrail,
     guardrail_information_cost,
+    is_str_keyed_dict,
+    native_bedrock_guardrail_information,
+    object_mapping,
+    with_guardrail_entry,
 )
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -2724,6 +2729,31 @@ class Logging(LiteLLMLoggingBaseClass):
         if headers is None:
             return
         self.model_call_details["response_headers"] = headers
+
+    def record_native_bedrock_guardrail(self, result: object) -> None:
+        """Bill the guardrail trace a Bedrock response carries when the deployment's ``guardrailConfig`` ran it, by
+        recording it as guardrail information on this call, the same entry the proxy-side Bedrock guardrail writes.
+        A cache hit carries the original response's trace but made no Bedrock call, so it bills nothing."""
+        trace: Final = bedrock_guardrail_trace(result)
+        if trace is None or served_from_cache(result) or self.model_call_details.get("cache_hit") is True:
+            return
+        optional_params: Final = object_mapping(getattr(self, "optional_params", None)) or {}
+        guardrail_config: Final = object_mapping(optional_params.get("guardrailConfig")) or {}
+        identifier: Final = guardrail_config.get("guardrailIdentifier")
+        litellm_params_in: Final = object_mapping(getattr(self, "litellm_params", None)) or {}
+        region: Final = optional_params.get("aws_region_name") or litellm_params_in.get("aws_region_name")
+        entry: Final = native_bedrock_guardrail_information(
+            trace,
+            aws_region_name=region if isinstance(region, str) else None,
+            guardrail_identifier=identifier if isinstance(identifier, str) else None,
+        )
+        litellm_params: Final[object] = self.model_call_details.get("litellm_params")
+        if entry is None or not is_str_keyed_dict(litellm_params):
+            return
+        metadata: Final[object] = litellm_params.get("metadata")
+        bucket: Final = metadata if is_str_keyed_dict(metadata) else {}
+        litellm_params["metadata"] = bucket
+        with_guardrail_entry(bucket, entry)
 
     def _merge_hidden_params_from_response_into_metadata(self, logging_result: object) -> None:
         """

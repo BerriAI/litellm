@@ -85,7 +85,7 @@ def _mock_mcp_environment(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
         get_mcp_server_by_name=MagicMock(return_value=None),
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         fake_manager,
     )
     monkeypatch.setitem(

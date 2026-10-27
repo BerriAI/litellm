@@ -145,7 +145,7 @@ API_BASE_IS_THE_FULL_URL: Final[Mapping[str, str]] = MappingProxyType(
             "searchapi.search.transformation.SearchAPIConfig",
             "tinyfish.search.transformation.TinyfishSearchConfig",
             "vertex_ai.text_to_speech.transformation.VertexAITextToSpeechConfig",
-            "vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation."
+            "vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation."
             "VertexAIPartnerModelsAnthropicMessagesConfig",
         )
     }

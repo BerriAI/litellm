@@ -93,6 +93,8 @@ def sdk_interaction_peer(*, sampling: bool = False):
     import queue
     from contextlib import asynccontextmanager
 
+    from integration._support.asgi import asgi_server
+    from integration._support.mcp import McpPeer, _capturing, _drain_sse_streams
     from mcp.server import Server
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from mcp.server.transport_security import TransportSecuritySettings
@@ -100,27 +102,25 @@ def sdk_interaction_peer(*, sampling: bool = False):
         CallToolResult,
         CreateMessageRequest,
         CreateMessageRequestParams,
-        SamplingMessage,
         ElicitRequest,
         ElicitRequestFormParams,
         GetPromptResult,
         InputRequiredResult,
-        ListToolsResult,
         ListPromptsResult,
         ListResourcesResult,
+        ListToolsResult,
         Prompt,
         PromptMessage,
         ReadResourceResult,
         Resource,
+        SamplingMessage,
         TextContent,
         TextResourceContents,
         Tool,
     )
+    from sse_starlette.sse import AppStatus
     from starlette.applications import Starlette
     from starlette.routing import Mount
-    from integration._support.asgi import asgi_server
-    from integration._support.mcp import McpPeer, _capturing, _drain_sse_streams
-    from sse_starlette.sse import AppStatus
 
     async def tools(ctx, params):
         return ListToolsResult(tools=[Tool(name="confirm", input_schema={"type": "object"})])
@@ -666,7 +666,7 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
         "    data = json.loads(Path(__file__).with_suffix('.json').read_text())\n"
         "    change = data.pop('subscription_test_update', None)\n"
         "    if change:\n"
-        "        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager as manager\n"
+        "        from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager as manager\n"
         "        server = manager.config_mcp_servers['subscription-server']\n"
         "        fields = {'authorization_url': 'https://authorization.example/authorize'} if change == 'metadata' else {'url': server.url.rstrip('/') + '/changed'}\n"
         "        manager.config_mcp_servers[server.server_id] = server.model_copy(update=fields)\n"
@@ -1295,9 +1295,9 @@ def test_subscription_partial_setup_releases_upstream_capacity() -> None:
     from starlette.applications import Starlette
     from starlette.routing import Mount
 
-    from litellm.experimental_mcp_client.client import MCPClient
-    from litellm.proxy._experimental.mcp_server.contracts import OperationContext
-    from litellm.proxy._experimental.mcp_server.subscriptions import GatewaySubscriptions, SubscriptionTarget
+    from litellm.mcp_client.client import MCPClient
+    from litellm.proxy.mcp_server.contracts import OperationContext
+    from litellm.proxy.mcp_server.subscriptions import GatewaySubscriptions, SubscriptionTarget
     from litellm.types.mcp import MCPTransport
     from litellm.types.mcp_server.mcp_server_manager import MCPServer as RegisteredServer
 

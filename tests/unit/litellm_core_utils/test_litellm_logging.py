@@ -6575,7 +6575,7 @@ def test_handle_anthropic_messages_response_logging_keeps_the_served_response_id
 def test_handle_anthropic_messages_response_logging_bills_the_bridged_chat_completion_not_the_served_body():
     """A chat deployment answers /v1/messages through the chat bridge. The Anthropic body served to the
     caller has no reasoning token field, so the spend row must come from the recorded chat completion."""
-    from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+    from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
     from litellm.types.utils import CompletionTokensDetailsWrapper, Usage
 
     chat_completion = ModelResponse(
@@ -13642,3 +13642,54 @@ def test_native_messages_body_carries_the_reported_list_cost_into_the_priced_res
     assert isinstance(priced, ModelResponse)
     headers = priced._hidden_params.get("additional_headers") or {}
     assert headers.get("llm_provider-x-litellm-response-cost") == expected_header
+
+
+def test_record_native_bedrock_guardrail_bills_when_the_metadata_is_none() -> None:
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="call-none-metadata",
+        function_id="fn",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"metadata": None}
+    trace = {"guardrail": {"inputAssessment": {"gid": {"invocationMetrics": {"usage": {"contentPolicyUnits": 2}}}}}}
+
+    logging_obj.record_native_bedrock_guardrail({"trace": trace})
+
+    (entry,) = logging_obj.model_call_details["litellm_params"]["metadata"]["standard_logging_guardrail_information"]
+    assert entry["guardrail_usage"] == {"contentPolicyUnits": 2}
+    assert entry["guardrail_cost"] > 0
+
+
+def test_record_native_bedrock_guardrail_bills_nothing_for_a_response_served_from_cache() -> None:
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="call-cache-hit",
+        function_id="fn",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"metadata": {}}
+    trace = {"guardrail": {"inputAssessment": {"gid": {"invocationMetrics": {"usage": {"contentPolicyUnits": 2}}}}}}
+    cached = litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "hi"}}], model="x")
+    setattr(cached, "trace", trace)
+    cached._hidden_params = {"cache_hit": True}
+
+    logging_obj.record_native_bedrock_guardrail(cached)
+    logging_obj.model_call_details["cache_hit"] = True
+    logging_obj.record_native_bedrock_guardrail({"trace": trace})
+
+    assert "standard_logging_guardrail_information" not in logging_obj.model_call_details["litellm_params"]["metadata"]

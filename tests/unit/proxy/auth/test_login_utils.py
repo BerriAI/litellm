@@ -9,8 +9,8 @@ import hashlib
 import os
 from collections.abc import Mapping
 from contextlib import ExitStack
-from typing import TYPE_CHECKING, Final
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -638,10 +638,10 @@ class TestEncodeUiSessionJwt:
         this helper must now be accepted."""
         from unittest.mock import MagicMock
 
-        from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (
+        from litellm.proxy.auth.login_utils import encode_ui_session_jwt
+        from litellm.proxy.mcp_server.byok_oauth_endpoints import (
             user_id_from_session_cookie,
         )
-        from litellm.proxy.auth.login_utils import encode_ui_session_jwt
 
         token_object = {"user_id": "cornell-user", "key": "sk-abc", "login_method": "sso"}
         with patch("litellm.proxy.auth.login_utils.LITELLM_UI_SESSION_DURATION", "24h"):
