@@ -2430,11 +2430,6 @@ def _client_socket_is_open(websocket: WebSocket) -> bool:
 
 
 async def _send_to_client(websocket: WebSocket, frame: str | bytes) -> bool:
-    """
-    False once the client has gone, so the relay ends the session like a client disconnect and still bills what the
-    upstream produced. Starlette raises WebSocketDisconnect when the transport errors. RuntimeError comes from uvicorn
-    after the client's close has arrived, or from the event loop once the transport is closed
-    """
     try:
         if isinstance(frame, bytes):
             await websocket.send_bytes(frame)
