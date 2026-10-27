@@ -4797,11 +4797,11 @@ class Router:
         - Merges tools from deployment with request (proxy-configured tools + request tools).
         - On a fallback hop, drops the encrypted reasoning this deployment cannot decrypt, keeping its summary.
         """
-        deployment_litellm_params: Final = cast(  # cast-ok: a dict or LiteLLM_Params, both answer get
+        deployment_param_lookup: Final = cast(  # cast-ok: a dict or LiteLLM_Params, both answer get
             "DeploymentParamLookup", deployment["litellm_params"]
         )
         caller_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: router call kwargs are a str-keyed dict
-        caller_endpoint_keys: Final = github_copilot_caller_endpoint_keys(deployment_litellm_params, caller_kwargs)
+        caller_endpoint_keys: Final = github_copilot_caller_endpoint_keys(deployment_param_lookup, caller_kwargs)
         router_defaults: Final = cast(  # cast-ok: router default params are a str-keyed dict
             "Mapping[str, object]", self.default_litellm_params
         )
@@ -4810,7 +4810,7 @@ class Router:
                 value
                 for value in (
                     caller_kwargs.get("drop_params"),
-                    deployment_litellm_params.get("drop_params"),
+                    deployment_param_lookup.get("drop_params"),
                     router_defaults.get("drop_params"),
                 )
                 if value is not None

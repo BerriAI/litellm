@@ -19,6 +19,7 @@ from prometheus_client.samples import Sample
 import litellm
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.llms.github_copilot.github_host import github_host_endpoints
 from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 
@@ -223,7 +224,7 @@ class TestSkipMetricsValidation:
                 {
                     "litellm_params": {
                         "github_copilot_user_session": GithubCopilotUserSession(
-                            token="caller-session-token", api_base="https://api.githubcopilot.com"
+                            token="caller-session-token", endpoints=github_host_endpoints("github.com")
                         )
                     }
                 },
