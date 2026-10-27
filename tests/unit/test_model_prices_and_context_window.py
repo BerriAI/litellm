@@ -313,6 +313,95 @@ def test_gemini_rows_agree_on_supports_sampling_params_across_their_provider_twi
         assert len(_sampling_flags_across_provider_twins(prices, key)) == 1, key
 
 
+BEDROCK_CLAUDE_ROW: Final = re.compile(
+    r"^(?:(?P<region>global|us|eu|apac|au|jp|us-gov)\.)?anthropic\.(?P<family>claude-[a-z0-9-]+?)(?:-v\d(?::\d+)?)?$"
+)
+BEDROCK_GOVCLOUD_ROUTE_PREFIXES: Final = ("bedrock/us-gov-east-1/", "bedrock/us-gov-west-1/")
+BEDROCK_NATIVE_OUTPUT_FLAGS: Final = ("supports_native_structured_output", "supports_bedrock_native_structured_output")
+
+
+class _BedrockClaudeRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    family: str
+    govcloud: bool
+    native_output_flags: tuple[bool | None, ...]
+
+
+def _bedrock_claude_row(key: str, row: Mapping[str, JsonValue]) -> _BedrockClaudeRow | None:
+    if row.get("litellm_provider") not in ("bedrock", "bedrock_converse"):
+        return None
+    match: Final = BEDROCK_CLAUDE_ROW.match(key.split("/")[-1])
+    if match is None:
+        return None
+    flags: Final = tuple(row.get(flag) for flag in BEDROCK_NATIVE_OUTPUT_FLAGS)
+    assert all(flag is None or isinstance(flag, bool) for flag in flags), key
+    return _BedrockClaudeRow(
+        family=match.group("family"),
+        govcloud=match.group("region") == "us-gov" or key.startswith(BEDROCK_GOVCLOUD_ROUTE_PREFIXES),
+        native_output_flags=tuple(flag for flag in flags if flag is None or isinstance(flag, bool)),
+    )
+
+
+def _bedrock_claude_rows(path: Path) -> Mapping[str, _BedrockClaudeRow]:
+    catalog: Final = TypeAdapter(dict[str, dict[str, JsonValue]]).validate_json(path.read_bytes())
+    parsed: Final = ((key, _bedrock_claude_row(key, row)) for key, row in catalog.items())
+    return MappingProxyType({key: row for key, row in parsed if row is not None})
+
+
+def _native_output_flags_by_family(
+    rows: Mapping[str, _BedrockClaudeRow], govcloud: bool
+) -> Mapping[str, frozenset[tuple[bool | None, ...]]]:
+    families: Final = frozenset(row.family for row in rows.values())
+    return MappingProxyType(
+        {
+            family: frozenset(
+                row.native_output_flags for row in rows.values() if row.family == family and row.govcloud is govcloud
+            )
+            for family in families
+        }
+    )
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_bedrock_claude_rows_of_one_family_agree_on_native_structured_output_flags(path: Path) -> None:
+    """Every inference-profile row of one Bedrock Claude model (anthropic., global., us., eu., apac., au., jp.)
+    gates native structured output the same way, so a json_schema request takes the same native-or-json-tool
+    path whichever profile the deployment names. GovCloud rows may lag their commercial base (a capability
+    reaches us-gov later) but never lead it"""
+    rows: Final = _bedrock_claude_rows(path)
+    commercial: Final = _native_output_flags_by_family(rows, govcloud=False)
+    govcloud: Final = _native_output_flags_by_family(rows, govcloud=True)
+    assert "claude-fable-5" in commercial
+    for family, flag_sets in commercial.items():
+        assert len(flag_sets) == 1, (family, flag_sets)
+    for family, flag_sets in govcloud.items():
+        (base,) = commercial[family]
+        for flags in flag_sets:
+            assert all(flag is not True or base_flag is True for flag, base_flag in zip(flags, base)), (
+                family,
+                flags,
+                base,
+            )
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_bedrock_claude_fable_5_rows_do_not_advertise_native_structured_output(path: Path) -> None:
+    """Bedrock Converse and Invoke reject outputConfig for claude-fable-5 with
+    `output_config.format: Extra inputs are not permitted` (AWS Bedrock, verified live 2026-10-17 in #46870),
+    so every claude-fable-5 row routes json_schema through the json tool call instead"""
+    fable_5_rows: Final = {
+        key: row.native_output_flags[0]
+        for key, row in _bedrock_claude_rows(path).items()
+        if row.family == "claude-fable-5"
+    }
+    assert len(fable_5_rows) >= 6, fable_5_rows
+    assert fable_5_rows == {key: False for key in fable_5_rows}
+
+
+def test_bedrock_claude_backup_rows_match_the_main_catalog() -> None:
+    assert _bedrock_claude_rows(PRICES_PATH) == _bedrock_claude_rows(BACKUP_PRICES_PATH)
+
+
 OPENAI_REASONING_FAMILY_MARKERS = ("codex", "deep-research", "chat-latest")
 
 
@@ -801,7 +890,10 @@ def test_volcengine_doubao_seed_2_1_pro_260915_row_matches_published_metadata(pa
     assert entry["cache_read_input_token_cost"] == pytest.approx(1.2 / 6.9565 / 1_000_000, rel=1e-4)
     sibling = rows["volcengine/doubao-seed-2-1-pro-260628"]
     assert isinstance(sibling, dict)
-    assert all(entry[key] == sibling[key] for key in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"))
+    assert all(
+        entry[key] == sibling[key]
+        for key in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost")
+    )
 
 
 def _bedrock_gpt_oss_rows(prices: Mapping[str, JsonValue]) -> tuple[str, ...]:
