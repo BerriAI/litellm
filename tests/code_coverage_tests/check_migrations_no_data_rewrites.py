@@ -1054,8 +1054,8 @@ def stale_grandfathers(found: Mapping[str, tuple[Violation, ...]]) -> tuple[str,
     return tuple(sorted((*clean, *missing)))
 
 
-def shipped_migrations(migration_sources: tuple[Path, ...] = MIGRATION_SOURCES) -> tuple[Path, ...]:
-    candidates = chain.from_iterable(source.iterdir() for source in migration_sources)
+def shipped_migrations() -> tuple[Path, ...]:
+    candidates = chain.from_iterable(source.iterdir() for source in MIGRATION_SOURCES)
     return tuple(sorted((path for path in candidates if (path / "migration.sql").is_file()), key=lambda p: p.name))
 
 

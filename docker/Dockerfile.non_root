@@ -184,8 +184,8 @@ RUN mkdir -p /nonexistent /app/.cache /var/lib/litellm/assets /var/lib/litellm/u
     chown -R nobody:nogroup /app /var/lib/litellm/ui /var/lib/litellm/assets /nonexistent && \
     PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__file__))") && \
     chown -R nobody:nogroup "$PRISMA_PATH" && \
-    LITELLM_PKG_MIGRATIONS_PATH="$(python -c 'import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))' 2>/dev/null || echo '')/migrations" && \
-    [ -n "$LITELLM_PKG_MIGRATIONS_PATH" ] && chown -R nobody:nogroup "$LITELLM_PKG_MIGRATIONS_PATH" || true && \
+    LITELLM_PKG_PATH="$(python -c 'import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))' 2>/dev/null || echo '')" && \
+    [ -n "$LITELLM_PKG_PATH" ] && chown -R nobody:nogroup "$LITELLM_PKG_PATH/migrations" "$LITELLM_PKG_PATH/spend_logs/migrations" || true && \
     LITELLM_PROXY_EXTRAS_PATH=$(python -c "import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))" 2>/dev/null || echo "") && \
     chgrp -R 0 "$PRISMA_PATH" /var/lib/litellm/ui /var/lib/litellm/assets && \
     [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chgrp -R 0 "$LITELLM_PROXY_EXTRAS_PATH" || true && \

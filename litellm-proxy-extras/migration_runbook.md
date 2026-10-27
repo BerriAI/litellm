@@ -124,3 +124,12 @@ rm -rf litellm-proxy-extras/litellm_proxy_extras/migrations/[empty_dir]
 ---
 
 **Done with migration?** See [build_and_publish.md](./build_and_publish.md) to publish a new `litellm-proxy-extras` package.
+
+## Where a migration lives
+
+Migrations are split across two source folders that the proxy merges into one flat Prisma `migrations/` directory at boot (`litellm_proxy_extras/migration_sources.py`):
+
+- `litellm_proxy_extras/migrations/` for every table except `LiteLLM_SpendLogs`
+- `litellm_proxy_extras/spend_logs/migrations/` for any migration whose SQL mentions `LiteLLM_SpendLogs`, next to `spend_logs/LiteLLM_SpendLogs.prisma` (a copy of the model block in `schema.prisma`) and `spend_logs/request_log_indexes.py`
+
+The split exists so `spend_logs/` can carry its own `.github/CODEOWNERS` entry. `ci_cd/run_migration.py` picks the folder from the generated SQL, and `tests/code_coverage_tests/check_spend_logs_folder.py` (part of the required `lint passed` check) fails a migration outside `spend_logs/` that mentions the table, or a `LiteLLM_SpendLogs.prisma` copy that drifted from `schema.prisma`. Directory names and apply order are unchanged by the split, so `_prisma_migrations` rows keep matching.

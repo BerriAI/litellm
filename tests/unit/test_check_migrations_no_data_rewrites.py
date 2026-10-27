@@ -293,7 +293,7 @@ class TestIndexesOnLogTables:
         ("20260823000000_add_spend_logs_api_key_starttime_index", "20260831120001_spend_logs_litellm_call_id_index"),
     )
     def test_the_inert_index_migrations_scan_clean_without_a_grandfather(self, name):
-        assert checker.scan_migration(checker.MIGRATIONS_DIR / name) == ()
+        assert checker.scan_migration(checker.MIGRATION_SOURCES[1] / name) == ()
         assert name not in checker.GRANDFATHERED
 
 
