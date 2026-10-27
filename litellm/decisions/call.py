@@ -456,10 +456,14 @@ def prepare_call(
     extra_headers: Mapping[str, str] | None,
     kwargs: Mapping[str, object],
 ) -> DecisionsCall:
+    base_url_alias: Final = kwargs.get("base_url")
+    call_api_base: Final = (
+        base_url_alias if api_base is None and isinstance(base_url_alias, str) and base_url_alias else api_base
+    )
     upstream_model, provider, dynamic_api_key, dynamic_api_base = litellm.get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
-        api_base=api_base,
+        api_base=call_api_base,
         api_key=api_key,
     )
     provider_config: Final = _provider_config(upstream_model, provider)
@@ -488,7 +492,7 @@ def prepare_call(
 
     try:
         resolved_api_base, static_api_key = provider_config.resolve_connection(
-            dynamic_api_base or api_base, dynamic_api_key or api_key
+            dynamic_api_base or call_api_base, dynamic_api_key or api_key
         )
     except ValueError as error:
         raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
