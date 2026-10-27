@@ -1165,7 +1165,7 @@ def _base_model_widened_window(
     return MappingProxyType({"max_input_tokens": base_max_input_tokens})
 
 
-_NO_PROMOTED_FIELDS: Final[Mapping[str, Any]] = MappingProxyType({})
+_NO_PROMOTED_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
 _NESTED_MODEL_INFO_WARNING: Final = (
     "model=%s: 'model_info' is nested inside 'litellm_params'. It belongs at the deployment "
     "level; applying it anyway, but please move it."
@@ -1173,8 +1173,8 @@ _NESTED_MODEL_INFO_WARNING: Final = (
 
 
 def _model_info_nested_under_litellm_params(
-    litellm_params: Mapping[str, Any], model_info: Mapping[str, Any]
-) -> Mapping[str, Any]:
+    litellm_params: Mapping[str, object], model_info: Mapping[str, object]
+) -> Mapping[str, object]:
     """
     Fields from a `model_info` block misplaced inside `litellm_params`, which would otherwise
     be dropped: `model_info` is a declared field on GenericLiteLLMParams, so the misplaced
@@ -1189,7 +1189,7 @@ def _model_info_nested_under_litellm_params(
     return MappingProxyType(
         {
             key: value
-            for key, value in nested.items()
+            for key, value in _MODEL_INFO_ADAPTER.validate_python(nested).items()
             if key != "id" and value is not None and model_info.get(key) is None
         }
     )
@@ -10438,10 +10438,15 @@ class Router:
         - None: If the deployment is not active for the current environment (if 'supported_environments' is set in litellm_params)
         """
         try:
-            _promoted_model_info: Final = _model_info_nested_under_litellm_params(_litellm_params, _model_info)
+            _promoted_model_info: Final = _model_info_nested_under_litellm_params(
+                _LITELLM_PARAMS_ADAPTER.validate_python(_litellm_params),
+                _MODEL_INFO_ADAPTER.validate_python(_model_info),
+            )
             if _promoted_model_info:
                 verbose_router_logger.warning(_NESTED_MODEL_INFO_WARNING, _model_name)
-                _model_info.update(_promoted_model_info)
+                _model_info.update(  # pyright: ignore[reportUnknownMemberType]  # _model_info is an untyped config dict
+                    _promoted_model_info
+                )
             config_sourced: Final = _model_info.get("db_model") is not True
             identity_error: Final = (
                 ptu_identity_error(
