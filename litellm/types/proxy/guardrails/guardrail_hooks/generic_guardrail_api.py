@@ -1,8 +1,8 @@
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, Literal, cast  # noqa: TID251  # JSON chat rows have no typed constructor across roles
 
-from pydantic import ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
-from typing_extensions import TypedDict
+from pydantic import ConfigDict, Field, SerializerFunctionWrapHandler, TypeAdapter, ValidationError, model_serializer
+from typing_extensions import TypedDict, TypeVar
 
 from litellm.types.guardrails import GuardrailNumRetries
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -180,12 +180,33 @@ def coerce_stream_holdback_value(value: Any) -> int:
         return 0
 
 
+def _is_placeholder(value: object) -> bool:
+    return not value and not isinstance(value, list)
+
+
 def structured_messages_from_response(value: object) -> Sequence[AllMessageValues] | None:
-    if not isinstance(value, list):
+    if _is_placeholder(value):
         return None
-    if not all(isinstance(message, Mapping) and isinstance(message.get("role"), str) for message in value):
-        return None
+    if not isinstance(value, list) or not all(
+        isinstance(message, Mapping) and isinstance(message.get("role"), str) for message in value
+    ):
+        raise ValueError("Generic Guardrail API response field 'structured_messages' is malformed")
     return cast("Sequence[AllMessageValues]", value)  # cast-ok: JSON rows checked for a role, the same trust texts get
+
+
+_Parsed: Final = TypeVar("_Parsed")
+_STRINGS: Final = TypeAdapter(list[str])
+_JSON_ROWS: Final = TypeAdapter(list[dict[str, object]])
+
+
+def _parsed_field(adapter: TypeAdapter[_Parsed], data: Mapping[str, object], field: str) -> _Parsed | None:
+    value: Final = data.get(field)
+    if _is_placeholder(value):
+        return None
+    try:
+        return adapter.validate_python(value, strict=True)
+    except ValidationError as error:
+        raise ValueError(f"Generic Guardrail API response field '{field}' is malformed") from error
 
 
 class GenericGuardrailAPIResponse:
@@ -229,9 +250,11 @@ class GenericGuardrailAPIResponse:
         return cls(
             action=data.get("action", "NONE"),
             blocked_reason=data.get("blocked_reason"),
-            texts=data.get("texts"),
-            images=data.get("images"),
-            tools=data.get("tools"),
+            texts=_parsed_field(_STRINGS, data, "texts"),
+            images=_parsed_field(_STRINGS, data, "images"),
+            tools=cast(  # cast-ok: tool rows pass through as the guardrail returned them, as before
+                "list[GuardrailToolParam] | None", _parsed_field(_JSON_ROWS, data, "tools")
+            ),
             stream_holdback_chars=stream_holdback_chars,
             structured_messages=structured_messages_from_response(data.get("structured_messages")),
         )

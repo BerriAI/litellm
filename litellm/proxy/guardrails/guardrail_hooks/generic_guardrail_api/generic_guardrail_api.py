@@ -262,6 +262,9 @@ class GenericGuardrailAPI(CustomGuardrail):
         "blocked_reason": str (optional, only if action is BLOCKED),
         "text": str (optional, modified text if action is GUARDRAIL_INTERVENED)
     }
+
+    A non-empty but malformed texts/images/tools/structured_messages field fails the call closed;
+    with fail_on_error=false the original content passes through instead. Empty/falsy values are ignored.
     """
 
     def __init__(
