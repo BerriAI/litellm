@@ -7700,6 +7700,13 @@ class TestAzureSpeechProxyRoute:
     def test_fast_transcription_multipart_upload_is_forwarded_byte_for_byte(
         self, azure_speech_client: TestClient
     ) -> None:
+        upload: Final = httpx.Request(
+            "POST",
+            f"http://testserver/azure_speech{AZURE_SPEECH_FAST_ENDPOINT}",
+            files={"audio": ("eagle.wav", AZURE_SPEECH_NON_UTF8_WAV_BYTES, "audio/wav")},
+            data={"definition": json.dumps({"locales": ["en-US"]})},
+        )
+        uploaded_body: Final = upload.read()
         with respx.mock(assert_all_called=True) as upstream:
             route = upstream.post(f"https://eastus.api.cognitive.microsoft.com{AZURE_SPEECH_FAST_ENDPOINT}").mock(
                 return_value=httpx.Response(200, json={"durationMilliseconds": 640, "combinedPhrases": []})
@@ -7708,17 +7715,18 @@ class TestAzureSpeechProxyRoute:
             response = azure_speech_client.post(
                 f"/azure_speech{AZURE_SPEECH_FAST_ENDPOINT}",
                 params={"api-version": "2024-11-15"},
-                files={"audio": ("eagle.wav", AZURE_SPEECH_NON_UTF8_WAV_BYTES, "audio/wav")},
-                data={"definition": json.dumps({"locales": ["en-US"]})},
-                headers={"Authorization": "Bearer sk-virtual"},
+                content=uploaded_body,
+                headers={
+                    "Authorization": "Bearer sk-virtual",
+                    "Content-Type": upload.headers["content-type"],
+                },
             )
 
         assert response.status_code == 200
         sent = route.calls.last.request
-        assert sent.headers["content-type"].startswith("multipart/form-data; boundary=")
+        assert sent.headers["content-type"] == upload.headers["content-type"]
         assert dict(sent.url.params) == {"api-version": "2024-11-15"}
-        assert AZURE_SPEECH_NON_UTF8_WAV_BYTES in sent.content
-        assert b'name="definition"' in sent.content
+        assert sent.content == uploaded_body
         assert sent.headers["ocp-apim-subscription-key"] == "server-subscription-key"
         assert "authorization" not in sent.headers
 
@@ -7769,9 +7777,21 @@ class TestAzureSpeechProxyRoute:
             ("azure_speech/batch-transcription", "azure_speech", 0.0)
         ]
 
-    @pytest.mark.parametrize("enhanced_model", [None, "MAI-Transcribe-2", "MAI-Transcribe-1.5", "future-model"])
+    @pytest.mark.parametrize(
+        "enhanced_model,pricing_model",
+        [
+            (None, "azure/speech/azure-stt"),
+            ("MAI-Transcribe-2", "azure/speech/MAI-Transcribe-2"),
+            ("MAI-Transcribe-1.5", "azure/speech/MAI-Transcribe-1.5"),
+            ("future-model", "azure/speech/azure-stt"),
+        ],
+    )
     def test_fast_transcription_spend_is_priced_from_duration_milliseconds(
-        self, azure_speech_client: TestClient, monkeypatch: pytest.MonkeyPatch, enhanced_model: str | None
+        self,
+        azure_speech_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        enhanced_model: str | None,
+        pricing_model: str,
     ) -> None:
         from litellm.integrations.custom_logger import CustomLogger
 
@@ -7795,8 +7815,7 @@ class TestAzureSpeechProxyRoute:
                 "output_cost_per_second": 0.0,
             },
         )
-        selected_price: Final = litellm.model_cost.get(f"azure/speech/{enhanced_model}")
-        expected_rate: Final = selected_price["input_cost_per_second"] if selected_price is not None else 0.25
+        expected_rate: Final = litellm.model_cost[pricing_model]["input_cost_per_second"]
         definition: Final = json.dumps(
             {"locales": ["en-US"], "enhancedMode": {"enabled": True, "model": enhanced_model}}
             if enhanced_model is not None

@@ -40,7 +40,7 @@ class _EnhancedMode(BaseModel):
 class _FastTranscriptionDefinition(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True)
 
-    enhancedMode: _EnhancedMode | None = None
+    enhanced_mode: _EnhancedMode | None = Field(default=None, alias="enhancedMode")
 
 
 class AzureSpeechPassthroughLoggingHandler:
@@ -55,9 +55,20 @@ class AzureSpeechPassthroughLoggingHandler:
             parsed: Final = _FastTranscriptionDefinition.model_validate_json(definition)
         except ValidationError:
             return None
-        if parsed.enhancedMode is None or not parsed.enhancedMode.enabled:
+        if parsed.enhanced_mode is None or not parsed.enhanced_mode.enabled:
             return None
-        return parsed.enhancedMode.model
+        return parsed.enhanced_mode.model
+
+    @staticmethod
+    def _resolve_model_and_pricing_model(url_route: str, request_body: Mapping[str, object]) -> tuple[str, str]:
+        enhanced_model: Final = AzureSpeechPassthroughLoggingHandler._enhanced_transcription_model(
+            url_route, request_body
+        )
+        if enhanced_model is None:
+            return AzureSpeechPassthroughLoggingHandler._model_from_url_route(url_route), AZURE_SPEECH_PRICING_MODEL
+        model_name: Final = f"{AZURE_SPEECH_CUSTOM_LLM_PROVIDER}/{enhanced_model}"
+        pricing_model: Final = get_model_cost_key(f"azure/speech/{enhanced_model}")
+        return model_name, pricing_model or AZURE_SPEECH_PRICING_MODEL
 
     @staticmethod
     def _is_short_audio_route(url_route: str) -> bool:
@@ -163,18 +174,9 @@ class AzureSpeechPassthroughLoggingHandler:
         **kwargs: object,  # kwargs-ok: the passthrough logging dispatch forwards shared logging kwargs to every handler
     ) -> PassThroughEndpointLoggingTypedDict:
         try:
-            enhanced_model: Final = AzureSpeechPassthroughLoggingHandler._enhanced_transcription_model(
+            model_name, pricing_model = AzureSpeechPassthroughLoggingHandler._resolve_model_and_pricing_model(
                 url_route, request_body
             )
-            model_name: Final = (
-                f"{AZURE_SPEECH_CUSTOM_LLM_PROVIDER}/{enhanced_model}"
-                if enhanced_model is not None
-                else AzureSpeechPassthroughLoggingHandler._model_from_url_route(url_route)
-            )
-            enhanced_pricing_model: Final = (
-                get_model_cost_key(f"azure/speech/{enhanced_model}") if enhanced_model is not None else None
-            )
-            pricing_model: Final = enhanced_pricing_model or AZURE_SPEECH_PRICING_MODEL
             response_cost: Final = AzureSpeechPassthroughLoggingHandler._response_cost(
                 url_route, httpx_response, response_body, pricing_model
             )
