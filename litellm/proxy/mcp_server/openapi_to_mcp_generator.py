@@ -5,15 +5,29 @@ This module is used to generate MCP tools from OpenAPI specs.
 import asyncio
 import contextvars
 import json
+import math
 import os
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
-from typing import Final, Literal, Protocol, TypeAlias, TypedDict, overload
+from typing import (
+    ClassVar,
+    Final,
+    Literal,
+    Protocol,
+    TypeAlias,
+    TypedDict,
+    cast,  # noqa: TID251  # existing OpenAPI Protocol fields have no runtime schema
+    overload,
+)
 from urllib.parse import quote
 
 import httpx
+import yaml
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Required
+from yaml.events import AliasEvent, ScalarEvent
+from yaml.nodes import MappingNode, Node, ScalarNode
 
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
 from litellm.proxy.mcp_server.exceptions import (
@@ -30,6 +44,18 @@ _OPENAPI_TOOL_NAME_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
 OPENAPI_TOOL_NAME_MAX_LEN: Final = 128
 
 _OPENAPI_TOOL_NAME_MAX_LEN: Final = OPENAPI_TOOL_NAME_MAX_LEN
+_OPENAPI_DOCUMENT: Final = TypeAdapter(dict[str, object])
+_MAX_YAML_INT_LENGTH: Final = 1024
+# YAML 1.2 core scalars; isolate these from PyYAML's global YAML 1.1 resolver.
+_YAML_SCALARS: Final = {
+    "tag:yaml.org,2002:null": re.compile(r"^(?:null|Null|NULL|~|)$"),
+    "tag:yaml.org,2002:bool": re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"),
+    "tag:yaml.org,2002:int": re.compile(r"^(?:[-+]?[0-9]+|0o[0-7]+|0x[0-9a-fA-F]+)$"),
+    "tag:yaml.org,2002:float": re.compile(
+        r"^(?:[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][-+]?[0-9]+)?"
+        r"|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$"
+    ),
+}
 
 
 def sanitize_openapi_tool_name(raw_name: str) -> str:
@@ -199,6 +225,70 @@ def load_openapi_spec(filepath: str) -> _OpenAPISpec:
     return asyncio.run(load_openapi_spec_async(filepath))
 
 
+class _OpenAPISafeLoader(yaml.SafeLoader):
+    yaml_implicit_resolvers: ClassVar[Mapping[str | None, Sequence[tuple[str, re.Pattern[str]]]]] = {  # pyright: ignore[reportIncompatibleVariableOverride]  # PyYAML resolver tables are class state
+        None: list(_YAML_SCALARS.items())
+    }
+
+    def compose_node(self, parent: Node | None, index: int) -> Node | None:
+        event: Final[object] = self.peek_event()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # incomplete PyYAML event stubs
+        if isinstance(event, AliasEvent):
+            raise ValueError("YAML aliases are not supported in OpenAPI specs")  # noqa: TRY004  # callers handle malformed documents as ValueError
+        node: Final = super().compose_node(parent, index)
+        # PyYAML otherwise implicitly resolves even an explicit nonspecific ! tag.
+        if isinstance(event, ScalarEvent) and event.tag == "!" and isinstance(node, ScalarNode):
+            node.tag = "tag:yaml.org,2002:str"
+        return node
+
+    def construct_object(self, node: Node, deep: bool = False) -> object:
+        pattern: Final = _YAML_SCALARS.get(node.tag)
+        if pattern is not None:
+            if not isinstance(node, ScalarNode):
+                raise ValueError("Invalid YAML OpenAPI spec")
+            scalar: Final[str] = node.value
+            if node.tag == "tag:yaml.org,2002:int" and len(scalar) > _MAX_YAML_INT_LENGTH:
+                raise ValueError("YAML integer is too long in OpenAPI spec")
+            if pattern.fullmatch(scalar) is None:
+                raise ValueError("Invalid YAML OpenAPI spec")
+            if node.tag == "tag:yaml.org,2002:int":
+                # YAML 1.2 decimal values with leading zeroes are not octal.
+                return int(scalar, 0 if scalar.startswith(("0o", "0x")) else 10)
+            if node.tag == "tag:yaml.org,2002:float":
+                value: Final = self.construct_yaml_float(node)
+                if not math.isfinite(value):
+                    raise ValueError("Invalid YAML OpenAPI spec")
+                return value
+        elif node.tag not in {"tag:yaml.org,2002:str", "tag:yaml.org,2002:seq", "tag:yaml.org,2002:map"} or (
+            node.tag == "tag:yaml.org,2002:str" and not isinstance(node, ScalarNode)
+        ):
+            raise ValueError("Invalid YAML OpenAPI spec")
+        if isinstance(node, MappingNode):
+            pairs: Final[Sequence[tuple[Node, Node]]] = node.value
+            if any(not isinstance(key, ScalarNode) or key.tag != "tag:yaml.org,2002:str" for key, _ in pairs):
+                raise ValueError("Invalid YAML OpenAPI spec")
+        return super().construct_object(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # incomplete PyYAML stubs
+            node, deep
+        )
+
+
+def _validate_openapi_spec(value: object) -> _OpenAPISpec:
+    try:
+        document: Final = _OPENAPI_DOCUMENT.validate_python(value)
+    except ValidationError as exc:
+        raise ValueError("OpenAPI spec must be a JSON or YAML object") from exc
+    return cast(_OpenAPISpec, document)  # cast-ok: preserve existing lazy OpenAPI Protocol validation
+
+
+def _parse_openapi_spec(content: str | bytes) -> _OpenAPISpec:
+    try:
+        return _validate_openapi_spec(json.loads(content))
+    except json.JSONDecodeError:
+        try:
+            return _validate_openapi_spec(yaml.load(content, Loader=_OpenAPISafeLoader))
+        except (yaml.YAMLError, RecursionError) as exc:
+            raise ValueError("Invalid YAML OpenAPI spec") from exc
+
+
 async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> _OpenAPISpec:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
@@ -208,14 +298,17 @@ async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None
             else await async_safe_get(client, filepath, max_response_bytes=max_bytes)
         )
         r.raise_for_status()
-        return r.json()
+        return await asyncio.to_thread(_parse_openapi_spec, r.content)
 
     # fallback: local file
-    # Local filesystem path
+    return await asyncio.to_thread(_load_openapi_file, filepath)
+
+
+def _load_openapi_file(filepath: str) -> _OpenAPISpec:
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"OpenAPI spec not found at {filepath}")
     with open(filepath, "r", encoding="utf-8") as f:
-        return json.load(f)
+        return _parse_openapi_spec(f.read())
 
 
 def get_base_url(spec: _OpenAPISpec, spec_path: str | None = None) -> str:
