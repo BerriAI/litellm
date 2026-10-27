@@ -42,12 +42,6 @@ _OCTET_LENGTH_TYPES: Final = frozenset({"text", "varchar", "bpchar", "bytea", "n
 MIGRATION_DATA_CHECK_TIMEOUT_ENV_VAR: Final = "LITELLM_MIGRATION_DATA_CHECK_TIMEOUT"
 DEFAULT_MIGRATION_DATA_CHECK_TIMEOUT_SECONDS: Final = 600.0
 REFUSAL: Final = "Existing rows would make a pending schema change fail:"
-LEGACY_SPEND_LOG_KEY_REMEDY: Final = (
-    "Rows written before v1.99.0 hold the raw key. Hash them in place (one-way, idempotent):\n"
-    '    UPDATE "LiteLLM_SpendLogs" SET api_key = encode(sha256(convert_to('
-    "regexp_replace(api_key, '^[Bb][Ee][Aa][Rr][Ee][Rr] ', ''), 'UTF8')), 'hex')\n"
-    "    WHERE api_key <> '' AND api_key !~ '^[0-9a-fA-F]{64}$' AND api_key !~ '^hashed-jwt-[0-9A-Fa-f]{64}$';"
-)
 
 Kind = Literal["too_long", "duplicates", "nulls", "any_row", "orphans", "check_violations"]
 
@@ -571,8 +565,6 @@ def find_blockers(
 
 
 def _remedy(check: Check) -> str:
-    if check.kind == "too_long" and check.table == "LiteLLM_SpendLogs" and "api_key" in check.columns:
-        return LEGACY_SPEND_LOG_KEY_REMEDY
     joined: Final = ", ".join(check.columns)
     match check.kind:
         case "too_long":

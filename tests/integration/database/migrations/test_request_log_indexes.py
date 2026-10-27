@@ -956,8 +956,11 @@ def _legacy_bearer_token() -> str:
     return "Bearer " + secrets.token_hex(1600)
 
 
-def _hash_sql_from(refusal: str) -> str:
-    return refusal[refusal.index('UPDATE "LiteLLM_SpendLogs"') : refusal.index("{64}$';") + len("{64}$';")]
+_HASH_LEGACY_KEYS: Final = (
+    'UPDATE "LiteLLM_SpendLogs" SET api_key = encode(sha256(convert_to('
+    "regexp_replace(api_key, '^[Bb][Ee][Aa][Rr][Ee][Rr] ', ''), 'UTF8')), 'hex') "
+    "WHERE api_key <> '' AND api_key !~ '^[0-9a-fA-F]{64}$' AND api_key !~ '^hashed-jwt-[0-9A-Fa-f]{64}$'"
+)
 
 
 @requires_db
@@ -985,7 +988,7 @@ def test_the_migration_job_refuses_before_the_first_migration_when_spend_log_key
     assert API_KEY_INDEX not in _index_validity(scratch_database, "api_key_startTime_idx")
 
     with psycopg.connect(scratch_database, autocommit=True) as conn:
-        conn.execute(_hash_sql_from(refusal))  # pyright: ignore[reportArgumentType]  # the refusal's own SQL
+        conn.execute(_HASH_LEGACY_KEYS)
     assert ProxyExtrasDBManager.run_migration_job(use_migrate=True, use_v2_resolver=use_v2_resolver) is True
     assert _index_validity(scratch_database, "api_key_startTime_idx") == {API_KEY_INDEX: True}
     assert len(_ledger(scratch_database)) > len(ledger_before)
