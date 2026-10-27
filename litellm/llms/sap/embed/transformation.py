@@ -2,8 +2,7 @@
 Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
 """
 
-import threading
-from typing import ClassVar, Final, Literal
+from typing import Final, Literal
 
 import httpx
 from pydantic import Field
@@ -18,8 +17,11 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.utils import EmbeddingResponse
 
+_AICORE_EMBEDDING_DEPLOYMENT_URL_ENV_VAR = "AICORE_EMBEDDING_DEPLOYMENT_URL"
+
 from ..chat.handler import GenAIHubOrchestrationError
-from ..credentials import AICoreConfiguration, AICoreDeploymentList, get_token_creator
+from ..credentials import get_token_creator
+from ..deployment import fetch_deployment_url, resolve_deployment_url
 
 
 class Usage(LiteLLMBaseModel):
@@ -98,40 +100,22 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         }
         return headers
 
-    # Process-wide cache, same reasoning as the chat config: per-call config
-    # instances would otherwise re-run the two discovery GETs on every call.
-    _deployment_url_cache: ClassVar[dict[tuple[str, str], str]] = {}  # mutable-ok: process cache, guarded by the lock
-    _deployment_url_lock: ClassVar[threading.Lock] = threading.Lock()
-
     @property
     def deployment_url(self) -> str:
-        cache_key: Final = (self.base_url, self.resource_group)
-        cached_url: Final = GenAIHubEmbeddingConfig._deployment_url_cache.get(cache_key)
-        if cached_url is not None:
-            return cached_url
-        with GenAIHubEmbeddingConfig._deployment_url_lock:
-            rechecked_url: Final = GenAIHubEmbeddingConfig._deployment_url_cache.get(cache_key)
-            if rechecked_url is not None:
-                return rechecked_url
-            fetched_url: Final = self._fetch_deployment_url()
-            GenAIHubEmbeddingConfig._deployment_url_cache[cache_key] = fetched_url
-            return fetched_url
+        return resolve_deployment_url(
+            self.base_url,
+            self.resource_group,
+            _AICORE_EMBEDDING_DEPLOYMENT_URL_ENV_VAR,
+            self._fetch_deployment_url,
+        )
 
     def _fetch_deployment_url(self) -> str:
-        with httpx.Client(timeout=30) as client:
-            valid_deployments: Final = []
-            deployments: Final[AICoreDeploymentList] = client.get(
-                join_api_base(self.base_url, "lm/deployments"), headers=self.headers
-            ).json()
-            for deployment in deployments.get("resources", []):
-                if deployment["scenarioId"] == "orchestration":
-                    config_details: AICoreConfiguration = client.get(
-                        join_api_base(self.base_url, f"lm/configurations/{deployment['configurationId']}"),
-                        headers=self.headers,
-                    ).json()
-                    if config_details["executableId"] == "orchestration":
-                        valid_deployments.append((deployment["deploymentUrl"], deployment["createdAt"]))
-            return sorted(valid_deployments, key=lambda x: x[1], reverse=True)[0][0]
+        return fetch_deployment_url(
+            self.base_url,
+            self.headers,
+            "No embedding deployment found in SAP AI Core.",
+            "embedding",
+        )
 
     def get_error_class(self, error_message, status_code, headers):
         return GenAIHubOrchestrationError(status_code, error_message)

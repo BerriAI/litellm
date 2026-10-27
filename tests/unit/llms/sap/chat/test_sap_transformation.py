@@ -4,6 +4,15 @@ from unittest.mock import MagicMock, patch
 from pydantic import ValidationError
 
 
+@pytest.fixture(autouse=True)
+def _clear_sap_deployment_caches():
+    import litellm.llms.sap.deployment as _depl
+
+    _depl._deployment_url_cache.clear()
+    yield
+    _depl._deployment_url_cache.clear()
+
+
 def _make_config():
     from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
 
@@ -962,7 +971,7 @@ class TestDeploymentResolution:
     def test_multiple_deployments_emits_warning(self):
         cfg = _make_config()
         with patch("litellm.module_level_client", _mock_client("older", "newer")):  # test-quality-ok: patching the HTTP client at the litellm transport boundary
-            with patch("litellm.llms.sap.chat.transformation.verbose_logger") as mock_log:  # test-quality-ok: patching module-level logger to intercept warning calls
+            with patch("litellm.llms.sap.deployment.verbose_logger") as mock_log:  # test-quality-ok: patching module-level logger to intercept warning calls
                 url = cfg._fetch_deployment_url()
         mock_log.warning.assert_called_once()
         assert 2 == mock_log.warning.call_args[0][1]
