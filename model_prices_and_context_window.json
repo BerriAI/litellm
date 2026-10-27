@@ -11241,6 +11241,20 @@
             "/v1/audio/transcriptions"
         ]
     },
+    "azure/speech/MAI-Transcribe-2": {
+        "input_cost_per_second": 0.00002777777777777778,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "azure",
+        "mode": "audio_transcription",
+        "source": "https://labs.ai.azure.com/innovations/mai-transcribe-2/"
+    },
+    "azure/speech/MAI-Transcribe-1.5": {
+        "input_cost_per_second": 0.0001,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "azure",
+        "mode": "audio_transcription",
+        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/new-mai-models-in-microsoft-foundry-across-text-image-voice-and-speech/4524632"
+    },
     "azure/tts-1": {
         "deprecation_date": "2026-12-15",
         "input_cost_per_character": 1.5e-05,

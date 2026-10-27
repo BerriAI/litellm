@@ -4,6 +4,7 @@ from typing import Final
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -26,9 +27,38 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.types.utils import StandardPassThroughResponseObject
+from litellm.utils import get_model_cost_key
+
+
+class _EnhancedMode(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    enabled: bool = False
+    model: str | None = Field(default=None, min_length=1)
+
+
+class _FastTranscriptionDefinition(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    enhancedMode: _EnhancedMode | None = None
 
 
 class AzureSpeechPassthroughLoggingHandler:
+    @staticmethod
+    def _enhanced_transcription_model(url_route: str, request_body: Mapping[str, object]) -> str | None:
+        if not AzureSpeechPassthroughLoggingHandler._is_fast_transcription_route(url_route):
+            return None
+        definition: Final = request_body.get("definition")
+        if not isinstance(definition, str):
+            return None
+        try:
+            parsed: Final = _FastTranscriptionDefinition.model_validate_json(definition)
+        except ValidationError:
+            return None
+        if parsed.enhancedMode is None or not parsed.enhancedMode.enabled:
+            return None
+        return parsed.enhancedMode.model
+
     @staticmethod
     def _is_short_audio_route(url_route: str) -> bool:
         path: Final = urlparse(url_route).path
@@ -99,6 +129,7 @@ class AzureSpeechPassthroughLoggingHandler:
         url_route: str,
         httpx_response: httpx.Response,
         response_body: Mapping[str, object] | Sequence[object] | None,
+        pricing_model: str = AZURE_SPEECH_PRICING_MODEL,
     ) -> float:
         audio_seconds: Final = AzureSpeechPassthroughLoggingHandler._billed_audio_seconds(
             url_route, httpx_response, response_body
@@ -107,13 +138,13 @@ class AzureSpeechPassthroughLoggingHandler:
             return 0.0
         try:
             prompt_cost, completion_cost = transcription_cost(
-                model=AZURE_SPEECH_PRICING_MODEL,
+                model=pricing_model,
                 custom_llm_provider="azure",
                 duration=audio_seconds,
             )
         except Exception as e:  # noqa: BLE001  # a missing price entry must not drop the spend log row
             verbose_proxy_logger.warning(
-                "No price for %s, logging Azure Speech call at zero cost: %s", AZURE_SPEECH_PRICING_MODEL, e
+                "No price for %s, logging Azure Speech call at zero cost: %s", pricing_model, e
             )
             return 0.0
         return prompt_cost + completion_cost
@@ -132,9 +163,20 @@ class AzureSpeechPassthroughLoggingHandler:
         **kwargs: object,  # kwargs-ok: the passthrough logging dispatch forwards shared logging kwargs to every handler
     ) -> PassThroughEndpointLoggingTypedDict:
         try:
-            model_name: Final = AzureSpeechPassthroughLoggingHandler._model_from_url_route(url_route)
+            enhanced_model: Final = AzureSpeechPassthroughLoggingHandler._enhanced_transcription_model(
+                url_route, request_body
+            )
+            model_name: Final = (
+                f"{AZURE_SPEECH_CUSTOM_LLM_PROVIDER}/{enhanced_model}"
+                if enhanced_model is not None
+                else AzureSpeechPassthroughLoggingHandler._model_from_url_route(url_route)
+            )
+            enhanced_pricing_model: Final = (
+                get_model_cost_key(f"azure/speech/{enhanced_model}") if enhanced_model is not None else None
+            )
+            pricing_model: Final = enhanced_pricing_model or AZURE_SPEECH_PRICING_MODEL
             response_cost: Final = AzureSpeechPassthroughLoggingHandler._response_cost(
-                url_route, httpx_response, response_body
+                url_route, httpx_response, response_body, pricing_model
             )
 
             updated_kwargs: Final = {

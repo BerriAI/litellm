@@ -7769,8 +7769,9 @@ class TestAzureSpeechProxyRoute:
             ("azure_speech/batch-transcription", "azure_speech", 0.0)
         ]
 
+    @pytest.mark.parametrize("enhanced_model", [None, "MAI-Transcribe-2", "MAI-Transcribe-1.5", "future-model"])
     def test_fast_transcription_spend_is_priced_from_duration_milliseconds(
-        self, azure_speech_client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, azure_speech_client: TestClient, monkeypatch: pytest.MonkeyPatch, enhanced_model: str | None
     ) -> None:
         from litellm.integrations.custom_logger import CustomLogger
 
@@ -7794,24 +7795,33 @@ class TestAzureSpeechProxyRoute:
                 "output_cost_per_second": 0.0,
             },
         )
+        selected_price: Final = litellm.model_cost.get(f"azure/speech/{enhanced_model}")
+        expected_rate: Final = selected_price["input_cost_per_second"] if selected_price is not None else 0.25
+        definition: Final = json.dumps(
+            {"locales": ["en-US"], "enhancedMode": {"enabled": True, "model": enhanced_model}}
+            if enhanced_model is not None
+            else {"locales": ["en-US"]}
+        )
         with respx.mock(assert_all_called=True) as upstream:
-            upstream.post(f"https://eastus.api.cognitive.microsoft.com{AZURE_SPEECH_FAST_ENDPOINT}").mock(
-                return_value=httpx.Response(200, json={"durationMilliseconds": 5061, "combinedPhrases": []})
-            )
+            route: Final = upstream.post(
+                f"https://eastus.api.cognitive.microsoft.com{AZURE_SPEECH_FAST_ENDPOINT}"
+            ).mock(return_value=httpx.Response(200, json={"durationMilliseconds": 5061, "combinedPhrases": []}))
 
             response = azure_speech_client.post(
                 f"/azure_speech{AZURE_SPEECH_FAST_ENDPOINT}",
                 params={"api-version": "2024-11-15"},
                 files={"audio": ("eagle.wav", AZURE_SPEECH_WAV_BYTES, "audio/wav")},
-                data={"definition": json.dumps({"locales": ["en-US"]})},
+                data={"definition": definition},
                 headers={"Authorization": "Bearer sk-virtual"},
             )
 
         assert response.status_code == 200
+        assert definition.encode() in route.calls.last.request.content
+        assert AZURE_SPEECH_WAV_BYTES in route.calls.last.request.content
         assert [(p["model"], p["custom_llm_provider"]) for p in recorder.payloads] == [
-            ("azure_speech/fast-transcription", "azure_speech")
+            (f"azure_speech/{enhanced_model or 'fast-transcription'}", "azure_speech")
         ]
-        assert recorder.payloads[0]["response_cost"] == pytest.approx(5.061 * 0.25)
+        assert recorder.payloads[0]["response_cost"] == pytest.approx(5.061 * expected_rate)
 
     def test_short_audio_spend_is_priced_from_the_recognized_duration(
         self, azure_speech_client: TestClient, monkeypatch: pytest.MonkeyPatch

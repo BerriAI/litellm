@@ -1787,6 +1787,14 @@ async def azure_speech_proxy_route(
     )
     raw_body: Final = await request.body()
 
+    if normalized_endpoint_path.endswith(
+        AZURE_SPEECH_FAST_TRANSCRIPTION_PATH
+    ) and HttpPassThroughEndpointHelpers.is_multipart(request):
+        async with request.form() as form:
+            definition: Final = form.get("definition")
+            if isinstance(definition, str):
+                setattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, {"definition": definition})
+
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(target_url),
