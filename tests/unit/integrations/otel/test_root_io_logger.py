@@ -355,6 +355,23 @@ def test_root_input_cuts_an_image_data_uri_as_the_logged_messages_do():
     assert root_input != messages
 
 
+def test_root_output_cuts_an_image_data_uri_as_the_logged_messages_do():
+    logger, exporter = _logger()
+    image: Final = {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64," + "iVBORw0KGgo" * 100},
+        "index": 0,
+    }
+    reply: Final = ModelResponse(choices=[Choices(message=Message(role="assistant", content="a cat", images=[image]))])
+
+    _run_request(logger, CHAT_DATA, "acompletion", reply)
+
+    root_output: Final = json.loads(_root_attrs(exporter)["output.value"])
+    served: Final = [choice.message.model_dump(exclude_none=True) for choice in reply.choices]
+    assert root_output == truncate_base64_in_messages(served)
+    assert root_output != served
+
+
 @pytest.mark.parametrize(
     ("mappers", "expected"),
     [

@@ -1,3 +1,5 @@
+from typing import Final
+
 import pytest
 from fastapi import HTTPException
 
@@ -8,7 +10,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import CallTypesLiteral, Choices, Message, ModelResponse
 
 
 def test_has_post_call_response_headers_callbacks_ignores_empty_callbacks(
@@ -410,7 +412,7 @@ class _MasksReply(CustomLogger):
 
 
 class _ReadsServedStream(CustomLogger):
-    relays_served_stream = True
+    reads_served_response = True
 
     def __init__(self) -> None:
         super().__init__()
@@ -444,6 +446,65 @@ async def test_post_call_stream_served_stream_relay_reads_what_a_later_hook_serv
 
     assert served == ["<PERSON>"]
     assert reader.read == served
+
+
+class _MasksResponse(CustomLogger):
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> ModelResponse:
+        return ModelResponse(choices=[Choices(message=Message(role="assistant", content="<PERSON>"))])
+
+
+class _RefusesResponse(CustomLogger):
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> None:
+        raise HTTPException(status_code=400, detail="refused")
+
+
+class _ReadsServedResponse(CustomLogger):
+    reads_served_response = True
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.read: Final[list[object]] = []  # mutable-ok: records each response the hook reads
+
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> None:
+        self.read.append(response)
+
+
+async def _post_call(callbacks: list[CustomLogger], monkeypatch: pytest.MonkeyPatch) -> object:
+    monkeypatch.setattr(litellm, "callbacks", callbacks)
+    return await ProxyLogging(user_api_key_cache=DualCache()).post_call_success_hook(
+        data={"model": "gpt-4o-mini", "metadata": {}},
+        response=ModelResponse(choices=[Choices(message=Message(role="assistant", content="John Smith"))]),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/chat/completions"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_runs_a_served_response_reader_after_a_later_listed_rewrite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader: Final = _ReadsServedResponse()
+
+    served: Final = await _post_call([reader, _MasksResponse()], monkeypatch)
+
+    assert reader.read == [served]
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_skips_a_served_response_reader_when_a_later_listed_hook_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader: Final = _ReadsServedResponse()
+
+    with pytest.raises(HTTPException):
+        await _post_call([reader, _RefusesResponse()], monkeypatch)
+
+    assert reader.read == []
 
 
 @pytest.mark.asyncio

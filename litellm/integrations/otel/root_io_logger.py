@@ -41,7 +41,7 @@ class RootIOOpenTelemetryV2(OpenTelemetryV2):
     only through a callback whose own class defines that hook.
     """
 
-    relays_served_stream: bool = True
+    reads_served_response: bool = True
 
     async def async_post_call_success_hook(
         self,
@@ -160,7 +160,7 @@ class OpenInferenceRootIOOpenTelemetryV2(RootIOOpenTelemetryV2):
                 ("openinference.span.kind", "CHAIN"),
                 ("input.value", _without_base64_payloads(rendered_input)),
                 ("input.mime_type", _JSON_MIME_TYPE if rendered_input is not None else None),
-                ("output.value", output),
+                ("output.value", _without_base64_payloads(output)),
                 ("output.mime_type", _JSON_MIME_TYPE),
             )
         )

@@ -4116,7 +4116,7 @@ class ProxyLogging:
             ############ Handle CustomLogger ###############################
             #################################################################
 
-            for callback in other_callbacks:
+            for callback in sorted(other_callbacks, key=lambda callback: callback.reads_served_response):
                 callback_response: LLMResponseTypes | None = await callback.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict, data=data, response=response
                 )
@@ -4472,7 +4472,7 @@ class ProxyLogging:
         pipeline_gated_names: Final = _pipeline_step_guardrail_names(post_call_pipelines)
         guarded_layers: Final[list[AsyncGenerator[object, None]]] = []  # mutable-ok: closed on disconnect
         stream_rewriters: Final = tuple(
-            override for override in caps.iterator_overrides if not override[0].relays_served_stream
+            override for override in caps.iterator_overrides if not override[0].reads_served_response
         )
         for resolved_callback, kind in stream_rewriters:
             if isinstance(resolved_callback, CustomGuardrail):
@@ -4538,7 +4538,7 @@ class ProxyLogging:
 
         served_streams: Final = tuple(
             accumulate(
-                (callback for callback, _ in caps.iterator_overrides if callback.relays_served_stream),
+                (callback for callback, _ in caps.iterator_overrides if callback.reads_served_response),
                 partial(self._relay_served_stream, user_api_key_dict=user_api_key_dict, request_data=request_data),
                 initial=current_response,
             )
