@@ -31,13 +31,20 @@ def openssl_enforces_fips() -> bool:
 
 
 def cryptography_enforces_fips() -> bool:
-    """The cryptography library's own OpenSSL runs with FIPS-only defaults."""
+    """The cryptography library's own OpenSSL runs with FIPS-only defaults and its FIPS provider can hash SHA-256."""
     try:
+        from cryptography.exceptions import InternalError, UnsupportedAlgorithm
         from cryptography.hazmat.bindings._rust import openssl as rust_openssl
-
-        return rust_openssl.is_fips_enabled()
-    except (ImportError, AttributeError):
+        from cryptography.hazmat.primitives import hashes
+    except ImportError:
         return False
+    try:
+        if not rust_openssl.is_fips_enabled():
+            return False
+        hashes.Hash(hashes.SHA256()).finalize()
+    except (AttributeError, InternalError, UnsupportedAlgorithm):
+        return False
+    return True
 
 
 def enforce_fips_mode() -> None:
@@ -63,6 +70,7 @@ def enforce_fips_mode() -> None:
         )
     if not cryptography_enforces_fips():
         raise FipsModeError(
-            f"{FIPS_MODE_ENV_VAR} is on but the cryptography library's OpenSSL does not enforce FIPS. Build it against "
-            f"the system OpenSSL (pip install --no-binary cryptography cryptography), or unset {FIPS_MODE_ENV_VAR}."
+            f"{FIPS_MODE_ENV_VAR} is on but the cryptography library's OpenSSL has no working FIPS provider. Build it "
+            "against the system OpenSSL (pip install --no-binary cryptography cryptography), or unset "
+            f"{FIPS_MODE_ENV_VAR}."
         )

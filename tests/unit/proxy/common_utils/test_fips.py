@@ -1,8 +1,11 @@
 import _hashlib
 from contextlib import nullcontext
+from unittest.mock import Mock
 
 import pytest
+from cryptography.exceptions import InternalError
 from cryptography.hazmat.bindings._rust import openssl as rust_openssl
+from cryptography.hazmat.primitives import hashes
 
 import litellm
 from litellm.proxy.common_utils.fips import (
@@ -50,10 +53,18 @@ def test_openssl_without_get_fips_mode_does_not_enforce_fips(monkeypatch):
     assert openssl_enforces_fips() is False
 
 
-@pytest.mark.parametrize("fips_enabled", [True, False])
-def test_cryptography_enforces_fips_reads_its_openssl_fips_flag(monkeypatch, fips_enabled):
+@pytest.mark.parametrize(
+    "fips_enabled, sha256_broken, enforces",
+    [(True, False, True), (False, False, False), (True, True, False)],
+    ids=["fips", "fips-flag-off", "sha256-broken"],
+)
+def test_cryptography_enforces_fips_needs_the_fips_flag_and_a_working_sha256(
+    monkeypatch, fips_enabled, sha256_broken, enforces
+):
     monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: fips_enabled)
-    assert cryptography_enforces_fips() is fips_enabled
+    if sha256_broken:
+        monkeypatch.setattr(hashes, "Hash", Mock(side_effect=InternalError("Unknown OpenSSL error", [])))
+    assert cryptography_enforces_fips() is enforces
 
 
 def test_cryptography_without_is_fips_enabled_does_not_enforce_fips(monkeypatch):
@@ -78,7 +89,7 @@ def test_this_runners_openssl_does_not_enforce_fips():
         ("true", "false", True, True, True, "TLS certificate verification is disabled"),
         ("true", None, False, True, True, "TLS certificate verification is disabled"),
         ("true", None, True, False, True, "is on but OpenSSL does not enforce FIPS"),
-        ("true", None, True, True, False, "cryptography library's OpenSSL does not enforce FIPS"),
+        ("true", None, True, True, False, "cryptography library's OpenSSL has no working FIPS provider"),
         ("enforced", None, True, True, True, "LITELLM_FIPS_MODE='enforced' is not a boolean"),
     ],
     ids=[
