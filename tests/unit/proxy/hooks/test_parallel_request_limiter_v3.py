@@ -4378,8 +4378,11 @@ async def test_mcp_tool_call_reusing_request_slot_keeps_request_max_parallel_hea
 
 
 @pytest.mark.asyncio
-async def test_concurrent_success_callbacks_release_parallel_slot_once_when_redis_fails() -> None:
+@pytest.mark.parametrize("release_from", ["post_call", "stream_cleanup"])
+async def test_concurrent_success_callbacks_release_parallel_slot_once_when_redis_fails(release_from: str) -> None:
     from unittest.mock import AsyncMock
+
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
     api_key = hash_token("sk-concurrent-release")
     local_cache = DualCache()
@@ -4409,9 +4412,20 @@ async def test_concurrent_success_callbacks_release_parallel_slot_once_when_redi
         counter_keys=[parallel_key],
     )
     data = {"litellm_call_id": call_id}
+    logger: Final = ProxyLogging(user_api_key_cache=local_cache)
+    logger.proxy_hook_mapping["parallel_request_limiter"] = handler
 
     post_call_task = asyncio.create_task(
-        handler.async_post_call_success_hook(
+        ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
+            request=None,
+            request_data=data,
+            response=None,
+            stream_completed=True,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=logger,
+        )
+        if release_from == "stream_cleanup"
+        else handler.async_post_call_success_hook(
             data=data,
             user_api_key_dict=user_api_key_dict,
             response=ResponsesAPIResponse(
