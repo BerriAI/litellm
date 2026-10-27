@@ -68,6 +68,8 @@ from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
     AIOHTTP_CONNECTOR_LIMIT_PER_HOST,
     AIOHTTP_KEEPALIVE_TIMEOUT,
+    AIOHTTP_MAX_FIELD_SIZE,
+    AIOHTTP_MAX_LINE_SIZE,
     AIOHTTP_NEEDS_CLEANUP_CLOSED,
     AIOHTTP_TTL_DNS_CACHE,
     AUDIO_SPEECH_CHUNK_SIZE,
@@ -1465,6 +1467,8 @@ async def initialize_shared_aiohttp_session() -> "ClientSession | None":
             connector=connector,
             cookie_jar=DummyCookieJar(),
             trace_configs=[build_pool_wait_trace_config()],
+            max_field_size=AIOHTTP_MAX_FIELD_SIZE,
+            max_line_size=AIOHTTP_MAX_LINE_SIZE,
         )
 
         verbose_proxy_logger.info(
