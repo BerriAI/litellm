@@ -112,7 +112,13 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     with (
         gateway_from_environment() as shared,
         wire_server(respond) as wire,
-        owned_proxy(shared, directory, {}, config=write_config(directory, wire.url), workers=1) as gateway,
+        owned_proxy(
+            shared,
+            directory,
+            {"LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS": "true"},
+            config=write_config(directory, wire.url),
+            workers=1,
+        ) as gateway,
     ):
         yield Rig(gateway, wire)
 

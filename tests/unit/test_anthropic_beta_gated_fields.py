@@ -27,7 +27,7 @@ BOUND_THINKING: Final = {
 }
 
 
-def _system_turn() -> dict:
+def _system_turn() -> dict[str, object]:
     return {
         "role": "system",
         "clear_at": "end_turn",
@@ -117,9 +117,7 @@ def test_per_turn_control_beta_also_unlocks_system_output_config():
         ).messages
         is messages
     )
-    assert strip_beta_gated_system_messages(messages, frozenset()).messages == [
-        {"role": "system", "content": "terse"}
-    ]
+    assert strip_beta_gated_system_messages(messages, frozenset()).messages == [{"role": "system", "content": "terse"}]
 
 
 def test_system_message_emptied_by_the_strip_is_dropped():
@@ -137,7 +135,12 @@ def test_system_message_emptied_by_the_strip_is_dropped():
 
 
 def test_request_strip_replaces_only_thinking_and_messages_and_keeps_the_dict_otherwise():
-    request = {"model": "claude", "thinking": dict(BOUND_THINKING), "messages": [_system_turn()], "max_tokens": 5}
+    request: Final = {
+        "model": "claude",
+        "thinking": dict(BOUND_THINKING),
+        "messages": [_system_turn()],
+        "max_tokens": 5,
+    }
     result = strip_beta_gated_request_fields(request, frozenset())
     assert result.request == {
         "model": "claude",
