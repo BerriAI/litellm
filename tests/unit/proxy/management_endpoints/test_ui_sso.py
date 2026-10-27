@@ -34,6 +34,7 @@ from litellm.proxy.management_endpoints.ui_sso import (
     normalize_email,
     process_sso_jwt_access_token,
     read_return_to_cookie,
+    role_from_role_mappings,
     sso_lookup_user_ids,
 )
 from litellm.types.proxy.management_endpoints.ui_sso import (
@@ -481,6 +482,27 @@ def test_get_microsoft_callback_response_applies_role_mappings(
 
     assert isinstance(result, CustomOpenID)
     assert result.user_role == expected_role
+
+
+@pytest.mark.parametrize(
+    ("claims", "expected_role"),
+    [
+        pytest.param({"groups": ["grp-b", "grp-a"]}, LitellmUserRoles.PROXY_ADMIN, id="list"),
+        pytest.param({"groups": "grp-b, grp-a"}, LitellmUserRoles.PROXY_ADMIN, id="comma-separated-string"),
+        pytest.param({"groups": 42}, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, id="single-non-string-value"),
+        pytest.param({"groups": " , "}, LitellmUserRoles.INTERNAL_USER, id="blank-string-uses-default-role"),
+        pytest.param({"groups": "grp-z"}, LitellmUserRoles.INTERNAL_USER, id="no-match-uses-default-role"),
+    ],
+)
+def test_role_from_role_mappings_reads_every_group_claim_shape(claims, expected_role):
+    role_mappings = RoleMappings(
+        provider="microsoft",
+        group_claim="groups",
+        default_role=LitellmUserRoles.INTERNAL_USER,
+        roles={LitellmUserRoles.PROXY_ADMIN: ["grp-a"], LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY: ["42"]},
+    )
+
+    assert role_from_role_mappings(claims, role_mappings) == expected_role
 
 
 def test_get_google_callback_response():
