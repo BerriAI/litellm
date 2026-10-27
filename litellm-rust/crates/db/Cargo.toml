@@ -6,5 +6,12 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+chrono.workspace = true
+macro_rules_attribute.workspace = true
 serde.workspace = true
 sqlx.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true
+tokio.workspace = true
