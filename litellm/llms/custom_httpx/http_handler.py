@@ -1131,12 +1131,15 @@ class AsyncHTTPHandler:
     def _aiohttp_session_bound_elsewhere(self, loop: asyncio.AbstractEventLoop) -> bool:
         """True when the wrapped aiohttp session is bound to a loop other than
         ``loop`` — awaiting ``aclose()`` here would touch that loop's internals."""
-        from litellm.llms.custom_httpx.aiohttp_transport import (
-            LiteLLMAiohttpTransport,
-        )
-
+        # 2026-10-24 patch 0006: class-name check instead of isinstance -- the
+        # original function-level import always raises ImportError when the
+        # handler is GC'd during interpreter shutdown (sys.meta_path is already
+        # None), which silently aborted the disposal inside __del__'s bare
+        # except and let aiohttp fire "Unclosed client session"/"Unclosed
+        # connector" warnings at GC. The instance is in hand, so its runtime
+        # class carries all the information isinstance needed.
         transport: Final = getattr(self._client, "_transport", None)
-        if not isinstance(transport, LiteLLMAiohttpTransport):
+        if type(transport).__name__ != "LiteLLMAiohttpTransport":
             return False
         session: Final = transport.client
         if not isinstance(session, ClientSession) or session.closed:
@@ -1154,12 +1157,15 @@ class AsyncHTTPHandler:
         "Unclosed client session" / "Unclosed connector" warnings fire at
         garbage collection.
         """
-        from litellm.llms.custom_httpx.aiohttp_transport import (
-            LiteLLMAiohttpTransport,
-        )
-
+        # 2026-10-24 patch 0006: class-name check instead of the function-level
+        # import -- that import always raises ImportError when this runs during
+        # interpreter shutdown (sys.meta_path is already None), silently
+        # aborting the disposal inside __del__'s bare except and leaving the
+        # wrapped aiohttp session to fire "Unclosed client session" /
+        # "Unclosed connector" warnings at GC. The instance is in hand, so its
+        # runtime class carries all the information isinstance needed.
         transport: Final = getattr(self._client, "_transport", None)
-        if not isinstance(transport, LiteLLMAiohttpTransport):
+        if type(transport).__name__ != "LiteLLMAiohttpTransport":
             return
         # A shared session (e.g. the proxy's) is never this handler's to close.
         if not getattr(transport, "_owns_session", False):
