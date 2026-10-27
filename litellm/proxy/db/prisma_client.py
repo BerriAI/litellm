@@ -1135,7 +1135,7 @@ class PrismaManager:
             ProxyExtrasDBManager,  # pyright: ignore[reportUnknownVariableType]  # litellm-proxy-extras is an optional install
         )
 
-        refusal: object = ProxyExtrasDBManager.preflight_report(use_migrate=use_migrate)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # litellm-proxy-extras is an optional install
+        refusal: Final[object] = ProxyExtrasDBManager.preflight_report(use_migrate=use_migrate)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # litellm-proxy-extras is an optional install
         return refusal if isinstance(refusal, str) else None
 
     @staticmethod
