@@ -213,6 +213,44 @@ class TestOptionallyHandleAnthropicOAuth:
         assert returned_api_key is None
         assert "authorization" not in updated_headers
 
+    def test_optionally_handle_anthropic_oauth_scopes_to_anthropic_host(self):
+        """OAuth tokens should only be forwarded if api_base points to api.anthropic.com."""
+        from litellm.llms.anthropic.common_utils import (
+            optionally_handle_anthropic_oauth,
+        )
+
+        headers = {"Authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
+
+        # Test completely different hostname
+        updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(
+            headers, None, api_base="https://custom-gateway.com/v1"
+        )
+        assert extracted_api_key is None
+        assert "authorization" not in updated_headers
+
+        # Test lookalike hostname
+        updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(
+            headers, FAKE_OAUTH_TOKEN, api_base="https://api.anthropic.com.attacker.com/v1"
+        )
+        assert extracted_api_key is None
+        assert "authorization" not in updated_headers
+
+        # Test configured deployment api_key is preserved for custom gateway
+        custom_headers = {"Authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
+        updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(
+            custom_headers, "sk-configured-deploy-key", api_base="https://custom-gateway.com/v1"
+        )
+        assert extracted_api_key == "sk-configured-deploy-key"
+        assert "authorization" not in updated_headers
+
+        # Test plaintext HTTP to api.anthropic.com is rejected for TLS security
+        http_headers = {"Authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
+        updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(
+            http_headers, "sk-configured-deploy-key", api_base="http://api.anthropic.com"
+        )
+        assert extracted_api_key == "sk-configured-deploy-key"
+        assert "authorization" not in updated_headers
+
 
 class TestGetAnthropicHeaders:
     """Tests for get_anthropic_headers method with OAuth support."""
@@ -4522,3 +4560,17 @@ def test_shared_legacy_thinking_translation_drops_a_non_numeric_budget_under_dro
     )
 
     assert optional_params == {"thinking": {"type": "adaptive"}}
+
+
+def test_optionally_handle_anthropic_oauth_invalid_url():
+    """Test that invalid URLs don't break OAuth validation and default to non-Anthropic."""
+    from litellm.llms.anthropic.common_utils import optionally_handle_anthropic_oauth
+
+    headers = {"Authorization": "Bearer sk-ant-oat01-token"}
+    api_key = "sk-ant-oat01-token"
+
+    # Test with a URL that will trigger ValueError in urllib.parse.urlparse
+    updated_headers, updated_api_key = optionally_handle_anthropic_oauth(headers, api_key, api_base="http://[::1")
+
+    assert "Authorization" not in {k.lower(): v for k, v in updated_headers.items()}
+    assert updated_api_key is None

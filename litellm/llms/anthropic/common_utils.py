@@ -358,7 +358,9 @@ def merge_anthropic_beta_headers(existing: str | Sequence[str] | None, new_beta:
     return ",".join(sorted(betas))
 
 
-def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tuple[dict, str | None]:
+def optionally_handle_anthropic_oauth(
+    headers: dict, api_key: str | None, api_base: str | None = None
+) -> tuple[dict, str | None]:
     """
     Handle Anthropic OAuth token detection and header setup.
 
@@ -368,33 +370,55 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tup
     Args:
         headers: Request headers dict
         api_key: Current API key (may be None)
+        api_base: Resolved api_base (may be None)
 
     Returns:
         Tuple of (updated headers, api_key)
     """
     # Check Authorization header (passthrough / forwarded requests)
     auth_header: Final = next((value for name, value in headers.items() if name.lower() == "authorization"), "")
+
+    from urllib.parse import urlparse
+
+    def _is_anthropic_host(url: object) -> bool:
+        if not isinstance(url, str) or not url:
+            return True
+        normalized_url: Final = url if "://" in url else f"https://{url}"
+        try:
+            parsed: Final = urlparse(normalized_url)
+        except ValueError:
+            return False
+        else:
+            return parsed.scheme == "https" and parsed.hostname == "api.anthropic.com"
+
+    is_anthropic: Final = _is_anthropic_host(api_base)
+
     if auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
-        api_key = auth_header.removeprefix("Bearer ")
-        for name in tuple(
-            header_name for header_name in headers if header_name.lower() in ("x-api-key", "authorization")
-        ):
+        pop_targets: Final = ("x-api-key", "authorization") if is_anthropic else ("authorization",)
+        for name in tuple(header_name for header_name in headers if header_name.lower() in pop_targets):
             headers.pop(name)
-        headers["authorization"] = auth_header
-        headers["anthropic-beta"] = merge_anthropic_beta_headers(
-            headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER
-        )
-        headers["anthropic-dangerous-direct-browser-access"] = "true"
+        if is_anthropic:
+            api_key = auth_header.removeprefix("Bearer ")  # rebind-ok: use oauth token as api_key for anthropic host
+            headers["authorization"] = auth_header
+            headers["anthropic-beta"] = merge_anthropic_beta_headers(
+                headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER
+            )
+            headers["anthropic-dangerous-direct-browser-access"] = "true"
+        elif api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX):
+            api_key = None  # rebind-ok: drop oauth token when routing to non-anthropic host
         return headers, api_key
     # Check api_key directly (standard chat/completion flow)
     if api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX):
-        for name in tuple(header_name for header_name in headers if header_name.lower() == "x-api-key"):
-            headers.pop(name)
-        headers["authorization"] = f"Bearer {api_key}"
-        headers["anthropic-beta"] = merge_anthropic_beta_headers(
-            headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER
-        )
-        headers["anthropic-dangerous-direct-browser-access"] = "true"
+        if is_anthropic:
+            for name in tuple(header_name for header_name in headers if header_name.lower() == "x-api-key"):
+                headers.pop(name)
+            headers["authorization"] = f"Bearer {api_key}"
+            headers["anthropic-beta"] = merge_anthropic_beta_headers(
+                headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER
+            )
+            headers["anthropic-dangerous-direct-browser-access"] = "true"
+        else:
+            api_key = None  # rebind-ok: drop oauth token when routing to non-anthropic host
     return headers, api_key
 
 
@@ -1331,7 +1355,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             params_mapping is not None and params_mapping.get("use_bearer_for_custom_base", False)
         )
         # Check for Anthropic OAuth token in headers
-        headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
+        headers, api_key = optionally_handle_anthropic_oauth(
+            headers=headers,
+            api_key=api_key,
+            api_base=api_base,  # pyright: ignore[reportUnknownArgumentType]  # params_mapping is untyped dict
+        )
         api_key = AnthropicModelInfo.get_api_key(api_key)
         # Resolve auth_token from ANTHROPIC_AUTH_TOKEN if api_key is not set
         auth_token: str | None = None
