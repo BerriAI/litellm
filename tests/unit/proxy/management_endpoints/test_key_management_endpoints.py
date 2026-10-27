@@ -1,30 +1,29 @@
 import asyncio
+import inspect
+import json
 from collections.abc import Mapping
 from contextlib import ExitStack
-from typing import Final
-from types import SimpleNamespace
-import json
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
-import litellm
 import pytest
 import yaml
-from fastapi.testclient import TestClient
-
-from unittest.mock import AsyncMock, MagicMock, patch
-
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from pydantic import JsonValue
 
-import inspect
-
+import litellm
+from litellm.constants import PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.proxy._types import (
-    GenerateKeyResponse,
     GenerateKeyRequest,
+    GenerateKeyResponse,
     KeyManagementRoutes,
-    NewUserRequest,
     LiteLLM_BudgetTable,
     LiteLLM_ObjectPermissionBase,
     LiteLLM_OrganizationTable,
@@ -36,46 +35,42 @@ from litellm.proxy._types import (
     LiteLLMKeyType,
     LitellmUserRoles,
     Member,
+    NewUserRequest,
     ProxyException,
     RegenerateKeyRequest,
     ResetSpendRequest,
     UpdateKeyRequest,
 )
-from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.proxy.auth.auth_checks import (
     delete_cache_key_object,
     jwt_key_mapping_cache_key,
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, project_cache_key
-from litellm.constants import PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy.management_endpoints.key_management_endpoints import (
+    KeyProjectBindingError,
     _check_key_project_team,
     _check_key_project_team_on_mutation,
     _check_org_key_limits,
     _check_project_key_limits,
     _check_team_key_limits,
-    _is_team_key,
-    _key_generation_required_param_check,
-    _personal_key_generation_check,
-    _team_key_generation_check,
     _common_key_generation_helper,
-    _member_key_request,
-    _team_admin_requests_member_key,
-    KeyProjectBindingError,
     _effective_key_after_update,
     _effective_key_for_generate,
     _enforce_custom_key_policy,
     _enforce_upperbound_key_params,
     _execute_virtual_key_regeneration,
     _get_and_validate_existing_key,
-    list_key_helper,
-    persist_deleted_verification_tokens,
+    _is_team_key,
+    _key_generation_required_param_check,
+    _member_key_request,
+    _personal_key_generation_check,
     _process_single_key_update,
     _requested_end_user_budget_id,
     _save_deleted_verification_token_records,
+    _team_admin_requests_member_key,
+    _team_key_generation_check,
     _transform_verification_tokens_to_deleted_records,
     _validate_end_user_budget_id_change,
     _validate_max_budget,
@@ -90,7 +85,9 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_service_account_key_fn,
     key_aliases,
     key_generation_check,
+    list_key_helper,
     list_keys,
+    persist_deleted_verification_tokens,
     prepare_key_update_data,
     prepare_metadata_fields,
     reset_key_spend_fn,
@@ -837,7 +834,7 @@ async def test_update_key_grandfathers_existing_mcp_servers(monkeypatch):
     }
     mock_mgr.get_allow_all_keys_server_ids.return_value = []
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         mock_mgr,
     )
 
@@ -10955,10 +10952,10 @@ class TestValidateKeyAliasFormat:
         _validate_key_alias_format("team/user@example.com")
 
     def test_validate_key_alias_format_invalid(self, monkeypatch):
+        from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             _validate_key_alias_format,
         )
-        from litellm.proxy._types import ProxyException
 
         monkeypatch.setattr(litellm, "enable_key_alias_format_validation", True)
         invalid_aliases = [
@@ -12798,13 +12795,13 @@ class TestKeyAliasSkipValidationOnUnchanged:
         Updating a key without changing its key_alias should skip format
         validation — even if the alias wouldn't pass current rules.
         """
+        # Temporarily make the regex reject '@' to simulate stricter rules
+        import re
+
+        from litellm.proxy.management_endpoints import key_management_endpoints as mod
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             _validate_key_alias_format,
         )
-
-        # Temporarily make the regex reject '@' to simulate stricter rules
-        import re
-        from litellm.proxy.management_endpoints import key_management_endpoints as mod
 
         original_pattern = mod._KEY_ALIAS_PATTERN
         mod._KEY_ALIAS_PATTERN = re.compile(
@@ -20431,7 +20428,6 @@ async def test_regenerate_key_repoints_access_group_assigned_key_ids(monkeypatch
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _execute_virtual_key_regeneration,
     )
-
     from litellm.proxy.utils import hash_token
 
     new_token_hash = hash_token("sk-newtoken1234ab12")

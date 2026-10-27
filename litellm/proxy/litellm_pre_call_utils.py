@@ -2525,7 +2525,7 @@ async def add_litellm_data_to_request(
         _headers,
         allow_client_message_redaction_opt_out=_allow_client_message_redaction_opt_out,
     )
-    from litellm.proxy._experimental.mcp_server.utils import upstream_credential_headers
+    from litellm.proxy.mcp_server.utils import upstream_credential_headers
 
     _mcp_credential_headers: Final = upstream_credential_headers(_headers)
     _logging_safe_headers: Final = redact_credential_headers(
