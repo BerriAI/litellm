@@ -1546,6 +1546,34 @@ async def test_idempotent_disconnect_is_replayed(method: str) -> None:
         await handler.close()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
+async def test_connection_error_not_resent_when_retries_disabled(method: str, monkeypatch) -> None:
+    first_attempts: Final[list[httpx.Request]] = []  # mutable-ok: async closure capture buffer
+    resent: Final[list[httpx.Request]] = []  # mutable-ok: async closure capture buffer
+
+    async def raise_connection_error(request: httpx.Request) -> httpx.Response:
+        first_attempts.append(request)
+        raise httpx.ConnectError("connection reset after the request was written", request=request)
+
+    async def capture_resend(request: httpx.Request) -> httpx.Response:
+        resent.append(request)
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_connection_error))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_resend))
+    monkeypatch.setattr(litellm, "num_retries", 0)
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
+
+        with pytest.raises(httpx.ConnectError):
+            await getattr(handler, method)("https://api.example.com/runs/batch", content=b'{"a":1}')
+
+        assert len(first_attempts) == 1
+        assert resent == []
+        await handler.close()
+
+
 @pytest.fixture
 def forward_proxy_server():
     """Plain HTTP forward proxy that records the absolute URIs it is asked to fetch."""
