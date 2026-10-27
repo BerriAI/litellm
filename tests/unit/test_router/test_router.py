@@ -24791,6 +24791,24 @@ def test_no_rpm_cache_read_when_no_deployment_has_rpm():
     assert get_cache_calls == [], f"Expected zero cache reads, got {get_cache_calls}"
 
 
+def test_rpm_helper_ignores_deployments_that_cannot_carry_rpm():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test",
+                "litellm_params": {"model": "gpt-5-mini", "api_key": "sk-test"},
+                "model_info": {"id": "plain"},
+            },
+        ],
+        set_verbose=False,
+        enable_pre_call_checks=True,
+    )
+
+    assert router._deployment_configures_rpm(["not", "a", "deployment"]) is False
+    assert router._deployment_configures_rpm({"litellm_params": None}) is False
+    assert router._deployment_configures_rpm({"litellm_params": {"rpm": 5}}) is True
+
+
 def test_rpm_cache_still_read_and_enforced_when_a_deployment_has_rpm():
     router = Router(
         model_list=[
