@@ -2,3 +2,9 @@
 /litellm/model_prices_and_context_window_backup.json @mateo-berri @ryan-crabbe-berri @kerry-berri @joshua-berri
 /helm/ @yassin-berriai
 /terraform/ @yassin-berriai
+
+# LiteLLM_SpendLogs schema and migration review (owner reviews every schema.prisma copy and every migration)
+/schema.prisma @kerry-berri
+/litellm/proxy/schema.prisma @kerry-berri
+/litellm-proxy-extras/litellm_proxy_extras/schema.prisma @kerry-berri
+/litellm-proxy-extras/litellm_proxy_extras/migrations/ @kerry-berri
