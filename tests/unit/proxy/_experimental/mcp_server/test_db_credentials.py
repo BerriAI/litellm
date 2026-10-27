@@ -1736,6 +1736,7 @@ async def test_enforcement_rejects_preexisting_unverified_credential():
 @pytest.mark.asyncio
 async def test_refresh_identity_rejection_returns_reauthentication_without_persisting(monkeypatch):
     from fastapi import HTTPException
+
     from litellm.proxy._experimental.mcp_server import db as module
 
     validator = AsyncMock(side_effect=HTTPException(status_code=403, detail="oauth_principal_mismatch"))
@@ -1816,7 +1817,7 @@ async def test_saved_cimd_grant_refreshes_from_encrypted_storage_on_a_fresh_repl
 
     from litellm.proxy import proxy_server
     from litellm.proxy._experimental.mcp_server import db as db_module
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _store_per_user_token_server_side
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import store_per_user_token_server_side
     from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_store import (
         LazyPerUserOAuthTokenStore,
     )
@@ -1833,7 +1834,7 @@ async def test_saved_cimd_grant_refreshes_from_encrypted_storage_on_a_fresh_repl
         oauth2_flow="authorization_code", authorization_url="https://idp.example.com/authorize",
         token_url="https://idp.example.com/token",
     )
-    await _store_per_user_token_server_side(
+    await store_per_user_token_server_side(
         server, "alice", {"access_token": "old", "refresh_token": "old-refresh", "expires_in": -10},
         cimd_client_id=identity,
     )

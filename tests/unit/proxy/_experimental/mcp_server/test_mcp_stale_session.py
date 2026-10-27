@@ -666,7 +666,15 @@ async def test_per_user_oauth_missing_stored_token_returns_preemptive_401():
     assert mock_handle_request.await_count == 0
     assert exc_info.value.status_code == 401
     assert "www-authenticate" in exc_info.value.headers
-    assert "Bearer authorization_uri=" in exc_info.value.headers["www-authenticate"]
+    challenge = exc_info.value.headers["www-authenticate"]
+    assert challenge.startswith(
+        'Bearer resource_metadata="http://localhost:8000/.well-known/oauth-protected-resource/mcp'
+        '?mcp_server=repro_oauth_server"'
+    )
+    assert (
+        'authorization_uri="http://localhost:8000/.well-known/oauth-authorization-server/repro_oauth_server"'
+        in challenge
+    )
 
 
 @pytest.mark.asyncio
@@ -1827,9 +1835,7 @@ async def test_streamable_http_skips_preflight_for_disabled_methods(  # test-qua
         "tp_server",
         extra_headers=request_headers,
     )
-    body: Final[bytes] = json.dumps(
-        {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
-    ).encode()
+    body: Final[bytes] = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
     receive: Final = AsyncMock(return_value={"type": "http.request", "body": body, "more_body": False})
     send: Final = AsyncMock()
     user_auth: Final = UserAPIKeyAuth()

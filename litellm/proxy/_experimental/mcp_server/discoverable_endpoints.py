@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 
 import httpx
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -44,6 +44,7 @@ from litellm.proxy._experimental.mcp_server.bridge_token_flow import (  # noqa: 
     prepare_bridge_mint,
     prepare_bridge_refresh,
     reload_active_user_by_id,
+    request_carries_litellm_credential,
 )
 from litellm.proxy._experimental.mcp_server.catalog import public_catalog_operation
 from litellm.proxy._experimental.mcp_server.faults import (
@@ -98,6 +99,7 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     needs_cimd_discovery,
     oauth_client_registration_matches,
     resolve_upstream_resource,
+    seal_relay_claim_token,
     validate_trusted_redirect_uri,
     well_known_root_suffix,
 )
@@ -670,7 +672,7 @@ def _validate_token_response(
             )
 
 
-async def _store_per_user_token_server_side(
+async def store_per_user_token_server_side(
     server: MCPServer,
     user_id: str,
     token_response: dict[str, Any],
@@ -722,13 +724,13 @@ async def _store_per_user_token_server_side(
             **({"cimd_client_id": cimd_client_id} if cimd_client_id is not None else {}),
         )
         verbose_logger.info(
-            "_store_per_user_token_server_side: stored token for user=%s server=%s",
+            "store_per_user_token_server_side: stored token for user=%s server=%s",
             user_id,
             server.server_id,
         )
     except Exception as exc:
         verbose_logger.warning(
-            "_store_per_user_token_server_side: DB storage failed for user=%s server=%s: %s",
+            "store_per_user_token_server_side: DB storage failed for user=%s server=%s: %s",
             user_id,
             server.server_id,
             exc,
@@ -1536,7 +1538,7 @@ async def exchange_token_with_server(
                     else await authorize_oauth_credential_request(request, resolved_server.server_id) == user_id
                 )
                 if can_store:
-                    await _store_per_user_token_server_side(
+                    await store_per_user_token_server_side(
                         server=resolved_server,
                         user_id=user_id,
                         token_response=token_response,
@@ -1599,6 +1601,22 @@ async def exchange_token_with_server(
     if effective_scope is not None:
         result["scope"] = effective_scope
 
+    anonymous_relay_token: Final = (
+        resolved_server.needs_user_oauth_token
+        and resolved_server.is_gateway_managed_oauth2
+        and resolved_user_id is None
+        and not request_carries_litellm_credential(request)
+    )
+    claim_grant: Final = TypeAdapter[dict[str, object]](dict[str, object]).validate_python(
+        result if "refresh_token" in result or not refresh_token else {**result, "refresh_token": refresh_token}
+    )
+    claim_token: Final = (
+        seal_relay_claim_token(resolved_server.server_id, claim_grant, int(time.time()), cimd_client_id=cimd_client_id)
+        if anonymous_relay_token
+        else None
+    )
+    if claim_token is not None:
+        return JSONResponse({**result, "access_token": claim_token}, headers=TOKEN_NO_CACHE_HEADERS)
     # RFC 6749 §5.1: token responses must not be cached.
     return JSONResponse(result, headers=TOKEN_NO_CACHE_HEADERS)
 
@@ -2975,6 +2993,14 @@ def is_network_error(exc: Exception) -> bool:
     return isinstance(exc, httpx.TransportError)
 
 
+def _resource_scopes(mcp_server: MCPServer | None) -> tuple[str, ...]:
+    return tuple(
+        value
+        for value in (mcp_server.scopes or () if mcp_server else ())
+        if value != "offline_access" or not mcp_server or not mcp_server.is_gateway_managed_oauth2
+    )
+
+
 @public_catalog_operation
 async def _build_oauth_protected_resource_response(
     request: Request,
@@ -3079,11 +3105,7 @@ async def _build_oauth_protected_resource_response(
     if obo_response is not None:
         return obo_response
 
-    resource_scopes: Final = [
-        value
-        for value in (mcp_server.scopes or () if mcp_server else ())
-        if value != "offline_access" or not mcp_server or not mcp_server.is_gateway_managed_oauth2
-    ]
+    resource_scopes: Final = list(_resource_scopes(mcp_server))
     if mcp_server is not None and mcp_server.advertises_gateway_authorization_server:
         return {
             "authorization_servers": [f"{request_base_url}/mcp"],
@@ -3172,11 +3194,29 @@ def _build_aggregate_protected_resource_response(request: Request) -> dict:
     discovery entry point (same pattern as the per-server documents, which
     advertise ``{base}/{server_name}``)."""
     request_base_url: Final = get_request_base_url(request)
+    relay_server_name: Final = request.query_params.get("mcp_server") or ""
+    relay_server: Final = _keyed_relay_server(request, relay_server_name)
+    authorization_server: Final = (
+        f"{request_base_url}/{quote(relay_server_name, safe='')}" if relay_server else f"{request_base_url}/mcp"
+    )
     return {
-        "authorization_servers": [f"{request_base_url}/mcp"],
+        "authorization_servers": [authorization_server],
         "resource": f"{request_base_url}/mcp",
-        "scopes_supported": _aggregate_header_scopes(request),
+        "scopes_supported": list(_resource_scopes(relay_server)) if relay_server else _aggregate_header_scopes(request),
     }
+
+
+def _keyed_relay_server(request: Request, server_name: str | None) -> MCPServer | None:
+    """The server the keyed aggregate 401 named in ``mcp_server``, when its sign-in is the
+    gateway-managed per-user flow the per-server relay completes. Anything else keeps the plain
+    aggregate document, so an unknown or ineligible name cannot steer discovery. A server literally
+    named ``mcp`` is skipped because its one-segment issuer is the aggregate sign-in."""
+    if not server_name or server_name == "mcp":
+        return None
+    server: Final = _resolve_mcp_server_by_name_or_id(server_name, IPAddressUtils.get_mcp_client_ip(request))
+    if server is None or not (server.is_gateway_managed_oauth2 and server.needs_user_oauth_token):
+        return None
+    return server
 
 
 def _aggregate_header_scopes(request: Request) -> tuple[str, ...]:

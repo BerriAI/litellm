@@ -24,7 +24,9 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.types import Message, Receive, Scope, Send
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
+from litellm.caching.caching import DualCache
 from litellm.constants import (
     MCP_ADMISSION_BODY_PEEK_TIMEOUT_SECONDS,
     MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH,
@@ -47,6 +49,7 @@ from litellm.proxy._experimental.mcp_server.client_allowlist import (
 )
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
+    store_per_user_token_server_side,
 )
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPUpstreamAuthError,
@@ -68,8 +71,11 @@ from litellm.proxy._experimental.mcp_server.mcp_debug import (
     MCPDebug,
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
+    RELAY_CLAIM_REDEEM_WINDOW_SECONDS,
+    get_keyed_aggregate_resource_metadata_url,
     get_passthrough_www_authenticate,
     get_route_relative_request_path,
+    open_relay_claim_token,
     redact_mcp_resource_url,
     well_known_root_suffix,
 )
@@ -90,6 +96,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
     LITELLM_MCP_SERVER_VERSION,
+    MCP_OAUTH_TOKENS_TARGET,
     asgi_scope_fields,
     merge_mcp_headers,
 )
@@ -1838,7 +1845,85 @@ if MCP_AVAILABLE:
 
     from litellm.proxy._experimental.mcp_server.catalog import catalog_operation
 
+    @with_service_target(MCP_OAUTH_TOKENS_TARGET)
+    async def _reserve_relay_claim(cache: DualCache, redeemed_key: str, ttl: int) -> bool:
+        """A claim is reserved with one atomic increment on the shared cache when there is one, so a
+        concurrent request on any worker is refused. A shared cache that cannot answer refuses the
+        claim rather than falling back to this worker's view, and the reservation is released again
+        when the save does not land."""
+        try:
+            count: Final = (
+                await cache.redis_cache.async_increment(redeemed_key, 1, ttl=ttl)  # pyright: ignore[reportUnknownMemberType]  # RedisCache is untyped
+                if cache.redis_cache is not None
+                else await cache.in_memory_cache.async_increment(redeemed_key, 1, ttl=ttl)  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
+            )
+        except Exception:  # noqa: BLE001  # any shared-cache failure must refuse the claim, never redeem it twice
+            verbose_logger.warning("relay claim: the shared cache could not reserve the claim, so it is refused")
+            return False
+        return count <= 1
+
+    @with_service_target(MCP_OAUTH_TOKENS_TARGET)
+    async def _release_relay_claim(cache: DualCache, redeemed_key: str) -> None:
+        await cache.async_delete_cache(redeemed_key)  # pyright: ignore[reportUnknownMemberType]  # DualCache is untyped
+
     @catalog_operation(lambda: operations.global_mcp_server_manager)
+    async def _claim_relay_token_for_key(
+        scope: Scope,
+        server: MCPServer,
+        oauth2_headers: Mapping[str, str] | None,
+        user_api_key_auth: UserAPIKeyAuth | None,
+    ) -> bool:
+        """A keyed client whose OAuth fetches carry no litellm key finishes the per-server relay
+        holding a sealed claim token instead of the upstream credential. The key on this request
+        is the owner the relay could not see, so vault the credential for it under the same write
+        policy the token endpoint applies, then let the resolver confirm it can serve the egress."""
+        from litellm.proxy._experimental.mcp_server.bridge_token_flow import (  # noqa: PLC0415  # proxy import cycle
+            can_store_oauth_credential,
+        )
+        from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415  # proxy import cycle
+
+        claim: Final = open_relay_claim_token(oauth2_headers.get("Authorization") if oauth2_headers else None)
+        now: Final = int(time.time())
+        if (
+            claim is None
+            or claim.mcp_server_id != server.server_id
+            or user_api_key_auth is None
+            or not claim.is_redeemable(now)
+        ):
+            return False
+        redeemed_key: Final = f"mcp_relay_claim_redeemed:{claim.claim_id}"
+        if not await _reserve_relay_claim(
+            user_api_key_cache, redeemed_key, ttl=max(1, claim.issued_at + RELAY_CLAIM_REDEEM_WINDOW_SECONDS - now)
+        ):
+            return False
+        try:
+            user_id: Final = user_api_key_auth.user_id
+            if not user_id or not await can_store_oauth_credential(
+                StarletteRequest(scope), user_api_key_auth, server.server_id
+            ):
+                verbose_logger.warning(
+                    "relay claim: the key on this request cannot store a per-user OAuth token for server=%s, "
+                    "so the credential stays unclaimed and the client is challenged again",
+                    server.server_id,
+                )
+                await _release_relay_claim(user_api_key_cache, redeemed_key)
+                return False
+            await store_per_user_token_server_side(
+                server=server,
+                user_id=user_id,
+                token_response=dict(claim.token_response(now)),
+                **({"cimd_client_id": claim.cimd_client_id} if claim.cimd_client_id is not None else {}),
+                requested_scope=claim.scope,
+            )
+            await operations.global_mcp_server_manager.invalidate_user_oauth_token_cache(user_id, server.server_id)
+            vaulted: Final = await operations.global_mcp_server_manager.has_user_oauth_token(server, user_api_key_auth)
+        except BaseException:
+            await _release_relay_claim(user_api_key_cache, redeemed_key)
+            raise
+        if not vaulted:
+            await _release_relay_claim(user_api_key_cache, redeemed_key)
+        return vaulted
+
     async def _raise_preemptive_401_for_unauthenticated_servers(
         scope: Scope,
         mcp_servers: list[str] | None,
@@ -1902,6 +1987,8 @@ if MCP_AVAILABLE:
                     # authorization server is the gateway itself, vaulting via the
                     # authorize interlude); the per-server relay advertised below
                     # cannot vault without a litellm key on its token request.
+                    if await _claim_relay_token_for_key(scope, server, oauth2_headers, user_api_key_auth):
+                        continue
                     if await operations.global_mcp_server_manager.has_user_oauth_token(server, user_api_key_auth):
                         continue
 
@@ -1928,12 +2015,20 @@ if MCP_AVAILABLE:
                         _as_url = f"{as_metadata_root}/mcp/{server_name}"
                     else:
                         _as_url = f"{as_metadata_root}/{server_name}"
-                    authorization_uri = f'Bearer authorization_uri="{_as_url}"'
+                    authorization_uri = f'authorization_uri="{_as_url}"'
+                    # On the aggregate route the per-server relay is also reachable through RFC 9728
+                    # resource_metadata, the only hint standard clients follow.
+                    named_route = _path.startswith((f"/mcp/{server_name}", f"/{server_name}/"))
+                    resource_metadata = (
+                        ""
+                        if named_route
+                        else f'resource_metadata="{get_keyed_aggregate_resource_metadata_url(scope, server_name)}", '
+                    )
 
                     raise HTTPException(
                         status_code=401,
                         detail="Unauthorized",
-                        headers={"www-authenticate": authorization_uri},
+                        headers={"www-authenticate": f"Bearer {resource_metadata}{authorization_uri}"},
                     )
 
                 if not oauth2_headers:

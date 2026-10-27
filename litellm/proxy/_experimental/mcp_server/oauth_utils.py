@@ -3,6 +3,7 @@
 
 import os
 import re
+import secrets
 from collections.abc import Mapping
 from dataclasses import dataclass
 from ipaddress import ip_address
@@ -11,6 +12,7 @@ from typing import TYPE_CHECKING, Final, NoReturn
 from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse, urlsplit, urlunparse, urlunsplit
 
 from fastapi import HTTPException, Request
+from pydantic import ConfigDict, Field, ValidationError
 from starlette.types import Scope
 
 from litellm._logging import verbose_logger
@@ -23,7 +25,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_s
     GOOGLE_REFRESH_TOKEN_PARAMS,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper, get_salt_key
 from litellm.proxy.middleware.per_request_root_path_middleware import get_request_root_path
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -320,6 +324,124 @@ def get_passthrough_www_authenticate(
     )
     error_attr: Final = 'error="invalid_token", ' if invalid_token else ""
     return f'Bearer {error_attr}resource_metadata="{resource_metadata_url}"'
+
+
+def get_keyed_aggregate_resource_metadata_url(scope: Scope, server_name: str) -> str:
+    """The aggregate protected-resource metadata URL with the selected server appended, for the
+    401 a keyed client receives on ``/mcp``. The client's OAuth fetches carry none of its MCP
+    headers, so the selection rides in the URL and the document advertises that server's relay
+    while ``resource`` stays the ``/mcp`` URL the client connected to (RFC 9728 section 3.3)."""
+    base_url: Final = get_request_base_url(Request(scope))
+    query: Final = urlencode({"mcp_server": server_name})
+    return f"{base_url}/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp?{query}"
+
+
+RELAY_CLAIM_TOKEN_PREFIX: Final = "llm_claim_"
+RELAY_CLAIM_REDEEM_WINDOW_SECONDS: Final = 900
+
+
+def is_relay_claim_bearer(authorization: str | None) -> bool:
+    if authorization is None:
+        return False
+    value: Final = authorization.strip()
+    bearer: Final = value[7:].strip() if value.lower().startswith("bearer ") else value
+    return bearer.startswith(RELAY_CLAIM_TOKEN_PREFIX)
+
+
+def carries_relay_claim(headers: Mapping[str, str] | None) -> bool:
+    """Whether the caller's ``Authorization`` is a relay claim. A claim is only ever redeemed by the
+    gateway, so it never travels to an upstream server (an aggregate request can fan the request-wide
+    ``Authorization`` out to a delegate server that would otherwise receive and could replay it)."""
+    if headers is None:
+        return False
+    return any(key.lower() == "authorization" and is_relay_claim_bearer(value) for key, value in headers.items())
+
+
+class RelayClaimToken(LiteLLMBaseModel):
+    """The upstream credential the per-server relay minted for a token request that carried no
+    litellm key, sealed so the key on the client's next ``/mcp`` request can claim it for its
+    owner. Bound to the server it was issued for; a different server's challenge ignores it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    mcp_server_id: str = Field(min_length=1)
+    access_token: str = Field(min_length=1)
+    token_type: str = "Bearer"
+    refresh_token: str | None = None
+    expires_at: int | None = None
+    scope: str | None = None
+    cimd_client_id: str | None = None
+    issued_at: int
+    claim_id: str = Field(min_length=1)
+
+    def is_redeemable(self, now: int) -> bool:
+        """A claim is redeemed right after the token exchange, so one that has outlived its upstream
+        access token or sat unredeemed past the window is refused rather than vaulted and refreshed."""
+        if self.expires_at is not None and self.expires_at <= now:
+            return False
+        return now - self.issued_at <= RELAY_CLAIM_REDEEM_WINDOW_SECONDS
+
+    def token_response(self, now: int) -> Mapping[str, object]:
+        expires_in: Final = max(self.expires_at - now, 0) if self.expires_at is not None else None
+        fields: Final = (
+            ("access_token", self.access_token),
+            ("token_type", self.token_type),
+            ("refresh_token", self.refresh_token),
+            ("expires_in", expires_in),
+            ("scope", self.scope),
+        )
+        return MappingProxyType({key: value for key, value in fields if value is not None})
+
+
+def _relay_claim_expires_at(now: int, expires_in: object) -> int | None:
+    if expires_in is None:
+        return None
+    try:
+        return now + int(float(str(expires_in)))
+    except ValueError:
+        return None
+
+
+def seal_relay_claim_token(
+    server_id: str, token_response: Mapping[str, object], now: int, cimd_client_id: str | None = None
+) -> str | None:
+    """``None`` when the gateway has no signing key, in which case the per-user vault the claim
+    feeds cannot store anything either and the upstream token goes back as issued."""
+    if get_salt_key() is None:
+        return None
+    claim: Final = RelayClaimToken(
+        mcp_server_id=server_id,
+        access_token=str(token_response["access_token"]),
+        token_type=str(token_response.get("token_type") or "Bearer"),
+        refresh_token=str(token_response["refresh_token"]) if token_response.get("refresh_token") else None,
+        expires_at=_relay_claim_expires_at(now, token_response.get("expires_in")),
+        scope=str(token_response["scope"]) if token_response.get("scope") else None,
+        cimd_client_id=cimd_client_id,
+        issued_at=now,
+        claim_id=secrets.token_urlsafe(16),
+    )
+    return RELAY_CLAIM_TOKEN_PREFIX + encrypt_value_helper(claim.model_dump_json())
+
+
+def open_relay_claim_token(authorization: str | None) -> RelayClaimToken | None:
+    if authorization is None:
+        return None
+    value: Final = authorization.strip()
+    bearer: Final = value[7:].strip() if value.lower().startswith("bearer ") else value
+    if not bearer.startswith(RELAY_CLAIM_TOKEN_PREFIX):
+        return None
+    decoded: Final = decrypt_value_helper(
+        bearer[len(RELAY_CLAIM_TOKEN_PREFIX) :],
+        "relay_claim_token",
+        exception_type="debug",
+        return_original_value=False,
+    )
+    if not isinstance(decoded, str):
+        return None
+    try:
+        return RelayClaimToken.model_validate_json(decoded)
+    except ValidationError:
+        return None
 
 
 def validate_loopback_redirect_uri(redirect_uri: str) -> None:
