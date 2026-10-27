@@ -1737,7 +1737,7 @@
       "count": 1
     },
     "prefer-const": {
-      "count": 5
+      "count": 3
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
