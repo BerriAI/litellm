@@ -423,6 +423,126 @@ class TestUseResponsesApiBridgeFlag:
         assert request.headers["authorization"] == "Bearer fake-azure-ad-token"
         assert "chat_template_kwargs" not in json.loads(request.read())
 
+    def test_bridge_rejects_a_responses_field_it_cannot_translate_when_drop_params_is_off(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    ):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        upstream: Final = _databricks_chat_upstream(respx_mock)
+
+        with pytest.raises(litellm.UnsupportedParamsError) as raised:
+            litellm.responses(
+                model="databricks/my-custom-model",
+                input="Hello",
+                max_tool_calls=5,
+                api_base="https://example.databricks.test/serving-endpoints",
+                api_key="fake-databricks-api-key",
+                num_retries=0,
+            )
+
+        assert upstream.call_count == 0, "the provider must not be called for a field the bridge cannot translate"
+        assert raised.value.status_code == 400
+        assert "max_tool_calls" in str(raised.value)
+        assert "drop_params" in str(raised.value)
+
+    @pytest.mark.parametrize("drop_params_source", ["request", "global"])
+    def test_bridge_drops_a_responses_field_it_cannot_translate_when_drop_params_is_on(
+        self, drop_params_source: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    ):
+        monkeypatch.setattr(litellm, "drop_params", drop_params_source == "global")
+        upstream: Final = _databricks_chat_upstream(respx_mock)
+
+        response: Final = litellm.responses(
+            model="databricks/my-custom-model",
+            input="Hello",
+            max_tool_calls=5,
+            chat_template_kwargs={"thinking": True},
+            api_base="https://example.databricks.test/serving-endpoints",
+            api_key="fake-databricks-api-key",
+            num_retries=0,
+            **({"drop_params": True} if drop_params_source == "request" else {}),
+        )
+
+        assert upstream.call_count == 1
+        assert json.loads(upstream.calls[0].request.read()) == {
+            "model": "my-custom-model",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "chat_template_kwargs": {"thinking": True},
+        }
+        assert response.output[0].content[0].text == "Answer"
+
+    def test_bridge_drops_a_responses_field_it_cannot_translate_when_the_deployment_sets_drop_params(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    ):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        upstream: Final = _databricks_chat_upstream(respx_mock)
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "bridged",
+                    "litellm_params": {
+                        "model": "databricks/my-custom-model",
+                        "api_base": "https://example.databricks.test/serving-endpoints",
+                        "api_key": "fake-databricks-api-key",
+                        "drop_params": True,
+                    },
+                }
+            ],
+            num_retries=0,
+        )
+
+        response: Final = router.responses(model="bridged", input="Hello", max_tool_calls=5)
+
+        assert upstream.call_count == 1
+        request_body: Final = json.loads(upstream.calls[0].request.read())
+        assert "max_tool_calls" not in request_body
+        assert request_body["messages"] == [{"role": "user", "content": "Hello"}]
+        assert response.output[0].content[0].text == "Answer"
+
+    def test_allowed_openai_params_sends_a_responses_field_through_the_bridge(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    ):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        upstream: Final = _databricks_chat_upstream(respx_mock)
+
+        litellm.responses(
+            model="databricks/my-custom-model",
+            input="Hello",
+            max_tool_calls=5,
+            allowed_openai_params=["max_tool_calls"],
+            api_base="https://example.databricks.test/serving-endpoints",
+            api_key="fake-databricks-api-key",
+            num_retries=0,
+        )
+
+        assert upstream.call_count == 1
+        assert json.loads(upstream.calls[0].request.read())["max_tool_calls"] == 5
+
+    def test_bridge_still_quietly_drops_responses_fields_it_already_handles(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    ):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        upstream: Final = _databricks_chat_upstream(respx_mock)
+
+        litellm.responses(
+            model="databricks/my-custom-model",
+            input="Hello",
+            store=False,
+            include=["reasoning.encrypted_content"],
+            truncation="auto",
+            metadata={"k": "v"},
+            background=False,
+            text={"verbosity": "low"},
+            api_base="https://example.databricks.test/serving-endpoints",
+            api_key="fake-databricks-api-key",
+            num_retries=0,
+        )
+
+        assert upstream.call_count == 1
+        assert json.loads(upstream.calls[0].request.read()) == {
+            "model": "my-custom-model",
+            "messages": [{"role": "user", "content": "Hello"}],
+        }
+
     @patch.object(import_module("litellm.responses.file_search.emulated_handler"), "_call_aresponses")
     @patch.object(import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config")
     async def test_bridge_flag_forwarded_to_file_search_emulation(self, mock_get_config, mock_call_aresponses):
@@ -574,6 +694,24 @@ class TestUseResponsesApiBridgeFlag:
 # Deployment-pinned routing mode (deployment_routing_mode / responses_api_bridge_check)
 _CHAT: Final[Mapping[str, JsonValue]] = {"id": "dep-1", "mode": "chat"}
 _RESPONSES: Final[Mapping[str, JsonValue]] = {"id": "dep-1", "mode": "responses"}
+
+
+def _databricks_chat_upstream(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post("https://example.databricks.test/serving-endpoints/chat/completions").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "id": "chatcmpl-123",
+                "object": "chat.completion",
+                "created": 1677652288,
+                "model": "my-custom-model",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+            },
+        )
+    )
 
 
 def _pin_shared_mode(monkeypatch: pytest.MonkeyPatch, model: str, mode: str) -> None:
