@@ -1,4 +1,5 @@
 import shutil
+import sys
 from itertools import chain
 from pathlib import Path
 from typing import Final
@@ -26,3 +27,7 @@ def materialize_prisma_dir(target: Path) -> Path:
     for migration in shipped_migrations():
         shutil.copytree(migration, migrations / migration.name, dirs_exist_ok=True)
     return target
+
+
+if __name__ == "__main__":
+    sys.stdout.write(f"{materialize_prisma_dir(Path(sys.argv[1]))}\n")
