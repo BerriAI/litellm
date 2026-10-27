@@ -426,4 +426,5 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         trace: Final = object_mapping(body.get(BEDROCK_INVOKE_TRACE_FIELD))
         if trace is not None:
             setattr(response, BEDROCK_INVOKE_TRACE_FIELD, trace)
+            logging_obj.record_native_bedrock_guardrail(response)
         return response

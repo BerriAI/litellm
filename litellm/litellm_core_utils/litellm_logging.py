@@ -2969,7 +2969,6 @@ class Logging(LiteLLMLoggingBaseClass):
                 result = self._handle_a2a_response_logging(result=result)
 
             logging_result: Final = self.normalize_logging_result(result=result)
-            self.record_native_bedrock_guardrail(logging_result)
             if cache_hit is None and _served_from_cache_at_no_charge(logging_result):
                 self.model_call_details["cache_hit"] = True
 
