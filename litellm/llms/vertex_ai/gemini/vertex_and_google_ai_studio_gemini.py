@@ -3476,12 +3476,8 @@ class VertexLLM(VertexBase):
             async def post(body: RequestBody) -> ModelResponseIterator:
                 return await open_stream(client=client, data=json.dumps(body), request_body=body)
 
-            post_with_fresh_cache: Final = partial(
-                post_with_fresh_cache_async, rebuild=rebuild, post=post, log_request=log_request
-            )
-            return (
-                await post_with_accepted_thought_signatures_async(request_body, post_with_fresh_cache, log_request)
-            )[1]
+            accepted: Final = partial(post_with_accepted_thought_signatures_async, post=post, log_request=log_request)
+            return (await post_with_fresh_cache_async(request_body, rebuild, accepted, log_request))[1][1]
 
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=None,
@@ -3605,12 +3601,8 @@ class VertexLLM(VertexBase):
                 )
             return response
 
-        post_with_fresh_cache: Final = partial(
-            post_with_fresh_cache_async, rebuild=rebuild, post=post, log_request=log_request
-        )
-        sent_body, first_response = await post_with_accepted_thought_signatures_async(
-            request_body, post_with_fresh_cache, log_request
-        )
+        accepted: Final = partial(post_with_accepted_thought_signatures_async, post=post, log_request=log_request)
+        _, (sent_body, first_response) = await post_with_fresh_cache_async(request_body, rebuild, accepted, log_request)
         return _transform_long_decode_hops(
             model=model,
             hops=await collect_hops_async(parse_body(first_response), sent_body, post),
@@ -3786,10 +3778,10 @@ class VertexLLM(VertexBase):
                 def post(body: RequestBody) -> ModelResponseIterator:
                     return open_stream(client=client, data=json.dumps(body), request_body=body)
 
-                post_with_fresh_cache: Final = partial(
-                    post_with_fresh_cache_sync, rebuild=rebuild, post=post, log_request=log_request
+                accepted: Final = partial(
+                    post_with_accepted_thought_signatures_sync, post=post, log_request=log_request
                 )
-                return post_with_accepted_thought_signatures_sync(data, post_with_fresh_cache, log_request)[1]
+                return post_with_fresh_cache_sync(data, rebuild, accepted, log_request)[1][1]
 
             streaming_response: Final = CustomStreamWrapper(
                 completion_stream=None,
@@ -3833,10 +3825,8 @@ class VertexLLM(VertexBase):
                 )
             return response
 
-        post_with_fresh_cache: Final = partial(
-            post_with_fresh_cache_sync, rebuild=rebuild, post=post, log_request=log_request
-        )
-        sent_body, first_response = post_with_accepted_thought_signatures_sync(data, post_with_fresh_cache, log_request)
+        accepted: Final = partial(post_with_accepted_thought_signatures_sync, post=post, log_request=log_request)
+        _, (sent_body, first_response) = post_with_fresh_cache_sync(data, rebuild, accepted, log_request)
         return _transform_long_decode_hops(
             model=model,
             hops=collect_hops_sync(parse_body(first_response), sent_body, post),

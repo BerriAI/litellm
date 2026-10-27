@@ -64,27 +64,29 @@ async def post_with_accepted_thought_signatures_async(
     body: RequestBody,
     post: Callable[[RequestBody], Awaitable[Sent]],
     log_request: Callable[[RequestBody], None],
-) -> Sent:
+) -> tuple[RequestBody, Sent]:
+    """Innermost retry around the raw post, so a cache rebuild (which re-transforms the messages and brings
+    the rejected signatures back) is itself wrapped by it. Returns the body the backend accepted."""
     try:
-        return await post(body)
+        return body, await post(body)
     except (httpx.HTTPStatusError, BaseLLMException) as error:
         resend_body: Final = _resend_body(body, error)
         if resend_body is None:
             raise
         log_request(resend_body)
-    return await post(resend_body)
+    return resend_body, await post(resend_body)
 
 
 def post_with_accepted_thought_signatures_sync(
     body: RequestBody,
     post: Callable[[RequestBody], Sent],
     log_request: Callable[[RequestBody], None],
-) -> Sent:
+) -> tuple[RequestBody, Sent]:
     try:
-        return post(body)
+        return body, post(body)
     except (httpx.HTTPStatusError, BaseLLMException) as error:
         resend_body: Final = _resend_body(body, error)
         if resend_body is None:
             raise
         log_request(resend_body)
-    return post(resend_body)
+    return resend_body, post(resend_body)
