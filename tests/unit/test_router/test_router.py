@@ -7038,50 +7038,121 @@ async def test_aresponses_fallback_attempt_does_not_replay_held_lifecycle_events
 
 
 @pytest.mark.asyncio
-async def test_aresponses_streaming_iterator_partial_content_injects_continuation():
-    """Mid-stream error: input is rewritten to include user prompt +
-    developer instruction + prior assistant message with partial output."""
-    from litellm.exceptions import MidStreamFallbackError
+@pytest.mark.parametrize("failure_type", ["error", "response.failed"])
+@pytest.mark.parametrize(
+    "output_sse",
+    [
+        "",
+        '{"type":"response.output_item.added","output_index":0,"sequence_number":1,"item":{"type":"function_call","id":"fc_primary","call_id":"call_primary","name":"record_run","arguments":"","status":"in_progress"}}',
+        '{"type":"response.output_item.done","output_index":0,"sequence_number":1,"item":{"type":"function_call","id":"fc_primary","call_id":"call_primary","name":"record_run","arguments":"{}","status":"completed"}}',
+        '{"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"msg_primary","sequence_number":1,"delta":"hello"}',
+        '{"type":"image_generation.partial_image","partial_image_index":0,"b64_json":"aW1hZ2U="}',
+    ],
+    ids=["before-output", "tool-started", "tool-completed", "text", "partial-image"],
+)
+async def test_aresponses_does_not_replay_delivered_output(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    output_sse: str,
+    failure_type: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    primary_response: Final = {
+        "id": "resp_primary",
+        "object": "response",
+        "created_at": 0,
+        "model": "primary",
+        "status": "in_progress",
+        "output": [],
+    }
+    provider_error: Final = {"type": "server_error", "code": "server_error", "message": "primary failed"}
+    failure: Final = (
+        {"type": "error", "sequence_number": 2, "error": provider_error}
+        if failure_type == "error"
+        else {
+            "type": "response.failed",
+            "sequence_number": 2,
+            "response": {**primary_response, "status": "failed", "error": provider_error},
+        }
+    )
+    primary_body: Final = (
+        f"data: {json.dumps({'type': 'response.created', 'sequence_number': 0, 'response': primary_response})}\n\n"
+        + (f"data: {output_sse}\n\n" if output_sse else "")
+        + f"data: {json.dumps(failure)}\n\n"
+    )
+    fallback_response: Final = {**primary_response, "id": "resp_fallback", "model": "fallback", "status": "completed"}
+    fallback_body: Final = (
+        f"data: {json.dumps({'type': 'response.created', 'sequence_number': 0, 'response': fallback_response})}\n\n"
+        f"data: {json.dumps({'type': 'response.completed', 'sequence_number': 1, 'response': fallback_response})}\n\n"
+    )
+    primary: Final = respx_mock.post("https://primary.responses.test/v1/responses").mock(
+        return_value=httpx.Response(200, text=primary_body, headers={"content-type": "text/event-stream"})
+    )
+    fallback: Final = respx_mock.post("https://fallback.responses.test/v1/responses").mock(
+        return_value=httpx.Response(200, text=fallback_body, headers={"content-type": "text/event-stream"})
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "openai/primary",
+                    "api_base": "https://primary.responses.test/v1",
+                    "api_key": "local-placeholder",
+                },
+            },
+            {
+                "model_name": "fallback",
+                "litellm_params": {
+                    "model": "openai/fallback",
+                    "api_base": "https://fallback.responses.test/v1",
+                    "api_key": "local-placeholder",
+                },
+            },
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        num_retries=0,
+    )
+    stream: Final = await router.aresponses(model="primary", input="run the tool", stream=True)
+    outcome: Final = [event async for event in _events_until_error(stream)]
 
-    router = _make_router_with_fallback()
-    src = _make_responses_iterator(
-        chunks=[MagicMock(type="response.output_text.delta")],
+    assert primary.call_count == 1
+    if not output_sse:
+        assert fallback.call_count == 1
+        assert [getattr(event, "type", None) for event in outcome] == ["response.created", "response.completed"]
+        return
+    assert fallback.call_count == 0
+    assert [getattr(event, "type", None) for event in outcome[:-1]] == [
+        "response.created",
+        json.loads(output_sse)["type"],
+    ]
+    assert isinstance(outcome[-1], litellm.InternalServerError)
+    assert "primary failed" in str(outcome[-1])
+
+
+@pytest.mark.asyncio
+async def test_aresponses_streaming_iterator_partial_content_surfaces_original_error():
+    router: Final = _make_router_with_fallback()
+    provider_error: Final = litellm.InternalServerError(message="primary failed", model="gpt-4", llm_provider="openai")
+    output: Final = SimpleNamespace(type="response.output_text.delta", output_index=0, delta="partial answer")
+    source: Final = _make_responses_iterator(
+        chunks=[output],
         error=MidStreamFallbackError(
-            message="socket reset mid-stream",
+            message="primary failed",
             model="gpt-4",
-            llm_provider="anthropic",
+            llm_provider="openai",
             is_pre_first_chunk=False,
-            generated_content="The capital of France is",
+            generated_content="partial answer",
+            original_exception=provider_error,
         ),
     )
+    wrapped: Final = await router._aresponses_streaming_iterator(
+        response=source,
+        initial_kwargs={"model": "gpt-4", "stream": True, "input": "Hello"},
+    )
+    outcome: Final = [event async for event in _events_until_error(wrapped)]
 
-    with patch.object(
-        router,
-        "async_function_with_fallbacks_common_utils",
-        return_value=_AsyncList(),
-    ) as mock_fallback_utils:
-        wrapped = await router._aresponses_streaming_iterator(
-            response=src,
-            initial_kwargs={
-                "model": "gpt-4",
-                "stream": True,
-                "input": "What's the capital of France?",
-                "original_generic_function": litellm.aresponses,
-            },
-        )
-        async for _ in wrapped:
-            pass
-
-    new_input = mock_fallback_utils.call_args.kwargs["kwargs"]["input"]
-    assert isinstance(new_input, list)
-    assert new_input[0]["role"] == "user"
-    assert new_input[0]["content"][0]["text"] == "What's the capital of France?"
-    assert new_input[1]["role"] == "developer"
-    assert "do not repeat" in new_input[1]["content"][0]["text"].lower()
-    assert new_input[2]["role"] == "assistant"
-    assert new_input[2]["content"][0]["type"] == "output_text"
-    assert new_input[2]["content"][0]["text"] == "The capital of France is"
-
+    assert outcome == [output, provider_error]
 
 @pytest.mark.asyncio
 async def test_aresponses_streaming_iterator_combines_partial_usage():
@@ -7102,13 +7173,13 @@ async def test_aresponses_streaming_iterator_combines_partial_usage():
     src = _make_responses_iterator(
         bridge=True,
         chat_chunks=[MagicMock()],
-        chunks=[MagicMock(type="response.output_text.delta")],
+        chunks=[],
         error=MidStreamFallbackError(
             message="boom",
             model="gpt-4",
             llm_provider="anthropic",
             is_pre_first_chunk=False,
-            generated_content="hello",
+            generated_content="",
         ),
     )
 
