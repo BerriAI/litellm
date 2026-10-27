@@ -39,6 +39,7 @@ from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthr
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     DEFAULT_MAX_RECURSE_DEPTH,
+    LITELLM_CLIENT_DISCONNECT_DETAIL,
     LITELLM_DETAILED_TIMING,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_LITELLM_CALL_ID_LENGTH,
@@ -1847,7 +1848,7 @@ def _has_attribute_error_in_chain(exc: Exception) -> bool:
     return False
 
 
-_CLIENT_DISCONNECT_DETAIL: Final = "Client disconnected the request"
+_CLIENT_DISCONNECT_DETAIL: Final = LITELLM_CLIENT_DISCONNECT_DETAIL
 
 
 @runtime_checkable
