@@ -538,9 +538,6 @@
   "src/app/(dashboard)/mcp-servers/_components/mcp_connect.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "react-hooks/static-components": {
-      "count": 4
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/mcp_connection_status.tsx": {
