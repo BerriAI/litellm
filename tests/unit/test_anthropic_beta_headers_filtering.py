@@ -18,8 +18,6 @@ import pytest
 import litellm
 from litellm import anthropic_beta_headers_manager
 from litellm.anthropic_beta_headers_manager import (
-    resolve_beta_provider,
-    is_foundry_api_base,
     GetAnthropicBetaHeadersConfig,
     filter_and_transform_beta_headers,
     get_beta_headers_config,
@@ -549,7 +547,7 @@ def bundled_config(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_foundry_deployment_headers_follow_the_azure_ai_row(bundled_config: None) -> None:
     headers: Final = {"anthropic-beta": f"{DIRECT_ONLY_BETA},thinking-binding-controls-2026-08-01"}
-    result: dict[str, str] = update_headers_with_filtered_beta(
+    result: Final[dict[str, str]] = update_headers_with_filtered_beta(
         headers=headers, provider="anthropic", api_base=FOUNDRY_API_BASE
     )
     assert result == {"anthropic-beta": "thinking-binding-controls-2026-08-01"}
@@ -557,7 +555,7 @@ def test_foundry_deployment_headers_follow_the_azure_ai_row(bundled_config: None
 
 def test_direct_deployment_headers_keep_every_anthropic_row_beta(bundled_config: None) -> None:
     headers: Final = {"anthropic-beta": f"{DIRECT_ONLY_BETA},thinking-binding-controls-2026-08-01"}
-    result: dict[str, str] = update_headers_with_filtered_beta(
+    result: Final[dict[str, str]] = update_headers_with_filtered_beta(
         headers=headers, provider="anthropic", api_base=DIRECT_API_BASE
     )
     assert result == {"anthropic-beta": f"{DIRECT_ONLY_BETA},thinking-binding-controls-2026-08-01"}
@@ -576,18 +574,9 @@ def test_foundry_deployment_request_filters_header_and_body_betas_together(bundl
     assert data == {"anthropic_beta": ["thinking-binding-controls-2026-08-01"], "max_tokens": 8}
 
 
-PRESERVED_THINKING_BETAS: Final = (
-    "thinking-binding-controls-2026-08-01",
-    "mid-conversation-system-clear-at-2026-08-21",
-    "mid-conversation-tool-changes-2026-07-01",
-    "mid-conversation-output-config-2026-07-01",
-    "thinking-display-updates-2026-08-18",
-)
-
-
 @pytest.mark.parametrize("provider", ["anthropic", "azure_ai", "vertex_ai"])
 def test_live_verified_platforms_forward_every_preserved_thinking_beta(bundled_config: None, provider: str) -> None:
-    result: dict[str, str] = update_headers_with_filtered_beta(
+    result: Final[dict[str, str]] = update_headers_with_filtered_beta(
         headers={"anthropic-beta": ",".join(PRESERVED_THINKING_BETAS)}, provider=provider
     )
     assert sorted(result["anthropic-beta"].split(",")) == sorted(PRESERVED_THINKING_BETAS), result
@@ -597,7 +586,7 @@ def test_live_verified_platforms_forward_every_preserved_thinking_beta(bundled_c
 def test_each_row_forwards_exactly_its_verified_preserved_thinking_cells(bundled_config: None, provider: str) -> None:
     row: Final[dict[str, str | None]] = GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()[provider]
     forwarded: Final = tuple(beta for beta in PRESERVED_THINKING_BETAS if row.get(beta) is not None)
-    result: dict[str, str] = update_headers_with_filtered_beta(
+    result: Final[dict[str, str]] = update_headers_with_filtered_beta(
         headers={"anthropic-beta": ",".join(PRESERVED_THINKING_BETAS)}, provider=provider
     )
     assert sorted(result["anthropic-beta"].split(",")) == sorted(forwarded), (provider, result)
