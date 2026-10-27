@@ -837,10 +837,9 @@ def _iter_system_scope_texts(
     must go through the staleness-aware tail scan instead -- scanning it here would floor every
     turn of a session that once planned, for any pattern whose client injects mid-conversation.
     """
-    if isinstance(body_system, str):
-        yield body_system
-    elif isinstance(body_system, list):
-        yield _message_text(body_system)
+    body_system_text: Final = _message_text(body_system)
+    if body_system_text:
+        yield body_system_text
     for msg in messages:
         if msg.get("role") != "system":
             return
