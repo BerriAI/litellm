@@ -25,18 +25,27 @@ def azure_transcription_client_secret_request(
     expires_after: Final = transcription_session.get(
         "expires_after", raw_secret.get("expires_at") if isinstance(raw_secret, dict) else raw_secret
     )
+    raw_audio: Final = transcription_session.get("audio")
+    audio: Final = raw_audio if isinstance(raw_audio, dict) else {}
+    raw_audio_input: Final = audio.get("input")
+    existing_audio_input: Final = raw_audio_input if isinstance(raw_audio_input, dict) else {}
+    raw_audio_transcription: Final = existing_audio_input.get("transcription")
+    audio_transcription: Final = raw_audio_transcription if isinstance(raw_audio_transcription, dict) else {}
     raw_transcription: Final = transcription_session.get("input_audio_transcription")
     transcription: Final = raw_transcription if isinstance(raw_transcription, dict) else {}
     raw_format: Final = transcription_session.get("input_audio_format")
     audio_input: Final[JsonValue] = {
+        **existing_audio_input,
         **(
-            {"format": _AUDIO_FORMATS[raw_format]}
-            if isinstance(raw_format, str) and raw_format in _AUDIO_FORMATS
-            else {"format": raw_format}
-            if raw_format is not None
+            {
+                "format": _AUDIO_FORMATS[raw_format]
+                if isinstance(raw_format, str) and raw_format in _AUDIO_FORMATS
+                else raw_format
+            }
+            if "input_audio_format" in transcription_session
             else {}
         ),
-        "transcription": {**transcription, "model": model},
+        "transcription": {**audio_transcription, **transcription, "model": model},
         **(
             {"noise_reduction": transcription_session["input_audio_noise_reduction"]}
             if "input_audio_noise_reduction" in transcription_session
@@ -55,6 +64,7 @@ def azure_transcription_client_secret_request(
             if key
             not in (
                 "model",
+                "audio",
                 "client_secret",
                 "expires_after",
                 "modalities",
@@ -65,7 +75,10 @@ def azure_transcription_client_secret_request(
             )
         },
         "type": "transcription",
-        "audio": {"input": audio_input},
+        "audio": {
+            **{key: value for key, value in audio.items() if key != "input"},
+            "input": audio_input,
+        },
     }
     return MappingProxyType(
         {"session": session, **({"expires_after": expires_after} if expires_after is not None else {})}
@@ -101,4 +114,13 @@ def azure_transcription_client_secret_response(response: httpx.Response) -> http
         **({"turn_detection": audio_input["turn_detection"]} if "turn_detection" in audio_input else {}),
         "client_secret": client_secret,
     }
-    return httpx.Response(response.status_code, json=response_body)
+    return httpx.Response(
+        response.status_code,
+        headers={
+            key: value
+            for key, value in response.headers.items()
+            if key.lower() not in ("content-length", "content-encoding", "transfer-encoding")
+        },
+        json=response_body,
+        request=response.request,
+    )
