@@ -29,6 +29,7 @@ from litellm.integrations.otel import (
     resolve_output_type,
     resolve_provider,
 )
+from litellm.integrations.otel.mappers import resolve_mappers
 from litellm.integrations.otel.mappers.genai import GenAIMapper
 from litellm.integrations.otel.model import spans as spans_mod
 from litellm.integrations.otel.model.metadata import LLMCallEvent
@@ -38,6 +39,7 @@ from litellm.integrations.otel.model.payloads import (
     RequestIdentity,
     _upstream_address_port,
 )
+from litellm.integrations.otel.model.semconv import User
 from litellm.integrations.otel.model.spans import (
     SPAN_REGISTRY,
     LiteLLMSpanKind,
@@ -51,6 +53,7 @@ from litellm.integrations.otel.model.trace_controls import (
     caller_trace_controls,
     request_trace_controls,
 )
+from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
 
 
 @pytest.fixture(autouse=True)
@@ -1355,8 +1358,11 @@ def test_caller_trace_controls_carry_user_session_and_tags(request_data, expecte
 @pytest.mark.parametrize(
     ("request_data", "expected"),
     [
-        ({"metadata": {"user_api_key_end_user_id": "end-1"}}, TraceControls(user_id="end-1")),
-        ({"litellm_metadata": {"user_api_key_end_user_id": "end-2"}}, TraceControls(user_id="end-2")),
+        ({"metadata": {"user_api_key_end_user_id": "end-1"}}, TraceControls(user_id="end-1", user_id_is_end_user=True)),
+        (
+            {"litellm_metadata": {"user_api_key_end_user_id": "end-2"}},
+            TraceControls(user_id="end-2", user_id_is_end_user=True),
+        ),
         (
             {"metadata": {"trace_user_id": "caller-1", "user_api_key_end_user_id": "end-1"}},
             TraceControls(user_id="caller-1"),
@@ -1370,7 +1376,7 @@ def test_caller_trace_controls_carry_user_session_and_tags(request_data, expecte
         ),
         (
             {"metadata": {"user_api_key_end_user_id": "end-1", "session_id": "s-1"}},
-            TraceControls(user_id="end-1", session_id="s-1"),
+            TraceControls(user_id="end-1", session_id="s-1", user_id_is_end_user=True),
         ),
         ({"metadata": {"user_api_key_user_id": "internal-1"}}, TraceControls()),
         ({}, TraceControls()),
@@ -1538,6 +1544,48 @@ def test_llm_span_stamps_gen_ai_conversation_id_only_when_the_caller_sent_one():
     without: Final = LLMCallSpanData.from_standard_logging_payload(_sample_payload(trace_id="per-request-uuid"))
     assert without.session_id is None
     assert GenAI.CONVERSATION_ID not in GenAIMapper().map(without)
+
+
+def _end_user_payload():
+    payload: Final = _sample_payload()
+    return {**payload, "metadata": {**payload["metadata"], "user_api_key_end_user_id": "end-1"}}
+
+
+@pytest.mark.parametrize(
+    ("payload", "trace", "metadata_keys", "expected"),
+    [
+        (_end_user_payload(), TraceControls(), ("user_api_key_end_user_id",), "end-1"),
+        (_end_user_payload(), TraceControls(), ("user_api_key_org_id",), None),
+        (_end_user_payload(), TraceControls(user_id="caller-1"), ("user_api_key_end_user_id",), "end-1"),
+        (_sample_payload(), TraceControls(user_id="caller-1"), ("user_api_key_end_user_id",), None),
+    ],
+    ids=["end-user-allowlisted", "end-user-withheld", "caller-trace-user-not-sent", "no-end-user"],
+)
+def test_llm_span_sends_only_the_allowlisted_end_user_as_user_id(payload, trace, metadata_keys, expected):
+    data: Final = LLMCallSpanData.from_standard_logging_payload(payload, trace=trace, metadata_keys=metadata_keys)
+    assert GenAIMapper().map(data).get(User.ID) == expected
+
+
+@pytest.mark.parametrize("callback_name", ["otel", *sorted(PRESET_BY_CALLBACK)])
+def test_every_v2_callback_sends_the_end_user_and_only_langfuse_the_caller_trace_user(callback_name, monkeypatch):
+    for name in ("LEVOAI_API_KEY", "LEVOAI_ORG_ID", "LEVOAI_WORKSPACE_ID"):
+        monkeypatch.setenv(name, "levo-test")
+    monkeypatch.setenv("LEVOAI_COLLECTOR_URL", "http://127.0.0.1:4318")
+    config: Final = (
+        OpenTelemetryV2Config()
+        if callback_name == "otel"
+        else PRESET_BY_CALLBACK[callback_name](allow_missing_credentials=True)
+    )
+    mappers: Final = resolve_mappers(config.mapper_names)
+
+    def user_id(trace: TraceControls) -> object:
+        data: Final = LLMCallSpanData.from_standard_logging_payload(
+            _end_user_payload(), trace=trace, metadata_keys=tuple(config.baggage_metadata_keys)
+        )
+        return {key: value for mapper in mappers for key, value in mapper.map(data).items()}.get(User.ID)
+
+    assert user_id(TraceControls(user_id="end-1", user_id_is_end_user=True)) == "end-1"
+    assert user_id(TraceControls(user_id="caller-1")) == ("caller-1" if callback_name == "langfuse_otel" else "end-1")
 
 
 def test_llm_span_carries_proxy_request_route():

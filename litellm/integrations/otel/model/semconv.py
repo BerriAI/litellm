@@ -254,6 +254,12 @@ class Server:
     PORT: Final = "server.port"
 
 
+class User:
+    """OTel ``user.*`` registry keys. OpenInference and Langfuse read the same ``user.id``."""
+
+    ID: Final = "user.id"
+
+
 class DB:
     """Database / cache client-span keys (OTel ``db.*`` semconv).
 

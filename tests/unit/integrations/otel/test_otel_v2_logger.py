@@ -14,6 +14,7 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -45,12 +46,15 @@ from litellm.integrations.otel import (  # noqa: E402
     OpenTelemetryV2Config,
 )
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
+from litellm.integrations.otel.mappers.genai import GenAIMapper  # noqa: E402
 from litellm.integrations.otel.model.config import CaptureMessageContent, ExporterSpec  # noqa: E402
 from litellm.integrations.otel.model.destination import OtelDestination  # noqa: E402
+from litellm.integrations.otel.model.semconv import User  # noqa: E402
 from litellm.integrations.otel.model.spans import (  # noqa: E402
     LITELLM_PROXY_REQUEST_SPAN_NAME,
     SpanRole,
 )
+from litellm.integrations.otel.model.trace_controls import caller_trace_controls  # noqa: E402
 from litellm.integrations.otel.model.utils import to_ns, to_seconds  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
 from litellm.integrations.otel.plumbing.context import (  # noqa: E402
@@ -299,6 +303,114 @@ def test_replayed_llm_call_span_does_not_take_the_payloads_session_id():
     _emit_llm(logger, kwargs)
     (span,) = exporter.get_finished_spans()
     assert GenAI.CONVERSATION_ID not in span.attributes
+
+
+def _user_kwargs(metadata, messages=None, call_id="call_1"):
+    payload: Final = _payload(metadata={**_payload()["metadata"], **metadata}, litellm_call_id=call_id)
+    if messages is not None:
+        payload["messages"] = messages
+    return {**_kwargs(payload), "litellm_params": {"metadata": metadata}, "messages": messages or []}
+
+
+def _logger_with(**config):
+    cfg: Final = OpenTelemetryV2Config(exporter="in_memory", **config)
+    exporter: Final = InMemorySpanExporter()
+    return OpenTelemetryV2(
+        config=cfg, tracer_provider=providers.build_tracer_provider(cfg, exporter=exporter)
+    ), exporter
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        ({"user_api_key_end_user_id": "end-1"}, "end-1"),
+        ({"trace_user_id": "caller-1", "user_api_key_end_user_id": "end-1"}, "end-1"),
+        ({"trace_user_id": "caller-1"}, None),
+        ({"user_api_key_user_id": "internal-1"}, None),
+    ],
+    ids=["proxy-end-user", "caller-trace-user-not-sent", "caller-trace-user-alone", "internal-user-never-sent"],
+)
+def test_llm_call_span_carries_the_end_user_as_user_id(metadata, expected):
+    logger, exporter = _logger()
+    _emit_llm(logger, _user_kwargs(metadata))
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes.get(User.ID) == expected
+    assert "caller-1" not in {str(value) for value in span.attributes.values()}
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [{"user_api_key_end_user_id": "end-1"}, {"trace_user_id": "caller-1", "user_api_key_end_user_id": "end-1"}],
+    ids=["end-user", "end-user-and-caller-trace-user"],
+)
+def test_llm_call_span_withholds_an_end_user_the_metadata_allowlist_drops(metadata):
+    logger, exporter = _logger_with(baggage_metadata_keys=["user_api_key_org_id"])
+    _emit_llm(logger, _user_kwargs(metadata))
+    (span,) = exporter.get_finished_spans()
+    assert User.ID not in span.attributes
+    assert not {"end-1", "caller-1"} & {str(value) for value in span.attributes.values()}
+
+
+def _user_spans(monkeypatch, mapper_names, limit, message_counts, metadata):
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", str(limit))
+    logger, exporter = _logger_with(mapper_names=mapper_names, capture_message_content=CaptureMessageContent.SPAN_ONLY)
+    for count in message_counts:
+        messages = [{"role": "user", "content": f"m{index}"} for index in range(count)]
+        _emit_llm(logger, _user_kwargs(metadata, messages, f"call_{count}"))
+    return exporter.get_finished_spans()
+
+
+@pytest.mark.parametrize(
+    ("mapper_names", "limits", "message_counts"),
+    [
+        (["genai", "openinference"], [128], range(40, 70)),
+        (["genai", "openinference", "langfuse"], [128], range(30, 60)),
+        (["genai", "langfuse"], range(30, 45), [1]),
+    ],
+    ids=["openinference", "langfuse-with-indexed-messages", "langfuse-at-a-lower-limit"],
+)
+def test_user_id_costs_no_other_attribute_at_the_span_limit(monkeypatch, mapper_names, limits, message_counts):
+    def spans() -> list:
+        return list(
+            chain.from_iterable(
+                _user_spans(monkeypatch, mapper_names, limit, message_counts, {"user_api_key_end_user_id": "end-1"})
+                for limit in limits
+            )
+        )
+
+    with_user_id: Final = spans()
+    monkeypatch.delitem(GenAIMapper._LLM_CALL_ATTRS, User.ID)
+    monkeypatch.setattr("litellm.integrations.otel.model.metadata.request_trace_controls", caller_trace_controls)
+    without_user_id: Final = spans()
+    assert {span.attributes.get(User.ID) for span in with_user_id} == {"end-1", None}
+    for with_user, without in zip(with_user_id, without_user_id, strict=True):
+        assert set(with_user.attributes) - {User.ID} == set(without.attributes)
+        assert with_user.dropped_attributes == without.dropped_attributes
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [{"trace_user_id": "caller-1"}, {"trace_user_id": "caller-1", "user_api_key_end_user_id": "end-1"}],
+    ids=["caller-trace-user", "caller-trace-user-and-end-user"],
+)
+@pytest.mark.parametrize(
+    "mapper_names",
+    [["genai", "langfuse"], ["genai", "openinference", "langfuse"]],
+    ids=["langfuse", "langfuse-with-openinference"],
+)
+def test_langfuse_vocabulary_keeps_the_caller_trace_user_at_the_span_limit(monkeypatch, mapper_names, metadata):
+    def spans() -> list:
+        return list(
+            chain.from_iterable(_user_spans(monkeypatch, mapper_names, limit, [1], metadata) for limit in range(16, 45))
+        )
+
+    with_user_id: Final = spans()
+    monkeypatch.delitem(GenAIMapper._LLM_CALL_ATTRS, User.ID)
+    without_user_id: Final = spans()
+    assert any(span.dropped_attributes and span.attributes.get(User.ID) == "caller-1" for span in with_user_id)
+    for with_user, without in zip(with_user_id, without_user_id, strict=True):
+        assert dict(with_user.attributes) == dict(without.attributes)
+        assert with_user.dropped_attributes == without.dropped_attributes
 
 
 def test_streaming_span_carries_time_to_first_chunk():

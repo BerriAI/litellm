@@ -1,7 +1,8 @@
 """The span engine: dedup, start, run the mapper chain, set status, end."""
 
 from collections import OrderedDict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import Final
 
@@ -13,6 +14,7 @@ from opentelemetry.trace.status import Status, StatusCode
 
 from litellm.integrations.otel.mappers import resolve_mappers
 from litellm.integrations.otel.mappers.base import AttributeMapper, AttrValue, SpanData
+from litellm.integrations.otel.mappers.langfuse import LangfuseMapper
 from litellm.integrations.otel.mappers.openinference import fit_indexed_messages
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.model.payloads import (
@@ -23,7 +25,7 @@ from litellm.integrations.otel.model.payloads import (
     ServiceSpanData,
     SpanError,
 )
-from litellm.integrations.otel.model.semconv import Error, ExceptionEvent, LiteLLMError
+from litellm.integrations.otel.model.semconv import Error, ExceptionEvent, LiteLLMError, User
 from litellm.integrations.otel.model.spans import (
     SPAN_REGISTRY,
     SpanRole,
@@ -82,6 +84,21 @@ def error_attributes(error: SpanError) -> Mapping[str, AttrValue]:
         (LiteLLMError.LLM_PROVIDER, error.llm_provider),
     )
     return MappingProxyType({key: value for key, value in pairs if value})
+
+
+def _without_user_id(attributes: Mapping[str, AttrValue]) -> Iterable[tuple[str, AttrValue]]:
+    return ((key, value) for key, value in attributes.items() if key != User.ID)
+
+
+def merge_mapped(outputs: Sequence[Mapping[str, AttrValue]]) -> Mapping[str, AttrValue]:
+    """The mappers' attributes in mapper order, a later mapper's value winning. ``user.id`` sits where the last
+    mapper that writes it puts it, so a full span evicts it no sooner than that mapper's other attributes."""
+    last_user_writer: Final = max((index for index, output in enumerate(outputs) if User.ID in output), default=-1)
+    placed: Final = (
+        output.items() if index == last_user_writer else _without_user_id(output)
+        for index, output in enumerate(outputs)
+    )
+    return MappingProxyType(dict(chain.from_iterable(placed)))
 
 
 def span_attribute_limit(span: Span) -> int | None:
@@ -167,9 +184,21 @@ class SpanEmitter:
         self._mappers: list[AttributeMapper] = (
             list(mappers) if mappers is not None else resolve_mappers(config.mapper_names)
         )
+        self._writes_langfuse_trace: Final = any(isinstance(mapper, LangfuseMapper) for mapper in self._mappers)
         # Bounded LRU (ordered by insertion / most-recent touch). Storing keys
         # only — the value is unused — so it behaves like a capped set.
         self._emitted: OrderedDict[tuple[str, SpanRole], None] = OrderedDict()
+
+    def _shed_first(self, data: SpanData) -> frozenset[str]:
+        """The keys that leave a full span before any other attribute: ``user.id``, unless it is a caller's
+        ``trace_user_id`` written by the Langfuse vocabulary."""
+        callers_trace_user: Final = (
+            self._writes_langfuse_trace
+            and isinstance(data, LLMCallSpanData)
+            and data.trace.user_id is not None
+            and not data.trace.user_id_is_end_user
+        )
+        return frozenset() if callers_trace_user else frozenset({User.ID})
 
     # -- low-level helpers --------------------------------------------------- #
 
@@ -294,15 +323,14 @@ class SpanEmitter:
             )
             else None
         )
-        mapped: Final = MappingProxyType(
-            {key: value for mapper in self._mappers for key, value in mapper.map(data).items()}
-        )
+        mapped: Final = merge_mapped(tuple(mapper.map(data) for mapper in self._mappers))
         stamped_later: Final = error_attributes(error) if error else _NO_ATTRIBUTES
         reserved: Final = len(stamped_later.keys() - mapped.keys())
         overwrites: Final = carried_keys(span) & mapped.keys()
         fitted: Final = fit_indexed_messages(
             MappingProxyType({key: value for key, value in mapped.items() if key not in overwrites}),
             attribute_budget(span, reserved),
+            self._shed_first(data),
         )
         for key, value in mapped.items():
             if key in overwrites or key in fitted:
