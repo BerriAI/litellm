@@ -262,17 +262,17 @@ describe("MCPToolsetsTab tool search and bulk selection", () => {
     const user = setup();
     renderWithServers();
 
-    const dialog = await openCreate(user);
-    fireEvent.change(dialog.getByPlaceholderText("e.g. github-linear-tools"), { target: { value: "issues" } });
-    await user.type(dialog.getByRole("textbox", { name: "Search tools or servers" }), "issue");
+    await openCreate(user);
+    fireEvent.change(screen.getByPlaceholderText("e.g. github-linear-tools"), { target: { value: "issues" } });
+    await user.type(screen.getByRole("textbox", { name: "Search tools or servers" }), "issue");
 
-    expect(await dialog.findByRole("checkbox", { name: /^create_ticket/ })).toBeInTheDocument();
-    expect(dialog.getByRole("checkbox", { name: /^create_issue/ })).toBeInTheDocument();
-    expect(dialog.queryByRole("checkbox", { name: /^list_pulls/ })).not.toBeInTheDocument();
-    expect(await dialog.findByText("2 matching tools")).toBeInTheDocument();
+    expect(await screen.findByRole("checkbox", { name: /^create_ticket/ })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /^create_issue/ })).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /^list_pulls/ })).not.toBeInTheDocument();
+    expect(await screen.findByText("2 matching tools")).toBeInTheDocument();
 
-    await user.click(dialog.getByRole("button", { name: "Select all matching" }));
-    await user.click(dialog.getByRole("button", { name: "Create Toolset" }));
+    await user.click(screen.getByRole("button", { name: "Select all matching" }));
+    await user.click(screen.getByRole("button", { name: "Create Toolset" }));
 
     await waitFor(() => {
       expect(networking.createMCPToolset).toHaveBeenCalledWith("sk-test", {
@@ -296,12 +296,12 @@ describe("MCPToolsetsTab tool search and bulk selection", () => {
       ]),
     ]);
 
-    const dialog = await openEditFor(user);
-    await user.type(dialog.getByRole("textbox", { name: "Search tools or servers" }), "create");
-    expect(await dialog.findByRole("checkbox", { name: /^create_ticket/ })).toBeChecked();
+    await openEditFor(user);
+    await user.type(screen.getByRole("textbox", { name: "Search tools or servers" }), "create");
+    expect(await screen.findByRole("checkbox", { name: /^create_ticket/ })).toBeChecked();
 
-    await user.click(dialog.getByRole("button", { name: "Deselect all matching" }));
-    await user.click(dialog.getByRole("button", { name: "Save Changes" }));
+    await user.click(screen.getByRole("button", { name: "Deselect all matching" }));
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {
       expect(networking.updateMCPToolset).toHaveBeenCalledWith(
@@ -315,17 +315,17 @@ describe("MCPToolsetsTab tool search and bulk selection", () => {
     const user = setup();
     renderWithServers();
 
-    const dialog = await openCreate(user);
-    fireEvent.change(dialog.getByPlaceholderText("e.g. github-linear-tools"), { target: { value: "gh-only" } });
-    await user.click(dialog.getByRole("button", { name: /^github/ }));
-    expect(await dialog.findByRole("checkbox", { name: /^list_pulls/ })).toBeInTheDocument();
+    await openCreate(user);
+    fireEvent.change(screen.getByPlaceholderText("e.g. github-linear-tools"), { target: { value: "gh-only" } });
+    await user.click(screen.getByRole("button", { name: /^github/ }));
+    expect(await screen.findByRole("checkbox", { name: /^list_pulls/ })).toBeInTheDocument();
 
-    await user.click(dialog.getByRole("checkbox", { name: "Select all tools on github" }));
-    expect(dialog.getByRole("checkbox", { name: /^list_pulls/ })).toBeChecked();
+    await user.click(screen.getByRole("checkbox", { name: "Select all tools on github" }));
+    expect(screen.getByRole("checkbox", { name: /^list_pulls/ })).toBeChecked();
     // Clicking anywhere on a tool row toggles it exactly once.
-    await user.click(dialog.getByText("List pull requests"));
-    expect(dialog.getByRole("checkbox", { name: /^list_pulls/ })).not.toBeChecked();
-    await user.click(dialog.getByRole("button", { name: "Create Toolset" }));
+    await user.click(screen.getByText("List pull requests"));
+    expect(screen.getByRole("checkbox", { name: /^list_pulls/ })).not.toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Create Toolset" }));
 
     await waitFor(() => {
       expect(networking.createMCPToolset).toHaveBeenCalledWith("sk-test", {
@@ -346,14 +346,14 @@ describe("MCPToolsetsTab tool search and bulk selection", () => {
     ];
     renderWithServers([editToolset(tools)]);
 
-    const dialog = await openEditFor(user);
-    await user.type(dialog.getByRole("textbox", { name: "Search tools or servers" }), "create");
+    await openEditFor(user);
+    await user.type(screen.getByRole("textbox", { name: "Search tools or servers" }), "create");
 
-    expect(await dialog.findByText("Couldn't load tools for this server.")).toBeInTheDocument();
-    expect(await dialog.findByText("server unreachable")).toBeInTheDocument();
-    expect(dialog.getByText("server not found")).toBeInTheDocument();
+    expect(await screen.findByText("Couldn't load tools for this server.")).toBeInTheDocument();
+    expect(await screen.findByText("server unreachable")).toBeInTheDocument();
+    expect(screen.getByText("server not found")).toBeInTheDocument();
 
-    await user.click(dialog.getByRole("button", { name: "Save Changes" }));
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {
       expect(networking.updateMCPToolset).toHaveBeenCalledWith("sk-test", expectedUpdate(tools));
@@ -364,10 +364,10 @@ describe("MCPToolsetsTab tool search and bulk selection", () => {
     const user = setup();
     const queryClient = renderWithServers();
 
-    const dialog = await openCreate(user);
-    await user.type(dialog.getByRole("textbox", { name: "Search tools or servers" }), "issue");
-    expect(await dialog.findByRole("checkbox", { name: /^create_ticket/ })).toBeInTheDocument();
-    await user.click(dialog.getByRole("button", { name: "Cancel" }));
+    await openCreate(user);
+    await user.type(screen.getByRole("textbox", { name: "Search tools or servers" }), "issue");
+    expect(await screen.findByRole("checkbox", { name: /^create_ticket/ })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     const callsWhileOpen = vi.mocked(networking.listMCPTools).mock.calls.length;
 
@@ -375,20 +375,38 @@ describe("MCPToolsetsTab tool search and bulk selection", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(networking.listMCPTools).toHaveBeenCalledTimes(callsWhileOpen);
 
-    const reopened = await openCreate(user);
-    expect(reopened.getByRole("textbox", { name: "Search tools or servers" })).toHaveValue("");
+    await openCreate(user);
+    expect(screen.getByRole("textbox", { name: "Search tools or servers" })).toHaveValue("");
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(networking.listMCPTools).toHaveBeenCalledTimes(callsWhileOpen);
+  });
+
+  it("does not refetch a previously expanded server when the editor is reopened", async () => {
+    const user = setup();
+    const queryClient = renderWithServers();
+
+    await openCreate(user);
+    await user.click(screen.getByRole("button", { name: /^github/ }));
+    expect(await screen.findByRole("checkbox", { name: /^list_pulls/ })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await act(() => queryClient.invalidateQueries({ queryKey: mcpServerToolKeys.all }));
+
+    await openCreate(user);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(networking.listMCPTools).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("checkbox", { name: /^list_pulls/ })).not.toBeInTheDocument();
   });
 
   it("clears the whole toolset with Clear all", async () => {
     const user = setup();
     renderWithServers([editToolset([{ server_id: "gh", tool_name: "create_issue" }])]);
 
-    const dialog = await openEditFor(user);
-    await user.click(dialog.getByRole("button", { name: "Clear all" }));
-    expect(dialog.getByText("No tools added yet")).toBeInTheDocument();
-    await user.click(dialog.getByRole("button", { name: "Save Changes" }));
+    await openEditFor(user);
+    await user.click(screen.getByRole("button", { name: "Clear all" }));
+    expect(screen.getByText("No tools added yet")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {
       expect(networking.updateMCPToolset).toHaveBeenCalledWith("sk-test", expectedUpdate([]));

@@ -16,7 +16,6 @@ export const matchesServerName = (query: string, serverNames: readonly string[])
   return q !== "" && serverNames.some((name) => name.toLowerCase().includes(q));
 };
 
-// A query that matches the server's name shows every tool on that server.
 export const filterServerTools = <T extends SearchableTool>(
   query: string,
   serverNames: readonly string[],
@@ -33,14 +32,9 @@ export const selectTools = (
   selected: readonly MCPToolsetTool[],
   tools: readonly MCPToolsetTool[],
 ): MCPToolsetTool[] => {
-  const seen = new Set(selected.map(toolKey));
-  const added = tools.filter((tool) => {
-    const key = toolKey(tool);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-  return [...selected, ...added];
+  const selectedKeys = new Set(selected.map(toolKey));
+  const uniqueTools = [...new Map(tools.map((tool) => [toolKey(tool), tool])).values()];
+  return [...selected, ...uniqueTools.filter((tool) => !selectedKeys.has(toolKey(tool)))];
 };
 
 export const deselectTools = (

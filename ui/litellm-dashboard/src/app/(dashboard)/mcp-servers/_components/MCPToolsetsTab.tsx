@@ -287,20 +287,16 @@ function CreateToolsetModal({ open, onClose, onSave, initialToolset }: CreateToo
   };
 
   const handleToggleExpanded = (serverId: string) => {
-    setExpandedServerIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(serverId)) {
-        next.delete(serverId);
-      } else {
-        next.add(serverId);
-      }
-      return next;
-    });
+    setExpandedServerIds((prev) =>
+      prev.has(serverId) ? new Set([...prev].filter((id) => id !== serverId)) : new Set([...prev, serverId]),
+    );
   };
 
-  // Clearing the search on close keeps a reopen from fetching every server for one render.
+  // The create modal stays mounted, so state left from the last session would fetch servers
+  // on the first render after reopening, before the open effect resets it.
   const handleClose = () => {
     setSearch("");
+    setExpandedServerIds(new Set());
     onClose();
   };
 
