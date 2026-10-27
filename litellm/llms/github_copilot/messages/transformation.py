@@ -1,6 +1,8 @@
-from typing import Any, Final, cast  # noqa: TID251  # narrows untyped request dicts at the session boundary
+from collections.abc import Sequence
+from typing import Final, cast  # noqa: TID251  # narrows untyped request dicts at the session boundary
 
 from litellm.exceptions import AuthenticationError
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -52,7 +54,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: Sequence[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -115,5 +117,5 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         user_session: Final = require_github_copilot_user_session(
             cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
         )
-        resolved: Final = resolve_copilot_api_base(api_base, user_session, self.authenticator.get_api_key).rstrip("/")
-        return resolved if resolved.endswith("/v1/messages") else f"{resolved}/v1/messages"
+        resolved: Final = resolve_copilot_api_base(api_base, user_session, self.authenticator.get_api_key)
+        return ensure_api_route(resolved, "v1/messages")

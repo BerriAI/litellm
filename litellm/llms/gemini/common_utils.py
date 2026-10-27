@@ -2,15 +2,16 @@ import base64
 import datetime
 import json
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import httpx
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -377,7 +378,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
         return "v1beta"
 
     @staticmethod
-    def get_api_base(api_base: str | None = None) -> str | None:
+    def get_api_base(api_base: str | None = None) -> str:
         return api_base or get_secret_str("GEMINI_API_BASE") or "https://generativelanguage.googleapis.com"
 
     @staticmethod
@@ -388,7 +389,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
     def get_base_model(model: str) -> str | None:
         return model.replace("gemini/", "")
 
-    def process_model_name(self, models: list[dict[str, str]]) -> list[str]:
+    def process_model_name(self, models: Iterable[Mapping[str, str]]) -> list[str]:
         litellm_model_names: Final = []
         for model in models:
             stripped_model_name = model["name"].replace("models/", "")
@@ -400,13 +401,13 @@ class GeminiModelInfo(BaseLLMModelInfo):
         api_base = GeminiModelInfo.get_api_base(api_base)
         api_key = GeminiModelInfo.get_api_key(api_key)
         endpoint: Final = f"/{self.api_version}/models"
-        if api_base is None or api_key is None:
+        if api_key is None:
             raise ValueError(
                 "GEMINI_API_BASE or GEMINI_API_KEY/GOOGLE_API_KEY is not set. Please set the environment variable, to query Gemini's `/models` endpoint."
             )
 
         response: Final = litellm.module_level_client.get(
-            url=f"{api_base}{endpoint}",
+            url=join_api_base(api_base, endpoint),
             headers={"x-goog-api-key": api_key},
         )
 
@@ -415,9 +416,11 @@ class GeminiModelInfo(BaseLLMModelInfo):
                 f"Failed to fetch models from Gemini. Status code: {response.status_code}, Response: {response.json()}"
             )
 
-        models: Final[list[dict[str, str]]] = response.json()["models"]
+        listing: Final = cast(  # cast-ok: the body passes through unvalidated, as before it was typed
+            Mapping[str, Iterable[Mapping[str, str]]], _JSON_VALUE.validate_python(response.json())
+        )
 
-        litellm_model_names: Final = self.process_model_name(models)
+        litellm_model_names: Final = self.process_model_name(listing["models"])
         return litellm_model_names
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:

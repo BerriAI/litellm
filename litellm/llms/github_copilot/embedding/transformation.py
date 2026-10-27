@@ -19,6 +19,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.types.llms.openai import AllEmbeddingInputValues
@@ -120,7 +121,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
             cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
         )
         resolved: Final = resolve_copilot_api_base(api_base, user_session, self.authenticator.get_api_key)
-        return f"{resolved.rstrip('/')}/embeddings"
+        return join_api_base(resolved, "embeddings")
 
     def transform_embedding_request(
         self,
@@ -192,7 +193,9 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
                 optional_params[param] = value
         return optional_params
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Any) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, str] | httpx.Headers
+    ) -> BaseLLMException:
         from litellm.llms.openai.openai import OpenAIConfig
 
         return OpenAIConfig().get_error_class(error_message=error_message, status_code=status_code, headers=headers)

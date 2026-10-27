@@ -19,6 +19,7 @@ from collections.abc import (
     Awaitable,
     Callable,
     Coroutine,
+    Iterable,
     Iterator,
     Mapping,
     Sequence,
@@ -51,7 +52,7 @@ from typing import (
 
 import anyio
 import httpx
-from typing_extensions import Never, ReadOnly, TypedDict
+from typing_extensions import Never, NotRequired, ReadOnly, TypedDict
 
 from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import (
@@ -89,9 +90,10 @@ from litellm.proxy.common_utils.openai_error_payload import (
     with_litellm_call_id,
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
+from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
-from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, CallTypesLiteral, CostPerToken, ModelInfo, Usage
+from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, CallTypesLiteral, ModelInfo, Usage
 
 try:
     from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
@@ -158,7 +160,8 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
-from litellm.litellm_core_utils.litellm_logging import Logging, deployment_pricing_model_info
+from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch, Logging, deployment_pricing_model_info
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.served_output_texts import (
@@ -181,6 +184,7 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
 from litellm.proxy.common_utils.config_sync_pubsub import publish_config_param_change
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.db import tool_registry_writer
 from litellm.proxy.db.create_views import (
     create_missing_views,
     create_view_tolerating_race,
@@ -188,6 +192,7 @@ from litellm.proxy.db.create_views import (
 )
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
 from litellm.proxy.db.db_url_settings import (
     DatabaseURLSettings,
     add_missing_query_params,
@@ -268,6 +273,7 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.router_utils.deployment_pricing import pricing_models
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -320,10 +326,22 @@ class _RelTuplesRow(TypedDict):
     reltuples: ReadOnly[int]
 
 
+class _TeamMemberRow(TypedDict):
+    role: ReadOnly[Literal["admin", "user"]]
+    user_id: ReadOnly[NotRequired[str | None]]
+    user_email: ReadOnly[NotRequired[str | None]]
+
+
+class _TeamMembershipRow(TypedDict):
+    user_id: ReadOnly[str | None]
+    team_members_with_roles: ReadOnly[Iterable[_TeamMemberRow] | None]
+
+
 _VIEW_SETUP_POLL_INTERVAL_SECONDS: Final = 5.0
 _VIEW_SETUP_DEADLINE_SECONDS: Final = 15 * 60.0
 _VIEW_SETUP_GATE_TABLE: Final = '"LiteLLM_SpendLogs"'
 _VIEW_SETUP_GATE_PROBE_ROWS: Final = TypeAdapter(tuple[Mapping[str, bool], ...])
+_DELEGATED_ATTRIBUTE: Final = TypeAdapter(object)
 
 _ViewSetupOutcome: TypeAlias = Literal["ready", "timed_out"]
 _ViewSetupAttempt: TypeAlias = Literal["ready", "table_missing"] | Exception
@@ -359,6 +377,47 @@ class _UpdateManyBatch(Protocol):
     def litellm_teamtable(self) -> _EndUserBatchTable: ...
 
     async def commit(self) -> None: ...
+
+
+def _update_many_batch(db: PrismaWrapper | RoutingPrismaWrapper) -> _UpdateManyBatch:
+    return db.batch_()
+
+
+def _query_raw_rows(
+    db: PrismaWrapper | RoutingPrismaWrapper, query: str, *args: object
+) -> Awaitable[Sequence[Mapping[str, object]]]:
+    return db.query_raw(query, *args)
+
+
+def _query_first_row(
+    db: PrismaWrapper | RoutingPrismaWrapper, query: str, *args: object
+) -> Awaitable[Mapping[str, object] | None]:
+    return db.query_first(query, *args)
+
+
+def _team_member_for_user(row: _TeamMembershipRow) -> Member | None:
+    members_with_roles: Final = row["team_members_with_roles"]
+    if members_with_roles is None:
+        return None
+    user_id: Final = row["user_id"]
+    if user_id is None:
+        return None
+    matches: Final = [
+        Member(**member)
+        for member in members_with_roles
+        if member.get("user_id") is not None and user_id == member.get("user_id")
+    ]
+    return matches[-1] if matches else None
+
+
+class _EndUserSpendTransaction(Protocol):
+    def batch_(self) -> contextlib.AbstractAsyncContextManager[_EndUserSpendBatch]: ...
+
+
+def _end_user_spend_transaction(
+    db: PrismaWrapper | RoutingPrismaWrapper, timeout: timedelta
+) -> contextlib.AbstractAsyncContextManager[_EndUserSpendTransaction]:
+    return db.tx(timeout=timeout)
 
 
 unified_guardrail: Final = UnifiedLLMGuardrails()
@@ -540,7 +599,7 @@ class _UpstreamStreamBoundary(Generic[_T]):
         self.failure: BaseException | None = None
 
     def __getattr__(self, name: str) -> object:
-        return getattr(self._source, name)
+        return _DELEGATED_ATTRIBUTE.validate_python(getattr(self._source, name))
 
     def __aiter__(self) -> "_UpstreamStreamBoundary[_T]":
         return self
@@ -935,7 +994,7 @@ def _system_prompt_text(system_input: object) -> str:
     return "".join(_prompt_block_text(block) for block in system_input)
 
 
-def _count_request_input_tokens(model: str, request_input: object, system_input: object) -> int:
+def count_request_input_tokens(model: str, request_input: object, system_input: object) -> int:
     system_text: Final = _system_prompt_text(system_input)
     system_tokens: Final = litellm.token_counter(model=model, text=system_text) if system_text else 0
     if isinstance(request_input, str):
@@ -956,7 +1015,7 @@ def _estimate_dispatched_failure_usage(model: str, request_input: object, system
     the same tokenizer fallback interrupted streams use, so the spend log's
     failure row records what was sent instead of zero."""
     try:
-        input_tokens: Final = _count_request_input_tokens(
+        input_tokens: Final = count_request_input_tokens(
             model=model, request_input=request_input, system_input=system_input
         )
     except Exception:
@@ -995,6 +1054,8 @@ _INPUT_ESTIMABLE_CALL_TYPES: Final = frozenset(
 )
 
 
+_RESPONSES_CALL_TYPES: Final = frozenset((CallTypes.responses.value, CallTypes.aresponses.value))
+
 _FAILED_ATTEMPTS_USAGE: Final = TypeAdapter(tuple[tuple[Usage, float], ...])
 
 
@@ -1013,13 +1074,14 @@ def _billed_across_attempts(
     )
 
 
-def _failure_usage_to_lift(
+def _current_failure_usage_to_lift(
     model_call_details: Mapping[str, object],
     request_body: Mapping[str, object],
     dispatched: bool,
     provider_billed: bool = False,
     deployment_id: str | None = None,
     base_model: str | None = None,
+    dispatched_call_type: str | None = None,
 ) -> tuple[object, object] | None:
     """A stream that broke mid-flight still billed the provider for the chunks
     already delivered; the streaming handler stashes that recovered usage and
@@ -1035,9 +1097,6 @@ def _failure_usage_to_lift(
     failure stays at zero cost. Returns the
     (combined_usage_object, response_cost) pair to lift, or None."""
     recovered_usage: Final = model_call_details.get("combined_usage_object")
-    failed_attempts: Final = _FAILED_ATTEMPTS_USAGE.validate_python(model_call_details.get("failed_attempts_usage", ()))
-    if failed_attempts:
-        return _billed_across_attempts(failed_attempts, recovered_usage, model_call_details.get("response_cost"))
     if recovered_usage is not None:
         return recovered_usage, model_call_details.get("response_cost")
     if not dispatched:
@@ -1046,7 +1105,7 @@ def _failure_usage_to_lift(
         # The proxy-only error handler stamps this flag on a client disconnect too, even though the
         # request had already reached the provider, so a billed failure keeps its estimate.
         return None
-    estimated_usage: Final = _estimated_prompt_usage(model_call_details, request_body)
+    estimated_usage: Final = _estimated_prompt_usage(model_call_details, request_body, dispatched_call_type)
     if estimated_usage is None:
         return None
     if not provider_billed:
@@ -1057,13 +1116,14 @@ def _failure_usage_to_lift(
 
 
 def _estimated_prompt_usage(
-    model_call_details: Mapping[str, object], request_body: Mapping[str, object]
+    model_call_details: Mapping[str, object], request_body: Mapping[str, object], dispatched_call_type: str | None
 ) -> Usage | None:
     """The input-only Usage estimate for the prompt this request sent, or None when the call type has no
     estimable input. The raw request body backfills the system prompt when the SDK bridges an endpoint
     (e.g. /v1/messages on a chat-completions provider) without filling optional_params."""
     if str(model_call_details.get("call_type")) not in _INPUT_ESTIMABLE_CALL_TYPES:
         return None
+    dispatched_input: Final = model_call_details.get("messages")
     optional_params: Final = model_call_details.get("optional_params")
     dispatched_system: Final = (
         (optional_params.get("system") or optional_params.get("instructions"))
@@ -1080,7 +1140,11 @@ def _estimated_prompt_usage(
     )
     return _estimate_dispatched_failure_usage(
         model=str(model_call_details.get("model") or ""),
-        request_input=model_call_details.get("messages"),
+        request_input=(
+            messages_since_newest_compaction(dispatched_input)
+            if dispatched_call_type in _RESPONSES_CALL_TYPES
+            else dispatched_input
+        ),
         system_input=system_input,
     )
 
@@ -1159,6 +1223,43 @@ def _timed_out_earlier_records(
     return tuple(record for identity, record in by_identity.items() if identity != final_identity)
 
 
+def _record_pricing(
+    model_call_details: Mapping[str, object], record: Mapping[str, object], base_model: str | None
+) -> tuple[Mapping[str, object], str | None]:
+    """The ``(model_call_details, base_model)`` to price one earlier attempt with: the record's own
+    deployment model and ``base_model`` when it served a different model than the final attempt
+    (the provider is then inferred from that model), else the final attempt's."""
+    record_model: Final = record.get("model")
+    if not isinstance(record_model, str) or record_model == model_call_details.get("model"):
+        return model_call_details, base_model
+    record_base_model: Final = record.get("base_model")
+    return (
+        {**model_call_details, "model": record_model, "custom_llm_provider": None},
+        record_base_model if isinstance(record_base_model, str) else None,
+    )
+
+
+def _billed_earlier_attempt(
+    model_call_details: Mapping[str, object],
+    record: Mapping[str, object],
+    index: int,
+    estimated_usage: Usage,
+    base_model: str | None,
+) -> BilledFailedAttempt:
+    pricing_details, pricing_base_model = _record_pricing(model_call_details, record, base_model)
+    return BilledFailedAttempt(
+        attempted_retries=_attempt_number(record, index),
+        deployment_id=_record_deployment_id(record),
+        usage=estimated_usage,
+        response_cost=_estimated_input_cost(
+            pricing_details,
+            estimated_usage.prompt_tokens,
+            deployment_id=_record_deployment_id(record),
+            base_model=pricing_base_model,
+        ),
+    )
+
+
 def _billed_earlier_attempts(
     model_call_details: Mapping[str, object],
     litellm_params: Mapping[str, object] | None,
@@ -1172,54 +1273,45 @@ def _billed_earlier_attempts(
     request's own deployment and retry count (``attempted_retries`` restarts at 0 after a fallback
     hop, so the count alone cannot tell the groups apart). An earlier attempt that ended in a
     ``Timeout`` had the same prompt accepted by its deployment, so it is billed like the final
-    attempt, at that deployment's input rate (else the cost map's rate for ``base_model`` or the
-    model). Only the exception class survives on the record, so an earlier connect timeout is
-    billed too; any other failure class is not."""
+    attempt, at that deployment's input rate (else the cost map's rate for the record's own
+    ``base_model`` or model, which a fallback hop can make a different model than the final one).
+    Only the exception class survives on the record, so an earlier connect timeout is billed too;
+    any other failure class is not."""
     final_attempt: Final = _retry_metadata_bucket(litellm_params).get("attempted_retries")
     final_identity: Final = (deployment_id, final_attempt if isinstance(final_attempt, int) else None)
     return tuple(
-        BilledFailedAttempt(
-            attempted_retries=_attempt_number(record, index),
-            deployment_id=_record_deployment_id(record),
-            usage=estimated_usage,
-            response_cost=_estimated_input_cost(
-                model_call_details,
-                estimated_usage.prompt_tokens,
-                deployment_id=_record_deployment_id(record),
-                base_model=base_model,
-            ),
-        )
+        _billed_earlier_attempt(model_call_details, record, index, estimated_usage, base_model)
         for index, record in enumerate(_timed_out_earlier_records(litellm_params, final_identity))
     )
 
 
-def _deployment_cost_per_token(deployment_id: str | None, model: str) -> CostPerToken | None:
-    """The pricing the router registered for this deployment under its ``model_info.id``, read
-    through ``deployment_pricing_model_info`` exactly as the success path does; None means the
-    public cost map. The id is ``Logging.get_router_model_id()`` (the logging object's own
-    ``litellm_params``), never the flattened ``model_call_details`` copy a request body key can
-    overwrite."""
-    model_info: Final = deployment_pricing_model_info(model_id=deployment_id, deployment_model=model)
-    if model_info is None:
-        return None
-    return CostPerToken(
-        input_cost_per_token=model_info["input_cost_per_token"] or 0.0,
-        output_cost_per_token=model_info["output_cost_per_token"] or 0.0,
-    )
+def _deployment_priced_input_cost(
+    model: str, custom_llm_provider: str | None, prompt_tokens: int, deployment_pricing: ModelInfo
+) -> float:
+    """Input price for the estimated prompt at the deployment's registered rates, read through
+    ``deployment_pricing_model_info`` and priced by ``generic_cost_per_token`` the way the success
+    path prices them, so a long-context tier the deployment declares (``input_cost_per_token_above_200k_tokens``)
+    is honoured instead of flattened to the standard rate. An entry it cannot price keeps the row at $0."""
+    usage: Final = Usage(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens)
+    try:
+        prompt_cost, _ = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider or str(deployment_pricing.get("litellm_provider") or ""),
+            model_info=deployment_pricing,
+        )
+    except Exception as exc:  # noqa: BLE001  # a malformed registered entry must not drop the failure row
+        verbose_proxy_logger.debug("failure spend estimate: could not price deployment of %s: %s", model, exc)
+        return 0.0
+    return prompt_cost
 
 
-def _priced_input_cost(
-    pricing_model: str,
-    custom_llm_provider: str | None,
-    prompt_tokens: int,
-    custom_cost_per_token: CostPerToken | None,
-) -> float | None:
+def _priced_input_cost(pricing_model: str, custom_llm_provider: str | None, prompt_tokens: int) -> float | None:
     try:
         estimated_input_cost, _ = litellm.cost_per_token(
             model=pricing_model,
             custom_llm_provider=custom_llm_provider,
             prompt_tokens=prompt_tokens,
-            custom_cost_per_token=custom_cost_per_token,
         )
     except Exception as exc:  # noqa: BLE001  # cost_per_token raises BadRequestError for an unmapped model and the row must still be written
         verbose_proxy_logger.debug("failure spend estimate: could not price %s: %s", pricing_model, exc)
@@ -1233,20 +1325,47 @@ def _estimated_input_cost(
     deployment_id: str | None,
     base_model: str | None,
 ) -> float:
-    """Input price for the estimated prompt: the deployment's registered rate when it has one, else
-    the cost map's rate for ``base_model``, else the deployment model, the same candidate order
-    ``completion_cost`` walks (an Azure deployment name is not in the cost map, its ``base_model``
-    is; a ``base_model`` the cost map does not know falls through to the deployment model). A model
-    no candidate can price keeps the row at $0 rather than dropping the failure row."""
+    """Input price for the estimated prompt: the deployment's registered rates when it has any (the id
+    is ``Logging.get_router_model_id()``, never the flattened ``model_call_details`` copy a request body
+    key can overwrite), else the cost map's rate for ``base_model``, else the deployment model, the same
+    candidate order ``completion_cost`` walks (an Azure deployment name is not in the cost map, its
+    ``base_model`` is; a ``base_model`` the cost map does not know falls through to the deployment
+    model). A model no candidate can price keeps the row at $0 rather than dropping the failure row."""
     model: Final = str(model_call_details.get("model") or "")
     custom_llm_provider: Final = str(model_call_details.get("custom_llm_provider") or "") or None
-    custom_cost_per_token: Final = _deployment_cost_per_token(deployment_id, model)
-    pricing_models: Final = (base_model, model) if base_model is not None else (model,)
+    deployment_pricing: Final = deployment_pricing_model_info(model_id=deployment_id, deployment_model=model)
+    if deployment_pricing is not None:
+        return _deployment_priced_input_cost(model, custom_llm_provider, prompt_tokens, deployment_pricing)
+    pricing_models_to_try: Final = pricing_models(base_model, model)
     candidate_costs: Final = (
-        _priced_input_cost(pricing_model, custom_llm_provider, prompt_tokens, custom_cost_per_token)
-        for pricing_model in pricing_models
+        _priced_input_cost(pricing_model, custom_llm_provider, prompt_tokens) for pricing_model in pricing_models_to_try
     )
     return next((cost for cost in candidate_costs if cost is not None), 0.0)
+
+
+def _failure_usage_to_lift(
+    model_call_details: Mapping[str, object],
+    request_body: Mapping[str, object],
+    dispatched: bool,
+    provider_billed: bool = False,
+    deployment_id: str | None = None,
+    base_model: str | None = None,
+    dispatched_call_type: str | None = None,
+) -> tuple[object, object] | None:
+    current_attempt: Final = _current_failure_usage_to_lift(
+        model_call_details,
+        request_body,
+        dispatched,
+        provider_billed,
+        deployment_id,
+        base_model,
+        dispatched_call_type=dispatched_call_type,
+    )
+    failed_attempts: Final = _FAILED_ATTEMPTS_USAGE.validate_python(model_call_details.get("failed_attempts_usage", ()))
+    if not failed_attempts:
+        return current_attempt
+    current_usage, current_cost = current_attempt if current_attempt is not None else (None, None)
+    return _billed_across_attempts(failed_attempts, current_usage, current_cost)
 
 
 _EMPTY_LIFT: Final = MappingProxyType({})
@@ -1357,6 +1476,13 @@ def _call_type_for_route(route: str | None) -> str | None:
     return call_types[0].value if len(operations) == 1 else None
 
 
+REJECTED_BEFORE_REQUEST_SETUP_KEY: Final = "litellm_rejected_before_request_setup"
+REJECTED_BEFORE_REQUEST_SETUP: Final = object()
+"""Stored under ``REJECTED_BEFORE_REQUEST_SETUP_KEY`` on ``request_data`` when the failure handler finds no logging
+object, meaning the request died (auth, body parsing, model resolution) before the pipeline set one up. A sentinel
+object rather than ``True`` because ``request_data`` is the client body: JSON cannot forge this identity, so a
+client can neither hide a guardrail block nor force a row by sending the key or a ``litellm_call_id`` itself."""
+
 _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
 
@@ -1383,15 +1509,18 @@ def _timed_out_reading_from_provider(exception: Exception) -> bool:
 
 
 def _client_disconnected(exception: Exception) -> bool:
-    """The 499 the proxy raises when the caller hung up while the provider was still working on the request."""
-    return getattr(exception, "status_code", None) == LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
+    """The 499 the proxy itself raises when the caller hung up while the provider was still working on the
+    request. A provider's own 499 arrives as a litellm exception and is a plain upstream failure."""
+    return isinstance(exception, HTTPException) and exception.status_code == LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
 
 
 def _provider_billed_the_failure(exception: Exception) -> bool:
     return _timed_out_reading_from_provider(exception) or _client_disconnected(exception)
 
 
-def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed: bool = False) -> Mapping[str, object]:
+def _failure_fields_to_lift(
+    request_data: Mapping[str, object], provider_billed: bool = False, dispatched_call_type: str | None = None
+) -> Mapping[str, object]:
     """Failure-path callbacks run after ``litellm_logging_obj`` is popped from
     request_data (it is not serialisable), so the caller merges these fields
     onto request_data first: the request start and first-handoff instants for
@@ -1406,17 +1535,20 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
     _litellm_params: Final = getattr(_logging_obj, "litellm_params", None)
     _base_model: Final = get_base_model_from_metadata(model_call_details=_model_call_details)
     _deployment_id: Final = _logging_obj.get_router_model_id() if isinstance(_logging_obj, Logging) else None
+    _success_already_logged: Final = isinstance(_logging_obj, Logging) and _logging_obj.async_success_log_enqueued
+    _billed: Final = provider_billed and not _success_already_logged
     _usage_to_lift: Final = _failure_usage_to_lift(
         model_call_details=_model_call_details,
         request_body=request_data,
-        dispatched=_first_handoff is not None,
-        provider_billed=provider_billed,
+        dispatched=_model_call_details.get("current_attempt_api_call_start_time", _first_handoff) is not None,
+        provider_billed=_billed,
         deployment_id=_deployment_id,
         base_model=_base_model,
+        dispatched_call_type=dispatched_call_type,
     )
     _prompt_estimate: Final = (
-        _estimated_prompt_usage(_model_call_details, request_data)
-        if provider_billed and _first_handoff is not None and not _model_call_details.get("failed_attempts_usage")
+        _estimated_prompt_usage(_model_call_details, request_data, dispatched_call_type)
+        if _billed and _first_handoff is not None and not _model_call_details.get("failed_attempts_usage")
         else None
     )
     _earlier_attempts: Final = (
@@ -3579,6 +3711,7 @@ class ProxyLogging:
         error_type: ProxyErrorTypes | None = None,
         route: str | None = None,
         traceback_str: str | None = None,
+        dispatched_call_type: str | None = None,
     ) -> HTTPException | None:
         """
         Allows users to raise custom exceptions/log when a call fails, without having to deal with parsing Request body.
@@ -3649,7 +3782,9 @@ class ProxyLogging:
 
         request_data.update(
             await offload_token_count(_failure_fields_to_lift)(
-                request_data, provider_billed=_provider_billed_the_failure(original_exception)
+                request_data,
+                provider_billed=_provider_billed_the_failure(original_exception),
+                dispatched_call_type=dispatched_call_type or _call_type_for_route(user_api_key_dict.request_route),
             )
         )
 
@@ -3760,6 +3895,7 @@ class ProxyLogging:
                 **request_data,
             )
             request_data["litellm_logging_obj"] = litellm_logging_obj  # rebind-ok: lifted then popped by the caller
+            request_data.update({REJECTED_BEFORE_REQUEST_SETUP_KEY: REJECTED_BEFORE_REQUEST_SETUP})
             if "metadata" not in request_data:
                 request_data["metadata"] = {}
             request_data["metadata"].update(user_api_key_logged_metadata)
@@ -3859,6 +3995,7 @@ class ProxyLogging:
                 original_exception,
                 traceback_str,
             ),
+            kwargs={"for_async_request": True},
             daemon=True,
         ).start()
 
@@ -4696,19 +4833,25 @@ class ProxyLogging:
 
     @staticmethod
     def _discard_deferred_stream_logging_for_failure(request_data: Mapping[str, object], error: Exception) -> bool:
-        """Drop the parked success dispatch for an assembled chat stream that ends in an error
-        ``post_call_failure_hook`` logs as a failure, billing its usage on the failure row instead.
+        """Drop the parked success dispatch for an assembled chat stream or a stream that billed several rounds when it
+        ends in an error ``post_call_failure_hook`` logs as a failure, billing its usage on the failure row instead.
         Returns False when the parked dispatch should still be flushed by the caller."""
         logging_obj: Final = request_data.get("litellm_logging_obj")
         if not isinstance(logging_obj, Logging):
             return False
         _args: Final[tuple[object, ...] | None] = getattr(logging_obj, "_deferred_stream_complete_args", None)
-        assembled: Final = _args[0] if _args else None
-        if not isinstance(error, _PROXY_ONLY_LLM_API_ERRORS) or not isinstance(assembled, ModelResponse):
+        if not isinstance(error, _PROXY_ONLY_LLM_API_ERRORS):
             return False
+        match _args:
+            case (ModelResponse() as assembled, *_):
+                logging_obj.record_assembled_response_for_failure(assembled)
+            case (BilledRoundsDispatch() as billed,):
+                billed.dispatch.close()
+                logging_obj.record_billed_rounds_for_failure(billed.spend)
+            case _:
+                return False
         logging_obj._on_deferred_stream_complete = None
         logging_obj._deferred_stream_complete_args = None
-        logging_obj.record_assembled_response_for_failure(assembled)
         return True
 
     async def arelease_max_parallel_requests_on_disconnect(
@@ -4796,6 +4939,7 @@ def jsonify_object(data: dict) -> dict:
 _deprecated_key_cache: Final[LimitedSizeOrderedDict] = LimitedSizeOrderedDict(max_size=1000)
 _DEPRECATED_KEY_CACHE_TTL_SECONDS: Final = 60
 _PRISMA_DEFAULT_TX_TIMEOUT: Final = timedelta(seconds=5)
+_PRISMA_DEFAULT_TX_MAX_WAIT: Final = timedelta(seconds=2)
 
 
 async def _lookup_deprecated_key(
@@ -5202,13 +5346,17 @@ class PrismaClient:
             return self.db.read_target
         return self.db
 
-    def tx(self, *, timeout: timedelta = _PRISMA_DEFAULT_TX_TIMEOUT) -> "TransactionManager":
+    def tx(
+        self, *, timeout: timedelta = _PRISMA_DEFAULT_TX_TIMEOUT, max_wait: timedelta = _PRISMA_DEFAULT_TX_MAX_WAIT
+    ) -> "TransactionManager":
         """Open an interactive transaction on the writer.
 
         Callers go through this instead of reaching into ``self.db`` so writer
         selection and read-replica routing stay encapsulated in the wrapper.
         """
-        return cast("TransactionManager", self.db.tx(timeout=timeout))  # cast-ok: untyped __getattr__ delegate
+        return cast(  # cast-ok: untyped __getattr__ delegate
+            "TransactionManager", self.db.tx(max_wait=max_wait, timeout=timeout)
+        )
 
     def get_request_status(self, payload: dict | SpendLogsPayload) -> Literal["success", "failure"]:
         """
@@ -5410,7 +5558,9 @@ class PrismaClient:
 
             raise e
 
-    async def _query_first_with_cached_plan_fallback(self, sql_query: str, *args) -> dict | None:
+    async def _query_first_with_cached_plan_fallback(
+        self, sql_query: str, *args: object
+    ) -> Mapping[str, object] | None:
         """
         Execute a query, recovering once from PostgreSQL's "cached plan must not
         change result type" error.
@@ -5661,7 +5811,7 @@ class PrismaClient:
                         LIMIT $1
                         OFFSET $2
                         """
-                        response = await self.db.query_raw(sql_query, limit, offset)
+                        response = await _query_raw_rows(self.db, sql_query, limit, offset)
                 return response
             elif table_name == "spend":
                 verbose_proxy_logger.debug("PrismaClient: get_data: table_name == 'spend'")
@@ -5805,7 +5955,7 @@ class PrismaClient:
                     """
 
                     response = (
-                        await self.writer_db.query_first(sql_query, hashed_token)
+                        await _query_first_row(self.writer_db, sql_query, hashed_token)
                         if use_writer
                         else await self._query_first_with_cached_plan_fallback(sql_query, hashed_token)
                     )
@@ -5841,31 +5991,14 @@ class PrismaClient:
                         if response["team_blocked"] is None:
                             response["team_blocked"] = False
 
-                        team_member: Member | None = None
-                        if response["team_members_with_roles"] is not None and response["user_id"] is not None:
-                            ## find the team member corresponding to user id
-                            """
-                            [
-                                {
-                                    "role": "admin",
-                                    "user_id": "default_user_id",
-                                    "user_email": null
-                                },
-                                {
-                                    "role": "user",
-                                    "user_id": null,
-                                    "user_email": "test@email.com"
-                                }
-                            ]
-                            """
-                            for tm in response["team_members_with_roles"]:
-                                if tm.get("user_id") is not None and response["user_id"] == tm.get("user_id"):
-                                    team_member = Member(**tm)
+                        ## find the team member corresponding to user id
+                        team_member: Final = _team_member_for_user(response)
                         response["team_member"] = team_member
-                        response = LiteLLM_VerificationTokenView(**response, last_refreshed_at=time.time())
+                        token_view: Final = LiteLLM_VerificationTokenView(**response, last_refreshed_at=time.time())
                         # for prisma we need to cast the expires time to str
-                        if response.expires is not None and isinstance(response.expires, datetime):
-                            response.expires = response.expires.isoformat()
+                        if token_view.expires is not None and isinstance(token_view.expires, datetime):
+                            token_view.expires = token_view.expires.isoformat()
+                        response = token_view
                     return response
         except Exception as e:
             import traceback
@@ -5948,13 +6081,12 @@ class PrismaClient:
             elif table_name == "user":
                 db_data = self.jsonify_object(data=data)
                 try:
-                    new_user_row: Final = await UserRepository(self).table.upsert(
-                        where={"user_id": data["user_id"]},
-                        data={
-                            "create": {**db_data},
-                            "update": {},  # don't do anything if it already exists
-                        },
-                    )
+                    new_user_row: Final = await UserRepository(self).upsert_user(db_data)
+                    if new_user_row is None:
+                        raise HTTPException(
+                            status_code=403,
+                            detail="SSO for more than 5 users requires a LiteLLM Enterprise license. Existing users can still sign in.",
+                        )
                 except Exception as e:
                     if (
                         "Foreign key constraint failed on the field: `LiteLLM_UserTable_organization_id_fkey (index)`"
@@ -6156,7 +6288,7 @@ class PrismaClient:
                 """
                 Batch write update queries
                 """
-                batcher: _UpdateManyBatch = self.db.batch_()
+                batcher: _UpdateManyBatch = _update_many_batch(self.db)
                 for idx, t in enumerate(data_list):
                     # check if plain text or hash
                     if t.token.startswith("sk-"):
@@ -6181,7 +6313,7 @@ class PrismaClient:
                 """
                 Batch write update queries
                 """
-                batcher = self.db.batch_()
+                batcher = _update_many_batch(self.db)
                 for user in sorted(data_list, key=attrgetter("user_id")):
                     try:
                         data_json = self.jsonify_object(data=user.model_dump(exclude_none=True))
@@ -6206,7 +6338,7 @@ class PrismaClient:
                 """
                 Batch write update queries
                 """
-                batcher = self.db.batch_()
+                batcher = _update_many_batch(self.db)
                 for enduser in data_list:
                     try:
                         data_json = self.jsonify_object(data=enduser.model_dump(exclude_none=True))
@@ -6231,7 +6363,7 @@ class PrismaClient:
                 """
                 Batch write update queries
                 """
-                batcher = self.db.batch_()
+                batcher = _update_many_batch(self.db)
                 for budget in data_list:
                     try:
                         data_json = self.jsonify_object(data=budget.model_dump(exclude_none=True))
@@ -6254,7 +6386,7 @@ class PrismaClient:
                 and isinstance(data_list, list)
             ):
                 # Batch write update queries
-                batcher = self.db.batch_()
+                batcher = _update_many_batch(self.db)
                 for idx, team in enumerate(data_list):
                     try:
                         data_json = self.jsonify_team_object(db_data=team.model_dump(exclude_none=True))
@@ -6919,7 +7051,7 @@ class PrismaClient:
                 # caller's own retried query, a stronger check than SELECT 1,
                 # and a reader that fails to come back sets `_reader_unavailable`
                 # so reads fall through to the writer just recreated here.
-                await self.writer_db.query_raw("SELECT 1")
+                await _query_raw_rows(self.writer_db, "SELECT 1")
                 # A recreate can decline: the optimistic-lock guard no-ops when
                 # the writer generation moved since cycle entry, and the routing
                 # wrapper then leaves the reader untouched as well. Callers that
@@ -7267,7 +7399,7 @@ class PrismaClient:
 
     async def _view_setup_gate_table_present(self) -> bool:
         rows: Final = _VIEW_SETUP_GATE_PROBE_ROWS.validate_python(
-            await self.db.query_raw("SELECT to_regclass($1) IS NOT NULL AS present", _VIEW_SETUP_GATE_TABLE)
+            await _query_raw_rows(self.db, "SELECT to_regclass($1) IS NOT NULL AS present", _VIEW_SETUP_GATE_TABLE)
         )
         return rows[0]["present"]
 
@@ -7277,7 +7409,7 @@ class PrismaClient:
                 await asyncio.sleep(self._db_health_watchdog_interval_seconds)
                 async with db_span("db_health_watchdog", None):
                     await asyncio.wait_for(
-                        self.db.query_raw("SELECT 1"),
+                        _query_raw_rows(self.db, "SELECT 1"),
                         timeout=self._db_health_watchdog_probe_timeout_seconds,
                     )
                 if isinstance(self.db, RoutingPrismaWrapper) and self.db.writer_unavailable:
@@ -7337,7 +7469,7 @@ class PrismaClient:
     async def _writer_is_read_only(self, writer: PrismaWrapper) -> bool:
         """True iff the pooled writer session answers reads but rejects writes (SQLSTATE 25006)."""
         rows: Final = _WRITER_WRITABILITY_PROBE_ROWS.validate_python(
-            await writer.query_raw(_WRITER_WRITABILITY_PROBE_SQL)
+            await _query_raw_rows(writer, _WRITER_WRITABILITY_PROBE_SQL)
         )
         return any(row.get("transaction_read_only") == "on" for row in rows)
 
@@ -7364,7 +7496,7 @@ class PrismaClient:
         """
         sql_query: Final = "SELECT 1"
         async with db_span("health_check", None):
-            response: Final[object] = await wrapper.query_raw(sql_query)
+            response: Final[object] = await _query_raw_rows(wrapper, sql_query)
         return response
 
     async def _probe_answers_now(self, wrapper: PrismaWrapper) -> bool:
@@ -7917,7 +8049,7 @@ class ProxyUpdateSpend:
             try:
                 async with (
                     db_span("update_end_user_spend", "LiteLLM_EndUserTable"),
-                    prisma_client.db.tx(timeout=timedelta(seconds=60)) as transaction,
+                    _end_user_spend_transaction(prisma_client.db, timedelta(seconds=60)) as transaction,
                 ):
                     batcher: _EndUserSpendBatch
                     async with transaction.batch_() as batcher:
@@ -8058,6 +8190,18 @@ class ProxyUpdateSpend:
         if general_settings.get("disable_spend_updates") is True:
             return True
         return False
+
+
+async def commit_tool_discoveries(prisma_client: PrismaClient, proxy_logging_obj: ProxyLogging) -> None:
+    """Scheduler job writing discovered tools to LiteLLM_ToolTable, on its own lock, next to update_spend."""
+    writer: Final = proxy_logging_obj.db_spend_update_writer
+    await tool_registry_writer.commit_tool_discoveries(
+        prisma_client=prisma_client,
+        tool_discovery_queue=writer.tool_discovery_queue,
+        redis_update_buffer=writer.redis_update_buffer,
+        pod_lock_manager=writer.pod_lock_manager,
+        use_redis_buffer=RedisUpdateBuffer.should_commit_spend_updates_to_redis(),
+    )
 
 
 async def update_spend(

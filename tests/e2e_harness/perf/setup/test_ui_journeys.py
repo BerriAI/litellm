@@ -6,9 +6,9 @@ import pytest
 from setup.ui_journeys import (
     UI_JOURNEY_LIMITS,
     Sample,
-    error_code,
     assert_within_ceiling,
     database_failures,
+    error_code,
     journeys,
     summarize,
     ui_junit_properties,
@@ -153,3 +153,21 @@ def test_failed_data_request_status_becomes_the_error_code() -> None:
     metrics: Final = dict(ui_junit_properties((gateway_error, slow, hung)))
     assert metrics["perf_ui_error_http_500"] == 1 and metrics["perf_ui_error_wall_clock"] == 1
     assert "perf_ui_error_ui" not in metrics
+
+
+def test_volume_properties_name_rows_and_bytes_per_queried_table() -> None:
+    from setup.ui_query_fixture import TableVolume, volume_properties
+
+    properties: Final = volume_properties(
+        (
+            TableVolume(table="LiteLLM_SpendLogs", rows=850_000_000, bytes=1_000_000_000_000),
+            TableVolume(table="LiteLLM_VerificationToken", rows=5_000, bytes=4_194_304),
+        )
+    )
+
+    assert properties == (
+        ("perf_ui_db_rows_LiteLLM_SpendLogs", 850_000_000),
+        ("perf_ui_db_bytes_LiteLLM_SpendLogs", 1_000_000_000_000),
+        ("perf_ui_db_rows_LiteLLM_VerificationToken", 5_000),
+        ("perf_ui_db_bytes_LiteLLM_VerificationToken", 4_194_304),
+    )

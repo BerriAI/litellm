@@ -488,6 +488,10 @@ class _AuthorizationServerMetadataPayload(TypedDict, total=False):
     token_endpoint_auth_methods_supported: Sequence[str]
 
 
+def _mapping_value(source: Mapping[str, object], key: str, default: object) -> object:
+    return source.get(key, default)
+
+
 def _blank_to_none(value: str | None) -> str | None:
     """Collapse an absent, empty, or whitespace-only string to ``None``.
 
@@ -2757,7 +2761,9 @@ class MCPServerManager:
                 server_id=server_id,
                 name=name_for_prefix,
                 protocol_version=TypeAdapter(MCPUpstreamProtocol).validate_python(
-                    server_config.get("protocol_version", mcp_info.get("protocol_version", "auto"))
+                    _mapping_value(
+                        server_config, "protocol_version", _mapping_value(mcp_info, "protocol_version", "auto")
+                    )
                 ),
                 alias=alias,
                 server_name=server_name,
@@ -4361,6 +4367,7 @@ class MCPServerManager:
         raw_headers: Mapping[str, str] | None = None,
         client_ip: str | None = None,
         protocol_version_override: MCPUpstreamProtocol | None = None,
+        for_tool_listing: bool = False,
     ) -> MCPClient:
         self.catalog.assert_current(server)
         record_auth_resolution(server.server_id, AuthResolution.unresolved)
@@ -4394,6 +4401,7 @@ class MCPServerManager:
                 else None
             ),
             upstream_transport=self._upstream_transport,
+            for_tool_listing=for_tool_listing,
         )
 
     _create_mcp_client = create_mcp_client
@@ -4540,6 +4548,7 @@ class MCPServerManager:
                 user_api_key_auth=user_api_key_auth,
                 raw_headers=raw_headers,
                 client_ip=client_ip,
+                for_tool_listing=True,
             )
 
             ## HANDLE OPENAPI TOOLS
