@@ -19888,12 +19888,14 @@ async def update_config_general_settings(
         )
 
     try:
-        ConfigGeneralSettings.model_validate({data.field_name: requested_value})
+        validated: Final = ConfigGeneralSettings.model_validate({data.field_name: requested_value})
     except Exception:
         raise HTTPException(
             status_code=400,
             detail={"error": f"Invalid type of field value={type(requested_value)} passed in."},
         )
+    parsed_value: Final[object] = _UNTYPED_VALUE.validate_python(getattr(validated, data.field_name))
+    stored_value: Final = parsed_value if isinstance(parsed_value, bool) else requested_value
 
     if data.field_name == "alerting_args":
         try:
@@ -19922,10 +19924,10 @@ async def update_config_general_settings(
 
     proxy_config.reject_config_owned_writes(
         section_name="general_settings",
-        changed_keys={data.field_name: cast(JsonValue, requested_value)},  # cast-ok: validated above
+        changed_keys={data.field_name: cast(JsonValue, stored_value)},  # cast-ok: validated above
     )
 
-    field_value = requested_value
+    field_value = stored_value
     if data.field_name == "plugins":
         field_value = _preserve_redacted_plugin_keys(field_value, general_settings.get("plugins"))
 
