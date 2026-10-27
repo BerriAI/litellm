@@ -8885,7 +8885,8 @@ def test_get_wildcard_deployment_usable_by_team_prefers_the_team_pattern():
         pytest.param(False, "rwild-chat", "team-r", ("team-r-wildcard",), id="team-pattern-when-no-proxy-wide-match"),
         pytest.param(False, "rwild-chat", "team-b", (), id="another-teams-pattern-never-serves"),
         pytest.param(False, "rwild-chat", None, (), id="no-team-no-team-pattern"),
-        pytest.param(True, "rwild-chat", "team-r", ("catch-all",), id="proxy-wide-pattern-beats-the-team-pattern"),
+        pytest.param(True, "rwild-chat", "team-r", ("team-r-wildcard",), id="team-pattern-beats-the-proxy-wide-pattern"),
+        pytest.param(True, "rwild-chat", "team-b", ("catch-all",), id="another-team-falls-through-to-proxy-wide"),
         pytest.param(True, "ptu-chat", "team-r", ("ptu-wildcard",), id="only-the-most-specific-proxy-wide-pattern"),
     ],
 )
@@ -8922,6 +8923,39 @@ def test_wildcard_route_deployments_is_the_one_pattern_routing_serves_from(
     assert router.wildcard_routed_models(requested, team_id) == frozenset(
         Deployment.model_validate(d).litellm_params.model for d in served
     )
+
+
+@pytest.mark.parametrize(
+    ("team_id", "expected_id"),
+    [
+        pytest.param("team-a", "team-a-byok", id="team-key-uses-its-own-byok-wildcard"),
+        pytest.param("team-b", "shared-openrouter", id="team-without-byok-uses-the-shared-wildcard"),
+        pytest.param(None, "shared-openrouter", id="key-without-team-uses-the-shared-wildcard"),
+    ],
+)
+def test_team_byok_wildcard_is_served_before_a_proxy_wide_wildcard_of_the_same_name(
+    team_id: str | None, expected_id: str
+):
+    """Regression: a proxy-wide openrouter/* shadowed a team's own openrouter/* BYOK deployment for that team's keys."""
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "model_name_team-a_internal",
+                "litellm_params": {"model": "openrouter/*", "api_key": "sk-team-a"},
+                "model_info": {"id": "team-a-byok", "team_id": "team-a", "team_public_model_name": "openrouter/*"},
+            },
+            {
+                "model_name": "openrouter/*",
+                "litellm_params": {"model": "openrouter/*", "api_key": "sk-shared"},
+                "model_info": {"id": "shared-openrouter"},
+            },
+        ]
+    )
+    requested: Final = "openrouter/openai/gpt-5-nano"
+
+    served: Final = router.wildcard_route_deployments(requested, team_id)
+
+    assert tuple(Deployment.model_validate(d).model_info.id for d in served) == (expected_id,)
 
 
 def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint():
