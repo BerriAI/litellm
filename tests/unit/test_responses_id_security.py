@@ -113,6 +113,25 @@ class TestDecryptResponseId:
             assert team_id is None
 
 
+    def test_decrypt_response_id_two_segment_no_team(self, responses_id_security):
+        """Two-segment managed ids (no team_id) must not IndexError on parts[2]."""
+        import litellm.proxy.hooks.responses_id_security as responses_module
+
+        with patch.object(responses_module, "decrypt_value_helper") as mock_decrypt:
+            mock_decrypt.return_value = (
+                f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}"
+                "response_id:resp_abc;user_id:user-1"
+            )
+
+            original_id, user_id, team_id = responses_id_security._decrypt_response_id(
+                "resp_encrypted_two_segment"
+            )
+
+            assert original_id == "resp_abc"
+            assert user_id == "user-1"
+            assert team_id is None
+
+
 class TestCheckUserAccessToResponseId:
     """Test check_user_access_to_response_id function"""
 
