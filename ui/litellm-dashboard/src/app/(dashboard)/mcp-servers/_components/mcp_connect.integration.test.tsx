@@ -1,5 +1,5 @@
 import React from "react";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, it, expect, vi } from "vitest";
@@ -83,46 +83,53 @@ describe("MCPConnect routing", () => {
 });
 
 describe("MCPConnect (tab mount contract)", () => {
-  it.each(["OpenAI API", "LiteLLM Proxy", "Cursor"])(
-    "preserves the %s server filter when settings arrive and the snippet is copied",
-    async (tab) => {
-      const settings = Promise.withResolvers<Awaited<ReturnType<typeof getProxyUISettings>>>();
-      vi.mocked(getProxyUISettings).mockReturnValue(settings.promise);
-      const user = userEvent.setup();
-      renderConnect();
+  it.each([
+    ["OpenAI API", '"server_url": "https://docs.example.com/mcp",'],
+    ["LiteLLM Proxy", "curl --location 'https://docs.example.com/v1/responses' \\"],
+    ["Cursor", '"url": "https://docs.example.com/mcp",'],
+  ])("preserves the %s server filter when settings arrive and the snippet is copied", async (tab, expectedUrlLine) => {
+    const settings = Promise.withResolvers<Awaited<ReturnType<typeof getProxyUISettings>>>();
+    vi.mocked(getProxyUISettings).mockReturnValue(settings.promise);
+    const user = userEvent.setup();
+    renderConnect();
 
-      await user.click(screen.getByRole("tab", { name: tab }));
-      await user.click(within(activePanel()).getByRole("switch"));
-      expect(within(activePanel()).getByRole("switch")).toBeChecked();
+    await user.click(screen.getByRole("tab", { name: tab }));
+    await user.click(within(activePanel()).getByRole("switch"));
+    expect(within(activePanel()).getByRole("switch")).toBeChecked();
 
-      await act(async () => {
-        settings.resolve({
-          PROXY_BASE_URL: "https://backend.example.com",
-          PROXY_LOGOUT_URL: "",
-          LITELLM_UI_API_DOC_BASE_URL: "https://docs.example.com",
-        });
+    await act(async () => {
+      settings.resolve({
+        PROXY_BASE_URL: "https://backend.example.com",
+        PROXY_LOGOUT_URL: "",
+        LITELLM_UI_API_DOC_BASE_URL: "https://docs.example.com",
       });
-      const snippet = await within(activePanel()).findByText(
-        (content, element) =>
-          element?.tagName === "PRE" && content.includes('"headers":') && content.includes("docs.example.com"),
-      );
-      expect(within(activePanel()).getByRole("switch")).toBeChecked();
-      expect(snippet).toHaveTextContent('"x-mcp-servers":');
-
-      await user.click(within(activePanel()).getByRole("button", { name: "Copy code" }));
-      expect(copyToClipboard).toHaveBeenLastCalledWith(snippet.textContent);
-      expect(within(activePanel()).getByRole("switch")).toBeChecked();
-
-      await user.click(screen.getByRole("tab", { name: "Streamable HTTP" }));
-      await user.click(screen.getByRole("tab", { name: tab }));
-      expect(within(activePanel()).getByRole("switch")).toBeChecked();
+    });
+    await waitFor(() => {
       expect(
-        within(activePanel()).getByText(
-          (content, element) => element?.tagName === "PRE" && content.includes('"x-mcp-servers":'),
-        ),
-      ).toHaveTextContent("docs.example.com");
-    },
-  );
+        within(activePanel())
+          .getByText(/"headers":/)
+          .textContent?.split("\n")
+          .map((line) => line.trim()),
+      ).toContain(expectedUrlLine);
+    });
+    const snippet = within(activePanel()).getByText(/"headers":/);
+    expect(within(activePanel()).getByRole("switch")).toBeChecked();
+    expect(snippet).toHaveTextContent('"x-mcp-servers":');
+
+    await user.click(within(activePanel()).getByRole("button", { name: "Copy code" }));
+    expect(copyToClipboard).toHaveBeenLastCalledWith(snippet.textContent);
+    expect(within(activePanel()).getByRole("switch")).toBeChecked();
+
+    await user.click(screen.getByRole("tab", { name: "Streamable HTTP" }));
+    await user.click(screen.getByRole("tab", { name: tab }));
+    expect(within(activePanel()).getByRole("switch")).toBeChecked();
+    expect(
+      within(activePanel())
+        .getByText(/"x-mcp-servers":/)
+        .textContent?.split("\n")
+        .map((line) => line.trim()),
+    ).toContain(expectedUrlLine);
+  });
 
   it("keeps the x-mcp-servers header toggle on after switching tabs away and back", async () => {
     renderConnect();
