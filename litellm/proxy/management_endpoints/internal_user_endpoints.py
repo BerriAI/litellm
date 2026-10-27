@@ -2093,7 +2093,9 @@ async def get_user_key_counts(
     return result
 
 
-def _validate_sort_params(sort_by: str | None, sort_order: str) -> dict[str, str] | None:
+def _validate_sort_params(
+    sort_by: str | None, sort_order: str
+) -> Mapping[str, object] | Sequence[Mapping[str, object]] | None:
     order_by: Final[dict[str, str]] = {}
 
     if sort_by is None:
@@ -2106,6 +2108,11 @@ def _validate_sort_params(sort_by: str | None, sort_order: str) -> dict[str, str
         "spend",
         "user_alias",
         "user_role",
+        "max_budget",
+        "updated_at",
+        "sso_user_id",
+        "status",
+        "key_count",
     ]
     if sort_by not in valid_columns:
         raise HTTPException(
@@ -2120,6 +2127,11 @@ def _validate_sort_params(sort_by: str | None, sort_order: str) -> dict[str, str
             detail={"error": "Invalid sort order. Must be 'asc' or 'desc'"},
         )
 
+    if sort_by in {"status", "key_count"}:
+        return None
+    if sort_by in {"max_budget", "updated_at", "sso_user_id"}:
+        nulls: Final = "first" if sort_by == "max_budget" and sort_order.lower() == "desc" else "last"
+        return ({sort_by: {"sort": sort_order.lower(), "nulls": nulls}}, {"user_id": "asc"})
     order_by[sort_by] = sort_order.lower()
 
     return order_by
@@ -2338,16 +2350,40 @@ async def get_users(
 
     # Build order_by conditions
 
-    order_by: Final[dict[str, str] | None] = (
+    order_by: Final = (
         _validate_sort_params(sort_by, sort_order) if sort_by is not None and isinstance(sort_by, str) else None
     )
 
-    users: Final[Sequence[prisma_models.LiteLLM_UserTable]] = await UserRepository(prisma_client).table.find_many(
-        where=where,
-        skip=skip,
-        take=page_size,
-        order=(order_by if order_by else {"created_at": "desc"}),  # Default to created_at desc if no sort specified
+    from litellm.proxy.management_helpers.user_list_sorting import sorted_user_ids
+
+    computed_sort: Final = sort_by in ("status", "key_count")
+    sorted_ids: Final = (
+        await sorted_user_ids(
+            prisma_client,
+            sort_by="status" if sort_by == "status" else "key_count",
+            descending=sort_order.lower() == "desc",
+            skip=skip,
+            take=page_size,
+            role=role,
+            user_ids=user_ids,
+            user_email=user_email,
+            team=team,
+            sso_user_ids=sso_user_ids,
+            organization_ids=organization_ids,
+            search=search,
+        )
+        if computed_sort
+        else ()
     )
+    page_users: Final = await UserRepository(prisma_client).table.find_many(
+        # bounded-ok: sorted_ids comes from LIMIT page_size, capped at 100 by the route
+        where={"AND": (where, {"user_id": {"in": sorted_ids}})} if computed_sort else where,
+        skip=0 if computed_sort else skip,
+        take=page_size,
+        order=order_by if order_by else {"created_at": "desc"},
+    )
+    positions: Final = {user_id: index for index, user_id in enumerate(sorted_ids)}
+    users: Final = sorted(page_users, key=lambda user: positions[user.user_id]) if computed_sort else page_users
 
     # Get total count of user rows
     total_count: Final[int] = await UserRepository(prisma_client).table.count(where=where)

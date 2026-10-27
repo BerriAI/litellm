@@ -212,6 +212,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_parallel_function_calling: bool | None
     supports_web_search: bool | None
     supports_reasoning: bool | None
+    supports_sampling_params: ReadOnly[bool | None]
     supports_adaptive_thinking: bool | None
     supports_legacy_thinking: ReadOnly[bool | None]
     thinking_always_on: ReadOnly[bool | None]
@@ -243,6 +244,12 @@ class SearchContextCostPerQuery(TypedDict, total=False):
     search_context_size_low: float
     search_context_size_medium: float
     search_context_size_high: float
+
+
+class SearchFreeRequests(TypedDict):
+    count: ReadOnly[int]
+    period: ReadOnly[Literal["day", "month"]]
+    shared_group: ReadOnly[str]
 
 
 class AgenticLoopParams(TypedDict, total=False):
@@ -315,11 +322,23 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost_above_272k_tokens_flex: float | None
     cache_creation_input_token_cost_above_272k_tokens_ultrafast: ReadOnly[float | None]
     cache_creation_input_token_cost_above_1hr: float | None
+    cache_creation_input_token_cost_above_12hr: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_flex: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_priority: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_batches: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_ultrafast: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast: ReadOnly[float | None]
     cache_creation_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_creation_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_creation_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost: float | None
     cache_read_input_audio_token_cost: ReadOnly[float | None]
+    cache_read_input_audio_token_cost_flex: ReadOnly[float | None]
+    cache_read_input_audio_token_cost_priority: ReadOnly[float | None]
     cache_read_input_image_token_cost: ReadOnly[float | None]
     explicit_cache_read_input_token_cost: ReadOnly[float | None]
     cache_read_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
@@ -335,6 +354,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_above_272k_tokens_ultrafast: ReadOnly[float | None]
     cache_read_input_token_cost_above_512k_tokens: float | None
     cache_read_input_token_cost_batches: ReadOnly[float | None]
+    cache_read_input_audio_token_cost_batches: ReadOnly[float | None]
     cache_read_input_token_cost_above_200k_tokens_batches: ReadOnly[float | None]
     cache_read_input_token_cost_above_100k_tokens_batches: ReadOnly[float | None]
     cache_read_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
@@ -348,6 +368,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     off_peak_pricing: ReadOnly[OffPeakPricing | None]  # time-windowed off-peak rates
     input_cost_per_character: float | None  # only for vertex ai models
     input_cost_per_audio_token: float | None
+    input_cost_per_audio_token_flex: ReadOnly[float | None]
+    input_cost_per_audio_token_priority: ReadOnly[float | None]
     input_cost_per_token_above_128k_tokens: float | None  # only for vertex ai models
     input_cost_per_token_above_200k_tokens: float | None  # only for vertex ai gemini-2.5-pro models
     input_cost_per_token_above_100k_tokens: ReadOnly[float | None]
@@ -436,6 +458,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     web_search_billing_unit: (
         Literal["per_query", "per_prompt"] | None
     )  # "per_query" (Gemini 3.x) or "per_prompt" (Gemini 2.x)
+    search_free_requests: ReadOnly[SearchFreeRequests | None]
     google_maps_grounding_cost_per_query: ReadOnly[float | None]
     citation_cost_per_token: float | None  # Cost per citation token for Perplexity
     tiered_pricing: list[dict[str, Any]] | None  # Tiered pricing structure for models like Dashscope
@@ -451,6 +474,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "responses",
             "decisions",
             "evaluation",
+            "extraction",
             "ocr",
             "realtime",
         ]
@@ -511,6 +535,8 @@ class CallTypes(str, Enum):
     adecisions = "adecisions"
     systemone = "systemone"
     asystemone = "asystemone"
+    extraction = "extraction"
+    aextraction = "aextraction"
     arealtime = "_arealtime"
     aresponses_websocket = "_aresponses_websocket"
     create_batch = "create_batch"
@@ -701,6 +727,8 @@ CallTypesLiteral = Literal[
     "adecisions",
     "systemone",
     "asystemone",
+    "extraction",
+    "aextraction",
     "_arealtime",
     "_aresponses_websocket",
     "create_batch",
@@ -814,6 +842,8 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     "/v1/decisions": [CallTypes.adecisions, CallTypes.decisions],
     "/systemone": [CallTypes.asystemone, CallTypes.systemone],
     "/v1/systemone": [CallTypes.asystemone, CallTypes.systemone],
+    "/extraction": [CallTypes.aextraction, CallTypes.extraction],
+    "/v1/extraction": [CallTypes.aextraction, CallTypes.extraction],
     # Batches
     "/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
     "/v1/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
@@ -1789,7 +1819,9 @@ class CompletionTokensDetailsWrapper(CompletionTokensDetails):  # wrapper for ol
 
 class CacheCreationTokenDetails(LiteLLMBaseModel):
     ephemeral_5m_input_tokens: int | None = None
+    ephemeral_30m_input_tokens: int | None = None
     ephemeral_1h_input_tokens: int | None = None
+    ephemeral_12h_input_tokens: int | None = None
 
 
 class PromptTokensDetailsWrapper(
@@ -3939,6 +3971,16 @@ class MirroredPricingParams(LiteLLMBaseModel):
     explicit_cache_read_input_token_cost: float | None = None
     cache_creation_input_token_cost: float | None = None
     cache_creation_input_token_cost_above_1hr: float | None = None
+    cache_creation_input_token_cost_above_12hr: float | None = None
+    cache_creation_input_token_cost_above_12hr_flex: float | None = None
+    cache_creation_input_token_cost_above_12hr_priority: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority: float | None = None
+    cache_creation_input_token_cost_above_12hr_batches: float | None = None
+    cache_creation_input_token_cost_above_12hr_ultrafast: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast: float | None = None
     tiered_pricing: list[dict[str, Any]] | None = None
 
 
@@ -3991,14 +4033,19 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_read_input_token_cost_above_100k_tokens_batches: float | None = None
     cache_read_input_token_cost_above_200k_tokens_batches: float | None = None
     cache_read_input_token_cost_above_272k_tokens_batches: float | None = None
+    cache_read_input_audio_token_cost_batches: float | None = None
     cache_creation_input_token_cost_batches: float | None = None
     cache_creation_input_token_cost_above_100k_tokens_batches: float | None = None
     cache_creation_input_token_cost_above_200k_tokens_batches: float | None = None
     cache_creation_input_token_cost_above_272k_tokens_batches: float | None = None
     cache_read_input_audio_token_cost: float | None = None
+    cache_read_input_audio_token_cost_flex: float | None = None
+    cache_read_input_audio_token_cost_priority: float | None = None
     cache_read_input_image_token_cost: float | None = None
     input_cost_per_character_above_128k_tokens: float | None = None
     input_cost_per_audio_token: float | None = None
+    input_cost_per_audio_token_flex: float | None = None
+    input_cost_per_audio_token_priority: float | None = None
     input_cost_per_token_cache_hit: float | None = None
     input_cost_per_token_above_128k_tokens: float | None = None
     input_cost_per_token_above_100k_tokens: float | None = None
@@ -4204,7 +4251,7 @@ oauth_token_exchange_litellm_params: Final = (
     "token_exchange_profile",
     "token_exchange_scope",
 )
-github_copilot_oauth_litellm_params: Final = ("github_copilot_auth_type",)
+github_copilot_oauth_litellm_params: Final = ("github_copilot_auth_type", "github_copilot_host")
 OIDC_SECRET_REFERENCE_PREFIX: Final = "oidc/"
 API_KEY_SECRET_REFERENCE_REJECTION: Final = (
     "Rejected Request: api_key holds an oidc/ secret reference, which only a deployment or credential a proxy "
@@ -4313,6 +4360,7 @@ server_owned_wif_litellm_params: Final = (
     + openai_wif_litellm_params
     + oauth_token_exchange_litellm_params
     + github_copilot_oauth_litellm_params
+    + ("chatgpt_auth_file",)
 )
 secret_bearing_wif_litellm_params: Final = tuple(sorted(WIF_SECRET_BEARING_KEYS))
 
@@ -4367,6 +4415,7 @@ GenericBudgetConfigType = dict[str, BudgetConfig]
 
 
 class LlmProviders(str, Enum):
+    REFUSELESS = "refuseless"
     OPENAI = "openai"
     CHATGPT = "chatgpt"
     OPENAI_LIKE = "openai_like"  # embedding only
@@ -4394,6 +4443,7 @@ class LlmProviders(str, Enum):
     VERTEX_AI = "vertex_ai"
     VERTEX_AI_BETA = "vertex_ai_beta"
     GEMINI = "gemini"
+    ABLITERATION = "abliteration"
     AI21 = "ai21"
     BASETEN = "baseten"
     BLACK_FOREST_LABS = "black_forest_labs"
@@ -4439,6 +4489,7 @@ class LlmProviders(str, Enum):
     PUBLICAI = "publicai"
     V0 = "v0"
     MORPH = "morph"
+    OPENCODE_GO = "opencode_go"
     LAMBDA_AI = "lambda_ai"
     INCEPTION = "inception"
     TEXT_COMPLETION_INCEPTION = "text-completion-inception"

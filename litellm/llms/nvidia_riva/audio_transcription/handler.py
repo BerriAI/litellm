@@ -16,7 +16,9 @@ The handler is intentionally a thin orchestration layer:
 3. Construct ``riva.client.Auth`` honoring NVCF (function-id metadata + TLS)
    vs self-hosted (any host:port, optional TLS) modes.
 4. Stream the audio through Riva's ``streaming_response_generator`` and
-   aggregate ``is_final`` results into a single transcript.
+   aggregate ``is_final`` results into a single transcript, or, when
+   ``riva_offline`` is set, send the whole buffer through the unary
+   ``offline_recognize`` RPC for NIMs that only ship offline engines.
 5. Return a normalized ``TranscriptionResponse`` with ``duration`` exposed
    on ``_hidden_params`` so cost calculation works.
 
@@ -26,13 +28,19 @@ without the optional STT extras installed.
 
 import asyncio
 import inspect
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
+import httpx
+
+import litellm
+from litellm.constants import COMPLETION_HTTP_FALLBACK_SECONDS
 from litellm.litellm_core_utils.audio_utils.utils import (
     get_audio_file_name,
     process_audio_file,
 )
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.llms.nvidia_riva.audio_transcription.audio_utils import (
     resample_to_riva_pcm,
 )
@@ -40,11 +48,14 @@ from litellm.llms.nvidia_riva.audio_transcription.transformation import (
     RIVA_TARGET_NUM_CHANNELS,
     RIVA_TARGET_SAMPLE_RATE_HZ,
     NvidiaRivaAudioTranscriptionConfig,
+    RivaFinalResult,
+    RivaWordTiming,
 )
 from litellm.llms.nvidia_riva.common_utils import (
     NvidiaRivaException,
     grpc_error_to_litellm_exception,
 )
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.utils import FileTypes, TranscriptionResponse
 from litellm.utils import convert_to_model_response_object
 
@@ -67,9 +78,19 @@ class _RivaAuth(Protocol):
     """Opaque ``riva.client.Auth`` handle."""
 
 
+class _RecognizeFuture(Protocol):
+    def result(self, timeout: float | None = None) -> object: ...
+
+    def done(self) -> bool: ...
+
+    def cancel(self) -> bool: ...
+
+
 class _AsrService(Protocol):
     @property
     def streaming_response_generator(self) -> Callable[..., Iterable[object]]: ...
+
+    def offline_recognize(self, audio_bytes: bytes, config: object, future: bool) -> _RecognizeFuture: ...
 
 
 class _EndpointingConfig(Protocol):
@@ -128,6 +149,38 @@ def _audio_encoding(riva_asr_module: _RivaAsrModule) -> _AudioEncoding:
     return riva_asr_module.AudioEncoding
 
 
+def _parse_riva_offline(value: object, drop_params: bool) -> bool:
+    match value:
+        case None:
+            return False
+        case bool():
+            return value
+        case str() if (parsed := str_to_bool(value)) is not None:
+            return parsed
+        case _ if drop_params:
+            return False
+        case _:
+            raise NvidiaRivaException(
+                status_code=400,
+                message=f"riva_offline must be true or false, got {value!r}. Set drop_params to ignore it.",
+            )
+
+
+def _deadline_seconds(timeout: float | str | httpx.Timeout, drop_params: bool) -> float:
+    try:
+        limit: Final = CompletionTimeout.as_limit(timeout)
+    except ValueError:
+        if drop_params:
+            return COMPLETION_HTTP_FALLBACK_SECONDS
+        raise NvidiaRivaException(
+            status_code=400,
+            message=f"timeout must be a number of seconds, got {timeout!r}. Set drop_params to ignore it.",
+        ) from None
+    if not isinstance(limit, httpx.Timeout):
+        return limit
+    return COMPLETION_HTTP_FALLBACK_SECONDS if limit.read is None else limit.read
+
+
 class NvidiaRivaAudioTranscription:
     """Sync + async entry point for Riva ASR."""
 
@@ -138,7 +191,7 @@ class NvidiaRivaAudioTranscription:
         optional_params: dict,
         litellm_params: dict,
         model_response: TranscriptionResponse,
-        timeout: float,
+        timeout: float | str | httpx.Timeout | None,
         logging_obj: "LiteLLMLoggingObj",
         api_key: str | None,
         api_base: str | None,
@@ -183,7 +236,7 @@ class NvidiaRivaAudioTranscription:
         optional_params: dict,
         litellm_params: dict,
         model_response: TranscriptionResponse,
-        timeout: float,
+        timeout: float | str | httpx.Timeout | None,
         logging_obj: "LiteLLMLoggingObj",
         api_key: str | None,
         api_base: str | None,
@@ -213,7 +266,7 @@ class NvidiaRivaAudioTranscription:
         optional_params: dict,
         litellm_params: dict,
         model_response: TranscriptionResponse,
-        timeout: float,
+        timeout: float | str | httpx.Timeout | None,
         logging_obj: "LiteLLMLoggingObj",
         api_key: str | None,
         api_base: str | None,
@@ -259,6 +312,10 @@ class NvidiaRivaAudioTranscription:
 
         response_format: Final = request_payload.get("response_format") or "json"
         timestamp_granularities: Final = request_payload.get("timestamp_granularities")
+        drop_params: Final = (
+            "drop_params" in litellm_params and litellm_params["drop_params"] is True
+        ) or litellm.drop_params is True
+        riva_offline: Final = _parse_riva_offline(optional_params.get("riva_offline"), drop_params=drop_params)
 
         riva_module, riva_asr_module = _import_riva()
         auth_obj: Final = self._construct_auth(
@@ -272,10 +329,6 @@ class NvidiaRivaAudioTranscription:
             riva_asr_module=riva_asr_module,
             recognition_config_dict=recognition_config_dict,
         )
-        streaming_config: Final[_StreamingRecognitionConfig] = riva_asr_module.StreamingRecognitionConfig(
-            config=recognition_config, interim_results=False
-        )
-
         logging_obj.pre_call(
             input=None,
             api_key=api_key,
@@ -286,24 +339,31 @@ class NvidiaRivaAudioTranscription:
                     "recognition_config": recognition_config_dict,
                     "nvcf_function_id_set": bool(optional_params.get("nvcf_function_id")),
                     "use_ssl": optional_params.get("use_ssl"),
+                    "riva_offline": riva_offline,
                 },
             },
         )
 
         try:
             asr_service: Final[_AsrService] = riva_module.ASRService(auth_obj)
-            audio_chunks: Final = self._iter_audio_chunks(resampled.pcm_bytes)
-            stream_kwargs: Final[dict[str, object]] = {
-                "audio_chunks": audio_chunks,
-                "streaming_config": streaming_config,
-            }
-            # Forward the deadline so the stream cannot block forever if the
-            # server stalls. Older riva-client versions do not accept a
-            # ``timeout`` kwarg, so pass it only when supported.
-            if timeout is not None and self._supports_timeout_kwarg(asr_service.streaming_response_generator):
-                stream_kwargs["timeout"] = float(timeout)
-            stream: Final = asr_service.streaming_response_generator(**stream_kwargs)
-            final_results: Final = self._collect_final_results(stream)
+            responses: Final = (
+                self._offline_responses(
+                    asr_service=asr_service,
+                    pcm_bytes=resampled.pcm_bytes,
+                    recognition_config=recognition_config,
+                    timeout=None if timeout is None else _deadline_seconds(timeout, drop_params),
+                )
+                if riva_offline
+                else self._streaming_responses(
+                    asr_service=asr_service,
+                    riva_asr_module=riva_asr_module,
+                    pcm_bytes=resampled.pcm_bytes,
+                    recognition_config=recognition_config,
+                    timeout=timeout,
+                    drop_params=drop_params,
+                )
+            )
+            final_results: Final = self._collect_final_results(responses, require_final=not riva_offline)
         except NvidiaRivaException:
             raise
         except Exception as e:
@@ -409,6 +469,54 @@ class NvidiaRivaAudioTranscription:
 
         return config
 
+    def _streaming_responses(
+        self,
+        asr_service: _AsrService,
+        riva_asr_module: _RivaAsrModule,
+        pcm_bytes: bytes,
+        recognition_config: _RecognitionConfig,
+        timeout: float | str | httpx.Timeout | None,
+        drop_params: bool,
+    ) -> Iterable[object]:
+        streaming_config: Final[_StreamingRecognitionConfig] = riva_asr_module.StreamingRecognitionConfig(
+            config=recognition_config, interim_results=False
+        )
+        return asr_service.streaming_response_generator(
+            audio_chunks=self._iter_audio_chunks(pcm_bytes),
+            streaming_config=streaming_config,
+            **self._timeout_kwargs(asr_service.streaming_response_generator, timeout, drop_params),
+        )
+
+    def _offline_responses(
+        self,
+        asr_service: _AsrService,
+        pcm_bytes: bytes,
+        recognition_config: _RecognitionConfig,
+        timeout: float | None,
+    ) -> Iterable[object]:
+        pending: Final = asr_service.offline_recognize(audio_bytes=pcm_bytes, config=recognition_config, future=True)
+        try:
+            return (pending.result(timeout=timeout),)
+        except Exception as e:
+            if pending.done():
+                raise
+            pending.cancel()
+            raise NvidiaRivaException(
+                status_code=408,
+                message=f"NVIDIA Riva offline recognition did not finish within {timeout} seconds",
+            ) from e
+
+    @classmethod
+    def _timeout_kwargs(
+        cls, rpc: Callable[..., object], timeout: float | str | httpx.Timeout | None, drop_params: bool
+    ) -> Mapping[str, float]:
+        # Forward the deadline so the call cannot block forever if the
+        # server stalls. Older riva-client versions do not accept a
+        # ``timeout`` kwarg, so pass it only when supported.
+        if timeout is None or not cls._supports_timeout_kwarg(rpc):
+            return MappingProxyType({})
+        return MappingProxyType({"timeout": _deadline_seconds(timeout, drop_params)})
+
     @staticmethod
     def _supports_timeout_kwarg(callable_obj: Callable[..., object]) -> bool:
         try:
@@ -429,18 +537,18 @@ class NvidiaRivaAudioTranscription:
             yield chunk
 
     @staticmethod
-    def _collect_final_results(stream) -> list[dict[str, object]]:
+    def _collect_final_results(stream: Iterable[object], require_final: bool = True) -> Sequence[RivaFinalResult]:
         """
-        Walk the gRPC stream, ignore empty / non-final chunks, and return a
+        Walk the gRPC responses, ignore empty / non-final chunks, and return a
         list of normalized final-result dicts. Matching the user's note: the
         ``id`` blocks with no ``results`` are streaming heartbeats and must
         be skipped.
         """
-        final_results: Final[list[dict[str, object]]] = []
+        final_results: Final[list[RivaFinalResult]] = []
         for response in stream:
             results = getattr(response, "results", None) or []
             for result in results:
-                if not getattr(result, "is_final", False):
+                if require_final and not getattr(result, "is_final", False):
                     continue
                 alternatives = getattr(result, "alternatives", None) or []
                 if not alternatives:
@@ -448,16 +556,19 @@ class NvidiaRivaAudioTranscription:
                 top = alternatives[0]
                 transcript = getattr(top, "transcript", "") or ""
                 words_proto = getattr(top, "words", None) or []
-                words = []
-                for word in words_proto:
-                    words.append(
-                        {
-                            "word": getattr(word, "word", ""),
-                            "start_time_ms": int(getattr(word, "start_time", 0) or 0),
-                            "end_time_ms": int(getattr(word, "end_time", 0) or 0),
-                        }
-                    )
-                final_results.append({"transcript": transcript, "words": words})
+                final_results.append(
+                    {
+                        "transcript": transcript,
+                        "words": [
+                            RivaWordTiming(
+                                word=getattr(word, "word", ""),
+                                start_time_ms=int(getattr(word, "start_time", 0) or 0),
+                                end_time_ms=int(getattr(word, "end_time", 0) or 0),
+                            )
+                            for word in words_proto
+                        ],
+                    }
+                )
         return final_results
 
 

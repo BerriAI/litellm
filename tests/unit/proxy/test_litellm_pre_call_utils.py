@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import copy
 import json
 import os
@@ -104,6 +105,13 @@ class TestGetMetadataVariableName:
 
     def test_returns_litellm_metadata_for_files_route(self):
         request = self._make_request("/v1/files")
+        assert get_metadata_variable_name(request) == "litellm_metadata"
+
+    @pytest.mark.parametrize(
+        "path", ["/v1beta/interactions", "/interactions", "/v1beta/interactions/v1_abc123", "/interactions/v1_abc123/cancel"]
+    )
+    def test_returns_litellm_metadata_for_interactions_routes(self, path):
+        request = self._make_request(path)
         assert get_metadata_variable_name(request) == "litellm_metadata"
 
     def test_returns_metadata_for_chat_completions(self):
@@ -709,6 +717,46 @@ async def test_add_litellm_data_to_request_parses_json_object_string_litellm_met
 
 
 @pytest.mark.asyncio
+async def test_interactions_spend_logs_metadata_survives_the_router_metadata_bucket():
+    """GH#47841: on /v1beta/interactions the router plants its deployment fields in
+    `litellm_metadata`. The proxy must put the request's metadata there too: otherwise the
+    spend log reads only the router's bucket and `spend_logs_metadata` from the
+    `x-litellm-spend-logs-metadata` header never reaches LiteLLM_SpendLogs."""
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1beta/interactions"
+    request_mock.url.path = "/v1beta/interactions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {
+        "Content-Type": "application/json",
+        "x-litellm-spend-logs-metadata": '{"cost_centre": "research"}',
+    }
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    request_mock.state.parent_otel_span = None
+
+    data = await add_litellm_data_to_request(
+        data={"model": "gemini-3.1-flash-lite", "input": "Reply OK.", "store": True},
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    assert data["litellm_metadata"]["spend_logs_metadata"] == {"cost_centre": "research"}
+
+    # The router then adds its deployment fields to the same bucket, and the spend log
+    # resolves that bucket.
+    data["litellm_metadata"].update({"model_group": "gemini-3.1-flash-lite", "deployment": "gemini/gemini-3.1-flash-lite"})
+    resolved = get_litellm_metadata_from_kwargs(
+        {"litellm_params": {"metadata": data.get("metadata") or {}, "litellm_metadata": data["litellm_metadata"]}}
+    )
+    assert resolved["spend_logs_metadata"] == {"cost_centre": "research"}
+    assert resolved["model_group"] == "gemini-3.1-flash-lite"
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_proxy_server_request_body_is_post_strip():
     """Regression: proxy_server_request['body'] used to be snapshotted before
     the admin-slot strip, so standard_logging_object and spend-tracking
@@ -879,6 +927,222 @@ async def test_add_litellm_data_to_request_body_snapshot_excludes_proxy_server_r
     assert snapshot_body["messages"] == [{"role": "user", "content": "hello"}]
 
 
+FORWARD_PROVIDER_AUTH_HEADERS: Final = {
+    "forward_llm_provider_auth_headers": True,
+    "forward_client_headers_to_llm_api": True,
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sent,request_headers,general_settings,expected",
+    [
+        ({"headers": {"Authorization": "Bearer sk-caller"}}, {}, {}, ("headers",)),
+        ({"headers": {"X-Trace-Id": "trace-1"}}, {}, {}, ("headers",)),
+        ({"headers": {}}, {}, {}, ()),
+        ({"extra_headers": {"API-Key": "caller-azure-key"}}, {}, {}, ("extra_headers",)),
+        ({"extra_headers": {"OpenAI-Project": "proj_caller"}}, {}, {}, ("extra_headers",)),
+        (
+            {"provider_specific_header": {"custom_llm_provider": "openai", "extra_headers": {"x-api-key": "caller"}}},
+            {},
+            {},
+            ("provider_specific_header",),
+        ),
+        (
+            {
+                "provider_specific_header": [
+                    {"custom_llm_provider": "anthropic", "extra_headers": {"anthropic-beta": "tools"}},
+                    {"custom_llm_provider": "gemini", "extra_headers": {"X-Goog-Api-Key": "caller"}},
+                ]
+            },
+            {},
+            {},
+            ("provider_specific_header",),
+        ),
+        (
+            {
+                "provider_specific_header": {
+                    "custom_llm_provider": "anthropic",
+                    "extra_headers": {"x-caller-trace": "x"},
+                }
+            },
+            {},
+            {},
+            ("provider_specific_header",),
+        ),
+        (
+            {
+                "provider_specific_header": {
+                    "custom_llm_provider": "anthropic",
+                    "extra_headers": {"anthropic-version": "2023-06-01", "anthropic-beta": "tools-2024-04-04"},
+                }
+            },
+            {},
+            {},
+            (),
+        ),
+        ({"headers": {"Anthropic-Version": "2023-06-01"}}, {}, {}, ()),
+        ({"organization": "org-caller"}, {}, {}, ("organization",)),
+        ({"headers": "authorization", "provider_specific_header": "x-api-key"}, {}, {}, ()),
+        (
+            {"api_key": "sk-caller", "headers": {"Ocp-Apim-Subscription-Key": "caller"}},
+            {},
+            {},
+            ("api_key", "headers"),
+        ),
+        ({}, {"anthropic-beta": "tools-2024-04-04"}, {}, ()),
+        ({}, {"anthropic-version": "2023-06-01", "anthropic-beta": "tools-2024-04-04"}, {}, ()),
+        ({}, {"openai-organization": "org-caller"}, {"forward_openai_org_id": True}, ("organization",)),
+        (
+            {},
+            {"x-litellm-api-key": "sk-virtual", "authorization": "Bearer sk-ant-oat01-caller"},
+            {},
+            ("provider_specific_header",),
+        ),
+        (
+            {},
+            {"authorization": "Bearer sk-virtual", "x-goog-api-key": "AIza-caller"},
+            FORWARD_PROVIDER_AUTH_HEADERS,
+            ("headers",),
+        ),
+        (
+            {},
+            {"authorization": "Bearer sk-virtual", "x-portkey-api-key": "caller-gateway-key"},
+            FORWARD_PROVIDER_AUTH_HEADERS,
+            ("headers",),
+        ),
+        ({}, {"authorization": "Bearer sk-virtual"}, FORWARD_PROVIDER_AUTH_HEADERS, ()),
+    ],
+    ids=[
+        "authorization-in-headers",
+        "plain-headers",
+        "empty-headers",
+        "api-key-in-extra-headers",
+        "openai-project-in-extra-headers",
+        "credential-in-provider-specific-header",
+        "credential-in-one-provider-specific-header-entry",
+        "plain-provider-specific-header",
+        "anthropic-version-and-beta-in-provider-specific-header",
+        "anthropic-version-in-headers",
+        "organization",
+        "malformed-header-fields",
+        "api-key-and-credential-headers",
+        "proxy-forwarded-anthropic-beta",
+        "proxy-forwarded-anthropic-sdk-headers",
+        "proxy-forwarded-openai-organization",
+        "proxy-forwarded-anthropic-oauth-token",
+        "proxy-forwarded-provider-auth-header",
+        "proxy-forwarded-gateway-key",
+        "proxy-forwarding-nothing",
+    ],
+)
+async def test_caller_credential_fields_name_every_field_that_carries_a_caller_header_or_credential(
+    sent: dict[str, object],
+    request_headers: dict[str, str],
+    general_settings: dict[str, object],
+    expected: tuple[str, ...],
+) -> None:
+    updated: Final = await _request_data_added_by_the_proxy(sent, request_headers, general_settings)
+
+    assert updated["proxy_server_request"]["caller_credential_fields"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_headers,expected",
+    [({}, ()), ({"x-caller-trace": "trace-1"}, ("headers",))],
+    ids=["user-information-only", "user-information-and-caller-header"],
+)
+async def test_caller_credential_fields_ignore_the_user_information_the_proxy_adds_to_forwarded_headers(
+    monkeypatch: pytest.MonkeyPatch, request_headers: dict[str, str], expected: tuple[str, ...]
+) -> None:
+    monkeypatch.setattr(litellm, "add_user_information_to_llm_headers", True)
+
+    updated: Final = await _request_data_added_by_the_proxy({}, request_headers, FORWARD_PROVIDER_AUTH_HEADERS)
+
+    assert updated["headers"]["x-litellm-user_api_key_user_id"] == "test-user"
+    assert updated["proxy_server_request"]["caller_credential_fields"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sent,request_headers,general_settings,expected",
+    [
+        ({"headers": {"Anthropic-Version": "2023-06-01"}}, {}, {}, ("headers",)),
+        (
+            {
+                "provider_specific_header": {
+                    "custom_llm_provider": "anthropic",
+                    "extra_headers": {"anthropic-version": "2023-06-01"},
+                }
+            },
+            {},
+            {},
+            ("provider_specific_header",),
+        ),
+        ({"organization": "org-caller"}, {}, {}, ()),
+        ({"extra_headers": {"API-Key": "caller-azure-key"}}, {}, {}, ()),
+        (
+            {"api_key": "sk-caller", "headers": {"Ocp-Apim-Subscription-Key": "caller"}},
+            {},
+            {},
+            ("api_key", "headers"),
+        ),
+        ({}, {"openai-organization": "org-caller"}, {"forward_openai_org_id": True}, ()),
+        (
+            {},
+            {"authorization": "Bearer sk-virtual", "x-goog-api-key": "AIza-caller"},
+            FORWARD_PROVIDER_AUTH_HEADERS,
+            (),
+        ),
+    ],
+    ids=[
+        "anthropic-version-in-headers",
+        "anthropic-version-in-provider-specific-header",
+        "organization",
+        "api-key-in-extra-headers",
+        "api-key-and-credential-headers",
+        "proxy-forwarded-openai-organization",
+        "proxy-forwarded-provider-auth-header",
+    ],
+)
+async def test_credential_fields_name_the_stripped_fields_the_caller_sent(
+    sent: dict[str, object],
+    request_headers: dict[str, str],
+    general_settings: dict[str, object],
+    expected: tuple[str, ...],
+) -> None:
+    updated: Final = await _request_data_added_by_the_proxy(sent, request_headers, general_settings)
+
+    assert updated["proxy_server_request"]["credential_fields"] == expected
+
+
+async def _request_data_added_by_the_proxy(
+    sent: dict[str, object], request_headers: dict[str, str], general_settings: dict[str, object]
+) -> dict:
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock: Final = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"content-type": "application/json", **request_headers}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    data: Final = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], **sent}
+
+    return await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", user_id="test-user"),
+        proxy_config=MagicMock(),
+        general_settings=dict(general_settings),
+        version="test-version",
+    )
+
+
 def test_initial_snapshot_refresh_clears_a_previous_guardrail_checkpoint() -> None:
     from litellm.integrations.shadow_eval_logger import GuardrailRequestSnapshot
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -934,6 +1198,26 @@ def test_body_snapshot_excludes_team_callback_credentials() -> None:
     assert proxy_request == {
         "body": {"messages": [{"role": "user", "content": "hi"}], "success_callback": ["langfuse"]}
     }, proxy_request
+
+
+def test_body_snapshot_keeps_the_stream_usage_injection_marker_out_of_the_stored_request() -> None:
+    from litellm.proxy.common_request_processing import stream_usage_tracking_updates
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+    from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
+
+    request: Final = {"model": "gpt-5-mini", "messages": [{"role": "user", "content": "hi"}], "stream": True}
+    proxy_request: Final = {"body": dict(request)}
+    data: Final = {
+        **request,
+        **stream_usage_tracking_updates(request, {}, "acompletion", lambda: True),
+        "proxy_server_request": proxy_request,
+    }
+
+    refresh_proxy_server_request_body_snapshot(data)
+
+    assert data[STREAM_USAGE_INJECTED_FIELD] is True
+    assert proxy_request["body"]["stream_options"] == {"include_usage": True}
+    assert STREAM_USAGE_INJECTED_FIELD not in proxy_request["body"]
 
 
 @pytest.mark.asyncio
@@ -1209,6 +1493,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "litellm_metadata": copy.deepcopy(malicious_metadata),
         "weights": {"gpt-3.5-turbo": {"forged-deployment-id": 100}},
         "_router_weights": {"gpt-3.5-turbo": {"forged-deployment-id": 100}},
+        "_encrypted_content_affinity_pinned": True,
     }
 
     updated = await add_litellm_data_to_request(
@@ -1231,6 +1516,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
     assert "_router_weights" not in updated
     assert "weights" not in updated["proxy_server_request"]["body"]
     assert "_router_weights" not in updated["proxy_server_request"]["body"]
+    assert "_encrypted_content_affinity_pinned" not in updated
 
     stripped_keys = {
         "disable_global_guardrails",
@@ -3330,9 +3616,7 @@ def test_x_litellm_trace_id_keeps_the_body_session_beside_it_whatever_the_log_se
     assert data["litellm_trace_id"] == "req-trace-1"
 
 
-@pytest.mark.parametrize(
-    "session_header", ["x-litellm-session-id", "x-claude-code-session-id", "x-session-id"]
-)
+@pytest.mark.parametrize("session_header", ["x-litellm-session-id", "x-claude-code-session-id", "x-session-id"])
 @pytest.mark.parametrize("with_trace_header", [False, True], ids=["session-header-only", "beside-trace-header"])
 def test_session_headers_still_beat_the_body_session_with_correlation_logging(
     monkeypatch: pytest.MonkeyPatch, session_header: str, with_trace_header: bool
@@ -8044,6 +8328,67 @@ def test_client_anthropic_api_headers_stay_off_openai_compatible_providers():
     assert forwarded == {}
 
 
+def test_client_anthropic_api_headers_stay_off_azure_ai_outside_native_messages():
+    forwarded = _headers_forwarded_to({"anthropic-beta": "thinking-binding-controls-2026-08-01"}, "azure_ai")
+
+    assert forwarded == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+async def test_client_thinking_binding_beta_reaches_azure_ai_foundry_claude():
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    data: Final[dict] = {"model": "claude-opus-4-8"}  # mutable-ok: the function under test writes into it
+    add_provider_specific_headers_to_request(
+        data=data,
+        headers={
+            "content-type": "application/json",
+            "anthropic-beta": "thinking-binding-controls-2026-08-01",
+            "anthropic-version": "2026-08-01",
+        },
+    )
+    received: Final[list[httpx.Request]] = []  # mutable-ok: the fake Foundry endpoint records what the proxy sent
+
+    def foundry_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(
+            status_code=200,
+            json={
+                "id": "msg_01",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-4-8",
+                "content": [{"type": "text", "text": "hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 12, "output_tokens": 6},
+            },
+            request=request,
+        )
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(foundry_answers))
+    try:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}},
+            model="azure_ai/claude-opus-4-8",
+            api_key="foundry-key",
+            api_base="https://my-resource.services.ai.azure.com/anthropic",
+            client=upstream,
+            provider_specific_header=data["provider_specific_header"],
+        )
+    finally:
+        await upstream.close()
+
+    assert received[0].headers["anthropic-beta"] == "thinking-binding-controls-2026-08-01"
+    assert received[0].headers["anthropic-version"] == "2026-08-01"
+    assert json.loads(received[0].content)["thinking"]["block_binding"] == {"prefix_mismatch_behavior": "drop_block"}
+
+
 TYPESAFE_DANGER_ZONE_HEADERS = {
     "TypeSafe-Danger-Zone-Images": "true",
     "typesafe-danger-zone-long-context": "true",
@@ -8282,6 +8627,7 @@ _PLANTED_STAMPS = {
     "attempted_fallbacks": 99,
     "original_model_group": "spoofed-group",
     "request_retry_count": -100,
+    "previous_models": [{"exception_type": "Timeout", "deployment_id": "spoofed", "attempted_retries": 101}],
     "_client_output_ceiling": {"api_base": "https://attacker.example"},
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: 10**9,
     "client_key": "client_value",
@@ -8316,6 +8662,7 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_from_bo
     assert "original_model_group" not in updated["metadata"]
     assert "_client_output_ceiling" not in updated["metadata"]
     assert "request_retry_count" not in updated["metadata"]
+    assert "previous_models" not in updated["metadata"]
     assert ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY not in updated["metadata"]
     assert updated["metadata"]["client_key"] == "client_value"
 
@@ -9078,6 +9425,97 @@ def test_default_team_settings_bool_turn_off_message_logging_redacts():
     )
 
 
+def _fake_chatgpt_oauth_token(account_id: str) -> str:
+    header = base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()
+    payload = (
+        base64.urlsafe_b64encode(
+            json.dumps({"https://api.openai.com/auth": {"chatgpt_account_id": account_id}, "exp": 4102444800}).encode()
+        )
+        .rstrip(b"=")
+        .decode()
+    )
+    return f"{header}.{payload}.fake-signature"
+
+
+CHATGPT_OAUTH_TOKEN = f"Bearer {_fake_chatgpt_oauth_token('acct-alice')}"
+CHATGPT_ACCOUNT_ID_HEADER_NAME = "ChatGPT-Account-Id"
+PLATFORM_API_KEY_BEARER = "Bearer sk-proj-fake-platform-key-0123456789"
+CHATGPT_LEAK_TARGET_PROVIDERS = ["openai", "azure", "anthropic", "bedrock", "vertex_ai"]
+
+
+def _codex_client_headers(
+    authorization_header_name: str = "authorization", account_id: str | None = "acct-alice"
+) -> dict:
+    return {
+        "content-type": "application/json",
+        "originator": "codex_cli_rs",
+        authorization_header_name: CHATGPT_OAUTH_TOKEN,
+        **({CHATGPT_ACCOUNT_ID_HEADER_NAME: account_id} if account_id is not None else {}),
+    }
+
+
+def test_clean_headers_keeps_chatgpt_oauth_bearer_when_gateway_key_is_separate():
+    result = clean_headers(
+        headers=Headers({**_codex_client_headers(), "x-litellm-api-key": "sk-proxy-virtual-key"}),
+        litellm_key_header_name="x-litellm-api-key",
+        forward_llm_provider_auth_headers=False,
+        authenticated_with_header="x-litellm-api-key",
+    )
+
+    assert result["authorization"] == CHATGPT_OAUTH_TOKEN
+    assert "x-litellm-api-key" not in result
+
+
+def test_clean_headers_drops_bearer_that_authenticated_to_the_gateway():
+    result = clean_headers(
+        headers=Headers({"authorization": CHATGPT_OAUTH_TOKEN, "content-type": "application/json"}),
+        litellm_key_header_name=None,
+        forward_llm_provider_auth_headers=False,
+        authenticated_with_header="authorization",
+    )
+
+    assert _authorization_values(result) == []
+
+
+@pytest.mark.parametrize("bearer", [PLATFORM_API_KEY_BEARER, "Bearer not.a-jwt", "Bearer a.bm90LWpzb24.c"])
+def test_clean_headers_drops_non_chatgpt_bearers(bearer):
+    result = clean_headers(
+        headers=Headers({"authorization": bearer, "x-litellm-api-key": "sk-proxy-virtual-key"}),
+        litellm_key_header_name="x-litellm-api-key",
+        forward_llm_provider_auth_headers=False,
+        authenticated_with_header="x-litellm-api-key",
+    )
+
+    assert _authorization_values(result) == []
+
+
+@pytest.mark.parametrize("authorization_header_name", AUTHORIZATION_HEADER_CASINGS)
+def test_chatgpt_oauth_credential_and_account_reach_chatgpt_provider(authorization_header_name):
+    forwarded = _headers_forwarded_to(_codex_client_headers(authorization_header_name), "chatgpt")
+
+    assert _authorization_values(forwarded) == [CHATGPT_OAUTH_TOKEN]
+    assert forwarded[CHATGPT_ACCOUNT_ID_HEADER_NAME] == "acct-alice"
+
+
+@pytest.mark.parametrize("custom_llm_provider", CHATGPT_LEAK_TARGET_PROVIDERS)
+def test_chatgpt_oauth_credential_is_never_forwarded_to_other_providers(custom_llm_provider):
+    forwarded = _headers_forwarded_to(_codex_client_headers(), custom_llm_provider)
+
+    assert _authorization_values(forwarded) == []
+    assert CHATGPT_OAUTH_TOKEN not in forwarded.values()
+    assert CHATGPT_ACCOUNT_ID_HEADER_NAME not in forwarded
+
+
+def test_chatgpt_account_header_is_not_forwarded_without_chatgpt_oauth_bearer():
+    headers = {**_codex_client_headers(), "authorization": PLATFORM_API_KEY_BEARER}
+
+    assert _headers_forwarded_to(headers, "chatgpt") == {}
+
+
+def test_anthropic_oauth_bearer_does_not_reach_chatgpt_provider():
+    assert _authorization_values(_headers_forwarded_to(_client_headers(), "chatgpt")) == []
+
+
 def test_add_user_api_key_auth_to_request_metadata_attributes_a_cli_session_to_its_alias():
     data = {"model": "gpt-5.4-nano", "messages": [{"role": "user", "content": "hi"}], "litellm_metadata": {}}
     session = UserAPIKeyAuth(
@@ -9347,7 +9785,9 @@ class TestResolveUserProviderCredentials:
             llm_router=self._router(),
         )
 
-        assert data["secret_fields"]["user_provider_credentials"] == {"copilot-cred": "gho_secret"}
+        assert data["secret_fields"]["user_provider_credentials"] == {
+            "copilot-cred": {"access_token": "gho_secret", "github_host": "github.com"}
+        }
         assert data["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
         # the shared fallback credential is never looked up
         call_where = table.find_many.await_args.kwargs["where"]
@@ -9804,7 +10244,9 @@ class TestResolveUserProviderCredentials:
             team_id=None,
             llm_router=router,
         )
-        assert data["secret_fields"]["user_provider_credentials"] == {"copilot-cred": "gho_secret"}
+        assert data["secret_fields"]["user_provider_credentials"] == {
+            "copilot-cred": {"access_token": "gho_secret", "github_host": "github.com"}
+        }
         call_where: Final = table.find_many.await_args.kwargs["where"]
         assert call_where == {"AND": ({"user_id": "user-a"}, {"credential_name": {"in": ["copilot-cred"]}})}
 
@@ -10290,7 +10732,8 @@ async def test_secret_fields_user_provider_credentials_repr_hides_tokens(monkeyp
     assert isinstance(credentials, RedactedDict)
     assert "gho_secret" not in str(data)
     assert "gho_secret" not in repr(credentials)
-    assert credentials["copilot-cred"] == "gho_secret", "provider reads still get the token"
+    assert credentials["copilot-cred"]["access_token"] == "gho_secret", "provider reads still get the token"
+    assert credentials["copilot-cred"]["github_host"] == "github.com"
 
 
 @pytest.mark.asyncio
@@ -10304,8 +10747,10 @@ async def test_header_mapped_user_id_cannot_load_another_users_connection(monkey
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     _per_user_env(monkeypatch)
-    load = AsyncMock(return_value={"copilot-cred": "gho_user_a_token"})
-    monkeypatch.setattr(upc, "aget_user_provider_tokens", load)
+    load = AsyncMock(
+        return_value={"copilot-cred": {"access_token": "gho_user_a_token", "github_host": "github.com"}}
+    )
+    monkeypatch.setattr(upc, "aget_user_provider_credentials", load)
     router = Router(
         model_list=[
             {
@@ -10344,7 +10789,8 @@ async def test_header_mapped_user_id_cannot_load_another_users_connection(monkey
     called_user_ids = [call.kwargs["user_id"] for call in load.await_args_list]
     assert called_user_ids == ["user-a"], f"header-mapped user-b must never reach the token loader: {called_user_ids}"
     credentials = updated["secret_fields"]["user_provider_credentials"]
-    assert credentials["copilot-cred"] == "gho_user_a_token"
+    assert credentials["copilot-cred"]["access_token"] == "gho_user_a_token"
+    assert credentials["copilot-cred"]["github_host"] == "github.com"
     assert updated["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
 
 
@@ -10357,8 +10803,10 @@ async def test_per_user_token_resolution_uses_key_identity_without_header_mappin
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     _per_user_env(monkeypatch)
-    load = AsyncMock(return_value={"copilot-cred": "gho_user_a_token"})
-    monkeypatch.setattr(upc, "aget_user_provider_tokens", load)
+    load = AsyncMock(
+        return_value={"copilot-cred": {"access_token": "gho_user_a_token", "github_host": "github.com"}}
+    )
+    monkeypatch.setattr(upc, "aget_user_provider_credentials", load)
     router = Router(
         model_list=[
             {
@@ -10394,7 +10842,8 @@ async def test_per_user_token_resolution_uses_key_identity_without_header_mappin
 
     called_user_ids = [call.kwargs["user_id"] for call in load.await_args_list]
     assert called_user_ids == ["user-a"]
-    assert updated["secret_fields"]["user_provider_credentials"]["copilot-cred"] == "gho_user_a_token"
+    assert updated["secret_fields"]["user_provider_credentials"]["copilot-cred"]["access_token"] == "gho_user_a_token"
+    assert updated["secret_fields"]["user_provider_credentials"]["copilot-cred"]["github_host"] == "github.com"
 
 
 @pytest.mark.asyncio
