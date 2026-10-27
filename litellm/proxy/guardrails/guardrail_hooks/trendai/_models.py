@@ -127,4 +127,5 @@ class TrendAIWindowScan:
 @dataclass(frozen=True, slots=True)
 class TrendAIRequestPrompt:
     prompt: str
-    text_range: tuple[int, int] | None
+    texts: tuple[str, ...]
+    message_index: int | None

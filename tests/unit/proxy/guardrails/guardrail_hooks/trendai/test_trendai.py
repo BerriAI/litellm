@@ -9,8 +9,11 @@ import pytest
 
 import litellm
 from litellm.exceptions import GuardrailRaisedException
+from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.bedrock.passthrough.guardrail_translation.handler import BedrockPassthroughGuardrailHandler
 from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
+from litellm.llms.openai.completion.guardrail_translation.handler import OpenAITextCompletionHandler
+from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy.guardrails.guardrail_hooks.trendai import TrendAIGuardrail, initialize_guardrail
 from litellm.proxy.guardrails.guardrail_hooks.trendai._models import (
     TrendAIAllow,
@@ -340,7 +343,12 @@ async def test_request_scans_only_the_last_user_turn_and_writes_redaction_back()
         )
 
     assert scanned == ["mail a@b.com now"]
-    assert result["texts"] == ["system prompt", "first turn a@b.com", "reply", "mail [EMAIL] now"]
+    assert result["structured_messages"] == [
+        {"role": "system", "content": "system prompt"},
+        {"role": "user", "content": "first turn a@b.com"},
+        {"role": "assistant", "content": "reply"},
+        {"role": "user", "content": "mail [EMAIL] now"},
+    ]
     (record,) = _guardrail_records(request_data)
     assert record["guardrail_status"] == "success"
     assert record["masked_entity_count"] == {"EMAIL": 1}
@@ -404,40 +412,79 @@ async def test_request_redaction_targets_the_last_user_even_when_later_messages_
 
 
 @pytest.mark.asyncio
-async def test_converse_redaction_with_unaligned_text_slots_fails_closed() -> None:
+@pytest.mark.parametrize("action", ["converse", "converse-stream"])
+@pytest.mark.parametrize("tool_result", ["found", "a@b.com"])
+@pytest.mark.parametrize("tool_input", [{}, {"query": "original"}])
+async def test_converse_redaction_preserves_native_field_positions(
+    action: str, tool_result: str, tool_input: Mapping[str, str]
+) -> None:
     respond, scanned = _engine(redact={"a@b.com": "[EMAIL]"})
+    history: Final = [
+        {"role": "user", "content": [{"text": "lookup"}]},
+        {
+            "role": "assistant",
+            "content": [{"toolUse": {"toolUseId": "call-1", "name": "lookup", "input": tool_input}}],
+        },
+    ]
     body: Final = {
         "messages": [
-            {"role": "user", "content": [{"text": "lookup"}]},
-            {
-                "role": "assistant",
-                "content": [{"toolUse": {"toolUseId": "call-1", "name": "lookup", "input": {}}}],
-            },
+            *history,
             {
                 "role": "user",
                 "content": [
                     {"text": "mail a@b.com"},
-                    {"toolResult": {"toolUseId": "call-1", "content": [{"text": "found"}]}},
+                    {"toolResult": {"toolUseId": "call-1", "content": [{"text": tool_result}]}},
                 ],
             },
         ],
-        "additionalModelRequestFields": {"system": "extra"},
+        "additionalModelRequestFields": {"system": "a@b.com"},
     }
-    original_body: Final = deepcopy(body)
+    original_history: Final = deepcopy(history)
     request_data: Final[dict[str, object]] = {
-        "endpoint": "/model/test-model/converse",
+        "endpoint": f"/model/test-model/{action}",
         "data": body,
         "metadata": {},
     }
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
-        with pytest.raises(GuardrailRaisedException, match="could not apply the requested redaction"):
-            await BedrockPassthroughGuardrailHandler().process_input_messages(
-                request_data, _guardrail(async_handler=client, fallback_on_error="allow")
-            )
+        await BedrockPassthroughGuardrailHandler().process_input_messages(
+            request_data, _guardrail(async_handler=client)
+        )
 
-    assert scanned == ["mail a@b.comextra"]
-    assert request_data["data"] == original_body
-    assert _guardrail_records(request_data)[-1]["guardrail_status"] == "guardrail_failed_to_respond"
+    assert scanned == ["mail a@b.coma@b.com"]
+    assert request_data["data"] == {
+        "messages": [
+            *original_history,
+            {
+                "role": "user",
+                "content": [
+                    {"text": "mail [EMAIL]"},
+                    {"toolResult": {"toolUseId": "call-1", "content": [{"text": tool_result}]}},
+                ],
+            },
+        ],
+        "additionalModelRequestFields": {"system": "[EMAIL]"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_converse_redaction_rewrites_guard_content_without_flat_text_slots() -> None:
+    respond, scanned = _engine(redact={"a@b.com": "[EMAIL]"})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        out: Final = await BedrockPassthroughGuardrailHandler().process_input_messages(
+            data={
+                "endpoint": "/model/test-model/converse",
+                "data": {
+                    "messages": [{"role": "user", "content": [{"guardContent": {"text": {"text": "mail a@b.com"}}}]}]
+                },
+                "metadata": {},
+            },
+            guardrail_to_apply=_guardrail(async_handler=client),
+        )
+
+    assert scanned == ["mail a@b.com"]
+    assert out["data"] == {
+        "messages": [{"role": "user", "content": [{"guardContent": {"text": {"text": "mail [EMAIL]"}}}]}]
+    }
 
 
 @pytest.mark.asyncio
@@ -463,7 +510,16 @@ async def test_request_redaction_is_split_back_across_multipart_user_content() -
         )
 
     assert scanned == ["card 4111 ok"]
-    assert result["texts"] == ["card ", "#### ok"]
+    assert result["structured_messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "card "},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},
+                {"type": "text", "text": "#### ok"},
+            ],
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -480,7 +536,9 @@ async def test_request_scans_text_slots_from_normalized_message_parts() -> None:
         )
 
     assert scanned == ["mail a@b.com"]
-    assert result["texts"] == ["mail [EMAIL]"]
+    assert result["structured_messages"] == [
+        {"role": "user", "content": [{"type": "input_text", "text": "mail [EMAIL]"}]}
+    ]
 
 
 @pytest.mark.asyncio
@@ -655,6 +713,89 @@ async def test_request_redaction_flows_through_the_chat_completions_handler() ->
 
     assert out["messages"][0]["content"] == "be terse"
     assert out["messages"][1]["content"][0]["text"] == "mail [EMAIL]"
+
+
+@pytest.mark.asyncio
+async def test_responses_redaction_keeps_instructions_and_tool_items() -> None:
+    respond, scanned = _engine(redact={"a@b.com": "[EMAIL]"})
+    history: Final = [
+        {"role": "user", "content": "mail a@b.com"},
+        {"type": "function_call", "call_id": "call-1", "name": "lookup", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call-1", "output": "a@b.com"},
+    ]
+    original_history: Final = deepcopy(history)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        out: Final = await OpenAIResponsesHandler().process_input_messages(
+            data={
+                "instructions": "be terse",
+                "input": [
+                    *history,
+                    {"role": "user", "content": [{"type": "input_text", "text": "mail a@b.com"}]},
+                ],
+                "metadata": {},
+            },
+            guardrail_to_apply=_guardrail(async_handler=client),
+        )
+
+    assert scanned == ["mail a@b.com"]
+    assert out["instructions"] == "be terse"
+    assert out["input"] == [
+        *original_history,
+        {"role": "user", "content": [{"type": "input_text", "text": "mail [EMAIL]"}]},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_redaction_preserves_system_and_image_content() -> None:
+    respond, scanned = _engine(redact={"a@b.com": "[EMAIL]"})
+    image: Final = {"type": "image", "source": {"type": "url", "url": "https://example.com/image.png"}}
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        out: Final = await AnthropicMessagesHandler().process_input_messages(
+            data={
+                "model": "claude-sonnet-5-5",
+                "system": "be terse",
+                "messages": [
+                    {"role": "user", "content": "first a@b.com"},
+                    {"role": "assistant", "content": "reply"},
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "mail "}, image, {"type": "text", "text": "a@b.com"}],
+                    },
+                ],
+                "metadata": {},
+            },
+            guardrail_to_apply=_guardrail(async_handler=client),
+        )
+
+    assert scanned == ["mail a@b.com"]
+    assert out["system"] == "be terse"
+    assert out["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "first a@b.com"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "reply"}]},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "mail "}, image, {"type": "text", "text": "[EMAIL]"}],
+        },
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("prompt", "expected"),
+    [("mail a@b.com", "mail [EMAIL]"), (["mail ", "a@b.com"], ["mail ", "[EMAIL]"])],
+)
+async def test_text_completion_redaction_still_rewrites_the_prompt(
+    prompt: str | list[str], expected: str | list[str]
+) -> None:
+    respond, scanned = _engine(redact={"a@b.com": "[EMAIL]"})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        out: Final = await OpenAITextCompletionHandler().process_input_messages(
+            data={"prompt": prompt, "metadata": {}},
+            guardrail_to_apply=_guardrail(async_handler=client),
+        )
+
+    assert scanned == ["mail a@b.com"]
+    assert out["prompt"] == expected
 
 
 @pytest.mark.parametrize(
