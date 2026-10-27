@@ -207,18 +207,37 @@ describe("fetchDecisionModels", () => {
     vi.unstubAllGlobals();
   });
 
-  it("lists the key's decision models from the proxy that answers the request, sorted by name", async () => {
+  it("lists the key's models with decision modes or endpoints from the request proxy, sorted by name", async () => {
     mockFetch.mockResolvedValueOnce(
       modelGroupInfo([
         { model_group: "pplx-decider", mode: "evaluation" },
         { model_group: "gpt-5.5", mode: "chat" },
         { model_group: "jev-latest", mode: "evaluation" },
         { model_group: "unknown-mode", mode: null },
+        { model_group: "native-decision", mode: "decisions" },
+        {
+          model_group: "chat-decisions",
+          mode: "chat",
+          supported_endpoints: ["/v1/chat/completions", "/v1/decisions"],
+        },
+        { model_group: "chat-systemone", mode: "chat", supported_endpoints: ["/v1/systemone"] },
+        { model_group: "custom-decision", mode: "custom", supported_endpoints: ["/v1/decisions"] },
+        { model_group: "endpoint-only", supported_endpoints: ["/v1/decisions"] },
+        { model_group: "chat-only", mode: "chat", supported_endpoints: ["/v1/chat/completions"] },
+        { model_group: "no-endpoints", mode: "chat", supported_endpoints: [] },
+        { model_group: "null-endpoints", mode: "chat", supported_endpoints: null },
+        { model_group: "missing-mode" },
+        { model_group: "custom-mode", mode: "custom" },
       ]),
     );
 
     await expect(fetchDecisionModels("virtual-key", "https://custom.example.com/")).resolves.toEqual([
+      "chat-decisions",
+      "chat-systemone",
+      "custom-decision",
+      "endpoint-only",
       "jev-latest",
+      "native-decision",
       "pplx-decider",
     ]);
     expect(mockFetch).toHaveBeenCalledWith(
