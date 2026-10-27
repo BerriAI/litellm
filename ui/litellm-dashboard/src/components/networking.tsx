@@ -1605,6 +1605,7 @@ export const modelInfoCall = async (
   accessGroup?: string,
   wildcardOnly?: boolean,
   blocked?: boolean,
+  options: { useStoredParams?: boolean } = {},
 ) => {
   /**
    * Get all models on proxy
@@ -1623,6 +1624,9 @@ export const modelInfoCall = async (
     }
     if (modelId && modelId.trim()) {
       params.append("modelId", modelId.trim());
+    }
+    if (options.useStoredParams) {
+      params.append("use_stored_params", "true");
     }
     if (teamId && teamId.trim()) {
       params.append("teamId", teamId.trim());
@@ -4223,81 +4227,6 @@ export const enrichPolicyTemplateStream = async (
           onStatus?.(event.message);
         } else if (event.type === "done") {
           onDone(event);
-        } else if (event.type === "error") {
-          onError?.(event.message);
-        }
-      } catch {
-        // skip malformed events
-      }
-    }
-  }
-};
-
-export interface UsageAiToolCallEvent {
-  tool_name: string;
-  tool_label: string;
-  arguments: Record<string, string>;
-  status: "running" | "complete" | "error";
-  error?: string;
-}
-
-export const usageAiChatStream = async (
-  accessToken: string,
-  messages: { role: string; content: string }[],
-  model: string,
-  onChunk: (content: string) => void,
-  onDone: () => void,
-  onError?: (error: string) => void,
-  onStatus?: (message: string) => void,
-  onToolCall?: (event: UsageAiToolCallEvent) => void,
-  signal?: AbortSignal,
-) => {
-  const url = proxyBaseUrl ? `${proxyBaseUrl}/usage/ai/chat` : `/usage/ai/chat`;
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ messages, model }),
-    signal,
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json();
-    const errorMessage = deriveErrorMessage(errorData);
-    handleError(errorMessage);
-    throw new Error(errorMessage);
-  }
-
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error("No response body");
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  // eslint-disable-next-line no-constant-condition -- stream read loop
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      try {
-        const event = JSON.parse(line.slice(6));
-        if (event.type === "chunk") {
-          onChunk(event.content);
-        } else if (event.type === "status") {
-          onStatus?.(event.message);
-        } else if (event.type === "tool_call") {
-          onToolCall?.(event as UsageAiToolCallEvent);
-        } else if (event.type === "done") {
-          onDone();
         } else if (event.type === "error") {
           onError?.(event.message);
         }
@@ -6935,7 +6864,7 @@ export const searchToolQueryCall = async (
     if (!response.ok) {
       const errorData = await response.text();
       await handleError(errorData);
-      return null;
+      throw new Error(errorData);
     }
 
     const data = await response.json();

@@ -152,7 +152,7 @@ class BaseVectorStoreConfig:
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: dict[str, Any] | None = None,
+        extra_body: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         pass
 
@@ -164,7 +164,7 @@ class BaseVectorStoreConfig:
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: dict[str, Any] | None = None,
+        extra_body: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         """
         Optional async version of transform_search_vector_store_request.
@@ -220,6 +220,11 @@ class BaseVectorStoreConfig:
         if api_base is None:
             raise ValueError("api_base is required")
         return api_base
+
+    def get_vector_store_url(self, api_base: str, encoded_vector_store_id: str) -> str:
+        """Url of one vector store for retrieve, update and delete. Providers whose
+        ``get_complete_url`` adds a query string, like Azure, override this."""
+        return f"{api_base}/{encoded_vector_store_id}"
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         from ..chat.transformation import BaseLLMException

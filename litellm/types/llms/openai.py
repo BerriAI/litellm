@@ -2,7 +2,7 @@ import builtins
 from collections.abc import Iterable, Mapping
 from enum import Enum
 from os import PathLike
-from typing import IO, Any, Final, Generic, Literal, Optional, TypeAlias, Union
+from typing import IO, TYPE_CHECKING, Any, Final, Generic, Literal, Optional, TypeAlias, Union
 
 import httpx
 from openai import Omit
@@ -55,6 +55,7 @@ except (ImportError, AttributeError):
 
 from typing import Annotated
 
+from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from openai.types.responses.response_create_params import (
     Reasoning,
     ResponseIncludable,
@@ -96,6 +97,9 @@ from litellm.types.responses.main import (
 
 from .base import CachedTokensDetails
 
+if TYPE_CHECKING:
+    from litellm.types.utils import Usage
+
 FileContent = IO[bytes] | bytes | PathLike
 
 FileTypes = (
@@ -119,6 +123,7 @@ class BinaryResponseSummary(TypedDict):
     object: ReadOnly[Literal["binary"]]
     content_type: ReadOnly[str | None]
     num_bytes: ReadOnly[int]
+    usage: NotRequired[ReadOnly[Mapping[str, builtins.object]]]
 
 
 _ResponseT = TypeVar("_ResponseT", bound=httpx.Response | SDKResponse, default=httpx.Response)
@@ -126,6 +131,7 @@ _ResponseT = TypeVar("_ResponseT", bound=httpx.Response | SDKResponse, default=h
 
 class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT]):
     _hidden_params: dict
+    usage: "Usage | None"
     response: _ResponseT  # pyright: ignore[reportIncompatibleVariableOverride]  # SDK accepts both backends at runtime
 
     @property
@@ -139,6 +145,7 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT
     def __init__(self, response: _ResponseT) -> None:
         super().__init__(response)  # pyright: ignore[reportArgumentType]  # SDK accepts both backends at runtime
         self._hidden_params = {}
+        self.usage = None
 
     @property
     def content_type(self) -> str | None:
@@ -146,11 +153,12 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT
         return headers.get("content-type")
 
     def logging_summary(self) -> BinaryResponseSummary:
-        return {
+        summary: Final[BinaryResponseSummary] = {
             "object": "binary",
             "content_type": self.content_type,
             "num_bytes": self._num_bytes(),
         }
+        return summary if self.usage is None else {**summary, "usage": self.usage.model_dump()}
 
     def _num_bytes(self) -> int:
         try:
@@ -675,12 +683,12 @@ class ChatCompletionCachedContent(TypedDict):
 
 class PromptCacheBreakpoint(TypedDict):
     mode: ReadOnly[Literal["explicit"]]
-    ttl: NotRequired[ReadOnly[Literal["30m"]]]
+    ttl: NotRequired[ReadOnly[Literal["30m", "12h"]]]
 
 
 class PromptCacheOptions(TypedDict, total=False):
     mode: ReadOnly[Literal["implicit", "explicit"]]
-    ttl: ReadOnly[Literal["30m"]]
+    ttl: ReadOnly[Literal["30m", "12h"]]
 
 
 class ChatCompletionThinkingBlock(TypedDict, total=False):
@@ -1374,10 +1382,23 @@ class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     model_config = {"extra": "allow"}
 
 
+class CacheWriteTokensDetails(BaseLiteLLMOpenAIResponseObject):
+    ttl_30m_tokens: int
+    ttl_12h_tokens: int
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+def _is_none(value: object) -> bool:
+    return value is None
+
+
 class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     audio_tokens: int | None = None
     cached_tokens: int = 0
     cached_tokens_details: CachedTokensDetails | None = None
+    cache_write_tokens: int | None = Field(default=None, exclude_if=_is_none)
+    cache_write_tokens_details: CacheWriteTokensDetails | None = Field(default=None, exclude_if=_is_none)
     image_tokens: int | None = None
     text_tokens: int | None = None
     video_tokens: int | None = None
@@ -1481,6 +1502,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
             | OutputToolSearchCall
+            | ResponseCompactionItem
         ]
     )
     parallel_tool_calls: bool | None = None
