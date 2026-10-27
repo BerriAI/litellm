@@ -8842,3 +8842,26 @@ async def test_success_charges_a_numeric_body_user_to_the_window_its_admission_o
     )
 
     assert _charged_windows(handler, _scoped_success_kwargs(user=123))["{end_user:123}:tokens"] == "{end_user:123}:window"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parent_admitted", [True, False], ids=["sub_call_of_an_admitted_request", "no_admission"])
+async def test_success_of_a_call_that_skipped_admission_charges_every_scope_without_waiting_for_a_window(
+    parent_admitted: bool,
+) -> None:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    if parent_admitted:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="key-hash", user_id="u", team_id="t"),
+            cache=handler.internal_usage_cache.dual_cache,
+            data={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "litellm_call_id": "parent",
+            },
+            call_type="acompletion",
+        )
+
+    assert _charged_windows(handler, _scoped_success_kwargs(litellm_call_id="sub-call")) == dict.fromkeys(
+        _SCOPE_TOKEN_KEYS
+    )

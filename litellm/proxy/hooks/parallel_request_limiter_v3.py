@@ -5325,10 +5325,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 reserved_tokens=reserved_tokens,
             )
         )
+        unreserved_targets: Final = [target for target in charged_targets if target not in reserved_scopes]
+        # A call that never passed admission, such as a proxy sub-call, opened no window, and the sub-call
+        # precheck reads its counters directly, so it charges them unconditionally
         pipeline_operations.extend(
-            self._build_open_window_tpm_ops(
-                targets=[target for target in charged_targets if target not in reserved_scopes],
-                tokens=total_tokens,
+            self._build_open_window_tpm_ops(targets=unreserved_targets, tokens=total_tokens)
+            if stash is not None
+            else self._build_reservation_aware_tpm_ops(
+                targets=unreserved_targets,
+                reserved_scopes=reserved_scopes,
+                actual_tokens=total_tokens,
+                reserved_tokens=0,
             )
         )
         pipeline_operations.extend(
