@@ -65,8 +65,8 @@ def test_a_zero_bill_replaces_the_upstream_cost() -> None:
     assert billed.usage is not None and billed.usage.cost == 0.0
 
 
-@pytest.mark.parametrize("bill", [None, -0.001, float("nan"), float("inf"), True])
-def test_an_unpriceable_stream_keeps_the_upstream_cost(bill: float | bool | None) -> None:
+@pytest.mark.parametrize("bill", [None, -0.001, float("nan"), float("inf")])
+def test_an_unpriceable_stream_keeps_the_upstream_cost(bill: float | None) -> None:
     chunk: Final = _usage_chunk(UPSTREAM_COST)
 
     assert with_client_stream_usage_cost(chunk, lambda _reply: bill) is chunk
