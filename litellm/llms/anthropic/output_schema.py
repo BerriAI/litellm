@@ -152,6 +152,7 @@ def _object_fields(declared_type: object, schema: Mapping[str, object]) -> Mappi
         return {"additionalProperties": False}
     if (
         declared_type is None
+        and "enum" not in schema
         and _as_schema(schema.get("properties")) is not None
         and not _COMPOSITION_KEYS & schema.keys()
     ):

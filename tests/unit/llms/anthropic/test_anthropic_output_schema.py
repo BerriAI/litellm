@@ -103,3 +103,4 @@ def test_nullable_object_enum_keeps_its_type_dropped_instead_of_forcing_object()
     )
 
     assert shaped == {"properties": {"a": {"type": "string"}}, "enum": [None]}
+    assert shape_claude_output_schema(shaped) == shaped
