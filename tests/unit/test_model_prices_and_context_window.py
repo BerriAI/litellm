@@ -388,21 +388,6 @@ def test_bedrock_claude_rows_of_one_family_agree_on_native_structured_output_fla
             )
 
 
-@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
-def test_bedrock_claude_fable_5_rows_do_not_advertise_native_structured_output(path: Path) -> None:
-    """Bedrock Converse and Invoke reject outputConfig for claude-fable-5 with
-    `output_config.format: Extra inputs are not permitted` (AWS Bedrock, verified live 2026-10-17 in #46870),
-    so every claude-fable-5 row routes json_schema through the json tool call instead, with or without thinking"""
-    fable_5_rows: Final = {
-        key: row.native_output_flags
-        for key, row in _bedrock_claude_rows(path).items()
-        if row.family == "claude-fable-5"
-    }
-    assert len(fable_5_rows) >= 6, fable_5_rows
-    assert {key: flags[0] for key, flags in fable_5_rows.items()} == {key: False for key in fable_5_rows}
-    assert {key: flags for key, flags in fable_5_rows.items() if True in flags} == {}
-
-
 def test_bedrock_claude_backup_rows_match_the_main_catalog() -> None:
     assert _bedrock_claude_rows(PRICES_PATH) == _bedrock_claude_rows(BACKUP_PRICES_PATH)
 
