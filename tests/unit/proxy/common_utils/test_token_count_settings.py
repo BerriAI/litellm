@@ -183,7 +183,7 @@ def test_every_shipped_token_count_model_resolves_to_a_mapped_aws_model() -> Non
     for name, count_model in count_models.items():
         model: Final = count_model["model"]
         assert get_bedrock_base_model(model) in aws_models
-        assert cost_map[name]["litellm_provider"] in ("bedrock", "bedrock_converse")
+        assert cost_map[name]["litellm_provider"] in ("bedrock", "bedrock_converse", "bedrock_mantle")
         assert "region" not in count_model or count_model["region"].strip()
 
 
