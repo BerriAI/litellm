@@ -7,7 +7,8 @@ import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
-from functools import lru_cache, partial
+from functools import lru_cache, partial, reduce
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
 
@@ -79,6 +80,7 @@ from litellm.types.utils import (
     ChatCompletionAudioResponse,
     ChatCompletionTokenLogprob,
     ChoiceLogprobs,
+    Choices,
     CompletionTokensDetailsWrapper,
     PromptTokensDetailsWrapper,
     TopLogprob,
@@ -231,6 +233,49 @@ def _served_model_name(model_version: object) -> str | None:
     if not isinstance(model_version, str) or not model_version:
         return None
     return model_version.split("@", 1)[0]
+
+
+def _chunk_field(value: object, name: str) -> object:
+    if isinstance(value, Mapping):
+        return cast(Mapping[str, object], value).get(name)  # cast-ok: streamed chunk dicts are untyped JSON
+    return getattr(value, name, None)
+
+
+def _delta_provider_fields(chunk: object) -> Mapping[str, object] | None:
+    choices: Final = _chunk_field(chunk, "choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    first_choice: Final = cast(Sequence[object], choices)[0]  # cast-ok: streamed chunk choices are untyped
+    return as_str_mapping(_chunk_field(_chunk_field(first_choice, "delta"), "provider_specific_fields"))
+
+
+def _list_field(fields: Mapping[str, object], key: str) -> Sequence[object]:
+    value: Final = fields.get(key)
+    return cast(Sequence[object], value) if isinstance(value, list) else ()  # cast-ok: items forwarded verbatim
+
+
+def _paired_invocation(first: Mapping[str, object], second: Mapping[str, object]) -> Mapping[str, object]:
+    if ("response" in first) == ("response" in second):
+        return first
+    call, result = (first, second) if "response" in second else (second, first)
+    return {
+        **{key: value for key, value in call.items() if key not in ("response", "response_thought_signature")},
+        "response": result["response"],
+        **(
+            {"response_thought_signature": result["response_thought_signature"]}
+            if "response_thought_signature" in result
+            else {}
+        ),
+    }
+
+
+def _paired_invocations(invocations: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    ids: Final = tuple(dict.fromkeys(invocation.get("id") for invocation in invocations))
+    return tuple(
+        reduce(_paired_invocation, (invocation for invocation in invocations if invocation.get("id") == invocation_id))
+        for invocation_id in ids
+        if invocation_id is not None
+    ) + tuple(invocation for invocation in invocations if invocation.get("id") is None)
 
 
 _GEMINI_SPEECH_CONFIG_KEY_MAP: Final[Mapping[str, str]] = MappingProxyType(
@@ -2706,6 +2751,26 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if merged:
                 setattr(response, field_name, merged)
                 response.hidden_params[field_name] = merged
+        VertexGeminiConfig._merge_streamed_message_provider_fields(response, chunks)
+
+    @staticmethod
+    def _merge_streamed_message_provider_fields(response: ModelResponse, chunks: Sequence[object]) -> None:
+        # a server-side toolCall and its toolResponse stream in different chunks, pair them as the unary path does
+        per_chunk: Final = tuple(fields for chunk in chunks if (fields := _delta_provider_fields(chunk)) is not None)
+        invocations: Final = tuple(
+            mapping
+            for invocation in chain.from_iterable(
+                _list_field(fields, "server_side_tool_invocations") for fields in per_chunk
+            )
+            if (mapping := as_str_mapping(invocation)) is not None
+        )
+        choice: Final = response.choices[0] if response.choices else None
+        if not invocations or not isinstance(choice, Choices):
+            return
+        choice.message.provider_specific_fields = {
+            **(choice.message.provider_specific_fields or {}),
+            "server_side_tool_invocations": list(_paired_invocations(invocations)),
+        }
 
     @staticmethod
     def _convert_grounding_metadata_to_annotations(
