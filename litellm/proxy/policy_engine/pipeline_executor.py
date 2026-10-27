@@ -573,8 +573,7 @@ class PipelineExecutor:
             _release_original_chunks(step.guardrail, undeliverable.reason, streaming_chunks, originals)
             return
         finally:
-            if not callback.records_own_guardrail_information:
-                _name_step_that_ran(hook_input, metadata_key, step.guardrail)
+            _name_step_that_ran(hook_input, metadata_key, step.guardrail)
         discard_reason: Final = observer.discard_reason(rewrite_undeliverable_reason)
         if discard_reason is not None:
             _release_original_chunks(step.guardrail, discard_reason, streaming_chunks, originals)

@@ -1434,6 +1434,19 @@ async def test_streaming_step_records_the_guardrail_in_the_applied_guardrails_he
     assert result.modified_data["metadata"]["applied_guardrails"] == ["masker"]
 
 
+class _SelfRecordingGuardrail(_TextReturningGuardrail):
+    records_own_guardrail_information = True
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_whose_guardrail_records_its_own_results_is_named(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [_SelfRecordingGuardrail(["hello world"])])
+
+    result = await _run_streaming_step(_WritingTranslation(), [_chunk()])
+
+    assert result.modified_data["metadata"]["applied_guardrails"] == ["masker"]
+
+
 class _LitellmMetadataOpeningGuardrail(CustomGuardrail):
     """Opens ``litellm_metadata`` on the request while scanning, as the A2A translation does."""
 

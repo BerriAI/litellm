@@ -36,6 +36,8 @@ _RESPONSE_BLOCKER: Final = "response-blocking-step"
 _LIVE_FIRST: Final = "live-first-step"
 _LIVE_SECOND: Final = "live-second-step"
 _UNGATED_STEP: Final = "ungated-step"
+_JUDGE: Final = "judge-step"
+_JUDGE_MODEL: Final = "pipeline-judge"
 _STOPS_AFTER_FIRST: Final = "stops-after-first"
 _RUNS_EVERY_STEP: Final = "runs-every-step"
 _BLOCKS_AT_FIRST: Final = "blocks-at-first"
@@ -46,6 +48,7 @@ _RESPONSE_MOVES_PAST_FIRST: Final = "response-moves-past-first"
 _SCANS_AFTER_RELEASE: Final = "scans-after-release"
 _CANNOT_HOLD_STREAM: Final = "cannot-hold-stream"
 _ERRORS_PAST_FIRST: Final = "errors-past-first"
+_JUDGES_THEN_CHECKS: Final = "judges-then-checks"
 _ENDPOINTS: Final = ("/v1/chat/completions", "/v1/responses", "/v1/messages")
 
 
@@ -154,6 +157,16 @@ def _completion(request: Request) -> Reply:
 
 
 def _vendor(request: Request) -> Reply:
+    if request.target == f"/{_JUDGE}/v1/decisions":
+        return Reply(
+            body=json.dumps(
+                {
+                    "model": "gpt-6-luna",
+                    "answers": [{"type": "predicate", "name": "unsafe_output", "probability": 0.01}],
+                    "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+                }
+            ).encode()
+        )
     if request.target.startswith(f"/{_PROMPT_SHIELD}{_PROMPT_SHIELD_PATH}?"):
         return Reply(
             body=json.dumps({"userPromptAnalysis": {"attackDetected": False}, "documentsAnalysis": []}).encode()
@@ -198,6 +211,17 @@ def _policy(mode: str, steps: tuple[tuple[str, str, str], ...], *, on_error: str
 def _config(directory: Path, vendor: Wire) -> Path:
     configuration: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     configuration["litellm_settings"] = {**configuration.get("litellm_settings", {}), "callbacks": ["otel"]}
+    configuration["model_list"] = [
+        *configuration.get("model_list", []),
+        {
+            "model_name": _JUDGE_MODEL,
+            "litellm_params": {
+                "model": "openai/gpt-6-luna",
+                "api_base": f"{vendor.url}/{_JUDGE}/v1",
+                "api_key": "synthetic-judge-key",
+            },
+        },
+    ]
     configuration["guardrails"] = [
         *(
             _guardrail(name, "pre_call", vendor)
@@ -216,6 +240,23 @@ def _config(directory: Path, vendor: Wire) -> Path:
                 "default_on": False,
                 "api_base": f"{vendor.url}/{_UNGATED_STEP}",
                 "api_key": "synthetic-guardrail-key",
+            },
+        },
+        {
+            "guardrail_name": _JUDGE,
+            "litellm_params": {
+                "guardrail": "decision_model",
+                "mode": "post_call",
+                "default_on": False,
+                "decision_model": _JUDGE_MODEL,
+                "checks": [
+                    {
+                        "name": "unsafe_output",
+                        "instructions": "Does the response say anything unsafe?",
+                        "action": "block",
+                        "threshold": 0.5,
+                    }
+                ],
             },
         },
         {
@@ -253,6 +294,7 @@ def _config(directory: Path, vendor: Wire) -> Path:
         _CANNOT_HOLD_STREAM: _policy(
             "post_call", ((_UNGATED_STEP, "next", "block"), (_RESPONSE_SECOND, "next", "block"))
         ),
+        _JUDGES_THEN_CHECKS: _policy("post_call", ((_JUDGE, "next", "block"), (_RESPONSE_SECOND, "next", "block"))),
         _ERRORS_PAST_FIRST: _policy(
             "pre_call", ((_REQUEST_ERRORING, "next", "block"), (_REQUEST_SECOND, "next", "block")), on_error="next"
         ),
@@ -514,6 +556,20 @@ def test_the_spend_log_and_the_trace_name_only_the_steps_that_ran(
     assert [ast.literal_eval(str(span["attributes"]["metadata.applied_guardrails"])) for span in spans] == [
         expected
     ] * len(spans), spans
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["whole", "streamed"])
+def test_a_response_pipeline_names_a_judge_step_that_records_its_own_results(rig: _Rig, stream: bool) -> None:
+    team, response = _ask_as_new_team(rig, _JUDGES_THEN_CHECKS, stream=stream)
+    assert response.status_code == 200, response.text
+    assert _steps_that_ran(rig) == (_JUDGE, _RESPONSE_SECOND)
+    assert sorted(response.headers.get(_HEADER, "").split(",")) == [_JUDGE, _RESPONSE_SECOND], dict(response.headers)
+    rows: Final = eventually(
+        lambda: rig.gateway.rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE team_id = %s', (team,)),
+        lambda found: len(found) == 1,
+        seconds=70,
+    )
+    assert sorted(object_value(rows[0]["metadata"]).get("applied_guardrails") or []) == [_JUDGE, _RESPONSE_SECOND]
 
 
 def _agent_card(name: str, url: str) -> dict[str, object]:
