@@ -1591,6 +1591,53 @@ def test_vertex_chat_native_schema_keeps_min_items_one_and_closes_a_nullable_obj
         assert "tools" not in sent.body, sent.body
 
 
+def test_anthropic_chat_native_schema_notes_an_unlisted_string_format_and_types_an_untyped_node(
+    gateway: Gateway,
+) -> None:
+    """Anthropic 400s on a string ``format`` outside Claude's list ("format 'int64' is not supported") and on
+    a node with properties but no ``type`` ("Schema type is missing"), so the proxy rewrites both."""
+    marker, marker_hex = _marker("native")
+    schema: Final[dict[str, JsonValue]] = {
+        "type": "object",
+        "properties": {
+            "id": {"type": "string", "format": "int64"},
+            "meta": {"properties": {"a": {"type": "string"}}, "required": ["a"]},
+        },
+        "required": ["id", "meta"],
+        "additionalProperties": False,
+    }
+    expected: Final[dict[str, JsonValue]] = {
+        **schema,
+        "properties": {
+            "id": {"description": "Note: format: int64.", "type": "string"},
+            "meta": {
+                "properties": {"a": {"type": "string"}},
+                "required": ["a"],
+                "type": "object",
+                "additionalProperties": False,
+            },
+        },
+    }
+    response_format: Final[dict[str, JsonValue]] = {
+        "type": "json_schema",
+        "json_schema": {"name": "record", "schema": schema},
+    }
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _native_deployment(gateway, scenario, wire.url, "anthropic", _NATIVE_MODEL)
+        response: Final = gateway.request(
+            "POST", "/v1/chat/completions", _chat_body(model, marker, response_format=response_format)
+        )
+        assert _chat_content(response) == _payload(marker_hex), response.text
+        sent: Final = _one_delivery(wire, marker_hex)
+        assert _native_format(sent.body) == {"type": "json_schema", "schema": expected}, sent.body
+        assert "tools" not in sent.body, sent.body
+
+
+def _native_format(body: Mapping[str, JsonValue]) -> JsonValue:
+    output_format: Final = body.get("output_format")
+    return output_format if output_format is not None else object_value(body["output_config"])["format"]
+
+
 @pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
 def test_vertex_messages_folds_output_format_into_output_config(gateway: Gateway, stream: bool) -> None:
     marker, marker_hex = _marker("native")
