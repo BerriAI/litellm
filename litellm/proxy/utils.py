@@ -4854,31 +4854,22 @@ class ProxyLogging:
         logging_obj._deferred_stream_complete_args = None
         return True
 
-    async def arelease_max_parallel_requests_on_disconnect(
+    async def arelease_max_parallel_requests(
         self,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> None:
         """
-        Release the api-key max_parallel_requests slot when a streaming
-        response is cancelled mid-flight (client disconnect) and no logging
-        callback fired for it. Neither the success nor failure callback runs on
-        the resulting CancelledError / GeneratorExit, so the pre-call +1 would
-        otherwise leak.
-
-        Awaited from the shielded streaming cleanup rather than scheduled
-        fire-and-forget, so the caller can make it the single owner of the
-        release: when a disconnect-time success event does fire (partial-spend
-        billing or a deferred-guardrail flush), that event's own limiter
-        callback releases the slot and this is not called at all. Two
-        concurrent releases of the same acquisition would otherwise race and
-        double-decrement under the limiter's in-memory fallback.
+        Release an ended request's v3 concurrency acquisition independently of logging.
+        The request stash serializes release with callbacks and clears the acquisition,
+        so repeated cleanup cannot release another request's slot.
         """
         limiter: Final = self.get_proxy_hook("parallel_request_limiter")
         if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
             return
         await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
 
-    _arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests_on_disconnect
+    arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests
+    _arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests
 
     async def arelease_responses_websocket_slot(self, user_api_key_dict: UserAPIKeyAuth) -> None:
         """Release the slot a Responses WebSocket took at admission. Only call this once that admission succeeded:
