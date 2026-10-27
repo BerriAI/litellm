@@ -5,7 +5,8 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from litellm_proxy_extras.request_log_indexes import filter_request_log_index_diff
+from litellm_proxy_extras.migration_sources import materialize_prisma_dir
+from litellm_proxy_extras.spend_logs.request_log_indexes import filter_request_log_index_diff
 
 
 @pytest.mark.skipif(
@@ -22,18 +23,13 @@ def test_schema_migration_in_sync():
     so those statements are filtered out before the diff is judged.
     """
     db_url = os.environ["DATABASE_URL"]
-    source_migrations_dir = Path(
-        "./litellm-proxy-extras/litellm_proxy_extras/migrations"
-    )
-    source_schema_path = Path("./schema.prisma")
 
     temp_base = Path(tempfile.mkdtemp(prefix="litellm_schema_migration_"))
     schema_path = temp_base / "schema.prisma"
     migrations_dir = temp_base / "migrations"
 
     try:
-        shutil.copy(source_schema_path, schema_path)
-        shutil.copytree(source_migrations_dir, migrations_dir)
+        materialize_prisma_dir(temp_base)
 
         if not any(migrations_dir.iterdir()):
             pytest.fail(

@@ -27,15 +27,15 @@ from psycopg.types.json import Jsonb
 from tests.integration._support.client import eventually
 from tests.integration._support.ports import allocate_port
 from tests.integration._support.process import stop_process_group
+from litellm_proxy_extras.migration_sources import shipped_migrations
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
-MIGRATIONS_DIR: Final = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras" / "migrations"
 MIGRATION_NAME: Final = "20260921190000_agent_identity"
 pytestmark: Final = pytest.mark.timeout(300)
 PASSWORD: Final = "wr ong'pw9"
 FRAGMENTS: Final = ("wr ong", "wr+ong", "ong'pw9", "wr%20ong", "ong%27pw9", "pw9")
 SHIPPED_MIGRATIONS: Final = tuple(
-    sorted(path.name for path in MIGRATIONS_DIR.iterdir() if path.is_dir() and path.name != "0_init")
+    migration.name for migration in shipped_migrations() if migration.name != "0_init"
 )
 LOG_PREFIX: Final = r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} - [^\n]+ - "
 LOG_RECORD_START: Final = rf"{LOG_PREFIX}(?:DEBUG|INFO|WARNING|ERROR|CRITICAL) - "

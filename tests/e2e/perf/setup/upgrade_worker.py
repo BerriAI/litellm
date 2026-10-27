@@ -91,7 +91,8 @@ def wait_for_traffic(connection: psycopg.Connection[tuple[object, ...]], deadlin
 def main() -> int:
     assert os.environ.get("E2E_DATABASE_UPGRADE") == "1", "Only run against a disposable restored baseline"
     assert os.environ.get("DATABASE_PERF_CONFIRM_DISPOSABLE") == "1", "Disposable database confirmation required"
-    from litellm_proxy_extras import request_log_indexes
+    from litellm_proxy_extras.migration_sources import shipped_migrations
+    from litellm_proxy_extras.spend_logs import request_log_indexes
     from litellm_proxy_extras.utils import ProxyExtrasDBManager
 
     with connect() as connection:
@@ -103,12 +104,11 @@ def main() -> int:
         ids: Final = tuple(row[0] for row in _STRINGS.validate_python(sample))
         assert ids, "Restored baseline has no spend logs"
         names: Final = tuple(index.name for index in request_log_indexes.REQUEST_LOG_INDEXES)
-        migrations: Final = Path(request_log_indexes.__file__).parent / "migrations"
         initial: Final = UpgradeState(
             phase="schema",
             started_at=time.time(),
             required_indexes=names,
-            required_migrations=tuple(sorted(path.parent.name for path in migrations.glob("*/migration.sql"))),
+            required_migrations=tuple(migration.name for migration in shipped_migrations()),
             pending_indexes=missing_indexes(connection, names),
             baseline_rows=fingerprints(connection, ids),
         )

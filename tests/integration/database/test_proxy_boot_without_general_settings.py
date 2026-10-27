@@ -8,12 +8,12 @@ from pydantic import JsonValue
 from integration._support.client import JSON_OBJECT, Gateway, list_value, object_value, string_value
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import DB_PUSH, LEGACY_MIGRATE_DEPLOY, MIGRATE_DEPLOY, owned_proxy_process
+from litellm_proxy_extras.migration_sources import shipped_migrations
 
 pytestmark: Final = pytest.mark.timeout(300)
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
-MIGRATIONS_DIR: Final = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras" / "migrations"
-SHIPPED_MIGRATIONS: Final = frozenset(path.name for path in MIGRATIONS_DIR.iterdir() if path.is_dir())
+SHIPPED_MIGRATIONS: Final = frozenset(migration.name for migration in shipped_migrations())
 CANNED_REPLY: Final = "Hello! This is a mock response from the fake OpenAI endpoint."
 PROVIDER_KEY: Final = "integration-provider-key"
 SCRATCH_ONLY: Final = ("DATABASE_URL_READ_REPLICA",)

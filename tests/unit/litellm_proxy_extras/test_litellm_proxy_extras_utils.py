@@ -281,6 +281,7 @@ def _get_all_migrations():
     """Return (migration_name, sql_content) pairs for all migrations."""
     migration_files = sorted(
         glob.glob(os.path.join(_MIGRATIONS_DIR, "*/migration.sql"))
+        + glob.glob(os.path.join(_MIGRATIONS_DIR, "..", "spend_logs", "migrations", "*/migration.sql"))
     )
     results = []
     for path in migration_files:

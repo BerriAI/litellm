@@ -210,7 +210,7 @@ class TestDefaultedColumnsOnRequestLogTables:
 class TestIndexesOnLogTables:
     """Every CREATE INDEX on a request-log table is rejected: a plain one blocks writes for
     the whole build and a concurrent one fails on a partitioned parent, so the migration job
-    (litellm_proxy_extras/request_log_indexes.py) builds those instead."""
+    (litellm_proxy_extras/spend_logs/request_log_indexes.py) builds those instead."""
 
     def test_the_original_spend_log_index_statement_is_flagged(self, tmp_path):
         sql = (
@@ -286,7 +286,7 @@ class TestIndexesOnLogTables:
         rendered = _scan(tmp_path, sql)[0].render()
         assert "20260101000000_fixture/migration.sql:1" in rendered
         assert "blocks writes until the build finishes, or fails on a partitioned table" in rendered
-        assert "REQUEST_LOG_INDEXES in litellm_proxy_extras/request_log_indexes.py" in rendered
+        assert "REQUEST_LOG_INDEXES in litellm_proxy_extras/spend_logs/request_log_indexes.py" in rendered
 
     @pytest.mark.parametrize(
         "name",
@@ -1829,8 +1829,8 @@ class TestReporting:
 class TestGrandfathering:
     def test_every_grandfathered_migration_still_violates(self):
         for name in sorted(checker.GRANDFATHERED):
-            directory = checker.MIGRATIONS_DIR / name
-            assert directory.is_dir(), f"{name} no longer exists; drop it from GRANDFATHERED"
+            directory = next((s / name for s in checker.MIGRATION_SOURCES if (s / name).is_dir()), None)
+            assert directory is not None, f"{name} no longer exists; drop it from GRANDFATHERED"
             assert checker.scan_migration(directory), f"{name} is clean; drop it from GRANDFATHERED"
 
     def test_stale_entry_is_reported_when_a_migration_stops_violating(self):
@@ -1841,11 +1841,7 @@ class TestGrandfathering:
         assert checker.stale_grandfathers({}) == tuple(sorted(checker.GRANDFATHERED))
 
     def test_no_stale_entries_against_the_real_tree(self):
-        found = {
-            path.name: checker.scan_migration(path)
-            for path in checker.MIGRATIONS_DIR.iterdir()
-            if (path / "migration.sql").is_file()
-        }
+        found = {path.name: checker.scan_migration(path) for path in checker.shipped_migrations()}
         assert checker.stale_grandfathers(found) == ()
 
 
@@ -1867,7 +1863,7 @@ def _tree(monkeypatch, tmp_path: Path, sql: str, grandfathered: frozenset = froz
     directory.mkdir(parents=True)
     (directory / "migration.sql").write_text(sql, encoding="utf-8")
     monkeypatch.setattr(checker, "REPO_ROOT", tmp_path)
-    monkeypatch.setattr(checker, "MIGRATIONS_DIR", tmp_path / "migrations")
+    monkeypatch.setattr(checker, "MIGRATION_SOURCES", (tmp_path / "migrations",))
     monkeypatch.setattr(checker, "GRANDFATHERED", grandfathered)
 
 
@@ -1889,7 +1885,7 @@ class TestExitCode:
         assert checker.main() == 0
 
     def test_a_missing_migrations_directory_is_an_error(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(checker, "MIGRATIONS_DIR", tmp_path / "absent")
+        monkeypatch.setattr(checker, "MIGRATION_SOURCES", (tmp_path / "absent",))
         assert checker.main() == 2
 
     def test_the_failure_names_the_migration_the_line_and_the_keyword(
@@ -1908,6 +1904,6 @@ class TestExitCode:
         assert f"{FIXTURE}: listed in GRANDFATHERED" in capsys.readouterr().out
 
     def test_a_missing_directory_is_reported_on_stderr(self, tmp_path, monkeypatch, capsys):
-        monkeypatch.setattr(checker, "MIGRATIONS_DIR", tmp_path / "absent")
+        monkeypatch.setattr(checker, "MIGRATION_SOURCES", (tmp_path / "absent",))
         checker.main()
         assert "migrations directory not found" in capsys.readouterr().err

@@ -15,11 +15,13 @@ from integration._support.client import Gateway
 from integration._support.process import owned_proxy
 from psycopg import sql
 from psycopg.rows import dict_row
+from litellm_proxy_extras.migration_sources import shipped_migrations
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
 PRISMA_DIR: Final = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras"
 MISSING_MIGRATION: Final = "20260626120000_add_mcp_tool_search_enabled"
-SHIPPED_MIGRATIONS: Final = tuple(sorted(path.name for path in (PRISMA_DIR / "migrations").iterdir() if path.is_dir()))
+SHIPPED: Final = {migration.name: migration for migration in shipped_migrations()}
+SHIPPED_MIGRATIONS: Final = tuple(SHIPPED)
 
 
 @contextmanager
@@ -41,7 +43,7 @@ def deploy_older_schema(database_url: str, directory: Path) -> None:
     shutil.copy(PRISMA_DIR / "schema.prisma", older / "schema.prisma")
     shutil.copy(PRISMA_DIR / "migrations" / "migration_lock.toml", older / "migrations" / "migration_lock.toml")
     for name in (name for name in SHIPPED_MIGRATIONS if name < MISSING_MIGRATION):
-        shutil.copytree(PRISMA_DIR / "migrations" / name, older / "migrations" / name)
+        shutil.copytree(SHIPPED[name], older / "migrations" / name)
     subprocess.run(
         [sys.executable, "-I", "-m", "prisma", "migrate", "deploy", "--schema", str(older / "schema.prisma")],
         check=True,

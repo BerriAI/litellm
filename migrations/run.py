@@ -4,7 +4,7 @@ Runs `prisma migrate deploy` against the LiteLLM writer database using the
 recovery logic in `litellm_proxy_extras.ProxyExtrasDBManager.setup_database`
 (P3005 baseline + P3009/P3018 idempotent-error handling, retries, etc.), then
 builds the request-log indexes the migrations leave out
-(`litellm_proxy_extras.request_log_indexes`), waiting for them. The job exits
+(`litellm_proxy_extras.spend_logs.request_log_indexes`), waiting for them. The job exits
 non-zero when an index could not be built so that it is rerun. A serving proxy
 that runs the migrations itself builds the same indexes in the background once
 it serves.

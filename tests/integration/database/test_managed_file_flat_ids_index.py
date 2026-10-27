@@ -17,12 +17,14 @@ from integration._support.process import owned_proxy, proxy_database_environment
 from integration._support.wire import Reply, Request, wire_server
 from psycopg import sql
 from pydantic import JsonValue, TypeAdapter
+from litellm_proxy_extras.migration_sources import shipped_migrations
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
 PRISMA_DIR: Final = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras"
 GIN_MIGRATION: Final = "20261003000000_add_managed_file_flat_ids_gin_index"
 INDEX_NAME: Final = "LiteLLM_ManagedFileTable_flat_model_file_ids_idx"
-SHIPPED_MIGRATIONS: Final = tuple(sorted(path.name for path in (PRISMA_DIR / "migrations").iterdir() if path.is_dir()))
+SHIPPED: Final = {migration.name: migration for migration in shipped_migrations()}
+SHIPPED_MIGRATIONS: Final = tuple(SHIPPED)
 INDEX_ROW: Final = (
     "SELECT i.indexdef, x.indisvalid FROM pg_indexes i "
     "JOIN pg_class c ON c.relname = i.indexname JOIN pg_index x ON x.indexrelid = c.oid WHERE i.indexname = %s"
@@ -70,7 +72,7 @@ def _deploy_schema_before(database_url: str, directory: Path, migration: str) ->
     shutil.copy(PRISMA_DIR / "schema.prisma", older / "schema.prisma")
     shutil.copy(PRISMA_DIR / "migrations" / "migration_lock.toml", older / "migrations" / "migration_lock.toml")
     for name in (name for name in SHIPPED_MIGRATIONS if name < migration):
-        shutil.copytree(PRISMA_DIR / "migrations" / name, older / "migrations" / name)
+        shutil.copytree(SHIPPED[name], older / "migrations" / name)
     subprocess.run(
         [sys.executable, "-I", "-m", "prisma", "migrate", "deploy", "--schema", str(older / "schema.prisma")],
         check=True,

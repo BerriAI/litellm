@@ -4,7 +4,7 @@ from typing import Final
 
 import pytest
 from litellm_proxy_extras.migration_recovery import is_inert_migration
-from litellm_proxy_extras.request_log_indexes import (
+from litellm_proxy_extras.spend_logs.request_log_indexes import (
     REQUEST_LOG_INDEXES,
     RequestLogIndex,
     filter_request_log_index_diff,
@@ -41,7 +41,7 @@ class TestTheIndexList:
 
     @pytest.mark.parametrize("name", INERT_MIGRATIONS)
     def test_the_migrations_that_used_to_build_these_indexes_run_no_sql(self, name: str):
-        assert is_inert_migration((PACKAGE / "migrations" / name / "migration.sql").read_text())
+        assert is_inert_migration((PACKAGE / "spend_logs" / "migrations" / name / "migration.sql").read_text())
 
 
 class TestIsInertMigration:

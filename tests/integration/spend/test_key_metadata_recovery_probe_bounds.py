@@ -5,7 +5,7 @@ from typing import Final
 
 import psycopg
 import pytest
-from litellm_proxy_extras.request_log_indexes import REQUEST_LOG_INDEXES
+from litellm_proxy_extras.spend_logs.request_log_indexes import REQUEST_LOG_INDEXES
 from psycopg.types.json import Jsonb
 from pydantic import JsonValue
 

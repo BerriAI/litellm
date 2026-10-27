@@ -14,10 +14,11 @@ from typing import Final
 
 import psycopg
 import pytest
-from litellm_proxy_extras import request_log_indexes
+from litellm_proxy_extras.migration_sources import shipped_migrations
+from litellm_proxy_extras.spend_logs import request_log_indexes
 from litellm_proxy_extras.migration_lock import MIGRATION_LOCK_KEY, migration_lock
 from litellm_proxy_extras.migration_recovery import roll_back_failed_inert_migration
-from litellm_proxy_extras.request_log_indexes import (
+from litellm_proxy_extras.spend_logs.request_log_indexes import (
     REQUEST_LOG_INDEXES,
     RequestLogIndex,
     build_index_on_partitioned_table,
@@ -91,8 +92,8 @@ def _release_layout(prisma_dir: Path, before: str) -> Path:
     the way the releases that shipped them did: the Prisma layout of a proxy on that release."""
     (prisma_dir / "migrations").mkdir(parents=True)
     shutil.copy(PACKAGE / "schema.prisma", prisma_dir / "schema.prisma")
-    for migration in sorted((PACKAGE / "migrations").iterdir()):
-        if migration.is_dir() and migration.name < before:
+    for migration in shipped_migrations():
+        if migration.name < before:
             shutil.copytree(migration, prisma_dir / "migrations" / migration.name)
     for name, original in ORIGINAL_MIGRATION_SQL.items():
         if (prisma_dir / "migrations" / name).is_dir():
@@ -399,7 +400,7 @@ def test_a_failed_row_whose_migration_still_runs_sql_in_this_build_is_left_for_t
 
 @requires_db
 def test_a_migration_without_a_failed_row_is_not_touched(partitioned_database: str) -> None:
-    inert: Final = PACKAGE / "migrations" / CALL_ID_INDEX_MIGRATION / "migration.sql"
+    inert: Final = PACKAGE / "spend_logs" / "migrations" / CALL_ID_INDEX_MIGRATION / "migration.sql"
     before: Final = _ledger(partitioned_database)
 
     with migration_lock(partitioned_database) as coordinator:

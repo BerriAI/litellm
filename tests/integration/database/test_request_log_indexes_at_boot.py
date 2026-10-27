@@ -16,13 +16,15 @@ from integration._support.database import scratch_database
 from integration._support.process import LEGACY_MIGRATE_DEPLOY, MIGRATE_DEPLOY, owned_proxy_process
 from psycopg import sql
 from psycopg.rows import class_row
+from litellm_proxy_extras.migration_sources import shipped_migrations
 
 pytestmark: Final = pytest.mark.timeout(240)
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
 PRISMA_DIR: Final = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras"
 PARTITION_SCRIPT: Final = REPO_ROOT / "db_scripts" / "partition_spend_logs.sql"
-SHIPPED_MIGRATIONS: Final = tuple(sorted(path.name for path in (PRISMA_DIR / "migrations").iterdir() if path.is_dir()))
+SHIPPED: Final = {migration.name: migration for migration in shipped_migrations()}
+SHIPPED_MIGRATIONS: Final = tuple(SHIPPED)
 API_KEY_INDEX_MIGRATION: Final = "20260823000000_add_spend_logs_api_key_starttime_index"
 CALL_ID_INDEX_MIGRATION: Final = "20260831120001_spend_logs_litellm_call_id_index"
 ORIGINAL_MIGRATION_SQL: Final = MappingProxyType(
@@ -76,7 +78,7 @@ def release_layout(directory: Path, migrations: tuple[str, ...]) -> Path:
     shutil.copy(PRISMA_DIR / "schema.prisma", directory / "schema.prisma")
     shutil.copy(PRISMA_DIR / "migrations" / "migration_lock.toml", directory / "migrations" / "migration_lock.toml")
     for name in migrations:
-        shutil.copytree(PRISMA_DIR / "migrations" / name, directory / "migrations" / name)
+        shutil.copytree(SHIPPED[name], directory / "migrations" / name)
     for name, original in ORIGINAL_MIGRATION_SQL.items():
         if name in migrations:
             (directory / "migrations" / name / "migration.sql").write_text(original)
