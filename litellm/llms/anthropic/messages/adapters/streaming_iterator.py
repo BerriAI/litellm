@@ -788,6 +788,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 model=model if isinstance(model, str) else self.model,
                 messages=materialized_messages,
                 tools=_PROMPT_TOOLS.validate_python(tools) if tools is not None else None,
+                use_default_image_token_count=True,
             )
         except Exception:  # noqa: BLE001  # prompt estimation must not interrupt the stream
             return 0

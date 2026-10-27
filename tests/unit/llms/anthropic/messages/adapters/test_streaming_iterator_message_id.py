@@ -31,6 +31,14 @@ _TOOLS: Final = TypeAdapter(list[ChatCompletionToolParam])
 _BLOCK_PROMPTS: Final[tuple[list[AllMessageValues], ...]] = (
     [{"role": "user", "content": [{"type": "text", "text": "Count every word. " * 100}]}],
     [{"role": "tool", "content": [{"type": "text", "text": "Count every word. " * 100}], "tool_call_id": "call_1"}],
+    [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "https://image.example/test.png", "detail": "high"}}
+            ],
+        }
+    ],
 )
 
 
@@ -95,9 +103,12 @@ class _FailingUpstream:
 
 
 @pytest.mark.parametrize("messages", _BLOCK_PROMPTS)
-def test_sync_initial_estimate_counts_content_blocks(messages: list[AllMessageValues]) -> None:
+def test_sync_initial_estimate_counts_content_blocks(
+    messages: list[AllMessageValues], respx_mock: respx.MockRouter
+) -> None:
+    image: Final = respx_mock.get("https://image.example/test.png").respond(503)
     wrapper: Final = AnthropicStreamWrapper(iter([]), model="gpt-4o", completion_request={"messages": messages})
-    expected: Final = litellm.token_counter(model="gpt-4o", messages=messages)
+    expected: Final = litellm.token_counter(model="gpt-4o", messages=messages, use_default_image_token_count=True)
     first: Final = _EVENT.validate_python(next(wrapper))
     message: Final = _EVENT.validate_python(first["message"])
     assert message["usage"] == {
@@ -106,13 +117,17 @@ def test_sync_initial_estimate_counts_content_blocks(messages: list[AllMessageVa
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
     }
+    assert not image.called
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("messages", _BLOCK_PROMPTS)
-async def test_async_initial_estimate_counts_content_blocks(messages: list[AllMessageValues]) -> None:
+async def test_async_initial_estimate_counts_content_blocks(
+    messages: list[AllMessageValues], respx_mock: respx.MockRouter
+) -> None:
+    image: Final = respx_mock.get("https://image.example/test.png").respond(503)
     wrapper: Final = AnthropicStreamWrapper(iter([]), model="gpt-4o", completion_request={"messages": messages})
-    expected: Final = litellm.token_counter(model="gpt-4o", messages=messages)
+    expected: Final = litellm.token_counter(model="gpt-4o", messages=messages, use_default_image_token_count=True)
     first: Final = _EVENT.validate_python(await anext(wrapper))
     message: Final = _EVENT.validate_python(first["message"])
     assert message["usage"] == {
@@ -121,6 +136,7 @@ async def test_async_initial_estimate_counts_content_blocks(messages: list[AllMe
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
     }
+    assert not image.called
 
 
 @pytest.mark.parametrize("prompt", [{}, {"messages": []}, {"messages": "invalid"}])
