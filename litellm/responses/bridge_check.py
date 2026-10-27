@@ -10,7 +10,7 @@ from litellm.llms.azure_ai.common_utils import (
     azure_ai_supports_native_responses,
     foundry_chat_rejects_function_tools_while_reasoning,
 )
-from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import OpenAIWebSearchOptions
 from litellm.types.utils import LlmProviders
