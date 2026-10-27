@@ -1,4 +1,5 @@
 from typing import cast
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.encoders import jsonable_encoder
@@ -28,9 +29,9 @@ from litellm.proxy.utils import (
     get_available_models_for_user,
 )
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
-    ModelGroupTeam,
     ModelGroupInfoProxy,
     ModelGroupInfoResponse,
+    ModelGroupTeam,
 )
 
 
@@ -140,6 +141,62 @@ async def test_session_grants_resolve_before_the_auth_builder_attaches_the_user_
 async def test_direct_user_access_is_the_default_without_a_team_selection(account, router):
     access = await sources(account, router)
     assert await access.for_request(("personal",), None) == account[0]
+
+
+async def test_session_model_access_fails_closed_without_a_database(account, router):
+    auth, _, _, _, _, cache, logging = account
+    with pytest.raises(ProxyException) as error:
+        await load_ui_session_model_sources(auth, router, None, cache, logging)
+    assert (error.value.code, error.value.type, error.value.param) == ("503", "no_db_connection", None)
+
+
+async def test_deleted_user_cannot_reuse_model_grants_from_the_session(account, router, monkeypatch):
+    auth, _, _, _, _, cache, logging = account
+    prisma = PrismaClient(database_url="postgresql://localhost/session-tests", proxy_logging_obj=logging)
+    missing_user = AsyncMock(return_value=None)
+    monkeypatch.setattr("prisma.actions.LiteLLM_UserTableActions.find_unique", missing_user)
+    deleted_user_auth = auth.model_copy(update={"user_id": "deleted-session-user"})
+
+    with pytest.raises(ProxyException) as error:
+        await load_ui_session_model_sources(deleted_user_auth, router, prisma, cache, logging)
+
+    assert (error.value.code, error.value.type, error.value.param) == ("403", "auth_error", None)
+    missing_user.assert_awaited_once_with(
+        where={"user_id": "deleted-session-user"}, include={"organization_memberships": True}
+    )
+
+
+async def test_deleted_team_is_not_discoverable_or_selectable_with_stale_membership(account, router, monkeypatch):
+    auth, _, team, _, _, cache, logging = account
+    prisma = PrismaClient(database_url="postgresql://localhost/session-tests", proxy_logging_obj=logging)
+    missing_team = AsyncMock(return_value=None)
+    monkeypatch.setattr("prisma.actions.LiteLLM_TeamTableActions.find_unique", missing_team)
+    await cache.async_delete_cache(f"team_id:{team.team_id}")
+
+    access = await load_ui_session_model_sources(auth, router, prisma, cache, logging)
+
+    assert access is not None
+    assert await access.available_teams("personal") == ()
+    assert await access.available_teams("research") is None
+    with pytest.raises(ProxyException) as error:
+        await access.for_request(("research",), team.team_id)
+    assert (error.value.code, error.value.type, error.value.param) == (
+        "403",
+        "team_model_access_denied",
+        "x-litellm-team-id",
+    )
+    missing_team.assert_awaited_once()
+
+
+async def test_changed_live_user_role_stops_internal_session_grant_resolution(account, router):
+    auth, user, _, _, prisma, cache, logging = account
+    await cache.async_set_cache(
+        key=user.user_id,
+        value=user.model_copy(update={"user_role": LitellmUserRoles.PROXY_ADMIN}),
+        model_type=LiteLLM_UserTable,
+    )
+    assert await load_ui_session_model_sources(auth, router, prisma, cache, logging) is None
+    assert auth.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
 
 
 @pytest.mark.parametrize("live_models", [["no-default-models"], ["shared"]])

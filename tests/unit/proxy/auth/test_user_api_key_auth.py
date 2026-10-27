@@ -548,8 +548,6 @@ def test_get_api_key_from_custom_header_different_casing():
     )
 
 
-
-
 @pytest.mark.parametrize(
     "user_role, auth_user_id, requested_user_id, expected_result",
     [
@@ -963,71 +961,60 @@ async def test_accepted_websocket_reauthorizes_the_frame_model_without_closing()
 
 @pytest.mark.parametrize("enforce_rbac", [True, False])
 @pytest.mark.asyncio
-async def test_jwt_user_api_key_auth_builder_enforce_rbac(enforce_rbac, monkeypatch):
-    from litellm.proxy.auth.handle_jwt import JWTHandler, JWTAuthManager
-    from unittest.mock import patch, Mock
+async def test_jwt_user_api_key_auth_builder_enforce_rbac(enforce_rbac: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    import jwt as pyjwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
     from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.caching import DualCache
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import ProxyLogging
 
-    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "my-fake-url")
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://idp.example.com/keys")
     monkeypatch.setenv("JWT_AUDIENCE", "api://LiteLLM_Proxy-dev")
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
 
-    local_cache = DualCache()
-
-    keys = [
-        {
-            "kty": "RSA",
-            "use": "sig",
-            "kid": "z1rsYHHJ9-8mggt4HsZu8BKkBPw",
-            "x5t": "z1rsYHHJ9-8mggt4HsZu8BKkBPw",
-            "n": "pOe4GbleFDT1u5ioOQjNMmhvkDVoVD9cBKvX7AlErtWA_D6wc1w1iwkd6arYVCPObZbAB4vLSXrlpBSOuP6VYnXw_cTgniv_c82ra-mfqCpM-SbqzZ3sVqlcE_bwxvci_4PrxAW4R85ok12NXyZ2371H3yGevabi35AlVm-bQ24azo1hLK_0DzB6TxsAIOTOcKfIugOfqP-B2R4vR4u6pYftS8MWcxegr9iJ5JNtubI1X2JHpxJhkRoMVwKFna2GXmtzdxLi3yS_GffVCKfTbFMhalbJS1lSmLqhmLZZL-lrQZ6fansTl1vcGcoxnzPTwBkZMks0iVV4yfym_gKBXQ",
-            "e": "AQAB",
-            "x5c": [
-                "MIIC/TCCAeWgAwIBAgIIQk8Qok6pfXkwDQYJKoZIhvcNAQELBQAwLTErMCkGA1UEAxMiYWNjb3VudHMuYWNjZXNzY29udHJvbC53aW5kb3dzLm5ldDAeFw0yNDExMjcwOTA0MzlaFw0yOTExMjcwOTA0MzlaMC0xKzApBgNVBAMTImFjY291bnRzLmFjY2Vzc2NvbnRyb2wud2luZG93cy5uZXQwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCk57gZuV4UNPW7mKg5CM0yaG+QNWhUP1wEq9fsCUSu1YD8PrBzXDWLCR3pqthUI85tlsAHi8tJeuWkFI64/pVidfD9xOCeK/9zzatr6Z+oKkz5JurNnexWqVwT9vDG9yL/g+vEBbhHzmiTXY1fJnbfvUffIZ69puLfkCVWb5tDbhrOjWEsr/QPMHpPGwAg5M5wp8i6A5+o/4HZHi9Hi7qlh+1LwxZzF6Cv2Inkk225sjVfYkenEmGRGgxXAoWdrYZea3N3EuLfJL8Z99UIp9NsUyFqVslLWVKYuqGYtlkv6WtBnp9qexOXW9wZyjGfM9PAGRkySzSJVXjJ/Kb+AoFdAgMBAAGjITAfMB0GA1UdDgQWBBSTO5FmUwwGS+1CNqg2uNgjxUjFijANBgkqhkiG9w0BAQsFAAOCAQEAok04z0ICMEHGqDTzx6eD7vvJP8itJTCSz8JcZcGVJofJpViGF3bNnyeSPa7vNDYP1Ps9XBvw3/n2s+yynZ8EwFxMyxCZRCSbLv0N+cAbH3rmZqGcgMJszZVwcFUtXQPTe1ZRyHtEyOB+PVFH7K7obysRVO/cC6EGqIF3pYWzez/dtMaXRAkdTNlz0ko62WoA4eMPwUFCITjW/Jxfxl0BNUbo82PXXKhaeVJb+EgFG5b/pWWPswWmBoQhmD5G1UODvEACHRl/cHsPPqe4YE+6D1/wMno/xqqyGltnk8v0d4TpNcQMn9oM19V+OGgrzWOvvXhvnhqUIVGMsRlyBGNHAw=="
-            ],
-            "cloud_instance_name": "microsoftonline.com",
-            "issuer": "https://login.microsoftonline.com/bdfd79b3-8401-47fb-a764-6e595c455b05/v2.0",
-        }
-    ]
-
-    local_cache.set_cache(
-        key="litellm_jwt_auth_keys_my-fake-url",
-        value=keys,
-    )
-
-    litellm_jwtauth = LiteLLM_JWTAuth(
-        **{
-            "admin_jwt_scope": "litellm_proxy_endpoints_access",
-            "admin_allowed_routes": ["openai_routes", "info_routes"],
-            "public_key_ttl": 600,
-            "enforce_rbac": enforce_rbac,
-        }
-    )
-
-    jwt_handler = JWTHandler()
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_jwk: Final = {
+        **json.loads(pyjwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key())),
+        "kid": "synthetic-rbac-test",
+    }
+    claims: Final = {"sub": "synthetic-rbac-user", "aud": "api://LiteLLM_Proxy-dev"}
+    token: Final = pyjwt.encode(claims, private_key, algorithm="RS256", headers={"kid": "synthetic-rbac-test"})
+    local_cache: Final = UserApiKeyCache()
+    local_cache.set_cache(key="litellm_jwt_auth_keys_https://idp.example.com/keys", value=[public_jwk])
+    jwt_handler: Final = JWTHandler()
     jwt_handler.update_environment(
         prisma_client=None,
         user_api_key_cache=local_cache,
-        litellm_jwtauth=litellm_jwtauth,
-        leeway=10000000000000,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            admin_jwt_scope="litellm_proxy_endpoints_access",
+            admin_allowed_routes=["openai_routes", "info_routes"],
+            public_key_ttl=600,
+            enforce_rbac=enforce_rbac,
+        ),
     )
-    args = {
-        "api_key": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsIng1dCI6InoxcnNZSEhKOS04bWdndDRIc1p1OEJLa0JQdyIsImtpZCI6InoxcnNZSEhKOS04bWdndDRIc1p1OEJLa0JQdyJ9.eyJhdWQiOiJhcGk6Ly9MaXRlTExNX1Byb3h5LWRldiIsImlzcyI6Imh0dHBzOi8vc3RzLndpbmRvd3MubmV0L2JkZmQ3OWIzLTg0MDEtNDdmYi1hNzY0LTZlNTk1YzQ1NWIwNS8iLCJpYXQiOjE3MzcyNDE3ODEsIm5iZiI6MTczNzI0MTc4MSwiZXhwIjoxNzM3MjQ1NjgxLCJhaW8iOiJrMlJnWUpBNE5hZGg4MGJQdXlyRmxlV1o3dHZiQUE9PSIsImFwcGlkIjoiOGNjZjNkMDItMmNkNi00N2I5LTgxODUtMGVkYjI0YWJjZjY5IiwiYXBwaWRhY3IiOiIxIiwiaWRwIjoiaHR0cHM6Ly9zdHMud2luZG93cy5uZXQvYmRmZDc5YjMtODQwMS00N2ZiLWE3NjQtNmU1OTVjNDU1YjA1LyIsIm9pZCI6IjQ0YTg3YTYzLWFiNTUtNDc4NS1iMmFmLTMzNjllZWM4ZTEzOSIsInJoIjoiMS5BYjBBczNuOXZRR0UtMGVuWkc1WlhFVmJCY0VDbkl6NHJxaE9wZ2E0UGZSZjBsbTlBQUM5QUEuIiwic3ViIjoiNDRhODdhNjMtYWI1NS00Nzg1LWIyYWYtMzM2OWVlYzhlMTM5IiwidGlkIjoiYmRmZDc5YjMtODQwMS00N2ZiLWE3NjQtNmU1OTVjNDU1YjA1IiwidXRpIjoiY3ltNVhlcmhIMHVMSlNZU1JyQmhBQSIsInZlciI6IjEuMCJ9.UooJjM9pS-wgYsExqgHdrYyQhp7NbwAsr7au9dWJaLpsufXeyHJSg-Xd5VJ4RsDVJiDes3jkC7WeoAiaCfzEHpAum-p_aqqLYXf1QIYbi1hLC0m7y_klFcqMp11WbDa9TSTvg-o8q3x2Y5su8X23ymlFih4OP17b7JA6a4_2MybU5QkCEW1tQK6VspuuXzeDHvbfGeGYcIptHFyfttHMHHXRtX1o9bX7gOR_dwFITAXD18T4ZdAN_0y6f1OtVF9TMWQhMXhKU8ahn8TSg_CXmPl9T_1gV3ZWLvVtcdVrWs82fDz3-2lEw28z4bQEr1Z5xoAz7srhx1WEBu_ioAcQiA",
+    args: Final = {
+        "api_key": token,
         "jwt_handler": jwt_handler,
         "route": "/v1/chat/completions",
         "prisma_client": None,
-        "user_api_key_cache": Mock(),
+        "user_api_key_cache": local_cache,
         "parent_otel_span": None,
-        "proxy_logging_obj": Mock(),
+        "proxy_logging_obj": ProxyLogging(local_cache),
         "request_data": {},
         "general_settings": {},
     }
 
     if enforce_rbac:
-        with pytest.raises(HTTPException):
+        with pytest.raises(HTTPException) as denied:
             await JWTAuthManager.auth_builder(**args)
+        assert denied.value.status_code == 403
+        assert "enforce_rbac is set to True" in denied.value.detail
     else:
-        await JWTAuthManager.auth_builder(**args)
+        authorized: Final = await JWTAuthManager.auth_builder(**args)
+        assert authorized["jwt_claims"] == claims
+        assert authorized["is_proxy_admin"] is False
 
 
 def test_user_api_key_auth_end_user_str():
@@ -1138,7 +1125,7 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
         "org_object": None,
         "end_user_id": None,
         "end_user_object": None,
-        "token": "eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJmR09YQTNhbHFObjByRzJ6OHJQT1FLZVVMSWxCNDFnVWl4VDJ5WE1QVG1ZIn0.eyJleHAiOjE3NDI2MDAzODIsImlhdCI6MTc0MjYwMDA4MiwianRpIjoiODRhNjZmZjAtMTE5OC00YmRkLTk1NzAtNWZhMjNhZjYxMmQyIiwiaXNzIjoiaHR0cDovL2xvY2FsaG9zdDo4MDgwL3JlYWxtcy9saXRlbGxtLXJlYWxtIiwiYXVkIjoiYWNjb3VudCIsInN1YiI6ImZmMGZjOGNiLWUyMjktNDkyYy05NzYwLWNlYzVhMDYxNmI2MyIsInR5cCI6IkJlYXJlciIsImF6cCI6ImxpdGVsbG0tdGVzdC1jbGllbnQtaWQiLCJzaWQiOiI4MTYwNjIxOC0yNmZmLTQwMjAtOWQxNy05Zjc0YmFlNTBkODUiLCJhY3IiOiIxIiwiYWxsb3dlZC1vcmlnaW5zIjpbImh0dHA6Ly9sb2NhbGhvc3Q6NDAwMC8qIl0sInJlYWxtX2FjY2VzcyI6eyJyb2xlcyI6WyJvZmZsaW5lX2FjY2VzcyIsImRlZmF1bHQtcm9sZXMtbGl0ZWxsbS1yZWFsbSIsInVtYV9hdXRob3JpemF0aW9uIl19LCJyZXNvdXJjZV9hY2Nlc3MiOnsiYWNjb3VudCI6eyJyb2xlcyI6WyJtYW5hZ2UtYWNjb3VudCIsIm1hbmFnZS1hY2NvdW50LWxpbmtzIiwidmlldy1wcm9maWxlIl19fSwic2NvcGUiOiJwcm9maWxlIGdyb3Vwcy1zY29wZSBlbWFpbCBsaXRlbGxtLmFwaS5jb25zdW1lciIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJuYW1lIjoiS3Jpc2ggRGhvbGFraWEiLCJncm91cHMiOlsiL28zX21pbmlfYWNjZXNzIl0sInByZWZlcnJlZF91c2VybmFtZSI6ImtycmlzaGRoMiIsImdpdmVuX25hbWUiOiJLcmlzaCIsImZhbWlseV9uYW1lIjoiRGhvbGFraWEiLCJlbWFpbCI6ImtycmlzaGRob2xha2lhMkBnbWFpbC5jb20ifQ.Fu2ErZhnfez-bhn_XmjkywcFdZHcFUSvzIzfdNiEowdA0soLmCyqf9731amP6m68shd9qk11e0mQhxFIAIxZPojViC1Csc9TBXLRRQ8ESMd6gPIj-DBkKVkQSZLJ1uibsh4Oo2RViGtqWVcEt32T8U_xhGdtdzNkJ8qy_e0fdNDsUnhmSaTQvmZJYarW0roIrkC-zYZrX3fftzbQfavSu9eqdfPf6wUttIrkaWThWUuORy-xaeZfSmvsGbEg027hh6QwlChiZTSF8R6bRxoqfPN3ZaGFFgbBXNRYZA_eYi2IevhIwJHi_r4o1UvtKAJyfPefm-M6hCfkN_6da4zsog",
+        "token": "fake.jwt.token",
     }
 
     # Create request
@@ -2282,3 +2269,181 @@ async def test_non_object_metadata_is_served_like_unset_mappings_whatever_the_ba
     )
     assert mapped == unset
     assert mapped[1] == "usecase-deployment"
+
+
+@pytest.fixture
+async def cached_chat_session(monkeypatch: pytest.MonkeyPatch) -> UserAPIKeyAuth:
+    from typing import cast
+
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+    from litellm.proxy._types import LiteLLM_TeamMembership, LiteLLM_TeamTableCachedObj
+    from litellm.proxy.common_utils.user_api_key_cache import (
+        UserApiKeyCache,
+        team_membership_auth_cache_key,
+        team_membership_reservation_cache_key,
+    )
+    from litellm.proxy.utils import PrismaClient, ProxyLogging
+
+    cache: Final = UserApiKeyCache()
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "test-key"},
+            }
+            for name in ("personal", "research", "clinical", "shared", "forbidden")
+        ]
+    )
+    user: Final = LiteLLM_UserTable(
+        user_id="researcher",
+        user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        models=["personal"],
+        teams=["research-team", "clinical-team"],
+        max_budget=10,
+    )
+    await cache.async_set_cache(key=user.user_id, value=user, model_type=LiteLLM_UserTable)
+    for team in (
+        LiteLLM_TeamTableCachedObj(
+            team_id="research-team", team_alias="Research", models=["research", "shared"], max_budget=20
+        ),
+        LiteLLM_TeamTableCachedObj(
+            team_id="clinical-team", team_alias="Clinical", models=["clinical", "shared"], max_budget=30
+        ),
+    ):
+        member: Final = LiteLLM_TeamMembership(user_id=user.user_id, team_id=team.team_id, spend=1)
+        await cache.async_set_cache(key=f"team_id:{team.team_id}", value=team, model_type=LiteLLM_TeamTableCachedObj)
+        await cache.async_set_cache(key=team_membership_reservation_cache_key(user.user_id, team.team_id), value=member)
+        await cache.async_set_cache(
+            key=team_membership_auth_cache_key(team_id=team.team_id, user_id=user.user_id),
+            value=member,
+            model_type=LiteLLM_TeamMembership,
+        )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", cast(PrismaClient, object()))
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_logging_obj", ProxyLogging(cache))
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_model_list", router.model_list)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    monkeypatch.setattr(litellm, "max_budget", 0)
+    return UserAPIKeyAuth(
+        token="session-hash",
+        user_id=user.user_id,
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        models=["personal"],
+        max_budget=3,
+    )
+
+
+async def _validated_chat_request(
+    auth: UserAPIKeyAuth, request_data: dict[str, object], selected_team_id: str | None = None
+) -> UserAPIKeyAuth:
+    from datetime import datetime, timezone
+
+    from fastapi import Request as FastAPIRequest
+
+    from litellm.proxy.auth.user_api_key_auth import validate_resolved_virtual_key
+
+    request: Final = FastAPIRequest(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": ([(b"x-litellm-team-id", selected_team_id.encode())] if selected_team_id is not None else []),
+            "query_string": b"",
+        }
+    )
+    return await validate_resolved_virtual_key(
+        request=request,
+        request_data=request_data,
+        valid_token=auth,
+        api_key="session-hash",
+        route="/v1/chat/completions",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        parent_otel_span=None,
+        end_user_id=None,
+        end_user_params={},
+        _end_user_object=None,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected_team_id", ["clinical-team", None], ids=["selected", "unique-fallback-grant"])
+async def test_chat_session_request_binds_selected_team_and_preserves_user_and_key_budgets(
+    cached_chat_session: UserAPIKeyAuth,
+    selected_team_id: str | None,
+) -> None:
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    authorized: Final = await _validated_chat_request(
+        cached_chat_session, {"model": "shared", "fallbacks": ["clinical"]}, selected_team_id
+    )
+
+    assert (
+        authorized.user_id,
+        authorized.team_id,
+        authorized.team_alias,
+        authorized.max_budget,
+        authorized.user_max_budget,
+        authorized.team_max_budget,
+        authorized.team_member_spend,
+        authorized.via_virtual_key,
+    ) == ("researcher", "clinical-team", "Clinical", 3, 10, 30, 1, True)
+    assert (cached_chat_session.team_id, cached_chat_session.models) == (UI_SESSION_TOKEN_TEAM_ID, ["personal"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", ["research", {"model": "research"}])
+async def test_chat_session_request_cannot_use_another_teams_fallback(
+    cached_chat_session: UserAPIKeyAuth, fallback: str | dict[str, str]
+) -> None:
+    from litellm.proxy._types import ProxyException
+
+    with pytest.raises(ProxyException) as denied:
+        await _validated_chat_request(
+            cached_chat_session, {"model": "shared", "fallbacks": [fallback]}, "clinical-team"
+        )
+
+    assert (denied.value.code, denied.value.type, denied.value.param) == (
+        "403",
+        "team_model_access_denied",
+        "x-litellm-team-id",
+    )
+
+
+@pytest.mark.asyncio
+async def test_chat_session_request_requires_team_selection_for_shared_model(
+    cached_chat_session: UserAPIKeyAuth,
+) -> None:
+    from litellm.proxy._types import ProxyException
+
+    with pytest.raises(ProxyException) as denied:
+        await _validated_chat_request(cached_chat_session, {"model": "shared"})
+
+    assert (denied.value.code, denied.value.type) == ("409", "team_selection_required")
+
+
+@pytest.mark.asyncio
+async def test_chat_session_request_still_enforces_original_key_budget_after_team_selection(
+    cached_chat_session: UserAPIKeyAuth,
+) -> None:
+    exhausted: Final = cached_chat_session.model_copy(update={"spend": 4})
+
+    with pytest.raises(litellm.BudgetExceededError) as denied:
+        await _validated_chat_request(exhausted, {"model": "shared"}, "clinical-team")
+
+    assert (denied.value.current_cost, denied.value.max_budget) == (4, 3)
+
+
+@pytest.mark.asyncio
+async def test_chat_team_header_cannot_grant_an_ordinary_key_access_to_a_team_fallback(
+    cached_chat_session: UserAPIKeyAuth,
+) -> None:
+    from litellm.proxy._types import ProxyException
+
+    ordinary_key: Final = cached_chat_session.model_copy(update={"team_id": None})
+
+    with pytest.raises(ProxyException) as denied:
+        await _validated_chat_request(ordinary_key, {"model": "personal", "fallbacks": ["clinical"]}, "clinical-team")
+
+    assert (denied.value.code, denied.value.type, denied.value.param) == ("403", "key_model_access_denied", "model")
