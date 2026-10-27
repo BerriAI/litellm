@@ -29,6 +29,7 @@ from litellm.types.llms.openai import (
     ChatCompletionImageObject,
     ChatCompletionReasoningItem,
     ChatCompletionReasoningSummaryTextBlock,
+    ChatCompletionReasoningTextBlock,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
     ChatCompletionTextObject,
@@ -2257,6 +2258,8 @@ def reasoning_content_from_thinking_blocks(
 
 
 ENCRYPTED_REASONING_SIGNATURE_PREFIX: Final = "litellm_encrypted_reasoning:"
+REASONING_TEXT_SIGNATURE_PREFIX: Final = "litellm_reasoning_text:"
+_RESPONSES_REASONING_SIGNATURE_PREFIXES: Final = (REASONING_TEXT_SIGNATURE_PREFIX, ENCRYPTED_REASONING_SIGNATURE_PREFIX)
 
 
 def encrypted_reasoning_signature(encrypted_content: str) -> str:
@@ -2269,14 +2272,30 @@ def encrypted_reasoning_signature(encrypted_content: str) -> str:
     return f"{ENCRYPTED_REASONING_SIGNATURE_PREFIX}{encrypted_content}"
 
 
+def reasoning_text_signature(encrypted_content: str | None) -> str:
+    """The signature of a thinking block holding a reasoning item's raw `reasoning_text`.
+
+    Backends that emit `reasoning_text` require it back verbatim, so the prefix tells the
+    replay to rebuild the item's `content` instead of a `summary`.
+    """
+    return f"{REASONING_TEXT_SIGNATURE_PREFIX}{encrypted_content or ''}"
+
+
 def _carries_encrypted_reasoning(signature: object) -> bool:
-    return isinstance(signature, str) and signature.startswith(ENCRYPTED_REASONING_SIGNATURE_PREFIX)
+    return isinstance(signature, str) and signature.startswith(_RESPONSES_REASONING_SIGNATURE_PREFIXES)
 
 
 def encrypted_content_from_signature(signature: object) -> str | None:
-    if not isinstance(signature, str) or not _carries_encrypted_reasoning(signature):
+    if not isinstance(signature, str):
         return None
-    return signature.removeprefix(ENCRYPTED_REASONING_SIGNATURE_PREFIX) or None
+    return next(
+        (
+            signature.removeprefix(prefix) or None
+            for prefix in _RESPONSES_REASONING_SIGNATURE_PREFIXES
+            if signature.startswith(prefix)
+        ),
+        None,
+    )
 
 
 def _encrypted_reasoning_field(block: Mapping[str, object]) -> object:
@@ -2291,6 +2310,11 @@ def _encrypted_reasoning_field(block: Mapping[str, object]) -> object:
 
 def encrypted_content_of_block(block: Mapping[str, object]) -> str | None:
     return encrypted_content_from_signature(_encrypted_reasoning_field(block))
+
+
+def _carries_reasoning_text(block: Mapping[str, object]) -> bool:
+    field: Final = _encrypted_reasoning_field(block)
+    return isinstance(field, str) and field.startswith(REASONING_TEXT_SIGNATURE_PREFIX)
 
 
 def is_encrypted_reasoning_block(block: object) -> bool:
@@ -2414,6 +2438,15 @@ def _reasoning_replay_group_key(indexed_block: tuple[int, Mapping[str, object]])
     return f"encrypted:{index}" if is_encrypted_reasoning_block(block) else "summary"
 
 
+def _reasoning_text_item(text: str, encrypted_content: str | None) -> ChatCompletionReasoningItem:
+    content: Final = [ChatCompletionReasoningTextBlock(type="reasoning_text", text=text)] if text else []
+    if encrypted_content is None:
+        return ChatCompletionReasoningItem(type="reasoning", summary=[], content=content)
+    return ChatCompletionReasoningItem(
+        type="reasoning", summary=[], content=content, encrypted_content=encrypted_content
+    )
+
+
 def _reasoning_item_from_block_group(group: tuple[Mapping[str, object], ...]) -> ChatCompletionReasoningItem | None:
     summary: Final[list[ChatCompletionReasoningSummaryTextBlock]] = [  # mutable-ok: API message payload
         ChatCompletionReasoningSummaryTextBlock(type="summary_text", text=text)
@@ -2421,6 +2454,8 @@ def _reasoning_item_from_block_group(group: tuple[Mapping[str, object], ...]) ->
         if (text := _readable_thinking_text(block))
     ]
     encrypted_content: Final = encrypted_content_of_block(group[0])
+    if _carries_reasoning_text(group[0]):
+        return _reasoning_text_item(_readable_thinking_text(group[0]), encrypted_content)
     if encrypted_content is not None:
         return ChatCompletionReasoningItem(type="reasoning", summary=summary, encrypted_content=encrypted_content)
     if not summary:

@@ -3,7 +3,7 @@
 import asyncio
 from collections import deque
 from collections.abc import AsyncGenerator, Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from pydantic import ConfigDict, field_validator
 
@@ -13,6 +13,7 @@ from litellm._uuid import uuid
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     encrypted_reasoning_signature,
+    reasoning_text_signature,
 )
 from litellm.llms.anthropic.messages.native.utils import (
     INCOMPLETE_STREAM_ERROR_MESSAGE,
@@ -115,6 +116,7 @@ class AnthropicResponsesStreamWrapper:
       response.output_text.delta         -> content_block_delta (text_delta)
       response.reasoning_summary_part.added -> content_block_delta (thinking_delta separator)
       response.reasoning_summary_text.delta -> content_block_delta (thinking_delta)
+      response.reasoning_text.delta      -> content_block_delta (thinking_delta)
       response.function_call_arguments.delta -> content_block_delta (input_json_delta)
       response.output_item.done          -> content_block_delta (signature_delta) + content_block_stop
       response.completed                 -> message_delta + message_stop
@@ -187,12 +189,25 @@ class AnthropicResponsesStreamWrapper:
     def _field(source: object, name: str) -> object:
         return source.get(name) if isinstance(source, dict) else getattr(source, name, None)
 
+    @classmethod
+    def _has_reasoning_text(cls, item: object) -> bool:
+        content: Final = cls._field(item, "content")
+        if not isinstance(content, list):
+            return False
+        return any(
+            cls._field(part, "type") == "reasoning_text" and cls._field(part, "text")
+            for part in cast(list[object], content)  # cast-ok: narrowed by isinstance
+        )
+
     def _close_reasoning_item(self, item: object, item_id: str | None) -> None:
         block_idx: Final = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
         encrypted_content: Final = self._field(item, "encrypted_content")
+        encrypted: Final = encrypted_content if isinstance(encrypted_content, str) and encrypted_content else None
         signature: Final = (
-            encrypted_reasoning_signature(encrypted_content)
-            if isinstance(encrypted_content, str) and encrypted_content
+            reasoning_text_signature(encrypted)
+            if block_idx >= 0 and self._has_reasoning_text(item)
+            else encrypted_reasoning_signature(encrypted)
+            if encrypted is not None
             else None
         )
         if block_idx < 0 and signature is None:
@@ -317,7 +332,7 @@ class AnthropicResponsesStreamWrapper:
             return
 
         # ---- reasoning summary text delta ----
-        if event_type == "response.reasoning_summary_text.delta":
+        if event_type in ("response.reasoning_summary_text.delta", "response.reasoning_text.delta"):
             item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
             delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
             block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index

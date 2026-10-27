@@ -711,6 +711,11 @@ class ChatCompletionReasoningSummaryTextBlock(TypedDict, total=False):
     text: str
 
 
+class ChatCompletionReasoningTextBlock(TypedDict):
+    type: ReadOnly[Literal["reasoning_text"]]
+    text: ReadOnly[str]
+
+
 class ChatCompletionReasoningItem(TypedDict, total=False):
     """Represents an OpenAI Responses API reasoning item for round-tripping in conversation history."""
 
@@ -718,6 +723,7 @@ class ChatCompletionReasoningItem(TypedDict, total=False):
     id: str
     encrypted_content: str | None
     summary: ReadOnly[list[ChatCompletionReasoningSummaryTextBlock]]
+    content: ReadOnly[list[ChatCompletionReasoningTextBlock]]
 
 
 class WebSearchOptionsUserLocationApproximate(TypedDict, total=False):
