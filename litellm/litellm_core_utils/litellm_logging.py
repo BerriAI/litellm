@@ -7141,12 +7141,12 @@ class StandardLoggingPayloadSetup:
         request_headers: Final = cast(  # cast-ok: request headers are untyped framework data
             dict[str, str], headers
         )
-
-        header_tags: Final = []
-        for header_name in extra_headers:
-            header_value = request_headers.get(header_name)
-            if header_value:
-                header_tags.append(f"{header_name}: {header_value}")
+        lowercase_request_headers: Final = {str(name).lower(): value for name, value in request_headers.items()}
+        header_tags: Final = [
+            f"{header_name}: {header_value}"
+            for header_name in extra_headers
+            if (header_value := lowercase_request_headers.get(header_name.lower()))
+        ]
 
         return header_tags if header_tags else None
 
