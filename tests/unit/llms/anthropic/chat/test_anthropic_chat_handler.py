@@ -3653,13 +3653,17 @@ def _anthropic_chat_body_for_bound_thinking(extra_headers: dict[str, str] | None
     return json.loads(captured_requests[0].content)
 
 
-def test_anthropic_chat_keeps_block_binding_when_the_final_header_carries_the_binding_beta(monkeypatch):
+def test_anthropic_chat_keeps_block_binding_when_the_final_header_carries_the_binding_beta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
     body: Final = _anthropic_chat_body_for_bound_thinking({"anthropic-beta": "thinking-binding-controls-2026-08-01"})
     assert body["thinking"] == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
 
 
-def test_anthropic_chat_drops_block_binding_when_no_header_carries_the_binding_beta(monkeypatch):
+def test_anthropic_chat_drops_block_binding_when_no_header_carries_the_binding_beta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
     body: Final = _anthropic_chat_body_for_bound_thinking(None)
     assert body["thinking"] == {"type": "adaptive"}

@@ -1,7 +1,7 @@
-import logging
 import base64
 import copy
 import json
+import logging
 import os
 import re
 from collections.abc import Iterator, Mapping
@@ -24,9 +24,9 @@ from litellm.llms.anthropic.chat.transformation import (
     NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS,
     NATIVE_OUTPUT_MAX_UNION_PARAMETERS,
 )
-from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.bedrock import ContentBlock, ConverseTokenUsageBlock, RequestObject
 from litellm.types.llms.openai import AllMessageValues
@@ -10817,9 +10817,11 @@ def _converse_bound_thinking_request(
     return data["additionalModelRequestFields"]
 
 
-def test_converse_keeps_beta_gated_thinking_fields_the_bedrock_converse_row_carries(monkeypatch):
+def test_converse_keeps_beta_gated_thinking_fields_the_bedrock_converse_row_carries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
-    fields = _converse_bound_thinking_request(
+    fields: Final = _converse_bound_thinking_request(
         {"anthropic-beta": "thinking-binding-controls-2026-08-01,thinking-display-updates-2026-08-18"}
     )
     assert fields["thinking"] == {
@@ -10829,10 +10831,12 @@ def test_converse_keeps_beta_gated_thinking_fields_the_bedrock_converse_row_carr
     }
 
 
-def test_converse_drops_beta_gated_thinking_fields_when_the_request_carries_no_beta(monkeypatch, caplog):
+def test_converse_drops_beta_gated_thinking_fields_when_the_request_carries_no_beta(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        fields = _converse_bound_thinking_request(None)
+        fields: Final = _converse_bound_thinking_request(None)
     assert fields["thinking"] == {"type": "adaptive"}
     assert any(
         "thinking.block_binding" in record.getMessage() and "provider=bedrock_converse" in record.getMessage()
@@ -10840,7 +10844,9 @@ def test_converse_drops_beta_gated_thinking_fields_when_the_request_carries_no_b
     )
 
 
-def test_converse_keeps_beta_gated_thinking_fields_the_body_anthropic_beta_carries(monkeypatch):
+def test_converse_keeps_beta_gated_thinking_fields_the_body_anthropic_beta_carries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
     fields: Final = _converse_bound_thinking_request(
         None, body_betas=("thinking-binding-controls-2026-08-01", "thinking-display-updates-2026-08-18")

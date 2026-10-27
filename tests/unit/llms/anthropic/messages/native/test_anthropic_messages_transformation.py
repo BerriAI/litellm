@@ -444,7 +444,7 @@ def _bound_adaptive_request(headers: dict[str, str]) -> dict[str, object]:
     return request
 
 
-def test_messages_request_keeps_beta_gated_thinking_fields_when_the_final_header_carries_the_betas():
+def test_messages_request_keeps_beta_gated_thinking_fields_when_the_final_header_carries_the_betas() -> None:
     request: Final = _bound_adaptive_request({"anthropic-beta": BINDING_AND_DISPLAY_BETAS})
     assert request["thinking"] == {
         "type": "adaptive",
@@ -455,14 +455,14 @@ def test_messages_request_keeps_beta_gated_thinking_fields_when_the_final_header
 
 def test_messages_request_drops_beta_gated_thinking_fields_the_final_header_does_not_carry(
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        request = _bound_adaptive_request({"anthropic-beta": "thinking-binding-controls-2026-08-01"})
+        request: Final = _bound_adaptive_request({"anthropic-beta": "thinking-binding-controls-2026-08-01"})
     assert request["thinking"] == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
     assert any("thinking.display=updates" in record.getMessage() for record in caplog.records)
 
 
-def test_messages_request_drops_clear_at_from_a_mid_conversation_system_turn_without_its_beta():
+def test_messages_request_drops_clear_at_from_a_mid_conversation_system_turn_without_its_beta() -> None:
     system_turn: Final = {"role": "system", "content": "be terse", "clear_at": "end_turn"}
     request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
         model="claude-opus-4-8",

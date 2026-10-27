@@ -40,20 +40,20 @@ def _system_turn() -> dict[str, object]:
     }
 
 
-def test_thinking_with_every_beta_active_is_returned_as_is():
-    result = strip_beta_gated_thinking(BOUND_THINKING, EVERY_BETA)
+def test_thinking_with_every_beta_active_is_returned_as_is() -> None:
+    result: Final = strip_beta_gated_thinking(BOUND_THINKING, EVERY_BETA)
     assert result.thinking is BOUND_THINKING
     assert result.stripped == ()
 
 
-def test_thinking_loses_only_the_field_whose_beta_is_absent():
-    without_binding = strip_beta_gated_thinking(
+def test_thinking_loses_only_the_field_whose_beta_is_absent() -> None:
+    without_binding: Final = strip_beta_gated_thinking(
         BOUND_THINKING, EVERY_BETA - {ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER}
     )
     assert without_binding.thinking == {"type": "adaptive", "display": "updates"}
     assert without_binding.stripped == ("thinking.block_binding",)
 
-    without_display = strip_beta_gated_thinking(
+    without_display: Final = strip_beta_gated_thinking(
         BOUND_THINKING, EVERY_BETA - {ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER}
     )
     assert without_display.thinking == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
@@ -65,30 +65,30 @@ def test_thinking_loses_only_the_field_whose_beta_is_absent():
     }, "copy-on-write: the caller's thinking dict must survive for the fallback leg"
 
 
-def test_thinking_display_other_than_updates_is_not_gated():
-    thinking = {"type": "adaptive", "display": "summarized"}
-    result = strip_beta_gated_thinking(thinking, frozenset())
+def test_thinking_display_other_than_updates_is_not_gated() -> None:
+    thinking: Final = {"type": "adaptive", "display": "summarized"}
+    result: Final = strip_beta_gated_thinking(thinking, frozenset())
     assert result.thinking is thinking
 
 
 @pytest.mark.parametrize("thinking", [None, "enabled", 12, ["adaptive"]])
-def test_non_mapping_thinking_passes_through(thinking: object):
-    result = strip_beta_gated_thinking(thinking, frozenset())
+def test_non_mapping_thinking_passes_through(thinking: object) -> None:
+    result: Final = strip_beta_gated_thinking(thinking, frozenset())
     assert result.thinking is thinking
     assert result.stripped == ()
 
 
-def test_system_message_keeps_every_gated_field_when_the_betas_are_active():
-    messages = [{"role": "user", "content": "hi"}, _system_turn()]
-    result = strip_beta_gated_system_messages(messages, EVERY_BETA)
+def test_system_message_keeps_every_gated_field_when_the_betas_are_active() -> None:
+    messages: Final = [{"role": "user", "content": "hi"}, _system_turn()]
+    result: Final = strip_beta_gated_system_messages(messages, EVERY_BETA)
     assert result.messages is messages
     assert result.stripped == ()
 
 
-def test_system_message_loses_exactly_the_fields_whose_betas_are_absent():
-    original = _system_turn()
-    messages = [{"role": "user", "content": "hi"}, original]
-    result = strip_beta_gated_system_messages(
+def test_system_message_loses_exactly_the_fields_whose_betas_are_absent() -> None:
+    original: Final = _system_turn()
+    messages: Final = [{"role": "user", "content": "hi"}, original]
+    result: Final = strip_beta_gated_system_messages(
         messages,
         EVERY_BETA
         - {ANTHROPIC_MID_CONVERSATION_SYSTEM_CLEAR_AT_BETA_HEADER, ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER},
@@ -108,8 +108,8 @@ def test_system_message_loses_exactly_the_fields_whose_betas_are_absent():
     assert original == _system_turn(), "copy-on-write: the caller's system message must survive"
 
 
-def test_per_turn_control_beta_also_unlocks_system_output_config():
-    messages = [{"role": "system", "output_config": {"effort": "low"}, "content": "terse"}]
+def test_per_turn_control_beta_also_unlocks_system_output_config() -> None:
+    messages: Final = [{"role": "system", "output_config": {"effort": "low"}, "content": "terse"}]
     assert strip_beta_gated_system_messages(messages, frozenset({"per-turn-control-2026-07-01"})).messages is messages
     assert (
         strip_beta_gated_system_messages(
@@ -120,13 +120,13 @@ def test_per_turn_control_beta_also_unlocks_system_output_config():
     assert strip_beta_gated_system_messages(messages, frozenset()).messages == [{"role": "system", "content": "terse"}]
 
 
-def test_system_message_emptied_by_the_strip_is_dropped():
-    messages = [
+def test_system_message_emptied_by_the_strip_is_dropped() -> None:
+    messages: Final = [
         {"role": "user", "content": "hi"},
         {"role": "system", "content": [{"type": "tool_removal", "tool_names": ["lookup"]}]},
         {"role": "assistant", "content": "ok"},
     ]
-    result = strip_beta_gated_system_messages(messages, frozenset())
+    result: Final = strip_beta_gated_system_messages(messages, frozenset())
     assert result.messages == [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "ok"}]
     assert result.stripped == (
         "messages[].system.content[].tool_addition|tool_removal",
@@ -134,14 +134,14 @@ def test_system_message_emptied_by_the_strip_is_dropped():
     )
 
 
-def test_request_strip_replaces_only_thinking_and_messages_and_keeps_the_dict_otherwise():
+def test_request_strip_replaces_only_thinking_and_messages_and_keeps_the_dict_otherwise() -> None:
     request: Final = {
         "model": "claude",
         "thinking": dict(BOUND_THINKING),
         "messages": [_system_turn()],
         "max_tokens": 5,
     }
-    result = strip_beta_gated_request_fields(request, frozenset())
+    result: Final = strip_beta_gated_request_fields(request, frozenset())
     assert result.request == {
         "model": "claude",
         "thinking": {"type": "adaptive"},
@@ -153,25 +153,30 @@ def test_request_strip_replaces_only_thinking_and_messages_and_keeps_the_dict_ot
     assert request["messages"] == [_system_turn()]
 
 
-def test_request_strip_is_identity_when_nothing_is_gated():
-    request = {"thinking": {"type": "enabled", "budget_tokens": 1024}, "messages": [{"role": "user", "content": "hi"}]}
-    result = strip_beta_gated_request_fields(request, frozenset())
+def test_request_strip_is_identity_when_nothing_is_gated() -> None:
+    request: Final = {
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    result: Final = strip_beta_gated_request_fields(request, frozenset())
     assert result.request is request
     assert result.stripped == ()
 
 
-def test_active_beta_values_reads_the_header_case_insensitively_and_merges_body_betas():
+def test_active_beta_values_reads_the_header_case_insensitively_and_merges_body_betas() -> None:
     assert active_beta_values({"Anthropic-Beta": "a-2026-01-01, b-2026-01-01 ,"}, ["c-2026-01-01", 7]) == frozenset(
         {"a-2026-01-01", "b-2026-01-01", "c-2026-01-01"}
     )
     assert active_beta_values({}) == frozenset()
 
 
-def test_every_strip_is_logged_once_at_warning_with_the_fields_model_and_provider(caplog: pytest.LogCaptureFixture):
+def test_every_strip_is_logged_once_at_warning_with_the_fields_model_and_provider(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         log_beta_gated_strips(("thinking.block_binding", "thinking.block_binding"), model="claude", provider="azure_ai")
         log_beta_gated_strips((), model="claude", provider="azure_ai")
-    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    warnings: Final = [record for record in caplog.records if record.levelno == logging.WARNING]
     assert len(warnings) == 1
     assert "['thinking.block_binding']" in warnings[0].getMessage()
     assert "model=claude provider=azure_ai" in warnings[0].getMessage()
