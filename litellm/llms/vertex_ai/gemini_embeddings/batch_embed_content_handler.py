@@ -45,9 +45,10 @@ class GoogleBatchEmbeddings(VertexLLM):
     @staticmethod
     def _flatten_and_detect_file_refs(
         input: GeminiEmbeddingInput,
+        drop_params: bool = False,
     ) -> tuple[list[str], bool]:
         """Flatten nested input lists and file content blocks into their sources and detect file references."""
-        flat_elements: Final = list(flatten_media_sources(input))
+        flat_elements: Final = list(flatten_media_sources(input, drop_params=drop_params))
         has_file_refs: Final = any(is_file_reference(e) for e in flat_elements)
         return flat_elements, has_file_refs
 
@@ -218,7 +219,7 @@ class GoogleBatchEmbeddings(VertexLLM):
 
         ### TRANSFORMATION (sync path) ###
         request_data: VertexAIBatchEmbeddingsRequestBody | dict[str, object]
-        flat_elements, has_file_refs = self._flatten_and_detect_file_refs(input)
+        flat_elements, has_file_refs = self._flatten_and_detect_file_refs(input, drop_params=drop_params)
         if use_embed_content:
             resolved_files = {}
             if api_key:
@@ -324,7 +325,7 @@ class GoogleBatchEmbeddings(VertexLLM):
             async_handler = client
 
         ### TRANSFORMATION (async path) ###
-        flat_elements, has_file_refs = self._flatten_and_detect_file_refs(input)
+        flat_elements, has_file_refs = self._flatten_and_detect_file_refs(input, drop_params=drop_params)
         if use_embed_content:
             resolved_files = {}
             if api_key:

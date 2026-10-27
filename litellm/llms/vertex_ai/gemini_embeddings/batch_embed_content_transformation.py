@@ -166,11 +166,20 @@ class _EmbeddingFileBlock(LiteLLMBaseModel):
     file: _EmbeddingFile
 
 
+class _EmbeddingTextBlock(LiteLLMBaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    type: Literal["text"]
+    text: str
+
+
 _file_block_adapter: Final = TypeAdapter(_EmbeddingFileBlock)
+_text_block_adapter: Final = TypeAdapter(_EmbeddingTextBlock)
 _video_metadata_adapter: Final = TypeAdapter(VideoMetadataType)
 _input_shape_adapter: Final[TypeAdapter[str | list[object]]] = TypeAdapter(str | list[object])
 _mapping_adapter: Final = TypeAdapter(dict[str, object])
 _BLOCK_FIELDS: Final = frozenset(_EmbeddingFileBlock.model_fields)
+_TEXT_BLOCK_FIELDS: Final = frozenset(_EmbeddingTextBlock.model_fields)
 _FILE_FIELDS: Final = frozenset(_EmbeddingFile.model_fields)
 _VIDEO_METADATA_FIELDS: Final = frozenset(_EmbeddingVideoMetadata.model_fields)
 _FILE_SOURCE_FORMS: Final = "a data: URI, a gs:// URL, a files/ reference, or a Gemini Files API URI"
@@ -211,10 +220,31 @@ def _dropping_unsupported_keys(block: Mapping[str, object]) -> dict[str, object]
     }
 
 
+def _is_text_block(element: object) -> bool:
+    return (
+        isinstance(element, Mapping)
+        and cast(Mapping[str, object], element).get("type") == "text"  # cast-ok: isinstance leaves value type unknown
+    )
+
+
+def _parse_text_block(element: object, drop_params: bool) -> _EmbeddingTextBlock:
+    if not isinstance(element, Mapping):
+        raise _invalid_input(
+            f"Embedding input elements must be strings, text content blocks, or file content blocks, got {type(element).__name__}"
+        )
+    block: Final = cast(Mapping[str, object], element)  # cast-ok: isinstance leaves the key and value types unknown
+    try:
+        return _text_block_adapter.validate_python(_only_fields(block, _TEXT_BLOCK_FIELDS) if drop_params else block)
+    except ValidationError as error:
+        raise _invalid_input(
+            f"Invalid text content block in embedding input: {_validation_error_summary(error)}"
+        ) from error
+
+
 def _parse_file_block(element: object, drop_params: bool) -> _EmbeddingFileBlock:
     if not isinstance(element, Mapping):
         raise _invalid_input(
-            f"Embedding input elements must be strings or file content blocks, got {type(element).__name__}"
+            f"Embedding input elements must be strings, text content blocks, or file content blocks, got {type(element).__name__}"
         )
     block: Final = cast(Mapping[str, object], element)  # cast-ok: isinstance leaves the key and value types unknown
     try:
@@ -268,16 +298,33 @@ def _source_mime_type(
     return None
 
 
+def _gcs_mime_type(gcs_url: str, mime_type_override: str | None) -> str:
+    """The MIME type for a GCS file part: an explicit override, else one inferred from the URL extension.
+
+    An unresolvable extension is a client input error (400), not a connection
+    error (500): no request was sent when it is raised.
+    """
+    if mime_type_override is not None:
+        return mime_type_override
+    try:
+        return _infer_mime_type_from_gcs_url(gcs_url)
+    except ValueError as error:
+        raise _invalid_input(str(error)) from error
+
+
 def _media_part(
     source: str,
     mime_type_override: str | None,
     resolved_files: Mapping[str, Mapping[str, str]],
 ) -> PartType:
     if _is_data_url(source):
-        mime_type, base64_data = _parse_data_url(source, mime_type_override)
-        return PartType(inline_data=BlobType(mime_type=mime_type, data=base64_data))
+        try:
+            data_url_parts: Final = _parse_data_url(source, mime_type_override)
+        except ValueError as error:
+            raise _invalid_input(str(error)) from error
+        return PartType(inline_data=BlobType(mime_type=data_url_parts[0], data=data_url_parts[1]))
     if _is_gcs_url(source):
-        gcs_mime_type: Final = mime_type_override or _infer_mime_type_from_gcs_url(source)
+        gcs_mime_type: Final = _gcs_mime_type(source, mime_type_override)
         return PartType(file_data=FileDataType(mime_type=gcs_mime_type, file_uri=source))
     if is_file_reference(source):
         file_info: Final = resolved_files.get(source)
@@ -299,7 +346,7 @@ def _top_level_elements(
         _input_shape_adapter.validate_python(input)
     except ValidationError as error:
         raise _invalid_input(
-            f"Embedding input must be a string or a list of strings and file content blocks, got {type(input).__name__}"
+            f"Embedding input must be a string or a list of strings, text content blocks, and file content blocks, got {type(input).__name__}"
         ) from error
     return [input] if isinstance(input, str) else input
 
@@ -312,15 +359,18 @@ def _elements(input: GeminiEmbeddingInput) -> Iterator[GeminiEmbeddingElement]:
             yield element
 
 
-def _element_source(element: GeminiEmbeddingElement) -> str:
+def _element_source(element: GeminiEmbeddingElement, drop_params: bool) -> str | None:
     if isinstance(element, str):
         return element
-    return _file_block_source(_parse_file_block(element, drop_params=True))
+    if _is_text_block(element):
+        _parse_text_block(element, drop_params)
+        return None
+    return _file_block_source(_parse_file_block(element, drop_params))
 
 
-def flatten_media_sources(input: GeminiEmbeddingInput) -> tuple[str, ...]:
-    """Every string element plus every file content block's source, in input order."""
-    return tuple(_element_source(element) for element in _elements(input))
+def flatten_media_sources(input: GeminiEmbeddingInput, drop_params: bool = False) -> tuple[str, ...]:
+    sources: Final = (_element_source(element, drop_params) for element in _elements(input))
+    return tuple(source for source in sources if source is not None)
 
 
 def _is_multimodal_input(input: GeminiEmbeddingInput) -> bool:
@@ -338,9 +388,9 @@ def _is_multimodal_input(input: GeminiEmbeddingInput) -> bool:
 
 
 def _is_multimodal_element(element: GeminiEmbeddingElement) -> bool:
-    """Check if a single element is multimodal."""
+    """Check if a single element is multimodal. Typed text blocks are text, not media."""
     if not isinstance(element, str):
-        return True
+        return not _is_text_block(element)
     if _is_data_url(element):
         return True
     if is_file_reference(element):
@@ -364,6 +414,9 @@ def _build_part_for_input(
 
     if isinstance(element, str):
         return _media_part(element, None, files) if _is_multimodal_element(element) else PartType(text=element)
+
+    if _is_text_block(element):
+        return PartType(text=_parse_text_block(element, drop_params).text)
 
     block: Final = _parse_file_block(element, drop_params)
     part: Final = _media_part(_file_block_source(block), block.file.format, files)
@@ -400,7 +453,7 @@ def transform_openai_input_gemini_content(
     Transform OpenAI embedding input to Gemini batchEmbedContents format.
 
     Each input element becomes a separate EmbedContentRequest, supporting
-    text, data URIs, file references, and GCS URLs.
+    text (bare strings and typed text blocks), data URIs, file references, and GCS URLs.
 
     If an element is a list (nested input), all sub-elements are combined
     into a single content with multiple parts, producing one combined
@@ -421,7 +474,7 @@ def transform_openai_input_gemini_content(
     for element in input_list:
         if isinstance(element, list):
             if not element:
-                raise ValueError("Nested input list must not be empty")
+                raise _invalid_input("Nested input list must not be empty")
             parts = [
                 _build_part_for_input(sub, resolved_files=resolved_files, drop_params=drop_params) for sub in element
             ]
@@ -448,7 +501,7 @@ def transform_openai_input_gemini_embed_content(
     Transform OpenAI embedding input to Gemini embedContent format (multimodal).
 
     Args:
-        input: GeminiEmbeddingInput with text, data URIs, or file references
+        input: GeminiEmbeddingInput with text (bare strings and typed text blocks), data URIs, or file references
         model: Model name
         optional_params: Additional parameters (taskType, outputDimensionality, etc.)
         resolved_files: Dict mapping file names (files/abc) to {mime_type, uri}
@@ -465,7 +518,7 @@ def transform_openai_input_gemini_embed_content(
 
     for element in input_list:
         if isinstance(element, list):
-            raise ValueError(
+            raise _invalid_input(
                 "Nested (combined) embeddings are not supported on the embedContent path. "
                 "Use the batchEmbedContents path or pass a flat list instead."
             )
@@ -502,6 +555,8 @@ def _is_image_element(
 ) -> bool:
     if isinstance(element, str):
         return _source_mime_type(element, None, resolved_files) in _IMAGE_MIME_TYPES
+    if _is_text_block(element):
+        return False
     block: Final = _parse_file_block(element, drop_params=True)
     return _source_mime_type(_file_block_source(block), block.file.format, resolved_files) in _IMAGE_MIME_TYPES
 
@@ -514,6 +569,23 @@ def _is_image_only_input(
     return bool(elements) and all(_is_image_element(element, resolved_files) for element in elements)
 
 
+def _plain_text(element: GeminiEmbeddingElement) -> str | None:
+    if isinstance(element, str):
+        return None if _is_multimodal_element(element) else element
+    if _is_text_block(element):
+        return _parse_text_block(element, drop_params=True).text
+    return None
+
+
+def _text_prompt_tokens(input: GeminiEmbeddingInput, model: str) -> int:
+    texts: Final = (_plain_text(element) for element in _elements(input))
+    text_elements: Final = [text for text in texts if text is not None]
+    if not text_elements:
+        return 0
+    input_text: Final = get_formatted_prompt(data={"input": text_elements}, call_type="embedding")
+    return token_counter(model=model, text=input_text)
+
+
 def _tokens_for_modality(details: Sequence[PromptTokensDetails], modality: str) -> int:
     return sum(detail["tokenCount"] for detail in details if detail["modality"] == modality)
 
@@ -521,8 +593,7 @@ def _tokens_for_modality(details: Sequence[PromptTokensDetails], modality: str) 
 def _fallback_usage(input: GeminiEmbeddingInput, model: str) -> Usage:
     if _is_multimodal_input(input):
         return Usage(prompt_tokens=0, total_tokens=0)
-    input_text: Final = get_formatted_prompt(data={"input": input}, call_type="embedding")
-    prompt_tokens: Final = token_counter(model=model, text=input_text)
+    prompt_tokens: Final = _text_prompt_tokens(input, model)
     return Usage(prompt_tokens=prompt_tokens, total_tokens=prompt_tokens)
 
 
@@ -628,23 +699,7 @@ def process_response(
     model_response.data = openai_embeddings
     model_response.model = model
 
-    has_nested: Final = isinstance(input, list) and any(isinstance(e, list) for e in input)
-    if _is_multimodal_input(input) or has_nested:
-        input_list: Final = input if isinstance(input, list) else [input]
-        text_elements: Final[list[str]] = []
-        for e in input_list:
-            if isinstance(e, list):
-                text_elements.extend(sub for sub in e if isinstance(sub, str) and not _is_multimodal_element(sub))
-            elif isinstance(e, str) and not _is_multimodal_element(e):
-                text_elements.append(e)
-        if text_elements:
-            input_text = get_formatted_prompt(data={"input": text_elements}, call_type="embedding")
-            prompt_tokens = token_counter(model=model, text=input_text)
-        else:
-            prompt_tokens = 0
-    else:
-        input_text = get_formatted_prompt(data={"input": input}, call_type="embedding")
-        prompt_tokens = token_counter(model=model, text=input_text)
+    prompt_tokens: Final = _text_prompt_tokens(input, model)
     model_response.usage = Usage(prompt_tokens=prompt_tokens, total_tokens=prompt_tokens)
 
     return model_response

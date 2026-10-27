@@ -39,7 +39,7 @@ from litellm.litellm_core_utils.logging_utils import (
 from litellm.types.caching import CACHED_STREAM_EVENTS_KEY, EMBEDDING_CACHE_FORMAT_VERSION, CachedEmbedding
 from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.llms.openai import ChatCompletionFileObject, ResponsesAPIResponse
+from litellm.types.llms.openai import ChatCompletionFileObject, ChatCompletionTextObject, ResponsesAPIResponse
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     CachingDetails,
@@ -71,7 +71,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
-EmbeddingCacheInputElement = str | list[int] | ChatCompletionFileObject
+EmbeddingCacheInputElement = str | list[int] | ChatCompletionFileObject | ChatCompletionTextObject
 
 
 class CachingHandlerResponse(LiteLLMBaseModel):
