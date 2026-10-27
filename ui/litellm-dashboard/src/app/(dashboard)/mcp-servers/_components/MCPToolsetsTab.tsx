@@ -298,11 +298,17 @@ function CreateToolsetModal({ open, onClose, onSave, initialToolset }: CreateToo
     });
   };
 
+  // Clearing the search on close keeps a reopen from fetching every server for one render.
+  const handleClose = () => {
+    setSearch("");
+    onClose();
+  };
+
   const handleSubmit = async (values: ToolsetFormValues) => {
     setSaving(true);
     try {
       await onSave(values.toolset_name, values.description, selectedTools);
-      onClose();
+      handleClose();
     } finally {
       setSaving(false);
     }
@@ -316,7 +322,7 @@ function CreateToolsetModal({ open, onClose, onSave, initialToolset }: CreateToo
   const matchingState = selectionState(selectedTools, matchingTools);
 
   return (
-    <Dialog open={open} onOpenChange={(open) => !open && onClose()}>
+    <Dialog open={open} onOpenChange={(open) => !open && handleClose()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[960px]">
         <DialogHeader>
           <DialogTitle>{initialToolset ? "Edit Toolset" : "New Toolset"}</DialogTitle>
@@ -463,7 +469,7 @@ function CreateToolsetModal({ open, onClose, onSave, initialToolset }: CreateToo
         </div>
 
         <div className="flex justify-end gap-2 mt-4 pt-4 border-t border-border">
-          <Button variant="outline" onClick={onClose}>
+          <Button variant="outline" onClick={handleClose}>
             Cancel
           </Button>
           <Button onClick={() => void form.handleSubmit(handleSubmit)()} disabled={saving} aria-busy={saving}>

@@ -373,7 +373,11 @@ describe("MCPToolsetsTab tool search and bulk selection", () => {
 
     await act(() => queryClient.invalidateQueries({ queryKey: mcpServerToolKeys.all }));
     await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(networking.listMCPTools).toHaveBeenCalledTimes(callsWhileOpen);
 
+    const reopened = await openCreate(user);
+    expect(reopened.getByRole("textbox", { name: "Search tools or servers" })).toHaveValue("");
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(networking.listMCPTools).toHaveBeenCalledTimes(callsWhileOpen);
   });
 

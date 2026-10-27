@@ -40,8 +40,7 @@ const toStatus = ({
   fetchStatus,
   data,
 }: Pick<QueryObserverResult<MCPServerToolEntry[]>, "status" | "fetchStatus" | "data">): MCPServerToolsStatus => {
-  // A failed refetch keeps the tools that already loaded on screen.
-  if (status === "error" && data !== undefined) return "success";
+  if (status === "error" && data !== undefined && data.length > 0) return "success";
   if (status !== "pending") return status;
   return fetchStatus === "idle" ? "idle" : "loading";
 };

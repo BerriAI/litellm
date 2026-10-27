@@ -79,6 +79,22 @@ describe("useMCPServerTools", () => {
     );
   });
 
+  it("reports an error when a refetch fails for a server that had loaded no tools", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const sharedWrapper = ({ children }: { children: React.ReactNode }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    vi.mocked(networking.listMCPTools)
+      .mockResolvedValueOnce({ tools: [], error: null })
+      .mockResolvedValueOnce({ tools: [], error: "http_502", message: "upstream down" });
+
+    const { result } = renderHook(() => useMCPServerTools(["a"], new Set(["a"])), { wrapper: sharedWrapper });
+    await waitFor(() => expect(result.current.get("a")?.status).toBe("success"));
+
+    await act(() => queryClient.refetchQueries({ queryKey: mcpServerToolKeys.detail("a") }));
+
+    await waitFor(() => expect(result.current.get("a")).toEqual({ tools: [], status: "error" }));
+  });
+
   it("keeps showing the loaded tools when a later refetch fails", async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const sharedWrapper = ({ children }: { children: React.ReactNode }) =>
