@@ -1682,11 +1682,11 @@ def _incomplete_openai_chat_chunk() -> ModelResponseStream:
 @pytest.mark.asyncio
 async def test_async_openai_compatible_chat_clean_eof_without_finish_reason_raises_midstream_fallback(
     logging_obj: Logging, custom_llm_provider: str
-):
+) -> None:
     """An OpenAI-compatible stream without a provider finish reason must fail at clean EOF."""
 
     logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
-    response = CustomStreamWrapper(
+    response: Final = CustomStreamWrapper(
         completion_stream=_as_async(iter([_incomplete_openai_chat_chunk()])),
         model="gpt-5.6",
         logging_obj=logging_obj,
@@ -1694,7 +1694,7 @@ async def test_async_openai_compatible_chat_clean_eof_without_finish_reason_rais
         stream_options={"include_usage": True},
     )
 
-    first_chunk = await response.__anext__()
+    first_chunk: Final = await response.__anext__()
     with pytest.raises(MidStreamFallbackError) as excinfo:
         await response.__anext__()
 
@@ -1707,11 +1707,11 @@ async def test_async_openai_compatible_chat_clean_eof_without_finish_reason_rais
 @pytest.mark.parametrize("custom_llm_provider", ["openai", "azure", "hosted_vllm"])
 def test_sync_openai_compatible_chat_clean_eof_without_finish_reason_raises_midstream_fallback(
     logging_obj: Logging, custom_llm_provider: str
-):
+) -> None:
     """The synchronous OpenAI-compatible stream must fail at clean EOF too."""
 
     logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
-    response = CustomStreamWrapper(
+    response: Final = CustomStreamWrapper(
         completion_stream=iter([_incomplete_openai_chat_chunk()]),
         model="gpt-5.6",
         logging_obj=logging_obj,
@@ -1719,7 +1719,7 @@ def test_sync_openai_compatible_chat_clean_eof_without_finish_reason_raises_mids
         stream_options={"include_usage": True},
     )
 
-    first_chunk = next(response)
+    first_chunk: Final = next(response)
     with pytest.raises(MidStreamFallbackError) as excinfo:
         next(response)
 
@@ -1740,7 +1740,7 @@ async def _collect(wrapper: CustomStreamWrapper, sync_mode: bool) -> list[ModelR
 @pytest.mark.asyncio
 async def test_stream_that_sends_no_chunks_keeps_the_default_stop(
     logging_obj: Logging, custom_llm_provider: str, sync_mode: bool
-):
+) -> None:
     """Gemini's OpenAI-compatible endpoint answers with only [DONE] when reasoning uses up max_tokens."""
 
     wrapper: Final = CustomStreamWrapper(
@@ -1806,7 +1806,7 @@ def _anthropic_stream(
 @pytest.mark.asyncio
 async def test_anthropic_stream_that_ends_before_message_delta_fails_with_the_eof_message(
     sync_mode: bool, logging_obj: Logging
-):
+) -> None:
     wrapper: Final = _anthropic_stream(_ANTHROPIC_PARTIAL_EVENTS, sync_mode, logging_obj)
 
     with pytest.raises(MidStreamFallbackError) as excinfo:
@@ -1821,7 +1821,9 @@ async def test_anthropic_stream_that_ends_before_message_delta_fails_with_the_eo
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_anthropic_stream_with_message_stop_ends_with_its_finish_reason(sync_mode: bool, logging_obj: Logging):
+async def test_anthropic_stream_with_message_stop_ends_with_its_finish_reason(
+    sync_mode: bool, logging_obj: Logging
+) -> None:
     wrapper: Final = _anthropic_stream(
         (*_ANTHROPIC_PARTIAL_EVENTS, *_ANTHROPIC_TERMINAL_EVENTS), sync_mode, logging_obj
     )
@@ -1838,7 +1840,7 @@ async def test_anthropic_stream_with_message_stop_ends_with_its_finish_reason(sy
 @pytest.mark.asyncio
 async def test_generic_chunk_stream_without_a_finish_reason_keeps_the_default_stop(
     sync_mode: bool, logging_obj: Logging
-):
+) -> None:
     """Providers that stream GenericStreamingChunks and never mark the last one finished still end with stop,
     but the logged response built from ``chunks`` never gains that synthetic stop."""
     chunks: Final = [
@@ -1863,7 +1865,7 @@ async def test_generic_chunk_stream_without_a_finish_reason_keeps_the_default_st
 @pytest.mark.asyncio
 async def test_gemini_stream_with_a_usage_chunk_after_its_finish_reason_still_completes(
     sync_mode: bool, logging_obj: Logging
-):
+) -> None:
     """Gemini marks every chunk unfinished, so its finishReason only shows up mid-stream before the usage chunk."""
     lines: Final = [
         f"data: {json.dumps(event)}"

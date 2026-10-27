@@ -22,6 +22,8 @@ import asyncio
 import importlib
 import json
 import os
+from collections.abc import AsyncIterator
+from typing import Final
 
 import httpx
 import pytest
@@ -271,23 +273,25 @@ async def test_langgraph_streaming_acompletion_without_a_client_posts_through_th
 
 
 @pytest.mark.asyncio
-async def test_langgraph_async_stream_delivers_every_step_of_the_run_before_its_stop():
-    async def events():
-        question = {"type": "human", "content": "What is 25 * 4?"}
-        answers = [{"type": "ai", "content": "25 * 4"}, {"type": "ai", "content": " is 100"}]
+async def test_langgraph_async_stream_delivers_every_step_of_the_run_before_its_stop() -> None:
+    async def events() -> AsyncIterator[bytes]:
+        question: Final = {"type": "human", "content": "What is 25 * 4?"}
+        answers: Final = ({"type": "ai", "content": "25 * 4"}, {"type": "ai", "content": " is 100"})
         yield b'event: metadata\ndata: {"run_id": "run-1", "attempt": 1}\n\n'
         for step in range(len(answers) + 1):
             yield b"event: values\ndata: " + json.dumps({"messages": [question, *answers[:step]]}).encode() + b"\n\n"
 
-    client = AsyncHTTPHandler(transport=httpx.MockTransport(lambda request: httpx.Response(200, content=events())))
+    client: Final = AsyncHTTPHandler(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=events()))
+    )
 
-    response = await litellm.acompletion(
+    response: Final = await litellm.acompletion(
         model="langgraph/agent",
         messages=[{"role": "user", "content": "What is 25 * 4?"}],
         api_base="http://langgraph.test",
         stream=True,
         client=client,
     )
-    streamed = [(chunk.choices[0].delta.content, chunk.choices[0].finish_reason) async for chunk in response]
+    streamed: Final = [(chunk.choices[0].delta.content, chunk.choices[0].finish_reason) async for chunk in response]
 
     assert streamed == [("25 * 4", None), (" is 100", None), (None, "stop")]
