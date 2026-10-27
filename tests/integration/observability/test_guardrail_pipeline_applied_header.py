@@ -20,6 +20,7 @@ import yaml
 from tests.integration._support.client import Gateway, eventually, gateway_from_environment, object_value
 from tests.integration._support.otlp_sink import Span, SpanSinks, recorded_spans
 from tests.integration._support.process import owned_proxy
+from tests.integration._support.upstream import aws_event_stream_frame
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
 _HEADER: Final = "x-litellm-applied-guardrails"
@@ -50,6 +51,8 @@ _CANNOT_HOLD_STREAM: Final = "cannot-hold-stream"
 _ERRORS_PAST_FIRST: Final = "errors-past-first"
 _JUDGES_THEN_CHECKS: Final = "judges-then-checks"
 _ENDPOINTS: Final = ("/v1/chat/completions", "/v1/responses", "/v1/messages")
+_BEDROCK_MODEL: Final = "pipeline-bedrock"
+_BEDROCK_MODEL_ID: Final = "anthropic.claude-sonnet-5-v1:0"
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,7 +129,58 @@ def _responses_reply(request: Request) -> Reply:
     )
 
 
+def _bedrock_event(event_type: str, payload: dict[str, object]) -> bytes:
+    return aws_event_stream_frame(
+        {":event-type": event_type, ":content-type": "application/json", ":message-type": "event"},
+        json.dumps(payload).encode(),
+    )
+
+
+def _bedrock_reply(request: Request) -> Reply:
+    action: Final = request.target.rsplit("/", 1)[1]
+    if action == "converse-stream":
+        return Reply(
+            content_type="application/vnd.amazon.eventstream",
+            chunks=(
+                _bedrock_event("messageStart", {"role": "assistant"}),
+                _bedrock_event("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "guarded"}}),
+                _bedrock_event("contentBlockStop", {"contentBlockIndex": 0}),
+                _bedrock_event("messageStop", {"stopReason": "end_turn"}),
+                _bedrock_event(
+                    "metadata", {"usage": {"inputTokens": 3, "outputTokens": 1, "totalTokens": 4}, "metrics": {}}
+                ),
+            ),
+        )
+    if action == "invoke":
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": f"msg_{uuid.uuid4().hex}",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": _BEDROCK_MODEL_ID,
+                    "content": [{"type": "text", "text": "guarded"}],
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 3, "output_tokens": 1},
+                }
+            ).encode()
+        )
+    assert action == "converse", request.target
+    return Reply(
+        body=json.dumps(
+            {
+                "output": {"message": {"role": "assistant", "content": [{"text": "guarded"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 3, "outputTokens": 1, "totalTokens": 4},
+                "metrics": {"latencyMs": 1},
+            }
+        ).encode()
+    )
+
+
 def _completion(request: Request) -> Reply:
+    if request.target.startswith("/model/"):
+        return _bedrock_reply(request)
     if request.target == "/v1/responses":
         return _responses_reply(request)
     assert request.target == "/v1/chat/completions", request.target
@@ -208,11 +262,21 @@ def _policy(mode: str, steps: tuple[tuple[str, str, str], ...], *, on_error: str
     }
 
 
-def _config(directory: Path, vendor: Wire) -> Path:
+def _config(directory: Path, vendor: Wire, upstream: Wire) -> Path:
     configuration: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     configuration["litellm_settings"] = {**configuration.get("litellm_settings", {}), "callbacks": ["otel"]}
     configuration["model_list"] = [
         *configuration.get("model_list", []),
+        {
+            "model_name": _BEDROCK_MODEL,
+            "litellm_params": {
+                "model": f"bedrock/{_BEDROCK_MODEL_ID}",
+                "api_base": upstream.url,
+                "aws_access_key_id": "AKIASYNTHETICPROVIDER",
+                "aws_secret_access_key": "synthetic-provider-secret",
+                "aws_region_name": "us-east-1",
+            },
+        },
         {
             "model_name": _JUDGE_MODEL,
             "litellm_params": {
@@ -316,7 +380,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory, audit_sinks: SpanSinks) -> Ite
             shared,
             directory,
             {"OTEL_EXPORTER": "http/json", "OTEL_ENDPOINT": audit_sinks.operator, "OTEL_BSP_SCHEDULE_DELAY": "100"},
-            config=_config(directory, vendor),
+            config=_config(directory, vendor, upstream),
             workers=2,
         ) as owned,
         owned.scenario() as scenario,
@@ -570,6 +634,45 @@ def test_a_response_pipeline_names_a_judge_step_that_records_its_own_results(rig
         seconds=70,
     )
     assert sorted(object_value(rows[0]["metadata"]).get("applied_guardrails") or []) == [_JUDGE, _RESPONSE_SECOND]
+
+
+def _bedrock_body(action: str) -> dict[str, object]:
+    prompt: Final = f"hello {uuid.uuid4().hex}"
+    if action == "invoke":
+        return {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 20,
+            "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+        }
+    return {"messages": [{"role": "user", "content": [{"text": prompt}]}]}
+
+
+@pytest.mark.parametrize("action", ["converse", "invoke", "converse-stream"])
+def test_a_pass_through_route_names_its_response_pipeline_up_front_because_its_headers_are_built_first(
+    rig: _Rig, action: str
+) -> None:
+    rig.vendor.drain()
+    rig.upstream.drain()
+    with rig.gateway.scenario() as scenario:
+        team: Final = scenario.team(metadata={"tags": [_RESPONSE_STOPS_AFTER_FIRST]})
+        response: Final = rig.gateway.request(
+            "POST", f"/bedrock/model/{_BEDROCK_MODEL}/{action}", _bedrock_body(action), key=scenario.key(team_id=team)
+        )
+    assert response.status_code == 200, response.text
+    assert _steps_that_ran(rig) == (_RESPONSE_FIRST,)
+    assert [request.target.rsplit("/", 1)[1] for request in rig.upstream.drain()] == [action]
+    assert sorted(response.headers.get(_HEADER, "").split(",")) == [_RESPONSE_FIRST, _RESPONSE_SECOND], dict(
+        response.headers
+    )
+    rows: Final = eventually(
+        lambda: rig.gateway.rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE team_id = %s', (team,)),
+        lambda found: len(found) == 1,
+        seconds=70,
+    )
+    assert sorted(object_value(rows[0]["metadata"]).get("applied_guardrails") or []) == [
+        _RESPONSE_FIRST,
+        _RESPONSE_SECOND,
+    ], rows
 
 
 def _agent_card(name: str, url: str) -> dict[str, object]:

@@ -723,29 +723,35 @@ def _ran_or_runs_outside_pipelines(
 
 
 def _post_call_steps_named_before_headers(
-    data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth
+    data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, call_type: str
 ) -> frozenset[str]:
     """
     Post_call pipeline steps the executor names, as it runs them, before the response
     headers go out: every step of a whole response, and of a streamed one the steps of
-    the pipelines that hold the stream until they finish.
+    the pipelines that hold the stream until they finish. The LLM pass-through route builds
+    its headers before any response step runs, so none of its steps.
     """
+    if call_type == CallTypes.allm_passthrough_route.value:
+        return frozenset()
     if data.get("stream") is not True and data.get("method") not in A2A_STREAMING_METHODS:
         return pipeline_managed_guardrail_names(data, "post_call")
     gated: Final = _stream_gated_pipelines(data, user_api_key_dict)
     return frozenset() if _pipelines_stream_live(gated) else _pipeline_step_guardrail_names(gated)
 
 
-def _pipeline_steps_that_have_not_run(data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth) -> frozenset[str]:
+def _pipeline_steps_that_have_not_run(
+    data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, call_type: str
+) -> frozenset[str]:
     """
     Guardrails only policy pipelines run whose pre_call hook has not run for this request:
     pre_call steps a pipeline skipped and the post_call steps the executor names when it
     runs them. A stream runs a pipeline it cannot hold as guardrails on their own, and one
-    whose steps all stream live after the headers go out, so those steps are named up front
-    like any other guardrail.
+    whose steps all stream live after the headers go out, and the LLM pass-through route runs
+    its response steps after its headers are built, so those steps are named up front like
+    any other guardrail.
     """
     pre_call: Final = pipeline_managed_guardrail_names(data, "pre_call")
-    post_call: Final = _post_call_steps_named_before_headers(data, user_api_key_dict)
+    post_call: Final = _post_call_steps_named_before_headers(data, user_api_key_dict, call_type)
     return frozenset(
         name
         for name in pre_call | post_call
@@ -2694,7 +2700,7 @@ class ProxyLogging:
             data.pop("prompt_version", None)
             data.pop("prompt_environment", None)
 
-    def _process_guardrail_metadata(self, data: dict, user_api_key_dict: UserAPIKeyAuth) -> None:
+    def _process_guardrail_metadata(self, data: dict, user_api_key_dict: UserAPIKeyAuth, call_type: str) -> None:
         """Process guardrails from metadata and add to applied_guardrails."""
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
@@ -2722,6 +2728,7 @@ class ProxyLogging:
             not_run: Final = _pipeline_steps_that_have_not_run(
                 cast(dict[str, object], data),  # cast-ok: request payload
                 user_api_key_dict,
+                call_type,
             )
             for guardrail_name in guardrails_in_metadata:
                 if (
@@ -3015,7 +3022,7 @@ class ProxyLogging:
                 and (guardrails_only or not caps.has_pre_call_override)
             ):
                 if data is not None:
-                    self._process_guardrail_metadata(data, user_api_key_dict)
+                    self._process_guardrail_metadata(data, user_api_key_dict, call_type)
                 return data
 
             parallel_guardrails: Final[tuple[CustomGuardrail, ...]] = (
@@ -3119,17 +3126,17 @@ class ProxyLogging:
                 )
 
             if data is not None:
-                self._process_guardrail_metadata(data, user_api_key_dict)
+                self._process_guardrail_metadata(data, user_api_key_dict, call_type)
 
             return data
         except SensitiveDataRouteException as e:
             data = await self._handle_sensitive_data_route_exception(e, data, user_api_key_dict)
             if data is not None:
-                self._process_guardrail_metadata(data, user_api_key_dict)
+                self._process_guardrail_metadata(data, user_api_key_dict, call_type)
             return data
         except Exception:
             if data is not None:
-                self._process_guardrail_metadata(data, user_api_key_dict)
+                self._process_guardrail_metadata(data, user_api_key_dict, call_type)
             raise
 
     async def _run_parallel_pre_call_guardrails(

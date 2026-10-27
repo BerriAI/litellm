@@ -170,7 +170,7 @@ async def test_pre_call_hook_processes_guardrail_metadata_when_no_overrides(prox
     proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
     invoked = {}
 
-    def fake_process(d: dict[str, object], user_api_key_dict: UserAPIKeyAuth) -> None:
+    def fake_process(d: dict[str, object], user_api_key_dict: UserAPIKeyAuth, call_type: str) -> None:
         invoked["data"] = d
 
     proxy_logging._process_guardrail_metadata = fake_process  # type: ignore[assignment]

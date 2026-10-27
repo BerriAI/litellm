@@ -280,7 +280,7 @@ def test_process_guardrail_metadata_calls_header_helper(proxy_logging, monkeypat
 
     monkeypatch.setattr(callback_utils, "add_guardrail_to_applied_guardrails_header", fake_add)
     data = {"metadata": {"guardrails": ["g1", "g2"]}}
-    proxy_logging._process_guardrail_metadata(data, UserAPIKeyAuth())
+    proxy_logging._process_guardrail_metadata(data, UserAPIKeyAuth(), "completion")
     snapshot = {
         "call_count": len(calls),
         "first_name": calls[0]["name"],
@@ -305,7 +305,7 @@ def test_process_guardrail_metadata_skips_already_applied(proxy_logging, monkeyp
 
     monkeypatch.setattr(callback_utils, "add_guardrail_to_applied_guardrails_header", fake_add)
     data = {"metadata": {"guardrails": ["g1", "g2"], "applied_guardrails": ["g1"]}}
-    proxy_logging._process_guardrail_metadata(data, UserAPIKeyAuth())
+    proxy_logging._process_guardrail_metadata(data, UserAPIKeyAuth(), "completion")
     assert calls == ["g2"]
 
 
@@ -317,12 +317,12 @@ def test_process_guardrail_metadata_no_metadata_is_noop(proxy_logging, monkeypat
         "add_guardrail_to_applied_guardrails_header",
         MagicMock(side_effect=AssertionError("should not be called")),
     )
-    proxy_logging._process_guardrail_metadata({}, UserAPIKeyAuth())
+    proxy_logging._process_guardrail_metadata({}, UserAPIKeyAuth(), "completion")
 
 
 def test_process_guardrail_metadata_invalid_data_raises(proxy_logging):
     with pytest.raises(AttributeError):
-        proxy_logging._process_guardrail_metadata(None, UserAPIKeyAuth())  # type: ignore[arg-type]
+        proxy_logging._process_guardrail_metadata(None, UserAPIKeyAuth(), "completion")  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -1185,7 +1185,7 @@ class _PipelineStepGuardrail(CustomGuardrail):
 def _two_step_pipeline_data(
     mode: str, first_on_pass: str, first_on_fail: str = "block", second_on_fail: str = "block"
 ) -> dict[str, object]:
-    pipeline = GuardrailPipeline(
+    pipeline: Final = GuardrailPipeline(
         mode=mode,
         steps=[
             PipelineStep(guardrail="first", on_pass=first_on_pass, on_fail=first_on_fail),
@@ -1214,11 +1214,11 @@ async def test_pre_call_hook_names_only_the_pre_call_pipeline_steps_that_ran(
     expected_calls: tuple[int, int],
     expected_header: list[str],
 ) -> None:
-    first = _PipelineStepGuardrail("first", "pre_call")
-    second = _PipelineStepGuardrail("second", "pre_call")
+    first: Final = _PipelineStepGuardrail("first", "pre_call")
+    second: Final = _PipelineStepGuardrail("second", "pre_call")
     monkeypatch.setattr(litellm, "callbacks", [first, second])
 
-    result = await proxy_logging.pre_call_hook(
+    result: Final = await proxy_logging.pre_call_hook(
         user_api_key_dict=make_user_api_key_auth(),
         data=_two_step_pipeline_data("pre_call", first_on_pass),
         call_type="completion",
@@ -1232,11 +1232,11 @@ async def test_pre_call_hook_names_only_the_pre_call_pipeline_steps_that_ran(
 async def test_pre_call_hook_names_a_skipped_step_whose_guardrail_also_runs_outside_the_pipeline(
     proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    first = _PipelineStepGuardrail("first", "pre_call")
-    second = _PipelineStepGuardrail("second", ["pre_call", "post_call"])
+    first: Final = _PipelineStepGuardrail("first", "pre_call")
+    second: Final = _PipelineStepGuardrail("second", ["pre_call", "post_call"])
     monkeypatch.setattr(litellm, "callbacks", [first, second])
 
-    result = await proxy_logging.pre_call_hook(
+    result: Final = await proxy_logging.pre_call_hook(
         user_api_key_dict=make_user_api_key_auth(),
         data=_two_step_pipeline_data("pre_call", "allow"),
         call_type="completion",
@@ -1270,11 +1270,11 @@ async def test_pre_call_hook_names_a_step_that_raised_before_the_pipeline_moved_
     proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
     error: Exception,
 ) -> None:
-    first = _RaisingPipelineStepGuardrail("first", error)
-    second = _PipelineStepGuardrail("second", "pre_call")
+    first: Final = _RaisingPipelineStepGuardrail("first", error)
+    second: Final = _PipelineStepGuardrail("second", "pre_call")
     monkeypatch.setattr(litellm, "callbacks", [first, second])
 
-    result = await proxy_logging.pre_call_hook(
+    result: Final = await proxy_logging.pre_call_hook(
         user_api_key_dict=make_user_api_key_auth(),
         data=_two_step_pipeline_data("pre_call", "next", first_on_fail="next"),
         call_type="completion",
@@ -1290,10 +1290,10 @@ async def test_deployment_hook_still_runs_a_pipeline_step_that_raised(
     proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
     error: Exception,
 ) -> None:
-    first = _RaisingPipelineStepGuardrail("first", error)
-    second = _PipelineStepGuardrail("second", "pre_call")
+    first: Final = _RaisingPipelineStepGuardrail("first", error)
+    second: Final = _PipelineStepGuardrail("second", "pre_call")
     monkeypatch.setattr(litellm, "callbacks", [first, second])
-    result = await proxy_logging.pre_call_hook(
+    result: Final = await proxy_logging.pre_call_hook(
         user_api_key_dict=make_user_api_key_auth(),
         data=_two_step_pipeline_data("pre_call", "next", first_on_fail="next"),
         call_type="completion",
@@ -1324,11 +1324,11 @@ class _OpensLitellmMetadataGuardrail(_PipelineStepGuardrail):
 async def test_pre_call_hook_names_a_step_that_ran_in_the_litellm_metadata_a_later_step_opened(
     proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    first = _PipelineStepGuardrail("first", "pre_call")
-    second = _OpensLitellmMetadataGuardrail("second", "pre_call")
+    first: Final = _PipelineStepGuardrail("first", "pre_call")
+    second: Final = _OpensLitellmMetadataGuardrail("second", "pre_call")
     monkeypatch.setattr(litellm, "callbacks", [first, second])
 
-    result = await proxy_logging.pre_call_hook(
+    result: Final = await proxy_logging.pre_call_hook(
         user_api_key_dict=make_user_api_key_auth(),
         data=_two_step_pipeline_data("pre_call", "next"),
         call_type="completion",
@@ -1344,12 +1344,12 @@ async def test_pre_call_hook_names_a_step_that_ran_in_the_litellm_metadata_a_lat
 async def test_post_call_pipeline_steps_are_named_only_once_they_run(
     proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    first = _PipelineStepGuardrail("first", "post_call")
-    second = _PipelineStepGuardrail("second", "post_call")
+    first: Final = _PipelineStepGuardrail("first", "post_call")
+    second: Final = _PipelineStepGuardrail("second", "post_call")
     monkeypatch.setattr(litellm, "callbacks", [first, second])
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
 
-    data = await proxy_logging.pre_call_hook(
+    data: Final = await proxy_logging.pre_call_hook(
         user_api_key_dict=make_user_api_key_auth(),
         data=_two_step_pipeline_data("post_call", "allow"),
         call_type="completion",
@@ -1376,12 +1376,12 @@ class _OpensLitellmMetadataOnResponseGuardrail(_PipelineStepGuardrail):
 async def test_post_call_pipeline_names_every_step_that_ran_in_metadata_after_a_step_opens_litellm_metadata(
     proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    first = _OpensLitellmMetadataOnResponseGuardrail("first", "post_call")
-    second = _PipelineStepGuardrail("second", "post_call")
+    first: Final = _OpensLitellmMetadataOnResponseGuardrail("first", "post_call")
+    second: Final = _PipelineStepGuardrail("second", "post_call")
     monkeypatch.setattr(litellm, "callbacks", [first, second])
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
 
-    data = await proxy_logging.pre_call_hook(
+    data: Final = await proxy_logging.pre_call_hook(
         user_api_key_dict=make_user_api_key_auth(),
         data=_two_step_pipeline_data("post_call", "next"),
         call_type="completion",
@@ -1416,20 +1416,42 @@ async def test_pre_call_hook_names_up_front_the_post_call_steps_a_stream_runs_af
     streams_live: bool,
     expected_header: list[str] | None,
 ) -> None:
-    guardrails = [_PipelineStepGuardrail(name, "post_call") for name in ("first", "second")]
+    guardrails: Final = [_PipelineStepGuardrail(name, "post_call") for name in ("first", "second")]
     for guardrail in guardrails:
         guardrail.streaming_buffer_until_moderated = not streams_live
     monkeypatch.setattr(litellm, "callbacks", guardrails)
-    data = _two_step_pipeline_data("post_call", "next", first_on_fail="next", second_on_fail="next")
+    data: Final = _two_step_pipeline_data("post_call", "next", first_on_fail="next", second_on_fail="next")
     data.update(asks_for)
 
-    result = await proxy_logging.pre_call_hook(
+    result: Final = await proxy_logging.pre_call_hook(
         user_api_key_dict=make_user_api_key_auth(request_route=request_route),
         data=data,
         call_type="completion",
     )
 
     assert result["metadata"].get("applied_guardrails") == expected_header
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["whole-response", "stream"])
+async def test_pre_call_hook_names_up_front_the_post_call_steps_the_llm_pass_through_route_runs_after_its_headers(
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
+    stream: bool,
+) -> None:
+    guardrails: Final = [_PipelineStepGuardrail(name, "post_call") for name in ("first", "second")]
+    monkeypatch.setattr(litellm, "callbacks", guardrails)
+    data: Final = _two_step_pipeline_data("post_call", "allow")
+    data["stream"] = stream
+
+    result: Final = await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(request_route="/bedrock/model/m/converse"),
+        data=data,
+        call_type="allm_passthrough_route",
+    )
+
+    assert result["metadata"].get("applied_guardrails") == ["first", "second"]
 
 
 @pytest.mark.asyncio
