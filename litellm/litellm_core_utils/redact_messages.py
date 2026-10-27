@@ -125,15 +125,18 @@ _MATCHED_TEXT_KEYS: Final = frozenset({"match", "regex"})
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
 
-def _without_matched_text(node: JsonValue) -> JsonValue:
-    if isinstance(node, dict):
-        return {
-            key: "[REDACTED]" if key in _MATCHED_TEXT_KEYS and isinstance(value, str) else _without_matched_text(value)
-            for key, value in node.items()
-        }
-    if isinstance(node, list):
-        return [_without_matched_text(item) for item in node]
-    return node
+def _without_matched_text(trace: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    redacted: Final = dict(copy.deepcopy(trace))
+    stack: Final[list[JsonValue]] = [redacted]  # mutable-ok: iterative walk, recursive_detector bans recursion here
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            for key in _MATCHED_TEXT_KEYS & node.keys():
+                node[key] = "[REDACTED]"
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return redacted
 
 
 def _redacted_bedrock_trace(trace: object) -> object:
