@@ -5,11 +5,13 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 from litellm.llms.gigachat.authenticator import get_access_token
 from litellm.llms.gigachat.chat.streaming import GigaChatModelResponseIterator
 from litellm.llms.gigachat.utils import GIGACHAT_BASE_URL
+from litellm.llms.openai.common_utils import decoded_json_object
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import EmbeddingResponse
@@ -19,6 +21,8 @@ if TYPE_CHECKING:
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.utils import CostResponseTypes
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class GigaChatPassthroughConfig(BasePassthroughConfig):
@@ -40,7 +44,7 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         if base_target_url is None:
             raise Exception("GigaChat api base not found")
 
-        complete_url: Final = f"{base_target_url}/{endpoint.lstrip('/')}"
+        complete_url: Final = f"{base_target_url.rstrip('/')}/{endpoint.lstrip('/')}"
 
         return (
             httpx.URL(complete_url),
@@ -93,16 +97,14 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
             raw_messages: Final = request_data.get("messages")
             litellm_model_response: Final = provider_chat_config.transform_response(
                 model=model,
-                messages=list(raw_messages)
-                if isinstance(raw_messages, list)
-                else [],  # mutable-ok: transform_response wants a list
+                messages=list(raw_messages) if isinstance(raw_messages, list) else [],
                 raw_response=httpx_response,
                 model_response=ModelResponse(),
                 logging_obj=logging_obj,
-                optional_params={},  # mutable-ok: empty dict kwarg for transform_response
-                litellm_params={},  # mutable-ok: empty dict kwarg for transform_response
+                optional_params={},
+                litellm_params={},
                 api_key="",
-                request_data=dict(request_data),  # mutable-ok: transform_response wants a dict
+                request_data=dict(request_data),
                 encoding=encoding,
             )
 
@@ -123,10 +125,10 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
                     raw_response=httpx_response,
                     model_response=EmbeddingResponse(),
                     logging_obj=logging_obj,
-                    optional_params={},  # mutable-ok: empty dict kwarg for transform_embedding_response
+                    optional_params={},
                     api_key="",
-                    request_data=dict(request_data),  # mutable-ok: transform_embedding_response wants a dict
-                    litellm_params={},  # mutable-ok: empty dict kwarg for transform_embedding_response
+                    request_data=dict(request_data),
+                    litellm_params={},
                 )
             )
 
@@ -148,11 +150,11 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         3. Return the model_response
         """
 
+        from litellm.litellm_core_utils.streaming_chunk_builder_utils import stream_chunk_builder
         from litellm.litellm_core_utils.streaming_handler import (
             convert_generic_chunk_to_model_response_stream,
             generic_chunk_has_all_required_fields,
         )
-        from litellm.main import stream_chunk_builder
         from litellm.types.utils import ModelResponseStream
 
         all_translated_chunks: Final[list[object]] = []  # mutable-ok: accumulator
@@ -163,7 +165,7 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
                 continue
             chunk = chunk.removeprefix("data: ")
             try:
-                message = json.loads(chunk)
+                message = _DECODED_JSON.validate_python(json.loads(chunk))
             except json.JSONDecodeError:
                 continue
 
@@ -171,7 +173,7 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
                 streaming_response=None,
                 sync_stream=False,
             )
-            translated_chunk = gigachat_iterator.chunk_parser(chunk=message)
+            translated_chunk = gigachat_iterator.chunk_parser(chunk=decoded_json_object(message))
 
             if isinstance(translated_chunk, dict) and generic_chunk_has_all_required_fields(  # pyright: ignore[reportUnnecessaryIsInstance]  # runtime guard for patched chunk_parser
                 dict(translated_chunk)

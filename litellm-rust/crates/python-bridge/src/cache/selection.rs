@@ -1,11 +1,15 @@
 use super::{native, python};
-use litellm_cache_response::{CacheOptions, CacheScope, ResponseCacheService, ScopedCache};
+use litellm_cache_response::{
+    CacheOptions, CachePolicy, CacheScope, ResponseCacheService, ScopedCache,
+};
 use litellm_host::{
     machine::{HostServices, MachineFault},
     protocol::Protocol,
 };
 use pyo3::{prelude::*, types::PyDict};
 use std::sync::Arc;
+
+const CACHE_HOST_MODULE: &str = "litellm.rust_bridge.host.cache";
 
 pub(crate) struct Cached<P>(std::marker::PhantomData<P>);
 
@@ -54,7 +58,10 @@ fn selected_cache<'py>(
     kwargs: &Bound<'py, PyDict>,
     call_type: &str,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
-    let configured = py.import("litellm")?.getattr("cache")?;
+    let configured = py
+        .import(CACHE_HOST_MODULE)?
+        .getattr("configured_cache")?
+        .call0()?;
     if configured.is_none()
         || kwargs
             .get_item("caching")?
@@ -67,21 +74,6 @@ fn selected_cache<'py>(
         return Ok(None);
     }
     Ok(Some(configured))
-}
-
-pub(crate) fn admit_native(
-    py: Python<'_>,
-    kwargs: &Bound<'_, PyDict>,
-    call_type: &str,
-) -> PyResult<()> {
-    if let Some(configured) = selected_cache(py, kwargs, call_type)?
-        && native::v2::native_handle(&configured)?.is_none()
-    {
-        return Err(crate::errors::RustBridgeDeclined::new_err(
-            "the configured cache requires Python inference",
-        ));
-    }
-    Ok(())
 }
 
 pub(crate) fn configured_native(
@@ -154,8 +146,11 @@ pub(crate) fn configure(
             .map(|value| value.unwrap_or(false))
     };
     let options = CacheOptions {
-        no_cache: boolean("no-cache")?,
-        no_store: boolean("no-store")?,
+        policy: CachePolicy {
+            no_cache: boolean("no-cache")?,
+            no_store: boolean("no-store")?,
+            ..CachePolicy::default()
+        },
         ..CacheOptions::new(CacheScope::Shared)
     };
     let namespace = cache

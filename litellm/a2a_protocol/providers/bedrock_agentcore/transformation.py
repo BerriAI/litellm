@@ -84,14 +84,23 @@ def _filter_reserved_headers(
     return filtered or None
 
 
+def _calling_key_hash(litellm_params: Mapping[str, object]) -> str | None:
+    principal: Final = litellm_params.get(A2A_USER_API_KEY_HASH_PARAM)
+    if principal is None or isinstance(principal, str):
+        return principal
+    if not principal:
+        return None
+    raise AttributeError(f"{type(principal).__name__!r} object has no attribute 'encode'", name="encode", obj=principal)
+
+
 def _request_scoped_runtime_session_id(
     params: Mapping[str, object],
-    litellm_params: Mapping[str, Any],
+    litellm_params: Mapping[str, object],
 ) -> str | None:
     context_id: Final = get_session_id_from_a2a_params(params)
     if not isinstance(context_id, str) or not context_id:
         return None
-    return scope_session_to_principal(context_id, litellm_params.get(A2A_USER_API_KEY_HASH_PARAM))
+    return scope_session_to_principal(context_id, _calling_key_hash(litellm_params))
 
 
 def _validate_runtime_session_id(session_id: str, model: str) -> str:
@@ -107,6 +116,13 @@ def _validate_runtime_session_id(session_id: str, model: str) -> str:
         model=model,
         llm_provider="bedrock",
     )
+
+
+def _agentcore_model_name(litellm_params: Mapping[str, object]) -> str:
+    model: Final = litellm_params.get("model", "")
+    if isinstance(model, str):
+        return model
+    raise AttributeError(f"{type(model).__name__!r} object has no attribute 'startswith'", name="startswith", obj=model)
 
 
 class BedrockAgentCoreA2ATransformation:
@@ -152,11 +168,8 @@ class BedrockAgentCoreA2ATransformation:
         """
         # Extract model and strip the "bedrock/" prefix
         # "bedrock/agentcore/arn:aws:..." → "agentcore/arn:aws:..."
-        model: Final = litellm_params.get("model", "")
-        if model.startswith("bedrock/"):
-            agentcore_model = model[len("bedrock/") :]
-        else:
-            agentcore_model = model
+        model: Final = _agentcore_model_name(litellm_params)
+        agentcore_model: Final = model.removeprefix("bedrock/")
 
         # Build optional_params from litellm_params (everything except model and custom_llm_provider)
         optional_params: Final = {k: v for k, v in litellm_params.items() if k not in ("model", "custom_llm_provider")}
@@ -186,11 +199,11 @@ class BedrockAgentCoreA2ATransformation:
         headers: Final[dict] = {}
         session_id: Final = _validate_runtime_session_id(
             _request_scoped_runtime_session_id(params, litellm_params)
-            or agentcore_config._get_runtime_session_id(optional_params),
+            or agentcore_config.get_runtime_session_id(optional_params),
             model=model,
         )
         headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] = session_id
-        runtime_user_id: Final = agentcore_config._get_runtime_user_id(optional_params)
+        runtime_user_id: Final = agentcore_config.get_runtime_user_id(optional_params)
         if runtime_user_id:
             headers["X-Amzn-Bedrock-AgentCore-Runtime-User-Id"] = runtime_user_id
 
@@ -219,7 +232,7 @@ class BedrockAgentCoreA2ATransformation:
         return url, signed_headers, signed_body
 
     @staticmethod
-    async def parse_sse_events(response: _SSELineSource) -> AsyncIterator[dict[str, Any]]:
+    async def parse_sse_events(response: _SSELineSource) -> AsyncIterator[dict[str, object]]:
         """
         Parse SSE events from an httpx streaming response.
 

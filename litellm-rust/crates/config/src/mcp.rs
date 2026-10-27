@@ -41,57 +41,43 @@ impl fmt::Debug for McpServer {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, strum::IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
 pub enum McpTransport {
     #[default]
+    #[strum(serialize = "http")]
     Http,
+    #[strum(serialize = "sse")]
     Sse,
+    #[strum(serialize = "stdio")]
     Stdio,
 }
 
-impl McpTransport {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Http => "http",
-            Self::Sse => "sse",
-            Self::Stdio => "stdio",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, strum::IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
 pub enum McpAuth {
+    #[strum(serialize = "none")]
     None,
+    #[strum(serialize = "api_key")]
     ApiKey,
+    #[strum(serialize = "bearer_token")]
     BearerToken,
+    #[strum(serialize = "basic")]
     Basic,
+    #[strum(serialize = "authorization")]
     Authorization,
+    #[strum(serialize = "token")]
     Token,
+    #[strum(serialize = "oauth2")]
     Oauth2,
+    #[strum(serialize = "aws_sigv4")]
     AwsSigv4,
+    #[strum(serialize = "oauth2_token_exchange")]
     Oauth2TokenExchange,
+    #[strum(serialize = "oauth2_id_jag")]
     Oauth2IdJag,
+    #[strum(serialize = "true_passthrough")]
     TruePassthrough,
+    #[strum(serialize = "oauth_delegate")]
     OauthDelegate,
-}
-
-impl McpAuth {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::ApiKey => "api_key",
-            Self::BearerToken => "bearer_token",
-            Self::Basic => "basic",
-            Self::Authorization => "authorization",
-            Self::Token => "token",
-            Self::Oauth2 => "oauth2",
-            Self::AwsSigv4 => "aws_sigv4",
-            Self::Oauth2TokenExchange => "oauth2_token_exchange",
-            Self::Oauth2IdJag => "oauth2_id_jag",
-            Self::TruePassthrough => "true_passthrough",
-            Self::OauthDelegate => "oauth_delegate",
-        }
-    }
 }

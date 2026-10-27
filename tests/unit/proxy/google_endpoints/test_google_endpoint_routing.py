@@ -39,6 +39,7 @@ def mock_request(request):
     mock_req.headers = Headers({"content-type": "application/json"})
     mock_req.method = "POST"
     mock_req.url.path = request.param.get("path")
+    mock_req.scope = {"type": "http", "path": request.param.get("path"), "method": "POST"}
 
     async def mock_body():
         return json.dumps(request.param.get("payload", {})).encode("utf-8")

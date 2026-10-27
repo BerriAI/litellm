@@ -15,11 +15,13 @@ mod responses;
 use std::sync::Arc;
 
 use axum::{Router, routing::post};
-use litellm_core::{
-    audio_transcription::AudioTranscriptionRoute, chat_completions::ChatCompletionsRoute,
-    messages::MessagesRoute, ocr::OcrRoute, resources::CoreResources, responses::ResponsesRoute,
-};
 use litellm_http::{ClientVariant, HttpClientConfig, media::UrlPolicy};
+use litellm_inference::resources::CoreResources;
+use litellm_inference_chat::ChatCompletionsRoute;
+use litellm_inference_messages::MessagesRoute;
+use litellm_inference_ocr::OcrRoute;
+use litellm_inference_responses::ResponsesRoute;
+use litellm_inference_transcription::AudioTranscriptionRoute;
 use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
 use litellm_secrets::source::SecretSource;
 
@@ -68,11 +70,7 @@ impl Gateway {
                 auth.clone(),
                 secrets.clone(),
             ),
-            messages: MessagesRoute::builder()
-                .with_http(provider.clone())
-                .with_auth(auth.clone())
-                .with_secrets(secrets.clone())
-                .build(),
+            messages: MessagesRoute::new(provider.clone(), auth.clone(), secrets.clone()),
             responses: ResponsesRoute::new(provider, auth.clone(), secrets.clone()),
             ocr: OcrRoute::new(OcrClient::new(
                 &resources.pool,

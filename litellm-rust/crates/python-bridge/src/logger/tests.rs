@@ -76,7 +76,7 @@ async fn traced_operation(_secret: &str) -> PyResult<()> {
 
 #[pyfunction]
 fn span_warning(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
-    super::run_async_value(py, traced_operation("private-key-sentinel"))
+    crate::execution::run_async_value(py, traced_operation("private-key-sentinel"))
 }
 
 #[pyfunction]
@@ -93,7 +93,7 @@ fn levels(py: Python<'_>) {
 
 #[pyfunction]
 fn asynchronous_warning(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
-    super::run_async_value(py, async {
+    crate::execution::run_async_value(py, async {
         tokio::task::yield_now().await;
         litellm_tracing::warn!("async warning");
         Ok(())
@@ -102,7 +102,7 @@ fn asynchronous_warning(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
 
 #[pyfunction]
 fn synchronous_warning(py: Python<'_>) -> PyResult<()> {
-    super::run_sync_value(py, async {
+    crate::execution::run_sync_value(py, async {
         tokio::task::yield_now().await;
         litellm_tracing::warn!("sync warning");
         Ok(())
@@ -111,7 +111,7 @@ fn synchronous_warning(py: Python<'_>) -> PyResult<()> {
 
 #[pyfunction]
 fn synchronous_failure(py: Python<'_>) -> PyResult<()> {
-    super::run_sync_value(py, async {
+    crate::execution::run_sync_value(py, async {
         litellm_tracing::warn!("failure diagnostic");
         Err(pyo3::exceptions::PyValueError::new_err("request failed"))
     })
