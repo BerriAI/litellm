@@ -5063,7 +5063,6 @@ class TestHostedWebSearchReplay:
         assert input_item == original
 
     def test_replays_search_without_action(self) -> None:
-        # Azure and Codex replay web_search_call items without the SDK-required `action`.
         input_item: Final = {"type": "web_search_call", "id": "ws_no_action", "status": "completed"}
 
         messages: Final = (

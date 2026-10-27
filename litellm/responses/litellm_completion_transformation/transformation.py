@@ -459,15 +459,6 @@ def _dropped_cache_control(_: object) -> None:
     return None
 
 
-def _replayed_web_search_call(input_item: Mapping[str, object]) -> ResponseFunctionWebSearch:
-    try:
-        return ResponseFunctionWebSearch.model_validate(input_item)
-    except ValidationError:
-        # Azure and Codex replay web_search_call items without the SDK-required `action`;
-        # the item only becomes replay text, so keep it as sent instead of failing the turn.
-        return ResponseFunctionWebSearch.model_construct(None, **input_item)
-
-
 def _without_cache_control_key(item: object) -> object:
     if not isinstance(item, dict):
         return item
@@ -2071,7 +2062,11 @@ class LiteLLMCompletionResponsesConfig:
         - ItemReference
         """
         if input_item.get("type") == "web_search_call":
-            search: Final = _replayed_web_search_call(input_item)
+            search: Final = (
+                ResponseFunctionWebSearch.model_validate(input_item)
+                if "action" in input_item
+                else ResponseFunctionWebSearch.model_construct(None, **input_item)
+            )
             return [
                 GenericChatCompletionMessage(
                     role="assistant",
