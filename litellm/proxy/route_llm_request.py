@@ -746,7 +746,6 @@ async def raise_if_model_not_routable(
     route_type: str,
 ) -> None:
     """Raise the error route_request would raise before sending this request, without sending it."""
-
     _merge_router_settings_override(dict(data))
 
     async def check(router: LitellmRouter | None) -> None:
