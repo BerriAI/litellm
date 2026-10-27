@@ -9,7 +9,7 @@ import httpx
 from integration._support.client import Gateway, Scenario, eventually, held
 from integration._support.wire import Reply, Request, Wire
 from openai.types.chat import ChatCompletionChunk
-from pydantic import BaseModel, JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 BACKEND: Final = "integration-partial-stream"
@@ -20,19 +20,27 @@ ROWS: Final = 'SELECT status, spend FROM "LiteLLM_SpendLogs" WHERE api_key=%s OR
 
 
 class _SpendRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     spend: float
 
 
 class StatusRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     status: str
     spend: float
 
 
 class _BudgetError(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     type: str
 
 
 class _ErrorResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     error: _BudgetError
 
 

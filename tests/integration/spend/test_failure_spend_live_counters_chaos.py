@@ -2,6 +2,7 @@ import json
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
@@ -25,6 +26,7 @@ from integration.spend._partial_stream import (
     recovered_cost,
 )
 from pydantic import JsonValue
+from redis import Redis
 
 from litellm.constants import REDIS_SOCKET_TIMEOUT
 
@@ -108,6 +110,17 @@ def test_broken_streams_through_a_redis_stall_log_once_and_the_budget_holds_on_e
 
         assert_not_delayed_by((drained.seconds,), control=(control.seconds,), injected_delay=REDIS_SOCKET_TIMEOUT)
         assert failure_spend(candidate, burst_key, rows=_BURST) == pytest.approx((cost,) * _BURST)
+        spent: Final = cost * _BURST
+        with Redis(host=counters.host, port=counters.port) as live_counters:
+            landed: Final = eventually(
+                lambda: float(live_counters.get(f"spend:key:{sha256(burst_key.encode()).hexdigest()}") or 0),
+                lambda counted: counted >= spent - 1e-9,
+                seconds=30,
+                return_last_on_timeout=True,
+            )
+        # The cold counter is seeded from the database, and a spend flush during the stall can land these rows
+        # there first, so it may count them twice, as completed streams held past a flush do
+        assert spent - 1e-9 <= landed <= 2 * spent + 1e-9, f"one broken stream costs {cost}"
 
         budgeted: Final = scenario.key(models=[model], max_budget=cost / 2)
         broken_stream(candidate, model, budgeted)

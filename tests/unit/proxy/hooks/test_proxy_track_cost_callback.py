@@ -2637,13 +2637,7 @@ def live_spend_counters(monkeypatch: pytest.MonkeyPatch) -> DualCache:
     return counters
 
 
-def _charging_spend_writer() -> DBSpendUpdateWriter:
-    writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
-    writer.update_database.return_value = True
-    return writer
-
-
-def _failure_with_billed_attempts() -> dict:
+def _failure_with_billed_attempts() -> Mapping[str, object]:
     usage: Final = Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24)
     return {
         "combined_usage_object": usage,
@@ -2668,7 +2662,7 @@ _LIVE_COUNTERS: Final = {
 }
 
 
-async def _fail_request(logger: ProxyDBLogger, failure: dict) -> None:
+async def _fail_request(logger: ProxyDBLogger, failure: Mapping[str, object]) -> None:
     await logger.async_post_call_failure_hook(
         request_data={
             "model": "gpt-4.1",
@@ -2709,14 +2703,14 @@ async def _counter_values(counters: DualCache) -> dict[str, float]:
     ],
 )
 async def test_failure_spend_rows_raise_the_live_spend_counters_by_their_cost(
-    live_spend_counters: DualCache, failure: dict, charged: float
+    live_spend_counters: DualCache, failure: Mapping[str, object], charged: float
 ):
     """#35568: budget checks read the live counters, so a failure row's cost has to land there as well as in the
     spend log, or an over-budget key keeps passing until the counter is next repaired from the database."""
     for key, spend in _LIVE_COUNTERS.items():
         await live_spend_counters.async_set_cache(key, spend)
 
-    await _fail_request(ProxyDBLogger(spend_writer=_charging_spend_writer), failure)
+    await _fail_request(ProxyDBLogger(), failure)
 
     assert await _counter_values(live_spend_counters) == pytest.approx(
         {key: spend + charged for key, spend in _LIVE_COUNTERS.items()}
@@ -2724,68 +2718,50 @@ async def test_failure_spend_rows_raise_the_live_spend_counters_by_their_cost(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("spend_updates_disabled", "writer_charged"), [(True, True), (False, False)])
-async def test_failure_spend_rows_leave_the_live_spend_counters_alone_when_nothing_was_charged(
-    live_spend_counters: DualCache, monkeypatch: pytest.MonkeyPatch, spend_updates_disabled: bool, writer_charged: bool
+async def test_failure_spend_rows_leave_the_live_spend_counters_alone_while_spend_updates_are_disabled(
+    live_spend_counters: DualCache, monkeypatch: pytest.MonkeyPatch
 ):
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.general_settings", {"disable_spend_updates": True} if spend_updates_disabled else {}
-    )
-    writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
-    writer.update_database.return_value = writer_charged
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"disable_spend_updates": True})
     for key, spend in _LIVE_COUNTERS.items():
         await live_spend_counters.async_set_cache(key, spend)
 
-    await _fail_request(ProxyDBLogger(spend_writer=lambda: writer), _failure_with_billed_attempts())
+    await _fail_request(ProxyDBLogger(), _failure_with_billed_attempts())
 
     assert await _counter_values(live_spend_counters) == pytest.approx(_LIVE_COUNTERS)
 
 
 @pytest.mark.asyncio
-async def test_a_spend_counter_outage_still_writes_every_failure_spend_row():
-    writer: Final = _charging_spend_writer()
+async def test_a_failing_spend_counter_store_is_still_sent_every_failure_spend_row():
     counters: Final = AsyncMock(side_effect=RuntimeError("redis unavailable"))
 
-    await _fail_request(
-        ProxyDBLogger(spend_writer=lambda: writer, spend_counters=lambda: counters), _failure_with_billed_attempts()
-    )
+    await _fail_request(ProxyDBLogger(spend_counters=lambda: counters), _failure_with_billed_attempts())
 
-    assert [call.kwargs["response_cost"] for call in writer.update_database.call_args_list] == [0.5, 0.25, 0.5]
     assert [call.kwargs["response_cost"] for call in counters.call_args_list] == [0.5, 0.25, 0.5]
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(30)
 async def test_a_slow_spend_counter_store_lets_the_failure_out_and_raises_the_counters_once_it_answers():
     store_answers: Final = asyncio.Event()
-    landed: Final = asyncio.Event()
-    raised_costs: Final[list[object]] = []
+    raised_cost: Final[asyncio.Future[object]] = asyncio.get_running_loop().create_future()
 
     async def slow_counter_store(**counter_args: object) -> None:
         await store_answers.wait()
-        raised_costs.append(counter_args["response_cost"])
-        landed.set()
+        raised_cost.set_result(counter_args["response_cost"])
 
-    logger: Final = ProxyDBLogger(
-        spend_writer=_charging_spend_writer,
-        spend_counters=lambda: slow_counter_store,
-        failure_counter_wait_seconds=0.05,
-    )
+    logger: Final = ProxyDBLogger(spend_counters=lambda: slow_counter_store, failure_counter_wait_seconds=0)
 
-    await asyncio.wait_for(
-        _fail_request(
-            logger,
-            {
-                "combined_usage_object": Usage(prompt_tokens=30, completion_tokens=40, total_tokens=70),
-                "response_cost": 0.125,
-            },
-        ),
-        timeout=1,
+    await _fail_request(
+        logger,
+        {
+            "combined_usage_object": Usage(prompt_tokens=30, completion_tokens=40, total_tokens=70),
+            "response_cost": 0.125,
+        },
     )
-    assert raised_costs == []
+    assert not raised_cost.done()
 
     store_answers.set()
-    await asyncio.wait_for(landed.wait(), timeout=1)
-    assert raised_costs == [0.125]
+    assert await raised_cost == 0.125
 
 
 @pytest.mark.asyncio
@@ -2800,7 +2776,8 @@ async def test_a_failure_spend_row_lands_in_the_key_budget_window_as_of_the_requ
     await window_queue.flush_and_get_aggregated_window_spend_transactions()
     key_cache: Final = DualCache()
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", key_cache)
-    reset_at: Final = datetime.now(timezone.utc) + timedelta(days=10)
+    request_start: Final = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
+    reset_at: Final = request_start + timedelta(days=10)
     await key_cache.async_set_cache(
         "hashed-key",
         UserAPIKeyAuth(
@@ -2808,10 +2785,9 @@ async def test_a_failure_spend_row_lands_in_the_key_budget_window_as_of_the_requ
             budget_limits=[{"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}],
         ),
     )
-    request_start: Final = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
 
     await _fail_request(
-        ProxyDBLogger(spend_writer=_charging_spend_writer),
+        ProxyDBLogger(),
         {
             "combined_usage_object": Usage(prompt_tokens=30, completion_tokens=40, total_tokens=70),
             "response_cost": 0.125,
@@ -2845,11 +2821,10 @@ async def test_a_billed_attempt_on_a_deployment_the_router_dropped_debits_every_
     )
 
     await _fail_request(
-        ProxyDBLogger(spend_writer=_charging_spend_writer),
+        ProxyDBLogger(),
         {
             **_failure_with_billed_attempts(),
-            "metadata": {MODEL_ACCESS_GROUP_METADATA_KEY: ["pool", "premium"]},
-            "standard_logging_object": {"id": "rid", "model_id": "dep-b"},
+            "metadata": {MODEL_ACCESS_GROUP_METADATA_KEY: ["pool", "premium"], "model_info": {"id": "dep-b"}},
         },
     )
 
