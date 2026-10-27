@@ -28,6 +28,10 @@ from litellm.types.utils import ModelResponseStream
 _EVENT: Final = TypeAdapter(Mapping[str, object])
 _MESSAGES: Final = TypeAdapter(list[AllMessageValues])
 _TOOLS: Final = TypeAdapter(list[ChatCompletionToolParam])
+_BLOCK_PROMPTS: Final[tuple[list[AllMessageValues], ...]] = (
+    [{"role": "user", "content": [{"type": "text", "text": "Count every word. " * 100}]}],
+    [{"role": "tool", "content": [{"type": "text", "text": "Count every word. " * 100}], "tool_call_id": "call_1"}],
+)
 
 
 def _assert_estimated_start_and_provider_final_usage(raw_events: Sequence[bytes], request_body: bytes) -> None:
@@ -88,6 +92,35 @@ class _FailingUpstream:
 
     def __aiter__(self) -> AsyncIterator[ModelResponseStream]:
         raise RuntimeError("upstream failed before its first chunk")
+
+
+@pytest.mark.parametrize("messages", _BLOCK_PROMPTS)
+def test_sync_initial_estimate_counts_content_blocks(messages: list[AllMessageValues]) -> None:
+    wrapper: Final = AnthropicStreamWrapper(iter([]), model="gpt-4o", completion_request={"messages": messages})
+    expected: Final = litellm.token_counter(model="gpt-4o", messages=messages)
+    first: Final = _EVENT.validate_python(next(wrapper))
+    message: Final = _EVENT.validate_python(first["message"])
+    assert message["usage"] == {
+        "input_tokens": expected,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("messages", _BLOCK_PROMPTS)
+async def test_async_initial_estimate_counts_content_blocks(messages: list[AllMessageValues]) -> None:
+    wrapper: Final = AnthropicStreamWrapper(iter([]), model="gpt-4o", completion_request={"messages": messages})
+    expected: Final = litellm.token_counter(model="gpt-4o", messages=messages)
+    first: Final = _EVENT.validate_python(await anext(wrapper))
+    message: Final = _EVENT.validate_python(first["message"])
+    assert message["usage"] == {
+        "input_tokens": expected,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+    }
 
 
 @pytest.mark.parametrize("prompt", [{}, {"messages": []}, {"messages": "invalid"}])

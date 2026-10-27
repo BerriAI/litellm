@@ -779,11 +779,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             messages: Final = _PROMPT_MESSAGES.validate_python(request.get("messages", self.messages))
             if not messages:
                 return 0
+            materialized_messages: Final = cast(  # cast-ok: JSON-mode serialization preserves validated message types and materializes iterable content
+                list[AllMessageValues], _PROMPT_MESSAGES.dump_python(messages, mode="json")
+            )
             model: Final = request.get("model", self.model)
             tools: Final = request.get("tools")
             return litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]  # token_counter's public signature is partially untyped
                 model=model if isinstance(model, str) else self.model,
-                messages=messages,
+                messages=materialized_messages,
                 tools=_PROMPT_TOOLS.validate_python(tools) if tools is not None else None,
             )
         except Exception:  # noqa: BLE001  # prompt estimation must not interrupt the stream
