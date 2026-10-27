@@ -12027,6 +12027,54 @@ GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED_STREAM: Final = GATEWAY_REPORTED
     }
 )
 
+
+_GATEWAY_ZERO_USAGE: Final = {**_GATEWAY_REPORTED_USAGE, "cost": 0}
+
+GATEWAY_REPORTED_ZERO_OPERATOR_PRICED: Final = GATEWAY_REPORTED_COST_OPERATOR_PRICED.model_copy(
+    update={
+        "name": "gateway-reported-zero-operator_priced",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={**GATEWAY_REPORTED_COST.response.body, "usage": _GATEWAY_ZERO_USAGE},
+        ),
+    }
+)
+
+GATEWAY_REPORTED_ZERO_OPERATOR_PRICED_STREAM: Final = GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM.model_copy(
+    update={
+        "name": "gateway-reported-zero-operator_priced-stream",
+        "response": SseResponse(
+            content_type="text/event-stream",
+            frames=sse_frames(
+                {**_GATEWAY_CHUNK, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}}]},
+                {**_GATEWAY_CHUNK, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+                {**_GATEWAY_CHUNK, "choices": [], "usage": _GATEWAY_ZERO_USAGE},
+                done=True,
+            ),
+        ),
+    }
+)
+
+_GATEWAY_OPENROUTER_OPERATOR_PRICED: Final = _GATEWAY_OPERATOR_PRICED.model_copy(
+    update={"model": "openrouter/vendor/gateway-reported-cost-fixture"}
+)
+
+GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED: Final = GATEWAY_REPORTED_COST_OPERATOR_PRICED.model_copy(
+    update={
+        "name": "gateway-reported-cost-openrouter-operator_priced",
+        "deployment": _GATEWAY_OPENROUTER_OPERATOR_PRICED,
+    }
+)
+
+GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED_STREAM: Final = (
+    GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM.model_copy(
+        update={
+            "name": "gateway-reported-cost-openrouter-operator_priced-stream",
+            "deployment": _GATEWAY_OPENROUTER_OPERATOR_PRICED,
+        }
+    )
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GATEWAY_REPORTED_COST,
     GATEWAY_REPORTED_COST_STREAM,
@@ -12036,6 +12084,10 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GATEWAY_REPORTED_COST_RESPONSES_STREAM,
     GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED,
     GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED_STREAM,
+    GATEWAY_REPORTED_ZERO_OPERATOR_PRICED,
+    GATEWAY_REPORTED_ZERO_OPERATOR_PRICED_STREAM,
+    GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED,
+    GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED_STREAM,
     GPT_5_6_SLASH_ALIAS,
     GPT_5_6_SLASH_ALIAS_STREAM,
     GPT_6_SOL_RESPONSES_DEPLOYMENT_JSON,
@@ -12280,6 +12332,13 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=GATEWAY_REPORTED_COST, streamed=GATEWAY_REPORTED_COST_STREAM),
     StreamParityTestCase(
         plain=GATEWAY_REPORTED_COST_OPERATOR_PRICED, streamed=GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM
+    ),
+    StreamParityTestCase(
+        plain=GATEWAY_REPORTED_ZERO_OPERATOR_PRICED, streamed=GATEWAY_REPORTED_ZERO_OPERATOR_PRICED_STREAM
+    ),
+    StreamParityTestCase(
+        plain=GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED,
+        streamed=GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED_STREAM,
     ),
     StreamParityTestCase(plain=GATEWAY_REPORTED_COST_RESPONSES, streamed=GATEWAY_REPORTED_COST_RESPONSES_STREAM),
     StreamParityTestCase(
