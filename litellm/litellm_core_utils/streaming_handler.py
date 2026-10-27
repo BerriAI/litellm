@@ -24,7 +24,7 @@ import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import chunk_usage, provider_reported_usage_cost
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, chunk_usage, provider_reported_usage_cost
 from litellm.litellm_core_utils.hidden_params import (
     HIDDEN_PARAMS_ATTR,
     get_hidden_params,
@@ -71,7 +71,7 @@ TOOL_CALLS_ATTRIBUTE: Final = "tool_calls"
 FUNCTION_CALL_ATTRIBUTE: Final = "function_call"
 
 _SYNC_ITER_EXHAUSTED: Final = object()
-_STREAM_OPTIONS: Final = TypeAdapter(Mapping[str, object] | None)
+_STREAM_OPTIONS_VALUE: Final = TypeAdapter(object)
 
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
 _CompleteStreamingResponse = ModelResponse | TextCompletionResponse | ModelResponseStream | None
@@ -376,14 +376,17 @@ class CustomStreamWrapper:
         self.received_model_id: str | None = None
         self.logging_loop = None
         self.rules = Rules()
-        self.stream_options: Mapping[str, object] | None = _STREAM_OPTIONS.validate_python(
+        self.stream_options: object = _STREAM_OPTIONS_VALUE.validate_python(
             stream_options or getattr(logging_obj, "stream_options", None)
         )
         self.messages = getattr(logging_obj, "messages", None)
         self.sent_stream_usage = False
         self.send_stream_usage = True if self.check_send_stream_usage(self.stream_options) else False
+        stream_options_fields: Final = as_str_mapping(self.stream_options)
         self._continuous_usage_stats = (
-            isinstance(self.stream_options, dict) and self.stream_options.get("continuous_usage_stats") is True
+            isinstance(self.stream_options, dict)
+            and stream_options_fields is not None
+            and stream_options_fields.get("continuous_usage_stats") is True
         ) and self.send_stream_usage
         self.caller_requested_stream_usage: Final = (
             self.check_send_stream_usage(getattr(logging_obj, "stream_options", None))
@@ -551,8 +554,11 @@ class CustomStreamWrapper:
                     )
         self._restore_consumer_correlation_context()
 
-    def check_send_stream_usage(self, stream_options: Mapping[str, object] | None) -> bool:
-        return stream_options is not None and stream_options.get("include_usage", False) is True
+    def check_send_stream_usage(self, stream_options: object) -> bool:
+        if stream_options is None:
+            return False
+        get_option: Final[Callable[[str, object], object]] = getattr(stream_options, "get")
+        return get_option("include_usage", False) is True
 
     def check_is_function_call(self, logging_obj) -> bool:
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
