@@ -76005,5 +76005,14 @@
             "high",
             "max"
         ]
+    },
+    "fireworks_ai/accounts/fireworks/models/rune": {
+        "cache_read_input_token_cost": 8.4e-09,
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 262144,
+        "mode": "decisions",
+        "output_cost_per_token": 0.0,
+        "source": "https://api.fireworks.ai/v1/serverless/models?format=nested"
     }
 }
