@@ -4709,8 +4709,8 @@ export const uiSpendLogDetailsCall = async (accessToken: string, logId: string, 
   try {
     // Construct base URL
     let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/spend/logs/ui/${logId}?start_date=${encodeURIComponent(start_date)}`
-      : `/spend/logs/ui/${logId}?start_date=${encodeURIComponent(start_date)}`;
+      ? `${proxyBaseUrl}/spend/logs/ui/${encodeURIComponent(logId)}?start_date=${encodeURIComponent(start_date)}`
+      : `/spend/logs/ui/${encodeURIComponent(logId)}?start_date=${encodeURIComponent(start_date)}`;
 
     const response = await fetch(url, {
       method: "GET",
