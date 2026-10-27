@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { toSiTerminology } from "@/lib/terminology";
-import { getComplianceDatasetPrompts, getFrameworks } from "./compliancePrompts";
+import { getFrameworks } from "./compliancePrompts";
 
 describe("getFrameworks with a terminology", () => {
   const original = getFrameworks();
@@ -8,12 +8,10 @@ describe("getFrameworks with a terminology", () => {
   const categoriesOf = (frameworks: typeof original) => frameworks.flatMap((framework) => framework.categories);
   const promptsOf = (frameworks: typeof original) => categoriesOf(frameworks).flatMap((category) => category.prompts);
 
-  it("rewrites every prompt the playground sends to the model", () => {
+  it("keeps the prompts the playground sends to the model in their original wording", () => {
     expect(promptsOf(si).length).toBeGreaterThan(0);
-    expect(promptsOf(si).map((prompt) => prompt.prompt)).toEqual(
-      promptsOf(original).map((prompt) => toSiTerminology(prompt.prompt)),
-    );
-    expect(promptsOf(si).some((prompt, index) => prompt.prompt !== promptsOf(original)[index].prompt)).toBe(true);
+    expect(promptsOf(original).some((prompt) => toSiTerminology(prompt.prompt) !== prompt.prompt)).toBe(true);
+    expect(promptsOf(si).map((prompt) => prompt.prompt)).toEqual(promptsOf(original).map((prompt) => prompt.prompt));
   });
 
   it("rewrites framework and category descriptions", () => {
@@ -31,9 +29,5 @@ describe("getFrameworks with a terminology", () => {
       categoriesOf(original).map((category) => category.name),
     );
     expect(promptsOf(si).map((prompt) => prompt.id)).toEqual(promptsOf(original).map((prompt) => prompt.id));
-  });
-
-  it("feeds the rewritten prompts into the flat dataset used by the pipeline tester", () => {
-    expect(getComplianceDatasetPrompts(toSiTerminology)).toEqual(promptsOf(si));
   });
 });

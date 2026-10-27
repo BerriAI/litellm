@@ -21,18 +21,16 @@ import {
   createPolicyVersion,
   updatePolicyVersionStatus,
 } from "@/components/networking";
-import { useTerminology } from "@/contexts/TerminologyContext";
 import { getComplianceDatasetPrompts, getFrameworks } from "@/data/compliancePrompts";
-import type { Term } from "@/lib/terminology";
 import type { CompliancePrompt } from "@/data/compliancePrompts";
 
 const TEST_SOURCE_QUICK = "quick_chat";
 const TEST_SOURCE_ALL = "__all__";
 
-function getPromptsForTestSource(source: string, term: Term): CompliancePrompt[] {
+function getPromptsForTestSource(source: string): CompliancePrompt[] {
   if (source === TEST_SOURCE_QUICK) return [];
-  if (source === TEST_SOURCE_ALL) return getComplianceDatasetPrompts(term);
-  const fw = getFrameworks(term).find((f) => f.name === source);
+  if (source === TEST_SOURCE_ALL) return getComplianceDatasetPrompts();
+  const fw = getFrameworks().find((f) => f.name === source);
   return fw ? fw.categories.flatMap((c) => c.prompts) : [];
 }
 
@@ -832,8 +830,7 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
   const [complianceResults, setComplianceResults] = useState<ComplianceRunEntry[]>([]);
 
   const isQuickChat = testSource === TEST_SOURCE_QUICK;
-  const term = useTerminology();
-  const promptsForSource = getPromptsForTestSource(testSource, term);
+  const promptsForSource = getPromptsForTestSource(testSource);
   const isDataset = promptsForSource.length > 0;
 
   const handleRunTest = async () => {
