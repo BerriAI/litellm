@@ -98,7 +98,9 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, r
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     declared_authenticating_provider,
+    inferred_provider,
     is_registered_custom_provider,
+    resolve_model_and_provider_for_metadata,
 )
 from litellm.litellm_core_utils.hidden_params import (
     HIDDEN_PARAMS_ATTR as _HIDDEN_PARAMS_ATTR,
@@ -561,6 +563,7 @@ _ALIAS_PARAMS_NEVER_FORWARDED: Final = frozenset(
     {"model", "api_base", "api_key", "api_version", "responses_api_version"}
 )
 _ALIAS_MARKER_FORWARDED_PARAMS_KWARG: Final = "_alias_marker_forwarded_params"
+_FORWARDED_CREDENTIAL_ISOLATION_PROVIDERS: Final = frozenset({"chatgpt", "anthropic"})
 _CLAUDE_CODE_SESSION_ID_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
 _CLAUDE_CODE_SESSION_ROUTER_TTL_SECONDS: Final = 3600
 CLAUDE_CODE_SESSION_ROUTER_BINDING_TARGET: Final = "claude_code_session_router_binding"
@@ -1247,6 +1250,7 @@ class Router:
         fallback_access_check: FallbackAccessCheck | None = None,
         fallback_budget_check: FallbackBudgetCheck | None = None,
         auto_router_capability_limit: AutoRouterCapabilityLimit | None = None,
+        session_affinity_repin_on_failover: bool = False,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -1283,6 +1287,8 @@ class Router:
             alerting_config (AlertingConfig): Slack alerting configuration. Defaults to None.
             provider_budget_config (ProviderBudgetConfig): Provider budget configuration. Use this to set llm_provider budget limits. example $100/day to OpenAI, $100/day to Azure, etc. Defaults to None.
             deployment_affinity_ttl_seconds (int): TTL for user-key -> deployment affinity mapping. Defaults to 3600.
+            session_affinity_repin_on_failover (bool): After a successful replacement response, move a session pin
+                whose deployment is in cooldown or removed. Async routes only. Defaults to False. Applied at startup.
             ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
             enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Async-only: currently honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls back to the regular fallback flow. Defaults to False.
             enable_mid_stream_fallback_continuation (bool): When True, a chat-completions stream that breaks after plain assistant text has been delivered continues on a fallback deployment via assistant prefill instead of surfacing the error. Only deployments whose model supports assistant prefill are eligible, so the partial text is continued, not regenerated; if none is, the original error is surfaced. Streams that emitted tool calls, thinking blocks, audio/images, or constrained (JSON / forced tool_choice) output are never continued. Async-only. Defaults to False.
@@ -1437,6 +1443,9 @@ class Router:
         # Maps (team_id, team_public_model_name) -> list of indices in model_list
         self.team_model_to_deployment_indices: dict[tuple[str, str], list[int]] = {}
         self.team_public_model_names: frozenset[str] = frozenset()
+        # Guards model_list and the three index maps above: writers change them, and readers turn an
+        # index into a deployment, under it, so a lookup never lands between a removal and its re-index
+        self._deployment_index_lock = threading.RLock()
 
         # Initialize cache attributes that ``_invalidate_model_group_info_cache``
         # and ``_invalidate_access_groups_cache`` touch *before* the first
@@ -1467,21 +1476,23 @@ class Router:
         self._provider_unresolved_deployments: tuple[Callable[[], Deployment | None], ...] = ()
 
         self.deployment_affinity_ttl_seconds = deployment_affinity_ttl_seconds
+        self.session_affinity_repin_on_failover = session_affinity_repin_on_failover
         self.model_group_affinity_config = model_group_affinity_config
         warn_on_unknown_model_group_affinity_flags(model_group_affinity_config)
 
         if model_list is not None:
             # set_model_list will build indices automatically
             self.set_model_list(model_list)
-            # Track this router so a price data reload can rebuild its deployments'
-            # cost-map entries from the list it is serving at that moment.
-            _live_routers.add(self)
             self.healthy_deployments: list = self.model_list
             for m in model_list:
                 if "model" in m["litellm_params"]:
                     self.deployment_latency_map[m["litellm_params"]["model"]] = 0
         else:
             self.model_list: list = []  # initialize an empty list - to allow _add_deployment and delete_deployment to work
+        # Track this router so a price data reload can rebuild its deployments'
+        # cost-map entries from the list it is serving at that moment, whether
+        # those deployments came from model_list or were added later from the DB.
+        _live_routers.add(self)
 
         if allowed_fails is not None:
             self.allowed_fails = allowed_fails
@@ -2176,8 +2187,8 @@ class Router:
         public_model_name: Final = deployment.model_info.team_public_model_name
         if team_id is None or public_model_name is None:
             return False
-        sibling_indices: Final = self.team_model_to_deployment_indices.get((team_id, public_model_name)) or ()
-        routable_siblings: Final = self._filter_blocked_deployments([self.model_list[idx] for idx in sibling_indices])
+        siblings: Final = self._team_deployments_named(team_id, public_model_name) or ()
+        routable_siblings: Final = self._filter_blocked_deployments([dict(sibling) for sibling in siblings])
         return len(routable_siblings) > 1
 
     _OVERRIDABLE_ROUTING_STRATEGIES: frozenset[str] = frozenset({"simple-shuffle", *_DEFAULT_SELECTOR_ATTR_BY_STRATEGY})
@@ -2862,6 +2873,7 @@ class Router:
             enable_session_id_affinity=False,
             model_group_affinity_config=self.model_group_affinity_config,
             is_priority_group=self._is_priority_routing_group,
+            session_affinity_repin_on_failover=self.session_affinity_repin_on_failover,
         )
         self.optional_callbacks.append(affinity_callback)
         litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
@@ -2908,6 +2920,7 @@ class Router:
                     enable_session_id_affinity=enable_session_id_affinity,
                     model_group_affinity_config=self.model_group_affinity_config,
                     is_priority_group=self._is_priority_routing_group,
+                    session_affinity_repin_on_failover=self.session_affinity_repin_on_failover,
                 )
                 self.optional_callbacks.append(affinity_callback)
                 litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
@@ -4792,9 +4805,39 @@ class Router:
         deployment_litellm_model_name = deployment["litellm_params"]["model"]
         deployment_api_base = deployment["litellm_params"].get("api_base")
         deployment_model_name: Final = deployment["model_name"]
-        if is_clientside_credential(request_kwargs=kwargs):
+        from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
+
+        request_context: Final = cast(  # cast-ok: the router's legacy request dict has string keys
+            Mapping[str, object], kwargs
+        )
+        raw_deployment_params: Final[object] = deployment["litellm_params"]
+        deployment_context: Final = _LITELLM_PARAMS_ADAPTER.validate_python(
+            raw_deployment_params.model_dump(exclude_none=True)
+            if isinstance(raw_deployment_params, LiteLLM_Params)
+            else raw_deployment_params
+        )
+        declared_provider: Final = deployment_context.get("custom_llm_provider")
+        declared_model: Final = deployment_context.get("model")
+        deployment_provider: Final = (
+            declared_provider
+            if isinstance(declared_provider, str)
+            else inferred_provider(declared_model if isinstance(declared_model, str) else None)
+        )
+        forwarded_authorization: Final = (
+            ProviderSpecificHeaderUtils.forwarded_authorization(
+                request_context.get("provider_specific_header"), deployment_provider
+            )
+            if deployment_provider in _FORWARDED_CREDENTIAL_ISOLATION_PROVIDERS
+            else None
+        )
+        if is_clientside_credential(request_kwargs=kwargs) or forwarded_authorization is not None:
             deployment_pydantic_obj: Final = self._handle_clientside_credential(
-                deployment=deployment, kwargs=kwargs, function_name=function_name
+                deployment=deployment,
+                kwargs={
+                    **kwargs,
+                    **({"api_key": forwarded_authorization} if forwarded_authorization is not None else {}),
+                },
+                function_name=function_name,
             )
             model_info = deployment_pydantic_obj.model_info.model_dump()
             deployment_litellm_model_name = deployment_pydantic_obj.litellm_params.model
@@ -9300,6 +9343,12 @@ class Router:
             if model_group is None or deployment_id is None or self.get_deployment(model_id=str(deployment_id)) is None:
                 return
 
+            if self.session_affinity_repin_on_failover:
+                await self._repin_session_after_success(
+                    _LITELLM_PARAMS_ADAPTER.validate_python(litellm_params),
+                    _OPAQUE_VALUE_ADAPTER.validate_python(completion_response),
+                )
+
             # Always track deployment successes for cooldown logic, regardless of TPM/RPM limits
             increment_deployment_successes_for_current_minute(
                 litellm_router_instance=self,
@@ -9322,6 +9371,36 @@ class Router:
             verbose_router_logger.debug(
                 "litellm.router.Router::deployment_callback_on_success(): Exception occured - %s", e
             )
+
+    async def _repin_session_after_success(self, litellm_params: Mapping[str, object], response: object) -> None:
+        if not self.session_affinity_repin_on_failover:
+            return
+        try:
+            from litellm.router_utils.pre_call_checks.deployment_affinity_check import completed_affinity_response
+
+            if not completed_affinity_response(response):
+                return
+            callback: Final = next(
+                (logger for logger in self._optional_loggers() if isinstance(logger, DeploymentAffinityCheck)),
+                None,
+            )
+            if callback is None:
+                return
+            model_group: Final = callback.get_repin_model_group(litellm_params)
+            if model_group is None or self._is_priority_routing_group(model_group):
+                return
+            registered_ids: Final = self.get_candidate_model_ids_for_route(
+                model=model_group, team_id=get_request_team_id(litellm_params)
+            )
+            cooldown_ids: Final = frozenset(
+                model_id
+                for model_id, _ in await self.cooldown_cache.async_get_active_cooldowns(
+                    model_ids=list(registered_ids), parent_otel_span=None
+                )
+            )
+            await callback.async_repin_session_after_success(litellm_params, model_group, registered_ids - cooldown_ids)
+        except Exception as error:  # noqa: BLE001  # Optional pin updates must not interrupt success accounting
+            verbose_router_logger.debug("Session re-pinning failed: %s", error)
 
     async def increment_deployment_usage_for_response(
         self,
@@ -10785,20 +10864,17 @@ class Router:
         # O(k) via the name→indices map: only touch deployments whose name
         # is listed in `available_models`, instead of scanning model_list.
         for name in config.available_models:
-            indices = self.model_name_to_deployment_indices.get(name, [])
-            if not indices:
+            deployments = self.deployments_named(name)
+            if not deployments:
                 continue
-            d = (self.model_list or [])[indices[0]]
-            mi = d.get("model_info") if isinstance(d, dict) else d.model_info
-            mi_dict: dict[str, Any] = mi if isinstance(mi, dict) else (mi.model_dump() if mi else {})
+            d = deployments[0]
+            mi_dict: dict[str, Any] = d.get("model_info") or {}
             prefs_raw = mi_dict.get("adaptive_router_preferences")
             if prefs_raw is not None:
                 model_to_prefs[name] = AdaptiveRouterPreferences(**prefs_raw)
 
             # model_info is the conventional pricing location elsewhere in LiteLLM; litellm_params wins if set.
-            lp = d.get("litellm_params") if isinstance(d, dict) else d.litellm_params
-            lp_dict: dict[str, Any] = lp if isinstance(lp, dict) else (lp.model_dump() if lp else {})
-            cost = lp_dict.get("input_cost_per_token")
+            cost = d.get("litellm_params", {}).get("input_cost_per_token")
             if cost is None:
                 cost = mi_dict.get("input_cost_per_token")
             if cost is not None:
@@ -10890,10 +10966,11 @@ class Router:
     def set_model_list(self, model_list: list):
         original_model_list: Final = copy.deepcopy(model_list)
         self._discovered_model_info_cache.flush_cache()
-        self.model_list = []
-        self.model_id_to_deployment_index_map = {}  # Reset the index
-        self.model_name_to_deployment_indices = {}  # Reset the model_name index
-        self.team_model_to_deployment_indices = {}  # Reset the team_model index
+        with self._deployment_index_lock:
+            self.model_list = []
+            self.model_id_to_deployment_index_map = {}  # Reset the index
+            self.model_name_to_deployment_indices = {}  # Reset the model_name index
+            self.team_model_to_deployment_indices = {}  # Reset the team_model index
         self.team_pattern_routers = {}
         self.team_public_model_names = frozenset()
         # Reset per-strategy router registries so hot-reload doesn't leave
@@ -11005,6 +11082,10 @@ class Router:
             custom_llm_provider = None
             dynamic_api_key = None
             api_base = None
+        elif declared_authenticating_provider(litellm_model, deployment.litellm_params.custom_llm_provider) is not None:
+            _model, custom_llm_provider = (  # rebind-ok: each branch resolves the deployment provider
+                self._model_group_llm_provider(deployment.litellm_params)
+            )
         else:
             # check if model provider in supported providers
             (
@@ -11284,26 +11365,27 @@ class Router:
         - model: dict - the model to add to the list
         - model_id: Optional[str] - the model ID to use for indexing. If None, will try to get from model["model_info"]["id"]
         """
-        idx: Final = len(self.model_list)
-        self.model_list.append(model)
-        self._invalidate_model_group_info_cache()
-        self._invalidate_access_groups_cache()
+        with self._deployment_index_lock:
+            idx: Final = len(self.model_list)
+            self.model_list.append(model)
+            self._invalidate_model_group_info_cache()
+            self._invalidate_access_groups_cache()
 
-        # Update model_id index for O(1) lookup
-        if model_id is not None:
-            self.model_id_to_deployment_index_map[model_id] = idx
-        elif model.get("model_info", {}).get("id") is not None:
-            self.model_id_to_deployment_index_map[model["model_info"]["id"]] = idx
+            # Update model_id index for O(1) lookup
+            if model_id is not None:
+                self.model_id_to_deployment_index_map[model_id] = idx
+            elif model.get("model_info", {}).get("id") is not None:
+                self.model_id_to_deployment_index_map[model["model_info"]["id"]] = idx
 
-        # Update model_name index for O(1) lookup
-        model_name: Final = model.get("model_name")
-        if model_name:
-            if model_name not in self.model_name_to_deployment_indices:
-                self.model_name_to_deployment_indices[model_name] = []
-            self.model_name_to_deployment_indices[model_name].append(idx)
+            # Update model_name index for O(1) lookup
+            model_name: Final = model.get("model_name")
+            if model_name:
+                if model_name not in self.model_name_to_deployment_indices:
+                    self.model_name_to_deployment_indices[model_name] = []
+                self.model_name_to_deployment_indices[model_name].append(idx)
 
-        # Update team_model index for O(1) team-scoped lookup
-        self._update_team_model_index(model, idx)
+            # Update team_model index for O(1) team-scoped lookup
+            self._update_team_model_index(model, idx)
 
     def upsert_deployment(self, deployment: Deployment) -> Deployment | None:
         """
@@ -11330,18 +11412,15 @@ class Router:
 
                 # if there is a new litellm param -> then update the deployment
                 # remove the previous deployment
-                removal_idx: int | None = None
-                deployment_id: Final = deployment.model_info.id
-                deployment_fast_mapping: Final = self.model_id_to_deployment_index_map
-
-                if deployment_id in deployment_fast_mapping:
-                    removal_idx = deployment_fast_mapping[deployment_id]
-
+                with self._deployment_index_lock:
+                    removal_idx: Final = self.model_id_to_deployment_index_map.get(_deployment_model_id)
                     if removal_idx is not None:
                         self.model_list.pop(removal_idx)
                         self._invalidate_model_group_info_cache()
                         self._invalidate_access_groups_cache()
-                        self._update_deployment_indices_after_removal(model_id=deployment_id, removal_idx=removal_idx)
+                        self._update_deployment_indices_after_removal(
+                            model_id=_deployment_model_id, removal_idx=removal_idx
+                        )
 
                 # Free the outgoing deployment's pre-routing strategy slot (keyed by the
                 # OLD model_name/tags) before the re-add below re-registers it.
@@ -11575,35 +11654,32 @@ class Router:
         - The deleted deployment
         - OR None (if deleted deployment not found)
         """
-        deployment_idx = None
-        if id in self.model_id_to_deployment_index_map:
-            deployment_idx = self.model_id_to_deployment_index_map[id]
-
         try:
-            if deployment_idx is not None:
+            with self._deployment_index_lock:
+                deployment_idx: Final = self.model_id_to_deployment_index_map.get(id)
+                if deployment_idx is None:
+                    return None
                 # Pop the item from the list first
                 item: Final = self.model_list.pop(deployment_idx)
                 self._invalidate_model_group_info_cache()
                 self._invalidate_access_groups_cache()
                 self._update_deployment_indices_after_removal(model_id=id, removal_idx=deployment_idx)
-                _budget_limiter: Final = self.get_router_deployment_budget_limiter()
-                if _budget_limiter is not None:
-                    _budget_limiter.unregister_deployment_budget(model_id=id)
-                try:
-                    self._unregister_pre_routing_strategy_for_deployment(
-                        deployment=item if isinstance(item, Deployment) else Deployment(**item)
-                    )
-                except Exception:
-                    verbose_router_logger.exception(
-                        "delete_deployment: could not release pre-routing strategies for model_id=%s; "
-                        "the deployment is out of the model_list and its indices are repaired",
-                        id,
-                    )
-                return item
-            else:
-                return None
+            _budget_limiter: Final = self.get_router_deployment_budget_limiter()
+            if _budget_limiter is not None:
+                _budget_limiter.unregister_deployment_budget(model_id=id)
+            try:
+                self._unregister_pre_routing_strategy_for_deployment(
+                    deployment=item if isinstance(item, Deployment) else Deployment(**item)
+                )
+            except Exception:
+                verbose_router_logger.exception(
+                    "delete_deployment: could not release pre-routing strategies for model_id=%s; "
+                    "the deployment is out of the model_list and its indices are repaired",
+                    id,
+                )
         except Exception:
             return None
+        return item
 
     def get_router_deployment_budget_limiter(
         self,
@@ -11652,6 +11728,18 @@ class Router:
         if _budget_limiter is not None:
             _budget_limiter.register_deployment_budget(deployment=deployment.to_json(exclude_none=True))
 
+    def deployments_named(self, model_name: str) -> tuple[DeploymentTypedDict, ...] | None:
+        """The deployments indexed under `model_name`, read under the index lock, or None when the name is not indexed."""
+        with self._deployment_index_lock:
+            indices: Final = self.model_name_to_deployment_indices.get(model_name)
+            return None if indices is None else tuple(self.model_list[idx] for idx in indices)
+
+    def _team_deployments_named(self, team_id: str, public_model_name: str) -> tuple[DeploymentTypedDict, ...] | None:
+        """The deployments `team_id` serves under `public_model_name`, or None when that pair is not indexed."""
+        with self._deployment_index_lock:
+            indices: Final = self.team_model_to_deployment_indices.get((team_id, public_model_name))
+            return None if indices is None else tuple(self.model_list[idx] for idx in indices)
+
     def get_deployment(self, model_id: str) -> Deployment | None:
         """
         Returns -> Deployment or None
@@ -11659,9 +11747,10 @@ class Router:
         Raise Exception -> if model found in invalid format
         """
         # Use O(1) lookup via model_id_to_deployment_index_map only
-        if model_id in self.model_id_to_deployment_index_map:
-            idx: Final = self.model_id_to_deployment_index_map[model_id]
-            model: Final = self.model_list[idx]
+        with self._deployment_index_lock:
+            idx: Final = self.model_id_to_deployment_index_map.get(model_id)
+            model: Final = None if idx is None else self.model_list[idx]
+        if model is not None:
             if isinstance(model, dict):
                 return Deployment(**model)
             elif isinstance(model, Deployment):
@@ -11695,17 +11784,17 @@ class Router:
         Optimized with O(1) index lookup instead of O(n) linear scan.
         """
         # O(1) lookup in model_name index
-        if model_group_name in self.model_name_to_deployment_indices:
-            indices: Final = self.model_name_to_deployment_indices[model_group_name]
-            if indices:
-                # Return first deployment for this model_name
-                model: Final = self.model_list[indices[0]]
-                if isinstance(model, dict):
-                    return Deployment(**model)
-                elif isinstance(model, Deployment):
-                    return model
-                else:
-                    raise Exception(f"Model Name invalid - {type(model)}")
+        with self._deployment_index_lock:
+            indices: Final = self.model_name_to_deployment_indices.get(model_group_name)
+            # Return first deployment for this model_name
+            model: Final = self.model_list[indices[0]] if indices else None
+        if model is not None:
+            if isinstance(model, dict):
+                return Deployment(**model)
+            elif isinstance(model, Deployment):
+                return model
+            else:
+                raise Exception(f"Model Name invalid - {type(model)}")
         return None
 
     @staticmethod
@@ -11728,11 +11817,12 @@ class Router:
         by other teams so a shared model name never resolves another team's
         credentials.
         """
-        indices: Final = self.model_name_to_deployment_indices.get(model_group_name) or ()
-        usable: Final = (
-            self.model_list[idx] for idx in indices if self.deployment_usable_by_team(self.model_list[idx], team_id)
-        )
-        first_usable: Final = next(usable, None)
+        with self._deployment_index_lock:
+            indices: Final = self.model_name_to_deployment_indices.get(model_group_name) or ()
+            usable: Final = (
+                self.model_list[idx] for idx in indices if self.deployment_usable_by_team(self.model_list[idx], team_id)
+            )
+            first_usable: Final = next(usable, None)
         if first_usable is None:
             return None
         return Deployment(**first_usable) if isinstance(first_usable, dict) else first_usable
@@ -11835,11 +11925,10 @@ class Router:
         this never triggers pattern matching or deep copies, so it is safe to call per
         listed model on the /v1/models hot path.
         """
-        indices: Final = self.model_name_to_deployment_indices.get(model_name)
-        if not indices:
+        deployments: Final = self.deployments_named(model_name)
+        if not deployments:
             return None
 
-        deployments: Final = tuple(self.model_list[index] for index in indices)
         model_infos: Final = tuple(
             MappingProxyType(
                 {
@@ -12012,10 +12101,11 @@ class Router:
     def _get_team_public_name_deployment(self, model_id: str, team_id: str | None) -> Deployment | None:
         if team_id is None:
             return None
-        team_indices: Final = self.team_model_to_deployment_indices.get((team_id, model_id))
-        if not team_indices:
+        with self._deployment_index_lock:
+            team_indices: Final = self.team_model_to_deployment_indices.get((team_id, model_id))
+            team_model: Final = self.model_list[team_indices[0]] if team_indices else None
+        if team_model is None:
             return None
-        team_model: Final = self.model_list[team_indices[0]]
         return Deployment(**team_model) if isinstance(team_model, dict) else team_model
 
     def _get_wildcard_deployment_usable_by_team(self, model_id: str, team_id: str | None) -> Deployment | None:
@@ -12175,7 +12265,6 @@ class Router:
             _fallback_entry = litellm.model_cost.get(_azure_fallback_key)
             _fallback_resolves = _fallback_entry is not None and (
                 (_fallback_entry.get("max_input_tokens") or 0) > 0
-                or (_fallback_entry.get("max_tokens") or 0) > 0
                 or (_fallback_entry.get("input_cost_per_token") or 0) > 0
             )
             if _fallback_resolves:
@@ -12254,10 +12343,9 @@ class Router:
         Optimized with O(1) index lookup instead of O(n) linear scan.
         """
         # O(1) lookup via model_id_to_deployment_index_map
-        if id in self.model_id_to_deployment_index_map:
-            idx: Final = self.model_id_to_deployment_index_map[id]
-            return self.model_list[idx]
-        return None
+        with self._deployment_index_lock:
+            idx: Final = self.model_id_to_deployment_index_map.get(id)
+            return None if idx is None else self.model_list[idx]
 
     def get_model_group(self, id: str) -> list | None:
         """
@@ -12350,6 +12438,17 @@ class Router:
             )
         return model_info
 
+    @staticmethod
+    def _model_group_llm_provider(litellm_params: LiteLLM_Params) -> tuple[str, str]:
+        try:
+            return resolve_model_and_provider_for_metadata(
+                model=litellm_params.model,
+                custom_llm_provider=litellm_params.custom_llm_provider,
+            )
+        except litellm.exceptions.BadRequestError as e:
+            verbose_router_logger.error("litellm.router.py::get_model_group_info() - %s", e)
+            return "", ""
+
     def _set_model_group_info(
         self, model_group: str, user_facing_model_group_name: str, team_id: str | None = None
     ) -> ModelGroupInfo | None:
@@ -12438,15 +12537,7 @@ class Router:
             deployment_is_mapped = deployment_is_catalog_mapped(model_info, model_info_dict)
 
             # get llm provider
-            litellm_model, llm_provider = "", ""
-            try:
-                litellm_model, llm_provider, _, _ = litellm.get_llm_provider(
-                    model=litellm_params.model,
-                    custom_llm_provider=litellm_params.custom_llm_provider,
-                    litellm_params=litellm_params,
-                )
-            except litellm.exceptions.BadRequestError as e:
-                verbose_router_logger.error("litellm.router.py::get_model_group_info() - %s", e)
+            litellm_model, llm_provider = self._model_group_llm_provider(litellm_params)
 
             if model_info is None:
                 supported_openai_params = litellm.get_supported_openai_params(
@@ -12927,20 +13018,19 @@ class Router:
 
         if model_name is not None:
             # O(1) lookup in model_name index, then O(k) iteration where k = deployments for this model_name
-            if model_name in self.model_name_to_deployment_indices:
-                indices: Final = self.model_name_to_deployment_indices[model_name]
-                for idx in indices:
-                    model = self.model_list[idx]
-                    if "model_info" in model and "id" in model["model_info"]:
-                        if exclude_team_models and model["model_info"].get("team_id"):
-                            continue
-                        ids.append(model["model_info"]["id"])
+            for model in self.deployments_named(model_name) or ():
+                if "model_info" in model and "id" in model["model_info"]:
+                    if exclude_team_models and model["model_info"].get("team_id"):
+                        continue
+                    ids.append(model["model_info"]["id"])
         else:
             # When model_name is None, return all model IDs
             # Use the index map keys for O(n) where n = total deployments
-            for model_id in self.model_id_to_deployment_index_map:
-                idx = self.model_id_to_deployment_index_map[model_id]
-                model = self.model_list[idx]
+            with self._deployment_index_lock:
+                id_indices: Final = tuple(self.model_id_to_deployment_index_map.items())
+                models: Final = tuple(self.model_list)
+            for model_id, idx in id_indices:
+                model = models[idx]
                 if "model_info" in model and "id" in model["model_info"]:
                     if exclude_team_models and model["model_info"].get("team_id"):
                         continue
@@ -13218,7 +13308,9 @@ class Router:
         # handled downstream by the pattern_router in _common_checks_available_deployment.
         return None
 
-    def should_include_deployment(self, model_name: str, model: dict, team_id: str | None = None) -> bool:
+    def should_include_deployment(
+        self, model_name: str, model: DeploymentTypedDict | dict, team_id: str | None = None
+    ) -> bool:
         """
         Get the team-specific model name if team_id matches the deployment.
         """
@@ -13266,12 +13358,10 @@ class Router:
 
         # O(1) lookup in team_model index when team_id is provided
         if team_id is not None:
-            key: Final = (team_id, model_name)
-            if key in self.team_model_to_deployment_indices:
-                indices = self.team_model_to_deployment_indices[key]
+            team_models: Final = self._team_deployments_named(team_id, model_name)
+            if team_models is not None:
                 # O(k) where k = team deployments for this model_name (typically 1-10)
-                for idx in indices:
-                    model = self.model_list[idx]
+                for model in team_models:
                     if not self.should_include_deployment(model_name=model_name, model=model, team_id=team_id):
                         continue
                     if model_alias is not None:
@@ -13284,12 +13374,10 @@ class Router:
                     return returned_models
 
         # O(1) lookup in model_name index
-        if model_name in self.model_name_to_deployment_indices:
-            indices = self.model_name_to_deployment_indices[model_name]
-
+        named_models: Final = self.deployments_named(model_name)
+        if named_models is not None:
             # O(k) where k = deployments for this model_name (typically 1-10)
-            for idx in indices:
-                model = self.model_list[idx]
+            for model in named_models:
                 if self.should_include_deployment(model_name=model_name, model=model, team_id=team_id):
                     if model_alias is not None:
                         # Optimized: Use shallow copy since we only modify top-level model_name
@@ -13303,7 +13391,7 @@ class Router:
             # Fallback: if team_id is provided and model_name not in index,
             # check if model_name matches any team_public_model_name
             # O(n) scan but only when team_id lookup fails
-            for idx, model in enumerate(self.model_list):
+            for _idx, model in enumerate(self.model_list):
                 if self.should_include_deployment(model_name=model_name, model=model, team_id=team_id):
                     if model_alias is not None:
                         # Optimized: Use shallow copy since we only modify top-level model_name
@@ -13701,21 +13789,21 @@ class Router:
         return [{**DeploymentTypedDict(**m), "model_name": model_name} for m in matches]
 
     def wildcard_route_deployments(self, model: str, team_id: str | None) -> Sequence[Mapping[str, object]]:
-        """The deployments routing serves ``model`` from through a wildcard: the most specific
-        proxy-wide pattern matching it, else ``team_id``'s own pattern, never both."""
-        proxy_wide: Final[Sequence[Mapping[str, object]]] = self.pattern_router.get_deployments_by_pattern(model=model)
+        """The deployments routing serves ``model`` from through a wildcard: ``team_id``'s own pattern
+        matching it, else the most specific proxy-wide pattern, never both."""
         team_router: Final = self.team_pattern_routers.get(team_id) if team_id is not None else None
-        if proxy_wide or team_router is None:
-            return proxy_wide
-        return team_router.get_deployments_by_pattern(model=model)
+        team_owned: Final[Sequence[Mapping[str, object]]] = (
+            team_router.get_deployments_by_pattern(model=model) if team_router is not None else ()
+        )
+        return team_owned or self.pattern_router.get_deployments_by_pattern(model=model)
 
     def wildcard_routed_models(self, model: str, team_id: str | None) -> frozenset[str]:
         """The models wildcard_route_deployments would route ``model`` to, without copying the deployments."""
-        proxy_wide: Final = self.pattern_router.get_models_by_pattern(model=model)
         team_router: Final = self.team_pattern_routers.get(team_id) if team_id is not None else None
-        if proxy_wide or team_router is None:
-            return proxy_wide
-        return team_router.get_models_by_pattern(model=model)
+        team_owned: Final = (
+            team_router.get_models_by_pattern(model=model) if team_router is not None else frozenset[str]()
+        )
+        return team_owned or self.pattern_router.get_models_by_pattern(model=model)
 
     def team_ptu_ceiling(self, team_id: str, model_group: str) -> PTUTeamCeiling | None:
         """The per-minute ceiling ``team_id``'s PTU shares set on the group serving ``model_group``,
@@ -14274,6 +14362,30 @@ class Router:
         return cast(_RouteDeploymentsT, filtered_deployments)  # cast-ok: same list shape as the input candidates
 
     @staticmethod
+    def _without_declared_text_only_deployments(
+        healthy_deployments: _RouteDeploymentsT,
+        group: str,
+        messages: list[dict[str, str]] | None,  # mutable-ok: handed to _request_carries_image as-is
+        request_kwargs: Mapping[str, object] | None,
+    ) -> _RouteDeploymentsT:
+        if isinstance(healthy_deployments, Mapping) or not Router._request_carries_image(
+            messages, request_kwargs or {}
+        ):
+            return healthy_deployments
+
+        vision_capable_deployments: Final = [
+            deployment
+            for deployment in healthy_deployments
+            if not Router._deployment_declares_no_vision(
+                cast(DeploymentTypedDict, deployment),  # cast-ok: router candidates use the deployment shape
+                group,
+            )
+        ]
+        if not vision_capable_deployments:
+            return healthy_deployments
+        return cast(_RouteDeploymentsT, vision_capable_deployments)  # cast-ok: same list shape as the input candidates
+
+    @staticmethod
     def _request_carries_image(
         messages: list[dict[str, str]] | None,  # mutable-ok: handed to resolve_structured_messages as-is
         request_kwargs: Mapping[str, object],
@@ -14313,7 +14425,6 @@ class Router:
         - model context window < message length. For azure openai models, requires 'base_model' is set. - https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models
         - filter models above rpm limits
         - if region given, filter out models not in that region / unknown region
-        - request carries an image and the deployment declares supports_vision false, unless every candidate does
         - [TODO] function call and model doesn't support function calling
         """
 
@@ -14473,20 +14584,9 @@ class Router:
                     model=model,
                     llm_provider="",
                 )
-        remaining: Final = tuple(
-            (idx, deployment) for idx, deployment in param_candidates if idx not in excluded_indices
-        )
-        text_only_indices: Final[frozenset[int]] = (
-            frozenset(idx for idx, deployment in remaining if self._deployment_declares_no_vision(deployment, model))
-            if remaining and self._request_carries_image(messages, request_settings)
-            else frozenset()
-        )
-        dropped_indices: Final[frozenset[int]] = excluded_indices | (
-            text_only_indices if len(text_only_indices) < len(remaining) else frozenset()
-        )
-        if len(dropped_indices) > 0:
+        if len(excluded_indices) > 0:
             # Single-pass filter using set for O(1) lookups (avoids O(n^2) from repeated pops)
-            _returned_deployments = [d for i, d in enumerate(_returned_deployments) if i not in dropped_indices]
+            _returned_deployments = [d for i, d in enumerate(_returned_deployments) if i not in excluded_indices]
 
         return _returned_deployments
 
@@ -14556,12 +14656,13 @@ class Router:
 
     def _team_deployments_across_teams(self, model: str) -> list[DeploymentTypedDict]:
         """Every team's deployments under public name `model`, for a proxy admin calling without a team."""
-        team_deployments: Final = [
-            self.model_list[index]
-            for (_, public_model_name), indices in self.team_model_to_deployment_indices.items()
-            if public_model_name == model
-            for index in indices
-        ]
+        with self._deployment_index_lock:
+            team_deployments: Final = [
+                self.model_list[index]
+                for (_, public_model_name), indices in self.team_model_to_deployment_indices.items()
+                if public_model_name == model
+                for index in indices
+            ]
         team_ids: Final = {
             team_id
             for deployment in team_deployments
@@ -15009,8 +15110,11 @@ class Router:
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
-        batch_candidates: Final = cast(  # cast-ok: router deployments are plain dicts
-            list[dict[str, object]], healthy_deployments
+        batch_candidates: Final = self._without_declared_text_only_deployments(
+            cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+            model,
+            messages,
+            cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
         )
         embedding_batch_admitting: Final = deployments_admitting_embedding_batch(
             batch_candidates,
@@ -16249,8 +16353,11 @@ class Router:
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
-        batch_candidates: Final = cast(  # cast-ok: router deployments are plain dicts
-            list[dict[str, object]], healthy_deployments
+        batch_candidates: Final = self._without_declared_text_only_deployments(
+            cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+            model,
+            messages,
+            cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
         )
         embedding_batch_admitting: Final = deployments_admitting_embedding_batch(
             batch_candidates,

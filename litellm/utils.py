@@ -2964,12 +2964,14 @@ def supports_native_streaming(model: str, custom_llm_provider: str | None) -> bo
     Raises:
     Exception: If the given model is not found in model_prices_and_context_window.json.
     """
+    from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
+
     try:
-        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+        resolved_model, resolved_provider = resolve_model_and_provider_for_metadata(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-        model_info: Final = get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        model_info: Final = get_model_info_helper(model=resolved_model, custom_llm_provider=resolved_provider)
         supports_native_streaming = model_info.get("supports_native_streaming", True)
         if supports_native_streaming is None:
             supports_native_streaming = True
@@ -6077,11 +6079,8 @@ def get_max_tokens(model: str) -> int | None:
             return None
 
     try:
-        if model in litellm.model_cost:
-            if "max_output_tokens" in litellm.model_cost[model]:
-                return litellm.model_cost[model]["max_output_tokens"]
-            elif "max_tokens" in litellm.model_cost[model]:
-                return litellm.model_cost[model]["max_tokens"]
+        if model in litellm.model_cost and "max_output_tokens" in litellm.model_cost[model]:
+            return litellm.model_cost[model]["max_output_tokens"]
         get_llm_provider: Final = litellm_utils.get_llm_provider
         model, custom_llm_provider, _, _ = get_llm_provider(model=model)
         if custom_llm_provider == "huggingface":
@@ -6090,8 +6089,6 @@ def get_max_tokens(model: str) -> int | None:
         if model in litellm.model_cost:  # check if extracted model is in model_list
             if "max_output_tokens" in litellm.model_cost[model]:
                 return litellm.model_cost[model]["max_output_tokens"]
-            elif "max_tokens" in litellm.model_cost[model]:
-                return litellm.model_cost[model]["max_tokens"]
         else:
             raise Exception()
         return None
@@ -6740,7 +6737,7 @@ def get_model_info_helper(
 
             returned_model_info: Final = ModelInfoBase(
                 key=key,
-                max_tokens=_model_info.get("max_tokens", None),
+                max_tokens=_model_info.get("max_output_tokens") or _model_info.get("max_input_tokens"),
                 max_input_tokens=_model_info.get("max_input_tokens", None),
                 max_output_tokens=_model_info.get("max_output_tokens", None),
                 input_cost_per_token=_input_cost_per_token,
@@ -6841,6 +6838,18 @@ def get_model_info_helper(
                 ),
                 cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority=_model_info.get(
                     "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority", None
+                ),
+                cache_creation_input_token_cost_above_12hr_batches=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_batches", None
+                ),
+                cache_creation_input_token_cost_above_12hr_ultrafast=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_ultrafast", None
+                ),
+                cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches", None
+                ),
+                cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast", None
                 ),
                 off_peak_pricing=_model_info.get("off_peak_pricing", None),
                 input_cost_per_character=_model_info.get("input_cost_per_character", None),
@@ -8228,9 +8237,7 @@ def trim_messages(
         if max_tokens is None:
             # Check if model is valid
             if model in litellm.model_cost:
-                max_tokens_for_model: Final = litellm.model_cost[model].get(
-                    "max_input_tokens", litellm.model_cost[model]["max_tokens"]
-                )
+                max_tokens_for_model: Final = litellm.model_cost[model]["max_input_tokens"]
                 max_tokens = int(max_tokens_for_model * trim_ratio)
             else:
                 # if user did not specify max (input) tokens
@@ -9126,6 +9133,7 @@ class ProviderConfigManager:
             LlmProviders.DATABRICKS: (lambda: litellm.DatabricksConfig(), False),
             LlmProviders.XAI: (lambda: litellm.XAIChatConfig(), False),
             LlmProviders.ZAI: (lambda: litellm.ZAIChatConfig(), False),
+            LlmProviders.OPENCODE_GO: (ProviderConfigManager.get_opencode_go_config, True),
             LlmProviders.LAMBDA_AI: (lambda: litellm.LambdaAIChatConfig(), False),
             LlmProviders.INCEPTION: (lambda: litellm.InceptionChatConfig(), False),
             LlmProviders.LLAMA: (lambda: litellm.LlamaAPIConfig(), False),
@@ -9316,6 +9324,12 @@ class ProviderConfigManager:
         from litellm.llms.bedrock.common_utils import get_bedrock_chat_config
 
         return get_bedrock_chat_config(model=model)
+
+    @staticmethod
+    def get_opencode_go_config(model: str) -> BaseConfig:
+        from litellm.llms.opencode.chat.transformation import go_chat_config
+
+        return go_chat_config(model)
 
     @staticmethod
     def get_bedrock_mantle_config(model: str) -> BaseConfig:
@@ -9552,7 +9566,7 @@ class ProviderConfigManager:
 
             return get_nvidia_nim_rerank_config(model)
         elif litellm.LlmProviders.VERTEX_AI == provider:
-            return litellm.VertexAIRerankConfig()
+            return ProviderConfigManager._get_vertex_ai_rerank_config_cached()
         elif litellm.LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIRerankConfig()
         elif litellm.LlmProviders.VOYAGE == provider:
@@ -9570,6 +9584,11 @@ class ProviderConfigManager:
 
             return get_dashscope_family_rerank_config(provider.value)
         return litellm.CohereRerankConfig()
+
+    @staticmethod
+    @lru_cache(maxsize=1)
+    def _get_vertex_ai_rerank_config_cached() -> BaseRerankConfig:
+        return litellm.VertexAIRerankConfig()
 
     @staticmethod
     def get_provider_decisions_config(model: str, provider: LlmProviders) -> BaseDecisionsConfig | None:
@@ -9620,6 +9639,11 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> BaseAnthropicMessagesConfig | None:
+        if provider == LlmProviders.OPENCODE_GO:
+            from litellm.llms.opencode.common_utils import go_endpoint
+            from litellm.llms.opencode.messages.transformation import OpenCodeGoMessagesConfig
+
+            return OpenCodeGoMessagesConfig() if go_endpoint(model) == "/v1/messages" else None
         model_lower: Final = model.lower()
         if litellm.LlmProviders.ANTHROPIC == provider:
             return litellm.AnthropicMessagesConfig()
@@ -9846,6 +9870,11 @@ class ProviderConfigManager:
         if provider is None:
             return None
 
+        if provider == LlmProviders.OPENCODE_GO:
+            from litellm.llms.opencode.common_utils import go_endpoint
+            from litellm.llms.opencode.responses.transformation import OpenCodeGoResponsesConfig
+
+            return OpenCodeGoResponsesConfig() if go_endpoint(model or "") == "/v1/responses" else None
         if litellm.LlmProviders.OPENAI == provider:
             return litellm.OpenAIResponsesAPIConfig()
         elif litellm.LlmProviders.AZURE == provider:
@@ -9985,6 +10014,10 @@ class ProviderConfigManager:
         model: str | None,
         provider: LlmProviders,
     ) -> BaseLLMModelInfo | None:
+        if provider == LlmProviders.OPENCODE_GO:
+            from litellm.llms.opencode.chat.transformation import OpenCodeGoChatConfig
+
+            return OpenCodeGoChatConfig()
         if LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIConfig()
         elif LlmProviders.BASETEN == provider:

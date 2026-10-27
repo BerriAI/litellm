@@ -1922,6 +1922,62 @@ async def test_list_tools_classifies_upstream_status_for_post_failures(failure_m
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("paginated", (False, True))
+async def test_sse_catalog_limit_reports_the_failure_and_allows_smaller_pages(paginated: bool) -> None:
+    from mcp.types import Tool
+
+    limit: Final = 1024
+    tools: Final = tuple(
+        Tool(name=f"tool_{index}", description="private-upstream-secret " * 25, input_schema={"type": "object"})
+        for index in range(2)
+    )
+    catalog: Final = tuple(tool.model_dump(by_alias=True, exclude_none=True) for tool in tools)
+    assert len(json.dumps({"tools": catalog}).encode()) > limit
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method != "POST":
+            return httpx2.Response(200)
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        assert isinstance(payload, (JSONRPCRequest, JSONRPCNotification))
+        if isinstance(payload, JSONRPCNotification):
+            return httpx2.Response(202)
+        if payload.method == "initialize":
+            return httpx2.Response(200, json={
+                "jsonrpc": "2.0", "id": payload.id, "result": {
+                    "protocolVersion": LATEST_HANDSHAKE_VERSION,
+                    "capabilities": {"tools": {}}, "serverInfo": {"name": "catalog", "version": "1"},
+                },
+            })
+        assert payload.method == "tools/list"
+        cursor: Final = (payload.params or {}).get("cursor")
+        page: Final = catalog[1:] if cursor == "next-page" else catalog[:1] if paginated else catalog
+        result: Final = {
+            "tools": page,
+            **({"nextCursor": "next-page"} if paginated and cursor is None else {}),
+        }
+        event: Final = f"data: {json.dumps({'jsonrpc': '2.0', 'id': payload.id, 'result': result})}\n\n"
+        assert (len(event.encode()) < limit) == paginated
+        return httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=event)
+
+    def transport_context(url: str, http_client: httpx2.AsyncClient) -> _TransportContext:
+        return streamable_http_client(url, http_client=http_client, max_sse_event_size=limit)
+
+    client: Final = _MockTransportClient(
+        respond, server_url="https://upstream.example/mcp", transport_context=transport_context,
+    )
+    if paginated:
+        assert await client.list_tools(raise_on_error=True) == list(tools)
+        return
+    with pytest.raises(MCPError) as caught:
+        await client.list_tools(raise_on_error=True)
+    fault: Final = classify_list_exception(caught.value)
+    assert fault == ServerListFault(tag="upstream_error", sse_event_limit_bytes=limit)
+    assert list_fault_http_status(fault) == 502
+    assert fault.public_message is not None
+    assert "private-upstream-secret" not in fault.public_message
+
+
+@pytest.mark.asyncio
 async def test_http_status_check_allows_auth_refresh_before_rejecting() -> None:
     from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import (
         ClientCredentialsBearerAuth,

@@ -677,7 +677,11 @@ async def acompletion(
     }
     if custom_llm_provider is None:
         _supplemental: Final = cast(  # cast-ok: kwargs values are request-scoped objects
-            "dict[str, object]", {k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS if k in kwargs}
+            "dict[str, object]",
+            {
+                **{k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS | {"provider_specific_header"} if k in kwargs},
+                "extra_headers": extra_headers,
+            },
         )
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
@@ -2194,6 +2198,27 @@ def _complete_groq(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
         api_key=api_key,
         logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
         client=client,
+    )
+
+
+def _complete_opencode_go(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
+    return base_llm_http_handler.completion(  # pyright: ignore[reportUnknownMemberType]  # shared legacy handler has untyped request mappings
+        model=ctx.model,
+        stream=ctx.stream,
+        messages=ctx.messages,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # existing dispatch context carries validated messages
+        acompletion=ctx.acompletion,
+        api_base=ctx.api_base,
+        model_response=ctx.model_response,
+        optional_params=ctx.optional_params,  # pyright: ignore[reportUnknownMemberType]  # existing dispatch context carries the mapped provider parameters
+        litellm_params=ctx.litellm_params,
+        shared_session=ctx.shared_session,
+        custom_llm_provider=ctx.custom_llm_provider,
+        timeout=ctx.timeout,  # pyright: ignore[reportArgumentType]  # completion normalizes timeout before constructing this context
+        headers=ctx.headers,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # legacy context retains caller headers
+        encoding=_get_encoding(),
+        api_key=ctx.api_key,
+        logging_obj=ctx.logging,
+        client=_dispatch_client_http(ctx),
     )
 
 
@@ -5657,7 +5682,10 @@ def completion(
         if deployment_id is not None:  # azure llms
             model = deployment_id
             custom_llm_provider = "azure"
-        _supplemental_provider_params: Final = {k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS if k in kwargs}
+        _supplemental_provider_params: Final = {
+            **{k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS | {"provider_specific_header"} if k in kwargs},
+            "extra_headers": extra_headers,
+        }
         model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -5977,6 +6005,7 @@ def completion(
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
+            chatgpt_auth_file=routing_kwargs.get("chatgpt_auth_file"),
             gigachat_scope=kwargs.get("gigachat_scope"),
             gigachat_auth_url=kwargs.get("gigachat_auth_url"),
             gigachat_access_token=kwargs.get("gigachat_access_token"),
@@ -6198,6 +6227,10 @@ def completion(
             response = _complete_xai(_dispatch_ctx)
         elif custom_llm_provider == "groq":
             response = _complete_groq(_dispatch_ctx)
+        elif custom_llm_provider == "opencode_go":
+            response = _complete_opencode_go(  # rebind-ok: common dispatcher finalizes the selected provider result
+                _dispatch_ctx
+            )
         elif custom_llm_provider == "bedrock_mantle":
             response = _complete_bedrock_mantle(_dispatch_ctx)
         elif custom_llm_provider == "a2a":
@@ -9115,6 +9148,7 @@ async def ahealth_check(
             custom_llm_provider=custom_llm_provider_from_params,
             api_base=api_base_from_params,
             api_key=api_key_from_params,
+            litellm_params=GenericLiteLLMParams(**model_params),
         )
 
         model_params["cache"] = {"no-cache": True}  # don't used cached responses for making health check calls

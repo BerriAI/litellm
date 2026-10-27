@@ -1490,6 +1490,7 @@ def convert_to_gemini_tool_call_result(
     message: ChatCompletionToolMessage | ChatCompletionFunctionMessage,
     last_message_with_tool_calls: dict | None,
     forward_function_call_id: bool = False,
+    supports_multimodal_function_responses: bool = True,
 ) -> VertexPartType | list[VertexPartType]:
     """
     OpenAI message with a tool result looks like:
@@ -1652,9 +1653,9 @@ def convert_to_gemini_tool_call_result(
 
     _part: Final[VertexPartType] = {"function_response": _function_response}
 
-    # For multimodal function responses, Gemini expects media parts nested
-    # inside functionResponse.parts instead of sibling content parts.
     if inline_data_list:
+        if not supports_multimodal_function_responses:
+            return [_part, *(VertexPartType(inline_data=inline_data) for inline_data in inline_data_list)]
         _function_response["parts"] = [{"inline_data": inline_data} for inline_data in inline_data_list]
         return [_part]
 
@@ -2205,15 +2206,97 @@ def anthropic_process_openai_file_message(
 _EMPTY_TEXT_PLACEHOLDER: Final = "[System: Empty message content sanitised to satisfy protocol]"
 
 
+def _dict_block(block: object) -> Mapping[str, object] | None:
+    if not isinstance(block, dict):
+        return None
+    return cast(Mapping[str, object], block)  # cast-ok: narrowed by isinstance; the converters only read dict blocks
+
+
+def _is_empty_text_block(block: object) -> bool:
+    match _dict_block(block):
+        case {"type": "text", "text": str() as text}:
+            return not text.strip()
+        case {"type": "text"}:
+            return True
+        case _:
+            return False
+
+
+def _with_placeholder_text(block: object) -> object:
+    fields: Final = _dict_block(block)
+    if fields is None or not _is_empty_text_block(fields):
+        return block
+    return {**fields, "text": _EMPTY_TEXT_PLACEHOLDER}
+
+
+def _survives_assistant_conversion(block: object) -> bool:
+    """Whether ``anthropic_messages_pt`` keeps this list-content block of an assistant turn.
+
+    Mirrors the assistant converter: a ``thinking`` / ``redacted_thinking`` block is kept
+    unless it is unsignable (a signed block is kept even with empty text), and
+    ``server_tool_use`` and ``*_tool_result`` blocks pass through. A redacted block with
+    blank data is dropped under ``drop_params``, which is not known here, so it never counts.
+    """
+    fields: Final = _dict_block(block)
+    if fields is None:
+        return False
+    if (thinking_block := _as_thinking_block(fields)) is not None:
+        return not (is_unsignable_thinking_block(thinking_block) or has_blank_redacted_data(thinking_block))
+    match fields:
+        case {"type": "server_tool_use"}:
+            return True
+        case {"type": str() as block_type}:
+            return block_type.endswith("_tool_result")
+        case _:
+            return False
+
+
+def _tool_call_survives_conversion(tool_call: object) -> bool:
+    """Whether ``convert_to_anthropic_tool_invoke`` can emit a block for this tool call.
+
+    Non-function calls are skipped there, and a tool search call is dropped when its
+    result is not replayed, which depends on the rest of the conversation, so neither counts.
+    """
+    if message_field(tool_call, "type") != "function":
+        return False
+    match message_field(tool_call, "id"), message_field(message_field(tool_call, "function"), "name"):
+        case (str() as tool_id, str() as tool_name):
+            return not is_anthropic_tool_search_use(tool_id, tool_name)
+        case _:
+            return True
+
+
+def _carries_non_text_content(message: AllMessageValues) -> bool:
+    if any(_tool_call_survives_conversion(tool_call) for tool_call in parts_of(message_field(message, "tool_calls"))):
+        return True
+    content: Final = message_field(message, "content")
+    blocks: Final = parts_of(content)
+    return isinstance(content, list) and any(_survives_assistant_conversion(block) for block in blocks)
+
+
+def _with_content(message: AllMessageValues, content: object, action: str) -> AllMessageValues:
+    sanitized: Final = cast(AllMessageValues, {**message, "content": content})
+    verbose_logger.debug("_sanitize_empty_text_content: %s in %s message", action, message_field(message, "role"))
+    return sanitized
+
+
 def _sanitize_empty_text_content(
     message: AllMessageValues,
 ) -> AllMessageValues:
     """
     Case C: Sanitize empty text content
-    - Replace empty or whitespace-only text content with a placeholder message.
-    - Handles both string content and list-of-blocks content (rewriting only
-      the empty text blocks in place; non-text blocks like images are left
-      untouched).
+
+    Anthropic rejects empty text blocks, so empty or whitespace-only text must never be
+    forwarded verbatim. What replaces it depends on what else the turn carries.
+
+    Assistant turns that already carry substantive content (``tool_calls``, or non-text
+    blocks such as ``server_tool_use``) get the empty text dropped. Anthropic accepts an
+    assistant turn whose content is just ``tool_use``, so there is nothing to substitute, and
+    substituting anyway leaks a protocol diagnostic into the conversation as though the
+    assistant had said it, which the model then echoes on later turns.
+
+    Every other empty turn would otherwise end up with no content at all, which Anthropic
+    also rejects, so the placeholder is still substituted there.
 
     Returns:
         The message with sanitized content if needed, otherwise the original message
@@ -2221,42 +2304,26 @@ def _sanitize_empty_text_content(
     if message.get("role") not in ["user", "assistant"]:
         return message
 
-    content: Final = message.get("content")
+    content: Final = message_field(message, "content")
+    drop_empty_text: Final = message_field(message, "role") == "assistant" and _carries_non_text_content(message)
 
     if isinstance(content, str):
-        if not content or not content.strip():
-            message = cast(AllMessageValues, dict(message))  # Make a copy
-            message["content"] = _EMPTY_TEXT_PLACEHOLDER
-            verbose_logger.debug(
-                "_sanitize_empty_text_content: Replaced empty text content in %s message", message.get("role")
-            )
+        if content.strip():
+            return message
+        if drop_empty_text:
+            return _with_content(message, None, "Dropped empty text content")
+        return _with_content(message, _EMPTY_TEXT_PLACEHOLDER, "Replaced empty text content")
+
+    blocks: Final = parts_of(content)
+    if not isinstance(content, list) or not any(_is_empty_text_block(block) for block in blocks):
         return message
 
-    if isinstance(content, list):
-        # Walk the blocks and rewrite any empty text blocks. We rewrite (rather
-        # than drop) so callers don't end up with an entirely empty content
-        # list, which Anthropic also rejects.
-        new_blocks: Final[list[Any]] = []
-        rewrote_any = False
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
-                text = block.get("text")
-                if not isinstance(text, str) or not text or not text.strip():
-                    new_block = dict(block)
-                    new_block["text"] = _EMPTY_TEXT_PLACEHOLDER
-                    new_blocks.append(new_block)
-                    rewrote_any = True
-                    continue
-            new_blocks.append(block)
+    if drop_empty_text:
+        kept: Final = [block for block in blocks if not _is_empty_text_block(block)]
+        return _with_content(message, kept, "Dropped empty text block(s)")
 
-        if rewrote_any:
-            message = cast(AllMessageValues, dict(message))  # Make a copy
-            message["content"] = new_blocks
-            verbose_logger.debug(
-                "_sanitize_empty_text_content: Replaced empty text block(s) in %s message", message.get("role")
-            )
-
-    return message
+    rewritten: Final = [_with_placeholder_text(block) for block in blocks]
+    return _with_content(message, rewritten, "Replaced empty text block(s)")
 
 
 def _add_missing_tool_results(

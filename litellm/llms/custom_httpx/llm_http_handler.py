@@ -198,6 +198,26 @@ from litellm.utils import (
 )
 
 
+def _merge_headers_case_insensitive(
+    headers: Mapping[str, object], extra_headers: Mapping[str, object] | None
+) -> dict[str, str]:  # mutable-ok: legacy HTTP handler methods require a dict of headers
+    overridden: Final = frozenset(name.lower() for name in extra_headers or {})
+    return {
+        **{name: str(value) for name, value in headers.items() if name.lower() not in overridden},
+        **{name: str(value) for name, value in (extra_headers or {}).items()},
+    }
+
+
+def _client_request_headers(
+    response_api_optional_request_params: Mapping[str, object],
+    extra_headers: Mapping[str, object] | None,
+) -> dict[str, str]:  # mutable-ok: provider validate_environment methods require a dict
+    from litellm.litellm_core_utils.core_helpers import as_str_mapping
+
+    optional_headers: Final = as_str_mapping(response_api_optional_request_params.get("extra_headers"))
+    return _merge_headers_case_insensitive(optional_headers or {}, extra_headers)
+
+
 def _rust_responses_websocket_enabled(
     custom_llm_provider: str | None,
 ) -> bool:
@@ -999,7 +1019,7 @@ class BaseLLMHTTPHandler:
         original_data: dict,
         model: str,
         messages: list,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         litellm_params: dict,
         timeout: float | httpx.Timeout,
@@ -1053,6 +1073,7 @@ class BaseLLMHTTPHandler:
                 sync_stream=True,
                 json_mode=json_mode,
                 optional_params=_OPTIONAL_PARAMS.validate_python(optional_params),
+                logging_obj=logging_obj,
             )
             if isinstance(completion_stream, BaseModelResponseIterator):
                 completion_stream.http_response = response
@@ -1195,6 +1216,7 @@ class BaseLLMHTTPHandler:
                 sync_stream=False,
                 json_mode=json_mode,
                 optional_params=_OPTIONAL_PARAMS.validate_python(optional_params),
+                logging_obj=logging_obj,
             )
             if isinstance(completion_stream, BaseModelResponseIterator):
                 completion_stream.http_response = response
@@ -2904,14 +2926,18 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers = responses_api_provider_config.validate_environment(
-            headers=response_api_optional_request_params.get("extra_headers", {}) or {},
-            model=model,
-            litellm_params=litellm_params,
-        )
-
-        if extra_headers:
-            headers.update(extra_headers)
+        headers = {  # rebind-ok: validation replaces the method's incoming headers
+            **responses_api_provider_config.validate_environment(
+                headers=(
+                    _client_request_headers(response_api_optional_request_params, extra_headers)
+                    if custom_llm_provider == "chatgpt"
+                    else response_api_optional_request_params.get("extra_headers", {}) or {}
+                ),
+                model=model,
+                litellm_params=litellm_params,
+            ),
+            **((extra_headers or {}) if custom_llm_provider != "chatgpt" else {}),
+        }
 
         # Check if streaming is requested
         stream = response_api_optional_request_params.get("stream", False)
@@ -3102,11 +3128,15 @@ class BaseLLMHTTPHandler:
         validated_headers: Final = {
             **await asyncio.to_thread(
                 responses_api_provider_config.validate_environment,
-                headers=response_api_optional_request_params.get("extra_headers", {}) or {},
+                headers=(
+                    _client_request_headers(response_api_optional_request_params, extra_headers)
+                    if custom_llm_provider == "chatgpt"
+                    else response_api_optional_request_params.get("extra_headers", {}) or {}
+                ),
                 model=model,
                 litellm_params=litellm_params,
             ),
-            **(extra_headers or {}),
+            **((extra_headers or {}) if custom_llm_provider != "chatgpt" else {}),
         }
 
         # Check if streaming is requested
@@ -10889,7 +10919,7 @@ class BaseLLMHTTPHandler:
         )
 
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
-        url: Final = f"{api_base}/{encoded_vector_store_id}"
+        url: Final = vector_store_provider_config.get_vector_store_url(api_base, encoded_vector_store_id)
 
         logging_obj.pre_call(
             input="",
@@ -10954,7 +10984,7 @@ class BaseLLMHTTPHandler:
         )
 
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
-        url: Final = f"{api_base}/{encoded_vector_store_id}"
+        url: Final = vector_store_provider_config.get_vector_store_url(api_base, encoded_vector_store_id)
 
         logging_obj.pre_call(
             input="",
@@ -11157,7 +11187,7 @@ class BaseLLMHTTPHandler:
         )
 
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
-        url: Final = f"{api_base}/{encoded_vector_store_id}"
+        url: Final = vector_store_provider_config.get_vector_store_url(api_base, encoded_vector_store_id)
 
         request_body: Final[dict[str, object]] = dict(vector_store_update_optional_params)
         metadata: Final = vector_store_update_optional_params.get("metadata")
@@ -11236,7 +11266,7 @@ class BaseLLMHTTPHandler:
         )
 
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
-        url: Final = f"{api_base}/{encoded_vector_store_id}"
+        url: Final = vector_store_provider_config.get_vector_store_url(api_base, encoded_vector_store_id)
 
         request_body: Final[dict[str, object]] = dict(vector_store_update_optional_params)
         metadata: Final = vector_store_update_optional_params.get("metadata")
@@ -11304,7 +11334,7 @@ class BaseLLMHTTPHandler:
         )
 
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
-        url: Final = f"{api_base}/{encoded_vector_store_id}"
+        url: Final = vector_store_provider_config.get_vector_store_url(api_base, encoded_vector_store_id)
 
         logging_obj.pre_call(
             input="",
@@ -11366,7 +11396,7 @@ class BaseLLMHTTPHandler:
         )
 
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
-        url: Final = f"{api_base}/{encoded_vector_store_id}"
+        url: Final = vector_store_provider_config.get_vector_store_url(api_base, encoded_vector_store_id)
 
         logging_obj.pre_call(
             input="",

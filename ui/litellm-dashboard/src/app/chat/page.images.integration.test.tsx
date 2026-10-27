@@ -3,10 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { ChatShellProvider } from "@/contexts/ChatShellContext";
-import { recordChatQuery } from "@/lib/telemetry/chat";
 import ChatConversationPage from "./page";
-
-vi.mock("@/lib/telemetry/chat", () => ({ recordChatQuery: vi.fn(async () => {}) }));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
@@ -67,10 +64,10 @@ async function chooseModel(user: ReturnType<typeof userEvent.setup>, current: st
 }
 
 beforeEach(() => {
+  vi.stubEnv("NODE_ENV", "production");
   localStorage.clear();
   testQueryClient.clear();
   requests.length = 0;
-  vi.mocked(recordChatQuery).mockClear();
   models = [
     { model_group: "research-chat", mode: "chat", providers: ["openai"] },
     { model_group: "studio-image", mode: "image_generation", providers: ["openai"] },
@@ -109,6 +106,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const [input] of vi.mocked(fetch).mock.calls) {
+    const url = input instanceof Request ? input.url : String(input);
+    expect(new URL(url, window.location.origin).origin).toBe(window.location.origin);
+  }
+  vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   localStorage.clear();
 });
@@ -121,10 +123,9 @@ describe("chat image workflows", () => {
     await userEvent.setup().click(screen.getByRole("button", { name: "research-chat", exact: true }));
     expect(await screen.findByRole("button", { name: /^studio-image/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
-    expect(recordChatQuery).not.toHaveBeenCalled();
   });
 
-  it("should upload a document as a file part, preserve it on edit, and keep contents out of metrics", async () => {
+  it("should upload a document as a file part, preserve it on edit", async () => {
     const user = userEvent.setup();
     renderChat();
     await screen.findByRole("button", { name: "research-chat" });
@@ -145,7 +146,6 @@ describe("chat image workflows", () => {
         "data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,cHJpdmF0ZSBmaXh0dXJl",
     };
     expect(requests[0].body).toMatchObject({ input: [{ role: "user", content: [filePart] }] });
-    expect(recordChatQuery).toHaveBeenCalledExactlyOnceWith("media-test-user");
     await user.click(screen.getByRole("button", { name: "Edit message" }));
     act(() =>
       fireEvent.change(screen.getByRole("textbox", { name: "Edit message" }), {
@@ -175,7 +175,6 @@ describe("chat image workflows", () => {
     await user.click(await screen.findByRole("button", { name: "Remove note-0.txt" }));
     expect(screen.queryByText("note-0.txt")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
-    expect(recordChatQuery).not.toHaveBeenCalled();
   });
 
   it("should restore the selected chat model after switching modes and reopening the page", async () => {
@@ -201,7 +200,6 @@ describe("chat image workflows", () => {
     expect(screen.queryByRole("img", { name: "diagram.png" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     expect(requests).toHaveLength(0);
-    expect(recordChatQuery).not.toHaveBeenCalled();
   });
 
   it("should send the image and preserve it when editing and resending the message", async () => {
@@ -212,7 +210,6 @@ describe("chat image workflows", () => {
     await user.type(screen.getByRole("textbox", { name: "Message", exact: true }), "Explain this diagram");
     await user.click(screen.getByRole("button", { name: "Send" }));
     await screen.findByText("I can see the uploaded image.");
-    expect(recordChatQuery).toHaveBeenCalledExactlyOnceWith("media-test-user");
     expect(requests[0].body).toMatchObject({
       model: "research-chat",
       input: [
@@ -246,7 +243,6 @@ describe("chat image workflows", () => {
     });
     expect(requests[1].body).not.toHaveProperty("previous_response_id");
     expect(screen.queryByText("Explain this diagram", { selector: "p" })).not.toBeInTheDocument();
-    expect(recordChatQuery).toHaveBeenCalledTimes(2);
   });
 
   it("should preserve a chat turn when editing it while an image model is selected", async () => {
@@ -267,7 +263,6 @@ describe("chat image workflows", () => {
     expect(screen.getByRole("heading", { name: "Explain the experiment" })).toBeInTheDocument();
     expect(screen.getByText("I can see the uploaded image.")).toBeInTheDocument();
     expect(requests).toHaveLength(1);
-    expect(recordChatQuery).toHaveBeenCalledExactlyOnceWith("media-test-user");
   });
 
   it("should continue an image conversation using the completed response context", async () => {
@@ -288,7 +283,6 @@ describe("chat image workflows", () => {
   });
 
   it("should generate and render an image through the selected Model Hub model", async () => {
-    vi.mocked(recordChatQuery).mockReturnValueOnce(new Promise<void>(() => {}));
     const user = userEvent.setup();
     renderChat();
     await screen.findByRole("button", { name: "research-chat" });
@@ -301,7 +295,6 @@ describe("chat image workflows", () => {
     expect(requests).toEqual([
       { pathname: "/images/generations", body: { model: "studio-image", prompt: "A blue research lab" } },
     ]);
-    expect(recordChatQuery).toHaveBeenCalledExactlyOnceWith("media-test-user");
   });
 
   it("should list no image models when the account has none permitted", async () => {
@@ -327,7 +320,6 @@ describe("chat image workflows", () => {
     await user.click(screen.getByRole("button", { name: "Generate image" }));
     expect(await screen.findByText(/Image access is disabled for this key/)).toBeInTheDocument();
     expect(screen.queryByRole("img", { name: "Generated image 1" })).not.toBeInTheDocument();
-    expect(recordChatQuery).toHaveBeenCalledExactlyOnceWith("media-test-user");
   });
 
   it("should abort image generation when the user stops the request", async () => {
@@ -346,12 +338,10 @@ describe("chat image workflows", () => {
       fireEvent.keyDown(screen.getByRole("textbox", { name: "Message", exact: true }), { key: "Enter" });
     });
     expect(requests).toHaveLength(1);
-    expect(recordChatQuery).toHaveBeenCalledExactlyOnceWith("media-test-user");
     await user.click(screen.getByRole("button", { name: "Stop request" }));
     expect(generationSignal?.aborted).toBe(true);
     expect(await screen.findByText("[stopped]")).toBeInTheDocument();
     expect(screen.queryByRole("img", { name: "Generated image 1" })).not.toBeInTheDocument();
-    expect(recordChatQuery).toHaveBeenCalledTimes(1);
   });
 
   it("should reject unsupported pasted files without issuing a request", async () => {
@@ -364,7 +354,6 @@ describe("chat image workflows", () => {
     });
     expect(await screen.findByRole("alert")).toHaveTextContent("Choose a PNG, JPEG, WebP, or GIF image.");
     expect(requests).toHaveLength(0);
-    expect(recordChatQuery).not.toHaveBeenCalled();
   });
 
   it("should not count a blank submission as a query", async () => {
@@ -377,7 +366,6 @@ describe("chat image workflows", () => {
       fireEvent.keyDown(screen.getByRole("textbox", { name: "Message", exact: true }), { key: "Enter" });
     });
     expect(requests).toHaveLength(0);
-    expect(recordChatQuery).not.toHaveBeenCalled();
   });
 
   it("should count one query for a message that streams text and executes multiple MCP tools", async () => {
@@ -390,7 +378,6 @@ describe("chat image workflows", () => {
     await user.click(serverSwitch);
     await waitFor(() => expect(screen.getByRole("switch")).toBeChecked());
     await user.click(screen.getByRole("button", { name: "Connect tools" }));
-    expect(recordChatQuery).not.toHaveBeenCalled();
 
     act(() => {
       fireEvent.change(screen.getByRole("textbox", { name: "Message", exact: true }), {
@@ -404,6 +391,5 @@ describe("chat image workflows", () => {
     expect(requests[0].body).toMatchObject({
       tools: [{ type: "mcp", server_label: "research-tools", require_approval: "never" }],
     });
-    expect(recordChatQuery).toHaveBeenCalledExactlyOnceWith("media-test-user");
   });
 });

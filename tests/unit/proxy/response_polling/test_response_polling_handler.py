@@ -1011,10 +1011,9 @@ class TestPollingConditionChecks:
 
         # Create mock router
         mock_router = Mock()
-        mock_router.model_name_to_deployment_indices = {"gpt-5": [0]}
-        mock_router.model_list = [
-            {"model_name": "gpt-5", "litellm_params": {"model": "openai/gpt-5"}}
-        ]
+        mock_router.deployments_named.side_effect = {
+            "gpt-5": ({"model_name": "gpt-5", "litellm_params": {"model": "openai/gpt-5"}},)
+        }.get
 
         result = should_use_polling_for_request(
             background_mode=True,
@@ -1033,13 +1032,14 @@ class TestPollingConditionChecks:
         )
 
         mock_router = Mock()
-        mock_router.model_name_to_deployment_indices = {"claude-3": [0]}
-        mock_router.model_list = [
-            {
-                "model_name": "claude-3",
-                "litellm_params": {"model": "anthropic/claude-3-sonnet"},
-            }
-        ]
+        mock_router.deployments_named.side_effect = {
+            "claude-3": (
+                {
+                    "model_name": "claude-3",
+                    "litellm_params": {"model": "anthropic/claude-3-sonnet"},
+                },
+            )
+        }.get
 
         result = should_use_polling_for_request(
             background_mode=True,
@@ -1183,13 +1183,14 @@ class TestPollingConditionChecks:
         )
 
         mock_router = Mock()
-        mock_router.model_name_to_deployment_indices = {"deep-research": [0]}
-        mock_router.model_list = [
-            {
-                "model_name": "deep-research",
-                "litellm_params": {"model": "openai/o4-mini-deep-research"},
-            }
-        ]
+        mock_router.deployments_named.side_effect = {
+            "deep-research": (
+                {
+                    "model_name": "deep-research",
+                    "litellm_params": {"model": "openai/o4-mini-deep-research"},
+                },
+            )
+        }.get
 
         # Model alias "deep-research" is in native_background_mode
         result = should_use_polling_for_request(

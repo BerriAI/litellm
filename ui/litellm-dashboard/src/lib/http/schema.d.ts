@@ -1792,6 +1792,30 @@ export interface paths {
         patch: operations["azure_speech_proxy_route_azure_speech__endpoint__patch"];
         trace?: never;
     };
+    "/backend-api/codex/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Codex Passthrough Route
+         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication.
+         */
+        get: operations["codex_passthrough_route_backend_api_codex__endpoint__get"];
+        put?: never;
+        /**
+         * Codex Passthrough Route
+         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication.
+         */
+        post: operations["codex_passthrough_route_backend_api_codex__endpoint__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/batches": {
         parameters: {
             query?: never;
@@ -35042,7 +35066,7 @@ export interface components {
             created_at: string;
             /** Created By */
             created_by: string;
-            litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
+            litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | null;
             /**
              * Members
              * @default []
@@ -35223,14 +35247,22 @@ export interface components {
             cache_creation_input_token_cost_above_12hr?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens */
             cache_creation_input_token_cost_above_12hr_above_272k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Batches */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Flex */
             cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Priority */
             cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Ultrafast */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Batches */
+            cache_creation_input_token_cost_above_12hr_batches?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Flex */
             cache_creation_input_token_cost_above_12hr_flex?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Priority */
             cache_creation_input_token_cost_above_12hr_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Ultrafast */
+            cache_creation_input_token_cost_above_12hr_ultrafast?: number | null;
             /** Cache Creation Input Token Cost Above 1Hr */
             cache_creation_input_token_cost_above_1hr?: number | null;
             /** Cache Creation Input Token Cost Above 1Hr Above 100K Tokens */
@@ -35301,6 +35333,11 @@ export interface components {
             cache_read_input_token_cost_priority?: number | null;
             /** Cache Read Input Token Cost Ultrafast */
             cache_read_input_token_cost_ultrafast?: number | null;
+            /**
+             * Chatgpt Auth File
+             * @description Path to a ChatGPT OAuth auth.json for this deployment.
+             */
+            chatgpt_auth_file?: string | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
             /** Client Id */
@@ -46320,6 +46357,21 @@ export interface components {
             team_id: string;
         };
         /**
+         * TeamListCallerMembership
+         * @description The calling user's own spend and effective member budget in a team.
+         */
+        TeamListCallerMembership: {
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+        };
+        /**
          * TeamListItem
          * @description A team item in the paginated list response, enriched with computed fields.
          */
@@ -46355,6 +46407,7 @@ export interface components {
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
+            caller_membership?: components["schemas"]["TeamListCallerMembership"] | null;
             /** Created At */
             created_at?: string | null;
             /** Default Team Member Models */
@@ -50237,14 +50290,22 @@ export interface components {
             cache_creation_input_token_cost_above_12hr?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens */
             cache_creation_input_token_cost_above_12hr_above_272k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Batches */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Flex */
             cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Priority */
             cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Ultrafast */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Batches */
+            cache_creation_input_token_cost_above_12hr_batches?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Flex */
             cache_creation_input_token_cost_above_12hr_flex?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Priority */
             cache_creation_input_token_cost_above_12hr_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Ultrafast */
+            cache_creation_input_token_cost_above_12hr_ultrafast?: number | null;
             /** Cache Creation Input Token Cost Above 1Hr */
             cache_creation_input_token_cost_above_1hr?: number | null;
             /** Cache Read Input Token Cost */
@@ -50542,14 +50603,22 @@ export interface components {
             cache_creation_input_token_cost_above_12hr?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens */
             cache_creation_input_token_cost_above_12hr_above_272k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Batches */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Flex */
             cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Priority */
             cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Above 272K Tokens Ultrafast */
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Batches */
+            cache_creation_input_token_cost_above_12hr_batches?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Flex */
             cache_creation_input_token_cost_above_12hr_flex?: number | null;
             /** Cache Creation Input Token Cost Above 12Hr Priority */
             cache_creation_input_token_cost_above_12hr_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 12Hr Ultrafast */
+            cache_creation_input_token_cost_above_12hr_ultrafast?: number | null;
             /** Cache Creation Input Token Cost Above 1Hr */
             cache_creation_input_token_cost_above_1hr?: number | null;
             /** Cache Creation Input Token Cost Above 1Hr Above 100K Tokens */
@@ -50620,6 +50689,11 @@ export interface components {
             cache_read_input_token_cost_priority?: number | null;
             /** Cache Read Input Token Cost Ultrafast */
             cache_read_input_token_cost_ultrafast?: number | null;
+            /**
+             * Chatgpt Auth File
+             * @description Path to a ChatGPT OAuth auth.json for this deployment.
+             */
+            chatgpt_auth_file?: string | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
             /** Client Id */
@@ -53684,6 +53758,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    codex_passthrough_route_backend_api_codex__endpoint__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: "models" | "responses";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    codex_passthrough_route_backend_api_codex__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: "models" | "responses";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Unmodified Codex response or server-sent events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
