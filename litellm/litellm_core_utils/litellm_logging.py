@@ -7131,10 +7131,12 @@ class StandardLoggingPayloadSetup:
         litellm_metadata: Final = cast(  # cast-ok: request metadata is caller-provided
             Mapping[str, object], litellm_params.get("litellm_metadata") or {}
         )
-        if metadata.get("tags", []):
-            request_tags = cast(list[str], metadata.get("tags", [])).copy()  # cast-ok: tags are caller-provided
-        elif litellm_metadata.get("tags", []):
-            request_tags = cast(list[str], litellm_metadata.get("tags", [])).copy()  # cast-ok: tags are caller-provided
+        tags: Final = metadata.get("tags") or litellm_metadata.get("tags") or []
+        if isinstance(tags, str):
+            # tolerate a caller passing a single tag as a string instead of a list
+            request_tags = [tags]
+        elif isinstance(tags, (list, tuple)):
+            request_tags = list(cast(list[str], tags))  # cast-ok: tags are caller-provided
         else:
             request_tags = []
         user_agent_tags: Final = StandardLoggingPayloadSetup._get_user_agent_tags(proxy_server_request)
