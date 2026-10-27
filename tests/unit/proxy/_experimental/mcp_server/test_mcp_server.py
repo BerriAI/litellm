@@ -69,7 +69,8 @@ async def test_mcp_server_manager_https_server():
 
     # Create a mock MCPClient
     mock_client = AsyncMock()
-    mock_client.list_tools = AsyncMock(return_value=mock_tools)
+    mock_client.list_tools_result = AsyncMock(return_value=ListToolsResult(tools=mock_tools))
+    mock_client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
     mock_client.call_tool = AsyncMock(return_value=mock_result)
 
     # Mock the MCPClient constructor
@@ -133,7 +134,7 @@ async def test_mcp_server_manager_https_server():
         assert result.content[0].text == "Email sent successfully"
 
         # Verify client methods were called
-        mock_client.list_tools.assert_called()
+        mock_client.list_tools_result.assert_called()
         mock_client.call_tool.assert_called_once()
 
 
@@ -176,7 +177,8 @@ async def test_mcp_http_transport_list_tools_mock():
 
     # Create a mock MCPClient that returns our test tools
     mock_client = AsyncMock()
-    mock_client.list_tools = AsyncMock(return_value=mock_tools)
+    mock_client.list_tools_result = AsyncMock(return_value=ListToolsResult(tools=mock_tools))
+    mock_client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
 
@@ -218,7 +220,7 @@ async def test_mcp_http_transport_list_tools_mock():
         assert tools[1].name == f"{expected_prefix}-calendar_create_event"
 
         # Verify client methods were called
-        mock_client.list_tools.assert_called()
+        mock_client.list_tools_result.assert_called()
 
         # Verify tool mapping was updated
         expected_prefix = "test_http_server"
@@ -1104,9 +1106,10 @@ async def test_list_tools_only_returns_allowed_servers(monkeypatch):
         mock_client = AsyncMock()
         # Return tools based on server URL
         if kwargs.get("server_url") == "https://server-a.com/mcp":
-            mock_client.list_tools = AsyncMock(return_value=mock_tools_a)
+            mock_client.list_tools_result = AsyncMock(return_value=ListToolsResult(tools=mock_tools_a))
         else:
-            mock_client.list_tools = AsyncMock(return_value=mock_tools_b)
+            mock_client.list_tools_result = AsyncMock(return_value=ListToolsResult(tools=mock_tools_b))
+        mock_client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=None)
         return mock_client
@@ -1401,7 +1404,8 @@ async def test_mcp_server_manager_alias_tool_prefixing():
 
     # Mock MCPClient
     mock_client = AsyncMock()
-    mock_client.list_tools = AsyncMock(return_value=mock_tools)
+    mock_client.list_tools_result = AsyncMock(return_value=ListToolsResult(tools=mock_tools))
+    mock_client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
 
@@ -1461,7 +1465,8 @@ async def test_mcp_server_manager_server_name_tool_prefixing():
 
     # Mock MCPClient
     mock_client = AsyncMock()
-    mock_client.list_tools = AsyncMock(return_value=mock_tools)
+    mock_client.list_tools_result = AsyncMock(return_value=ListToolsResult(tools=mock_tools))
+    mock_client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
 
@@ -1521,7 +1526,8 @@ async def test_mcp_server_manager_server_id_tool_prefixing():
 
     # Mock MCPClient
     mock_client = AsyncMock()
-    mock_client.list_tools = AsyncMock(return_value=mock_tools)
+    mock_client.list_tools_result = AsyncMock(return_value=ListToolsResult(tools=mock_tools))
+    mock_client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
 
