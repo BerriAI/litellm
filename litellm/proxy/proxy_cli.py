@@ -1323,9 +1323,6 @@ def run_server(
                 import litellm
 
                 litellm.json_logs = True
-                # Workers that uvicorn or granian spawn import litellm afresh and read this at import,
-                # so they log JSON from their first record instead of plain text until load_config
-                # reaches the json_logs key.
                 os.environ["JSON_LOGS"] = "true"
 
                 litellm.turn_on_json()

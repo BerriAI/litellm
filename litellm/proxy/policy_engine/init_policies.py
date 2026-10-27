@@ -8,6 +8,7 @@ Configuration structure:
 
 import sys
 from collections.abc import Mapping, Sequence
+from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import print_startup_message, verbose_proxy_logger
@@ -26,6 +27,42 @@ _yellow_color_code: Final = "\033[93m"
 _reset_color_code: Final = "\033[0m"
 
 
+def _policy_lines(policy_name: str, policy_data: Mapping[str, object]) -> tuple[str, ...]:
+    guardrails: Final = policy_data.get("guardrails", {})
+    inherit: Final = policy_data.get("inherit")
+    condition: Final = policy_data.get("condition")
+    description: Final = policy_data.get("description")
+
+    guardrails_add: Final = guardrails.get("add", []) if isinstance(guardrails, dict) else []
+    guardrails_remove: Final = guardrails.get("remove", []) if isinstance(guardrails, dict) else []
+    model_condition: Final = condition.get("model") if isinstance(condition, dict) else None
+    inherit_str: Final = f" (inherits: {inherit})" if inherit else ""
+
+    return (
+        f"{_blue_color_code}  - {policy_name}{inherit_str}{_reset_color_code}",
+        *((f"      description: {description}",) if description else ()),
+        *((f"      guardrails.add: {guardrails_add}",) if guardrails_add else ()),
+        *((f"      guardrails.remove: {guardrails_remove}",) if guardrails_remove else ()),
+        *((f"      condition.model: {model_condition}",) if model_condition else ()),
+    )
+
+
+def _attachment_line(attachment: Mapping[str, object]) -> str:
+    policy: Final = attachment.get("policy", "unknown")
+    scope: Final = attachment.get("scope")
+    teams: Final = attachment.get("teams")
+    keys: Final = attachment.get("keys")
+    models: Final = attachment.get("models")
+
+    scope_parts: Final = (
+        *(("scope=* (global)",) if scope == "*" else ()),
+        *((f"teams={teams}",) if teams else ()),
+        *((f"keys={keys}",) if keys else ()),
+        *((f"models={models}",) if models else ()),
+    )
+    return f"  - {policy} -> {', '.join(scope_parts) if scope_parts else 'all'}"
+
+
 def _print_policies_on_startup(
     policies_config: Mapping[str, Mapping[str, object]],
     policy_attachments_config: Sequence[Mapping[str, object]] | None = None,
@@ -33,60 +70,29 @@ def _print_policies_on_startup(
     """
     Print loaded policies to console on startup (similar to model list).
     """
-    lines: Final = [
+    header: Final = (
         f"{_green_color_code}\nLiteLLM Policy Engine: Loaded {len(policies_config)} policies{_reset_color_code}\n"
-    ]
-
-    for policy_name, policy_data in policies_config.items():
-        guardrails = policy_data.get("guardrails", {})
-        inherit = policy_data.get("inherit")
-        condition = policy_data.get("condition")
-        description = policy_data.get("description")
-
-        guardrails_add = guardrails.get("add", []) if isinstance(guardrails, dict) else []
-        guardrails_remove = guardrails.get("remove", []) if isinstance(guardrails, dict) else []
-        inherit_str = f" (inherits: {inherit})" if inherit else ""
-
-        lines.append(f"{_blue_color_code}  - {policy_name}{inherit_str}{_reset_color_code}")
-        if description:
-            lines.append(f"      description: {description}")
-        if guardrails_add:
-            lines.append(f"      guardrails.add: {guardrails_add}")
-        if guardrails_remove:
-            lines.append(f"      guardrails.remove: {guardrails_remove}")
-        if condition:
-            model_condition = condition.get("model") if isinstance(condition, dict) else None
-            if model_condition:
-                lines.append(f"      condition.model: {model_condition}")
-
-    # Print attachments
-    if policy_attachments_config:
-        lines.append(
-            f"\n{_yellow_color_code}Policy Attachments: {len(policy_attachments_config)} attachment(s){_reset_color_code}"
+    )
+    policy_lines: Final = tuple(
+        chain.from_iterable(
+            _policy_lines(policy_name, policy_data) for policy_name, policy_data in policies_config.items()
         )
-        for attachment in policy_attachments_config:
-            policy = attachment.get("policy", "unknown")
-            scope = attachment.get("scope")
-            teams = attachment.get("teams")
-            keys = attachment.get("keys")
-            models = attachment.get("models")
+    )
 
-            scope_parts = []
-            if scope == "*":
-                scope_parts.append("scope=* (global)")
-            if teams:
-                scope_parts.append(f"teams={teams}")
-            if keys:
-                scope_parts.append(f"keys={keys}")
-            if models:
-                scope_parts.append(f"models={models}")
-            scope_str = ", ".join(scope_parts) if scope_parts else "all"
-
-            lines.append(f"  - {policy} -> {scope_str}")
-        lines.append("")
-        print_startup_message("\n".join(lines))
+    if policy_attachments_config:
+        print_startup_message(
+            "\n".join(
+                (
+                    header,
+                    *policy_lines,
+                    f"\n{_yellow_color_code}Policy Attachments: {len(policy_attachments_config)} attachment(s){_reset_color_code}",
+                    *(_attachment_line(attachment) for attachment in policy_attachments_config),
+                    "",
+                )
+            )
+        )
     else:
-        print_startup_message("\n".join(lines))
+        print_startup_message("\n".join((header, *policy_lines)))
         print_startup_message(
             f"\n{_yellow_color_code}Warning: No policy_attachments configured. Policies will not be applied to any requests.{_reset_color_code}\n",
         )

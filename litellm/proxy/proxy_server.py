@@ -9627,8 +9627,6 @@ async def initialize(
         prisma_client
     from litellm.proxy.common_utils.banner import LITELLM_BANNER, show_banner
 
-    # show_banner() also serves the `lite` shell, which runs against an uninitialized SDK (#46803), so
-    # the JSON-mode choice stays out of it.
     if litellm.json_logs:
         print_startup_message(LITELLM_BANNER)
     else:

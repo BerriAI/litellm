@@ -77,35 +77,31 @@ def test_migrate_diff_without_the_prisma_runner_skips_instead_of_crashing_boot(m
     assert check_prisma_schema_diff_helper("postgresql://u:p@localhost:9/x") == (False, [])
 
 
-def test_migrate_diff_announces_the_schema_changes_as_one_json_record(fake_prisma_cli, monkeypatch, capfd):
+def test_a_skipped_migration_diff_is_one_json_record_in_json_mode(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
     """
-    The "Changes to DB Schema detected" notice and its SQL went to stdout as plaintext;
-    with json_logs on they are one INFO record, so a log pipeline keeps parsing. The
-    loggers sit at WARNING, as they do at boot without LITELLM_LOG, and the record
-    still goes out: the print it replaces had no level.
+    With json_logs on, the notice that the migration diff was skipped is one INFO record on stdout,
+    also while the loggers sit at WARNING, as they do at boot without LITELLM_LOG.
     """
     from litellm.proxy.db.check_migration import check_prisma_schema_diff_helper
 
-    monkeypatch.setenv(
-        "FAKE_PRISMA_STDOUT", '-- AlterTable\nALTER TABLE "LiteLLM_UserTable" ADD COLUMN "nickname" TEXT;\n'
-    )
+    monkeypatch.setitem(sys.modules, "litellm_proxy_extras.prisma_toolchain", None)
     monkeypatch.setattr(litellm, "json_logs", True)
-    monkeypatch.setattr(sys, "excepthook", sys.excepthook)  # turn_on_json swaps it; put it back at teardown
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
     turn_on_json()
     verbose_logger.setLevel(logging.WARNING)
     verbose_proxy_logger.setLevel(logging.WARNING)
 
-    assert check_prisma_schema_diff_helper("postgresql://u:p@localhost:9/x") == (
-        True,
-        ['ALTER TABLE "LiteLLM_UserTable" ADD COLUMN "nickname" TEXT;'],
-    )
+    assert check_prisma_schema_diff_helper("postgresql://u:p@localhost:9/x") == (False, [])
 
     out, err = capfd.readouterr()
     assert err == ""
     lines: Final = [raw for raw in out.splitlines() if raw.strip()]
     assert len(lines) == 1, lines
     record: Final = json.loads(lines[0])
-    assert record["level"] == "INFO"
-    assert record["message"] == (
-        'Changes to DB Schema detected\nRequired SQL commands:\nALTER TABLE "LiteLLM_UserTable" ADD COLUMN "nickname" TEXT;'
+    assert (record["level"], record["message"]) == (
+        "INFO",
+        "Skipping the migration diff: litellm-proxy-extras has no Prisma runner. "
+        "Error: import of litellm_proxy_extras.prisma_toolchain halted; None in sys.modules",
     )

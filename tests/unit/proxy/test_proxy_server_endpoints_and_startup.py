@@ -15588,11 +15588,13 @@ async def test_spend_capture_rate_check_job_clears_the_gauge_once_the_setting_is
     ]
 
 
-def test_feedback_box_is_one_json_record_in_json_mode(monkeypatch, capfd):
+def test_feedback_box_is_one_json_record_in_json_mode(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
     """The feedback box is a dozen terminal lines; with JSON logs on it has to land as one parseable
     record, not a plaintext line per row."""
     monkeypatch.setattr(litellm, "json_logs", True)
-    monkeypatch.setattr(sys, "excepthook", sys.excepthook)  # turn_on_json swaps it; put it back at teardown
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
     turn_on_json()
 
     proxy_server_module.generate_feedback_box()
@@ -15608,7 +15610,9 @@ def test_feedback_box_is_one_json_record_in_json_mode(monkeypatch, capfd):
 
 
 @pytest.mark.asyncio
-async def test_initialize_prints_the_banner_between_blank_lines_in_plain_mode(monkeypatch, capfd):
+async def test_initialize_prints_the_banner_between_blank_lines_in_plain_mode(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
     """Operators without JSON logs see the banner exactly as before, through show_banner()'s flushing
     click.echo."""
     monkeypatch.setattr(litellm, "json_logs", False)
@@ -15622,11 +15626,13 @@ async def test_initialize_prints_the_banner_between_blank_lines_in_plain_mode(mo
 
 
 @pytest.mark.asyncio
-async def test_initialize_prints_the_banner_as_one_json_record_in_json_mode(monkeypatch, capfd):
+async def test_initialize_prints_the_banner_as_one_json_record_in_json_mode(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
     """With JSON logs on, the six banner rows are one INFO record with their indentation kept, so the
     first line a worker writes parses like every other."""
     monkeypatch.setattr(litellm, "json_logs", True)
-    monkeypatch.setattr(sys, "excepthook", sys.excepthook)  # turn_on_json swaps it; put it back at teardown
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
     monkeypatch.setenv("LITELLM_DONT_SHOW_FEEDBACK_BOX", "true")
     turn_on_json()
 

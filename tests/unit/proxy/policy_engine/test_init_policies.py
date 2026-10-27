@@ -53,7 +53,12 @@ NO_ATTACHMENTS_WARNING: Final = (
     ],
     ids=["with-attachments", "without-attachments"],
 )
-def test_policy_table_prints_unchanged_in_plain_mode(monkeypatch, capfd, attachments, expected):
+def test_policy_table_prints_unchanged_in_plain_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+    attachments: Sequence[Mapping[str, object]] | None,
+    expected: str,
+) -> None:
     """Operators without JSON logs keep the colored policy table byte for byte."""
     monkeypatch.setattr(litellm, "json_logs", False)
 
@@ -62,10 +67,12 @@ def test_policy_table_prints_unchanged_in_plain_mode(monkeypatch, capfd, attachm
     assert capfd.readouterr() == (expected, "")
 
 
-def test_policy_table_is_one_json_record_in_json_mode(monkeypatch, capfd):
+def test_policy_table_is_one_json_record_in_json_mode(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
     """With JSON logs on the whole table, attachments included, is one INFO record without color codes."""
     monkeypatch.setattr(litellm, "json_logs", True)
-    monkeypatch.setattr(sys, "excepthook", sys.excepthook)  # turn_on_json swaps it; put it back at teardown
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
     turn_on_json()
 
     _print_policies_on_startup(POLICIES, ATTACHMENTS)
@@ -88,7 +95,9 @@ def test_policy_table_is_one_json_record_in_json_mode(monkeypatch, capfd):
     )
 
 
-def test_missing_attachments_warning_is_a_second_json_record(monkeypatch, capfd):
+def test_missing_attachments_warning_is_a_second_json_record(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
     """Without attachments the table and the yellow warning are two INFO records on stdout, where the two
     prints put them."""
     monkeypatch.setattr(litellm, "json_logs", True)
