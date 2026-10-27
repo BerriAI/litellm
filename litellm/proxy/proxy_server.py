@@ -9858,7 +9858,7 @@ def _restamp_streaming_chunk_model(
 
 
 def _streaming_choice_carries_provider_extras(choice: object) -> bool:
-    extra: Final = getattr(choice, "__pydantic_extra__", None)
+    extra: Final[Mapping[str, object] | None] = getattr(choice, "__pydantic_extra__", None)
     if not isinstance(extra, dict):
         return False
     return any(key not in STREAMING_CHOICE_OPENAI_FIELDS for key in extra)

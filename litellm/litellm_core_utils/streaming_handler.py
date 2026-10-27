@@ -33,6 +33,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import OpenAIChatCompletionChunk
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    STREAMING_CHOICE_OPENAI_FIELDS,
     CacheCreationTokenDetails,
     CompletionTokensDetailsWrapper,
     Delta,
@@ -257,6 +258,7 @@ class CustomStreamWrapper:
         self.system_fingerprint: str | None = None
         self._provider_response_model: str | None = None
         self.received_finish_reason: str | None = None
+        self._deferred_finish_chunk: ModelResponseStream | None = None
         self.intermittent_finish_reason: str | None = None  # finish reasons that show up mid-stream
         self.special_tokens = [
             "<|assistant|>",
@@ -293,7 +295,9 @@ class CustomStreamWrapper:
         self.received_model_id: str | None = None
         self.logging_loop = None
         self.rules = Rules()
-        self.stream_options = stream_options or getattr(logging_obj, "stream_options", None)
+        self.stream_options: Mapping[str, object] | None = stream_options or getattr(
+            logging_obj, "stream_options", None
+        )
         self.messages = getattr(logging_obj, "messages", None)
         self.sent_stream_usage = False
         self.send_stream_usage = True if self.check_send_stream_usage(self.stream_options) else False
@@ -301,7 +305,7 @@ class CustomStreamWrapper:
             isinstance(self.stream_options, dict) and self.stream_options.get("continuous_usage_stats") is True
         ) and self.send_stream_usage
         self.tool_call = False
-        self.chunks: list = []  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
+        self.chunks: list[ModelResponseStream] = []
         self._repeated_messages_count = 1
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: int | None = None
@@ -461,7 +465,7 @@ class CustomStreamWrapper:
                     )
         self._restore_consumer_correlation_context()
 
-    def check_send_stream_usage(self, stream_options: dict | None):
+    def check_send_stream_usage(self, stream_options: Mapping[str, object] | None) -> bool:
         return stream_options is not None and stream_options.get("include_usage", False) is True
 
     def check_is_function_call(self, logging_obj) -> bool:
@@ -509,9 +513,7 @@ class CustomStreamWrapper:
 
         last_content: Final = self.chunks[-1].choices[0].delta.content
 
-        if (
-            last_content is None or not isinstance(last_content, str) or len(last_content) <= 2
-        ):  # ignore empty content - https://github.com/BerriAI/litellm/issues/5158#issuecomment-2287156946
+        if last_content is None or len(last_content) <= 2:
             self._repeated_messages_count = 1
             return
 
@@ -1070,6 +1072,24 @@ class CustomStreamWrapper:
 
                 self._optional_combine_thinking_block_in_choices(model_response=model_response)
 
+                if self.received_finish_reason is not None:
+                    self._deferred_finish_chunk = ModelResponseStream(choices=model_response.choices).model_copy(
+                        deep=True
+                    )
+                    return model_response.model_copy(
+                        update={
+                            "choices": [
+                                StreamingChoices(
+                                    **{
+                                        key: value
+                                        for key, value in choice.model_dump().items()
+                                        if key in STREAMING_CHOICE_OPENAI_FIELDS
+                                    }
+                                )
+                                for choice in model_response.choices
+                            ]
+                        }
+                    )
                 return model_response
             else:
                 return
@@ -1773,9 +1793,13 @@ class CustomStreamWrapper:
             self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 
     def finish_reason_handler(self):
+        from litellm.litellm_core_utils.core_helpers import preserve_streaming_choice_provider_extras
+
         model_response: Final = self.model_response_creator(
             hidden_params=None if self.received_model_id is None else {"received_model_id": self.received_model_id}
         )
+        if self._deferred_finish_chunk is not None:
+            preserve_streaming_choice_provider_extras(model_response, self._deferred_finish_chunk)
         _finish_reason: Final = self.received_finish_reason or self.intermittent_finish_reason
         if _finish_reason is not None:
             model_response.choices[0].finish_reason = _finish_reason
@@ -2559,7 +2583,7 @@ def _coerce_token_details(
     return details_type(**(raw if isinstance(raw, dict) else raw.model_dump()))
 
 
-def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
+def calculate_total_usage(chunks: Sequence[ModelResponse | ModelResponseStream]) -> Usage:
     """Assume most recent usage chunk has total usage uptil then."""
     from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
         attach_cache_creation_token_details,

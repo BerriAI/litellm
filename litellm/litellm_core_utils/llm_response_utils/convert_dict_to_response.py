@@ -56,10 +56,10 @@ from litellm.types.utils import Logprobs as TextCompletionLogprobs
 from .get_headers import get_response_headers
 
 _MESSAGE_FIELDS: Final[frozenset] = frozenset(Message.model_fields.keys())
-_CHOICES_FIELDS: Final[frozenset] = frozenset(Choices.model_fields.keys())
-_CHOICES_EXPLICIT_KWARGS: Final[frozenset] = _CHOICES_FIELDS | {"enhancements"}
+_CHOICES_FIELDS: Final[frozenset[str]] = frozenset(Choices.model_fields.keys())
+_CHOICES_EXPLICIT_KWARGS: Final[frozenset[str]] = _CHOICES_FIELDS | {"enhancements"}
 _MODEL_RESPONSE_FIELDS: Final[frozenset] = frozenset(ModelResponse.model_fields.keys()) | {"usage"}
-_CACHED_CHOICE_RESERVED_KEYS: Final[frozenset] = STREAMING_CHOICE_OPENAI_FIELDS | {"message", "finish_details"}
+_CACHED_CHOICE_RESERVED_KEYS: Final[frozenset[str]] = STREAMING_CHOICE_OPENAI_FIELDS | {"message", "finish_details"}
 
 
 def _normalize_images_for_message(
@@ -148,8 +148,8 @@ def _split_assembled_content_for_replay(content: str | None) -> list[str]:
     return _REPLAY_CONTENT_SLICE_RE.findall(content)
 
 
-def _cached_choice_provider_extras(choice: Mapping[str, object]) -> Mapping[str, object]:
-    return {key: value for key, value in choice.items() if key not in _CACHED_CHOICE_RESERVED_KEYS}
+def _choice_provider_extras(choice: Mapping[str, object], reserved_keys: frozenset[str]) -> Mapping[str, object]:
+    return {key: value for key, value in choice.items() if key not in reserved_keys}
 
 
 def _clear_later_replay_slice_metadata(choice: StreamingChoices) -> None:
@@ -260,7 +260,7 @@ async def convert_to_streaming_response_async(
             index=idx,
             delta=delta,
             logprobs=logprobs,
-            **_cached_choice_provider_extras(choice),
+            **_choice_provider_extras(choice, _CACHED_CHOICE_RESERVED_KEYS),
         )
         choice_list.append(choice)
 
@@ -360,7 +360,7 @@ def convert_to_streaming_response(
             delta=delta,
             logprobs=logprobs,
             enhancements=enhancements,
-            **_cached_choice_provider_extras(choice),
+            **_choice_provider_extras(choice, _CACHED_CHOICE_RESERVED_KEYS),
         )
 
         choice_list.append(choice)
@@ -814,7 +814,7 @@ def convert_to_model_response_object(
                     logprobs=logprobs,
                     enhancements=enhancements,
                     provider_specific_fields=provider_specific_fields,
-                    **{f: v for f, v in provider_specific_fields.items() if f not in _CHOICES_EXPLICIT_KWARGS},
+                    **_choice_provider_extras(provider_specific_fields, _CHOICES_EXPLICIT_KWARGS),
                 )
                 if provider_sent_logprobs and logprobs is None:
                     choice.logprobs = None

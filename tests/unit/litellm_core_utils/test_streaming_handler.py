@@ -2,10 +2,12 @@ import asyncio
 import json
 import threading
 import time
+from collections.abc import Sequence
 from typing import Final, NoReturn, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
+from openai.types.chat import ChatCompletionChunk
 
 import litellm
 from litellm import verbose_logger
@@ -6691,11 +6693,15 @@ async def test_leaving_an_async_with_block_closes_the_provider_stream():
     assert stream.close_calls == 1
 
 
-def _vllm_wrapper(chunks: list[ModelResponseStream], stream_options: dict | None = None) -> CustomStreamWrapper:
+def _vllm_wrapper(
+    chunks: Sequence[ModelResponseStream | ChatCompletionChunk],
+    stream_options: dict | None = None,
+    custom_llm_provider: str = "hosted_vllm",
+) -> CustomStreamWrapper:
     return CustomStreamWrapper(
         completion_stream=ModelResponseListIterator(model_responses=chunks),
         model="hosted_vllm/m",
-        custom_llm_provider="hosted_vllm",
+        custom_llm_provider=custom_llm_provider,
         stream_options=stream_options,
         logging_obj=Logging(
             model="hosted_vllm/m",
@@ -6730,6 +6736,66 @@ async def test_vllm_choice_extras_survive_the_terminal_finish_chunk(sync_mode: b
     finish_choice: Final = emitted[-1].choices[0]
     assert getattr(finish_choice, "stop_reason", None) == "eos"
     assert getattr(finish_choice, "token_ids", None) == [9]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("source", ["sdk", "http_handler", "cache"])
+@pytest.mark.parametrize("content", ["", "last token"])
+@pytest.mark.parametrize(("stop_reason", "token_ids"), [("eos", (9,)), (0, ())])
+@pytest.mark.asyncio
+async def test_vllm_finish_choice_extras_survive_serialized_live_and_cached_streams(
+    sync_mode: bool, source: str, content: str, stop_reason: str | int, token_ids: tuple[int, ...]
+) -> None:
+    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+        convert_to_streaming_response,
+        convert_to_streaming_response_async,
+    )
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
+    from litellm.proxy.proxy_server import _serialize_streaming_chunk
+
+    terminal_choice: Final = {
+        "index": 0,
+        "finish_reason": "stop",
+        "stop_reason": stop_reason,
+        "token_ids": list(token_ids),
+    }
+    cached_response: Final = {
+        "id": "c",
+        "created": 1,
+        "model": "hosted_vllm/m",
+        "choices": [{**terminal_choice, "message": {"role": "assistant", "content": content}}],
+    }
+    replay_chunks: Final = (
+        list(convert_to_streaming_response(cached_response))
+        if sync_mode
+        else [chunk async for chunk in convert_to_streaming_response_async(cached_response)]
+    )
+    parser: Final = OpenAIChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+    live_body: Final = {
+        "id": "c",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "hosted_vllm/m",
+        "choices": [{**terminal_choice, "delta": {"content": content}}],
+    }
+    live_chunk: Final = ChatCompletionChunk(**live_body) if source == "sdk" else parser.chunk_parser(live_body)
+    wrapper: Final = _vllm_wrapper(
+        replay_chunks if source == "cache" else [live_chunk],
+        custom_llm_provider="cached_response" if source == "cache" else "hosted_vllm",
+    )
+
+    emitted: Final = list(wrapper) if sync_mode else [chunk async for chunk in wrapper]
+    serialized: Final = [json.loads(_serialize_streaming_chunk(chunk)) for chunk in emitted]
+    finish_choices: Final = [chunk["choices"][0] for chunk in serialized if chunk["choices"][0].get("finish_reason")]
+
+    assert len(finish_choices) == 1
+    assert finish_choices[0]["stop_reason"] == terminal_choice["stop_reason"]
+    assert finish_choices[0]["token_ids"] == terminal_choice["token_ids"]
+    assert not finish_choices[0]["delta"].get("content")
+    assert [
+        chunk["choices"][0]["token_ids"] for chunk in serialized if "token_ids" in chunk["choices"][0]
+    ] == [terminal_choice["token_ids"]]
+    assert "".join(chunk["choices"][0]["delta"].get("content") or "" for chunk in serialized) == content
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
