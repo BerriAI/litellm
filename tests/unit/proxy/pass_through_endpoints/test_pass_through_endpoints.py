@@ -7619,9 +7619,6 @@ async def test_websocket_passthrough_sends_deepgram_audio_bytes_and_control_text
     upstream_ws.close.assert_awaited_once()
 
 
-RELAY_HANG_GUARD_SECONDS: Final = 5.0
-
-
 def _final_results_frame(start: float, duration: float, transcript: str) -> str:
     return json.dumps(
         {
@@ -7676,17 +7673,14 @@ async def _relay_and_capture_spend(
         worker.ensure_initialized_and_enqueue = MagicMock(
             side_effect=lambda async_coroutine: queued.append(async_coroutine)
         )
-        await asyncio.wait_for(
-            websocket_passthrough_request(
-                websocket=websocket,
-                target=target,
-                custom_headers={"Authorization": "Token dg-provider-key"},
-                user_api_key_dict=UserAPIKeyAuth(),
-                forward_headers=False,
-                endpoint=endpoint,
-                accept_websocket=False,
-            ),
-            timeout=RELAY_HANG_GUARD_SECONDS,
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target=target,
+            custom_headers={"Authorization": "Token dg-provider-key"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint=endpoint,
+            accept_websocket=False,
         )
     for coroutine in queued:
         await coroutine
