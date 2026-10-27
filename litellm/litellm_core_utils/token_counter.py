@@ -59,7 +59,6 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionDocumentObject,
-    ChatCompletionNamedToolChoiceParam,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolParam,
@@ -456,7 +455,7 @@ def token_counter(
     messages: Sequence[AllMessageValues | Message] | None = None,
     count_response_tokens: bool | None = False,
     tools: list[ChatCompletionToolParam] | None = None,
-    tool_choice: ChatCompletionNamedToolChoiceParam | None = None,
+    tool_choice: str | Mapping[str, object] | None = None,
     use_default_image_token_count: bool | None = False,
     default_token_count: int | None = None,
 ) -> int:
@@ -636,7 +635,7 @@ def _count_messages(
 def _count_extra(
     count_function: TokenCounterFunction,
     tools: list[ChatCompletionToolParam] | None,
-    tool_choice: ChatCompletionNamedToolChoiceParam | None,
+    tool_choice: str | Mapping[str, object] | None,
     includes_system_message: bool,
     tool_section: ChatTemplateToolSection | None,
 ) -> int:
@@ -673,13 +672,19 @@ def _count_tool_definitions(
 
 def _count_tool_choice(
     count_function: TokenCounterFunction,
-    tool_choice: ChatCompletionNamedToolChoiceParam | None,
+    tool_choice: str | Mapping[str, object] | None,
 ) -> int:
-    if tool_choice == "none":
-        return 1
-    if isinstance(tool_choice, dict):
-        return 7 + count_function(str(tool_choice["function"]["name"]))
-    return 0
+    match tool_choice:
+        case "none":
+            return 1
+        case {"function": {"name": str() as name}}:
+            return 7 + count_function(name)
+        case {"type": "none"}:
+            return 1
+        case {"name": str() as name}:
+            return 7 + count_function(name)
+        case _:
+            return 0
 
 
 def _count_chat_template_tools(
