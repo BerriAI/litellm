@@ -6,18 +6,18 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
-from typing import Final, TypeVar
+from typing import Final, TypeAlias, TypeVar
 
 from pydantic import BaseModel
 
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 
-Pricer = Callable[[ModelResponse | ResponsesAPIResponse], float | None]
+Pricer: TypeAlias = Callable[[ModelResponse | ResponsesAPIResponse], float | None]
 """Prices a reply the way the request's logging object bills it (deployment rates, discount, margin)."""
 
 _RESPONSES_USAGE_EVENTS: Final = frozenset({"response.completed", "response.incomplete"})
-_ReplyT = TypeVar("_ReplyT", bound=BaseModel)
+_ReplyT: Final = TypeVar("_ReplyT", bound=BaseModel)
 
 
 def _billable(cost: object) -> float | None:
