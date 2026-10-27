@@ -387,7 +387,7 @@ litellm-enterprise = { workspace = true }
 litellm-gateway = { workspace = true }
 
 [tool.uv.workspace]
-members = ["enterprise", "litellm-proxy-extras", "litellm-rust"]
+members = ["enterprise", "litellm-proxy-extras", "litellm-rust/crates/gateway"]
 
 [tool.commitizen]
 version = "1.108.0"

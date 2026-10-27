@@ -13,7 +13,7 @@ requires = ["maturin==1.15.0"]
 build-backend = "maturin"
 
 [tool.maturin]
-manifest-path = "crates/gateway/Cargo.toml"
+manifest-path = "Cargo.toml"
 bindings = "bin"
 profile = "release"
 strip = true
@@ -22,15 +22,16 @@ strip = true
 cache-keys = [
     { file = "pyproject.toml" },
     { file = "Cargo.toml" },
-    { file = "Cargo.lock" },
-    { file = "crates/**/*" },
-    { file = "../rust-toolchain.toml" },
-    { file = "../.cargo/config.toml" },
+    { file = "../../Cargo.toml" },
+    { file = "../../Cargo.lock" },
+    { file = "../**/*" },
+    { file = "../../../rust-toolchain.toml" },
+    { file = "../../../.cargo/config.toml" },
 ]
 
 [tool.commitizen]
 version = "0.1.0"
 version_files = [
     "pyproject.toml:^version",
-    "../pyproject.toml:litellm-gateway==",
+    "../../../pyproject.toml:litellm-gateway==",
 ]

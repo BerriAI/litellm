@@ -167,7 +167,9 @@ def main(
         capture_output=True,
         text=True,
     ).stdout.strip()
-    project_directory: Final = Path(__file__).parents[2] / ("litellm-rust" if gateway else ".")
+    project_directory: Final = Path(__file__).parents[2] / (
+        "litellm-rust/crates/gateway" if gateway else "."
+    )
     pyproject: Final = (project_directory / "pyproject.toml").read_text()
     maturin_match: Final = re.search(r'"maturin==([^";]+)', pyproject)
     if maturin_match is None:

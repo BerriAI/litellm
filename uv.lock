@@ -5235,7 +5235,7 @@ requires-dist = [
     { name = "keyring", marker = "extra == 'cli'", specifier = ">=25.6.0,<26.0" },
     { name = "langfuse", marker = "extra == 'proxy-runtime'", specifier = ">=4.7,<5.0" },
     { name = "litellm-enterprise", marker = "extra == 'proxy'", editable = "enterprise" },
-    { name = "litellm-gateway", marker = "extra == 'proxy'", editable = "litellm-rust" },
+    { name = "litellm-gateway", marker = "extra == 'proxy'", editable = "litellm-rust/crates/gateway" },
     { name = "litellm-proxy-extras", marker = "extra == 'proxy'", editable = "litellm-proxy-extras" },
     { name = "llm-sandbox", marker = "extra == 'proxy-runtime'", specifier = ">=0.3.39,<1.0" },
     { name = "mangum", marker = "extra == 'proxy-runtime'", specifier = ">=0.17.0,<1.0" },
@@ -5438,7 +5438,7 @@ source = { editable = "enterprise" }
 [[package]]
 name = "litellm-gateway"
 version = "0.1.0"
-source = { editable = "litellm-rust" }
+source = { editable = "litellm-rust/crates/gateway" }
 
 [[package]]
 name = "litellm-proxy-extras"
