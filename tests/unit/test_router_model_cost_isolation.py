@@ -3081,6 +3081,36 @@ def test_reload_keeps_custom_pricing_configured_on_litellm_params_for_a_db_model
         _invalidate_model_cost_lowercase_map()
 
 
+def test_reload_keeps_custom_pricing_of_a_db_model_on_a_router_built_without_a_model_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    A proxy whose config.yaml has no model_list builds its router without one and
+    takes every deployment from the DB afterwards. A price data reload must restore
+    that deployment's custom pricing exactly as it does for a config router.
+    """
+    fetched_catalog: Final = copy.deepcopy(litellm.model_cost)
+    router: Final = Router()
+    router.add_deployment(
+        deployment=Deployment(
+            model_name="db-only-priced",
+            litellm_params=LiteLLM_Params(
+                model="openai/gpt-4o",
+                api_key="sk-fake",
+                input_cost_per_token=0.000123,
+                output_cost_per_token=0.000456,
+            ),
+            model_info=ModelInfo(id="db-only-priced-id"),
+        )
+    )
+    assert litellm.model_cost["db-only-priced-id"]["input_cost_per_token"] == 0.000123
+
+    _simulate_price_data_reload_with_provider_sets(monkeypatch, fetched_catalog)
+
+    assert litellm.model_cost["db-only-priced-id"]["input_cost_per_token"] == 0.000123
+    assert litellm.model_cost["db-only-priced-id"]["output_cost_per_token"] == 0.000456
+
+
 def test_replay_live_router_model_cost_rebuilds_every_live_router():
     """
     A process can hold more than one Router, so the rebuild has to fan out across

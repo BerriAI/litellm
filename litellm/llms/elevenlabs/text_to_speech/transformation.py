@@ -56,9 +56,9 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
     # Response format mappings from OpenAI to ElevenLabs
     FORMAT_MAPPINGS = {
         "mp3": "mp3_44100_128",
-        "pcm": "pcm_44100",
+        "pcm": "pcm_24000",
         "opus": "opus_48000_128",
-        # ElevenLabs does not support WAV, AAC, or FLAC formats.
+        "wav": "wav_24000",
     }
 
     ELEVENLABS_QUERY_PARAMS_KEY = "__elevenlabs_query_params__"
