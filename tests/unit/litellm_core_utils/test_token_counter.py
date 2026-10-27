@@ -377,6 +377,33 @@ def test_token_counter_legacy_function_call_counts_arguments():
     assert fc_tokens > 500, f"4000-char arguments payload must contribute real tokens, got {fc_tokens}"
 
 
+def test_token_counter_custom_tool_call_counts_input_like_function_arguments():
+    code = "print('hello world from a custom tool')\n" * 50
+
+    def assistant_turn(tool_call: dict[str, object]) -> list[dict[str, object]]:
+        return [
+            {"role": "user", "content": "run the code"},
+            {"role": "assistant", "content": None, "tool_calls": [tool_call]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "done"},
+        ]
+
+    custom_tokens = token_counter(
+        model="gpt-4o",
+        messages=assistant_turn({"id": "call_1", "type": "custom", "custom": {"name": "code_exec", "input": code}}),
+    )
+    function_tokens = token_counter(
+        model="gpt-4o",
+        messages=assistant_turn(
+            {"id": "call_1", "type": "function", "function": {"name": "code_exec", "arguments": code}}
+        ),
+    )
+
+    assert custom_tokens == function_tokens, (
+        f"custom tool call input must count like function arguments, got {custom_tokens} vs {function_tokens}"
+    )
+    assert custom_tokens > 300, f"custom tool call input must contribute real tokens, got {custom_tokens}"
+
+
 @pytest.mark.parametrize(
     "message_count_pair",
     MESSAGES_TEXT,
