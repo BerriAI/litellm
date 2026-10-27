@@ -1512,6 +1512,10 @@ def _overrides_streaming_chunk_hook(callback: CustomLogger) -> bool:
     )
 
 
+def _assigns_streaming_chunk_hook(callback: CustomLogger) -> bool:
+    return "async_post_call_streaming_hook" in vars(callback)
+
+
 def _overrides_moderation_hook(callback: CustomLogger) -> bool:
     return _overrides_hook(callback, "async_moderation_hook")
 
@@ -3252,8 +3256,12 @@ class ProxyLogging:
                 if resolved.enforces_request_content is True:
                     has_content_enforcer = True
 
+        # A hook set on the instance runs per chunk only beside a guardrail,
+        # the one case where the per-chunk loop used to reach it.
         streaming_chunk_overrides: Final = tuple(
-            callback for callback in resolved_callbacks if _overrides_streaming_chunk_hook(callback)
+            callback
+            for callback in resolved_callbacks
+            if _overrides_streaming_chunk_hook(callback) or (has_guardrail and _assigns_streaming_chunk_hook(callback))
         )
         caps: Final = _CallbackCapabilities(
             has_post_call_response_headers=has_post_call_response_headers,

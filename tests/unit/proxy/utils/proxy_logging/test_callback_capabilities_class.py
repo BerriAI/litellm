@@ -48,6 +48,16 @@ class _OverridesPreCall(CustomLogger):
         return None
 
 
+def _instance_per_chunk_logger() -> CustomLogger:
+    logger = _PlainLogger()
+
+    async def per_chunk(user_api_key_dict, response):
+        return None
+
+    logger.async_post_call_streaming_hook = per_chunk  # type: ignore[method-assign]
+    return logger
+
+
 @pytest.fixture(autouse=True)
 def _clear_caps_cache():
     ProxyLogging._callback_capabilities_cache.clear()
@@ -271,12 +281,24 @@ def test_needs_per_chunk_streaming_hook_truth_table(proxy_logging, monkeypatch, 
     monkeypatch.setattr(litellm, "callbacks", [_PerChunkGuardrail(guardrail_name="g", event_hook="post_call")])
     ProxyLogging._callback_capabilities_cache.clear()
     snapshot["per_chunk_guardrail_true"] = proxy_logging.needs_per_chunk_streaming_hook()
+    monkeypatch.setattr(litellm, "callbacks", [_instance_per_chunk_logger()])
+    ProxyLogging._callback_capabilities_cache.clear()
+    snapshot["instance_hook_alone_false"] = proxy_logging.needs_per_chunk_streaming_hook()
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [CustomGuardrail(guardrail_name="g", event_hook="pre_call"), _instance_per_chunk_logger()],
+    )
+    ProxyLogging._callback_capabilities_cache.clear()
+    snapshot["instance_hook_beside_guardrail_true"] = proxy_logging.needs_per_chunk_streaming_hook()
     assert snapshot == {
         "empty_false": False,
         "per_chunk_override_true": True,
         "only_iter_override_false": False,
         "request_only_guardrail_false": False,
         "per_chunk_guardrail_true": True,
+        "instance_hook_alone_false": False,
+        "instance_hook_beside_guardrail_true": True,
     }
 
 

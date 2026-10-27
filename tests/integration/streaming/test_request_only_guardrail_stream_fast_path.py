@@ -35,6 +35,7 @@ _CHUNK_GUARDRAIL: Final = "per-chunk-check"
 _OPT_IN: Final = "opt-in-chunk-check"
 _INHERITED: Final = "inherited-chunk-check"
 _RAISING: Final = "raising-chunk-check"
+_INSTANCE: Final = "instance-chunk-check"
 _CHUNK_ERROR: Final = "Chunk check failed"
 _MODULE: Final = "request_only_guardrail"
 _LOG_ENV: Final = "REQUEST_ONLY_GUARDRAIL_LOG"
@@ -87,6 +88,16 @@ class PerChunkGuardrail(CustomGuardrail):
 
 class InheritedPerChunkGuardrail(PerChunkGuardrail):
     pass
+
+
+class InstancePerChunkGuardrail(CustomGuardrail):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.async_post_call_streaming_hook = self._see_chunk
+
+    async def _see_chunk(self, user_api_key_dict, response):
+        _log(_marker_in(response), "chunk:" + self.guardrail_name)
+        return None
 
 
 class RaisingPerChunkGuardrail(CustomGuardrail):
@@ -335,6 +346,16 @@ def opt_in_rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactor
             _guardrail(_RAISING, "RaisingPerChunkGuardrail", "post_call", default_on=False),
         ],
         {"include_cost_in_streaming_usage": True},
+    ) as built:
+        yield built
+
+
+@pytest.fixture(scope="module")
+def instance_rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
+    with _rig(
+        session_gateway,
+        tmp_path_factory.mktemp("request-only-guardrail-beside-instance-per-chunk-hook"),
+        [*_request_only(), _guardrail(_INSTANCE, "InstancePerChunkGuardrail", "post_call")],
     ) as built:
         yield built
 
@@ -589,6 +610,13 @@ def test_an_inherited_per_chunk_hook_still_sees_every_chunk(opt_in_rig: Rig) -> 
     marker: Final = uuid.uuid4().hex
     text: Final = _stream(opt_in_rig, "chat", marker, guardrails=[_INHERITED])
     _assert_every_chunk_seen(opt_in_rig, marker, _INHERITED, text)
+
+
+def test_a_per_chunk_hook_set_on_the_instance_still_sees_every_chunk(instance_rig: Rig) -> None:
+    marker: Final = uuid.uuid4().hex
+    text: Final = _stream(instance_rig, "chat", marker)
+    _assert_every_chunk_seen(instance_rig, marker, _INSTANCE, text)
+    assert _events(instance_rig, marker).count("post_call") <= 1, _events(instance_rig, marker)
 
 
 def test_a_model_level_per_chunk_guardrail_sees_every_chunk(opt_in_rig: Rig) -> None:

@@ -443,6 +443,34 @@ async def test_async_post_call_streaming_hook_skips_a_request_only_guardrail_bes
 
 
 @pytest.mark.asyncio
+async def test_async_post_call_streaming_hook_runs_an_instance_hook_beside_a_guardrail(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    guardrail = _RequestOnlyGuardrail()
+    rewriter = CustomLogger()
+
+    async def per_chunk(user_api_key_dict, response):
+        return f"modified-{response}"
+
+    rewriter.async_post_call_streaming_hook = per_chunk  # type: ignore[method-assign]
+    monkeypatch.setattr(litellm, "callbacks", [guardrail, rewriter])
+    chunk = ModelResponseStream(
+        id="rid",
+        choices=[{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": None}],
+        created=0,
+        model="gpt-4o-mini",
+    )
+    out = await proxy_logging.async_post_call_streaming_hook(
+        data={"messages": [{"role": "user", "content": "hi"}]},
+        response=chunk,
+        user_api_key_dict=make_user_api_key_auth(),
+        str_so_far="say ",
+    )
+    assert out == "modified-say hi"
+    assert guardrail.asked == []
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_streaming_hook_callback_error_raises(proxy_logging, make_user_api_key_auth, monkeypatch):
     class _Per(CustomLogger):
         async def async_post_call_streaming_hook(self, **kwargs):  # type: ignore[override]
