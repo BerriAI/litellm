@@ -148,7 +148,7 @@ def _model_max_output_tokens(model_name: str) -> int | None:
     # this lookup is a fallback default and must never fail the request.
     with contextlib.suppress(Exception):
         info: Final = litellm.get_model_info(model=model_name)
-        model_max: Final = info.get("max_output_tokens") or info.get("max_tokens")
+        model_max: Final = info.get("max_output_tokens")
         if model_max is not None:
             return max(0, int(model_max))
     return None

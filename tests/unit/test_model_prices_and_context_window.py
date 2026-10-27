@@ -50,7 +50,6 @@ class _CopilotEndpointRow(BaseModel):
     mode: str
     max_input_tokens: int
     max_output_tokens: int
-    max_tokens: int
     supported_endpoints: tuple[str, ...]
 
 
@@ -96,16 +95,20 @@ def _anthropic_counterpart(key: str) -> str:
 
 
 @pytest.mark.parametrize(("path",), [(PRICES_PATH,), (BACKUP_PRICES_PATH,)], ids=("main", "backup"))
-def test_github_copilot_rows_derive_mode_and_max_tokens_from_their_endpoints(path: Path) -> None:
+def test_github_copilot_rows_derive_mode_from_their_endpoints(path: Path) -> None:
     rows: Final[Mapping[str, _CopilotEndpointRow]] = _copilot_endpoint_rows(path)
     assert rows, f"No GitHub Copilot endpoint rows found in {path}"
-    assert {key: (row.mode, row.max_tokens) for key, row in rows.items()} == {
-        key: (
-            "chat" if "/v1/chat/completions" in row.supported_endpoints else "responses",
-            row.max_output_tokens,
-        )
-        for key, row in rows.items()
+    assert {key: row.mode for key, row in rows.items()} == {
+        key: "chat" if "/v1/chat/completions" in row.supported_endpoints else "responses" for key, row in rows.items()
     }
+
+
+def _rows_carrying_legacy_max_tokens(prices: Mapping[str, Mapping[str, object]]) -> tuple[str, ...]:
+    return tuple(key for key, row in prices.items() if "max_tokens" in row)
+
+
+def test_no_row_carries_the_retired_max_tokens_field(prices: dict) -> None:
+    assert _rows_carrying_legacy_max_tokens(prices) == ()
 
 
 def test_github_copilot_backup_rows_match_the_main_catalog() -> None:
@@ -601,7 +604,6 @@ def test_tencent_tokenhub_glm_rows_match_published_metadata(path: Path):
         or entry.get("litellm_provider") != "tencent"
         or entry.get("max_input_tokens") != 1000000
         or entry.get("max_output_tokens") != 128000
-        or entry.get("max_tokens") != 128000
         or entry.get("input_cost_per_token_cache_hit") != entry.get("cache_read_input_token_cost")
     )
     assert actual == TENCENT_TOKENHUB_GLM_ROWS
@@ -619,7 +621,7 @@ def test_tencent_tokenhub_kimi_rows_match_published_metadata(path: Path):
                 entry.get("input_cost_per_token"),
                 entry.get("output_cost_per_token"),
                 entry.get("cache_read_input_token_cost"),
-                entry.get("max_tokens"),
+                entry.get("max_output_tokens"),
                 entry.get("supports_vision", False),
                 entry.get("supports_video_input", False),
             )
@@ -793,7 +795,6 @@ def test_volcengine_doubao_seed_2_1_pro_260915_row_matches_published_metadata(pa
     assert entry["mode"] == "chat"
     assert entry["max_input_tokens"] == 1024000
     assert entry["max_output_tokens"] == 256000
-    assert entry["max_tokens"] == 256000
     # Volcengine Ark pricing https://www.volcengine.com/docs/82379/1544106 checked 2026-10-20
     assert entry["input_cost_per_token"] == pytest.approx(6.0 / 6.9565 / 1_000_000, rel=1e-4)
     assert entry["output_cost_per_token"] == pytest.approx(30.0 / 6.9565 / 1_000_000, rel=1e-4)
