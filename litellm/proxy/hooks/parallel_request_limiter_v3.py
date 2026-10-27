@@ -1254,7 +1254,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if not isinstance(result, CacheFailure):
             return result
         self._reject_if_rate_limit_unverifiable("atomic counter read", result)
-        log_redis_failure(verbose_proxy_logger, logging.WARNING, "Atomic counter read failed, using local mirror", result)
+        log_redis_failure(
+            verbose_proxy_logger, logging.WARNING, "Atomic counter read failed, using local mirror", result
+        )
         return await self._batch_get_counter_values(keys=keys, parent_otel_span=parent_otel_span, local_only=True)
 
     def _reject_if_rate_limit_unverifiable(self, failed_operation: str, error: CacheFailure) -> None:
@@ -1312,8 +1314,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     await self._refund_later_pipelined_groups(key_groups[index + 1 :], operations[index + 1 :])
             self._reject_if_rate_limit_unverifiable("window counter increment", result)
             log_redis_failure(
-                verbose_proxy_logger, logging.WARNING,
-                f"Window counter increment failed for hash tag {hash_tag}", result
+                verbose_proxy_logger,
+                logging.WARNING,
+                f"Window counter increment failed for hash tag {hash_tag}",
+                result,
             )
             all_cache_values.extend(
                 await self.in_memory_cache_sliding_window(
@@ -1609,8 +1613,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if isinstance(result, CacheFailure):
                 self._reject_if_rate_limit_unverifiable("concurrency acquire", result)
                 log_redis_failure(
-                    verbose_proxy_logger, logging.WARNING,
-                    "Concurrency acquire failed, falling back to in-memory gauge", result
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "Concurrency acquire failed, falling back to in-memory gauge",
+                    result,
                 )
                 async with self._check_and_increment_lock:
                     return await self._acquire_parallel_slots_in_memory(gauges, slot_id, parent_otel_span)
@@ -1642,7 +1648,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if not isinstance(result, CacheFailure):
                 return tuple(max(0, count) for count in result)
             self._reject_if_rate_limit_unverifiable("concurrency count", result)
-            log_redis_failure(verbose_proxy_logger, logging.WARNING, "Concurrency count failed, using local mirror", result)
+            log_redis_failure(
+                verbose_proxy_logger, logging.WARNING, "Concurrency count failed, using local mirror", result
+            )
         return await self._read_local_gauge_counts(gauge_keys, parent_otel_span)
 
     async def _read_local_gauge_counts(
@@ -1760,8 +1768,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 await self._mirror_released_parallel_slots(counter_keys, result, parent_otel_span)
                 return
             log_redis_failure(
-                verbose_proxy_logger, logging.WARNING,
-                "Concurrency release failed, falling back to in-memory release", result
+                verbose_proxy_logger,
+                logging.WARNING,
+                "Concurrency release failed, falling back to in-memory release",
+                result,
             )
         await self._release_parallel_request_slots_in_memory(counter_keys, slot_id, parent_otel_span)
 
@@ -1789,8 +1799,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             result: Final = future.result()
             if isinstance(result, CacheFailure):
                 log_redis_failure(
-                    verbose_proxy_logger, logging.WARNING,
-                    "Concurrency release failed, the slot stays released in memory only", result
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "Concurrency release failed, the slot stays released in memory only",
+                    result,
                 )
 
         redis_cache.async_release_concurrency(
@@ -1975,7 +1987,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 await self._refund_applied_descriptor_groups(applied)
                 self._reject_if_rate_limit_unverifiable("window capacity reservation", result)
                 log_redis_failure(
-                    verbose_proxy_logger, logging.ERROR,
+                    verbose_proxy_logger,
+                    logging.ERROR,
                     f"Window capacity reservation failed, refunded {len(applied)} prior descriptors and falling back to memory",
                     result,
                 )
@@ -2033,7 +2046,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             await self._refund_applied_descriptor_groups(applied)
             self._reject_if_rate_limit_unverifiable("window capacity reservation", failure)
             log_redis_failure(
-                verbose_proxy_logger, logging.ERROR,
+                verbose_proxy_logger,
+                logging.ERROR,
                 f"Window capacity reservation failed, refunded {len(applied)} batched descriptors and falling back to memory",
                 failure,
             )
@@ -2135,7 +2149,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 ),
                 CacheFailure,
             ):
-                log_redis_failure(verbose_proxy_logger, logging.WARNING, f"Failed to refund {refund.counter_key} on rollback", result)
+                log_redis_failure(
+                    verbose_proxy_logger, logging.WARNING, f"Failed to refund {refund.counter_key} on rollback", result
+                )
 
     def _build_atomic_response(
         self,
@@ -4244,7 +4260,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if not isinstance(result, CacheFailure):
                 return
             log_redis_failure(
-                verbose_proxy_logger, logging.WARNING, "TTL preservation failed, falling back to regular pipeline", result
+                verbose_proxy_logger,
+                logging.WARNING,
+                "TTL preservation failed, falling back to regular pipeline",
+                result,
             )
             await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(increment_list=group_operations)
 

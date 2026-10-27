@@ -66,7 +66,9 @@ def failure(error: BaseException) -> CacheFailure:
     reason: Final = (
         "circuit_open"
         if isinstance(error, RedisCircuitBreakerOpenError)
-        else "timeout" if is_redis_timeout_failure(error) else "other"
+        else "timeout"
+        if is_redis_timeout_failure(error)
+        else "other"
     )
     return CacheFailure(
         kind="unavailable", message=f"Cache operation failed ({type(error).__name__}): {error}", reason=reason

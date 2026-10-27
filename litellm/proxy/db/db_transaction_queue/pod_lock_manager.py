@@ -160,8 +160,10 @@ class PodLockManager:
             if not isinstance(released, CacheFailure):
                 return int(released)
             log_redis_failure(
-                verbose_proxy_logger, logging.WARNING,
-                f"Atomic release failed for lock_key={lock_key}, falling back to GET+DEL", released
+                verbose_proxy_logger,
+                logging.WARNING,
+                f"Atomic release failed for lock_key={lock_key}, falling back to GET+DEL",
+                released,
             )
 
         current_value = await self.redis_cache.async_get_cache(lock_key)

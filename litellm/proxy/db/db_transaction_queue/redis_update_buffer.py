@@ -561,11 +561,13 @@ class RedisUpdateBuffer:
         if isinstance(result, CacheFailure):
             verbose_proxy_logger.error(
                 "Spend tracking - failed to restore uncommitted transactions to Redis. "
-                "These spend updates are lost. Error: %s", result.message,
+                "These spend updates are lost. Error: %s",
+                result.message,
             )
             return
         verbose_proxy_logger.info(
-            "Spend tracking - restored %d uncommitted transaction set(s) to Redis for retry on next tick.", len(rpush_list)
+            "Spend tracking - restored %d uncommitted transaction set(s) to Redis for retry on next tick.",
+            len(rpush_list),
         )
 
     @with_service_target(SPEND_QUEUE_TARGET)
@@ -582,7 +584,8 @@ class RedisUpdateBuffer:
         if isinstance(result, CacheFailure):
             verbose_proxy_logger.error(
                 "Tool discovery - failed to push %d tool rows to Redis, restoring them for the next tick. Error: %s",
-                len(items), result.message,
+                len(items),
+                result.message,
             )
             for item in items:
                 tool_discovery_queue.add_update(item)

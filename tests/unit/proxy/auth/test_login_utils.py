@@ -1509,11 +1509,9 @@ async def test_invalid_shared_throttle_replies_do_not_allow_unchecked_logins(
     redis, _ = login_redis_backend
     throttle: Final = _throttle(user_limit=1, redis_cache=redis)
     with patch("redis.asyncio.client.Redis.register_script", return_value=AsyncMock(return_value=reply)):
-        with pytest.raises(ValueError):
-            if phase == "attempt":
-                await throttle.attempt("admin")
-            else:
-                await throttle.record_failure("admin")
+        operation: Final = throttle.attempt if phase == "attempt" else throttle.record_failure
+        with pytest.raises(ValueError, match="validation error"):
+            await operation("admin")
     assert not throttle.counters.cache_dict
     assert not throttle.blocks.cache_dict
 

@@ -187,8 +187,10 @@ class BatchEnqueuedTokenStore:
             if not isinstance(result, CacheFailure):
                 return result
             log_redis_failure(
-                verbose_proxy_logger, logging.WARNING,
-                "Redis enqueued-token reserve failed, falling back to in-memory", result
+                verbose_proxy_logger,
+                logging.WARNING,
+                "Redis enqueued-token reserve failed, falling back to in-memory",
+                result,
             )
         return await self._reserve_in_memory(tokens=tokens, scopes=scopes, span=litellm_parent_otel_span)
 
@@ -325,8 +327,10 @@ class BatchEnqueuedTokenStore:
             if not isinstance(result, CacheFailure):
                 return
             log_redis_failure(
-                verbose_proxy_logger, logging.WARNING,
-                "Redis enqueued-token reservation save failed, falling back to in-memory", result
+                verbose_proxy_logger,
+                logging.WARNING,
+                "Redis enqueued-token reservation save failed, falling back to in-memory",
+                result,
             )
         await self.internal_usage_cache.async_set_cache(
             key=self._record_key(batch_id),
@@ -371,8 +375,10 @@ class BatchEnqueuedTokenStore:
         if not isinstance(result, CacheFailure):
             return result
         log_redis_failure(
-            verbose_proxy_logger, logging.WARNING,
-            "Redis enqueued-token reservation pop failed, falling back to in-memory", result
+            verbose_proxy_logger,
+            logging.WARNING,
+            "Redis enqueued-token reservation pop failed, falling back to in-memory",
+            result,
         )
         return None
 

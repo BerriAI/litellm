@@ -133,7 +133,8 @@ async def test_lease_cancellation_is_not_translated_to_an_outage(
 ) -> None:
     lock, transport = backend
     transport.side_effect = asyncio.CancelledError
-    with pytest.raises(asyncio.CancelledError):
+
+    async def invoke() -> None:
         match operation:
             case "acquire":
                 await lock.acquire("k", "tok", 10.0)
@@ -143,6 +144,9 @@ async def test_lease_cancellation_is_not_translated_to_an_outage(
                 await lock.release("k", "tok")
             case "is_held":
                 await lock.is_held("k")
+
+    with pytest.raises(asyncio.CancelledError):
+        await invoke()
 
 
 @pytest.mark.asyncio

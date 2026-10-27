@@ -661,9 +661,10 @@ async def test_cancelled_typed_cluster_read_releases_its_connection_admission() 
             startup_nodes=[{"host": "typed-cluster-cancellation", "port": 7000}],
             connection_gate=ClusterConnectionGate(limit=1, wait_timeout=60),
         )
+        first: Final = asyncio.create_task(cache.async_read_values(keys=("cancelled",)))
         with pytest.warns(FutureWarning, match="async_read_values is experimental and may change"):
-            first: Final = asyncio.create_task(cache.async_read_values(keys=("cancelled",)))
-            assert await asyncio.wait_for(entered.get(), timeout=1) == "cancelled"
+            entered_key: Final = await asyncio.wait_for(entered.get(), timeout=1)
+        assert entered_key == "cancelled"
         first.cancel()
         with pytest.raises(asyncio.CancelledError):
             await first

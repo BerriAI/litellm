@@ -544,7 +544,9 @@ def log_redis_failure(
     logger: logging.Logger, level: int, message: str, exc: BaseException | CacheFailure, with_traceback: bool = False
 ) -> None:
     detail: Final = exc.message if isinstance(exc, CacheFailure) else exc
-    circuit_open: Final = exc.reason == "circuit_open" if isinstance(exc, CacheFailure) else isinstance(exc, RedisCircuitBreakerOpenError)
+    circuit_open: Final = (
+        exc.reason == "circuit_open" if isinstance(exc, CacheFailure) else isinstance(exc, RedisCircuitBreakerOpenError)
+    )
     if circuit_open:
         logger.debug("%s: %s", message, detail, stacklevel=2)
         return
@@ -2331,7 +2333,6 @@ class RedisCache(BaseCache):
         # don't waste a network request if there's nothing to increment
         if len(increment_list) == 0:
             return None
-
 
         _redis_client: Final = cast(  # cast-ok: RedisCluster stubs omit the shared Redis commands used here
             "Redis[bytes]", self._get_async_client()

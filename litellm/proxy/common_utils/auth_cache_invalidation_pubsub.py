@@ -45,7 +45,11 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 
 def auth_cache_invalidation_channel(redis_cache: "RedisCache") -> str:
-    return AUTH_CACHE_INVALIDATION_CHANNEL if redis_cache.namespace is None else f"{redis_cache.namespace}:{AUTH_CACHE_INVALIDATION_CHANNEL}"
+    return (
+        AUTH_CACHE_INVALIDATION_CHANNEL
+        if redis_cache.namespace is None
+        else f"{redis_cache.namespace}:{AUTH_CACHE_INVALIDATION_CHANNEL}"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,7 +300,9 @@ class AuthCacheInvalidationSubscriber:
             return CacheFailure("unavailable", str(error))
 
     async def _consume(self, subscription: CacheSubscription) -> CacheFailure:
-        while not isinstance(message := await subscription.receive(timeout_seconds=_POLL_TIMEOUT_SECONDS), CacheFailure):
+        while not isinstance(
+            message := await subscription.receive(timeout_seconds=_POLL_TIMEOUT_SECONDS), CacheFailure
+        ):
             if message is None:
                 continue
             self._apply_message(message)

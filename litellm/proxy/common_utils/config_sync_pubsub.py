@@ -251,7 +251,9 @@ class ConfigSyncSubscriber:
             return CacheFailure("unavailable", str(error))
 
     async def _consume(self, subscription: CacheSubscription) -> CacheFailure:
-        while not isinstance(message := await subscription.receive(timeout_seconds=_POLL_TIMEOUT_SECONDS), CacheFailure):
+        while not isinstance(
+            message := await subscription.receive(timeout_seconds=_POLL_TIMEOUT_SECONDS), CacheFailure
+        ):
             if message is None:
                 continue
             if (failure := await self._debounce_and_resync(subscription)) is not None:
@@ -271,7 +273,9 @@ class ConfigSyncSubscriber:
     async def _wait_for_min_resync_interval(self) -> None:
         if self._last_resync_at is None:
             return
-        seconds_until_next_resync: Final = self._min_resync_interval_seconds - (self._monotonic() - self._last_resync_at)
+        seconds_until_next_resync: Final = self._min_resync_interval_seconds - (
+            self._monotonic() - self._last_resync_at
+        )
         if seconds_until_next_resync <= 0:
             return
         verbose_proxy_logger.debug(
