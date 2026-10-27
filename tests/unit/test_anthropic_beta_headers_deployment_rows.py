@@ -33,9 +33,10 @@ def _bundled_config(monkeypatch: pytest.MonkeyPatch) -> None:
     anthropic_beta_headers_manager._BETA_HEADERS_CONFIG = None
 
 
-def _bundled_rows() -> dict:
+def _bundled_rows() -> dict[str, dict[str, str | None]]:
     with open(os.path.join(os.path.dirname(litellm.__file__), "anthropic_beta_headers_config.json")) as f:
-        return json.load(f)
+        rows: dict[str, dict[str, str | None]] = json.load(f)
+    return rows
 
 
 @pytest.mark.parametrize(
@@ -70,17 +71,23 @@ def test_resolve_beta_provider_picks_the_row_per_deployment(provider: str, api_b
 
 def test_foundry_deployment_headers_follow_the_azure_ai_row() -> None:
     headers: Final = {"anthropic-beta": f"{DIRECT_ONLY_BETA},thinking-binding-controls-2026-08-01"}
-    result: Final = update_headers_with_filtered_beta(headers=headers, provider="anthropic", api_base=FOUNDRY_API_BASE)
+    result: dict[str, str] = update_headers_with_filtered_beta(
+        headers=headers, provider="anthropic", api_base=FOUNDRY_API_BASE
+    )
     assert result == {"anthropic-beta": "thinking-binding-controls-2026-08-01"}
 
 
 def test_direct_deployment_headers_keep_every_anthropic_row_beta() -> None:
     headers: Final = {"anthropic-beta": f"{DIRECT_ONLY_BETA},thinking-binding-controls-2026-08-01"}
-    result: Final = update_headers_with_filtered_beta(headers=headers, provider="anthropic", api_base=DIRECT_API_BASE)
+    result: dict[str, str] = update_headers_with_filtered_beta(
+        headers=headers, provider="anthropic", api_base=DIRECT_API_BASE
+    )
     assert result == {"anthropic-beta": f"{DIRECT_ONLY_BETA},thinking-binding-controls-2026-08-01"}
 
 
 def test_foundry_deployment_request_filters_header_and_body_betas_together() -> None:
+    headers: dict[str, str]
+    data: dict[str, object]
     headers, data = update_request_with_filtered_beta(
         headers={"anthropic-beta": DIRECT_ONLY_BETA},
         request_data={"anthropic_beta": [DIRECT_ONLY_BETA, "thinking-binding-controls-2026-08-01"], "max_tokens": 8},

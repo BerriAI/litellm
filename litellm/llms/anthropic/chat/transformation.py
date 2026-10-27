@@ -2920,7 +2920,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     def _build_provider_specific_fields(
         self,
-        completion_response: dict,
+        completion_response: dict[str, object],
         citations: Sequence[object] | None,
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None,
         web_search_results: Sequence[object] | None,
@@ -2951,17 +2951,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if tool_results is not None:
             provider_specific_fields["tool_results"] = tool_results
 
+        container: Final = completion_response.get("container")
+        container_fields: Final[dict[str, object] | None] = container if isinstance(container, dict) else None
         if tool_results is not None and any(result.get("type") != "tool_search_tool_result" for result in tool_results):
-            container_id: Final = (
-                completion_response.get("container", {}).get("id")
-                if isinstance(completion_response.get("container"), dict)
-                else None
-            )
+            raw_container_id: Final = container_fields.get("id") if container_fields is not None else None
+            container_id: Final = raw_container_id if isinstance(raw_container_id, str) else None
             code_by_id: Final = self._build_code_by_id_map(tool_calls)
             code_interpreter_results = self._build_code_interpreter_results(tool_results, code_by_id, container_id)
             provider_specific_fields["code_interpreter_results"] = code_interpreter_results
 
-        container: Final = completion_response.get("container")
         if container is not None:
             provider_specific_fields["container"] = container
 
