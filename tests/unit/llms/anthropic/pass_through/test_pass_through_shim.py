@@ -17,7 +17,7 @@ def _forget_old_package(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_old_deep_import_is_the_new_module_object_and_warns(monkeypatch: pytest.MonkeyPatch) -> None:
     _forget_old_package(monkeypatch)
     with pytest.warns(DeprecationWarning, match=NEW_PACKAGE):
-        old_handler = importlib.import_module(f"{OLD_PACKAGE}.messages.handler")
+        old_handler: Final = importlib.import_module(f"{OLD_PACKAGE}.messages.handler")
     from litellm.llms.anthropic.messages.native import handler as new_handler
 
     assert old_handler is new_handler
