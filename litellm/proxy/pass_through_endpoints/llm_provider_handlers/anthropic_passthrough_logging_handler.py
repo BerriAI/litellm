@@ -28,6 +28,7 @@ from litellm.llms.anthropic.messages.stream_assembly import (
     collapse_pure_text_chunks,
     split_sse_chunk_into_events,
 )
+from litellm.llms.bedrock.common_utils import BEDROCK_INVOKE_TRACE_FIELD
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
@@ -68,6 +69,17 @@ def _event_payload(event: str) -> Mapping[str, object] | None:
         return _JSON_OBJECT.validate_json(data_lines[0])
     except ValidationError:
         return None
+
+
+def _bedrock_trace_payload(all_chunks: Sequence[str | bytes]) -> Mapping[str, object] | None:
+    payloads: Final = (
+        _event_payload(event)
+        for chunk in reversed(all_chunks)
+        for event in reversed(split_sse_chunk_into_events(chunk))
+    )  # comprehension-ok: chunk then event, read newest first
+    return next(
+        (payload for payload in payloads if payload is not None and BEDROCK_INVOKE_TRACE_FIELD in payload), None
+    )
 
 
 def _message_delta_usages(all_chunks: Sequence[str | bytes]) -> Iterator[object]:
@@ -141,6 +153,7 @@ class AnthropicPassthroughLoggingHandler:
             json_mode=False,
             litellm_params={},
         )
+        logging_obj.record_native_bedrock_guardrail(response_body)  # pyright: ignore[reportUnknownArgumentType]  # response_body is an untyped dict param
 
         kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
             litellm_model_response=litellm_model_response,
@@ -546,6 +559,7 @@ class AnthropicPassthroughLoggingHandler:
                 "result": None,
                 "kwargs": {},
             }
+        litellm_logging_obj.record_native_bedrock_guardrail(_bedrock_trace_payload(all_chunks))
         kwargs: Final = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
             litellm_model_response=complete_streaming_response,
             model=model,

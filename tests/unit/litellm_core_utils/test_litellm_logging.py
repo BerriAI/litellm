@@ -3672,6 +3672,73 @@ def test_get_extra_header_tags():
                 delattr(litellm, "extra_spend_tag_headers")
 
 
+def test_get_extra_header_tags_matches_title_case_config_with_lowercase_request_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "extra_spend_tag_headers", ["X-Org-Id"], raising=False)
+
+    assert StandardLoggingPayloadSetup._get_extra_header_tags(
+        proxy_server_request={"headers": {"x-org-id": "org_1"}}
+    ) == ["X-Org-Id: org_1"]
+
+
+def test_get_extra_header_tags_matches_mixed_case_request_header_with_lowercase_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "extra_spend_tag_headers", ["x-customer-id"], raising=False)
+
+    assert StandardLoggingPayloadSetup._get_extra_header_tags(
+        proxy_server_request={"headers": {"X-Customer-Id": "v"}}
+    ) == ["x-customer-id: v"]
+
+
+def test_get_extra_header_tags_keeps_lowercase_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "extra_spend_tag_headers", ["x-customer-id"], raising=False)
+
+    assert StandardLoggingPayloadSetup._get_extra_header_tags(
+        proxy_server_request={"headers": {"x-customer-id": "v"}}
+    ) == ["x-customer-id: v"]
+
+
+def test_get_extra_header_tags_returns_none_for_absent_or_empty_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "extra_spend_tag_headers", ["x-org-id"], raising=False)
+
+    assert StandardLoggingPayloadSetup._get_extra_header_tags(proxy_server_request={"headers": {}}) is None
+    assert StandardLoggingPayloadSetup._get_extra_header_tags(
+        proxy_server_request={"headers": {"x-org-id": ""}}
+    ) is None
+
+
+def test_get_extra_header_tags_preserves_configured_header_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "extra_spend_tag_headers", ["x-second", "x-first"], raising=False)
+
+    assert StandardLoggingPayloadSetup._get_extra_header_tags(
+        proxy_server_request={"headers": {"x-first": "1", "x-second": "2"}}
+    ) == ["x-second: 2", "x-first: 1"]
+
+
+def test_get_request_tags_includes_extra_header_tag_with_user_agent_tags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "extra_spend_tag_headers", ["X-Org-Id"], raising=False)
+
+    assert StandardLoggingPayloadSetup.get_request_tags(
+        litellm_params={},
+        proxy_server_request={
+            "headers": {
+                "user-agent": "litellm/1.0",
+                "x-org-id": "org_1",
+            }
+        },
+    ) == ["User-Agent: litellm", "User-Agent: litellm/1.0", "X-Org-Id: org_1"]
+
+
 def test_response_cost_calculator_with_response_cost_in_hidden_params(logging_obj):
     from litellm import Router
 
@@ -13642,3 +13709,54 @@ def test_native_messages_body_carries_the_reported_list_cost_into_the_priced_res
     assert isinstance(priced, ModelResponse)
     headers = priced._hidden_params.get("additional_headers") or {}
     assert headers.get("llm_provider-x-litellm-response-cost") == expected_header
+
+
+def test_record_native_bedrock_guardrail_bills_when_the_metadata_is_none() -> None:
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="call-none-metadata",
+        function_id="fn",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"metadata": None}
+    trace = {"guardrail": {"inputAssessment": {"gid": {"invocationMetrics": {"usage": {"contentPolicyUnits": 2}}}}}}
+
+    logging_obj.record_native_bedrock_guardrail({"trace": trace})
+
+    (entry,) = logging_obj.model_call_details["litellm_params"]["metadata"]["standard_logging_guardrail_information"]
+    assert entry["guardrail_usage"] == {"contentPolicyUnits": 2}
+    assert entry["guardrail_cost"] > 0
+
+
+def test_record_native_bedrock_guardrail_bills_nothing_for_a_response_served_from_cache() -> None:
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="call-cache-hit",
+        function_id="fn",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"metadata": {}}
+    trace = {"guardrail": {"inputAssessment": {"gid": {"invocationMetrics": {"usage": {"contentPolicyUnits": 2}}}}}}
+    cached = litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "hi"}}], model="x")
+    setattr(cached, "trace", trace)
+    cached._hidden_params = {"cache_hit": True}
+
+    logging_obj.record_native_bedrock_guardrail(cached)
+    logging_obj.model_call_details["cache_hit"] = True
+    logging_obj.record_native_bedrock_guardrail({"trace": trace})
+
+    assert "standard_logging_guardrail_information" not in logging_obj.model_call_details["litellm_params"]["metadata"]
