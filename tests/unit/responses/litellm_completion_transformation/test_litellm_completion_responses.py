@@ -14,7 +14,7 @@ from openai.types.responses.response_function_web_search import (
     ActionSearchSource,
     ResponseFunctionWebSearch,
 )
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import CALLER_SESSION_ID_METADATA_KEY
@@ -5061,6 +5061,50 @@ class TestHostedWebSearchReplay:
         replayed: Final = ResponseFunctionWebSearch.model_validate_json(content[content.index("{") :])
         assert replayed == search
         assert input_item == original
+
+    def test_replays_search_without_action(self) -> None:
+        input_item: Final = {"type": "web_search_call", "id": "ws_no_action", "status": "completed"}
+
+        messages: Final = (
+            LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+                input_item=input_item
+            )
+        )
+
+        assert len(messages) == 1
+        assert messages[0]["role"] == "assistant"
+        content: Final = messages[0].get("content")
+        assert isinstance(content, str)
+        assert json.loads(content[content.index("{") :]) == input_item
+
+    @pytest.mark.parametrize(
+        "fields",
+        (
+            {"status": "completed"},
+            {"id": "ws_invalid"},
+            {"id": 42, "status": "completed"},
+            {"id": "ws_invalid", "status": "invalid"},
+            {"id": "ws_invalid", "status": "completed", "action": None},
+            {"id": "ws_invalid", "status": "completed", "action": 42},
+            {"id": "ws_invalid", "status": "completed", "action": {"type": "invalid"}},
+            {"id": "ws_invalid", "status": "completed", "action": {"type": "find_in_page"}},
+        ),
+        ids=(
+            "missing-id",
+            "missing-status",
+            "invalid-id",
+            "invalid-status",
+            "null-action",
+            "invalid-action-type",
+            "unknown-action",
+            "incomplete-action",
+        ),
+    )
+    def test_rejects_search_with_other_invalid_fields(self, fields: Mapping[str, object]) -> None:
+        with pytest.raises(ValidationError):
+            LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=[{"type": "web_search_call", **fields}], responses_api_request={}
+            )
 
     @pytest.mark.parametrize("order", ((0, 1, 2, 3), (1, 0, 3, 2), (1, 3, 0, 2)))
     @pytest.mark.parametrize("modify_params", (False, True))
