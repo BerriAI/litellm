@@ -368,10 +368,6 @@ def _native_output_flags_by_family(
 
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
 def test_bedrock_claude_rows_of_one_family_agree_on_native_structured_output_flags(path: Path) -> None:
-    """Every inference-profile row of one Bedrock Claude model (anthropic., global., us., eu., apac., au., jp.)
-    gates native structured output the same way, so a json_schema request takes the same native-or-json-tool
-    path whichever profile the deployment names. GovCloud rows may lag their commercial base (a capability
-    reaches us-gov later) but never lead it"""
     rows: Final = _bedrock_claude_rows(path)
     commercial: Final = _native_output_flags_by_family(rows, govcloud=False)
     govcloud: Final = _native_output_flags_by_family(rows, govcloud=True)
@@ -382,6 +378,7 @@ def test_bedrock_claude_rows_of_one_family_agree_on_native_structured_output_fla
         (base,) = commercial[family]
         for flags in flag_sets:
             assert all(flag is not True or base_flag is True for flag, base_flag in zip(flags, base)), (
+                "a GovCloud row claims a native output flag its commercial base rows lack",
                 family,
                 flags,
                 base,
