@@ -10,8 +10,6 @@ export interface MCPServerToolEntry {
   description: string;
 }
 
-// "idle" means the server has not been fetched yet, so callers can tell it apart from
-// a server that loaded and has no tools.
 export type MCPServerToolsStatus = "idle" | "loading" | "error" | "success";
 
 export interface MCPServerToolsState {
@@ -34,22 +32,20 @@ export const fetchServerTools = async (accessToken: string, serverId: string): P
     throw new Error(result.message || result.error);
   }
   const toolList: RawTool[] = Array.isArray(result) ? result : result?.tools ?? [];
-  return toolList.map(toEntry);
+  return toolList.map(toEntry).filter((tool) => tool.name !== "");
 };
 
 const toStatus = ({
   status,
   fetchStatus,
-}: Pick<QueryObserverResult, "status" | "fetchStatus">): MCPServerToolsStatus => {
+  data,
+}: Pick<QueryObserverResult<MCPServerToolEntry[]>, "status" | "fetchStatus" | "data">): MCPServerToolsStatus => {
+  // A failed refetch keeps the tools that already loaded on screen.
+  if (status === "error" && data !== undefined) return "success";
   if (status !== "pending") return status;
   return fetchStatus === "idle" ? "idle" : "loading";
 };
 
-/**
- * Tool catalogs for a set of MCP servers, one query per server so a slow or failing
- * server never blocks the others. Only servers in `enabledServerIds` are fetched;
- * the rest stay "idle" until they are enabled.
- */
 export const useMCPServerTools = (
   serverIds: readonly string[],
   enabledServerIds: ReadonlySet<string>,
@@ -62,6 +58,7 @@ export const useMCPServerTools = (
       enabled: !!accessToken && enabledServerIds.has(serverId),
       staleTime: 5 * 60 * 1000,
       retry: false,
+      refetchOnWindowFocus: false,
     })),
     combine: (results) =>
       new Map(

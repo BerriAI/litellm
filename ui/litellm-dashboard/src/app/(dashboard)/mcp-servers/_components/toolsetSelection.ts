@@ -11,16 +11,12 @@ const toolKey = (tool: MCPToolsetTool): string => `${tool.server_id}\u0000${tool
 
 const normalize = (query: string): string => query.trim().toLowerCase();
 
-/** Whether a non-empty search query matches any of a server's names (alias, server name). */
 export const matchesServerName = (query: string, serverNames: readonly string[]): boolean => {
   const q = normalize(query);
   return q !== "" && serverNames.some((name) => name.toLowerCase().includes(q));
 };
 
-/**
- * The tools of one server that a search query shows. A query matching the server's
- * name shows every tool on it; otherwise a tool shows when its name or description matches.
- */
+// A query that matches the server's name shows every tool on that server.
 export const filterServerTools = <T extends SearchableTool>(
   query: string,
   serverNames: readonly string[],
@@ -33,7 +29,6 @@ export const filterServerTools = <T extends SearchableTool>(
   return tools.filter((tool) => tool.name.toLowerCase().includes(q) || tool.description.toLowerCase().includes(q));
 };
 
-/** Adds `tools` to the selection, keeping existing order and skipping tools already selected. */
 export const selectTools = (
   selected: readonly MCPToolsetTool[],
   tools: readonly MCPToolsetTool[],
@@ -48,7 +43,6 @@ export const selectTools = (
   return [...selected, ...added];
 };
 
-/** Removes exactly `tools` from the selection; every other selected tool is kept. */
 export const deselectTools = (
   selected: readonly MCPToolsetTool[],
   tools: readonly MCPToolsetTool[],
@@ -63,7 +57,6 @@ export const toggleTool = (selected: readonly MCPToolsetTool[], tool: MCPToolset
 export const isToolSelected = (selected: readonly MCPToolsetTool[], tool: MCPToolsetTool): boolean =>
   selected.some((t) => toolKey(t) === toolKey(tool));
 
-/** How much of `tools` is selected, for a tri-state "select all" checkbox. */
 export const selectionState = (
   selected: readonly MCPToolsetTool[],
   tools: readonly MCPToolsetTool[],

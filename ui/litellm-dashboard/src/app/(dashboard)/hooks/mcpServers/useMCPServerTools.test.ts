@@ -1,9 +1,9 @@
 /* @vitest-environment jsdom */
 import React from "react";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useMCPServerTools } from "./useMCPServerTools";
+import { mcpServerToolKeys, useMCPServerTools } from "./useMCPServerTools";
 import * as networking from "@/components/networking";
 
 vi.mock("@/components/networking", () => ({
@@ -62,8 +62,12 @@ describe("useMCPServerTools", () => {
     expect(result.current.get("a")).toEqual({ tools: [], status: "loading" });
   });
 
-  it("normalizes a bare array response and tools without descriptions", async () => {
-    vi.mocked(networking.listMCPTools).mockResolvedValue([{ tool_name: "legacy" }, "plain"]);
+  it("normalizes a bare array response, tools without descriptions, and drops tools without a name", async () => {
+    vi.mocked(networking.listMCPTools).mockResolvedValue([
+      { tool_name: "legacy" },
+      "plain",
+      { description: "nameless" },
+    ]);
 
     const { result } = renderHook(() => useMCPServerTools(["a"], new Set(["a"])), { wrapper });
 
@@ -73,5 +77,26 @@ describe("useMCPServerTools", () => {
         { name: "plain", description: "" },
       ]),
     );
+  });
+
+  it("keeps showing the loaded tools when a later refetch fails", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const sharedWrapper = ({ children }: { children: React.ReactNode }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    vi.mocked(networking.listMCPTools)
+      .mockResolvedValueOnce(toolsFor("a"))
+      .mockResolvedValueOnce({ tools: [], error: "http_502", message: "upstream down" });
+
+    const { result } = renderHook(() => useMCPServerTools(["a"], new Set(["a"])), { wrapper: sharedWrapper });
+    await waitFor(() => expect(result.current.get("a")?.status).toBe("success"));
+
+    await act(() => queryClient.refetchQueries({ queryKey: mcpServerToolKeys.detail("a") }));
+
+    await waitFor(() => expect(queryClient.getQueryState(mcpServerToolKeys.detail("a"))?.status).toBe("error"));
+    expect(networking.listMCPTools).toHaveBeenCalledTimes(2);
+    expect(result.current.get("a")).toEqual({
+      tools: [{ name: "a_tool", description: "from a" }],
+      status: "success",
+    });
   });
 });

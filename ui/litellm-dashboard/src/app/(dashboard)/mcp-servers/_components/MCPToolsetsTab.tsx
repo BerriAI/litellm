@@ -48,10 +48,23 @@ const toolsetSchema = z.object({
 
 type ToolsetFormValues = z.infer<typeof toolsetSchema>;
 
-// Typing starts a fetch of every server's tools; wait for a pause so each keystroke does not.
 const SEARCH_DEBOUNCE_WAIT_MS = 300;
 
 const IDLE_SERVER_TOOLS: MCPServerToolsState = { tools: [], status: "idle" };
+
+const NO_SERVERS: ReadonlySet<string> = new Set();
+
+// The modal stays mounted while closed, so fetch only while it is open; otherwise a finished
+// search keeps every server's query live and refetches all of them in the background.
+const serversToFetch = (
+  open: boolean,
+  searching: boolean,
+  serverIds: readonly string[],
+  expandedServerIds: ReadonlySet<string>,
+): ReadonlySet<string> => {
+  if (!open) return NO_SERVERS;
+  return searching ? new Set(serverIds) : expandedServerIds;
+};
 
 const checkboxStateProps = (state: SelectionState) => ({
   checked: state === "all",
@@ -245,10 +258,10 @@ function CreateToolsetModal({ open, onClose, onSave, initialToolset }: CreateToo
   const [expandedServerIds, setExpandedServerIds] = useState<ReadonlySet<string>>(() => new Set());
   const { data: mcpServers = [], isSuccess: serversLoaded } = useMCPServers();
   const serverIds = React.useMemo(() => mcpServers.map((s) => s.server_id), [mcpServers]);
-  // Searching needs every server's catalog; otherwise only expanded servers are fetched.
+  const searching = search.trim() !== "" && debouncedSearch.trim() !== "";
   const fetchServerIds = React.useMemo(
-    () => (debouncedSearch.trim() ? new Set(serverIds) : expandedServerIds),
-    [debouncedSearch, serverIds, expandedServerIds],
+    () => serversToFetch(open, searching, serverIds, expandedServerIds),
+    [open, searching, serverIds, expandedServerIds],
   );
   const toolsByServer = useMCPServerTools(serverIds, fetchServerIds);
   const serverPrefixById = React.useMemo(

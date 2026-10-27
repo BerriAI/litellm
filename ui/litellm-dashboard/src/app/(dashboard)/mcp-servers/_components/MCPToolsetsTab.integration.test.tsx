@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -7,6 +7,7 @@ import { MCPToolsetsTab } from "./MCPToolsetsTab";
 import * as networking from "@/components/networking";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
+import { mcpServerToolKeys } from "@/app/(dashboard)/hooks/mcpServers/useMCPServerTools";
 import { MCPToolset } from "@/components/mcp_tools/types";
 
 vi.mock("@/components/networking", () => ({
@@ -223,11 +224,13 @@ describe("MCPToolsetsTab tool search and bulk selection", () => {
     vi.mocked(useMCPServers).mockReturnValue({ data: servers, isSuccess: true } as unknown as ReturnType<
       typeof useMCPServers
     >);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     render(
-      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })}>
+      <QueryClientProvider client={queryClient}>
         <MCPToolsetsTab accessToken="sk-test" userRole="Admin" />
       </QueryClientProvider>,
     );
+    return queryClient;
   };
 
   const editToolset = (tools: MCPToolset["tools"]) =>
@@ -355,6 +358,23 @@ describe("MCPToolsetsTab tool search and bulk selection", () => {
     await waitFor(() => {
       expect(networking.updateMCPToolset).toHaveBeenCalledWith("sk-test", expectedUpdate(tools));
     });
+  });
+
+  it("stops fetching server tools once the editor is closed after a search", async () => {
+    const user = setup();
+    const queryClient = renderWithServers();
+
+    const dialog = await openCreate(user);
+    await user.type(dialog.getByRole("textbox", { name: "Search tools or servers" }), "issue");
+    expect(await dialog.findByRole("checkbox", { name: /^create_ticket/ })).toBeInTheDocument();
+    await user.click(dialog.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    const callsWhileOpen = vi.mocked(networking.listMCPTools).mock.calls.length;
+
+    await act(() => queryClient.invalidateQueries({ queryKey: mcpServerToolKeys.all }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(networking.listMCPTools).toHaveBeenCalledTimes(callsWhileOpen);
   });
 
   it("clears the whole toolset with Clear all", async () => {
