@@ -47102,6 +47102,7 @@
     },
     "together_ai/MiniMaxAI/MiniMax-M3": {
         "cache_read_input_token_cost": 6e-08,
+        "deprecation_date": "2026-11-06",
         "input_cost_per_token": 3e-07,
         "litellm_provider": "together_ai",
         "max_input_tokens": 524288,
@@ -47295,6 +47296,7 @@
     },
     "together_ai/thinkingmachines/Inkling": {
         "cache_read_input_token_cost": 1.7e-07,
+        "deprecation_date": "2026-11-06",
         "input_cost_per_token": 1e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 524288,
