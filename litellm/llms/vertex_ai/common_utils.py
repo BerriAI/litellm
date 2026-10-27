@@ -672,9 +672,8 @@ def _fix_enum_empty_strings(schema, depth=0):
     # An Optional[Literal[...]] arrives here as an `anyOf` branch, because
     # convert_anyof_null_to_nullable runs first. Without this arm the empty string
     # survives on optional fields while the same enum is fixed on required ones.
-    anyof: Final = schema.get("anyOf", None)
-    if anyof is not None and isinstance(anyof, list):
-        for item in anyof:
+    if "anyOf" in schema and isinstance(schema["anyOf"], list):
+        for item in cast(list[object], schema["anyOf"]):  # cast-ok: an untyped JSON list
             _fix_enum_empty_strings(item, depth=depth + 1)
 
 
