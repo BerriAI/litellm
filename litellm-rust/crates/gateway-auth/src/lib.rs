@@ -13,7 +13,7 @@ pub use authentication::Auth;
 pub use caller::{AccessRequest, Caller, McpAction};
 pub use custom::{CustomAuth, CustomOutcome};
 pub use error::{Error, KeyError, UiAuthError};
-pub use extract::Bearer;
+pub use extract::{ApiKey, ApiKeySources, Bearer};
 pub use http::authenticate;
 pub use ui::{UI_CSRF_KEY, UiAuthSession, UiBackend, UiCredentials, UiSession, UiUser};
 

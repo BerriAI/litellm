@@ -3,14 +3,17 @@ use std::sync::Arc;
 use axum::{
     Router,
     body::{Body, to_bytes},
+    extract::FromRef,
     http::{Request, StatusCode},
     middleware::from_fn_with_state,
-    routing::get,
+    routing::{get, post},
 };
 use futures_util::future::BoxFuture;
 use litellm_auth_types::SecretValue;
 use litellm_config::Config;
-use litellm_gateway_auth::{Auth, Bearer, Caller, Error, authenticate, hash_token};
+use litellm_gateway_auth::{
+    ApiKey, ApiKeySources, Auth, Bearer, Caller, Error, authenticate, hash_token,
+};
 use litellm_secrets::source::SecretSource;
 use rstest::{fixture, rstest};
 use tower::ServiceExt;
@@ -232,4 +235,83 @@ async fn master_rotation_rejects_the_old_key(secrets: Arc<dyn SecretSource>) {
         rotated.authenticate(&SecretValue::new("first-key")).await,
         Err(Error::InvalidToken)
     ));
+}
+
+#[derive(Clone)]
+struct ApiKeyProfile {
+    auth: Auth,
+    sources: ApiKeySources,
+}
+
+impl FromRef<ApiKeyProfile> for Auth {
+    fn from_ref(profile: &ApiKeyProfile) -> Self {
+        profile.auth.clone()
+    }
+}
+
+impl FromRef<ApiKeyProfile> for ApiKeySources {
+    fn from_ref(profile: &ApiKeyProfile) -> Self {
+        profile.sources.clone()
+    }
+}
+
+fn api_key_app(secrets: Arc<dyn SecretSource>, sources: ApiKeySources) -> Router {
+    Router::new()
+        .route("/protected", post(|body: String| async move { body }))
+        .layer(from_fn_with_state(
+            ApiKeyProfile {
+                auth: master_auth(secrets, "master-key"),
+                sources,
+            },
+            authenticate::<ApiKey>,
+        ))
+}
+
+#[rstest]
+#[tokio::test]
+async fn api_key_extractor_selects_configured_header_and_preserves_body(
+    secrets: Arc<dyn SecretSource>,
+) {
+    let app = api_key_app(
+        secrets,
+        ApiKeySources::new(Some(axum::http::HeaderName::from_static("x-selected-key"))),
+    );
+    let response = app
+        .oneshot(
+            Request::post("/protected")
+                .header("x-selected-key", "Bearer master-key")
+                .header("authorization", "Bearer wrong-key")
+                .body(Body::from("body remains available"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        to_bytes(response.into_body(), 4096).await.unwrap(),
+        "body remains available"
+    );
+}
+
+#[rstest]
+#[case::standard_bearer(&["Bearer master-key"], 200)]
+#[case::duplicate_authorization(&["Bearer master-key", "Bearer other-key"], 401)]
+#[tokio::test]
+async fn api_key_extractor_reads_authorization(
+    secrets: Arc<dyn SecretSource>,
+    #[case] values: &[&str],
+    #[case] status: u16,
+) {
+    let app = api_key_app(secrets, ApiKeySources::default());
+    let request = values
+        .iter()
+        .fold(Request::post("/protected"), |request, value| {
+            request.header("authorization", *value)
+        })
+        .body(Body::from("body"))
+        .unwrap();
+    assert_eq!(
+        app.oneshot(request).await.unwrap().status().as_u16(),
+        status
+    );
 }
