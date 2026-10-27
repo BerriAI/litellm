@@ -5360,7 +5360,42 @@ class TestMCPServerManager:
             (
                 httpx.Response(200, text="secret invalid JSON body"),
                 "unhealthy",
-                "OpenAPI specification could not be loaded (JSONDecodeError)",
+                "OpenAPI specification could not be loaded (ValueError)",
+            ),
+            (
+                httpx.Response(200, text="paths: [secret invalid YAML body"),
+                "unhealthy",
+                "OpenAPI specification could not be loaded (ValueError)",
+            ),
+            (
+                httpx.Response(200, text="paths: {}\nx: \x01"),
+                "unhealthy",
+                "OpenAPI specification could not be loaded (ValueError)",
+            ),
+            (
+                httpx.Response(200, text="x: &a []\ny: *a"),
+                "unhealthy",
+                "OpenAPI specification could not be loaded (ValueError)",
+            ),
+            (
+                httpx.Response(200, text="x: !!bool invalid"),
+                "unhealthy",
+                "OpenAPI specification could not be loaded (ValueError)",
+            ),
+            (
+                httpx.Response(200, text="x: !!int ''"),
+                "unhealthy",
+                "OpenAPI specification could not be loaded (ValueError)",
+            ),
+            (
+                httpx.Response(200, text="x: !!float ''"),
+                "unhealthy",
+                "OpenAPI specification could not be loaded (ValueError)",
+            ),
+            (
+                httpx.Response(200, text="x: !!timestamp invalid"),
+                "unhealthy",
+                "OpenAPI specification could not be loaded (ValueError)",
             ),
         ],
     )
