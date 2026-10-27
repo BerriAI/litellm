@@ -243,10 +243,9 @@ async def read_request_body(request: Request | None) -> dict:
     Returns:
     - dict: Parsed request data as a dictionary or an empty dictionary if parsing fails
     """
+    if request is None:
+        return {}
     try:
-        if request is None:
-            return {}
-
         if is_otlp_trace_request(request):
             return {}
 
@@ -332,8 +331,8 @@ async def read_request_body(request: Request | None) -> dict:
         )
         from litellm.proxy.lens.buffering import LensRoute
 
-        route: Final[object] = request.scope.get("route") if request is not None else None
-        if request is not None and (
+        route: Final[object] = request.scope.get("route")
+        if (
             request_dispatched_to_pass_through_endpoint(request)
             or request_dispatched_to_provider_pass_through(request)
             or isinstance(route, LensRoute)
@@ -356,10 +355,16 @@ async def read_request_body(request: Request | None) -> dict:
         verbose_proxy_logger.error("Invalid JSON payload received: %s", e)
         raise
     except ClientDisconnect as e:
+        from litellm.proxy.proxy_server import (
+            _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; the Starlette HTTPException handler does not stamp the OTel server span opened at auth time, so the body reader must before it aborts
+        )
+
         verbose_proxy_logger.info("Client disconnected before the request body was fully received")
-        raise HTTPException(
+        disconnected: Final = HTTPException(
             status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, detail=LITELLM_CLIENT_DISCONNECT_DETAIL
-        ) from e
+        )
+        _close_dangling_otel_server_span(request, LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, exc=disconnected)
+        raise disconnected from e
     except Exception as e:
         # Catch unexpected errors to avoid crashes
         verbose_proxy_logger.exception("Unexpected error reading request body - %s", e)

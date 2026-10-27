@@ -1720,3 +1720,17 @@ async def test_read_request_body_aborts_with_499_when_the_client_disconnects_mid
         await read_request_body(request)
     assert (raised.value.status_code, raised.value.detail) == (499, "Client disconnected the request")
     assert _safe_get_request_parsed_body(request) is None, "a half-received body must never be cached as {}"
+
+
+async def test_read_request_body_closes_the_otel_server_span_when_the_client_disconnects_mid_upload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    span: Final = MagicMock()
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", MagicMock(), raising=False)
+    request: Final = _request_whose_client_disconnects_mid_upload("application/json")
+    request.state.parent_otel_span = span
+    with pytest.raises(HTTPException):
+        await read_request_body(request)
+    assert (span.end.called, request.state.parent_otel_span) == (True, None), "the auth-time span must not dangle"
