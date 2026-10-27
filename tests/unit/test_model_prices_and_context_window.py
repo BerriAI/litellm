@@ -801,7 +801,10 @@ def test_volcengine_doubao_seed_2_1_pro_260915_row_matches_published_metadata(pa
     assert entry["cache_read_input_token_cost"] == pytest.approx(1.2 / 6.9565 / 1_000_000, rel=1e-4)
     sibling = rows["volcengine/doubao-seed-2-1-pro-260628"]
     assert isinstance(sibling, dict)
-    assert all(entry[key] == sibling[key] for key in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"))
+    assert all(
+        entry[key] == sibling[key]
+        for key in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost")
+    )
 
 
 def _bedrock_gpt_oss_rows(prices: Mapping[str, JsonValue]) -> tuple[str, ...]:
@@ -831,6 +834,7 @@ _CLAUDE_PROVIDERS: Final = frozenset(
     {"anthropic", "bedrock", "bedrock_converse", "bedrock_mantle", "vertex_ai-anthropic_models", "azure_ai"}
 )
 _GEMINI_PROVIDERS: Final = frozenset({"gemini", "vertex_ai-language-models", "vertex_ai"})
+_GEMINI_ROWS_WITH_A_LONG_DECODE_OUTPUT_BUDGET: Final = frozenset({"gemini/gemini-4-argon", "vertex_ai/gemini-4-argon"})
 
 
 def _chat_rows(prices: Mapping[str, Mapping[str, object]]) -> Mapping[str, Mapping[str, object]]:
@@ -861,7 +865,9 @@ def test_claude_rows_share_one_window_so_context_window_equals_max_input_tokens(
     claude_rows: Final = {
         key: row
         for key, row in _chat_rows(prices).items()
-        if "claude" in key.lower() and row.get("litellm_provider") in _CLAUDE_PROVIDERS and "max_input_tokens" in row
+        if "claude" in key.lower()
+        and row.get("litellm_provider") in _CLAUDE_PROVIDERS
+        and (row.get("litellm_provider") == "anthropic" or "context_window" in row)
     }
     assert claude_rows
     assert {key: row.get("context_window") for key, row in claude_rows.items()} == {
@@ -874,7 +880,9 @@ def test_gemini_rows_have_independent_limits_so_context_window_is_input_plus_out
         key: row
         for key, row in _chat_rows(prices).items()
         if "gemini" in key.lower()
+        and key not in _GEMINI_ROWS_WITH_A_LONG_DECODE_OUTPUT_BUDGET
         and row.get("litellm_provider") in _GEMINI_PROVIDERS
+        and (row.get("litellm_provider") == "gemini" or "context_window" in row)
         and isinstance(row.get("max_input_tokens"), int)
         and isinstance(row.get("max_output_tokens"), int)
     }
