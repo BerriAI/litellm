@@ -445,7 +445,7 @@ async def test_langfuse_logging_systemone(
             **({"id": response_id} if response_id is not None else {}),
             "model": "typesafe/jev-1.13",
             "answers": answers,
-            "usage": {"input_tokens": 283, "output_tokens": 20},
+            "usage": {"input_tokens": 283, "output_tokens": 20, "cost": 1.1886e-05},
         }
     )
     await litellm.asystemone(
@@ -457,23 +457,7 @@ async def test_langfuse_logging_systemone(
     )
     await _flush_langfuse()
     assert upstream.call_count == 1
-    generations: Final = tuple(
-        TypeAdapter(dict[str, object]).validate_python(span["attributes"])
-        for span in _exported_spans(route)
-        if span["trace_id"] == resolve_trace_id(trace_id)
-        and TypeAdapter(dict[str, object]).validate_python(span["attributes"]).get("langfuse.observation.type")
-        == "generation"
-    )
-    assert len(generations) == 1
-    assert generations[0]["langfuse.observation.usage_details"] == {
-        "input": 283,
-        "output": 20,
-        "total": 303,
-        "cache_creation_input_tokens": 0,
-        "cache_read_input_tokens": 0,
-    }
-    output: Final = TypeAdapter(dict[str, object]).validate_python(generations[0]["langfuse.observation.output"])
-    assert output["answers"] == answers
+    _expected_generation(route, "systemone.json", trace_id)
 
 
 @pytest.mark.asyncio

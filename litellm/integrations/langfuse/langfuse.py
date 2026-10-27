@@ -638,9 +638,11 @@ class LangFuseLogger:
         elif response_obj is not None and isinstance(response_obj, litellm.ResponsesAPIResponse):
             input = prompt
             output = self._get_responses_api_content_for_langfuse(response_obj)
-        elif response_obj is not None and isinstance(response_obj, (DecisionsResponse, OpenAIDecisionResponse)):
-            input = prompt
-            output = response_obj.model_dump(mode="json", exclude={"usage"})
+        elif isinstance(response_obj, (DecisionsResponse, OpenAIDecisionResponse)):
+            return (  # pyright: ignore[reportUnknownVariableType]  # prompt is the caller's untyped dict, as in every branch
+                prompt,
+                response_obj.model_dump(mode="json", include={"answers"}),
+            )
         elif (
             kwargs.get("call_type") is not None
             and kwargs.get("call_type") == "_arealtime"

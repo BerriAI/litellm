@@ -1,0 +1,38 @@
+{
+    "name": "litellm-asystemone",
+    "parent_span_id": null,
+    "attributes": {
+        "langfuse.observation.cost_details": {
+            "total": 1.1886e-05
+        },
+        "langfuse.observation.input": {
+            "messages": [
+                {
+                    "content": "{\"state\": \"Customer writes: my payout has failed three days in a row.\", \"questions\": {\"urgent\": {\"type\": \"noul\", \"instructions\": \"Is this urgent?\"}}}",
+                    "role": "user"
+                }
+            ]
+        },
+        "langfuse.observation.level": "DEFAULT",
+        "langfuse.observation.metadata.api_base": "https://openrouter.ai/api/alpha/decisions",
+        "langfuse.observation.model.name": "typesafe/jev-1.13",
+        "langfuse.observation.model.parameters": {},
+        "langfuse.observation.output": {
+            "answers": {
+                "urgent": {
+                    "noul": 0.87,
+                    "type": "noul"
+                }
+            }
+        },
+        "langfuse.observation.type": "generation",
+        "langfuse.observation.usage_details": {
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input": 283,
+            "output": 20,
+            "total": 303
+        },
+        "langfuse.trace.name": "litellm-asystemone"
+    }
+}
