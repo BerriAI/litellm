@@ -30,9 +30,19 @@ def openssl_enforces_fips() -> bool:
     return False
 
 
+def cryptography_enforces_fips() -> bool:
+    """The cryptography library's own OpenSSL runs with FIPS-only defaults."""
+    try:
+        from cryptography.hazmat.bindings._rust import openssl as rust_openssl
+
+        return rust_openssl.is_fips_enabled()
+    except (ImportError, AttributeError):
+        return False
+
+
 def enforce_fips_mode() -> None:
     """Refuse to start when LITELLM_FIPS_MODE is not a boolean, or is on but TLS verification is off
-    or OpenSSL does not enforce FIPS."""
+    or Python's or the cryptography library's OpenSSL does not enforce FIPS."""
     value: Final = os.getenv(FIPS_MODE_ENV_VAR)
     if value and str_to_bool(value) is None:
         raise FipsModeError(f"{FIPS_MODE_ENV_VAR}={value!r} is not a boolean. Set it to true or false, or unset it.")
@@ -50,4 +60,9 @@ def enforce_fips_mode() -> None:
         raise FipsModeError(
             f"{FIPS_MODE_ENV_VAR} is on but OpenSSL does not enforce FIPS. Run the proxy on an OpenSSL with "
             f"its FIPS provider active and default_properties = fips=yes, or unset {FIPS_MODE_ENV_VAR}."
+        )
+    if not cryptography_enforces_fips():
+        raise FipsModeError(
+            f"{FIPS_MODE_ENV_VAR} is on but the cryptography library's OpenSSL does not enforce FIPS. Build it against "
+            f"the system OpenSSL (pip install --no-binary cryptography cryptography), or unset {FIPS_MODE_ENV_VAR}."
         )

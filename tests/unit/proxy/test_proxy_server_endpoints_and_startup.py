@@ -1801,6 +1801,7 @@ async def test_proxy_startup_refuses_fips_mode_when_the_password_migration_fails
     monkeypatch.delenv("SSL_VERIFY", raising=False)
     monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
     monkeypatch.setattr("litellm.proxy.common_utils.fips.openssl_enforces_fips", lambda: True)
+    monkeypatch.setattr("litellm.proxy.common_utils.fips.cryptography_enforces_fips", lambda: True)
     monkeypatch.setattr(ProxyStartupEvent, "setup_prisma_client", AsyncMock(return_value=MockPrisma()))
     scrypt_refused = ValueError("[digital envelope routines] unsupported")
     monkeypatch.setattr(
