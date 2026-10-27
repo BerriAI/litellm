@@ -8,7 +8,7 @@ import copy
 import json
 import sys
 from datetime import datetime, timedelta
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import Mock
 
 import pytest
@@ -1716,3 +1716,41 @@ async def test_timeout_penalty_updates_normalized_latency_and_avoids_failed_depl
         healthy_deployments=[{"model_info": {"id": name}, "litellm_params": {}} for name in ("native", "bridge")],
     )
     assert selected["model_info"]["id"] == "bridge"
+
+
+@pytest.mark.parametrize("limit_name", ["tpm", "rpm"])
+@pytest.mark.parametrize(
+    ("deployment_limit", "params_limit", "info_limit", "available"),
+    [
+        pytest.param(0, 100, 100, False, id="zero-top-level"),
+        pytest.param(None, 0, 100, False, id="zero-litellm-params"),
+        pytest.param(None, None, 0, False, id="zero-model-info"),
+        pytest.param(100, 0, 0, True, id="positive-top-level"),
+        pytest.param(None, 100, 0, True, id="positive-litellm-params"),
+        pytest.param(None, None, None, True, id="unset"),
+    ],
+)
+def test_capacity_limits_preserve_zero_and_precedence(
+    limit_name: Literal["tpm", "rpm"],
+    deployment_limit: int | None,
+    params_limit: int | None,
+    info_limit: int | None,
+    available: bool,
+) -> None:
+    handler: Final = LowestLatencyLoggingHandler(router_cache=DualCache())
+    deployment_id: Final = "capacity-limit"
+    deployment: Final = {
+        "model_name": "test-model",
+        limit_name: deployment_limit,
+        "litellm_params": {"model": "openai/test-model", limit_name: params_limit},
+        "model_info": {"id": deployment_id, limit_name: info_limit},
+    }
+
+    selected: Final = handler._get_available_deployments(
+        model_group="test-model",
+        healthy_deployments=[deployment],
+        input="hello",
+        request_count_dict={deployment_id: {"latency_normalized": [0.1]}},
+    )
+
+    assert selected == (deployment if available else None)
