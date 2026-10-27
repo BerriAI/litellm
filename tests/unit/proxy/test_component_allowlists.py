@@ -162,7 +162,6 @@ def test_composed_lifespan_preserves_request_state_and_teardown(
 
     def register_trace_route(application: Starlette, module: object) -> None:
         application.router.routes.append(Route("/v1/traces", trace_state))
-        application.router.routes.append(Route("/not-a-component-route/lazy", trace_state))
 
     @asynccontextmanager
     async def stateful_lifespan(application: Starlette) -> AsyncGenerator[Mapping[str, object], None]:
@@ -190,14 +189,9 @@ def test_composed_lifespan_preserves_request_state_and_teardown(
         assert response.json() == {"keys": [] if state_kind == "stateless" else sorted(state)}
         filtered: Final = client.get("/not-a-component-route")
         assert filtered.status_code == (200 if component_lifespan is None else 404), filtered.text
-        lazy_filtered: Final = client.get("/not-a-component-route/lazy")
-        assert lazy_filtered.status_code == (200 if component_lifespan is None else 404), lazy_filtered.text
-        assert events == (
-            ["startup", "request", "request", "request"] if component_lifespan is None else ["startup", "request"]
-        )
+        assert events == (["startup", "request", "request"] if component_lifespan is None else ["startup", "request"])
     assert events == (
-        ["startup", "request", "request", "request", "shutdown"]
-        if component_lifespan is None else ["startup", "request", "shutdown"]
+        ["startup", "request", "request", "shutdown"] if component_lifespan is None else ["startup", "request", "shutdown"]
     )
 
 

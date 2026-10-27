@@ -66,7 +66,6 @@ async def _gateway_lifespan(
     app_: Starlette, lifespan: Lifespan[Starlette] = _proxy_lifespan
 ) -> AsyncGenerator[Mapping[str, object], None]:
     async with lifespan(app_) as state:
-        app_.state.component_route_filter = _is_gateway_route
         app_.router.routes = [r for r in app_.router.routes if _is_gateway_route(r)]
         yield state if state is not None else {}
 
