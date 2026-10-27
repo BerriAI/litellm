@@ -8990,8 +8990,11 @@ def validate_chat_completion_user_messages(messages: list[AllMessageValues]):
                     f"Invalid message at index {idx}. Please ensure all messages are valid OpenAI chat completion messages."
                 )
             if "invalid content type" in str(e):
-                raise Exception(
-                    f"Invalid user message at index {idx}. Please ensure all user messages are valid OpenAI chat completion messages."
+                raise BadRequestError(
+                    message=f"Invalid user message at index {idx}. Please ensure all user messages are valid OpenAI chat completion messages.",
+                    model="",
+                    llm_provider="",
+                    body={"type": "invalid_request_error", "param": f"messages[{idx}].content"},
                 )
             else:
                 raise e
