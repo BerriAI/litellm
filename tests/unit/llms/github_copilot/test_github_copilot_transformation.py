@@ -966,3 +966,176 @@ def test_transform_response_carries_upstream_usage():
     assert result.usage.prompt_tokens == 11
     assert result.usage.completion_tokens == 7
     assert result.usage.total_tokens == 18
+
+
+class TestGithubCopilotUsageTokenDetails:
+    """
+    The Copilot API reports prompt cache usage only in
+    usage.copilot_usage.token_details, as cache_read and cache_write entries.
+    Those counts must surface as cache_read_input_tokens,
+    cache_creation_input_tokens and prompt_tokens_details.cached_tokens on
+    every response path.
+
+    See: https://github.com/BerriAI/litellm/issues/48567
+    """
+
+    CACHE_READ = 18002
+    CACHE_WRITE = 18002
+
+    @staticmethod
+    def _token_details(*entries):
+        return [{"token_type": token_type, "token_count": count} for token_type, count in entries]
+
+    @staticmethod
+    def _anthropic_native_response(token_details):
+        return {
+            "id": "msg_1",
+            "model": "claude-sonnet-5",
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 18027,
+                "output_tokens": 10,
+                "copilot_usage": {"token_details": token_details},
+            },
+        }
+
+    @staticmethod
+    def _openai_response(token_details):
+        return {
+            "id": "chatcmpl-1",
+            "created": 1,
+            "model": "claude-sonnet-5",
+            "object": "chat.completion",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {
+                "prompt_tokens": 18027,
+                "completion_tokens": 10,
+                "total_tokens": 18037,
+                "copilot_usage": {"token_details": token_details},
+            },
+        }
+
+    def test_cache_write_surfaces_as_cache_creation_input_tokens_on_anthropic_native_path(self):
+        config = GithubCopilotConfig()
+        response = self._anthropic_native_response(
+            self._token_details(("input", 25), ("cache_write", self.CACHE_WRITE), ("output", 10))
+        )
+
+        usage = config.transform_parsed_response_dict(response)["usage"]
+
+        assert usage["cache_creation_input_tokens"] == self.CACHE_WRITE
+
+    def test_cache_read_surfaces_as_cache_read_input_tokens_and_cached_tokens_on_anthropic_native_path(self):
+        config = GithubCopilotConfig()
+        response = self._anthropic_native_response(self._token_details(("cache_read", self.CACHE_READ)))
+
+        usage = config.transform_parsed_response_dict(response)["usage"]
+
+        assert usage["cache_read_input_tokens"] == self.CACHE_READ
+        assert usage["prompt_tokens_details"]["cached_tokens"] == self.CACHE_READ
+
+    def test_cache_counts_surface_on_openai_style_parsed_response(self):
+        config = GithubCopilotConfig()
+        response = self._openai_response(
+            self._token_details(("cache_read", self.CACHE_READ), ("cache_write", self.CACHE_WRITE))
+        )
+
+        usage = config.transform_parsed_response_dict(response)["usage"]
+
+        assert usage["cache_read_input_tokens"] == self.CACHE_READ
+        assert usage["cache_creation_input_tokens"] == self.CACHE_WRITE
+        assert usage["prompt_tokens_details"]["cached_tokens"] == self.CACHE_READ
+
+    def test_cache_counts_reach_model_response_usage_through_transform_response(self):
+        config = GithubCopilotConfig()
+        body = self._openai_response(
+            self._token_details(("cache_read", self.CACHE_READ), ("cache_write", self.CACHE_WRITE))
+        )
+        raw_response = httpx.Response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            content=json.dumps(body).encode(),
+        )
+
+        model_response = config.transform_response(
+            model="github_copilot/claude-sonnet-5",
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+            api_key="test",
+        )
+
+        usage = model_response.usage
+        assert usage is not None
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.cached_tokens == self.CACHE_READ
+        assert usage.prompt_tokens_details.cache_write_tokens == self.CACHE_WRITE
+        assert usage["cache_read_input_tokens"] == self.CACHE_READ
+        assert usage["cache_creation_input_tokens"] == self.CACHE_WRITE
+
+    def test_cache_counts_reach_aggregated_streaming_usage(self):
+        from litellm.litellm_core_utils.streaming_handler import calculate_total_usage
+        from litellm.types.utils import ModelResponseStream
+
+        chunk = ModelResponseStream(
+            **{
+                "id": "chatcmpl-1",
+                "created": 1,
+                "model": "claude-sonnet-5",
+                "object": "chat.completion.chunk",
+                "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 18027,
+                    "completion_tokens": 10,
+                    "total_tokens": 18037,
+                    "copilot_usage": {
+                        "token_details": self._token_details(
+                            ("cache_read", self.CACHE_READ), ("cache_write", self.CACHE_WRITE)
+                        )
+                    },
+                },
+            }
+        )
+
+        usage = calculate_total_usage(chunks=[chunk])
+
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.cached_tokens == self.CACHE_READ
+        assert usage.prompt_tokens_details.cache_write_tokens == self.CACHE_WRITE
+        assert usage["cache_read_input_tokens"] == self.CACHE_READ
+        assert usage["cache_creation_input_tokens"] == self.CACHE_WRITE
+
+    def test_repeated_token_detail_entries_are_summed_and_malformed_entries_ignored(self):
+        config = GithubCopilotConfig()
+        token_details = self._token_details(("cache_read", 100), ("cache_read", 23)) + [
+            {"token_type": "cache_read"},
+            {"token_type": "cache_write", "token_count": -5},
+            {"token_type": "cache_write", "token_count": "18002"},
+            {"token_count": 10},
+            "not-a-dict",
+        ]
+        response = self._anthropic_native_response(token_details)
+
+        usage = config.transform_parsed_response_dict(response)["usage"]
+
+        assert usage["cache_read_input_tokens"] == 123
+        assert "cache_creation_input_tokens" not in usage
+
+    def test_provider_reported_cache_fields_are_not_overwritten(self):
+        config = GithubCopilotConfig()
+        response = self._anthropic_native_response(
+            self._token_details(("cache_read", self.CACHE_READ), ("cache_write", self.CACHE_WRITE))
+        )
+        response["usage"]["cache_read_input_tokens"] = 7
+        response["usage"]["cache_creation_input_tokens"] = 9
+
+        usage = config.transform_parsed_response_dict(response)["usage"]
+
+        assert usage["cache_read_input_tokens"] == 7
+        assert usage["cache_creation_input_tokens"] == 9
