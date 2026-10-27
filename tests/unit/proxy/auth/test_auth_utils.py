@@ -368,7 +368,11 @@ _SERVICE_ACCOUNT_TOKEN_REFERENCE: Final = "oidc/file//var/run/secrets/kubernetes
 
 
 def _user_config_with(litellm_params: dict[str, str]) -> dict[str, object]:
-    return {"model_list": [{"model_name": "devstral", "litellm_params": {"model": "mistral/devstral-latest", **litellm_params}}]}
+    return {
+        "model_list": [
+            {"model_name": "devstral", "litellm_params": {"model": "mistral/devstral-latest", **litellm_params}}
+        ]
+    }
 
 
 def _user_config_defaulting_to(litellm_params: dict[str, str]) -> dict[str, object]:
@@ -388,7 +392,11 @@ def _user_config_search_tool_with(litellm_params: dict[str, str]) -> dict[str, o
         "search_tools": [
             {
                 "search_tool_name": "web",
-                "litellm_params": {"search_provider": "tavily", "api_base": "https://attacker.example", **litellm_params},
+                "litellm_params": {
+                    "search_provider": "tavily",
+                    "api_base": "https://attacker.example",
+                    **litellm_params,
+                },
             }
         ]
     }
@@ -509,7 +517,9 @@ def test_a_call_cannot_carry_an_oidc_api_key_in_litellm_params(route: str | None
         )
 
 
-@pytest.mark.parametrize("route", ["/model/new", "/model/update", "/model/deployment-1/update", "/health/test_connection"])
+@pytest.mark.parametrize(
+    "route", ["/model/new", "/model/update", "/model/deployment-1/update", "/health/test_connection"]
+)
 def test_a_deployment_write_may_carry_an_oidc_api_key_in_litellm_params(route: str):
     """A proxy admin configures an oidc/ api_key on a deployment through these routes, and the model management role
     gate refuses anyone else with a 403."""
@@ -4404,6 +4414,40 @@ class TestObservabilityCallbackBans:
                 model="gpt-4",
             )
             is True
+        )
+
+
+@pytest.mark.parametrize("container", [None, "metadata", "litellm_metadata", "extra_body"])
+@pytest.mark.parametrize("model", ["group-a", "group-b"])
+def test_proxy_wide_allowlist_admits_only_the_named_observability_param(container: str | None, model: str) -> None:
+    settings: Final = {"configurable_clientside_auth_params": ["langfuse_environment"]}
+    controls: Final = {"langfuse_environment": "test"}
+    request: Final = {"model": model, **({container: controls} if container else controls)}
+    assert is_request_body_safe(request_body=request, general_settings=settings, llm_router=None, model=model) is True
+    for field in ("api_base", "langfuse_host", "aws_web_identity_token"):
+        forbidden: Final = {**controls, field: "https://unlisted.example"}
+        mixed: Final = {"model": model, **({container: forbidden} if container else forbidden)}
+        with pytest.raises(ValueError, match=field):
+            is_request_body_safe(request_body=mixed, general_settings=settings, llm_router=None, model=model)
+
+
+def test_proxy_wide_allowlist_keeps_api_base_value_restrictions() -> None:
+    settings: Final = {"configurable_clientside_auth_params": [{"api_base": r"^https://allowed\.example/v1$"}]}
+    assert (
+        is_request_body_safe(
+            request_body={"api_base": "https://allowed.example/v1"},
+            general_settings=settings,
+            llm_router=None,
+            model="group",
+        )
+        is True
+    )
+    with pytest.raises(ValueError, match="api_base"):
+        is_request_body_safe(
+            request_body={"api_base": "https://unlisted.example/v1"},
+            general_settings=settings,
+            llm_router=None,
+            model="group",
         )
 
 

@@ -37,6 +37,9 @@ LANGFUSE_TRACE_NAME: Final = "langfuse.trace.name"
 LANGFUSE_TRACE_USER_ID: Final = "user.id"
 LANGFUSE_TRACE_SESSION_ID: Final = "session.id"
 LANGFUSE_TRACE_TAGS: Final = "langfuse.trace.tags"
+LANGFUSE_ENVIRONMENT: Final = "langfuse.environment"
+LANGFUSE_RELEASE: Final = "langfuse.release"
+LANGFUSE_VERSION: Final = "langfuse.version"
 
 
 class LangfuseMapper:
@@ -103,6 +106,9 @@ class LangfuseMapper:
                 (LANGFUSE_TRACE_USER_ID, trace.user_id or None),
                 (LANGFUSE_TRACE_SESSION_ID, trace.session_id or None),
                 (LANGFUSE_TRACE_TAGS, trace.tags or None),
+                (LANGFUSE_ENVIRONMENT, trace.environment or None),
+                (LANGFUSE_RELEASE, trace.release or None),
+                (LANGFUSE_VERSION, trace.version or None),
             )
         )
 
