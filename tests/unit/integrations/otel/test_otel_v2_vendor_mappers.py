@@ -856,3 +856,14 @@ def test_mixpanel_mapper_stamps_user_id_and_omits_when_absent():
     )
     assert MixpanelMapper().map(mcp_span) == {"user.id": "mcp_user"}
     assert MixpanelMapper().map(_llm_call()) == {}
+
+    from litellm.integrations.otel.model.metadata import LLMCallEvent
+
+    sdk_event = LLMCallEvent.from_dict(
+        {
+            "litellm_params": {"metadata": {"user.id": "sdk_user_789", "ignored_key": "x"}},
+            "standard_logging_object": {"id": "c3", "model": "gpt-4o", "metadata": {}},
+        }
+    )
+    assert sdk_event.user_id_metadata == {"user.id": "sdk_user_789"}
+    assert LLMCallEvent.from_dict({}).user_id_metadata == {}

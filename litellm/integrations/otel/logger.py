@@ -600,6 +600,7 @@ class OpenTelemetryV2(CustomLogger):
             trace=call.trace,
             session_id=call.session_id,
             metadata_keys=tuple(self.config.baggage_metadata_keys),
+            request_metadata=call.user_id_metadata,
         )
         end_time_ns: Final = to_ns(end_time)
         if carrier is not None and carrier.span is not None:

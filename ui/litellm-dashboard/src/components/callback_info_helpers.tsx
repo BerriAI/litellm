@@ -100,7 +100,8 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       mixpanel_project_token: "password",
       mixpanel_region: "text",
     },
-    description: "Mixpanel Agent Intelligence OpenTelemetry Integration. Setup: https://docs.mixpanel.com/docs/agent-intelligence",
+    description:
+      "Mixpanel Agent Intelligence OpenTelemetry Integration. Setup: https://docs.mixpanel.com/docs/agent-intelligence",
   },
   {
     id: "newrelic",
