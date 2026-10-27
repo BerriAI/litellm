@@ -44,6 +44,7 @@ SHARDED_ROOTS: tuple[str, ...] = (
     "tests/unit/enterprise/proxy",
     "tests/unit/llms",
     "tests/unit/proxy",
+    "tests/unit/proxy/_experimental",
     "tests/unit/responses",
     "tests/unit/skills",
 )
