@@ -272,3 +272,30 @@ def test_hosted_vllm_responses_transform_request_from_optional_request_params():
 
     assert request["chat_template_kwargs"] == {"enable_thinking": False}
     assert request["top_k"] == 30
+
+
+def test_hosted_vllm_responses_provider_params_merge_with_request_extra_body():
+    """
+    A request-level extra_body must not drop the forwarded provider params:
+    unrelated keys from both reach vLLM, and extra_body wins on a shared key.
+    """
+    mock_client = _make_mock_http_client(_make_mock_responses_api_response("Test output"))
+
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.get_httpx_client",
+        return_value=mock_client,
+    ):
+        litellm.responses(
+            model="hosted_vllm/Qwen/Qwen3-8B",
+            input="hi",
+            api_base="https://test-vllm.example.com/v1",
+            api_key="test-key",
+            chat_template_kwargs={"enable_thinking": False},
+            top_k=20,
+            extra_body={"min_p": 0.1, "top_k": 5},
+        )
+
+    call_json = mock_client.post.call_args[1]["json"]
+    assert call_json["chat_template_kwargs"] == {"enable_thinking": False}
+    assert call_json["min_p"] == 0.1
+    assert call_json["top_k"] == 5
