@@ -3,7 +3,9 @@ import json
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import aclosing
 from copy import deepcopy
+from dataclasses import dataclass
 from functools import reduce
+from types import MappingProxyType
 from typing import Final, Literal
 
 import httpx
@@ -32,6 +34,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from litellm.types.utils import (
     CallTypes,
     Choices,
@@ -130,6 +133,46 @@ def test_explicit_configuration_takes_precedence(monkeypatch: pytest.MonkeyPatch
     assert guardrail.api_key == "test-key"
     assert guardrail.api_url == "https://guard.example.com/v3.0/aiSecurity/applyGuardrails"
     assert guardrail.app_name == "configured-app"
+
+
+@dataclass(frozen=True, slots=True)
+class _SecretStore:
+    secrets: Mapping[str, str]
+
+    def sync_read_secret(self, secret_name: str) -> str | None:
+        return self.secrets.get(secret_name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api_key", [None, "explicit-key"])
+async def test_outbound_scan_uses_secret_manager_fallback_unless_key_is_explicit(
+    api_key: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TMV1_API_KEY", "environment-key")
+    monkeypatch.setattr(
+        litellm, "secret_manager_client", _SecretStore(MappingProxyType({"TMV1_API_KEY": "managed-key"}))
+    )
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.HASHICORP_VAULT)
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
+    expected_key: Final = api_key or "managed-key"
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.headers.get("Authorization") != f"Bearer {expected_key}":
+            return httpx.Response(401)
+        return httpx.Response(200, json={"action": "allow"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        guardrail: Final = TrendAIGuardrail(
+            api_key=api_key,
+            api_base="https://guard.example.com",
+            guardrail_name="trendai",
+            event_hook=GuardrailEventHooks.pre_call,
+            async_handler=client,
+        )
+        inputs: Final[GenericGuardrailAPIInputs] = {"texts": ["hello"]}
+        result: Final = await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
+
+    assert result == inputs
 
 
 def test_negative_stream_overlap_is_rejected() -> None:
