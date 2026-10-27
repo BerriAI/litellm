@@ -489,6 +489,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
+from litellm.proxy.common_utils.fips import FipsModeError, enforce_fips_mode, is_fips_mode
 from litellm.proxy.common_utils.healthy_model_filter import (
     get_hidden_unhealthy_model_names,
     is_healthy_only_listing_default,
@@ -1523,6 +1524,8 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
             if decoded_worker_config is not None:
                 await initialize_from_worker_config(decoded_worker_config)
 
+    enforce_fips_mode()
+
     enforce_master_key_boot_verdict(
         await with_stored_secrets_counted(
             master_key_boot_verdict(
@@ -1565,9 +1568,14 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                 result: Final = await migrate_passwords_to_scrypt_async(prisma_client)
                 verbose_proxy_logger.info("Password migration: %s", result)
             except Exception as e:
+                if is_fips_mode():
+                    raise FipsModeError(f"Password migration failed, so plaintext passwords stay unhashed: {e}") from e
                 verbose_proxy_logger.warning("Password migration skipped: %s", e)
 
-        asyncio.create_task(_run_pw_migration())
+        if is_fips_mode():
+            await _run_pw_migration()
+        else:
+            asyncio.create_task(_run_pw_migration())
 
         async def _run_agent_grant_id_migration() -> None:
             from litellm.proxy.agent_endpoints.agent_registry import (

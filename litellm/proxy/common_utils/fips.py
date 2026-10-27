@@ -1,0 +1,53 @@
+import os
+from typing import Final
+
+from litellm.secret_managers.main import str_to_bool
+
+FIPS_MODE_ENV_VAR: Final = "LITELLM_FIPS_MODE"
+
+
+class FipsModeError(Exception):
+    pass
+
+
+def is_fips_mode() -> bool:
+    return str_to_bool(os.getenv(FIPS_MODE_ENV_VAR)) is True
+
+
+def openssl_enforces_fips() -> bool:
+    """Python's OpenSSL runs with FIPS-only defaults and itself refuses MD5."""
+    try:
+        import _hashlib
+
+        if _hashlib.get_fips_mode() != 1:
+            return False
+    except (ImportError, AttributeError, ValueError):
+        return False
+    try:
+        _hashlib.new("md5", b"", usedforsecurity=True)
+    except ValueError:
+        return True
+    return False
+
+
+def enforce_fips_mode() -> None:
+    """Refuse to start when LITELLM_FIPS_MODE is not a boolean, or is on but TLS verification is off
+    or OpenSSL does not enforce FIPS."""
+    value: Final = os.getenv(FIPS_MODE_ENV_VAR)
+    if value and str_to_bool(value) is None:
+        raise FipsModeError(f"{FIPS_MODE_ENV_VAR}={value!r} is not a boolean. Set it to true or false, or unset it.")
+    if not is_fips_mode():
+        return
+
+    from litellm.llms.custom_httpx.http_handler import get_ssl_verify
+
+    if get_ssl_verify() is False:
+        raise FipsModeError(
+            f"{FIPS_MODE_ENV_VAR} is on but TLS certificate verification is disabled by SSL_VERIFY or "
+            "litellm_settings.ssl_verify. Remove the override, or point ssl_verify at a CA bundle."
+        )
+    if not openssl_enforces_fips():
+        raise FipsModeError(
+            f"{FIPS_MODE_ENV_VAR} is on but OpenSSL does not enforce FIPS. Run the proxy on an OpenSSL with "
+            f"its FIPS provider active and default_properties = fips=yes, or unset {FIPS_MODE_ENV_VAR}."
+        )

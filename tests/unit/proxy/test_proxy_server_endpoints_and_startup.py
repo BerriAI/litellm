@@ -1775,6 +1775,45 @@ async def test_proxy_startup_refuses_an_unsafe_master_key_even_when_the_database
     assert ("could not be checked" in announced[0]) == key_can_have_encrypted_the_database
 
 
+@pytest.mark.asyncio
+async def test_proxy_startup_refuses_fips_mode_when_the_config_disables_tls_verification(monkeypatch, tmp_path):
+    from litellm.proxy.common_utils.fips import FipsModeError
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    config_path, _ = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
+    config_path.write_text(yaml.dump({"litellm_settings": {"ssl_verify": False}}))
+    monkeypatch.setattr(litellm, "ssl_verify", True)
+    monkeypatch.delenv("SSL_VERIFY", raising=False)
+    monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
+
+    with pytest.raises(FipsModeError, match="TLS certificate verification is disabled"):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_refuses_fips_mode_when_the_password_migration_fails(monkeypatch, tmp_path):
+    from litellm.proxy.common_utils.fips import FipsModeError
+    from litellm.proxy.proxy_server import ProxyStartupEvent, proxy_startup_event
+
+    _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
+    monkeypatch.setattr(litellm, "ssl_verify", True)
+    monkeypatch.delenv("SSL_VERIFY", raising=False)
+    monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
+    monkeypatch.setattr("litellm.proxy.common_utils.fips.openssl_enforces_fips", lambda: True)
+    monkeypatch.setattr(ProxyStartupEvent, "setup_prisma_client", AsyncMock(return_value=MockPrisma()))
+    scrypt_refused = ValueError("[digital envelope routines] unsupported")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.migrate_passwords_to_scrypt_async", AsyncMock(side_effect=scrypt_refused)
+    )
+
+    with pytest.raises(FipsModeError, match="plaintext passwords stay unhashed") as refused:
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    assert refused.value.__cause__ is scrypt_refused
+
+
 class _DatabaseWithOneStoredCredential:
     def __init__(self, ciphertext):
         self._ciphertext = ciphertext
