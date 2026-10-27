@@ -408,7 +408,14 @@ def _per_second_pricing_cost(
     return resolved_cost_per_second * seconds, 0.0
 
 
+_PROVIDERS_WITH_OWN_REPORTED_COST_READER: Final = frozenset(
+    {LlmProviders.XAI.value, LlmProviders.PERPLEXITY.value, LlmProviders.OPENCODE_GO.value}
+)
+
+
 def _billable_reported_cost(usage_object: Usage | None, custom_llm_provider: str | None) -> float | None:
+    if custom_llm_provider in _PROVIDERS_WITH_OWN_REPORTED_COST_READER:
+        return None
     return _billable_header_cost(provider_reported_usage_cost(usage_object, custom_llm_provider))
 
 

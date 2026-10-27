@@ -130,7 +130,6 @@ from litellm.proxy.route_llm_request import (
     route_request,
 )
 from litellm.proxy.telemetry.request_context import bind_call_id as bind_telemetry_call_id
-from litellm.proxy.usage_cost_egress import with_client_usage_cost
 from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     ProxyLogging,
     _check_and_merge_model_level_guardrails,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -274,7 +273,6 @@ from litellm.proxy.litellm_pre_call_utils import (
 )
 from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
-from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -3327,7 +3325,7 @@ class ProxyBaseLLMRequestProcessing:
                 user_api_key_dict=user_api_key_dict,
             )
 
-        return with_client_usage_cost(response, response_cost_for_headers)
+        return response
 
     @staticmethod
     async def _record_container_owners_from_responses_if_needed(
@@ -4712,7 +4710,6 @@ class ProxyBaseLLMRequestProcessing:
             completion_tokens_details=usage.get("completion_tokens_details"),
             prompt_tokens_details=usage.get("prompt_tokens_details"),
             server_tool_use=usage.get("server_tool_use"),
-            cost=usage.get("cost"),
         )
 
     @staticmethod
@@ -4727,7 +4724,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _completion_cost_or_none(
-        model_response: ModelResponse | ResponsesAPIResponse, model_name: str, service_tier: str | None
+        model_response: ModelResponse, model_name: str, service_tier: str | None
     ) -> float | None:
         try:
             return litellm.completion_cost(
@@ -4738,7 +4735,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _logging_obj_cost_or_none(
-        model_response: ModelResponse | ResponsesAPIResponse, litellm_logging_obj: LiteLLMLoggingObj
+        model_response: ModelResponse, litellm_logging_obj: LiteLLMLoggingObj
     ) -> float | None:
         # Pricing a frame stamps cost_breakdown and, on failure, the cost-failure debug key onto
         # the live logging object. The pass-through handlers never recompute either one, so a
@@ -4765,7 +4762,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _streamed_usage_cost(
-        model_response: ModelResponse | ResponsesAPIResponse,
+        model_response: ModelResponse,
         model_name: str,
         service_tier: str | None,
         litellm_logging_obj: LiteLLMLoggingObj | None,
