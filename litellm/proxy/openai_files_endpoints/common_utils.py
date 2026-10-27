@@ -477,6 +477,18 @@ async def get_authorized_credentials_for_model(
     )
 
 
+def deployment_drop_params(
+    llm_router: Optional["Router"], model_id: str, request: Mapping[str, object]
+) -> Mapping[str, bool | str]:
+    deployment: Final = (
+        llm_router.get_credential_deployment(model_id=model_id)
+        if llm_router is not None and "drop_params" not in request
+        else None
+    )
+    drop_params: Final = deployment.litellm_params.drop_params if deployment is not None else None
+    return MappingProxyType({}) if drop_params is None else MappingProxyType({"drop_params": drop_params})
+
+
 def _key_allowlist_covers(public_model_name: str, key_model_allowlist: Sequence[str]) -> bool:
     from litellm.proxy.auth.auth_checks import model_matches_any_wildcard_pattern_in_list
 

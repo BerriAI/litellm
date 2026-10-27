@@ -52,6 +52,8 @@ A2A_CALL_TYPES: Final = (CallTypes.asend_message, CallTypes.send_message)
 GUARDRAIL_NAME: Final = "unified_llm_guardrails"
 GUARDRAIL_ADAPTER: Final[TypeAdapter[CustomGuardrail | None]] = TypeAdapter(InstanceOf[CustomGuardrail] | None)
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
 _RequestData: TypeAlias = dict[str, object]
 
 
@@ -185,7 +187,7 @@ def _get_a2a_request_id(responses_so_far: Sequence[object], request_data: dict) 
             return item.get("id")
         if isinstance(item, str):
             try:
-                obj = json.loads(item.strip())
+                obj = _DECODED_JSON.validate_python(json.loads(item.strip()))
                 if isinstance(obj, dict) and "id" in obj:
                     return obj.get("id")
             except (json.JSONDecodeError, TypeError):
@@ -731,7 +733,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         call_type: str,
         sampling_rate: int,
-        end_of_stream_only: bool,
+        end_of_stream_only: object,
         mappings: Mapping[CallTypes, type["BaseTranslation"]],
     ) -> AsyncGenerator[object, None]:
         """Emit guardrail text transformations as new deltas on the stream.
@@ -1111,16 +1113,19 @@ class UnifiedLLMGuardrails(CustomLogger):
         )
         typed_request_data: Final[_RequestData] = request_data
 
-        def _streaming_flag(name: str, default: object) -> Any:
+        def _streaming_setting(name: str, default: object) -> object:
             return self.resolve_streaming_flag(resolved_guardrail, name, default)
+
+        def _streaming_flag(name: str, default: object) -> Any:
+            return _streaming_setting(name, default)
 
         sampling_rate: Final[int] = _streaming_flag("streaming_sampling_rate", 5)
         # Only apply the guardrail at end of stream (not per chunk).
-        end_of_stream_only: bool = _streaming_flag("streaming_end_of_stream_only", False)
+        end_of_stream_only: object = _streaming_setting("streaming_end_of_stream_only", False)
         # "block_only" (default) drops guardrail text rewrites on the streaming
         # path; "incremental_diff" emits them as synthetic deltas (see
         # _run_incremental_transform_stream).
-        streaming_transform_mode: Final[str] = _streaming_flag("streaming_transform_mode", "block_only")
+        streaming_transform_mode: Final = _streaming_setting("streaming_transform_mode", "block_only")
         # Withhold every chunk until end-of-stream moderation passes, then
         # release the original chunks (clean) or only the block message
         # (blocked) -- moderating the whole response *before* any content
@@ -1128,10 +1133,10 @@ class UnifiedLLMGuardrails(CustomLogger):
         # release the original chunks are replayed as-is, so a
         # content-rewriting guardrail (e.g. PII masking) would leak
         # unredacted content. Guarded below via mask_response_content.
-        buffer_until_moderated: bool = _streaming_flag(
+        buffer_until_moderated: object = _streaming_setting(
             "streaming_buffer_until_moderated", buffer_until_moderated_default
         )
-        release_on_scan: Final[bool] = _streaming_flag("streaming_buffer_release_on_scan", False)
+        release_on_scan: Final = _streaming_setting("streaming_buffer_release_on_scan", False)
 
         if (
             buffer_until_moderated

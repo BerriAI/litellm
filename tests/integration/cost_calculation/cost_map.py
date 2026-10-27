@@ -174,6 +174,8 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         },
     },
     "gpt-5.6": {
+        "cache_creation_input_token_cost": 2.1875e-06,
+        "cache_creation_input_token_cost_above_12hr": 4.375e-06,
         "cache_read_input_token_cost": 1.75e-07,
         "input_cost_per_audio_token": 4e-05,
         "input_cost_per_token": 1.75e-06,
@@ -597,6 +599,7 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "cache_read_input_token_cost_priority": 2.16e-07,
         "google_maps_grounding_cost_per_query": 0.0168,
         "input_cost_per_audio_token": 2.4e-06,
+        "input_cost_per_audio_token_priority": 4.32e-06,
         "input_cost_per_token": 2.4e-06,
         "input_cost_per_token_flex": 1.2e-06,
         "input_cost_per_token_priority": 4.32e-06,

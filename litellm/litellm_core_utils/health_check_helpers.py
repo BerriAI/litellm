@@ -4,6 +4,7 @@ Helper functions for health check calls.
 
 import base64
 from collections.abc import Awaitable, Callable, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
 from litellm.llms.base_llm.ocr.transformation import DocumentType
@@ -25,6 +26,9 @@ IMAGE_EDIT_HEALTH_CHECK_PROMPT: Final = (
 )
 
 ANTHROPIC_MESSAGES_HEALTH_CHECK_MAX_TOKENS: Final = 16
+EXTRACTION_HEALTH_CHECK_FIELDS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
+    {"reachable": MappingProxyType({"type": "text", "instructions": "Any word from the text"})}
+)
 
 
 def native_health_check_mode(model: str, custom_llm_provider: str | None) -> Literal["anthropic_messages"] | None:
@@ -215,6 +219,7 @@ class HealthCheckHelpers:
             "anthropic_messages",
             "ocr",
             "decisions",
+            "extraction",
         ],
         Callable,
     ]:
@@ -237,7 +242,11 @@ class HealthCheckHelpers:
         from litellm.litellm_core_utils.audio_utils.utils import (
             get_audio_file_for_health_check,
         )
-        from litellm.litellm_core_utils.health_check_utils import DECISIONS_CALL_PARAMS, _filter_model_params
+        from litellm.litellm_core_utils.health_check_utils import (
+            DECISIONS_CALL_PARAMS,
+            EXTRACTION_CALL_PARAMS,
+            _filter_model_params,
+        )
         from litellm.realtime_api.main import realtime_health_check
 
         return {
@@ -318,6 +327,15 @@ class HealthCheckHelpers:
                         "questions": _decisions_health_check_questions(
                             model=model, custom_llm_provider=custom_llm_provider
                         ),
+                        **_filter_model_params(model_params=model_params),
+                    }
+                )
+            ),
+            "extraction": lambda: litellm.aextraction(
+                **EXTRACTION_CALL_PARAMS.validate_python(
+                    {
+                        "state": prompt or "health check",
+                        "fields": EXTRACTION_HEALTH_CHECK_FIELDS,
                         **_filter_model_params(model_params=model_params),
                     }
                 )
