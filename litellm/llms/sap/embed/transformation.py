@@ -1,5 +1,5 @@
 """
-Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
+Translates from OpenAI's `/v1/embeddings` to SAP GenAI Hub's Orchestration Service `/v2/embeddings`.
 """
 
 from typing import Final, Literal
@@ -113,8 +113,6 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         return fetch_deployment_url(
             self.base_url,
             self.headers,
-            "No embedding deployment found in SAP AI Core.",
-            "embedding",
         )
 
     def get_error_class(self, error_message, status_code, headers):

@@ -195,8 +195,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         return fetch_deployment_url(
             self.base_url,
             self.headers,
-            "No orchestration deployment found in SAP AI Core.",
-            "orchestration",
         )
 
     @classmethod

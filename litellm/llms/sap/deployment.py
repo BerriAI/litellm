@@ -24,8 +24,6 @@ _deployment_url_lock: Final = threading.Lock()
 def fetch_deployment_url(
     base_url: str,
     headers: Mapping[str, str],
-    not_found_message: str,
-    kind: str,
 ) -> str:
     deployments: Final[AICoreDeploymentList] = (
         litellm.module_level_client.get(
@@ -41,7 +39,7 @@ def fetch_deployment_url(
 
     candidates: Final[list[tuple[str, str, str]]] = sorted(
         (
-            (resource["deploymentUrl"], resource["createdAt"], resource.get("configurationName", ""))
+            (resource["deploymentUrl"], resource["createdAt"], resource["configurationName"])
             for resource in deployments.get("resources", [])
             if resource.get("deploymentUrl")
         ),
@@ -49,12 +47,11 @@ def fetch_deployment_url(
         reverse=True,
     )
     if not candidates:
-        raise GenAIHubOrchestrationError(status_code=404, message=not_found_message)
+        raise GenAIHubOrchestrationError(status_code=404, message="No orchestration deployment found in SAP AI Core.")
     if len(candidates) > 1:
         verbose_logger.warning(
-            "SAP: %d %s deployments found; using newest (name=%r, url=%r). Others ignored: %s.",
+            "SAP: %d orchestration deployments found; using newest (name=%r, url=%r). Others ignored: %s.",
             len(candidates),
-            kind,
             candidates[0][2],
             candidates[0][0],
             tuple(v[2] or v[0] for v in candidates[1:]),
