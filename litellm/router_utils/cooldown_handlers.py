@@ -406,7 +406,17 @@ def _should_run_cooldown_logic(
     return True
 
 
-_FALLBACK_ENTRIES_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, list[str]] | str, ...])
+_FALLBACK_ENTRIES_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, list[str | Mapping[str, object]]] | str, ...])
+
+
+def _fallback_target_name(target: str | Mapping[str, object]) -> str:
+    return target if isinstance(target, str) else str(target.get("model", ""))
+
+
+def _fallback_chain_names(
+    entry: Mapping[str, Sequence[str | Mapping[str, object]]],
+) -> Mapping[str, list[str]]:  # mutable-ok: mirrors get_fallback_model_group's fallbacks shape
+    return {key: [_fallback_target_name(target) for target in targets] for key, targets in entry.items()}
 
 
 def _has_fallback_group(litellm_router_instance: LitellmRouter, requested_model_group: str | None) -> bool:
@@ -416,7 +426,9 @@ def _has_fallback_group(litellm_router_instance: LitellmRouter, requested_model_
     if requested_model_group is None or not configured:
         return False
     chains: Final = tuple(
-        entry for entry in _FALLBACK_ENTRIES_ADAPTER.validate_python(configured) if isinstance(entry, Mapping)
+        _fallback_chain_names(entry)
+        for entry in _FALLBACK_ENTRIES_ADAPTER.validate_python(configured)
+        if isinstance(entry, Mapping)
     )
     fallback_group, _ = get_fallback_model_group(fallbacks=chains, model_group=requested_model_group)
     return bool(fallback_group)

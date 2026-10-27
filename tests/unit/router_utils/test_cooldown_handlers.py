@@ -2970,6 +2970,11 @@ BENCHED: Final = (litellm.Timeout, litellm.Timeout, RouterRateLimitError, Router
         ({"allowed_fails_policy": AllowedFailsPolicy(RateLimitErrorAllowedFails=1)}, {}, (litellm.Timeout,) * 5),
         ({"allowed_fails_policy": AllowedFailsPolicy(TimeoutErrorAllowedFails=1)}, {}, BENCHED),
         ({"allowed_fails": 1, "fallbacks": [{"test-model": ["backup-model"]}]}, {}, BENCHED),
+        (
+            {"allowed_fails": 1, "fallbacks": [{"test-model": [{"model": "backup-model", "temperature": 0}]}]},
+            {},
+            BENCHED,
+        ),
     ],
     ids=[
         "allowed_fails",
@@ -2977,6 +2982,7 @@ BENCHED: Final = (litellm.Timeout, litellm.Timeout, RouterRateLimitError, Router
         "policy_names_another_exception",
         "policy_names_timeout",
         "allowed_fails_with_a_fallback_group",
+        "allowed_fails_with_a_dict_fallback_target",
     ],
 )
 @pytest.mark.asyncio
