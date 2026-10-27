@@ -21,6 +21,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,  # pyright: ignore[reportUnknownVariableType]  # legacy decorator has an untyped signature
 )
+from litellm.llms.base_llm.guardrail_translation.utils import message_with_slot_texts
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # legacy client factory has an untyped params map
     httpxSpecialProvider,
@@ -161,7 +162,8 @@ class TrendAIGuardrail(CustomGuardrail):
         texts: tuple[str, ...],
         request_data: dict[str, object],  # mutable-ok: CustomGuardrail hook contract is a plain dict
     ) -> GenericGuardrailAPIInputs:
-        prompt: Final = locate_request_prompt(texts, inputs.get("structured_messages"))
+        messages: Final = tuple(inputs.get("structured_messages") or ())
+        prompt: Final = locate_request_prompt(texts, messages)
         if prompt is None:
             verbose_proxy_logger.debug("Trend AI Guard: no user prompt to scan in request inputs")
             return inputs
@@ -171,14 +173,20 @@ class TrendAIGuardrail(CustomGuardrail):
         redacted: Final = self._enforce(result)
         if redacted is None:
             return inputs
-        redacted_texts: Final = redact_request_texts(texts, prompt, redacted)
-        if redacted_texts is None:
+        redacted_texts: Final = redact_request_texts(prompt.texts, redacted)
+        if prompt.message_index is None:
+            return {**inputs, "texts": list(redacted_texts)}
+        rewritten_message: Final = message_with_slot_texts(messages[prompt.message_index], redacted_texts)
+        if rewritten_message is None:
             self._raise_redaction_failure(request_data, started_at, event_type=None)
-        redacted_inputs: Final[GenericGuardrailAPIInputs] = {
+        return {
             **inputs,
-            "texts": list(redacted_texts),
+            "structured_messages": [
+                *messages[: prompt.message_index],
+                rewritten_message,
+                *messages[prompt.message_index + 1 :],
+            ],
         }
-        return redacted_inputs
 
     async def _apply_response_guardrail(
         self,

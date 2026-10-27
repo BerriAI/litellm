@@ -2,10 +2,9 @@
 # This file has been modified for integration into LiteLLM.
 
 from collections.abc import Iterator, Sequence
-from itertools import chain
 from typing import Final
 
-from litellm.llms.base_llm.guardrail_translation.utils import message_slot_texts, message_text_slot_count
+from litellm.llms.base_llm.guardrail_translation.utils import message_slot_texts
 from litellm.types.llms.openai import AllMessageValues
 
 from ._models import TrendAIRequestPrompt, TrendAITextWindow
@@ -65,10 +64,7 @@ def locate_request_prompt(
     texts: Sequence[str],
     structured_messages: Sequence[AllMessageValues] | None,
 ) -> TrendAIRequestPrompt | None:
-    """Locate the last user turn by message order, never by matching its text.
-
-    A different flat-text layout can still be scanned, but cannot be safely rewritten.
-    """
+    """Locate the last user turn and its text slots, or use flat texts when no rows are supplied."""
     messages: Final = tuple(structured_messages or ())
     user_index: Final = next(
         (index for index in reversed(range(len(messages))) if messages[index]["role"] == "user"), None
@@ -79,32 +75,23 @@ def locate_request_prompt(
     prompt: Final = "".join(parts).strip()
     if not prompt:
         return None
-    start: Final = sum(map(message_text_slot_count, messages[:user_index])) if user_index is not None else 0
-    normalized_texts: Final = (
-        tuple(chain.from_iterable(map(message_slot_texts, messages))) if messages else tuple(texts)
-    )
-    text_range: Final = (start, start + len(parts)) if normalized_texts == tuple(texts) else None
-    return TrendAIRequestPrompt(prompt=prompt, text_range=text_range)
+    return TrendAIRequestPrompt(prompt=prompt, texts=tuple(parts), message_index=user_index)
 
 
-def redact_request_texts(texts: Sequence[str], prompt: TrendAIRequestPrompt, redacted: str) -> tuple[str, ...] | None:
+def redact_request_texts(texts: Sequence[str], redacted: str) -> tuple[str, ...]:
     """Write a redacted prompt back over the ``texts`` entries the prompt was assembled from.
 
     A single-part prompt is replaced outright. A multi-part prompt whose redaction kept its length
     is split back into the original parts; otherwise the first part carries the whole redaction and
     the rest are blanked, so no original part can leak.
     """
-    if prompt.text_range is None:
-        return None
-    start, end = prompt.text_range
-    parts: Final = tuple(texts[start:end])
+    parts: Final = tuple(texts)
     if len(parts) == 1:
-        return (*texts[:start], redacted, *texts[end:])
+        return (redacted,)
     joined: Final = "".join(parts)
     leading: Final = len(joined) - len(joined.lstrip())
     aligned: Final = f"{joined[:leading]}{redacted}{joined[len(joined.rstrip()) :]}"
     if len(aligned) != len(joined):
-        return (*texts[:start], redacted, *("" for _ in parts[1:]), *texts[end:])
+        return (redacted, *("" for _ in parts[1:]))
     offsets: Final = tuple(sum(len(part) for part in parts[:index]) for index in range(len(parts) + 1))
-    split: Final = tuple(aligned[offsets[index] : offsets[index + 1]] for index in range(len(parts)))
-    return (*texts[:start], *split, *texts[end:])
+    return tuple(aligned[offsets[index] : offsets[index + 1]] for index in range(len(parts)))
