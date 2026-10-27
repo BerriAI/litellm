@@ -17,7 +17,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from litellm.harness.errors import CapabilityUnsupported, SandboxError
 from litellm.harness.sandbox.base import CompletedRun
 from litellm.harness.sandbox.snapshot import parse_sha256sum, remote_snapshot_script
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # the factory's params dict is untyped upstream
+)
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.custom_http import httpxSpecialProvider
 
 PRIZED_API_BASE: Final = "https://api.prized.dev/api/v1"
 PRIZED_DEFAULT_TEMPLATE: Final = "prized-base-v1"
@@ -137,8 +141,7 @@ class PrizedSandbox:
         self._max_runtime_min = max_runtime_min
         self._api_key = api_key
         self._api_base = (api_base or PRIZED_API_BASE).rstrip("/")
-        self._client = client
-        self._owns_client = False
+        self._client: Final = client
         self._toolbox: str | None = None
         self._start_lock: Final = asyncio.Lock()
         self._processes: Final[set[_PrizedProcess]] = set()  # mutable-ok: live-process registry, killed on close()
@@ -148,10 +151,10 @@ class PrizedSandbox:
         return f"PrizedSandbox({self.sandbox_id or self.template!r}, workdir={self.workdir!r})"
 
     def _http(self) -> httpx.AsyncClient:
-        if self._client is None:
-            self._client = httpx.AsyncClient()
-            self._owns_client = True
-        return self._client
+        """The injected client, else LiteLLM's shared cached client, looked up per request and never closed here."""
+        if self._client is not None:
+            return self._client
+        return get_async_httpx_client(llm_provider=httpxSpecialProvider.Sandbox).client
 
     def _headers(self) -> Mapping[str, str]:
         key: Final = self._api_key or get_secret_str("PRIZED_API_KEY")
@@ -351,11 +354,8 @@ class PrizedSandbox:
         self._closed = True
         await asyncio.gather(*(process.kill() for process in self._processes), return_exceptions=True)
         self._processes.clear()
-        try:
-            if self._owns_sandbox and self.sandbox_id is not None:
-                await self._delete(self.sandbox_id)
-        finally:
-            await self._close_client()
+        if self._owns_sandbox and self.sandbox_id is not None:
+            await self._delete(self.sandbox_id)
 
     async def _delete(self, sandbox_id: str) -> None:
         try:
@@ -366,10 +366,6 @@ class PrizedSandbox:
             raise SandboxError(f"could not delete prized sandbox {sandbox_id}: {exc}") from exc
         if response.status_code >= 400 and response.status_code != 404:
             raise SandboxError(f"could not delete prized sandbox {sandbox_id}: {_edge_error(response)}")
-
-    async def _close_client(self) -> None:
-        if self._owns_client and self._client is not None:
-            await self._client.aclose()
 
     async def __aenter__(self) -> PrizedSandbox:
         await self.start()
