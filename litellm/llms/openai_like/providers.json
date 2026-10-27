@@ -257,5 +257,11 @@
       "/v1/chat/completions",
       "/v1/responses"
     ]
+  },
+  "cheapaimodel": {
+    "base_url": "https://api.cheapaimodel.ai/v1",
+    "api_key_env": "CHEAPAIMODEL_API_KEY",
+    "api_base_env": "CHEAPAIMODEL_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions"]
   }
 }

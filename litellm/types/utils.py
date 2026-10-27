@@ -4583,6 +4583,7 @@ class LlmProviders(str, Enum):
     CORTECS = "cortecs"
     SCX_AI = "scx-ai"
     PRISM = "prism"
+    CHEAPAIMODEL = "cheapaimodel"
     OPENINFER = "openinfer"
     INFERENCEAPIS = "inferenceapis"
     DARKBLOOM = "darkbloom"

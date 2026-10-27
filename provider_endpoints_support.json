@@ -2286,6 +2286,23 @@
         "a2a": false
       }
     },
+    "cheapaimodel": {
+      "display_name": "cheapaimodel (`cheapaimodel`)",
+      "url": "https://docs.litellm.ai/docs/providers/cheapaimodel",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "recraft": {
       "display_name": "Recraft (`recraft`)",
       "url": "https://docs.litellm.ai/docs/providers/recraft",
