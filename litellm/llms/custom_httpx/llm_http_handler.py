@@ -6,6 +6,7 @@ import ssl
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from functools import lru_cache, partial, reduce
+from itertools import chain
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -62,7 +63,7 @@ from litellm.litellm_core_utils.realtime_errors import (
 )
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo, merge_anthropic_beta_headers
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -570,6 +571,22 @@ def _unwrap_provider_error(error: Exception) -> Exception:
             return current
         current = current.__cause__
     return error
+
+
+def _merge_messages_header_sources(*sources: Mapping[str, object] | None) -> Mapping[str, object]:
+    """Later sources win per header, except ``anthropic-beta``, which unions every source so client betas
+    never drop a deployment's configured ones."""
+    entries: Final = tuple(chain.from_iterable((source or {}).items() for source in sources))
+    beta_values: Final = tuple(
+        cast("str | Sequence[str]", value)  # cast-ok: the merge helper skips non-str list entries
+        for name, value in entries
+        if name.lower() == "anthropic-beta" and isinstance(value, str | Sequence)
+    )
+    merged_beta: Final = reduce(merge_anthropic_beta_headers, beta_values, "")
+    return MappingProxyType(
+        {name: value for name, value in entries if name.lower() != "anthropic-beta"}
+        | ({"anthropic-beta": merged_beta} if merged_beta else {})
+    )
 
 
 class BaseLLMHTTPHandler:
@@ -2481,13 +2498,8 @@ class BaseLLMHTTPHandler:
         forwarded_headers: Final = kwargs.get("headers", None)
         # Also check for extra_headers in kwargs (from config or direct calls)
         extra_headers_from_kwargs: Final = kwargs.get("extra_headers", None)
-        # Merge all header sources: forwarded < extra_headers < provider_specific
-        merged_headers: Final[Mapping[str, object]] = MappingProxyType(
-            {
-                **(forwarded_headers or {}),
-                **(extra_headers_from_kwargs or {}),
-                **(provider_specific_headers or {}),
-            }
+        merged_headers: Final = _merge_messages_header_sources(
+            forwarded_headers, extra_headers_from_kwargs, provider_specific_headers
         )
         request_params: Final = reduce(
             delete_nested_value,
