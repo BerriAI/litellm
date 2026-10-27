@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     responses_reasoning_items_from_thinking_blocks,
     with_prompt_cache_breakpoint,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_tools import resolve_midturn_tool_changes
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking,
 )
@@ -605,14 +606,15 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         Responses API rejects ``include``. ``auto_summary_level`` is the ``reasoning.summary`` the
         opt-in auto summary injects when the client sent none.
         """
-        model: Final[str] = anthropic_request["model"]
+        request: Final = resolve_midturn_tool_changes(anthropic_request)
+        model: Final[str] = request["model"]
         messages_list: Final = cast(
             list[AllAnthropicPassThroughMessageValues],
-            anthropic_request["messages"],
+            request["messages"],
         )
 
         input_items: Final = self.translate_messages_to_responses_input(messages_list)
-        system: Final = anthropic_request.get("system")
+        system: Final = request.get("system")
         developer_parts: Final = (
             self._translate_midturn_system_content_to_responses(system)
             if isinstance(system, list)
@@ -643,34 +645,34 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 responses_kwargs["instructions"] = self.system_blocks_to_instructions(system)
 
         # max_tokens -> max_output_tokens
-        max_tokens: Final = anthropic_request.get("max_tokens")
+        max_tokens: Final = request.get("max_tokens")
         if max_tokens:
             responses_kwargs["max_output_tokens"] = max_tokens
 
         # temperature / top_p passed through
-        if "temperature" in anthropic_request:
-            responses_kwargs["temperature"] = anthropic_request["temperature"]
-        if "top_p" in anthropic_request:
-            responses_kwargs["top_p"] = anthropic_request["top_p"]
+        if "temperature" in request:
+            responses_kwargs["temperature"] = request["temperature"]
+        if "top_p" in request:
+            responses_kwargs["top_p"] = request["top_p"]
 
         # tools
-        tools: Final = anthropic_request.get("tools")
+        tools: Final = request.get("tools")
         if tools:
             responses_kwargs["tools"] = self.translate_tools_to_responses_api(
                 cast(list[AllAnthropicToolsValues], tools)
             )
 
         # tool_choice
-        tool_choice: Final = anthropic_request.get("tool_choice")
+        tool_choice: Final = request.get("tool_choice")
         if tool_choice:
             responses_kwargs["tool_choice"] = self.translate_tool_choice_to_responses_api(
                 cast(AnthropicMessagesToolChoice, tool_choice)
             )
 
         # thinking -> reasoning
-        thinking: Final = anthropic_request.get("thinking")
+        thinking: Final = request.get("thinking")
         if isinstance(thinking, dict):
-            output_config = anthropic_request.get("output_config")
+            output_config = request.get("output_config")
             reasoning: Final = self.translate_thinking_to_reasoning(
                 thinking,
                 output_config=cast(dict[str, object] | None, output_config),
@@ -683,8 +685,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         # output_format / output_config.format -> text format
         # output_format: {"type": "json_schema", "schema": {...}}
         # output_config: {"format": {"type": "json_schema", "schema": {...}}}
-        output_format: object = anthropic_request.get("output_format")
-        output_config = anthropic_request.get("output_config")
+        output_format: object = request.get("output_format")
+        output_config = request.get("output_config")
         if not isinstance(output_format, dict) and isinstance(output_config, dict):
             output_format = output_config.get("format")
         if isinstance(output_format, dict) and output_format.get("type") == "json_schema":
@@ -700,14 +702,14 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 }
 
         # context_management: Anthropic dict -> OpenAI array
-        context_management: Final = anthropic_request.get("context_management")
+        context_management: Final = request.get("context_management")
         if isinstance(context_management, dict):
             openai_cm: Final = self.translate_context_management_to_responses_api(context_management)
             if openai_cm is not None:
                 responses_kwargs["context_management"] = openai_cm
 
         # metadata user_id -> user and prompt_cache_key
-        metadata: Final = anthropic_request.get("metadata")
+        metadata: Final = request.get("metadata")
         if isinstance(metadata, dict) and "user_id" in metadata:
             responses_kwargs["user"] = str(metadata["user_id"])[:64]
             prompt_cache_key: Final = prompt_cache_key_from_user_id(metadata["user_id"])

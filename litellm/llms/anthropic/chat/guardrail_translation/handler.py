@@ -25,6 +25,7 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_tools import resolve_midturn_tool_changes
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
@@ -603,6 +604,10 @@ class AnthropicMessagesHandler(BaseTranslation):
         messages: Final = data.get("messages")
         if messages is None:
             return data
+        request_view: Final = cast(  # cast-ok: JSON request keys are strings; values are inspected as objects
+            Mapping[str, object], data
+        )
+        resolved_request: Final = resolve_midturn_tool_changes(request_view)
 
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
@@ -685,9 +690,8 @@ class AnthropicMessagesHandler(BaseTranslation):
             model: Final = data.get("model")
             if model:
                 inputs["model"] = model
-            original_tool_names: Final = _original_tool_names(
-                cast(Mapping[str, object], data)  # cast-ok: Anthropic request body
-            )
+            original_tool_names: Final = _original_tool_names(resolved_request)
+            original_tools: Final = deepcopy(tools_to_check)
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=data,
@@ -697,7 +701,8 @@ class AnthropicMessagesHandler(BaseTranslation):
 
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
             guardrailed_tools: Final = guardrailed_inputs.get("tools")
-            if guardrailed_tools is not None:
+            tools_changed: Final = guardrailed_tools is not None and guardrailed_tools != original_tools
+            if guardrailed_tools is not None and (resolved_request is data or tools_changed):
                 # Convert tools back from OpenAI format to Anthropic format
                 anthropic_config: Final = AnthropicConfig()
                 anthropic_tools: Final[list[AllAnthropicToolsValues]] = []
@@ -754,6 +759,10 @@ class AnthropicMessagesHandler(BaseTranslation):
                     data=data,
                     responses=guardrailed_texts,
                     scanned=scanned,
+                )
+            if tools_changed and resolved_request is not data:
+                data["messages"] = (  # rebind-ok: guardrails rewrite the caller's request
+                    resolve_midturn_tool_changes(request_view)["messages"]
                 )
 
         verbose_proxy_logger.debug("Anthropic Messages: Processed input messages: %s", messages)
@@ -1001,7 +1010,8 @@ class AnthropicMessagesHandler(BaseTranslation):
     def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:
         """Extract every tool name in an Anthropic messages request: tools[].name, plus
         tools[].function.name for OpenAI-format tools the bridge forwards verbatim."""
-        return [name for tool in list_field(data, "tools") for name in anthropic_tool_names(tool)]
+        request: Final = resolve_midturn_tool_changes(data)
+        return [name for tool in list_field(request, "tools") for name in anthropic_tool_names(tool)]
 
     @classmethod
     def _extract_input_text_and_images(
