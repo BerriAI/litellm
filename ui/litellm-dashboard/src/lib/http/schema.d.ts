@@ -36476,6 +36476,11 @@ export interface components {
              */
             application_id?: string | null;
             /**
+             * Apply To Aliases
+             * @description Allowlist of virtual-key aliases: only requests from keys whose alias is listed here are scanned by this guardrail. Leave empty to apply to all keys (subject to the exclude list below). Accepts a list or a comma-separated string.
+             */
+            apply_to_aliases?: string | string[] | null;
+            /**
              * Assertions
              * @description Custom assertions to validate against the output. Each assertion is a string describing a condition.
              */
@@ -36746,6 +36751,11 @@ export interface components {
              */
             evaluation_id?: string | null;
             /**
+             * Except Aliases
+             * @description Exclude list of virtual-key aliases: requests from keys whose alias is listed here are NOT scanned by this guardrail (exempted), even when the allowlist is empty. Accepts a list or a comma-separated string.
+             */
+            except_aliases?: string | string[] | null;
+            /**
              * Experimental Use Latest Role Message Only
              * @description When True, guardrails only receive the latest message for the relevant role (e.g., newest user input pre-call, newest assistant output post-call)
              * @default false
@@ -36897,6 +36907,16 @@ export interface components {
              * @description Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.
              */
             max_input_chars?: number | null;
+            /**
+             * Meta Data Fields
+             * @description Restrict which of the virtual key's metadata fields are forwarded in `meta.data`. Leave empty to send every field that fits the backend's contract (flat scalar values, at most 32 fields, 512 characters each), minus the proxy's own per-key control settings (rate limits, budget knobs, enforced params) which are skipped as SIEM noise - naming one here opts it back in. Callback credential slots are never forwarded either way. Accepts a list or a comma-separated string. Only used when `send_meta` is enabled.
+             */
+            meta_data_fields?: string | string[] | null;
+            /**
+             * Meta Identity Format
+             * @description Wire shape of `meta.virtualkey`. 'string' (default) sends the alias as a bare string and is what current XecGuard backends accept. 'object' sends `{alias, key_id}` so a scan stays attributable when the key has no alias or the alias was renamed or reused, and lifts the identifier-pattern restriction on aliases - it requires a backend that validates the object form, otherwise every scan is rejected with 400. Falls back to the XECGUARD_META_IDENTITY_FORMAT env var. Only used when `send_meta` is enabled.
+             */
+            meta_identity_format?: ("string" | "object") | null;
             /**
              * Metadata
              * @description Additional metadata to include in the request
@@ -37142,6 +37162,11 @@ export interface components {
              * @description When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.
              */
             scan_raw_request?: boolean | null;
+            /**
+             * Send Meta
+             * @description Forward caller context to XecGuard as the scan payload's `meta` object: `meta.virtualkey` is the calling virtual key's alias (its token hash when it has no alias) and `meta.data` is that key's own metadata from the Virtual Keys page. It takes no part in the verdict - XecGuard flattens it into the SIEM event (ctx_virtualkey, ctx_<field>) so scans can be traced back to the key that caused them. Defaults to false; falls back to the XECGUARD_SEND_META env var.
+             */
+            send_meta?: boolean | null;
             /**
              * Send User Api Key Alias
              * @description Whether to send user_API_key_alias in headers

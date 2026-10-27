@@ -17164,6 +17164,24 @@
               "description": "Application ID for Noma Security. Defaults to 'litellm' if not provided",
               "title": "Application Id"
             },
+            "apply_to_aliases": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Allowlist of virtual-key aliases: only requests from keys whose alias is listed here are scanned by this guardrail. Leave empty to apply to all keys (subject to the exclude list below). Accepts a list or a comma-separated string.",
+              "title": "Apply To Aliases"
+            },
             "assertions": {
               "anyOf": [
                 {
@@ -17799,6 +17817,24 @@
               "description": "Pre-configured evaluation ID from Qualifire dashboard. When provided, uses invoke_evaluation() instead of evaluate().",
               "title": "Evaluation Id"
             },
+            "except_aliases": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exclude list of virtual-key aliases: requests from keys whose alias is listed here are NOT scanned by this guardrail (exempted), even when the allowlist is empty. Accepts a list or a comma-separated string.",
+              "title": "Except Aliases"
+            },
             "experimental_use_latest_role_message_only": {
               "anyOf": [
                 {
@@ -18159,6 +18195,40 @@
               ],
               "description": "Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
               "title": "Max Input Chars"
+            },
+            "meta_data_fields": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Restrict which of the virtual key's metadata fields are forwarded in `meta.data`. Leave empty to send every field that fits the backend's contract (flat scalar values, at most 32 fields, 512 characters each), minus the proxy's own per-key control settings (rate limits, budget knobs, enforced params) which are skipped as SIEM noise - naming one here opts it back in. Callback credential slots are never forwarded either way. Accepts a list or a comma-separated string. Only used when `send_meta` is enabled.",
+              "title": "Meta Data Fields"
+            },
+            "meta_identity_format": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "string",
+                    "object"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Wire shape of `meta.virtualkey`. 'string' (default) sends the alias as a bare string and is what current XecGuard backends accept. 'object' sends `{alias, key_id}` so a scan stays attributable when the key has no alias or the alias was renamed or reused, and lifts the identifier-pattern restriction on aliases - it requires a backend that validates the object form, otherwise every scan is rejected with 400. Falls back to the XECGUARD_META_IDENTITY_FORMAT env var. Only used when `send_meta` is enabled.",
+              "title": "Meta Identity Format"
             },
             "metadata": {
               "anyOf": [
@@ -18790,6 +18860,18 @@
               ],
               "description": "When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.",
               "title": "Scan Raw Request"
+            },
+            "send_meta": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Forward caller context to XecGuard as the scan payload's `meta` object: `meta.virtualkey` is the calling virtual key's alias (its token hash when it has no alias) and `meta.data` is that key's own metadata from the Virtual Keys page. It takes no part in the verdict - XecGuard flattens it into the SIEM event (ctx_virtualkey, ctx_<field>) so scans can be traced back to the key that caused them. Defaults to false; falls back to the XECGUARD_SEND_META env var.",
+              "title": "Send Meta"
             },
             "send_user_api_key_alias": {
               "anyOf": [
