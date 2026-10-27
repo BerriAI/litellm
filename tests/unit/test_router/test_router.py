@@ -8885,7 +8885,8 @@ def test_get_wildcard_deployment_usable_by_team_prefers_the_team_pattern():
         pytest.param(False, "rwild-chat", "team-r", ("team-r-wildcard",), id="team-pattern-when-no-proxy-wide-match"),
         pytest.param(False, "rwild-chat", "team-b", (), id="another-teams-pattern-never-serves"),
         pytest.param(False, "rwild-chat", None, (), id="no-team-no-team-pattern"),
-        pytest.param(True, "rwild-chat", "team-r", ("catch-all",), id="proxy-wide-pattern-beats-the-team-pattern"),
+        pytest.param(True, "rwild-chat", "team-r", ("team-r-wildcard",), id="team-pattern-beats-the-proxy-wide-pattern"),
+        pytest.param(True, "rwild-chat", "team-b", ("catch-all",), id="another-team-falls-through-to-proxy-wide"),
         pytest.param(True, "ptu-chat", "team-r", ("ptu-wildcard",), id="only-the-most-specific-proxy-wide-pattern"),
     ],
 )
@@ -8922,6 +8923,39 @@ def test_wildcard_route_deployments_is_the_one_pattern_routing_serves_from(
     assert router.wildcard_routed_models(requested, team_id) == frozenset(
         Deployment.model_validate(d).litellm_params.model for d in served
     )
+
+
+@pytest.mark.parametrize(
+    ("team_id", "expected_id"),
+    [
+        pytest.param("team-a", "team-a-byok", id="team-key-uses-its-own-byok-wildcard"),
+        pytest.param("team-b", "shared-openrouter", id="team-without-byok-uses-the-shared-wildcard"),
+        pytest.param(None, "shared-openrouter", id="key-without-team-uses-the-shared-wildcard"),
+    ],
+)
+def test_team_byok_wildcard_is_served_before_a_proxy_wide_wildcard_of_the_same_name(
+    team_id: str | None, expected_id: str
+):
+    """Regression: a proxy-wide openrouter/* shadowed a team's own openrouter/* BYOK deployment for that team's keys."""
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "model_name_team-a_internal",
+                "litellm_params": {"model": "openrouter/*", "api_key": "sk-team-a"},
+                "model_info": {"id": "team-a-byok", "team_id": "team-a", "team_public_model_name": "openrouter/*"},
+            },
+            {
+                "model_name": "openrouter/*",
+                "litellm_params": {"model": "openrouter/*", "api_key": "sk-shared"},
+                "model_info": {"id": "shared-openrouter"},
+            },
+        ]
+    )
+    requested: Final = "openrouter/openai/gpt-5-nano"
+
+    served: Final = router.wildcard_route_deployments(requested, team_id)
+
+    assert tuple(Deployment.model_validate(d).model_info.id for d in served) == (expected_id,)
 
 
 def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint():
@@ -30475,3 +30509,84 @@ def test_request_carries_image_sees_chat_parts_and_responses_input_items():
     assert litellm.Router._request_carries_image(None, {"input": _IMAGE_RESPONSES_INPUT}) is True
     assert litellm.Router._request_carries_image([{"role": "user", "content": "Say hi"}], {}) is False
     assert litellm.Router._request_carries_image(None, {"input": "Say hi"}) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("isolate_litellm_state")
+@pytest.mark.parametrize("surface", ["chat", "messages"])
+@pytest.mark.parametrize("credential_kind", ["oauth", "api_key"])
+async def test_anthropic_caller_rate_limit_does_not_block_other_credentials(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, surface: str, credential_kind: str
+) -> None:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.types.router import AllowedFailsPolicy
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr("time.time", lambda: 1767225600.0)
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        credential: Final = request.headers.get("authorization", request.headers.get("x-api-key", ""))
+        if credential.endswith("limited") and route.call_count < 2:
+            return httpx.Response(
+                429,
+                headers={"retry-after": "168307"},
+                json={"type": "error", "error": {"type": "rate_limit_error", "message": "usage limit"}},
+            )
+        return httpx.Response(200, json={
+            "id": "msg-healthy", "type": "message", "role": "assistant", "model": "claude-sonnet-5-5",
+            "content": [{"type": "text", "text": "healthy account"}], "stop_reason": "end_turn",
+            "usage": {"input_tokens": 2, "output_tokens": 2},
+        })
+
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(side_effect=upstream)
+    router: Final = Router(
+        model_list=[{
+            "model_name": "claude", "litellm_params": {
+                "model": "anthropic/claude-sonnet-5-5", "api_key": "fake-gateway-key",
+            }, "model_info": {"id": "shared-anthropic"},
+        }],
+        num_retries=0,
+        allowed_fails_policy=AllowedFailsPolicy(RateLimitErrorAllowedFails=1),
+    )
+    client: Final = AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport())
+
+    async def call(account: str | None) -> object:
+        credentials: Final = (
+            {"provider_specific_header": {
+                "custom_llm_provider": "anthropic", "extra_headers": {
+                    "Authorization": f"Bearer sk-ant-oat-fake-{account}",
+                },
+            }} if credential_kind == "oauth" else {"api_key": f"fake-{account}"}
+        ) if account is not None else {}
+        if surface == "messages":
+            max_tokens: Final = litellm.get_max_tokens("anthropic/claude-sonnet-5-5")
+            assert max_tokens is not None
+            return await router.aanthropic_messages(
+                model="claude", messages=[{"role": "user", "content": "hello"}],
+                client=client, max_tokens=max_tokens, **credentials,
+            )
+        return await router.acompletion(
+            model="claude", messages=[{"role": "user", "content": "hello"}],
+            client=client, **credentials,
+        )
+
+    try:
+        for _ in range(2):
+            with pytest.raises(litellm.RateLimitError):
+                await call("limited")
+            await GLOBAL_LOGGING_WORKER.flush()
+        limited_calls: Final = len(route.calls)
+        assert limited_calls == 2
+        await call("healthy")
+        assert len(route.calls) == limited_calls + 1
+        assert route.calls[-1].request.headers.get(
+            "authorization", route.calls[-1].request.headers.get("x-api-key", "")
+        ) == ("Bearer sk-ant-oat-fake-healthy" if credential_kind == "oauth" else "fake-healthy")
+        await call(None)
+        assert len(route.calls) == limited_calls + 2
+        assert route.calls[-1].request.headers["x-api-key"] == "fake-gateway-key"
+        await call("limited")
+        assert len(route.calls) == limited_calls + 3
+    finally:
+        await GLOBAL_LOGGING_WORKER.flush()
+        await client.close()

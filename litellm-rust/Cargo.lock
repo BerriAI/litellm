@@ -3695,8 +3695,15 @@ dependencies = [
 name = "litellm-db"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "macro_rules_attribute",
+ "rstest",
  "serde",
+ "serde_json",
  "sqlx",
+ "strum",
+ "thiserror 2.0.19",
+ "tokio",
 ]
 
 [[package]]
