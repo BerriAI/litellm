@@ -113,7 +113,7 @@ async def test_admin_mcp_failure_still_closes_proxy_resources(
     message: Final = "LITELLM_LICENSE" if failure_phase == "license" else f"{failure_phase} failed"
     async def run_lifespan() -> None:
         async with admin_mcp_proxy.router.lifespan_context(admin_mcp_proxy) as state:
-            assert state == {"tracing_receiver": None}
+            assert state == {"tracing_receiver": None, "database": None}
             if failure_phase == "serving":
                 raise RuntimeError("serving failed")
             if failure_phase == "cancelled":
@@ -162,7 +162,7 @@ async def test_proxy_shutdown_drains_active_admin_tool_before_closing_connector(
         transport=httpx2.ASGITransport(app=admin_mcp_proxy), base_url="http://localhost:4000"
     ) as client:
         async with admin_mcp_proxy.router.lifespan_context(admin_mcp_proxy) as state:
-            assert state == {"tracing_receiver": None}
+            assert state == {"tracing_receiver": None, "database": None}
             request: Final = asyncio.create_task(client.post(
                 "/admin/mcp",
                 headers={"Authorization": "Bearer admin", "Accept": "application/json, text/event-stream"},

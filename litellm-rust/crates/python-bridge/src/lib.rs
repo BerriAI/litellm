@@ -2,6 +2,7 @@ mod cache;
 mod callable;
 mod coercion;
 mod credentials;
+mod database;
 mod diagnostics;
 mod errors;
 mod execution;
@@ -20,6 +21,8 @@ mod _native {
     use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
     use pyo3::{prelude::*, types::PyModule};
 
+    #[pymodule_export]
+    use crate::database::NativeDatabase;
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
     use crate::diagnostics::_panic_for_test;
@@ -87,6 +90,7 @@ mod tests {
         Python::attach(|py| {
             let mut expected = vec![
                 "NativeCacheHandle",
+                "NativeDatabase",
                 "RustBridgeDeclined",
                 "RustUpstreamError",
                 "ForkedAfterNativeRuntimeStarted",

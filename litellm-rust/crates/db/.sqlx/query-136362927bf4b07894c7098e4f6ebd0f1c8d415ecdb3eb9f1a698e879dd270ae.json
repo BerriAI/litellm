@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT ui_settings\nFROM \"LiteLLM_UISettings\"\nWHERE id = 'user_banner'\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ui_settings",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_UISettings\"",
+            "name": "ui_settings"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "136362927bf4b07894c7098e4f6ebd0f1c8d415ecdb3eb9f1a698e879dd270ae"
+}

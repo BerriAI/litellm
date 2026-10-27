@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO \"LiteLLM_UISettings\" (id, ui_settings, updated_at)\nVALUES ('user_banner', $1, CURRENT_TIMESTAMP)\nON CONFLICT (id) DO UPDATE\nSET ui_settings = EXCLUDED.ui_settings,\n    updated_at = EXCLUDED.updated_at\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c8da5047ab370f06f239ef8d5798dc13486a1f56d03400f54edf3f25be95cccc"
+}
