@@ -57,7 +57,8 @@ describe("MCPConnect with LITELLM_UI_API_DOC_BASE_URL", () => {
       await user.click(screen.getByRole("tab", { name: "Streamable HTTP" }));
       expect(within(activePanel()).getByText("https://docs.example.com/mcp")).toBeInTheDocument();
 
-      expect(screen.queryByText(/backend\.example\.com|gateway\.example\.com/)).not.toBeInTheDocument();
+      expect(document.body).not.toHaveTextContent("backend.example.com");
+      expect(document.body).not.toHaveTextContent("gateway.example.com");
     },
   );
 });
