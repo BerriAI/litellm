@@ -954,6 +954,40 @@ def test_logged_response_keeps_received_model_id_when_the_finish_chunk_is_synthe
     assert logged._hidden_params.get("received_model_id") == upstream_id
 
 
+def test_terminal_chunk_preserves_native_finish_reason(logging_obj: Logging):
+    """A finish-only chunk whose raw finish_reason is not an OpenAI reason must surface
+    the provider value under provider_specific_fields.native_finish_reason while the
+    OpenAI-facing finish_reason stays normalized."""
+    finish_choice: Final = StreamingChoices(index=0, delta=Delta())
+    finish_choice.finish_reason = "network_error"
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(
+            model_responses=[
+                ModelResponseStream(
+                    id="chatcmpl-native-finish",
+                    model="glm-5",
+                    choices=[finish_choice],
+                )
+            ]
+        ),
+        model="glm-5",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+
+    emitted: Final = list(wrapper)
+
+    terminal: Final = [chunk for chunk in emitted if chunk.choices and chunk.choices[0].finish_reason is not None]
+    assert len(terminal) == 1
+    assert terminal[0].choices[0].finish_reason == "stop"
+    assert terminal[0].choices[0].provider_specific_fields == {"native_finish_reason": "network_error"}
+
+    logged: Final = litellm.stream_chunk_builder(chunks=wrapper.chunks)
+    assert logged is not None
+    assert logged.choices[0].finish_reason == "stop"
+    assert logged.choices[0].provider_specific_fields == {"native_finish_reason": "network_error"}
+
+
 @pytest.mark.asyncio
 async def test_streaming_completion_start_time(logging_obj: Logging):
     """Test that the start time is set correctly"""
