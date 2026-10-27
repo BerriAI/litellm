@@ -10880,3 +10880,24 @@ def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_
     )
 
     assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}
+
+
+def test_should_run_mock_completion_empty_string_mock_response():
+    """mock_response="" is an intentional (empty) mock and must trigger mock mode.
+
+    Regression test for the empty-string case: an empty string is falsy, so the
+    previous ``if mock_response or ...`` check skipped the mock and sent a real
+    request. The gate must distinguish "not provided" (None) from "provided but
+    empty" ("").
+    """
+    from litellm.utils import should_run_mock_completion
+
+    # provided-but-empty => mock must run
+    assert should_run_mock_completion("", None, None) is True
+    # a normal mock string => mock must run
+    assert should_run_mock_completion("hello", None, None) is True
+    # nothing provided => no mock
+    assert should_run_mock_completion(None, None, None) is False
+    # other mock knobs still trigger mock
+    assert should_run_mock_completion(None, [{"id": "1"}], None) is True
+    assert should_run_mock_completion(None, None, True) is True
