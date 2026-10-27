@@ -299,3 +299,35 @@ def test_an_openai_response_becomes_systemone_answers_with_the_callers_score_lab
     }
     assert response.usage is not None
     assert (response.usage.cached_tokens, response.usage.cache_write_tokens) == (256, 64)
+
+
+def test_openai_answers_do_not_invent_zero_probabilities_for_options_the_model_omitted() -> None:
+    ir: Final = _openai_ir(_OPENAI_REQUEST)
+    payload: Final = {
+        **_OPENAI_RESPONSE,
+        "answers": [
+            _PREDICATE_ANSWER,
+            {
+                "type": "choice",
+                "name": None,
+                "choice": True,
+                "probabilities": [{"value": True, "probability": 0.0}],
+                "confidence": 0.8,
+            },
+            {
+                "type": "score",
+                "name": "severity",
+                "score": 1,
+                "probabilities": [{"value": 1, "label": "major", "probability": 1.0}],
+                "confidence": 0.6,
+            },
+            _REFUSAL_ANSWER,
+        ],
+    }
+
+    response: Final = ir_to_openai_response(OpenAIDecisionsConfig().parse_response(payload, ir), ir, "requested")
+
+    assert response.answers[1].model_dump(mode="json")["probabilities"] == [{"value": True, "probability": 0.0}]
+    assert response.answers[2].model_dump(mode="json")["probabilities"] == [
+        {"value": 1, "label": "major", "probability": 1.0}
+    ]

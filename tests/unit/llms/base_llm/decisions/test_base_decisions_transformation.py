@@ -333,3 +333,36 @@ def test_invalid_provider_response_is_an_api_error(payload: object, provider: st
     with pytest.raises(BaseLLMException, match="unexpected response") as error:
         config.transform_decisions_response("drex-v2.0", provider, httpx.Response(200, json=payload), request)
     assert error.value.status_code == 500
+
+
+def test_an_omitted_score_probability_stays_omitted_and_an_explicit_zero_is_kept() -> None:
+    ir: Final = systemone_request_to_ir(
+        _SYSTEMONE_BODY.validate_python(
+            {
+                "state": "Screen cracked",
+                "questions": {"severity": {"type": "score", "criteria": ["none", "low", "high"]}},
+            }
+        )
+    )
+    payload: Final = {
+        "model": "jev-latest",
+        "answers": {
+            "severity": {
+                "type": "score",
+                "score": 2,
+                "confidence": 0.7,
+                "legend": {"0": "none", "1": "low", "2": "high"},
+                "probabilities": {"0": 0.0, "2": 1.0},
+            }
+        },
+        "usage": {"input_tokens": 10, "output_tokens": 1},
+    }
+
+    parsed: Final = parse_systemone_response(payload, ir)
+    answer: Final = parsed.answers[0]
+
+    assert isinstance(answer, DecisionsIRScoreAnswer)
+    assert tuple((item.value, item.label, item.probability) for item in answer.probabilities) == (
+        (0, "none", 0.0),
+        (2, "high", 1.0),
+    )
