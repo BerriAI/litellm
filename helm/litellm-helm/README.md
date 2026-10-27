@@ -113,7 +113,28 @@ type: Opaque
 
 #### Authenticated Prometheus scraping
 
-LiteLLM requires authentication on `/metrics` by default. Store a valid LiteLLM key in a Kubernetes Secret in the ServiceMonitor namespace, then reference it from the chart:
+The proxy's `/metrics/` endpoint requires authentication by default when proxy authentication is configured. This option is for `metricsServer.enabled: false`, the default. The separate metrics server does not use virtual-key authentication
+
+As a proxy administrator, create a dedicated internal user and a key restricted to the metrics routes. Set `LITELLM_URL` to your proxy URL and `LITELLM_MASTER_KEY` to its administrator credential, then run:
+
+```bash
+curl --fail --silent --show-error "$LITELLM_URL/user/new" \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"user_id":"prometheus-metrics","user_role":"internal_user","auto_create_key":false}'
+
+METRICS_KEY="$(curl --fail --silent --show-error "$LITELLM_URL/key/generate" \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"user_id":"prometheus-metrics","key_alias":"prometheus","allowed_routes":["/metrics","/metrics/"]}' \
+  | jq --exit-status --raw-output .key)"
+
+printf '%s' "$METRICS_KEY" | kubectl --namespace YOUR_RELEASE_NAMESPACE \
+  create secret generic litellm-prometheus-key --from-file=token=/dev/stdin
+unset METRICS_KEY
+```
+
+The Secret must be in the ServiceMonitor namespace and contain the raw key, without a `Bearer ` prefix. The Prometheus Operator must have permission to read it. Reference that Secret in the chart:
 
 ```
 serviceMonitor:
@@ -124,7 +145,7 @@ serviceMonitor:
     key: token
 ```
 
-Use a dedicated restricted key instead of the LiteLLM master key. The Prometheus Operator must be able to read the Secret. If unauthenticated metrics are acceptable for your deployment, leave `authSecret.enabled` set to `false` and set `litellm_settings.require_auth_for_metrics_endpoint: false` in `proxy_config`
+The chart does not generate or rotate the LiteLLM key. Keep the key valid and update the Secret when rotating it. If unauthenticated metrics are acceptable for your deployment, leave `authSecret.enabled` set to `false` and set `litellm_settings.require_auth_for_metrics_endpoint: false` in `proxy_config`
 
 #### Enterprise billable-request metering
 
