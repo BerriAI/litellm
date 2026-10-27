@@ -4446,17 +4446,22 @@ class ComplexityRouter(CustomLogger):
 
         # In 'user_turn' mode a held pin is replayed only on continuation turns; a new human
         # ask falls through and re-classifies. session_affinity restores pin-first for asks too.
+        codex_compaction: Final = self._is_codex_compaction_lifecycle(request_kwargs, resolved_messages, marker_pairs)
         pin_replay_allowed: Final = (
             bool(self.config.session_affinity)
             or not _newest_turn_is_human_ask(resolved_messages, marker_pairs)
-            or self._is_codex_compaction_lifecycle(request_kwargs, resolved_messages, marker_pairs)
+            or codex_compaction
         )
 
         if cache_key is not None and pin_replay_allowed:
             pinned_value: Final = await self.litellm_router_instance.cache.async_get_cache(key=cache_key)
             pinned_pin: Final = _parse_session_affinity_pin(pinned_value, self.config.tier_names())
             if pinned_pin is not None:
-                user_message: Final = _newest_turn_ask(resolved_messages, marker_pairs) if resolved_messages else None
+                user_message: Final = (
+                    _newest_turn_ask(resolved_messages, marker_pairs)
+                    if resolved_messages and not codex_compaction
+                    else None
+                )
                 pin_escalation_keyword: Final = (
                     self._matched_escalation_keyword(user_message) if user_message is not None else None
                 )

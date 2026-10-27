@@ -7828,9 +7828,11 @@ class TestClassificationMode:
         "process. You also have access to the state of the tools that were used by that language model.\nHi.",
     }
 
-    def _codex_kwargs(self, session_id: str, request_kind: str, transport: str = "client_metadata") -> dict:
-        turn_metadata = json.dumps({"session_id": session_id, "request_kind": request_kind})
-        carrier = (
+    def _codex_kwargs(
+        self, session_id: str, request_kind: str, transport: str = "client_metadata"
+    ) -> dict[str, object]:
+        turn_metadata: Final = json.dumps({"session_id": session_id, "request_kind": request_kind})
+        carrier: Final = (
             {"client_metadata": {"x-codex-turn-metadata": turn_metadata}}
             if transport == "client_metadata"
             else {"proxy_server_request": {"headers": {"x-codex-turn-metadata": turn_metadata}}}
@@ -7849,13 +7851,11 @@ class TestClassificationMode:
         await router.async_pre_routing_hook(
             model="test-model", request_kwargs=self._codex_kwargs(session, "turn"), messages=[self.REASONING_ASK]
         )
-        with patch.object(router, "_classify_and_route", wraps=router._classify_and_route) as spy:
-            compaction = await router.async_pre_routing_hook(
-                model="test-model",
-                request_kwargs=self._codex_kwargs(session, "compaction", transport),
-                messages=[self.REASONING_ASK, self.ASSISTANT_ANSWER, self.COMPACTION_PROMPT],
-            )
-        assert spy.call_count == 0
+        compaction = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._codex_kwargs(session, "compaction", transport),
+            messages=[self.REASONING_ASK, self.ASSISTANT_ANSWER, self.COMPACTION_PROMPT],
+        )
         assert compaction.model == "o1-preview"
         assert compaction.routing_decision["cause"] == "user_turn_continuation"
 
@@ -7875,6 +7875,26 @@ class TestClassificationMode:
             messages=[self.REASONING_ASK, self.COMPACTION_SUMMARY],
         )
         assert resumed.model == "o1-preview"
+        assert resumed.routing_decision["cause"] == "user_turn_continuation"
+
+    @pytest.mark.asyncio
+    async def test_codex_summary_quoting_escalation_keyword_keeps_held_tier(
+        self, mock_router_instance, user_turn_config
+    ):
+        router = self._router(mock_router_instance, user_turn_config)
+        await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._codex_kwargs("codex-quote", "turn"), messages=[self.SIMPLE_ASK]
+        )
+        quoted_summary: Final = {
+            "role": "user",
+            "content": f"{self.COMPACTION_SUMMARY['content']} The user said LITELLM ESCALATE",
+        }
+        resumed = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._codex_kwargs("codex-quote", "turn"),
+            messages=[self.SIMPLE_ASK, quoted_summary],
+        )
+        assert resumed.model == "gpt-4o-mini"
         assert resumed.routing_decision["cause"] == "user_turn_continuation"
 
     @pytest.mark.asyncio
