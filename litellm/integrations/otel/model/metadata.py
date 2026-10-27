@@ -60,8 +60,6 @@ if TYPE_CHECKING:
 _INTERNAL_CALL_ORIGINS: Final[frozenset[str]] = frozenset(get_args(InternalCallOrigin))
 _AUTH_ATTRIBUTE: Final = TypeAdapter(object)
 _EXPORTED_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, str]]] = TypeAdapter(Mapping[str, str])
-# The caller identity the Langfuse metadata keys export; the rest of the request metadata stays in the bare
-# ``metadata`` attribute.
 IDENTITY_METADATA_FIELDS: Final = (
     "user_api_key_alias",
     "user_api_key_user_id",

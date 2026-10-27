@@ -5,6 +5,7 @@ from collections.abc import Generator, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
+from itertools import chain
 from pathlib import Path
 from typing import Final, Literal
 from urllib.parse import urlparse
@@ -480,8 +481,7 @@ def test_arize_destination_gets_no_langfuse_request_metadata(rig: Rig) -> None:
     assert any(attributes.get("langfuse.trace.metadata.team_id") == team for attributes in models), models
     assert not [
         name
-        for attributes in models
-        for name in attributes
+        for name in chain.from_iterable(models)
         if name == "langfuse.observation.metadata" or name.startswith("langfuse.trace.metadata.user_api_key_")
     ], models
 

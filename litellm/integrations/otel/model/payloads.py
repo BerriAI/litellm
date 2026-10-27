@@ -422,7 +422,6 @@ class LLMCallSpanData:
     response_cost: float | None
     server: ServerInfo | None
     identity: RequestIdentity
-    # The caller identity among the promoted metadata plus the team (see ``exported_request_metadata``).
     request_metadata: Mapping[str, str] = field(default_factory=lambda: _EMPTY_METADATA)
     is_streaming: bool | None = None
     cost: LLMCost = field(default_factory=LLMCost)

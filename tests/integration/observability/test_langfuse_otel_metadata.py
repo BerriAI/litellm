@@ -20,6 +20,7 @@ from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import AsyncOpenAI, OpenAI
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+from opentelemetry.proto.trace.v1.trace_pb2 import Span
 
 _IDENTITIES: Final = (
     "user_api_key_alias",
@@ -28,7 +29,6 @@ _IDENTITIES: Final = (
     "user_api_key_team_id",
     "user_api_key_team_alias",
 )
-# The only request metadata the Langfuse metadata keys carry; everything else stays in the bare ``metadata``.
 _EXPORTED_FIELDS: Final = frozenset({*_IDENTITIES, "user_api_key_org_id"})
 
 
@@ -40,14 +40,20 @@ class _Rig:
     proxy: OwnedProxy
 
 
+def _exported_spans(body: bytes) -> Iterator[Span]:
+    for resource in ExportTraceServiceRequest.FromString(body).resource_spans:
+        for scope in resource.scope_spans:
+            yield from scope.spans
+
+
+def _attribute_values(span: Span) -> dict[str, object]:
+    return {
+        attribute.key: getattr(attribute.value, attribute.value.WhichOneof("value")) for attribute in span.attributes
+    }
+
+
 def _span_attributes(body: bytes) -> tuple[dict[str, object], ...]:
-    request: Final = ExportTraceServiceRequest.FromString(body)
-    return tuple(
-        {attribute.key: getattr(attribute.value, attribute.value.WhichOneof("value")) for attribute in span.attributes}
-        for resource in request.resource_spans
-        for scope in resource.scope_spans
-        for span in scope.spans
-    )
+    return tuple(map(_attribute_values, _exported_spans(body)))
 
 
 def _sse_chat(response_id: str) -> tuple[bytes, ...]:
@@ -1227,19 +1233,7 @@ def test_langfuse_otel_metadata_omits_prompt_quoting_routing_fields(gateway: Gat
 
 
 def _span_records(body: bytes) -> tuple[tuple[dict[str, object], int], ...]:
-    request: Final = ExportTraceServiceRequest.FromString(body)
-    return tuple(
-        (
-            {
-                attribute.key: getattr(attribute.value, attribute.value.WhichOneof("value"))
-                for attribute in span.attributes
-            },
-            span.dropped_attributes_count,
-        )
-        for resource in request.resource_spans
-        for scope in resource.scope_spans
-        for span in scope.spans
-    )
+    return tuple((_attribute_values(span), span.dropped_attributes_count) for span in _exported_spans(body))
 
 
 def _identity_attributes(attrs: Mapping[str, object]) -> frozenset[str]:
@@ -1399,12 +1393,9 @@ def test_otel_v2_span_another_tracer_wrote_keeps_its_langfuse_metadata_keys_at_t
 
 
 def _chat_span_drops(body: bytes) -> tuple[tuple[int, int, int], ...]:
-    request: Final = ExportTraceServiceRequest.FromString(body)
     return tuple(
         (span.dropped_attributes_count, span.dropped_events_count, span.dropped_links_count)
-        for resource in request.resource_spans
-        for scope in resource.scope_spans
-        for span in scope.spans
+        for span in _exported_spans(body)
         if span.name.startswith("chat ")
     )
 
