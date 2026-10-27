@@ -2959,21 +2959,30 @@ async def _lone_call_outcome(router: Router) -> type[Exception]:
     pytest.fail("the timed-out deployment answered")
 
 
+BENCHED: Final = (litellm.Timeout, litellm.Timeout, RouterRateLimitError, RouterRateLimitError, RouterRateLimitError)
+
+
 @pytest.mark.parametrize(
-    ("router_kwargs", "outcomes"),
+    ("router_kwargs", "model_info", "outcomes"),
     [
-        ({"allowed_fails": 1}, (litellm.Timeout,) * 5),
-        ({"allowed_fails_policy": AllowedFailsPolicy(RateLimitErrorAllowedFails=1)}, (litellm.Timeout,) * 5),
-        (
-            {"allowed_fails_policy": AllowedFailsPolicy(TimeoutErrorAllowedFails=1)},
-            (litellm.Timeout, litellm.Timeout, RouterRateLimitError, RouterRateLimitError, RouterRateLimitError),
-        ),
+        ({"allowed_fails": 1}, {}, (litellm.Timeout,) * 5),
+        ({"allowed_fails": 1}, {"allowed_fails_policy": {}}, (litellm.Timeout,) * 5),
+        ({"allowed_fails_policy": AllowedFailsPolicy(RateLimitErrorAllowedFails=1)}, {}, (litellm.Timeout,) * 5),
+        ({"allowed_fails_policy": AllowedFailsPolicy(TimeoutErrorAllowedFails=1)}, {}, BENCHED),
+        ({"allowed_fails": 1, "fallbacks": [{"test-model": ["backup-model"]}]}, {}, BENCHED),
     ],
-    ids=["allowed_fails", "policy_names_another_exception", "policy_names_timeout"],
+    ids=[
+        "allowed_fails",
+        "allowed_fails_with_an_empty_deployment_policy",
+        "policy_names_another_exception",
+        "policy_names_timeout",
+        "allowed_fails_with_a_fallback_group",
+    ],
 )
 @pytest.mark.asyncio
 async def test_router_allowed_fails_benches_a_lone_deployment_only_when_the_policy_names_the_exception(
     router_kwargs: Mapping[str, object],
+    model_info: Mapping[str, object],
     outcomes: tuple[type[Exception], ...],
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
@@ -2982,7 +2991,8 @@ async def test_router_allowed_fails_benches_a_lone_deployment_only_when_the_poli
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
         side_effect=httpx.ReadTimeout("upstream timeout")
     )
-    router: Final = Router(model_list=[TIMED_OUT_DEPLOYMENT], cooldown_time=300, num_retries=0, **router_kwargs)
+    deployment: Final = {**TIMED_OUT_DEPLOYMENT, "model_info": {**TIMED_OUT_DEPLOYMENT["model_info"], **model_info}}
+    router: Final = Router(model_list=[deployment], cooldown_time=300, num_retries=0, **router_kwargs)
 
     seen: Final = tuple([await _lone_call_outcome(router) for _ in range(5)])
 

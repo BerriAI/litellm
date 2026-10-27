@@ -401,15 +401,17 @@ def assert_failed(outcome: Outcome) -> None:
 
 
 @pytest.mark.timeout(900)
-def test_a_router_allowed_fails_count_leaves_a_lone_deployment_warm_but_benches_one_with_a_sibling(
+def test_a_router_allowed_fails_count_leaves_a_lone_deployment_warm_but_benches_one_with_a_sibling_or_fallback(
     tmp_path: Path,
 ) -> None:
     lone_group: Final = new_group()
     pair_group: Final = new_group()
+    primary_group: Final = new_group()
+    backup_group: Final = new_group()
     with ExitStack() as stack:
         upstream: Final = stack.enter_context(gateway_from_environment())
         cache: Final = stack.enter_context(owned_redis(tmp_path))
-        settings: Final = router_settings(cache, allowed_fails=1)
+        settings: Final = router_settings(cache, allowed_fails=1, fallbacks=[{primary_group: [backup_group]}])
         owned: Final = stack.enter_context(
             owned_proxy_process(
                 upstream,
@@ -441,6 +443,25 @@ def test_a_router_allowed_fails_count_leaves_a_lone_deployment_warm_but_benches_
         served: Final = tuple(raw_chat(owned.gateway, pair_group, new_marker()) for _ in range(10))
         assert_served(served, chat_identity)
         assert markers_received(healthy) == (*markers(o for o in history if o.status == 200), *markers(served))
+
+        primary_id: Final = deployment(scenario, primary_group, anthropic_params(failing))
+        deployment(scenario, backup_group, openai_params(healthy))
+        failing.drain()
+        healthy.drain()
+        fell_back: Final = tuple(
+            itertools.takewhile(
+                lambda outcome: not cooled(cache, primary_id),
+                (raw_chat(owned.gateway, primary_group, new_marker()) for _ in range(40)),
+            )
+        )
+        assert cooled(cache, primary_id) and fell_back, [(o.status, o.detail[:80]) for o in fell_back]
+        assert_served(fell_back, chat_identity)
+        backed: Final = tuple(raw_chat(owned.gateway, primary_group, new_marker()) for _ in range(4))
+        assert_served(backed, chat_identity)
+        received: Final = markers_received(failing)
+        assert received[: len(fell_back)] == markers(fell_back)
+        assert len(received) <= len(fell_back) + 1, received
+        assert {*markers(fell_back), *markers(backed)} <= set(markers_received(healthy))
 
 
 def test_a_deployment_allowed_fails_policy_cools_a_lone_402_deployment(rig: CooldownRig) -> None:
