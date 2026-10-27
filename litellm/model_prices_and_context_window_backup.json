@@ -27866,6 +27866,14 @@
         "comment": "Strong GLM coding model for agentic engineering, terminals, and repository generation",
         "source": "https://api.friendli.ai/serverless/v1/models"
     },
+    "flint": {
+        "cache_read_input_token_cost": 4e-08,
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "openai",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06
+    },
     "ft:babbage-002": {
         "deprecation_date": "2026-10-23",
         "input_cost_per_token": 1.6e-06,
