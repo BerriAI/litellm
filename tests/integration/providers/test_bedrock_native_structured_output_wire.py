@@ -88,6 +88,15 @@ _LIMITS_SCHEMA: Final[dict[str, JsonValue]] = {
     "required": ["tier", "summary", "tags", "owner", "backup"],
     "$defs": {"Person": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}},
 }
+_UNLISTED_FORMAT_SCHEMA: Final[dict[str, JsonValue]] = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string", "format": "int64"},
+        "meta": {"properties": {"a": {"type": "string"}}, "required": ["a"]},
+    },
+    "required": ["id", "meta"],
+    "additionalProperties": False,
+}
 _OPEN_COUNTS: Final[dict[str, JsonValue]] = {"type": "object", "additionalProperties": {"type": "integer"}}
 _DICT_SCHEMA: Final[dict[str, JsonValue]] = {
     "type": "object",
@@ -752,6 +761,35 @@ def test_native_schema_reaches_bedrock_with_limits_in_descriptions_and_every_obj
         assert {"1", "5"} <= set(re.findall(r"\d+", string_value(object_value(properties["tier"])["description"])))
         assert all(_resolves(schema, ref) for ref in _refs(schema)), schema
         assert _JSON_TOOL not in _tools(body, route == "invoke"), body
+
+
+@pytest.mark.parametrize("route", ["converse", "invoke"])
+def test_unlisted_string_format_reaches_bedrock_as_a_description_note_with_the_untyped_node_closed(
+    gateway: Gateway, route: str
+) -> None:
+    """Bedrock Claude rejects a string ``format`` outside Claude's list and a node with no ``type``, so the
+    proxy notes the format in the description and types the node, instead of dropping to the json tool."""
+    marker, marker_hex = _marker()
+    with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, route, _SONNET)
+        body: Final = _chat_body(model, marker, response_format=_response_format(_UNLISTED_FORMAT_SCHEMA))
+        assert _content_json(_chat_message(gateway.request("POST", "/v1/chat/completions", body))) == _payload(
+            marker_hex
+        )
+        _, sent = _one_call(wire, marker_hex)
+        schema: Final = _native_schema(sent, route == "invoke")
+        assert schema is not None, sent
+        assert _bedrock_schema_fault(schema) is None, schema
+        assert object_value(schema["properties"]) == {
+            "id": {"type": "string", "description": "Note: format: int64."},
+            "meta": {
+                "type": "object",
+                "properties": {"a": {"type": "string"}},
+                "required": ["a"],
+                "additionalProperties": False,
+            },
+        }, schema
+        assert _JSON_TOOL not in _tools(sent, route == "invoke"), sent
 
 
 @pytest.mark.parametrize("route", ["converse", "invoke"])
