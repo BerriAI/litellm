@@ -3440,6 +3440,22 @@ def test_get_request_tags_preserves_non_string_metadata_tags():
     assert 7 in tags
 
 
+def test_get_request_tags_accepts_string_tags():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    tags = StandardLoggingPayloadSetup.get_request_tags(
+        litellm_params={"metadata": {"tags": "my-tag"}},
+        proxy_server_request={},
+    )
+    assert tags == ["my-tag"]
+
+    tags = StandardLoggingPayloadSetup.get_request_tags(
+        litellm_params={"litellm_metadata": {"tags": "other-tag"}},
+        proxy_server_request={},
+    )
+    assert tags == ["other-tag"]
+
+
 def test_get_request_tags_from_metadata_and_litellm_metadata():
     """
     Test that _get_request_tags correctly picks tags from both 'metadata' and 'litellm_metadata'.
