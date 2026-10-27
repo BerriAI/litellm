@@ -174,7 +174,11 @@ def test_messages_replays_reasoning_text_with_its_encrypted_content(gateway: Gat
             "/v1/messages",
             _messages_request(
                 model,
-                [user_turn, {"role": "assistant", "content": assistant_content}, _tool_results(identity, {"a": "alpha"})],
+                [
+                    user_turn,
+                    {"role": "assistant", "content": assistant_content},
+                    _tool_results(identity, {"a": "alpha"}),
+                ],
             ),
         )
         assert second.status_code == 200, second.text
@@ -196,7 +200,7 @@ def test_messages_stream_emits_reasoning_text_deltas_as_thinking(gateway: Gatewa
     pieces: Final = ("Let me ", "think ", identity)
     reasoning_item: Final = _reasoning(identity, "".join(pieces))
     completed: Final = _response(identity, (reasoning_item, _message(identity, "done")))
-    events: Final = (
+    events: Final[tuple[Mapping[str, object], ...]] = (
         {"type": "response.created", "response": {**completed, "status": "in_progress", "output": []}},
         {"type": "response.output_item.added", "output_index": 0, "item": {**reasoning_item, "content": []}},
         *(
@@ -323,11 +327,26 @@ def test_messages_replays_assistant_text_in_its_original_place_among_tool_calls(
                         "role": "assistant",
                         "content": [
                             {"type": "text", "text": "First I will look."},
-                            {"type": "tool_use", "id": f"call_{identity}_a", "name": "Bash", "input": {"command": "ls"}},
+                            {
+                                "type": "tool_use",
+                                "id": f"call_{identity}_a",
+                                "name": "Bash",
+                                "input": {"command": "ls"},
+                            },
                             {"type": "text", "text": "Then two more."},
                             {"type": "text", "text": "In parallel."},
-                            {"type": "tool_use", "id": f"call_{identity}_b", "name": "Bash", "input": {"command": "pwd"}},
-                            {"type": "tool_use", "id": f"call_{identity}_c", "name": "Bash", "input": {"command": "id"}},
+                            {
+                                "type": "tool_use",
+                                "id": f"call_{identity}_b",
+                                "name": "Bash",
+                                "input": {"command": "pwd"},
+                            },
+                            {
+                                "type": "tool_use",
+                                "id": f"call_{identity}_c",
+                                "name": "Bash",
+                                "input": {"command": "id"},
+                            },
                         ],
                     },
                     _tool_results(identity, {"a": "a.txt", "b": "/tmp", "c": "uid=0"}),

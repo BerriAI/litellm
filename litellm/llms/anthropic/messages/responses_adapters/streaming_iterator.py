@@ -3,7 +3,7 @@
 import asyncio
 from collections import deque
 from collections.abc import AsyncGenerator, Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import ConfigDict, field_validator
 
@@ -139,6 +139,7 @@ class AnthropicResponsesStreamWrapper:
         self._current_block_index: int = -1
         # Map item_id -> content_block_index so we can stop the right block later
         self._item_id_to_block_index: dict[str, int] = {}
+        self._reasoning_text_block_indexes: frozenset[int] = frozenset()
         # Track open function_call items by item_id so we can emit tool_use start
         self._pending_tool_ids: dict[str, str] = {}  # item_id -> call_id / name accumulator
         self._sent_message_start = False
@@ -189,23 +190,13 @@ class AnthropicResponsesStreamWrapper:
     def _field(source: object, name: str) -> object:
         return source.get(name) if isinstance(source, dict) else getattr(source, name, None)
 
-    @classmethod
-    def _has_reasoning_text(cls, item: object) -> bool:
-        content: Final = cls._field(item, "content")
-        if not isinstance(content, list):
-            return False
-        return any(
-            cls._field(part, "type") == "reasoning_text" and cls._field(part, "text")
-            for part in cast(list[object], content)  # cast-ok: narrowed by isinstance
-        )
-
     def _close_reasoning_item(self, item: object, item_id: str | None) -> None:
         block_idx: Final = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
         encrypted_content: Final = self._field(item, "encrypted_content")
         encrypted: Final = encrypted_content if isinstance(encrypted_content, str) and encrypted_content else None
         signature: Final = (
             reasoning_text_signature(encrypted)
-            if block_idx >= 0 and self._has_reasoning_text(item)
+            if block_idx in self._reasoning_text_block_indexes
             else encrypted_reasoning_signature(encrypted)
             if encrypted is not None
             else None
@@ -343,6 +334,8 @@ class AnthropicResponsesStreamWrapper:
                     item_id,
                     {"type": "thinking", "thinking": "", "signature": ""},
                 )
+            if event_type == "response.reasoning_text.delta":
+                self._reasoning_text_block_indexes = self._reasoning_text_block_indexes | {block_idx}
             self._chunk_queue.append(
                 {
                     "type": "content_block_delta",

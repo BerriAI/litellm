@@ -14,8 +14,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     encrypted_reasoning_signature,
-    responses_reasoning_items_from_thinking_blocks,
     reasoning_text_signature,
+    responses_reasoning_items_from_thinking_blocks,
     with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import (
@@ -247,14 +247,12 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             return str(mapping.get("text") or "")
         return str(getattr(part, "text", None) or "")
 
-    @classmethod
-    def _reasoning_text_part_text(cls, part: object) -> str:
-        part_type: Final = (
-            cast(Mapping[str, object], part).get("type")  # cast-ok: content parts are untyped provider json
-            if isinstance(part, Mapping)
-            else getattr(part, "type", None)
-        )
-        return cls._summary_part_text(part) if part_type == "reasoning_text" else ""
+    @staticmethod
+    def _reasoning_text_part_text(part: object) -> str:
+        if isinstance(part, Mapping):
+            mapping: Final = cast(Mapping[str, object], part)  # cast-ok: content parts are untyped provider json
+            return str(mapping.get("text") or "") if mapping.get("type") == "reasoning_text" else ""
+        return str(getattr(part, "text", None) or "") if getattr(part, "type", None) == "reasoning_text" else ""
 
     @classmethod
     def _thinking_block_from_reasoning_item(
@@ -271,7 +269,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         since only Anthropic can sign a thinking block.
         """
         reasoning_text: Final = REASONING_SUMMARY_PART_SEPARATOR.join(
-            part_text for part in content if (part_text := cls._reasoning_text_part_text(part))
+            reasoning_part_text for part in content if (reasoning_part_text := cls._reasoning_text_part_text(part))
         )
         if reasoning_text:
             return AnthropicResponseContentBlockThinking(

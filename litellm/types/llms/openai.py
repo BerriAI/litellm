@@ -1,5 +1,5 @@
 import builtins
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from enum import Enum
 from os import PathLike
 from typing import IO, TYPE_CHECKING, Any, Final, Generic, Literal, Optional, TypeAlias, Union
@@ -723,7 +723,7 @@ class ChatCompletionReasoningItem(TypedDict, total=False):
     id: str
     encrypted_content: str | None
     summary: ReadOnly[list[ChatCompletionReasoningSummaryTextBlock]]
-    content: ReadOnly[list[ChatCompletionReasoningTextBlock]]
+    content: ReadOnly[Sequence[ChatCompletionReasoningTextBlock]]
 
 
 class WebSearchOptionsUserLocationApproximate(TypedDict, total=False):
