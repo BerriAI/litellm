@@ -6740,6 +6740,7 @@ def get_model_info_helper(
                 max_tokens=_model_info.get("max_output_tokens") or _model_info.get("max_input_tokens"),
                 max_input_tokens=_model_info.get("max_input_tokens", None),
                 max_output_tokens=_model_info.get("max_output_tokens", None),
+                context_window=_model_info.get("context_window", None),
                 input_cost_per_token=_input_cost_per_token,
                 input_cost_per_token_flex=_model_info.get("input_cost_per_token_flex", None),
                 input_cost_per_token_priority=_model_info.get("input_cost_per_token_priority", None),

@@ -825,3 +825,75 @@ def test_bedrock_gpt_oss_rows_declare_vision_support_like_their_safeguard_siblin
 def test_bedrock_gpt_oss_vision_is_explicitly_disabled_for_the_router_gate() -> None:
     assert litellm.utils.is_vision_explicitly_disabled("bedrock/openai.gpt-oss-120b-1:0") is True
     assert litellm.utils.is_vision_explicitly_disabled("bedrock_mantle/openai.gpt-oss-20b") is True
+
+
+_CLAUDE_PROVIDERS: Final = frozenset(
+    {"anthropic", "bedrock", "bedrock_converse", "bedrock_mantle", "vertex_ai-anthropic_models", "azure_ai"}
+)
+_GEMINI_PROVIDERS: Final = frozenset({"gemini", "vertex_ai-language-models", "vertex_ai"})
+
+
+def _chat_rows(prices: Mapping[str, Mapping[str, object]]) -> Mapping[str, Mapping[str, object]]:
+    return MappingProxyType(
+        {key: row for key, row in prices.items() if key != "sample_spec" and row.get("mode") in ("chat", "responses")}
+    )
+
+
+def _rows_with_context_window(prices: Mapping[str, Mapping[str, object]]) -> Mapping[str, Mapping[str, object]]:
+    return MappingProxyType({key: row for key, row in _chat_rows(prices).items() if "context_window" in row})
+
+
+def test_context_window_sits_between_input_limit_and_input_plus_output(prices: dict) -> None:
+    outside: Final = tuple(
+        (key, row["max_input_tokens"], row["context_window"], row["max_output_tokens"])
+        for key, row in _rows_with_context_window(prices).items()
+        if not (
+            isinstance(row["context_window"], int)
+            and isinstance(row["max_input_tokens"], int)
+            and isinstance(row["max_output_tokens"], int)
+            and row["max_input_tokens"] <= row["context_window"] <= row["max_input_tokens"] + row["max_output_tokens"]
+        )
+    )
+    assert outside == ()
+
+
+def test_claude_rows_share_one_window_so_context_window_equals_max_input_tokens(prices: dict) -> None:
+    claude_rows: Final = {
+        key: row
+        for key, row in _chat_rows(prices).items()
+        if "claude" in key.lower() and row.get("litellm_provider") in _CLAUDE_PROVIDERS and "max_input_tokens" in row
+    }
+    assert claude_rows
+    assert {key: row.get("context_window") for key, row in claude_rows.items()} == {
+        key: row["max_input_tokens"] for key, row in claude_rows.items()
+    }
+
+
+def test_gemini_rows_have_independent_limits_so_context_window_is_input_plus_output(prices: dict) -> None:
+    gemini_rows: Final = {
+        key: row
+        for key, row in _chat_rows(prices).items()
+        if "gemini" in key.lower()
+        and row.get("litellm_provider") in _GEMINI_PROVIDERS
+        and isinstance(row.get("max_input_tokens"), int)
+        and isinstance(row.get("max_output_tokens"), int)
+    }
+    assert gemini_rows
+    assert {key: row.get("context_window") for key, row in gemini_rows.items()} == {
+        key: row["max_input_tokens"] + row["max_output_tokens"] for key, row in gemini_rows.items()
+    }
+
+
+def test_context_window_matches_between_main_and_backup_catalog() -> None:
+    main: Final = json.loads(PRICES_PATH.read_text())
+    backup: Final = json.loads(BACKUP_PRICES_PATH.read_text())
+    assert {key: row["context_window"] for key, row in _rows_with_context_window(main).items()} == {
+        key: row["context_window"] for key, row in _rows_with_context_window(backup).items()
+    }
+
+
+def test_get_model_info_returns_the_context_window(local_model_cost_map: None) -> None:
+    assert litellm.get_model_info("claude-sonnet-4-6")["context_window"] == 1000000
+    assert litellm.get_model_info("gpt-5-nano")["context_window"] == 400000
+    assert litellm.get_model_info("gemini/gemini-2.5-flash-lite")["context_window"] == 1048576 + 65536
+    assert litellm.get_model_info("together_ai/moonshotai/Kimi-K2-Instruct")["context_window"] is None
