@@ -668,7 +668,7 @@ async def test_expired_key_error_log_names_the_key_owner(
     ):
         verbose_proxy_logger.propagate = True
         try:
-            with caplog.at_level("ERROR", logger="LiteLLM Proxy"), pytest.raises(ProxyException):
+            with caplog.at_level("WARNING", logger="LiteLLM Proxy"), pytest.raises(ProxyException):
                 await handler.handle_authentication_error(
                     expired_key_error,
                     MagicMock(),
@@ -714,8 +714,8 @@ async def test_expired_key_error_log_names_the_key_owner(
 async def test_unknown_key_error_log_keeps_the_operator_wording_the_401_hides(
     looked_up, logged_fragment, absent_fragment, caplog
 ):
-    """A wrong key gets a generic 401, while the one auth failure log line keeps the
-    operator wording and the hash that was looked up, next to the requester IP."""
+    """A wrong key gets a generic 401, while the one auth failure log line, a WARNING with no
+    traceback, keeps the operator wording and the hash that was looked up, next to the requester IP."""
     from litellm.constants import INVALID_API_KEY_ERROR_MESSAGE
     from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
 
@@ -733,7 +733,7 @@ async def test_unknown_key_error_log_keeps_the_operator_wording_the_401_hides(
     ):
         verbose_proxy_logger.propagate = True
         try:
-            with caplog.at_level("ERROR", logger="LiteLLM Proxy"), pytest.raises(ProxyException) as exc_info:
+            with caplog.at_level("WARNING", logger="LiteLLM Proxy"), pytest.raises(ProxyException) as exc_info:
                 await UserAPIKeyAuthExceptionHandler().handle_authentication_error(
                     KeyNotFoundError(looked_up),
                     MagicMock(),
@@ -748,6 +748,7 @@ async def test_unknown_key_error_log_keeps_the_operator_wording_the_401_hides(
     assert exc_info.value.message == INVALID_API_KEY_ERROR_MESSAGE
     records = [r for r in caplog.records if "user_api_key_auth(): Exception occured" in r.getMessage()]
     assert len(records) == 1, [r.getMessage() for r in caplog.records]
+    assert records[0].levelname == "WARNING" and records[0].exc_info is None
     logged = records[0].getMessage()
     assert "Requester IP Address:" in logged and logged_fragment in logged, logged
     if absent_fragment is not None:
@@ -1148,10 +1149,16 @@ def _marked_malformed_key_error() -> HTTPException:
                 message="Authentication Error", type=ProxyErrorTypes.auth_error, param=None, code=401
             ),
             False,
-            "ERROR",
-            id="expected_401_no_traceback",
+            "WARNING",
+            id="proxy_exception_401_warning_no_traceback",
         ),
         pytest.param(ValueError("unexpected internal error"), True, "ERROR", id="unexpected_error_keeps_traceback"),
+        pytest.param(
+            Exception("No api key passed in."),
+            True,
+            "ERROR",
+            id="bare_exception_coerced_to_401_still_keeps_traceback",
+        ),
         pytest.param(
             _marked_malformed_key_error(),
             False,
@@ -1161,8 +1168,14 @@ def _marked_malformed_key_error() -> HTTPException:
         pytest.param(
             HTTPException(status_code=401, detail="LiteLLM Virtual Key expected. Received=test"),
             False,
+            "WARNING",
+            id="http_exception_401_warning_no_traceback",
+        ),
+        pytest.param(
+            ProxyException(message="Forbidden", type=ProxyErrorTypes.auth_error, param=None, code=403),
+            False,
             "ERROR",
-            id="phrase_without_marker_stays_loud",
+            id="403_stays_error_without_traceback",
         ),
     ],
 )
@@ -1189,7 +1202,7 @@ async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
         try:
             try:
                 raise auth_error
-            except (ProxyException, ValueError, HTTPException) as caught:
+            except Exception as caught:
                 with caplog.at_level(expect_level, logger="LiteLLM Proxy"), pytest.raises((ProxyException, HTTPException)):
                     await handler.handle_authentication_error(
                         caught,

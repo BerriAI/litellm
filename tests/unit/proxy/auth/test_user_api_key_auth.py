@@ -2031,9 +2031,9 @@ async def test_user_api_key_auth_websocket_rejection_adds_no_traceback_for_other
     assert rejection.value.status_code == 403
     assert "expired key" in str(rejection.value.detail).lower()
     assert sent == [{"type": "websocket.close", "code": status.WS_1008_POLICY_VIOLATION, "reason": ""}]
-    proxy_records: Final = [record for record in caplog.records if record.name == verbose_proxy_logger.name]
+    proxy_records: Final = [record for record in caplog.records if record.name.startswith(verbose_proxy_logger.name)]
     assert [record.getMessage() for record in proxy_records if record.exc_info is not None] == []
-    assert [record.levelno for record in proxy_records if record.levelno >= logging.WARNING] == [logging.ERROR]
+    assert [record.levelno for record in proxy_records if record.levelno >= logging.WARNING] == [logging.WARNING]
 
 
 @pytest.mark.asyncio
