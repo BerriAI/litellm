@@ -548,6 +548,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         iterations_usage: list[UsageIteration] | None = None,
         litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
         safeguards_evaluator: "SafeguardsEvaluator | None" = None,
+        input_tokens: int = 0,
     ):
         # Wrap the upstream stream so chunks that carry both content and a
         # finish_reason (fake-streamed providers) are split into two — see
@@ -556,6 +557,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         super().__init__(combined_chunk_splitter)
         self._combined_chunk_splitter: Final = combined_chunk_splitter
         self.model = model
+        self._input_tokens: Final = input_tokens
         self._message_id: str = f"msg_{uuid.uuid4()}"
         if litellm_logging_obj is not None:
             litellm_logging_obj.record_streamed_anthropic_message_id(self._message_id)
@@ -754,18 +756,15 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         """
         Create the initial UsageDelta for the message_start event.
 
-        Initializes cache token fields (cache_creation_input_tokens, cache_read_input_tokens)
-        to 0 to indicate to clients (like Claude Code) that prompt caching is supported.
+        ``input_tokens`` is the caller's local estimate of the prompt, since providers such as
+        Bedrock Converse only report usage in the final chunk. The provider's real counts,
+        including cache tokens, are sent on message_delta and supersede it.
 
-        The actual cache token values will be provided in the message_delta event at the
-        end of the stream, since Bedrock Converse API only returns usage data in the final
-        response chunk.
-
-        Returns:
-            UsageDelta with all token counts initialized to 0.
+        Cache token fields start at 0 to tell clients (like Claude Code) that prompt caching
+        is supported.
         """
         return UsageDelta(
-            input_tokens=0,
+            input_tokens=self._input_tokens,
             output_tokens=0,
             cache_creation_input_tokens=0,
             cache_read_input_tokens=0,

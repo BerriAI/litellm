@@ -8,7 +8,7 @@ from typing import (
 )
 
 from pydantic import TypeAdapter
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -43,7 +43,7 @@ from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
-from litellm.types.llms.openai import OpenAIWebSearchOptions
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam, OpenAIWebSearchOptions
 from litellm.types.utils import ModelResponse
 from litellm.utils import get_model_info
 
@@ -63,6 +63,8 @@ _ContextManagementSpec: TypeAlias = "dict[str, object] | list[dict[str, object]]
 class _CompletionKwargs(TypedDict, total=False, extra_items=object):
     model: str
     custom_llm_provider: str
+    messages: ReadOnly[Sequence[AllMessageValues]]
+    tools: ReadOnly[Sequence[ChatCompletionToolParam]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -388,6 +390,20 @@ async def _run_polyfill_if_enabled(
 # init adapter
 ANTHROPIC_ADAPTER: Final = AnthropicAdapter()
 ########################################################
+
+
+def _estimate_input_tokens(completion_kwargs: _CompletionKwargs, model: str) -> int:
+    tools: Final = completion_kwargs.get("tools")
+    try:
+        return litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]  # its tokenizer param is a bare dict
+            model=model,
+            messages=completion_kwargs.get("messages"),
+            tools=list(tools) if tools else None,
+            use_default_image_token_count=True,
+        )
+    except Exception:  # noqa: BLE001  # message_start usage is informational, so counting must never fail the stream
+        verbose_logger.debug("Could not estimate input tokens for message_start", exc_info=True)
+        return 0
 
 
 def _record_bridged_model_response(logging_obj: LiteLLMLoggingObject | None, completion_response: object) -> None:
@@ -800,14 +816,16 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         logging_obj: Final = litellm_logging_obj_from_kwargs(kwargs)
 
         if stream:
+            stream_model: Final = local_model_name(model, kwargs.get("custom_llm_provider"))
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
                 completion_response,
-                model=local_model_name(model, kwargs.get("custom_llm_provider")),
+                model=stream_model,
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=True,
                 litellm_logging_obj=logging_obj,
                 safeguards_evaluator=safeguards_evaluator,
+                input_tokens=_estimate_input_tokens(completion_kwargs, stream_model),
             )
             if transformed_stream is not None:
                 return transformed_stream
@@ -946,13 +964,15 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         logging_obj: Final = litellm_logging_obj_from_kwargs(kwargs)
 
         if stream:
+            stream_model: Final = local_model_name(model, kwargs.get("custom_llm_provider"))
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
                 completion_response,
-                model=local_model_name(model, kwargs.get("custom_llm_provider")),
+                model=stream_model,
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=False,
                 litellm_logging_obj=logging_obj,
+                input_tokens=_estimate_input_tokens(completion_kwargs, stream_model),
             )
             if transformed_stream is not None:
                 return transformed_stream

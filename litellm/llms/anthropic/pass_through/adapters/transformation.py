@@ -322,6 +322,7 @@ class AnthropicAdapter:
         is_async: bool = True,
         litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
         safeguards_evaluator: "SafeguardsEvaluator | None" = None,
+        input_tokens: int = 0,
     ) -> AsyncIterator[bytes] | Iterator[bytes] | None:
         """
         Translate OpenAI streaming response to Anthropic format.
@@ -337,6 +338,7 @@ class AnthropicAdapter:
                 (e.g. ``litellm.anthropic.messages.create(stream=True)`` via
                 the sync handler) don't get back an async iterator they
                 can't iterate without an event loop.
+            input_tokens: Estimated prompt size reported on ``message_start``.
         """
         applied_edits: Final = polyfill_result.applied_edits_for_response() if polyfill_result else None
         compaction_block: Final = polyfill_result.compaction_block if polyfill_result is not None else None
@@ -350,6 +352,7 @@ class AnthropicAdapter:
             iterations_usage=iterations_usage,
             litellm_logging_obj=litellm_logging_obj,
             safeguards_evaluator=safeguards_evaluator,
+            input_tokens=input_tokens,
         )
         # Return the SSE-wrapped version for proper event formatting.
         if is_async:
