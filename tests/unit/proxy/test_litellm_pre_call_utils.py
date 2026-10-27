@@ -37,7 +37,6 @@ from litellm.litellm_core_utils.redact_messages import _get_turn_off_message_log
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.proxy._types import AddTeamCallback, ProxyException, TeamCallbackMetadata, UserAPIKeyAuth
-from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
     LiteLLMProxyRequestSetup,
@@ -59,6 +58,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     move_guardrails_to_metadata,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
 from litellm.types.utils import CredentialItem
 
 
@@ -9360,7 +9360,7 @@ async def test_mcp_credentials_only_removed_from_logging_copies(path: str, custo
     with (
         patch("litellm.proxy.proxy_server.general_settings", settings),
         patch.dict(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.config_mcp_servers",
+            "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager.config_mcp_servers",
             {"header-test": server},
             clear=True,
         ),
@@ -10155,8 +10155,8 @@ class TestResolveUserProviderCredentials:
         _get_hierarchical_router_settings) must be part of discovery."""
         from types import SimpleNamespace
 
-        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
         import litellm.proxy.auth.auth_checks as auth_checks
+        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         table = self._env(monkeypatch)
         monkeypatch.setattr(
