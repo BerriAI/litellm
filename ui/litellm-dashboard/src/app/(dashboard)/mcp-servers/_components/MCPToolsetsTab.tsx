@@ -197,6 +197,8 @@ function ServerToolGroup({
         <Checkbox
           {...checkboxStateProps(groupState)}
           disabled={visibleRefs.length === 0}
+          // Base UI renders a span, which the global button cursor rule does not cover.
+          className="cursor-pointer data-disabled:cursor-not-allowed"
           aria-label={`${searchActive ? "Select matching tools" : "Select all tools"} on ${serverName}`}
           onCheckedChange={(checked) => onSetToolsSelected(visibleRefs, checked)}
         />
