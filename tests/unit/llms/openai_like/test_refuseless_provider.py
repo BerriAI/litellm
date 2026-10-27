@@ -6,6 +6,7 @@ import respx
 
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.utils import trim_messages
 
 
 def test_refuseless_resolves_environment_and_explicit_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -93,3 +94,18 @@ def test_refuseless_uses_native_responses_endpoint() -> None:
     assert route.calls.last.request.headers["authorization"] == "Bearer fake-test-key"
     assert json.loads(route.calls.last.request.content)["model"] == "glm-5.3-abliterated"
     assert response.output[0].content[0].text == "hello"
+
+
+def test_refuseless_models_trim_to_their_input_budget(local_model_cost_map: None) -> None:
+    model_names: Final = tuple(model for model in litellm.model_cost if model.startswith("refuseless/"))
+    assert model_names
+    messages: Final = [{"role": "user", "content": "hello " * 500}]
+    budget: Final = 100
+    for model in model_names:
+        trimmed: Final = trim_messages(
+            messages,
+            model=model,
+            trim_ratio=budget / litellm.model_cost[model]["max_input_tokens"],
+        )
+        assert litellm.token_counter(model=model, messages=messages) > budget
+        assert litellm.token_counter(model=model, messages=trimmed) <= budget
