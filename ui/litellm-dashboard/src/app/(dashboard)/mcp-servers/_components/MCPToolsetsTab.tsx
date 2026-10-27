@@ -98,6 +98,20 @@ const summarizeSearch = (serverViews: readonly ServerView[]) => ({
   pendingServerCount: serverViews.filter(({ state }) => isPending(state)).length,
 });
 
+// Why a selected tool cannot be confirmed against its server. The tool stays selected and is
+// still saved; the note only keeps it from looking lost.
+const selectedToolIssue = (
+  tool: MCPToolsetTool,
+  serverNameById: ReadonlyMap<string, string>,
+  toolsByServer: ReadonlyMap<string, MCPServerToolsState>,
+): string | undefined => {
+  if (!serverNameById.has(tool.server_id)) return "server not found";
+  const state = toolsByServer.get(tool.server_id);
+  if (state?.status === "error") return "server unreachable";
+  if (state?.status === "success" && !state.tools.some((t) => t.name === tool.tool_name)) return "tool not found";
+  return undefined;
+};
+
 interface ServerToolGroupProps {
   serverId: string;
   serverName: string;
@@ -227,7 +241,7 @@ function CreateToolsetModal({ open, onClose, onSave, initialToolset }: CreateToo
   const [search, setSearch] = useState("");
   const [debouncedSearch] = useDebouncedValue(search, { wait: SEARCH_DEBOUNCE_WAIT_MS });
   const [expandedServerIds, setExpandedServerIds] = useState<ReadonlySet<string>>(() => new Set());
-  const { data: mcpServers = [] } = useMCPServers();
+  const { data: mcpServers = [], isSuccess: serversLoaded } = useMCPServers();
   const serverIds = React.useMemo(() => mcpServers.map((s) => s.server_id), [mcpServers]);
   // Searching needs every server's catalog; otherwise only expanded servers are fetched.
   const fetchServerIds = React.useMemo(
@@ -381,34 +395,53 @@ function CreateToolsetModal({ open, onClose, onSave, initialToolset }: CreateToo
 
           {/* Right panel: Your Toolset */}
           <div className="w-72 shrink-0">
-            <p className="text-sm font-semibold text-foreground mb-2 block">
-              Your Toolset{" "}
-              <span className="text-xs font-normal text-muted-foreground">({selectedTools.length} tools)</span>
-            </p>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-semibold text-foreground">
+                Your Toolset{" "}
+                <span className="text-xs font-normal text-muted-foreground">({selectedTools.length} tools)</span>
+              </p>
+              <Button
+                size="xs"
+                variant="ghost"
+                disabled={selectedTools.length === 0}
+                onClick={() => setSelectedTools([])}
+              >
+                Clear all
+              </Button>
+            </div>
             <div className="space-y-1 overflow-y-auto" style={{ maxHeight: 340 }}>
               {selectedTools.length === 0 ? (
                 <p className="text-muted-foreground text-sm">No tools added yet</p>
               ) : (
-                selectedTools.map((tool, idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => handleToggleTool(tool)}
-                    className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg border border-purple-200 bg-purple-50 hover:bg-destructive/10 hover:border-destructive/20 group transition-colors dark:border-purple-800 dark:bg-purple-950"
-                  >
-                    <div className="min-w-0 text-left">
-                      <span className="text-xs font-medium text-purple-800 group-hover:text-destructive truncate block dark:text-purple-200">
-                        {displayToolName(serverPrefixById.get(tool.server_id), tool.tool_name)}
+                selectedTools.map((tool) => {
+                  const toolName = displayToolName(serverPrefixById.get(tool.server_id), tool.tool_name);
+                  const issue = serversLoaded ? selectedToolIssue(tool, serverPrefixById, toolsByServer) : undefined;
+                  return (
+                    <button
+                      key={`${tool.server_id}:${tool.tool_name}`}
+                      type="button"
+                      aria-label={`Remove ${toolName}`}
+                      onClick={() => handleToggleTool(tool)}
+                      className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg border border-purple-200 bg-purple-50 hover:bg-destructive/10 hover:border-destructive/20 group transition-colors dark:border-purple-800 dark:bg-purple-950"
+                    >
+                      <div className="min-w-0 text-left">
+                        <span className="text-xs font-medium text-purple-800 group-hover:text-destructive truncate block dark:text-purple-200">
+                          {toolName}
+                        </span>
+                        {issue ? (
+                          <span className="text-[10px] text-warning truncate block">{issue}</span>
+                        ) : (
+                          <span className="text-[10px] text-purple-400 truncate block dark:text-purple-500">
+                            {tool.server_id.slice(0, 8)}…
+                          </span>
+                        )}
+                      </div>
+                      <span className="ml-2 text-purple-300 group-hover:text-destructive text-xs shrink-0 dark:text-purple-600">
+                        ✕
                       </span>
-                      <span className="text-[10px] text-purple-400 truncate block dark:text-purple-500">
-                        {tool.server_id.slice(0, 8)}…
-                      </span>
-                    </div>
-                    <span className="ml-2 text-purple-300 group-hover:text-destructive text-xs shrink-0 dark:text-purple-600">
-                      ✕
-                    </span>
-                  </button>
-                ))
+                    </button>
+                  );
+                })
               )}
             </div>
           </div>
