@@ -12,14 +12,14 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from types import MappingProxyType
-from typing import (  # noqa: TID251  # Router pool narrowing
+from typing import (
     TYPE_CHECKING,
     Any,
     Final,
     Literal,
     Protocol,
     TypedDict,
-    cast,
+    cast,  # noqa: TID251  # Router pool narrowing
     overload,
 )
 
