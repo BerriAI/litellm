@@ -1,3 +1,4 @@
+from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Final
 
 import pytest
@@ -10,7 +11,15 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import CallTypesLiteral, Choices, Message, ModelResponse
+from litellm.types.utils import (
+    CallTypesLiteral,
+    Choices,
+    Delta,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 
 def test_has_post_call_response_headers_callbacks_ignores_empty_callbacks(
@@ -280,6 +289,7 @@ async def test_post_call_stream_guardrail_blocks_anthropic_messages_stream(monke
     from fastapi import HTTPException
 
     from litellm.caching.caching import DualCache
+
     guardrail = _content_filter_guardrail("BLOCK")
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
@@ -295,6 +305,7 @@ async def test_post_call_stream_guardrail_blocks_anthropic_messages_stream(monke
             yield chunk
 
     delivered = []
+
     async def _drain():
         async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
             response=fake_stream(),
@@ -329,12 +340,8 @@ async def test_post_call_stream_guardrail_keeps_own_iterator_on_chat_completions
     proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
 
     async def fake_stream():
-        yield ModelResponseStream(
-            choices=[StreamingChoices(index=0, delta=Delta(content="the zebra runs"))]
-        )
-        yield ModelResponseStream(
-            choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")]
-        )
+        yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="the zebra runs"))])
+        yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")])
 
     delivered_text = ""
     async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
@@ -404,9 +411,12 @@ async def test_post_call_stream_records_the_served_text_when_the_client_disconne
 
 
 class _MasksReply(CustomLogger):
-    async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
-        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
-
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: AsyncIterator[ModelResponseStream],
+        request_data: dict[str, object],
+    ) -> AsyncGenerator[ModelResponseStream, None]:
         async for _ in response:
             yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="<PERSON>"))])
 
@@ -418,24 +428,28 @@ class _ReadsServedStream(CustomLogger):
         super().__init__()
         self.read: list[str | None] = []
 
-    async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: AsyncIterator[ModelResponseStream],
+        request_data: dict[str, object],
+    ) -> AsyncGenerator[ModelResponseStream, None]:
         async for chunk in response:
             self.read.append(chunk.choices[0].delta.content)
             yield chunk
 
 
 @pytest.mark.asyncio
-async def test_post_call_stream_served_stream_relay_reads_what_a_later_hook_serves(monkeypatch):
-    from litellm.caching.caching import DualCache
-    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
-
-    reader = _ReadsServedStream()
+async def test_post_call_stream_served_stream_relay_reads_what_a_later_hook_serves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader: Final = _ReadsServedStream()
     monkeypatch.setattr(litellm, "callbacks", [reader, _MasksReply()])
 
-    async def fake_stream():
+    async def fake_stream() -> AsyncIterator[ModelResponseStream]:
         yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="John Smith"))])
 
-    served = [
+    served: Final = [
         chunk.choices[0].delta.content
         async for chunk in ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
             response=fake_stream(),
@@ -581,6 +595,7 @@ async def test_post_call_stream_guardrail_reroutes_inherited_apply_guardrail(mon
             yield chunk
 
     delivered = []
+
     async def _drain():
         async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
             response=fake_stream(),
@@ -621,9 +636,7 @@ async def test_post_call_stream_masking_guardrail_keeps_own_iterator_on_anthropi
             async for item in response:
                 yield item
 
-    guardrail = _content_filter_guardrail(
-        "BLOCK", guardrail_cls=_MasksViaOwnRawStreamHook, mask_response_content=True
-    )
+    guardrail = _content_filter_guardrail("BLOCK", guardrail_cls=_MasksViaOwnRawStreamHook, mask_response_content=True)
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     proxy_logging = ProxyLogging(user_api_key_cache=DualCache())

@@ -19,11 +19,9 @@ from opentelemetry.trace import Span  # noqa: E402
 import litellm  # noqa: E402
 from litellm.caching.dual_cache import DualCache  # noqa: E402
 from litellm.integrations.custom_logger import CustomLogger  # noqa: E402
-from litellm.integrations.otel import root_io_logger  # noqa: E402
 from litellm.integrations.otel.logger import OpenTelemetryV2, build_otel_v2_logger  # noqa: E402
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config, is_otel_v2_enabled  # noqa: E402
 from litellm.integrations.otel.model.destination import OtelDestination  # noqa: E402
-from litellm.integrations.otel.model.request_io import response_output  # noqa: E402
 from litellm.integrations.otel.model.spans import LITELLM_PROXY_REQUEST_SPAN_NAME, SpanRole  # noqa: E402
 from litellm.integrations.otel.plumbing import context as otel_context  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
@@ -177,31 +175,34 @@ def test_chat_stream_relays_chunks_untouched_and_stamps_the_assembled_output() -
     assert [(turn["role"], turn["content"]) for turn in json.loads(attrs["output.value"])] == [("assistant", "pong")]
 
 
-def test_root_output_renders_while_the_event_loop_serves_other_requests(monkeypatch: pytest.MonkeyPatch) -> None:
-    logger, exporter = _logger()
-    loop_served_another_request: Final = threading.Event()
+class _ContentThatWaitsForAnotherRequest:
+    def __init__(self) -> None:
+        self.loop_served_another_request: Final = threading.Event()
 
-    def render_after_another_request(response: object) -> str | None:
-        return response_output(response) if loop_served_another_request.wait(timeout=2) else None
+    def __str__(self) -> str:
+        return "pong" if self.loop_served_another_request.wait(timeout=2) else "the event loop was blocked"
+
+
+def test_root_output_renders_while_the_event_loop_serves_other_requests() -> None:
+    logger, exporter = _logger()
+    content: Final = _ContentThatWaitsForAnotherRequest()
+    reply: Final = {"type": "message", "role": "assistant", "content": content}
 
     async def another_request() -> None:
-        loop_served_another_request.set()
+        content.loop_served_another_request.set()
 
     async def serve_both() -> None:
         await asyncio.gather(
-            logger.async_post_call_success_hook(data=CHAT_DATA, user_api_key_dict=UserAPIKeyAuth(), response=PONG),
+            logger.async_post_call_success_hook(data=CHAT_DATA, user_api_key_dict=UserAPIKeyAuth(), response=reply),
             another_request(),
         )
 
-    monkeypatch.setattr(root_io_logger, "response_output", render_after_another_request)
     root: Final = _start_root(logger)
 
     asyncio.run(serve_both())
     root.end()
 
-    assert [(turn["role"], turn["content"]) for turn in json.loads(_root_attrs(exporter)["output.value"])] == [
-        ("assistant", "pong")
-    ]
+    assert json.loads(_root_attrs(exporter)["output.value"]) == [{"role": "assistant", "content": "pong"}]
 
 
 def test_a_root_another_callback_started_is_left_alone() -> None:
@@ -275,7 +276,7 @@ def _logging_obj(dynamic_params: dict[str, object], *, no_log: bool = False) -> 
         messages=CHAT_DATA["messages"],
         stream=False,
         call_type="acompletion",
-        start_time=datetime.now(),
+        start_time=datetime(2026, 1, 1),
         litellm_call_id="root-io",
         function_id="fn",
     )
