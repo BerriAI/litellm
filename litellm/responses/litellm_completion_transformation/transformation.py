@@ -290,6 +290,10 @@ def _input_item_role(input_item: Mapping[str, object]) -> str:
     return cast(str, input_item.get("role") or "user")  # cast-ok: client-supplied role forwarded verbatim, unvalidated
 
 
+def _assistant_content_parts(role: str, content: object) -> Sequence[object]:
+    return _OBJECT_LIST_ADAPTER.validate_python(content) if role == "assistant" and isinstance(content, list) else ()
+
+
 SessionMessage: TypeAlias = (
     AllMessageValues
     | GenericChatCompletionMessage
@@ -2138,6 +2142,22 @@ class LiteLLMCompletionResponsesConfig:
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:
                 return []
+
+            # An assistant message can carry both text and function_call items mixed
+            # inside `content`. The top-level `type` is not "function_call" in that
+            # case (it's a regular message item with a `role`), so the function_call
+            # parts would otherwise be silently dropped here — leaving the downstream
+            # `function_call_output` orphaned and causing "Missing corresponding tool
+            # call for tool response message". Split them out into a proper assistant
+            # message with both `content` and `tool_calls`. See issue #28978.
+            assistant_content_parts: Final = _assistant_content_parts(_input_item_role(input_item), content)
+            if any(LiteLLMCompletionResponsesConfig._is_function_call_part(part) for part in assistant_content_parts):
+                return [
+                    LiteLLMCompletionResponsesConfig._transform_responses_api_mixed_content_to_chat_completion_message(
+                        assistant_content_parts
+                    )
+                ]
+
             return [LiteLLMCompletionResponsesConfig._transform_responses_api_message_item(input_item, content)]
 
     @staticmethod
@@ -2471,6 +2491,58 @@ class LiteLLMCompletionResponsesConfig:
 
         # Create an assistant message with the tool call
         return [ChatCompletionResponseMessage(tool_calls=[tool_call], role="assistant", content=None)]
+
+    @staticmethod
+    def _is_function_call_part(part: object) -> bool:
+        return isinstance(part, dict) and _STR_KEY_DICT_ADAPTER.validate_python(part).get("type") == "function_call"
+
+    @staticmethod
+    def _transform_responses_api_mixed_content_to_chat_completion_message(
+        content_list: Sequence[object],
+    ) -> ChatCompletionResponseMessage:
+        """
+        Transform a Responses API assistant message whose `content` list mixes
+        text/output_text parts with `function_call` parts into a single Chat
+        Completion assistant message carrying both `content` and `tool_calls`.
+
+        The non-mixed cases are already handled by:
+        - `_transform_responses_api_function_call_to_chat_completion_message`
+          (top-level item with `type == "function_call"`)
+        - `_transform_responses_api_content_to_chat_completion_content`
+          (top-level item with text-only content)
+        """
+        is_call: Final = LiteLLMCompletionResponsesConfig._is_function_call_part
+        call_parts: Final = [_STR_KEY_DICT_ADAPTER.validate_python(part) for part in content_list if is_call(part)]
+        non_call_parts: Final = [part for part in content_list if not is_call(part)]
+
+        # index = position among tool calls, not position in the raw content list
+        # (a leading text part must not shift the first tool call off 0).
+        tool_calls: Final = [
+            ChatCompletionToolCallChunk(
+                id=str(call.get("call_id") or call.get("id") or ""),
+                type="function",
+                function=ChatCompletionToolCallFunctionChunk(
+                    name=str(call.get("name") or ""),
+                    arguments=str(call.get("arguments") or ""),
+                ),
+                index=idx,
+            )
+            for idx, call in enumerate(call_parts)
+        ]
+
+        transformed_content: Final = (
+            LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(non_call_parts)
+            if non_call_parts
+            else None
+        )
+
+        return ChatCompletionResponseMessage(
+            role="assistant",
+            content=cast(  # cast-ok: assistant content may be a block list; the TypedDict only types str
+                "str | None", transformed_content
+            ),
+            tool_calls=tool_calls,
+        )
 
     @staticmethod
     def _resolve_file_id(item: Mapping[str, object]) -> object:
