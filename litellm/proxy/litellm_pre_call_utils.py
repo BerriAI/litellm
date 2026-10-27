@@ -99,6 +99,8 @@ _CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names
     {"cookie", "proxy-authorization"}
 )
 _TRANSPORT_ONLY_CREDENTIAL_KEYS: Final = frozenset({"provider_specific_header", "headers", "api_key"})
+_REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_REQUEST_ENTRIES: Final = TypeAdapter(tuple[object, ...])
 
 # Matches any header of the form x-<something>-session-id (case-insensitive).
 # Excludes the two explicit litellm headers which are handled with higher priority.
@@ -288,6 +290,9 @@ _DESTINATION_ONLY_CALLBACK_VARS: Final[frozenset[str]] = frozenset({CAPTURE_MESS
 
 _CALLBACK_CREDENTIAL_KEYS: Final = frozenset(StandardCallbackDynamicParams.__annotations__) | frozenset(
     {TRUSTED_CALLBACK_VARS_FIELD}
+)
+_HEADERS_THAT_CANNOT_CHANGE_PROVIDER_AUTH: Final = frozenset(
+    {*(f"x-litellm-{key}" for key in StandardLoggingUserAPIKeyMetadata.__annotations__), *ANTHROPIC_API_HEADERS}
 )
 service_logger_obj: Final = ServiceLogging()  # used for tracking latency on OTEL
 # Bounded dedup for stale-alias warnings (FIFO eviction when over cap).
@@ -1451,6 +1456,44 @@ def clean_headers(
     return clean_headers
 
 
+def _request_fields(value: object) -> Mapping[str, object]:
+    try:
+        return _REQUEST_FIELDS.validate_python(value)
+    except PydanticValidationError:
+        return MappingProxyType({})
+
+
+def _request_entries(value: object) -> tuple[object, ...]:
+    if value is None:
+        return ()
+    try:
+        return _REQUEST_ENTRIES.validate_python(value)
+    except PydanticValidationError:
+        return (value,)
+
+
+def _carries_a_caller_header(headers: object) -> bool:
+    return any(name.lower() not in _HEADERS_THAT_CANNOT_CHANGE_PROVIDER_AUTH for name in _request_fields(headers))
+
+
+def _caller_credential_fields(data: Mapping[str, object]) -> tuple[str, ...]:
+    """Names of the request fields through which the caller can change how the provider authenticates the call:
+    ``api_key``, ``organization``, and ``headers``, ``extra_headers`` or a ``provider_specific_header`` entry's
+    ``extra_headers`` that carry any header besides the key and user details the proxy adds under
+    ``add_user_information_to_llm_headers`` and the ``anthropic-version`` and ``anthropic-beta`` headers."""
+    carried: Final = {
+        "api_key": "api_key" in data,
+        "extra_headers": _carries_a_caller_header(data.get("extra_headers")),
+        "headers": _carries_a_caller_header(data.get("headers")),
+        "organization": "organization" in data,
+        "provider_specific_header": any(
+            _carries_a_caller_header(_request_fields(entry).get("extra_headers"))
+            for entry in _request_entries(data.get("provider_specific_header"))
+        ),
+    }
+    return tuple(name for name, sent in sorted(carried.items()) if sent)
+
+
 def _is_credential_header(header: str) -> bool:
     """Whether `header` carries a caller credential rather than request context."""
     return header.lower().removeprefix("x-pass-") in _CREDENTIAL_HEADER_NAMES
@@ -2605,6 +2648,8 @@ async def add_litellm_data_to_request(
     data[_metadata_variable_name]["used_client_oauth_token"] = add_provider_specific_headers_to_request(
         data=data, headers=_headers
     )
+    caller_fields: Final = _caller_credential_fields(_REQUEST_FIELDS.validate_python(data))
+    data["proxy_server_request"]["caller_credential_fields"] = caller_fields  # rebind-ok: data is an out-param
 
     ## Cache Controls
     cache_control_header: Final = _headers.get("Cache-Control", None)
