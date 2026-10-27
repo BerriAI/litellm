@@ -743,3 +743,32 @@ def test_signoz_keyless_team_endpoint_is_ignored_so_the_operator_key_never_reach
     owned = next(e for e in routed.exporters if e.owner == "signoz")
     assert owned.endpoint == "https://ingest.us.signoz.cloud:443"
     assert owned.headers == "signoz-ingestion-key=OPERATOR"
+
+
+def test_mixpanel_dynamic_headers_and_endpoint_routing(monkeypatch, caplog):
+    expected_auth = "Basic " + base64.b64encode(b"team-token:").decode()
+    assert dynamic_otlp_headers("mixpanel", {"mixpanel_project_token": "team-token"}) == {
+        "Authorization": expected_auth
+    }
+    assert dynamic_otlp_headers("mixpanel", {}) is None
+
+    monkeypatch.setenv("MIXPANEL_REGION", "eu")
+    assert (
+        dynamic_otlp_endpoint("mixpanel", {"mixpanel_project_token": "team-token"})
+        == "https://ingestion-us.mixpanel.com/v1/ai/otel/traces"
+    )
+    assert (
+        dynamic_otlp_endpoint("mixpanel", {"mixpanel_project_token": "team-token", "mixpanel_region": "eu"})
+        == "https://ingestion-eu.mixpanel.com/v1/ai/otel/traces"
+    )
+    assert (
+        dynamic_otlp_endpoint("mixpanel", {"mixpanel_project_token": "team-token", "mixpanel_region": "IN"})
+        == "https://ingestion-in.mixpanel.com/v1/ai/otel/traces"
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        fallback = dynamic_otlp_endpoint(
+            "mixpanel", {"mixpanel_project_token": "team-token", "mixpanel_region": "ap-south"}
+        )
+    assert fallback == "https://ingestion-us.mixpanel.com/v1/ai/otel/traces"
+    assert "unknown mixpanel_region" in caplog.text

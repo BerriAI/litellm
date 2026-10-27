@@ -254,3 +254,47 @@ def test_baggage_processor_allowlist_can_be_widened():
     assert span.attributes.get("custom.key") == "v"
     # team_alias not in this config's allowlist -> not promoted
     assert LiteLLM.TEAM_ALIAS not in span.attributes
+
+
+def test_user_id_not_promoted_by_default_and_promoted_for_mixpanel(monkeypatch):
+    monkeypatch.setenv("MIXPANEL_PROJECT_TOKEN", "mp-token")
+    from litellm.integrations.otel.presets.mixpanel import mixpanel_preset
+
+    payload = _payload()
+    payload["end_user"] = "user_123"
+    data = LLMCallSpanData.from_standard_logging_payload(payload)
+
+    default_bag = promoted_baggage(data.identity, data.request_model, BAGGAGE_PROMOTED_KEYS)
+    assert "user.id" not in default_bag
+
+    mp_cfg = mixpanel_preset(config_overrides=OpenTelemetryV2Config(exporter="in_memory"))
+    engine, exporter = _engine_and_exporter(mp_cfg)
+    mp_bag = promoted_baggage(data.identity, data.request_model, tuple(mp_cfg.baggage_promoted_keys))
+    assert mp_bag["user.id"] == "user_123"
+
+    ctx = ctx_mod.set_request_baggage(mp_bag)
+    root = engine.start_span(SpanRole.PROXY_REQUEST, "POST /chat/completions", ctx)
+    root_ctx = ctx_mod.context_from_span(root, ctx)
+    engine.emit(SpanRole.LLM_CALL, data, parent_context=root_ctx)
+    engine.emit(SpanRole.GUARDRAIL, GuardrailSpanData("presidio", status="success"), root_ctx)
+    engine.emit(SpanRole.SERVICE, ServiceSpanData("redis", call_type="set"), root_ctx)
+    root.end()
+
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 4
+    for span in spans:
+        assert span.attributes.get("user.id") == "user_123"
+
+
+def test_user_id_precedence_and_key_owner_exclusion():
+    payload = _payload()
+    payload["end_user"] = "from-end-user"
+    payload["metadata"]["user_api_key_user_id"] = "from-key-owner"
+    payload["metadata"]["requester_metadata"] = {"user.id": "from-explicit-user-dot-id"}
+    data = LLMCallSpanData.from_standard_logging_payload(payload)
+    assert data.identity.user_id == "from-explicit-user-dot-id"
+
+    key_owner_only_payload = _payload()
+    key_owner_only_payload["metadata"]["user_api_key_user_id"] = "from-key-owner"
+    key_owner_only_data = LLMCallSpanData.from_standard_logging_payload(key_owner_only_payload)
+    assert key_owner_only_data.identity.user_id is None

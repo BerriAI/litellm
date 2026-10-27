@@ -14,6 +14,8 @@ from litellm.types.utils import CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_V
 
 _NEWRELIC_CALLBACK: Final = "newrelic"
 _NEWRELIC_VAR_PREFIX: Final = "newrelic_"
+_MIXPANEL_CALLBACK: Final = "mixpanel"
+_MIXPANEL_VAR_PREFIX: Final = "mixpanel_"
 _LANGFUSE_OTEL_CALLBACK: Final = "langfuse_otel"
 _LANGFUSE_SPAN_SCOPE_VAR: Final = "langfuse_span_scope"
 _ARIZE_CALLBACK: Final = "arize"
@@ -61,6 +63,8 @@ def callback_config_error(
     )
     if destination_setting_error is not None:
         return destination_setting_error
+    if callback_name == _MIXPANEL_CALLBACK:
+        return _mixpanel_config_error(callback_vars)
     if callback_name != _NEWRELIC_CALLBACK:
         return None
     return _newrelic_config_error(callback_vars)
@@ -144,8 +148,10 @@ _VAR_FAMILIES: Final[Mapping[str, str]] = MappingProxyType(
         "humanloop_": "Humanloop",
         "langfuse_": "Langfuse",
         "langsmith_": "LangSmith",
+        "mixpanel_": "Mixpanel",
         "newrelic_": "New Relic",
         "posthog_": "PostHog",
+        "signoz_": "SigNoz",
         "wandb_": "Weights & Biases",
         "weave_": "Weights & Biases",
     }
@@ -444,4 +450,27 @@ def _newrelic_config_error(callback_vars: Mapping[str, str]) -> str | None:
     api_key: Final = callback_vars.get("newrelic_api_key")
     if region is not None and (not api_key or api_key == "None"):
         return "newrelic_region requires newrelic_api_key; the region rides the team's own key."
+    return None
+
+
+def _mixpanel_config_error(callback_vars: Mapping[str, str]) -> str | None:
+    if not any(key.startswith(_MIXPANEL_VAR_PREFIX) for key in callback_vars):
+        return None
+
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.integrations.otel.presets.mixpanel import MIXPANEL_OTLP_ENDPOINT_BY_REGION
+
+    if not is_otel_v2_enabled():
+        return "Per-team Mixpanel routing requires the proxy to run with LITELLM_OTEL_V2=true."
+
+    region: Final = callback_vars.get("mixpanel_region")
+    if region is not None and region.strip().lower() not in MIXPANEL_OTLP_ENDPOINT_BY_REGION:
+        return (
+            f"Unknown mixpanel_region {region!r}. "
+            f"Supported regions: {', '.join(sorted(MIXPANEL_OTLP_ENDPOINT_BY_REGION))}."
+        )
+
+    token: Final = callback_vars.get("mixpanel_project_token")
+    if region is not None and (not token or not token.strip() or token == "None"):
+        return "mixpanel_region requires mixpanel_project_token; the region rides the team's own project token."
     return None

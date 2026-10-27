@@ -5697,6 +5697,19 @@ def build_custom_logger_compatible_class(
         _in_memory_loggers.append(_signoz_logger)
         return _signoz_logger
 
+    elif logging_integration == "mixpanel":
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.integrations.otel.presets.mixpanel import MIXPANEL_PROJECT_TOKEN_ENV
+
+        if not is_otel_v2_enabled():
+            raise ValueError("The 'mixpanel' callback requires OpenTelemetry v2 (set LITELLM_OTEL_V2=true)")
+
+        _mixpanel_v2: Final = _maybe_construct_otel_v2("mixpanel", _in_memory_loggers)
+        if _mixpanel_v2 is not None:
+            return _mixpanel_v2
+
+        raise ValueError(f"{MIXPANEL_PROJECT_TOKEN_ENV} not found in environment variables")
+
     elif logging_integration == "mlflow":
         for callback in _in_memory_loggers:
             if isinstance(callback, MlflowLogger):
@@ -6303,6 +6316,12 @@ def get_custom_logger_compatible_class(
                 if isinstance(callback, OpenTelemetryV2) and callback.callback_name == "newrelic":
                     return callback
                 if isinstance(callback, NewRelicLogger):
+                    return callback
+        elif logging_integration == "mixpanel":
+            from litellm.integrations.otel.logger import OpenTelemetryV2
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, OpenTelemetryV2) and callback.callback_name == "mixpanel":
                     return callback
         return None
 

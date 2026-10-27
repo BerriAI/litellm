@@ -147,7 +147,7 @@ def _otlp_traces_endpoint(endpoint: str | None) -> str | None:
         return endpoint
     endpoint = endpoint.rstrip("/")
     # Splunk Observability uses ``/v2/trace/otlp``; never rewrite it.
-    if endpoint.endswith("/v1/traces") or "/v2/trace/otlp" in endpoint:
+    if endpoint.endswith(("/v1/traces", "/v1/ai/otel/traces")) or "/v2/trace/otlp" in endpoint:
         return endpoint
     for other_signal in ("/v1/logs", "/v1/metrics"):
         if endpoint.endswith(other_signal):

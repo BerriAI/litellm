@@ -17,6 +17,7 @@ from litellm.integrations.otel import GenAIOperation
 from litellm.integrations.otel.mappers import (
     LangfuseMapper,
     LangtraceMapper,
+    MixpanelMapper,
     OpenInferenceMapper,
     WeaveMapper,
     resolve_mappers,
@@ -802,3 +803,30 @@ def test_resolve_mappers_composition_layers_vocabularies():
 def test_resolve_mappers_rejects_unknown_name():
     with pytest.raises(ValueError, match="unknown mapper name 'nope'"):
         resolve_mappers(["genai", "nope"])
+
+
+def test_mixpanel_mapper_stamps_user_id_and_omits_when_absent():
+    from litellm.integrations.otel.model.payloads import MCPToolCallSpanData
+
+    with_end_user = _llm_call(identity=RequestIdentity(call_id="c1", end_user="user_123"))
+    assert MixpanelMapper().map(with_end_user) == {"user.id": "user_123"}
+
+    with_trace_user = _llm_call(trace=TraceControls(user_id="trace_user_456"))
+    assert MixpanelMapper().map(with_trace_user) == {"user.id": "trace_user_456"}
+
+    mcp_span = MCPToolCallSpanData(
+        operation=GenAIOperation.EXECUTE_TOOL,
+        method="tools/call",
+        tool_name="search",
+        server_name="srv",
+        server_address=None,
+        server_port=None,
+        session_id=None,
+        arguments_json=None,
+        result_json=None,
+        error=None,
+        response_cost=None,
+        identity=RequestIdentity(call_id="c2", end_user="mcp_user"),
+    )
+    assert MixpanelMapper().map(mcp_span) == {"user.id": "mcp_user"}
+    assert MixpanelMapper().map(_llm_call()) == {}

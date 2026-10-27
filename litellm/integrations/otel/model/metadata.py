@@ -62,6 +62,14 @@ _AUTH_ATTRIBUTE: Final = TypeAdapter(object)
 
 REQUESTER_METADATA_KEY: Final = "requester_metadata"
 REQUESTER_METADATA_PATH: Final = f"{REQUESTER_METADATA_KEY}."
+_USER_ID_METADATA_KEYS: Final[tuple[str, ...]] = (
+    "requester_metadata.user.id",
+    "user.id",
+    "requester_metadata.user_id",
+    "user_id",
+    "requester_metadata.trace_user_id",
+    "trace_user_id",
+)
 
 
 def allowlisted_metadata(metadata: Mapping[str, str], metadata_keys: tuple[str, ...]) -> Mapping[str, str]:
@@ -92,6 +100,14 @@ class RequestIdentity:
     request_route: str | None = None
     metadata: Mapping[str, str] = field(default_factory=dict)
 
+    @property
+    def user_id(self) -> str | None:
+        return (
+            next((value for key in _USER_ID_METADATA_KEYS if (value := self.metadata.get(key))), None)
+            or self.end_user
+            or self.metadata.get("user_api_key_end_user_id")
+        )
+
     @classmethod
     def from_payload(cls, payload: StandardLoggingPayload) -> RequestIdentity:
         """Parse caller identity out of a closed request's payload metadata.
@@ -101,6 +117,8 @@ class RequestIdentity:
         model, not just the user-facing one.
         """
         raw_meta: Final = cast(Mapping[str, object], payload.get("metadata") or {})
+        payload_view: Final = as_str_mapping(payload)
+        params: Final = as_str_mapping(payload_view.get("model_parameters")) if payload_view is not None else None
         metadata: Final = MappingProxyType(dict(flatten_metadata(raw_meta)))
         return cls(
             call_id=as_str(payload.get("litellm_call_id")) or as_str(payload.get("id")),
@@ -111,7 +129,11 @@ class RequestIdentity:
             team_alias=as_str(raw_meta.get("user_api_key_team_alias")) or as_str(raw_meta.get("team_alias")),
             team_metadata=_team_metadata_dict(raw_meta.get("user_api_key_team_metadata")),
             key_hash=as_str(raw_meta.get("user_api_key_hash")),
-            end_user=as_str(payload.get("end_user")) or as_str(raw_meta.get("user_api_key_end_user_id")),
+            end_user=(
+                as_str(payload.get("end_user"))
+                or as_str(raw_meta.get("user_api_key_end_user_id"))
+                or (as_str(params.get("user")) if params is not None else None)
+            ),
             provider_model=resolve_provider_model(payload),
             request_route=as_str(raw_meta.get("user_api_key_request_route")),
             metadata=metadata,

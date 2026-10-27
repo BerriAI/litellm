@@ -13642,3 +13642,70 @@ def test_native_messages_body_carries_the_reported_list_cost_into_the_priced_res
     assert isinstance(priced, ModelResponse)
     headers = priced._hidden_params.get("additional_headers") or {}
     assert headers.get("llm_provider-x-litellm-response-cost") == expected_header
+
+
+def test_mixpanel_dispatch_constructs_otel_v2_when_flag_on(monkeypatch):
+    import base64
+
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import ExporterOwner, is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("MIXPANEL_PROJECT_TOKEN", "mp-token")
+    is_otel_v2_enabled.cache_clear()
+    try:
+        v2_logger = logging_module._init_custom_logger_compatible_class(
+            logging_integration="mixpanel",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert isinstance(v2_logger, OpenTelemetryV2)
+        assert v2_logger.callback_name == "mixpanel"
+        spec = next(e for e in v2_logger.config.exporters if e.owner == ExporterOwner.MIXPANEL)
+        assert spec.endpoint == "https://ingestion-us.mixpanel.com/v1/ai/otel/traces"
+        expected_basic = base64.b64encode(b"mp-token:").decode()
+        assert spec.headers == f"Authorization=Basic {expected_basic}"
+        assert logging_module.get_custom_logger_compatible_class("mixpanel") is v2_logger
+    finally:
+        logging_module._in_memory_loggers.clear()
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()
+
+
+def test_mixpanel_dispatch_requires_otel_v2_and_project_token(monkeypatch):
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    monkeypatch.setenv("MIXPANEL_PROJECT_TOKEN", "mp-token")
+    is_otel_v2_enabled.cache_clear()
+    try:
+        assert (
+            logging_module._init_custom_logger_compatible_class(
+                logging_integration="mixpanel",
+                internal_usage_cache=None,
+                llm_router=None,
+                custom_logger_init_args={},
+            )
+            is None
+        )
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        monkeypatch.delenv("MIXPANEL_PROJECT_TOKEN", raising=False)
+        is_otel_v2_enabled.cache_clear()
+        assert (
+            logging_module._init_custom_logger_compatible_class(
+                logging_integration="mixpanel",
+                internal_usage_cache=None,
+                llm_router=None,
+                custom_logger_init_args={},
+            )
+            is None
+        )
+    finally:
+        logging_module._in_memory_loggers.clear()
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()

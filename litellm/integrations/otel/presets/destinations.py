@@ -80,6 +80,13 @@ def _newrelic_destination(params: StandardCallbackDynamicParams) -> "_Destinatio
     return (endpoint, None) if endpoint else None
 
 
+def _mixpanel_destination(params: StandardCallbackDynamicParams) -> "_Destination | None":
+    from litellm.integrations.otel.presets.mixpanel import mixpanel_dynamic_endpoint
+
+    endpoint: Final = mixpanel_dynamic_endpoint(params)
+    return (endpoint, None) if endpoint else None
+
+
 #: Callback name -> destination resolver. A backend is destination-capable exactly
 #: when it appears here AND in ``DYNAMIC_HEADERS_BY_CALLBACK``: without a header
 #: builder the destination would carry no tenant credentials, and the exporter
@@ -91,6 +98,7 @@ _DESTINATION_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynamicPa
             "arize": _arize_destination,
             "weave_otel": _weave_destination,
             "newrelic": _newrelic_destination,
+            "mixpanel": _mixpanel_destination,
         }
     )
 )
@@ -105,6 +113,7 @@ _REQUIRED_HEADERS_BY_CALLBACK: Final[Mapping[str, frozenset[str]]] = MappingProx
         "arize": frozenset({"arize-space-id", "api_key"}),
         "weave_otel": frozenset({"Authorization", "project_id"}),
         "newrelic": frozenset({"api-key"}),
+        "mixpanel": frozenset({"Authorization"}),
     }
 )
 
