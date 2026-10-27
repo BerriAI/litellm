@@ -83,7 +83,7 @@ def resolve_openai_api_base(api_base: str | None) -> str:
     )
 
 
-_resolve_openai_api_base = resolve_openai_api_base
+_resolve_openai_api_base: Final = resolve_openai_api_base
 
 
 def _mantle_responses_series_name(model: str) -> str | None:

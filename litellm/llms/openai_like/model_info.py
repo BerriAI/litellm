@@ -134,7 +134,7 @@ class CustomOpenAIModelInfo(BaseLLMModelInfo):
         self,
         headers: dict[str, str],  # mutable-ok: mirrors override contract
         model: str,
-        messages: list[AllMessageValues],
+        messages: list[AllMessageValues],  # mutable-ok: mirrors override contract
         optional_params: dict[str, object],  # mutable-ok: mirrors override contract
         litellm_params: dict[str, object],  # mutable-ok: mirrors override contract
         api_key: str | None = None,
@@ -146,7 +146,9 @@ class CustomOpenAIModelInfo(BaseLLMModelInfo):
     def get_base_model(model: str) -> str | None:
         return model
 
-    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
+    def get_models(
+        self, api_key: str | None = None, api_base: str | None = None
+    ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override
         resolved_api_base: Final = self.get_api_base(api_base)
         if resolved_api_base is None:
             raise ValueError("custom_openai needs an api_base to list models from")
