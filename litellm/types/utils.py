@@ -477,6 +477,15 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "extraction",
             "ocr",
             "realtime",
+            # Modes the cost map also uses: pricing merges validate whole rows, so a row whose mode
+            # is missing here fails validation and takes its deployment down with it
+            "rerank",
+            "moderation",
+            "image_edit",
+            "video_generation",
+            "search",
+            "vector_store",
+            "guardrail",
         ]
     ]
     supported_endpoints: list[str] | None

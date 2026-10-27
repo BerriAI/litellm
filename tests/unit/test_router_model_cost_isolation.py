@@ -948,6 +948,44 @@ def test_bedrock_deployment_inherits_invoked_profile_around_custom_prices(
     assert litellm.model_cost[profile] == profile_prices
 
 
+@pytest.mark.parametrize("mode", ("rerank", "moderation", "image_edit", "video_generation", "search"))
+def test_bedrock_profile_deployment_with_a_non_chat_cost_map_mode_is_registered(
+    monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    """A base_model row whose mode the pricing merge did not accept used to drop the whole deployment"""
+    backend_model: Final = "cohere.rerank-mode-test"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            backend_model: {"litellm_provider": "bedrock", "mode": mode, "input_cost_per_query": 0.002},
+        },
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "rerank",
+                "litellm_params": {
+                    "model": f"bedrock/arn:aws:bedrock:eu-central-1::foundation-model/{backend_model}",
+                    "model_id": "arn:aws:bedrock:eu-central-1:123456789012:application-inference-profile/abc123",
+                    "aws_region_name": "eu-central-1",
+                },
+                "model_info": {
+                    "id": "rerank-profile-deployment",
+                    "base_model": backend_model,
+                    "input_cost_per_query": 0.00175,
+                },
+            }
+        ]
+    )
+
+    assert [deployment["model_info"]["id"] for deployment in router.get_model_list() or []] == [
+        "rerank-profile-deployment"
+    ]
+    assert litellm.model_cost["rerank-profile-deployment"]["input_cost_per_query"] == 0.00175
+
+
 @pytest.mark.parametrize("catalog_entry", (None, {"litellm_provider": 1, "mode": "chat"}))
 @pytest.mark.parametrize("known_model", (False, True))
 @pytest.mark.parametrize("explicit_base", (False, True))
