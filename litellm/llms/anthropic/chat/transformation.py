@@ -2920,7 +2920,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     def _build_provider_specific_fields(
         self,
-        completion_response: dict[str, object],
+        completion_response: Mapping[str, object],
         citations: Sequence[object] | None,
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None,
         web_search_results: Sequence[object] | None,
@@ -2952,7 +2952,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             provider_specific_fields["tool_results"] = tool_results
 
         container: Final = completion_response.get("container")
-        container_fields: Final[dict[str, object] | None] = container if isinstance(container, dict) else None
+        container_fields: Final[Mapping[str, object] | None] = container if isinstance(container, dict) else None
         if tool_results is not None and any(result.get("type") != "tool_search_tool_result" for result in tool_results):
             raw_container_id: Final = container_fields.get("id") if container_fields is not None else None
             container_id: Final = raw_container_id if isinstance(raw_container_id, str) else None
