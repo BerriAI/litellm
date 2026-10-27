@@ -7,7 +7,7 @@ import pytest
 import litellm
 import litellm.main as litellm_main
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
-from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.utils import (
     is_explicitly_disabled_factory,

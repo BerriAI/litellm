@@ -1605,6 +1605,7 @@ export const modelInfoCall = async (
   accessGroup?: string,
   wildcardOnly?: boolean,
   blocked?: boolean,
+  options: { useStoredParams?: boolean } = {},
 ) => {
   /**
    * Get all models on proxy
@@ -1623,6 +1624,9 @@ export const modelInfoCall = async (
     }
     if (modelId && modelId.trim()) {
       params.append("modelId", modelId.trim());
+    }
+    if (options.useStoredParams) {
+      params.append("use_stored_params", "true");
     }
     if (teamId && teamId.trim()) {
       params.append("teamId", teamId.trim());

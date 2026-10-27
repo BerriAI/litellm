@@ -4,7 +4,7 @@ from collections.abc import Collection
 from typing import ClassVar, Final
 
 import litellm
-from litellm.llms.openai.chat.gpt_5_transformation import (
+from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     OpenAIGPT5Config,
     is_gpt_reasoning_series_name,
 )
