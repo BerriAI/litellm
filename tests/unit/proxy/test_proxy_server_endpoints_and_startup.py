@@ -3151,6 +3151,62 @@ async def test_delete_deployment_type_mismatch():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("config_shape", "expected_ids"),
+    [
+        ("populated", {"config-1", "plugin-1"}),
+        ("empty", {"plugin-1"}),
+        ("null", {"config-1", "plugin-1", "unowned-1", "empty-owner-1", "null-owner-1"}),
+        ("missing", {"config-1", "plugin-1", "unowned-1", "empty-owner-1", "null-owner-1"}),
+    ],
+)
+async def test_delete_deployment_preserves_external_owners_without_preserving_db_orphans(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, config_shape: str, expected_ids: set[str]
+) -> None:
+    from litellm import Router
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.types.router import DeploymentTypedDict
+
+    def deployment(model_id: str, info: dict[str, str | bool | None]) -> DeploymentTypedDict:
+        return {
+            "model_name": model_id,
+            "litellm_params": {"model": "openai/runtime-test", "api_key": "sk-fake"},
+            "model_info": {"id": model_id, **info},
+        }
+
+    config_model: Final = deployment("config-1", {})
+    router: Final = Router(
+        model_list=[
+            config_model,
+            deployment("plugin-1", {"managed_by": "plugin"}),
+            deployment("unowned-1", {}),
+            deployment("empty-owner-1", {"managed_by": ""}),
+            deployment("null-owner-1", {"managed_by": None}),
+            deployment("db-orphan-1", {"db_model": True}),
+            deployment("marked-db-orphan-1", {"db_model": True, "managed_by": "plugin"}),
+        ]
+    )
+    config: Final = {
+        "populated": {"model_list": [config_model]},
+        "empty": {"model_list": []},
+        "null": {"model_list": None},
+        "missing": {},
+    }[config_shape]
+    config_path: Final = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config))
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.setattr(proxy_server_module, "llm_router", router)
+    monkeypatch.setattr(proxy_server_module, "user_config_file_path", str(config_path))
+    monkeypatch.setattr(proxy_server_module, "prisma_client", None)
+    monkeypatch.setattr(proxy_server_module, "store_model_in_db", True)
+
+    desired_ids: Final = await ProxyConfig()._delete_deployment(db_models=[])
+
+    assert set(router.get_model_ids()) == expected_ids
+    assert desired_ids == frozenset(expected_ids)
+
+
+@pytest.mark.asyncio
 async def test_get_config_from_file(tmp_path, monkeypatch):
     """
     Test the _get_config_from_file method of ProxyConfig class.
