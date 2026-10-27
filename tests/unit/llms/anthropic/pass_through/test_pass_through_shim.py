@@ -43,7 +43,18 @@ def test_old_transformation_import_loads_only_its_new_counterpart(monkeypatch: p
     _forget_old_package(monkeypatch)
     monkeypatch.delitem(sys.modules, f"{NEW_PACKAGE}.native.streaming_iterator", raising=False)
     with pytest.warns(DeprecationWarning, match=NEW_PACKAGE):
-        old_transformation = importlib.import_module(f"{OLD_PACKAGE}.messages.transformation")
+        old_transformation: Final = importlib.import_module(f"{OLD_PACKAGE}.messages.transformation")
 
     assert old_transformation is sys.modules[f"{NEW_PACKAGE}.native.transformation"]
     assert f"{NEW_PACKAGE}.native.streaming_iterator" not in sys.modules, "shim imported the streaming iterator"
+
+
+def test_old_subpackage_import_keeps_the_new_package_path_importable(monkeypatch: pytest.MonkeyPatch) -> None:
+    _forget_old_package(monkeypatch)
+    monkeypatch.delitem(sys.modules, f"{NEW_PACKAGE}.native.mcp_handler", raising=False)
+    with pytest.warns(DeprecationWarning, match=NEW_PACKAGE):
+        native: Final = importlib.import_module(f"{OLD_PACKAGE}.messages")
+
+    assert [path.rsplit("/", 2)[-2:] for path in native.__path__] == [["messages", "native"]]  # pyright: ignore[reportAny]  # module attributes are untyped
+    assert native.__spec__ is not None and native.__spec__.name == f"{NEW_PACKAGE}.native"
+    assert importlib.import_module(f"{NEW_PACKAGE}.native.mcp_handler").__name__ == f"{NEW_PACKAGE}.native.mcp_handler"

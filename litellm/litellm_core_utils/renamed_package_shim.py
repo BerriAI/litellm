@@ -46,7 +46,10 @@ class _RenamedPackageFinder(MetaPathFinder):
         if new_name is None:
             return None
         module: Final = importlib.import_module(new_name)
-        return spec_from_loader(fullname, _AliasLoader(module), is_package=hasattr(module, "__path__"))
+        spec: Final = spec_from_loader(fullname, _AliasLoader(module), is_package=hasattr(module, "__path__"))
+        if spec is not None and spec.submodule_search_locations is not None:
+            spec.submodule_search_locations = list(module.__path__)  # pyright: ignore[reportAny]  # module attributes are untyped
+        return spec
 
 
 def alias_renamed_package(
