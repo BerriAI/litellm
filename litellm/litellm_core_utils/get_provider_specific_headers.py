@@ -12,9 +12,17 @@ _PROVIDER_HEADERS: Final[TypeAdapter[ProviderSpecificHeader | Sequence[ProviderS
 
 class ProviderSpecificHeaderUtils:
     @staticmethod
-    def forwarded_authorization(provider_specific_header: object, custom_llm_provider: str | None) -> str | None:
-        headers: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+    def validated_provider_specific_headers(
+        provider_specific_header: object, custom_llm_provider: str | None
+    ) -> Mapping[str, str]:
+        return ProviderSpecificHeaderUtils.get_provider_specific_headers(
             _PROVIDER_HEADERS.validate_python(provider_specific_header), custom_llm_provider
+        )
+
+    @staticmethod
+    def forwarded_authorization(provider_specific_header: object, custom_llm_provider: str | None) -> str | None:
+        headers: Final = ProviderSpecificHeaderUtils.validated_provider_specific_headers(
+            provider_specific_header, custom_llm_provider
         )
         return next((value for key, value in headers.items() if key.lower() == "authorization"), None)
 

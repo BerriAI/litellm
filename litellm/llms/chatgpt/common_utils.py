@@ -6,7 +6,7 @@ import base64
 import json
 import os
 import platform
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias
@@ -18,14 +18,10 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.utils import ProviderSpecificHeader
 
 if TYPE_CHECKING:
     from litellm.types.router import GenericLiteLLMParams
 
-_SCOPED_HEADERS: Final[TypeAdapter[ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None]] = TypeAdapter(
-    ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None
-)
 _STRING_HEADERS: Final = TypeAdapter(Mapping[str, str])
 _PARAMS: Final = TypeAdapter(Mapping[str, object])
 
@@ -355,8 +351,8 @@ def get_chatgpt_request_credential(
     normalized: Final = _normalize_litellm_params(params)
     scoped: Final = normalized.get("provider_specific_header")
     extra: Final = normalized.get("extra_headers")
-    headers: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
-        provider_specific_header=_SCOPED_HEADERS.validate_python(scoped), custom_llm_provider="chatgpt"
+    headers: Final = ProviderSpecificHeaderUtils.validated_provider_specific_headers(
+        provider_specific_header=scoped, custom_llm_provider="chatgpt"
     )
     return get_chatgpt_client_credential(headers) or get_chatgpt_client_credential(
         _STRING_HEADERS.validate_python(extra) if extra is not None else MappingProxyType({})
