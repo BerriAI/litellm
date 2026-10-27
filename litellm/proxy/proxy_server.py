@@ -3925,11 +3925,8 @@ async def _prepare_spend_counter_increment(
     2. If not found, reseed from the DB via `SpendCounterReseed.coalesced`.
        Falls back to the cached object's `.spend` via user_api_key_cache
        only if prisma is unavailable, since that value can lag the flusher.
-    3. Seed counter via async_increment_cache (not async_set_cache) to avoid a
-       check-then-set race: if two pods cold-start simultaneously, both may see
-       the counter as absent and seed it. Using increment means the worst case
-       is over-counting (conservative, blocks slightly early) rather than
-       under-counting (would allow overspend).
+    3. Seed counter via SET NX under per-counter lock (matching SpendCounterReseed.coalesced)
+       to avoid double-counting base_spend when concurrent requests cold-start the counter.
     4. Increment is returned for the caller to apply via pipeline
     """
     with service_target(SPEND_COUNTERS_TARGET):
@@ -4032,9 +4029,33 @@ async def ensure_spend_counter_initialized(
         )
         if db_spend is None:
             # DB unavailable - fall back to in-process cache (may be stale).
-            base_spend: Final = await _get_source_cache_base_spend(source_cache_key=source_cache_key)
-            if base_spend > 0:
-                await increment_spend_counter_cache(counter_key=counter_key, increment=base_spend)
+            async with await SpendCounterReseed._get_lock(counter_key):  # pyright: ignore[reportPrivateUsage]  # per-counter lock shared with SpendCounterReseed
+                if await _is_spend_counter_cache_warm(counter_key=counter_key):
+                    return
+                base_spend: Final = await _get_source_cache_base_spend(source_cache_key=source_cache_key)
+                if base_spend > 0:
+                    if spend_counter_cache.redis_cache is not None:
+                        seeded: Final = await spend_counter_cache.redis_cache.async_set_cache(  # pyright: ignore[reportUnknownMemberType]  # async_set_cache is partially unknown
+                            key=counter_key,
+                            value=base_spend,
+                            nx=True,
+                        )
+                        cached: Final = (
+                            None if seeded else await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)  # pyright: ignore[reportUnknownMemberType]  # async_get_cache is partially unknown
+                        )
+                        current_value: Final = float(cached) if cached is not None else float(base_spend)
+                        spend_counter_cache.in_memory_cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # set_cache is partially unknown
+                            key=counter_key,
+                            value=current_value,
+                        )
+                        record_spend_counter_value(counter_key, current_value)
+                    else:
+                        cached_spend: Final = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # get_cache is partially unknown
+                        seeded_spend: Final = (
+                            max(base_spend, float(cached_spend)) if cached_spend is not None else base_spend  # pyright: ignore[reportUnknownArgumentType]  # cached_spend is partially unknown
+                        )
+                        spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=seeded_spend)  # pyright: ignore[reportUnknownMemberType]  # set_cache is partially unknown
+                        record_spend_counter_value(counter_key, seeded_spend)
 
 
 _ensure_spend_counter_initialized: Final = ensure_spend_counter_initialized
