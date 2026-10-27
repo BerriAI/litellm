@@ -3672,6 +3672,73 @@ def test_get_extra_header_tags():
                 delattr(litellm, "extra_spend_tag_headers")
 
 
+def test_get_extra_header_tags_matches_title_case_config_with_lowercase_request_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "extra_spend_tag_headers", ["X-Org-Id"], raising=False)
+
+    assert StandardLoggingPayloadSetup._get_extra_header_tags(
+        proxy_server_request={"headers": {"x-org-id": "org_1"}}
+    ) == ["X-Org-Id: org_1"]
+
+
+def test_get_extra_header_tags_matches_mixed_case_request_header_with_lowercase_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "extra_spend_tag_headers", ["x-customer-id"], raising=False)
+
+    assert StandardLoggingPayloadSetup._get_extra_header_tags(
+        proxy_server_request={"headers": {"X-Customer-Id": "v"}}
+    ) == ["x-customer-id: v"]
+
+
+def test_get_extra_header_tags_keeps_lowercase_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "extra_spend_tag_headers", ["x-customer-id"], raising=False)
+
+    assert StandardLoggingPayloadSetup._get_extra_header_tags(
+        proxy_server_request={"headers": {"x-customer-id": "v"}}
+    ) == ["x-customer-id: v"]
+
+
+def test_get_extra_header_tags_returns_none_for_absent_or_empty_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "extra_spend_tag_headers", ["x-org-id"], raising=False)
+
+    assert StandardLoggingPayloadSetup._get_extra_header_tags(proxy_server_request={"headers": {}}) is None
+    assert StandardLoggingPayloadSetup._get_extra_header_tags(
+        proxy_server_request={"headers": {"x-org-id": ""}}
+    ) is None
+
+
+def test_get_extra_header_tags_preserves_configured_header_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "extra_spend_tag_headers", ["x-second", "x-first"], raising=False)
+
+    assert StandardLoggingPayloadSetup._get_extra_header_tags(
+        proxy_server_request={"headers": {"x-first": "1", "x-second": "2"}}
+    ) == ["x-second: 2", "x-first: 1"]
+
+
+def test_get_request_tags_includes_extra_header_tag_with_user_agent_tags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "extra_spend_tag_headers", ["X-Org-Id"], raising=False)
+
+    assert StandardLoggingPayloadSetup.get_request_tags(
+        litellm_params={},
+        proxy_server_request={
+            "headers": {
+                "user-agent": "litellm/1.0",
+                "x-org-id": "org_1",
+            }
+        },
+    ) == ["User-Agent: litellm", "User-Agent: litellm/1.0", "X-Org-Id: org_1"]
+
+
 def test_response_cost_calculator_with_response_cost_in_hidden_params(logging_obj):
     from litellm import Router
 
