@@ -13,7 +13,7 @@ import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.anthropic.count_tokens import handler as count_handler
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import DEFAULT_ANTHROPIC_API_VERSION
+from litellm.llms.anthropic.pass_through.messages.transformation import DEFAULT_ANTHROPIC_API_VERSION
 from litellm.llms.anthropic.prompt_cache_prediction import (
     CountedPromptCachePlan,
     NativePredictionTarget,
@@ -22,6 +22,7 @@ from litellm.llms.anthropic.prompt_cache_prediction import (
     cache_scope,
     count_cache_plan,
     count_prompt_tokens,
+    lookup,
     parse_cache_plan,
     parse_observed_cache,
     parse_prompt,
@@ -32,7 +33,7 @@ from litellm.llms.anthropic.prompt_cache_prediction import (
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.models.credentials import CredentialItem
 from litellm.proxy import proxy_server
-from litellm.proxy.hooks.prompt_cache_prediction import PromptCacheObserver, lookup
+from litellm.proxy.hooks.prompt_cache_prediction import PromptCacheObserver
 from litellm.proxy.management_endpoints.prompt_cache_prediction import predict_arm
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
@@ -115,7 +116,16 @@ def test_prediction_header_eligibility(headers: Mapping[str, str], supported: bo
 
 
 @pytest.mark.asyncio
-async def test_provider_count_uses_same_version_and_preserves_native_input(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "api_base, count_url",
+    [
+        (None, "https://api.anthropic.com/v1/messages/count_tokens"),
+        ("https://gateway.example/v1/messages", "https://gateway.example/v1/messages/count_tokens"),
+    ],
+)
+async def test_provider_count_uses_same_version_and_preserves_native_input(
+    monkeypatch: pytest.MonkeyPatch, api_base: str | None, count_url: str
+) -> None:
     body: Final = _body()
     requests: Final[list[httpx.Request]] = []
 
@@ -128,12 +138,12 @@ async def test_provider_count_uses_same_version_and_preserves_native_input(monke
     client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
     monkeypatch.setattr(count_handler, "get_async_httpx_client", lambda **kwargs: client)
     try:
-        assert await count_prompt_tokens(_MODEL, _KEY, body) == 311
+        assert await count_prompt_tokens(_MODEL, _KEY, body, api_base=api_base) == 311
     finally:
         await client.client.aclose()
     assert len(requests) == 1
     assert requests[0].headers["anthropic-version"] == DEFAULT_ANTHROPIC_API_VERSION
-    assert requests[0].url == "https://api.anthropic.com/v1/messages/count_tokens"
+    assert requests[0].url == count_url
     assert json.loads(requests[0].content) == body
 
 

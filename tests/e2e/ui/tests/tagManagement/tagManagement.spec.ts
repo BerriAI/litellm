@@ -22,11 +22,10 @@ test.describe("Tag management", () => {
       async () => {
         await navigateToPage(page, DashboardPage.TagManagement);
         await page.getByRole("button", { name: "+ Create New Tag" }).click();
-        await expect(
-          page.getByRole("dialog", { name: "Create New Tag" }),
-        ).toBeVisible();
-        await page.getByLabel("Tag Name").fill(tagName);
-        await page.getByLabel("Description").fill(description);
+        const createDialog = page.getByRole("dialog", { name: "Create New Tag" });
+        await expect(createDialog).toBeVisible();
+        await createDialog.getByLabel("Tag Name").fill(tagName);
+        await createDialog.getByLabel("Description").fill(description);
         await page.getByRole("button", { name: "Create Tag" }).click();
 
         await expect

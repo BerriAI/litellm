@@ -51,8 +51,8 @@ class FakeHTTPClient:
         presign: Sequence[httpx.Response | Exception] | None = None,
         put: Sequence[httpx.Response | Exception] | None = None,
     ) -> None:
-        self.presign = list(presign) if presign else [_presigned()]  # mutable-ok: results are consumed by popping
-        self.put_results = list(put) if put else [_accepted()]  # mutable-ok: results are consumed by popping
+        self.presign = list(presign) if presign else [_presigned()]
+        self.put_results = list(put) if put else [_accepted()]
         self.presign_calls: list[dict] = []
         self.put_calls: list[dict] = []
 

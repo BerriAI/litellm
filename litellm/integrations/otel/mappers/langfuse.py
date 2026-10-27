@@ -12,8 +12,10 @@ the JSON-serialized payloads. ``trace_attributes`` maps the caller's trace contr
 
 import json
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Final
 
+from litellm.integrations.langfuse.langfuse_otel_attributes import serialize_langfuse_datetime
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
     collect,
@@ -45,6 +47,11 @@ class LangfuseMapper:
         "langfuse.observation.id": lambda d: d.identity.call_id or None,
         "langfuse.trace.metadata.team_id": lambda d: d.identity.team_id or None,
         "langfuse.trace.metadata.team_alias": lambda d: d.identity.team_alias or None,
+        "langfuse.observation.completion_start_time": lambda d: (
+            serialize_langfuse_datetime(datetime.fromtimestamp(d.completion_start_seconds, tz=timezone.utc))
+            if d.completion_start_seconds is not None
+            else None
+        ),
     }
 
     # Sub-tables folded into their respective JSON blobs.
@@ -56,9 +63,13 @@ class LangfuseMapper:
         "presence_penalty": lambda rp: rp.presence_penalty,
         "seed": lambda rp: rp.seed,
     }
+    # Langfuse prices every key, and litellm's prompt/completion counts include cache and reasoning tokens
     _USAGE_FIELDS: dict[str, Callable[[LLMUsage], AttrValue | None]] = {
-        "input": lambda u: u.input_tokens,
-        "output": lambda u: u.output_tokens,
+        "input": lambda u: u.uncached_input_tokens,
+        "input_cached_tokens": lambda u: u.cache_read_input_tokens or None,
+        "input_cache_creation": lambda u: u.cache_creation_input_tokens or None,
+        "output": lambda u: u.non_reasoning_output_tokens,
+        "output_reasoning_tokens": lambda u: u.reasoning_tokens or None,
         "total": lambda u: u.total_tokens,
     }
 

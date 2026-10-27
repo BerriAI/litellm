@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Optional
 
@@ -8,8 +9,10 @@ from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
 from litellm.integrations.langfuse.langfuse_otel_attributes import (
     LangfuseLLMObsOTELAttributes,
+    serialize_langfuse_datetime,
 )
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.types.integrations.langfuse_otel import (
     LangfuseSpanAttributes,
@@ -19,7 +22,7 @@ from litellm.types.utils import StandardCallbackDynamicParams
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
 
@@ -54,7 +57,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         LangfuseOtelLogger._set_langfuse_specific_attributes(span=span, kwargs=kwargs, response_obj=response_obj)
 
     @staticmethod
-    def _extract_langfuse_metadata(kwargs: dict) -> dict:
+    def _extract_langfuse_metadata(kwargs: Mapping[str, Any]) -> dict:
         """
         Extracts Langfuse metadata from the standard LiteLLM kwargs structure.
 
@@ -190,18 +193,19 @@ class LangfuseOtelLogger(OpenTelemetry):
                                     }
                                 )
                     elif item_type == "message":
+                        item_content: Sequence[object] = getattr(item, "content", [{}])
                         output_items_data.append(
                             {
                                 "role": getattr(item, "role", "assistant"),
-                                "content": getattr(getattr(item, "content", [{}])[0], "text", ""),
+                                "content": getattr(item_content[0], "text", ""),
                             }
                         )
                     elif item_type == "function_call":
-                        arguments_str = getattr(item, "arguments", "{}")
+                        item_arguments: object = getattr(item, "arguments", "{}")
                         arguments_obj = (
-                            safe_json_loads(arguments_str, default={})
-                            if isinstance(arguments_str, str)
-                            else arguments_str
+                            safe_json_loads(item_arguments, default={})
+                            if isinstance(item_arguments, str)
+                            else item_arguments
                         )
                         langfuse_tool_call = {
                             "id": getattr(item, "id", ""),
@@ -219,7 +223,7 @@ class LangfuseOtelLogger(OpenTelemetry):
                 )
 
     @staticmethod
-    def _set_langfuse_specific_attributes(span: Span, kwargs, response_obj):
+    def _set_langfuse_specific_attributes(span: Span, kwargs: Mapping[str, object], response_obj):
         """
         Sets Langfuse specific metadata attributes onto the OTEL span.
 
@@ -231,7 +235,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         from litellm.integrations.arize._utils import safe_set_attribute
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-        dynamic_params: Final = kwargs.get("standard_callback_dynamic_params")
+        dynamic_params: Final = as_str_mapping(kwargs.get("standard_callback_dynamic_params"))
         langfuse_environment: Final = (
             dynamic_params.get("langfuse_environment") if dynamic_params else None
         ) or os.environ.get("LANGFUSE_TRACING_ENVIRONMENT")
@@ -251,6 +255,14 @@ class LangfuseOtelLogger(OpenTelemetry):
                 span,
                 LangfuseSpanAttributes.OBSERVATION_INPUT.value,
                 safe_dumps(messages),
+            )
+
+        completion_start_time: Final = kwargs.get("completion_start_time")
+        if isinstance(completion_start_time, datetime):
+            safe_set_attribute(
+                span,
+                LangfuseSpanAttributes.OBSERVATION_COMPLETION_START_TIME.value,
+                serialize_langfuse_datetime(completion_start_time),
             )
 
         LangfuseOtelLogger._set_observation_output(span=span, response_obj=response_obj)

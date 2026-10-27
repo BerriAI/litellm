@@ -1,21 +1,298 @@
-from unittest.mock import patch
+import copy
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from enum import Enum
+from typing import Final
+from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
+from pydantic import JsonValue, TypeAdapter
 
+import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-
-
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.vertex_ai.common_utils import (
-    _get_vertex_url,
+    VertexAITokenCounter,
+    _fix_enum_types,
+    build_vertex_schema,
     convert_anyof_null_to_nullable,
+    convert_vertex_datetime_to_openai_datetime,
     get_vertex_location_from_url,
     get_vertex_project_id_from_url,
+    get_vertex_url,
     pop_vertex_request_labels,
     set_schema_property_ordering,
     supports_response_json_schema,
     validate_vertex_location,
     vertex_request_labels_from_litellm_params,
 )
+from litellm.llms.vertex_ai.count_tokens import handler as vertex_count_tokens_handler
+from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
+from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("messages_format", ("openai", "anthropic"))
+async def test_vertex_gemini_rejects_non_text_system_blocks_before_request(
+    messages_format: TokenCountMessagesFormat,
+) -> None:
+    result: Final = await VertexAITokenCounter().count_tokens(
+        model_to_use="gemini-4-argon",
+        messages=[{"role": "user", "content": "Count this"}],
+        contents=None,
+        request_model="vertex_ai/gemini-4-argon",
+        system=[{"type": "image", "source": {"type": "base64", "data": "AAAA"}}],
+        messages_format=messages_format,
+    )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 400
+    assert "text blocks" in (result.error_message or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model",
+    (
+        "zai-org/glm-5.2-maas",
+        "deepseek-ai/deepseek-v3.2-maas",
+        "qwen/qwen3-coder-480b-a35b-instruct-maas",
+        "mistral-medium-3",
+        "codestral-2501",
+        "openai/gpt-oss-120b-maas",
+        "google/gemma-4-26b-a4b-it-maas",
+    ),
+)
+async def test_vertex_partner_model_without_an_inference_matching_count_answers_400_naming_the_model(
+    model: str,
+) -> None:
+    result: Final = await VertexAITokenCounter().count_tokens(
+        model_to_use=model,
+        messages=[{"role": "user", "content": "Count this"}],
+        contents=None,
+        deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "global"}},
+        request_model=f"vertex_ai/{model}",
+        messages_format="anthropic",
+    )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 400
+    assert result.error_message == f"LiteLLM does not support counting tokens for Vertex AI model {model}."
+
+
+class _VertexCountTokensPeer:
+    def __init__(self, status_code: int) -> None:
+        self.status_code: Final = status_code
+        self.requests: tuple[httpx.Request, ...] = ()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests = (*self.requests, request)
+        if self.status_code == 200:
+            return httpx.Response(200, json={"totalTokens": 37}, request=request)
+        return httpx.Response(
+            self.status_code,
+            json={
+                "error": {"code": self.status_code, "message": "Invalid function name", "status": "INVALID_ARGUMENT"}
+            },
+            request=request,
+        )
+
+
+@contextmanager
+def _vertex_count_tokens_peer(status_code: int) -> Iterator[_VertexCountTokensPeer]:
+    peer: Final = _VertexCountTokensPeer(status_code)
+    with (
+        patch.object(
+            gemini_count_tokens_handler,
+            "get_async_httpx_client",
+            return_value=AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+        ),
+        patch.object(
+            vertex_count_tokens_handler.VertexAITokenCounter,
+            "_ensure_access_token_async",
+            new=AsyncMock(return_value=("fake-token", "test-project")),
+        ),
+    ):
+        yield peer
+
+
+_VERTEX_DEPLOYMENT: Final = {"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-central1"}}
+_JSON_BODY: Final = TypeAdapter(dict[str, JsonValue])
+
+
+@pytest.mark.asyncio
+async def test_vertex_gemini_count_answers_with_the_status_google_rejected_it_with() -> None:
+    with _vertex_count_tokens_peer(400) as peer:
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment=_VERTEX_DEPLOYMENT,
+            request_model="vertex_ai/gemini-2.5-flash",
+        )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 400
+    assert "Invalid function name" in (result.error_message or "")
+    assert len(peer.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_vertex_gemini_count_rejects_an_image_url_it_refuses_to_fetch_without_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", True)
+    with _vertex_count_tokens_peer(200) as peer:
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"type": "image", "source": {"type": "url", "url": "http://127.0.0.1:9/image.png"}}],
+                }
+            ],
+            contents=None,
+            deployment=_VERTEX_DEPLOYMENT,
+            request_model="vertex_ai/gemini-2.5-flash",
+            messages_format="anthropic",
+        )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 400
+    assert "http://127.0.0.1:9/image.png" in (result.error_message or "")
+    assert peer.requests == ()
+
+
+def _weather_tool_result_messages(text: JsonValue) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "Paris"}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01",
+                    "content": [{"type": "text", "text": text}, {"type": "text", "text": "partly cloudy"}],
+                }
+            ],
+        },
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", (None, 5))
+async def test_vertex_gemini_count_rejects_a_non_string_tool_result_text_without_request(text: JsonValue) -> None:
+    with _vertex_count_tokens_peer(200) as peer:
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=_weather_tool_result_messages(text),
+            contents=None,
+            deployment=_VERTEX_DEPLOYMENT,
+            request_model="vertex_ai/gemini-2.5-flash",
+            messages_format="anthropic",
+        )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 400
+    assert result.error_message == "tool_result toolu_01 content.0.text: Input should be a valid string"
+    assert peer.requests == ()
+
+
+@pytest.mark.asyncio
+async def test_vertex_gemini_count_leaves_out_a_numeric_tool_result_text_when_the_deployment_drops_params() -> None:
+    with _vertex_count_tokens_peer(200) as peer:
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=_weather_tool_result_messages(5),
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-central1",
+                    "drop_params": True,
+                }
+            },
+            request_model="vertex_ai/gemini-2.5-flash",
+            messages_format="anthropic",
+        )
+
+    assert result is not None
+    assert result.error is False
+    assert result.total_tokens == 37
+    assert _JSON_BODY.validate_json(peer.requests[0].content)["contents"] == [
+        {"role": "user", "parts": [{"text": "What is the weather in Paris?"}]},
+        {"role": "model", "parts": [{"function_call": {"name": "get_weather", "args": {"city": "Paris"}}}]},
+        {
+            "role": "user",
+            "parts": [{"function_response": {"name": "get_weather", "response": {"content": "partly cloudy"}}}],
+        },
+    ]
+
+
+_TOOL_OUTPUT: Final = "line of a long file that the agent read earlier. " * 180
+
+
+def _tool_round(index: int) -> tuple[dict[str, object], ...]:
+    return (
+        {"role": "user", "content": f"Read file {index}."},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": f"toolu_{index}", "name": "read_file", "input": {"path": f"{index}"}}
+            ],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": f"toolu_{index}", "content": _TOOL_OUTPUT}],
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_vertex_gemini_count_applies_the_context_edits_inference_applies() -> None:
+    with _vertex_count_tokens_peer(200) as peer:
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[*_tool_round(0), *_tool_round(1), *_tool_round(2), {"role": "user", "content": "Summarize."}],
+            contents=None,
+            deployment={
+                "litellm_params": {**_VERTEX_DEPLOYMENT["litellm_params"], "model": "vertex_ai/gemini-2.5-flash"}
+            },
+            request_model="vertex_ai/gemini-2.5-flash",
+            tools=[
+                {"name": "read_file", "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}}}
+            ],
+            messages_format="anthropic",
+            context_management=CountContextManagement(
+                spec={
+                    "edits": [
+                        {
+                            "type": "clear_tool_uses_20250919",
+                            "trigger": {"type": "input_tokens", "value": 500},
+                            "keep": {"type": "tool_uses", "value": 1},
+                        }
+                    ]
+                },
+                drop_invalid_edits=False,
+            ),
+        )
+
+    assert result is not None
+    assert result.total_tokens == 37
+    assert len(peer.requests) == 1
+    assert peer.requests[0].content.decode().count(_TOOL_OUTPUT) == 1
 
 
 @pytest.mark.parametrize("location", ["us", "eu", "us-central1", "europe-west1", "global"])
@@ -121,6 +398,147 @@ def test_nested_anyof_conversion():
     assert schema == expected
 
 
+def test_anyof_conversion_with_multiple_null_branches():
+    """Adjacent null branches must all be removed."""
+    schema: Final = {
+        "type": "object",
+        "properties": {
+            "example": {
+                "anyOf": [
+                    {"type": "null"},
+                    {"type": "null"},
+                    {"type": "string"},
+                ]
+            }
+        },
+    }
+
+    convert_anyof_null_to_nullable(schema)
+
+    expected: Final = {
+        "type": "object",
+        "properties": {"example": {"anyOf": [{"type": "string", "nullable": True}]}},
+    }
+    assert schema == expected
+
+
+def test_anyof_conversion_with_null_before_empty_object():
+    """An empty-object branch following a null branch still gets a type."""
+    schema: Final = {
+        "type": "object",
+        "properties": {"example": {"anyOf": [{"type": "null"}, {}]}},
+    }
+
+    convert_anyof_null_to_nullable(schema)
+
+    expected: Final = {
+        "type": "object",
+        "properties": {"example": {"anyOf": [{"type": "object", "nullable": True}]}},
+    }
+    assert schema == expected
+
+
+@pytest.mark.parametrize("null_count", [1, 2, 4])
+def test_anyof_conversion_with_only_null_branches_keeps_one_nullable_null(null_count: int):
+    """Vertex accepts a NULL type, so a null-only union is forwarded as one nullable null branch."""
+    schema: Final = {
+        "type": "object",
+        "properties": {"example": {"anyOf": [{"type": "null"} for _ in range(null_count)]}},
+    }
+
+    convert_anyof_null_to_nullable(schema)
+
+    expected: Final = {
+        "type": "object",
+        "properties": {"example": {"anyOf": [{"type": "null", "nullable": True}]}},
+    }
+    assert schema == expected
+
+
+def test_anyof_conversion_leaves_empty_anyof_for_the_provider_to_judge():
+    """An empty union has no null branch to strip, so it is forwarded unchanged."""
+    schema: Final = {"type": "object", "properties": {"example": {"anyOf": []}}}
+
+    convert_anyof_null_to_nullable(schema)
+
+    assert schema == {"type": "object", "properties": {"example": {"anyOf": []}}}
+
+
+@pytest.mark.parametrize("malformed", ["string", {"type": "string"}], ids=["string", "object"])
+def test_anyof_conversion_forwards_a_non_list_anyof_unchanged(malformed: JsonValue):
+    """A malformed union is the provider's to judge, as it was before null branches were stripped in one pass."""
+    schema: Final = {"type": "object", "properties": {"example": {"anyOf": copy.deepcopy(malformed)}}}
+
+    convert_anyof_null_to_nullable(schema)
+
+    assert schema == {"type": "object", "properties": {"example": {"anyOf": malformed}}}
+
+
+@pytest.mark.parametrize(
+    ("branches", "expected"),
+    [
+        ([{"type": "null"}, 5], [5]),
+        ([True, {"type": "null"}], [True]),
+        ([{"type": "null"}, 5, {"type": "string"}], [5, {"type": "string", "nullable": True}]),
+    ],
+    ids=["null-int", "true-null", "null-int-string"],
+)
+def test_anyof_conversion_forwards_a_non_object_branch_for_the_provider_to_judge(
+    branches: list[JsonValue], expected: list[JsonValue]
+):
+    schema: Final = {"type": "object", "properties": {"example": {"anyOf": branches}}}
+
+    convert_anyof_null_to_nullable(schema)
+
+    assert schema == {"type": "object", "properties": {"example": {"anyOf": expected}}}
+
+
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    [
+        ({"type": ["integer", "null"]}, {"anyOf": [{"type": "integer", "nullable": True}]}),
+        (
+            {
+                "anyOf": [
+                    {"type": "object", "properties": {"x": {"anyOf": [{"type": "integer"}, {"type": "null"}]}}},
+                    {"type": "null"},
+                ]
+            },
+            {
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {"x": {"anyOf": [{"type": "integer", "nullable": True}]}},
+                        "nullable": True,
+                    }
+                ]
+            },
+        ),
+        (
+            {"type": ["object", "null"], "properties": {"x": {"type": ["string", "null"]}}},
+            {
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {"x": {"anyOf": [{"type": "string", "nullable": True}]}},
+                        "nullable": True,
+                    }
+                ]
+            },
+        ),
+        (
+            {"type": "array", "items": {"type": ["number", "null"]}},
+            {"type": "array", "items": {"anyOf": [{"type": "number", "nullable": True}]}},
+        ),
+    ],
+    ids=["type-array", "null-inside-a-union-branch", "nullable-object-with-nullable-property", "nullable-items"],
+)
+def test_vertex_schema_folds_every_null_branch_into_nullable(field: JsonValue, expected: JsonValue):
+    schema: Final = build_vertex_schema({"type": "object", "properties": {"value": field}})
+
+    assert schema["properties"]["value"] == expected
+
+
 def test_anyof_with_excessive_nesting():
     """Test conversion with excessive nesting > max levels +1 deep."""
     # generate a schema with excessive nesting
@@ -149,15 +567,11 @@ async def test_get_supports_system_message():
     from litellm.llms.vertex_ai.common_utils import get_supports_system_message
 
     # fine-tuned vertex gemini models will specifiy they are in the /gemini spec format
-    result = get_supports_system_message(
-        model="gemini/1234567890", custom_llm_provider="vertex_ai"
-    )
+    result = get_supports_system_message(model="gemini/1234567890", custom_llm_provider="vertex_ai")
     assert result == True
 
     # non-fine-tuned vertex gemini models will not specifiy they are in the /gemini spec format
-    result = get_supports_system_message(
-        model="random-model-name", custom_llm_provider="vertex_ai"
-    )
+    result = get_supports_system_message(model="random-model-name", custom_llm_provider="vertex_ai")
     assert result == False
 
 
@@ -213,7 +627,7 @@ def test_set_schema_property_ordering_skips_non_dict_property_values():
 
 def test_build_vertex_schema():
     """Test build_vertex_schema with a sample schema"""
-    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+    from litellm.llms.vertex_ai.common_utils import build_vertex_schema
 
     parameters = {
         "properties": {
@@ -230,13 +644,9 @@ def test_build_vertex_schema():
                 "properties": {
                     "tags": {"items": {"type": "string"}, "type": "array"},
                     "metadata": {"type": "object"},
-                    "callbacks": {
-                        "anyOf": [{"items": {}, "type": "array"}, {}, {"type": "null"}]
-                    },
+                    "callbacks": {"anyOf": [{"items": {}, "type": "array"}, {}, {"type": "null"}]},
                     "run_name": {"type": "string"},
-                    "max_concurrency": {
-                        "anyOf": [{"type": "integer"}, {"type": "null"}]
-                    },
+                    "max_concurrency": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
                     "recursion_limit": {"type": "integer"},
                     "configurable": {"type": "object"},
                     "run_id": {
@@ -280,9 +690,7 @@ def test_build_vertex_schema():
                         ]
                     },
                     "run_name": {"type": "string"},
-                    "max_concurrency": {
-                        "anyOf": [{"type": "integer", "nullable": True}]
-                    },
+                    "max_concurrency": {"anyOf": [{"type": "integer", "nullable": True}]},
                     "recursion_limit": {"type": "integer"},
                     "configurable": {"type": "object"},
                     "run_id": {"anyOf": [{"type": "string", "nullable": True}]},
@@ -295,7 +703,7 @@ def test_build_vertex_schema():
         "type": "object",
     }
 
-    assert _build_vertex_schema(parameters) == expected_output
+    assert build_vertex_schema(parameters) == expected_output
 
 
 def test_process_items_with_excessive_nesting():
@@ -363,7 +771,7 @@ def test_build_vertex_schema_array_branch_missing_items_in_anyof():
     end up with synthesized `items: {"type": "object"}` after the schema
     transform — Vertex returns INVALID_ARGUMENT otherwise.
     """
-    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+    from litellm.llms.vertex_ai.common_utils import build_vertex_schema
 
     parameters = {
         "properties": {
@@ -378,14 +786,12 @@ def test_build_vertex_schema_array_branch_missing_items_in_anyof():
         "type": "object",
     }
 
-    result = _build_vertex_schema(parameters)
+    result = build_vertex_schema(parameters)
     callbacks_anyof = result["properties"]["callbacks"]["anyOf"]
     array_branches = [b for b in callbacks_anyof if b.get("type") == "array"]
     assert array_branches, "expected an array branch to remain after transform"
     for branch in array_branches:
-        assert branch.get("items") == {
-            "type": "object"
-        }, f"array branch must have items synthesized; got {branch}"
+        assert branch.get("items") == {"type": "object"}, f"array branch must have items synthesized; got {branch}"
 
 
 def test_vertex_ai_complex_response_schema():
@@ -622,7 +1028,7 @@ def test_vertex_ai_complex_response_schema():
 )
 def test_get_vertex_url_global_region(stream, expected_endpoint_suffix):
     """
-    Test _get_vertex_url when vertex_location is 'global' for chat mode.
+    Test get_vertex_url when vertex_location is 'global' for chat mode.
     """
     mode = "chat"
     model = "gemini-1.5-pro-preview-0409"
@@ -636,7 +1042,7 @@ def test_get_vertex_url_global_region(stream, expected_endpoint_suffix):
         "litellm.VertexGeminiConfig.get_model_for_vertex_ai_url",
         side_effect=lambda model: model,
     ):
-        url, endpoint = _get_vertex_url(
+        url, endpoint = get_vertex_url(
             mode=mode,
             model=model,
             stream=stream,
@@ -689,9 +1095,7 @@ def test_get_vertex_url_global_region(stream, expected_endpoint_suffix):
         ({}, "us-east1", "us-east1"),
     ],
 )
-def test_get_vertex_region_global_only_model(
-    model_cost_entry, vertex_region, expected_region
-):
+def test_get_vertex_region_global_only_model(model_cost_entry, vertex_region, expected_region):
     """Test get_vertex_region resolves region from model_cost supported_regions"""
     import litellm
     from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -703,9 +1107,7 @@ def test_get_vertex_region_global_only_model(
         {"vertex_ai/test-model": model_cost_entry},
         clear=False,
     ):
-        result = vertex_base.get_vertex_region(
-            vertex_region=vertex_region, model="test-model"
-        )
+        result = vertex_base.get_vertex_region(vertex_region=vertex_region, model="test-model")
 
         assert result == expected_region
 
@@ -823,9 +1225,7 @@ def test_convert_schema_types_type_array_conversion():
     assert anyof_types[1]["type"] == "number"
 
     # 4. Other properties preserved
-    assert (
-        input_schema["properties"]["studio"]["description"] == "The studio ID or name"
-    )
+    assert input_schema["properties"]["studio"]["description"] == "The studio ID or name"
     assert input_schema["required"] == ["studio"]
 
 
@@ -992,7 +1392,9 @@ def test_construct_target_url_with_version_prefix():
         ),
     ],
 )
-def test_construct_target_url_versionless_project_route_gets_api_version(requested_route: str, expected_url: str) -> None:
+def test_construct_target_url_versionless_project_route_gets_api_version(
+    requested_route: str, expected_url: str
+) -> None:
     from litellm.llms.vertex_ai.common_utils import construct_target_url
 
     target_url = construct_target_url(
@@ -1007,12 +1409,11 @@ def test_construct_target_url_versionless_project_route_gets_api_version(request
 
 def test_fix_enum_types():
     """
-    Test _fix_enum_types function removes enum fields when type is not string.
+    Test _fix_enum_types keeps string enums, converts integer enums to the form
+    Gemini accepts, and removes enums on other non-string types.
 
-    This test verifies the fix for the issue where Gemini rejects cached content
-    with function parameter enums on non-string types, causing API failures.
-
-    Relevant issue: Gemini only allows enums for string-typed fields
+    Gemini rejects non-string enum values, causing API failures. Integer enums are
+    sent as type INTEGER with string values.
     """
     from litellm.llms.vertex_ai.common_utils import _fix_enum_types
 
@@ -1026,7 +1427,7 @@ def test_fix_enum_types():
                 "description": "How to truncate content",
             },
             "maxLength": {
-                "enum": [100, 200, 500],  # This should be removed
+                "enum": [100, 200, 500],
                 "type": "integer",
                 "description": "Maximum length",
             },
@@ -1043,7 +1444,7 @@ def test_fix_enum_types():
                         "type": "string",
                     },
                     "innerNonStringEnum": {
-                        "enum": [1, 2, 3],  # This should be removed
+                        "enum": [1, 2, 3],
                         "type": "integer",
                     },
                 },
@@ -1054,13 +1455,13 @@ def test_fix_enum_types():
                         "type": "string",
                         "enum": ["option1", "option2"],
                     },  # This should be kept
-                    {"type": "integer", "enum": [1, 2, 3]},  # This should be removed
+                    {"type": "integer", "enum": [1, 2, 3]},
                 ]
             },
         },
     }
 
-    # Expected output: Non-string enums removed, string enums kept
+    # Expected output: string enums kept, integer enums converted, others removed
     expected_output = {
         "type": "object",
         "properties": {
@@ -1069,7 +1470,8 @@ def test_fix_enum_types():
                 "type": "string",
                 "description": "How to truncate content",
             },
-            "maxLength": {  # enum removed
+            "maxLength": {
+                "enum": ["100", "200", "500"],
                 "type": "integer",
                 "description": "Maximum length",
             },
@@ -1084,7 +1486,10 @@ def test_fix_enum_types():
                         "enum": ["a", "b", "c"],  # Kept - string type
                         "type": "string",
                     },
-                    "innerNonStringEnum": {"type": "integer"},  # enum removed
+                    "innerNonStringEnum": {
+                        "enum": ["1", "2", "3"],
+                        "type": "integer",
+                    },
                 },
             },
             "anyOfField": {
@@ -1093,14 +1498,14 @@ def test_fix_enum_types():
                         "type": "string",
                         "enum": ["option1", "option2"],
                     },  # Kept - has string type
-                    {"type": "integer"},  # enum removed
+                    {"type": "integer", "enum": ["1", "2", "3"]},
                 ]
             },
         },
     }
 
     # Apply the transformation
-    _fix_enum_types(input_schema)
+    _fix_enum_types(input_schema, send_integer_enums=True)
 
     # Verify the transformation
     assert input_schema == expected_output
@@ -1122,22 +1527,134 @@ def test_fix_enum_types():
         "c",
     ]
 
-    # 2. Non-string enums are removed
-    assert "enum" not in input_schema["properties"]["maxLength"]
+    # 2. Integer enums are converted, other non-string enums are removed
+    assert input_schema["properties"]["maxLength"]["enum"] == ["100", "200", "500"]
     assert "enum" not in input_schema["properties"]["enabled"]
-    assert (
-        "enum"
-        not in input_schema["properties"]["nested"]["properties"]["innerNonStringEnum"]
-    )
+    assert input_schema["properties"]["nested"]["properties"]["innerNonStringEnum"]["enum"] == ["1", "2", "3"]
 
-    # 3. anyOf with string type keeps enum, non-string removes it
+    # 3. anyOf keeps the string enum and converts the integer one
     assert "enum" in input_schema["properties"]["anyOfField"]["anyOf"][0]
-    assert "enum" not in input_schema["properties"]["anyOfField"]["anyOf"][1]
+    assert input_schema["properties"]["anyOfField"]["anyOf"][1]["enum"] == ["1", "2", "3"]
 
     # 4. Other properties preserved
     assert input_schema["properties"]["maxLength"]["type"] == "integer"
     assert input_schema["properties"]["enabled"]["type"] == "boolean"
 
+
+
+def test_build_vertex_schema_sends_integer_enum_as_string_values():
+    """An integer enum tool parameter reaches Gemini as INTEGER with string values and no enum format."""
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    parameters = {
+        "type": "object",
+        "properties": {
+            "level": {"type": "integer", "enum": [1, 2, 5]},
+            "flag": {"type": "boolean", "enum": [True]},
+        },
+        "required": ["level"],
+    }
+
+    result = _build_vertex_schema(parameters, send_integer_enums=True)
+
+    assert "format" not in result["properties"]["level"]
+    assert result["properties"]["level"]["enum"] == ["1", "2", "5"]
+    assert result["properties"]["level"]["type"].lower() == "integer"
+    assert "enum" not in result["properties"]["flag"]
+
+
+@pytest.mark.parametrize(
+    ("enum_values", "send_integer_enums", "expected_level"),
+    [
+        (
+            [1, 2, 5],
+            True,
+            {"anyOf": [{"type": "integer", "enum": ["1", "2", "5"], "nullable": True}]},
+        ),
+        (
+            [1, 2, 5, None],
+            True,
+            {"anyOf": [{"type": "integer", "enum": ["1", "2", "5"], "nullable": True}]},
+        ),
+        ([1, 2, 5], False, {"anyOf": [{"type": "integer", "nullable": True}]}),
+        ([1, "a"], True, {"anyOf": [{"type": "integer", "nullable": True}]}),
+    ],
+    ids=["sent", "null-in-enum", "not-sent", "mixed-values"],
+)
+def test_build_vertex_schema_keeps_integer_enum_on_nullable_type_list(
+    enum_values: list[object], send_integer_enums: bool, expected_level: JsonValue
+) -> None:
+    schema: Final = build_vertex_schema(
+        {"type": "object", "properties": {"level": {"type": ["integer", "null"], "enum": enum_values}}},
+        send_integer_enums=send_integer_enums,
+    )
+
+    assert schema["properties"]["level"] == expected_level
+
+
+def test_map_function_keeps_integer_enum_when_tools_are_reused():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "set_priority",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"level": {"type": "integer", "enum": [1, 2, 5]}},
+                    "required": ["level"],
+                },
+            },
+        }
+    ]
+    config = VertexGeminiConfig()
+
+    sent = [
+        config._map_function(tools, {}, send_integer_enums=True)[0]["function_declarations"][0]["parameters"][
+            "properties"
+        ]["level"]
+        for _ in range(2)
+    ]
+
+    assert sent[0]["enum"] == ["1", "2", "5"]
+    assert sent[1]["enum"] == ["1", "2", "5"]
+    assert sent[0] == sent[1]
+
+
+class _Priority(int, Enum):
+    LOW = 1
+    HIGH = 3
+
+
+@pytest.mark.parametrize(
+    ("enum_values", "send_integer_enums", "expected_enum"),
+    [
+        ([1, 2, 5], False, None),
+        (["-3", "007", 4], True, ["-3", "7", "4"]),
+        ([1, 2**53], True, None),
+        ([1, -(2**53)], True, None),
+        (["1", str(2**53)], True, None),
+        ([-(2**53 - 1), 2**53 - 1], True, [str(-(2**53 - 1)), str(2**53 - 1)]),
+        ([str(-(2**53 - 1)), str(2**53 - 1)], True, [str(-(2**53 - 1)), str(2**53 - 1)]),
+        (["1", "9" * 5000], True, None),
+        (["1", "--2"], True, None),
+        (["1", "\u00b2"], True, None),
+        ([True, 1], True, None),
+        ([1.5, 2], True, None),
+        ([], True, None),
+        ([_Priority.LOW, _Priority.HIGH], True, ["1", "3"]),
+    ],
+)
+def test_fix_enum_types_sends_only_integer_enums_gemini_accepts(
+    enum_values: list[object], send_integer_enums: bool, expected_enum: list[str] | None
+) -> None:
+    schema: Final = {"type": "integer", "enum": enum_values}
+
+    _fix_enum_types(schema, send_integer_enums=send_integer_enums)
+
+    assert schema.get("enum") == expected_enum
+    assert "format" not in schema
 
 def test_get_token_url():
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -1149,7 +1666,7 @@ def test_get_token_url():
     vertex_ai_location = "us-central1"
     vertex_credentials = ""
 
-    _, url = vertex_llm._get_token_and_url(
+    _, url = vertex_llm.get_token_and_url(
         auth_header=None,
         vertex_project=vertex_ai_project,
         vertex_location=vertex_ai_location,
@@ -1164,7 +1681,7 @@ def test_get_token_url():
 
     print("url=", url)
 
-    _, url = vertex_llm._get_token_and_url(
+    _, url = vertex_llm.get_token_and_url(
         auth_header=None,
         vertex_project=vertex_ai_project,
         vertex_location=vertex_ai_location,
@@ -1181,8 +1698,6 @@ def test_get_token_url():
 
     assert "v1beta1" not in url
     assert "/v1/" in url
-
-    pass
 
 
 @pytest.mark.asyncio
@@ -1227,6 +1742,291 @@ async def test_vertex_ai_token_counter_routes_partner_models():
         assert isinstance(result, TokenCountResponse)
         assert result.total_tokens == 42
         assert result.tokenizer_type == "vertex_ai_partner_models"
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_token_counter_forwards_system_and_tools_to_partner_request():
+    from typing import Final
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, int]:
+            return {"input_tokens": 37}
+
+    class FakeHttpClient:
+        posted_bodies: tuple[dict[str, object], ...] = ()
+
+        async def post(
+            self,
+            url: str,
+            headers: dict[str, str],
+            json: dict[str, object],
+            timeout: float,
+        ) -> FakeResponse:
+            self.posted_bodies = (*self.posted_bodies, json)
+            return FakeResponse()
+
+    fake_http_client: Final = FakeHttpClient()
+    counter: Final = VertexAITokenCounter()
+    model: Final = "claude-opus-5-5"
+    messages: Final = [{"role": "user", "content": "Hello"}]
+    system: Final = "Follow the system instructions"
+    tools: Final = [
+        {
+            "name": "lookup",
+            "description": "Look up a value",
+            "input_schema": {"type": "object", "properties": {}},
+        }
+    ]
+    deployment: Final = {
+        "litellm_params": {
+            "vertex_project": "test-project",
+            "vertex_location": "us-east5",
+        }
+    }
+
+    with (
+        patch.object(handler, "get_async_httpx_client", return_value=fake_http_client),
+        patch.object(
+            handler.VertexAIPartnerModelsTokenCounter,
+            "_ensure_access_token_async",
+            new=AsyncMock(return_value=("fake-token", "test-project")),
+        ),
+    ):
+        with_optional_fields: Final = await counter.count_tokens(
+            model_to_use=model,
+            messages=messages,
+            contents=None,
+            deployment=deployment,
+            system=system,
+            tools=tools,
+        )
+        without_optional_fields: Final = await counter.count_tokens(
+            model_to_use=model,
+            messages=messages,
+            contents=None,
+            deployment=deployment,
+        )
+
+    assert fake_http_client.posted_bodies == (
+        {"model": model, "messages": messages, "system": system, "tools": tools},
+        {"model": model, "messages": messages},
+    )
+    assert with_optional_fields is not None
+    assert with_optional_fields.total_tokens == 37
+    assert without_optional_fields is not None
+    assert without_optional_fields.total_tokens == 37
+
+
+_PARTNER_CHAT_TOOL_TURNS: Final[list[dict[str, object]]] = [
+    {"role": "user", "content": "Weather in SF?"},
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}],
+    },
+    {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+]
+_PARTNER_RESPONSES_TOOL: Final[dict[str, object]] = {
+    "type": "function",
+    "name": "get_weather",
+    "parameters": {"type": "object", "properties": {}},
+}
+
+
+async def _partner_counted_bodies(
+    model: str, chat_params: dict[str, JsonValue] | None = None
+) -> tuple[dict[str, object], ...]:
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, int]:
+            return {"input_tokens": 37}
+
+    class FakeHttpClient:
+        posted_bodies: tuple[dict[str, object], ...] = ()
+
+        async def post(
+            self, url: str, headers: dict[str, str], json: dict[str, object], timeout: float
+        ) -> FakeResponse:
+            self.posted_bodies = (*self.posted_bodies, json)
+            return FakeResponse()
+
+    fake_http_client: Final = FakeHttpClient()
+    with (
+        patch.object(handler, "get_async_httpx_client", return_value=fake_http_client),
+        patch.object(
+            handler.VertexAIPartnerModelsTokenCounter,
+            "_ensure_access_token_async",
+            new=AsyncMock(return_value=("fake-token", "test-project")),
+        ),
+    ):
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use=model,
+            messages=copy.deepcopy(_PARTNER_CHAT_TOOL_TURNS),
+            contents=None,
+            deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-east5"}},
+            tools=[_PARTNER_RESPONSES_TOOL],
+            chat_params=chat_params or {},
+        )
+
+    assert result is not None
+    assert result.total_tokens == 37
+    return fake_http_client.posted_bodies
+
+
+@pytest.mark.asyncio
+async def test_vertex_claude_count_sends_chat_tool_use_in_the_shape_chat_inference_sends() -> None:
+    assert await _partner_counted_bodies("claude-opus-5-5") == (
+        {
+            "model": "claude-opus-5-5",
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "Weather in SF?"}]},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {}}],
+                },
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "sunny"}]},
+            ],
+            "tools": [
+                {
+                    "name": "get_weather",
+                    "input_schema": {"type": "object", "properties": {}},
+                    "type": "custom",
+                    "description": "",
+                }
+            ],
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_vertex_claude_count_sends_the_structured_output_vertex_inference_sends() -> None:
+    model: Final = "claude-haiku-4-5"
+    chat_params: Final[dict[str, JsonValue]] = {
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "answer",
+                "schema": {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]},
+            },
+        }
+    }
+    config: Final = VertexAIAnthropicConfig()
+    inference: Final = config.transform_request(
+        model=model,
+        messages=copy.deepcopy(_PARTNER_CHAT_TOOL_TURNS),
+        optional_params=config.map_openai_params(
+            {
+                **chat_params,
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "description": "",
+                            "parameters": _PARTNER_RESPONSES_TOOL["parameters"],
+                        },
+                    }
+                ],
+            },
+            {},
+            model,
+            drop_params=False,
+        ),
+        litellm_params={},
+        headers={},
+    )
+
+    (body,) = await _partner_counted_bodies(model, chat_params)
+
+    assert (body["tools"], body.get("tool_choice"), body.get("output_config")) == (
+        inference["tools"],
+        inference.get("tool_choice"),
+        inference.get("output_config"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_vertex_llama_count_sends_chat_tool_use_as_sent() -> None:
+    assert await _partner_counted_bodies("meta/llama-4-maverick-17b-128e-instruct-maas") == (
+        {
+            "model": "meta/llama-4-maverick-17b-128e-instruct-maas",
+            "messages": _PARTNER_CHAT_TOOL_TURNS,
+            "tools": [_PARTNER_RESPONSES_TOOL],
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_failure", "expected_status", "expected_message"),
+    [
+        ("http_400", 400, 'tools.0: Input tag "function" does not match any of the expected tags'),
+        ("credentials", 500, "could not resolve credentials"),
+    ],
+)
+async def test_vertex_ai_token_counter_returns_partner_provider_error_as_value(
+    provider_failure: str, expected_status: int, expected_message: str
+):
+    from typing import Final
+    from unittest.mock import AsyncMock, patch
+
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
+
+    class RejectingHttpClient:
+        async def post(
+            self,
+            url: str,
+            headers: dict[str, str],
+            json: dict[str, object],
+            timeout: float,
+        ) -> None:
+            request: Final = httpx.Request("POST", url)
+            response: Final = httpx.Response(400, text=expected_message, request=request)
+            raise MaskedHTTPStatusError(
+                httpx.HTTPStatusError("Client error '400 Bad Request'", request=request, response=response),
+                message=expected_message,
+                text=expected_message,
+            )
+
+    access_token: Final = (
+        AsyncMock(side_effect=ValueError(expected_message))
+        if provider_failure == "credentials"
+        else AsyncMock(return_value=("fake-token", "test-project"))
+    )
+    with (
+        patch.object(handler, "get_async_httpx_client", return_value=RejectingHttpClient()),
+        patch.object(handler.VertexAIPartnerModelsTokenCounter, "_ensure_access_token_async", new=access_token),
+    ):
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="claude-opus-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-east5"}},
+            request_model="vertex-claude",
+            tools=[{"type": "function", "function": {"name": "lookup", "parameters": {}}}],
+        )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == expected_status
+    assert result.error_message is not None
+    assert expected_message in result.error_message
+    assert result.total_tokens == 0
+    assert result.request_model == "vertex-claude"
+    assert result.tokenizer_type == "vertex_ai_partner_models"
 
 
 @pytest.mark.asyncio
@@ -1319,6 +2119,49 @@ async def test_vertex_ai_token_counter_routes_gemini_models():
 
 
 @pytest.mark.asyncio
+async def test_vertex_gemini_count_tokens_uses_request_system_over_deployment_system_instruction() -> None:
+    class VertexCountTokensPeer:
+        def __init__(self) -> None:
+            self.request_body: dict[str, JsonValue] | None = None
+
+        def __call__(self, request: httpx.Request) -> httpx.Response:
+            self.request_body = TypeAdapter(dict[str, JsonValue]).validate_json(request.content)
+            return httpx.Response(200, json={"totalTokens": 37}, request=request)
+
+    peer: Final = VertexCountTokensPeer()
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(peer))
+
+    with (
+        patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client),
+        patch.object(
+            vertex_count_tokens_handler.VertexAITokenCounter,
+            "_ensure_access_token_async",
+            new=AsyncMock(return_value=("fake-token", "test-project")),
+        ),
+    ):
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-central1",
+                    "system_instruction": {"parts": [{"text": "deployment-level"}]},
+                }
+            },
+            request_model="vertex_ai/gemini-2.5-flash",
+            system="You are terse.",
+        )
+
+    assert result is not None
+    assert result.error is False
+    assert result.total_tokens == 37
+    assert peer.request_body is not None
+    assert peer.request_body["systemInstruction"] == {"parts": [{"text": "You are terse."}]}
+
+
+@pytest.mark.asyncio
 async def test_vertex_ai_token_counter_converts_messages_to_contents_for_gemini():
     """
     Regression test for #36921: acount_tokens passed contents=None to the
@@ -1332,9 +2175,7 @@ async def test_vertex_ai_token_counter_converts_messages_to_contents_for_gemini(
 
     token_counter = VertexAITokenCounter()
 
-    with patch(
-        "litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens"
-    ) as mock_acount_tokens:
+    with patch("litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens") as mock_acount_tokens:
         mock_acount_tokens.return_value = {
             "totalTokens": 42,
             "tokenizer_used": "gemini",
@@ -1376,9 +2217,7 @@ async def test_vertex_ai_token_counter_returns_none_when_api_omits_total_tokens(
 
     token_counter = VertexAITokenCounter()
 
-    with patch(
-        "litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens"
-    ) as mock_acount_tokens:
+    with patch("litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens") as mock_acount_tokens:
         mock_acount_tokens.return_value = {"tokenizer_used": "gemini"}
 
         result = await token_counter.count_tokens(
@@ -1421,9 +2260,7 @@ async def test_vertex_ai_partner_model_detection():
     # Test Minimax models
     assert VertexAIPartnerModels.is_vertex_partner_model("minimaxai/minimax-m2-maas")
     # Test Moonshot models
-    assert VertexAIPartnerModels.is_vertex_partner_model(
-        "moonshotai/kimi-k2-thinking-maas"
-    )
+    assert VertexAIPartnerModels.is_vertex_partner_model("moonshotai/kimi-k2-thinking-maas")
 
     # Test Gemini models (should NOT be detected as partner model)
     assert not VertexAIPartnerModels.is_vertex_partner_model("gemini-1.5-pro")
@@ -1454,9 +2291,7 @@ def test_vertex_ai_moonshot_uses_openai_handler():
         VertexAIPartnerModels,
     )
 
-    assert VertexAIPartnerModels.should_use_openai_handler(
-        "moonshotai/kimi-k2-thinking-maas"
-    )
+    assert VertexAIPartnerModels.should_use_openai_handler("moonshotai/kimi-k2-thinking-maas")
 
 
 def test_vertex_ai_zai_uses_openai_handler():
@@ -1491,9 +2326,7 @@ def test_vertex_ai_gemma_maas_is_partner_model():
         VertexAIPartnerModels,
     )
 
-    assert VertexAIPartnerModels.is_vertex_partner_model(
-        "google/gemma-4-26b-a4b-it-maas"
-    )
+    assert VertexAIPartnerModels.is_vertex_partner_model("google/gemma-4-26b-a4b-it-maas")
 
 
 def test_vertex_ai_gemma_maas_uses_openai_handler():
@@ -1504,9 +2337,7 @@ def test_vertex_ai_gemma_maas_uses_openai_handler():
         VertexAIPartnerModels,
     )
 
-    assert VertexAIPartnerModels.should_use_openai_handler(
-        "google/gemma-4-26b-a4b-it-maas"
-    )
+    assert VertexAIPartnerModels.should_use_openai_handler("google/gemma-4-26b-a4b-it-maas")
 
 
 def test_vertex_ai_gemma_maas_routes_to_partner_models():
@@ -1540,7 +2371,7 @@ def test_vertex_ai_google_gemini_not_detected_as_gemma_maas():
 
 def test_build_vertex_schema_empty_properties():
     """
-    Test _build_vertex_schema handles empty properties objects correctly.
+    Test build_vertex_schema handles empty properties objects correctly.
 
     This test verifies the fix for the issue where Gemini rejects schemas
     with empty properties objects like {"properties": {}, "type": "object"}.
@@ -1551,7 +2382,7 @@ def test_build_vertex_schema_empty_properties():
 
     The fix removes empty properties objects and their associated type/required fields.
     """
-    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+    from litellm.llms.vertex_ai.common_utils import build_vertex_schema
 
     # Input: Schema with empty properties (the problematic case from real request)
     input_schema = {
@@ -1584,40 +2415,28 @@ def test_build_vertex_schema_empty_properties():
     }
 
     # Apply the transformation
-    result = _build_vertex_schema(input_schema)
+    result = build_vertex_schema(input_schema)
 
     # Verify the transformation removed empty properties
     # Navigate to the go_back schema
-    go_back_schema = result["properties"]["action"]["items"]["anyOf"][0]["properties"][
-        "go_back"
-    ]
+    go_back_schema = result["properties"]["action"]["items"]["anyOf"][0]["properties"]["go_back"]
 
     # Verify empty properties was removed
     assert "properties" not in go_back_schema, "Empty properties should be removed"
 
     # Verify type is kept as object (Gemini requires type: object even without properties)
-    assert (
-        go_back_schema.get("type") == "object"
-    ), "Type should be kept as object when properties is empty"
+    assert go_back_schema.get("type") == "object", "Type should be kept as object when properties is empty"
 
     # Verify required was also removed
-    assert (
-        "required" not in go_back_schema
-    ), "Required should be removed when properties is empty"
+    assert "required" not in go_back_schema, "Required should be removed when properties is empty"
 
     # Verify description is preserved
-    assert (
-        go_back_schema.get("description") == "Go back"
-    ), "Description should be preserved"
+    assert go_back_schema.get("description") == "Go back", "Description should be preserved"
 
     # Verify parent schema still has proper structure
     parent_schema = result["properties"]["action"]["items"]["anyOf"][0]
-    assert (
-        parent_schema["type"] == "object"
-    ), "Parent schema should still have object type"
-    assert (
-        "go_back" in parent_schema["properties"]
-    ), "go_back should still be in parent properties"
+    assert parent_schema["type"] == "object", "Parent schema should still have object type"
+    assert "go_back" in parent_schema["properties"], "go_back should still be in parent properties"
 
 
 def test_add_object_type_schema_with_no_properties_and_no_type():
@@ -1708,12 +2527,8 @@ def test_pop_vertex_request_labels_prefers_explicit_labels_then_metadata():
 
 def test_pop_vertex_request_labels_uses_litellm_metadata_when_metadata_absent():
     optional: dict = {}
-    litellm_params = {
-        "litellm_metadata": {"requester_metadata": {"team": "from_litellm_meta"}}
-    }
-    assert pop_vertex_request_labels(optional, litellm_params) == {
-        "team": "from_litellm_meta"
-    }
+    litellm_params = {"litellm_metadata": {"requester_metadata": {"team": "from_litellm_meta"}}}
+    assert pop_vertex_request_labels(optional, litellm_params) == {"team": "from_litellm_meta"}
 
 
 def test_vertex_text_embedding_request_includes_labels_from_metadata():
@@ -1723,9 +2538,7 @@ def test_vertex_text_embedding_request_includes_labels_from_metadata():
         input="hi",
         optional_params={},
         model="text-embedding-004",
-        litellm_params={
-            "metadata": {"requester_metadata": {"project_id": "cost-center-1"}}
-        },
+        litellm_params={"metadata": {"requester_metadata": {"project_id": "cost-center-1"}}},
     )
     assert req.get("labels") == {"project_id": "cost-center-1"}
 
@@ -1755,3 +2568,63 @@ def test_get_vertex_ai_lyria_model_info_is_none_for_non_lyria_speech_models(mode
     assert get_vertex_ai_lyria_model_info(model=model) is None
 
 
+@pytest.fixture
+def host_zone(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv("TZ", request.param)
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+@pytest.mark.parametrize(
+    "host_zone", ["UTC", "America/Los_Angeles", "Asia/Kolkata", "Pacific/Kiritimati"], indirect=True
+)
+@pytest.mark.parametrize(
+    ("vertex_datetime", "utc_epoch"),
+    [
+        ("2024-12-04T21:53:12.120184Z", 1733349192),
+        ("2026-10-08T23:41:07.902Z", 1791502867),
+        ("2026-01-15T08:00:00.000000Z", 1768464000),
+        ("2026-09-09T21:39:16Z", 1788989956),
+        ("2026-10-09T08:19:53.576944123Z", 1791533993),
+    ],
+)
+@pytest.mark.usefixtures("host_zone")
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="switching the process timezone needs time.tzset()")
+def test_convert_vertex_datetime_to_openai_datetime_is_the_utc_epoch_on_any_host_zone(
+    vertex_datetime: str, utc_epoch: int
+) -> None:
+    assert convert_vertex_datetime_to_openai_datetime(vertex_datetime) == utc_epoch
+
+
+@pytest.mark.parametrize(
+    ("base_model", "vertex_counted_tokens"),
+    [(None, None), ("gemini-3.8-flash", 7)],
+    ids=["model_garden_route", "gemini_base_model"],
+)
+@pytest.mark.asyncio
+async def test_vertex_ai_token_counter_routes_like_generate_content(
+    base_model: str | None, vertex_counted_tokens: int | None
+):
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+
+    with patch(
+        "litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens",
+        new=AsyncMock(return_value={"totalTokens": 7}),
+    ):
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="xai/grok-4.20-non-reasoning",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "global",
+                    **({} if base_model is None else {"base_model": base_model}),
+                }
+            },
+            request_model="vertex_ai/xai/grok-4.20-non-reasoning",
+        )
+
+    assert (None if result is None else result.total_tokens) == vertex_counted_tokens

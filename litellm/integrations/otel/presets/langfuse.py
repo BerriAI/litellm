@@ -30,7 +30,7 @@ def langfuse_preset(
         if not allow_missing_credentials:
             raise
         return base.model_copy(
-            update={  # mutable-ok: pydantic model_copy takes a plain update mapping
+            update={
                 "exporters": credential_gated_exporters(base.exporters, ExporterOwner.LANGFUSE_OTEL),
                 "mapper_names": mappers,
             }
