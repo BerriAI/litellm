@@ -39,7 +39,8 @@ from litellm.proxy.policy_engine.pipeline_executor import recorded_guardrail_inf
 from litellm.proxy.utils import ProxyLogging, _streamable_post_call_pipelines, stream_gated_guardrail_names
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
 from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
-from litellm.types.utils import CallTypes
+from litellm.caching.dual_cache import DualCache
+from litellm.types.utils import CallTypes, CallTypesLiteral, LLMResponseTypes
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.proxy.policy_engine.pipeline_types import (
     GuardrailPipeline,
@@ -1169,20 +1170,26 @@ class _PipelineStepGuardrail(CustomGuardrail):
         super().__init__(guardrail_name=guardrail_name, event_hook=event_hook, default_on=False)
         self.calls = 0
 
-    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
+    ) -> dict:
         self.calls += 1
         return data
 
-    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+    async def async_post_call_success_hook(
+        self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
+    ) -> None:
         self.calls += 1
 
 
-def _two_step_pipeline_data(mode: str, first_on_pass: str, first_on_fail: str = "block") -> dict[str, Any]:
+def _two_step_pipeline_data(
+    mode: str, first_on_pass: str, first_on_fail: str = "block", second_on_fail: str = "block"
+) -> dict[str, object]:
     pipeline = GuardrailPipeline(
         mode=mode,
         steps=[
             PipelineStep(guardrail="first", on_pass=first_on_pass, on_fail=first_on_fail),
-            PipelineStep(guardrail="second", on_pass="next", on_fail="block"),
+            PipelineStep(guardrail="second", on_pass="next", on_fail=second_on_fail),
         ],
     )
     return {
@@ -1241,7 +1248,9 @@ class _RaisingPipelineStepGuardrail(_PipelineStepGuardrail):
         super().__init__(guardrail_name, "pre_call")
         self.error = error
 
-    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
+    ) -> dict:
         self.calls += 1
         raise self.error
 
@@ -1297,7 +1306,9 @@ async def test_deployment_hook_still_runs_a_pipeline_step_that_raised(
 
 
 class _OpensLitellmMetadataGuardrail(_PipelineStepGuardrail):
-    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
+    ) -> dict:
         self.calls += 1
         data["litellm_metadata"] = {}
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
@@ -1349,7 +1360,9 @@ async def test_post_call_pipeline_steps_are_named_only_once_they_run(
 
 
 class _OpensLitellmMetadataOnResponseGuardrail(_PipelineStepGuardrail):
-    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+    async def async_post_call_success_hook(
+        self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
+    ) -> None:
         self.calls += 1
         data["litellm_metadata"] = {"user_api_key_hash": "hashed"}
 
@@ -1398,16 +1411,7 @@ async def test_pre_call_hook_names_up_front_the_post_call_steps_a_stream_runs_af
     for guardrail in guardrails:
         guardrail.streaming_buffer_until_moderated = not streams_live
     monkeypatch.setattr(litellm, "callbacks", guardrails)
-    data = _two_step_pipeline_data("post_call", "next")
-    data["metadata"]["_guardrail_pipelines"] = [
-        (
-            "governance",
-            GuardrailPipeline(
-                mode="post_call",
-                steps=[PipelineStep(guardrail=name, on_pass="next", on_fail="next") for name in ("first", "second")],
-            ),
-        )
-    ]
+    data = _two_step_pipeline_data("post_call", "next", first_on_fail="next", second_on_fail="next")
     data.update(asks_for)
 
     result = await proxy_logging.pre_call_hook(

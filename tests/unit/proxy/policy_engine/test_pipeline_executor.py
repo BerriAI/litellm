@@ -15,6 +15,7 @@ import pytest
 import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import (
@@ -30,7 +31,7 @@ from litellm.types.proxy.policy_engine.pipeline_types import (
     GuardrailPipeline,
     PipelineStep,
 )
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import CallTypesLiteral, GenericGuardrailAPIInputs
 
 try:
     from fastapi.exceptions import HTTPException
@@ -1450,10 +1451,16 @@ async def test_streaming_step_whose_guardrail_records_its_own_results_is_named(m
 class _LitellmMetadataOpeningGuardrail(CustomGuardrail):
     """Opens ``litellm_metadata`` on the request while scanning, as the A2A translation does."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
 
-    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
         request_data["litellm_metadata"] = {"user_api_key_hash": "hashed"}
         return inputs
 
