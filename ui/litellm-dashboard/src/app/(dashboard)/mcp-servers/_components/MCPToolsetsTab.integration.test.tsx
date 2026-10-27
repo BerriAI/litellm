@@ -20,6 +20,7 @@ vi.mock("@/components/networking", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPToolsets", () => ({ useMCPToolsets: vi.fn() }));
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({ useMCPServers: vi.fn() }));
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => ({ accessToken: "sk-test" }) }));
 
 const setup = () => userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
 
@@ -193,6 +194,180 @@ describe("MCPToolsetsTab create/edit toolset form", () => {
     const expectedUpdate = { toolset_id: "ts-2", toolset_name: "no-desc", description: "", tools: [] };
     await waitFor(() => {
       expect(networking.updateMCPToolset).toHaveBeenCalledWith("sk-test", expectedUpdate);
+    });
+  });
+});
+
+describe("MCPToolsetsTab tool search and bulk selection", () => {
+  const servers = [
+    { server_id: "gh", alias: "github", server_name: "GitHub" },
+    { server_id: "lin", alias: "linear", server_name: "Linear" },
+    { server_id: "broken", alias: "flaky", server_name: "Flaky" },
+  ];
+  const catalogs: Record<string, { name: string; description: string }[]> = {
+    gh: [
+      { name: "create_issue", description: "Open a GitHub issue" },
+      { name: "list_pulls", description: "List pull requests" },
+    ],
+    lin: [
+      { name: "create_ticket", description: "Create a Linear issue" },
+      { name: "list_projects", description: "List projects" },
+    ],
+  };
+
+  const renderWithServers = (toolsets: MCPToolset[] = []) => {
+    vi.mocked(useMCPToolsets).mockReturnValue({
+      data: toolsets,
+      isLoading: false,
+    } as unknown as ReturnType<typeof useMCPToolsets>);
+    vi.mocked(useMCPServers).mockReturnValue({ data: servers, isSuccess: true } as unknown as ReturnType<
+      typeof useMCPServers
+    >);
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })}>
+        <MCPToolsetsTab accessToken="sk-test" userRole="Admin" />
+      </QueryClientProvider>,
+    );
+  };
+
+  const editToolset = (tools: MCPToolset["tools"]) =>
+    ({ toolset_id: "ts-1", toolset_name: "triage", description: "", tools }) as MCPToolset;
+
+  const expectedUpdate = (tools: MCPToolset["tools"]) => ({
+    toolset_id: "ts-1",
+    toolset_name: "triage",
+    description: "",
+    tools,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(networking.listMCPTools).mockImplementation(async (_token, serverId) =>
+      serverId in catalogs
+        ? { tools: catalogs[serverId], error: null }
+        : { tools: [], error: "http_502", message: "upstream down" },
+    );
+    vi.mocked(networking.createMCPToolset).mockResolvedValue(
+      {} as Awaited<ReturnType<typeof networking.createMCPToolset>>,
+    );
+    vi.mocked(networking.updateMCPToolset).mockResolvedValue(
+      {} as Awaited<ReturnType<typeof networking.updateMCPToolset>>,
+    );
+  });
+
+  it("searches tool names and descriptions across collapsed servers and selects every match", async () => {
+    const user = setup();
+    renderWithServers();
+
+    const dialog = await openCreate(user);
+    fireEvent.change(dialog.getByPlaceholderText("e.g. github-linear-tools"), { target: { value: "issues" } });
+    await user.type(dialog.getByRole("textbox", { name: "Search tools or servers" }), "issue");
+
+    expect(await dialog.findByRole("checkbox", { name: /^create_ticket/ })).toBeInTheDocument();
+    expect(dialog.getByRole("checkbox", { name: /^create_issue/ })).toBeInTheDocument();
+    expect(dialog.queryByRole("checkbox", { name: /^list_pulls/ })).not.toBeInTheDocument();
+    expect(await dialog.findByText("2 matching tools")).toBeInTheDocument();
+
+    await user.click(dialog.getByRole("button", { name: "Select all matching" }));
+    await user.click(dialog.getByRole("button", { name: "Create Toolset" }));
+
+    await waitFor(() => {
+      expect(networking.createMCPToolset).toHaveBeenCalledWith("sk-test", {
+        toolset_name: "issues",
+        description: "",
+        tools: [
+          { server_id: "gh", tool_name: "create_issue" },
+          { server_id: "lin", tool_name: "create_ticket" },
+        ],
+      });
+    });
+  });
+
+  it("deselecting all matches keeps selected tools the search hides", async () => {
+    const user = setup();
+    renderWithServers([
+      editToolset([
+        { server_id: "gh", tool_name: "list_pulls" },
+        { server_id: "gh", tool_name: "create_issue" },
+        { server_id: "lin", tool_name: "create_ticket" },
+      ]),
+    ]);
+
+    const dialog = await openEditFor(user);
+    await user.type(dialog.getByRole("textbox", { name: "Search tools or servers" }), "create");
+    expect(await dialog.findByRole("checkbox", { name: /^create_ticket/ })).toBeChecked();
+
+    await user.click(dialog.getByRole("button", { name: "Deselect all matching" }));
+    await user.click(dialog.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(networking.updateMCPToolset).toHaveBeenCalledWith(
+        "sk-test",
+        expectedUpdate([{ server_id: "gh", tool_name: "list_pulls" }]),
+      );
+    });
+  });
+
+  it("selects all of one server's tools from its header and toggles single rows, fetching only that server", async () => {
+    const user = setup();
+    renderWithServers();
+
+    const dialog = await openCreate(user);
+    fireEvent.change(dialog.getByPlaceholderText("e.g. github-linear-tools"), { target: { value: "gh-only" } });
+    await user.click(dialog.getByRole("button", { name: /^github/ }));
+    expect(await dialog.findByRole("checkbox", { name: /^list_pulls/ })).toBeInTheDocument();
+
+    await user.click(dialog.getByRole("checkbox", { name: "Select all tools on github" }));
+    expect(dialog.getByRole("checkbox", { name: /^list_pulls/ })).toBeChecked();
+    // Clicking anywhere on a tool row toggles it exactly once.
+    await user.click(dialog.getByText("List pull requests"));
+    expect(dialog.getByRole("checkbox", { name: /^list_pulls/ })).not.toBeChecked();
+    await user.click(dialog.getByRole("button", { name: "Create Toolset" }));
+
+    await waitFor(() => {
+      expect(networking.createMCPToolset).toHaveBeenCalledWith("sk-test", {
+        toolset_name: "gh-only",
+        description: "",
+        tools: [{ server_id: "gh", tool_name: "create_issue" }],
+      });
+    });
+    expect(networking.listMCPTools).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps and flags tools whose server is unreachable or gone when saving", async () => {
+    const user = setup();
+    const tools = [
+      { server_id: "broken", tool_name: "flaky_tool" },
+      { server_id: "deleted", tool_name: "old_tool" },
+      { server_id: "gh", tool_name: "create_issue" },
+    ];
+    renderWithServers([editToolset(tools)]);
+
+    const dialog = await openEditFor(user);
+    await user.type(dialog.getByRole("textbox", { name: "Search tools or servers" }), "create");
+
+    expect(await dialog.findByText("Couldn't load tools for this server.")).toBeInTheDocument();
+    expect(await dialog.findByText("server unreachable")).toBeInTheDocument();
+    expect(dialog.getByText("server not found")).toBeInTheDocument();
+
+    await user.click(dialog.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(networking.updateMCPToolset).toHaveBeenCalledWith("sk-test", expectedUpdate(tools));
+    });
+  });
+
+  it("clears the whole toolset with Clear all", async () => {
+    const user = setup();
+    renderWithServers([editToolset([{ server_id: "gh", tool_name: "create_issue" }])]);
+
+    const dialog = await openEditFor(user);
+    await user.click(dialog.getByRole("button", { name: "Clear all" }));
+    expect(dialog.getByText("No tools added yet")).toBeInTheDocument();
+    await user.click(dialog.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(networking.updateMCPToolset).toHaveBeenCalledWith("sk-test", expectedUpdate([]));
     });
   });
 });
