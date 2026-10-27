@@ -185,11 +185,12 @@ class ResponseMetadata:
         self._update_hidden_params(new_params)
 
     def _stamp_billed_usage_cost(self, response_cost: object) -> None:
-        """A client reads what litellm billed from usage.cost, streamed or not, priced deployment or not."""
+        """A usage.cost the upstream reported becomes what litellm billed, so a client and the spend log agree on a
+        priced deployment; a reply without one keeps its usage as the upstream sent it."""
         if not isinstance(self.result, (ModelResponse, ResponsesAPIResponse)):
             return
         usage: Final = getattr(self.result, "usage", None)
-        if not isinstance(usage, (Usage, ResponseAPIUsage)):
+        if not isinstance(usage, (Usage, ResponseAPIUsage)) or getattr(usage, "cost", None) is None:
             return
         stamp_billable_usage_cost(self.result, usage, response_cost)
 
