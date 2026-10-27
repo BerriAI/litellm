@@ -12,6 +12,7 @@ from litellm.integrations.otel.mappers.base import AttributeMap
 from litellm.integrations.otel.mappers.utils import drop_none_pairs
 from litellm.integrations.otel.model.request_io import request_input, response_output, stream_output
 from litellm.integrations.otel.plumbing.context import request_root_span
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_utils import (
     truncate_base64_in_messages,  # pyright: ignore[reportUnknownVariableType]  # the helper types its messages as bare list and dict
@@ -49,7 +50,7 @@ class RootIOOpenTelemetryV2(OpenTelemetryV2):
         user_api_key_dict: "UserAPIKeyAuth",
         response: object,
     ) -> None:
-        self._stamp_root_io(data, lambda: response_output(response))
+        await self._stamp_root_io(data, lambda: response_output(response))
 
     async def _relay_stream(
         self,
@@ -64,23 +65,29 @@ class RootIOOpenTelemetryV2(OpenTelemetryV2):
         async for chunk in response:
             relayed.append(chunk)
             yield chunk
-        self._stamp_root_io(request_data, lambda: stream_output(tuple(relayed), request_data))
+        await self._stamp_root_io(request_data, lambda: stream_output(tuple(relayed), request_data))
 
-    def _stamp_root_io(self, data: Mapping[str, object], render_output: Callable[[], str | None]) -> None:
+    async def _stamp_root_io(self, data: Mapping[str, object], render_output: Callable[[], str | None]) -> None:
         if not self._capture_span_content():
             return
         root: Final = request_root_span()
         if root is None or not root.is_recording() or not self._stamps_root(root):
             return
         try:
-            output: Final = render_output()
-            if output is None:
-                return
-            rendered_input: Final = request_input(data)
+            attributes: Final = await asyncify(self._rendered_root_io)(data, render_output)
         except Exception:  # noqa: BLE001  # telemetry must never fail the request it describes
             verbose_logger.debug("otel v2: could not render the request root input or output", exc_info=True)
             return
-        root.set_attributes(self._root_io_attributes(rendered_input, output))
+        if attributes is not None:
+            root.set_attributes(attributes)
+
+    def _rendered_root_io(
+        self, data: Mapping[str, object], render_output: Callable[[], str | None]
+    ) -> AttributeMap | None:
+        """The root's input and output attributes, rendered off the event loop, or None when the response has no
+        message to show."""
+        output: Final = render_output()
+        return None if output is None else self._root_io_attributes(request_input(data), output)
 
     def _stamps_root(self, root: "Span") -> bool:
         """Whether this logger writes the input and output onto ``root``."""
@@ -147,9 +154,9 @@ class OpenInferenceRootIOOpenTelemetryV2(RootIOOpenTelemetryV2):
         async for chunk in self._relay_stream(response, request_data):
             yield chunk
 
-    def _stamp_root_io(self, data: Mapping[str, object], render_output: Callable[[], str | None]) -> None:
+    async def _stamp_root_io(self, data: Mapping[str, object], render_output: Callable[[], str | None]) -> None:
         if not _withholds_messages(self, data):
-            super()._stamp_root_io(data, render_output)
+            await super()._stamp_root_io(data, render_output)
 
     def _stamps_root(self, root: "Span") -> bool:
         return isinstance(root, ReadableSpan) and root.resource is self.tracer_provider.resource
