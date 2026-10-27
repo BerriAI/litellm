@@ -3,13 +3,12 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Final
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import pytest
 import yaml
 from integration._support.client import JSON_OBJECT, Gateway, eventually
 from integration._support.database import scratch_database
-from integration._support.database_relay import database_relay, held_statement_relay
+from integration._support.database_relay import database_relay, held_statement_relay, plaintext_database_url
 from integration._support.process import owned_proxy
 
 _READINESS_PROBE_QUERY: Final = b"SELECT 1"
@@ -21,14 +20,6 @@ def _health_routing_config(directory: Path, general_settings: dict[str, object])
     path: Final = directory / "health-routing.yaml"
     path.write_text(yaml.safe_dump(config))
     return path
-
-
-def _plaintext_database_url(database_url: str) -> str:
-    parts: Final = urlsplit(database_url)
-    parameters: Final = tuple(
-        (name, value) for name, value in parse_qsl(parts.query, keep_blank_values=True) if name != "sslmode"
-    ) + (("sslmode", "disable"),)
-    return urlunsplit(parts._replace(query=urlencode(parameters)))
 
 
 def _assert_liveness_and_readiness(gateway: Gateway, *, status_code: int, body: dict[str, str]) -> None:
@@ -51,7 +42,7 @@ def test_public_readiness_reports_database_outage_and_allow_unavailable_setting(
                 gateway,
                 tmp_path,
                 {
-                    "DATABASE_URL": _plaintext_database_url(relayed_url),
+                    "DATABASE_URL": plaintext_database_url(relayed_url),
                     "PRISMA_HEALTH_WATCHDOG_ENABLED": "false",
                 },
                 workers=1,
@@ -84,7 +75,7 @@ def test_public_readiness_reports_database_outage_and_allow_unavailable_setting(
                 gateway,
                 tmp_path,
                 {
-                    "DATABASE_URL": _plaintext_database_url(relayed_url),
+                    "DATABASE_URL": plaintext_database_url(relayed_url),
                     "PRISMA_HEALTH_WATCHDOG_ENABLED": "false",
                 },
                 config=allow_unavailable_config,
@@ -125,7 +116,7 @@ def test_public_readiness_reports_stalled_database_lookups(gateway: Gateway, tmp
             )
             with held_statement_relay(database_url, lookup_hash) as (relay, relayed_url):
                 overrides = {
-                    "DATABASE_URL": _plaintext_database_url(relayed_url),
+                    "DATABASE_URL": plaintext_database_url(relayed_url),
                     "PRISMA_HEALTH_WATCHDOG_ENABLED": "false",
                     "PROXY_DB_LOOKUP_DEADLINE_SECONDS": "1",
                     "PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS": "15",

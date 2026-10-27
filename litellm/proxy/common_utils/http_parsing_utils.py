@@ -6,6 +6,7 @@ from typing import Annotated, Any, Final, Literal, Union, get_args, get_origin
 
 import orjson
 from fastapi import Request, UploadFile, status
+from pydantic import TypeAdapter, ValidationError
 from starlette._utils import get_route_path
 from starlette.requests import HTTPConnection
 from typing_extensions import NotRequired, ReadOnly, Required, assert_never
@@ -29,6 +30,8 @@ _FORM_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-www-form-
 _BINARY_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-protobuf", "application/protobuf"})
 
 _ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
+_DECODED_JSON: Final = TypeAdapter(object)
+_JSON_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
 
 
 def resolve_inference_model(
@@ -159,13 +162,11 @@ def coerce_numeric_form_fields(
     }
 
 
-def _parse_binary_body(body: bytes) -> dict:
+def _parse_binary_body(body: bytes) -> dict[str, object]:
     """JSON sent under a binary content type still parses; real binary (protobuf) carries no params -> {}."""
     try:
-        parsed: Final = orjson.loads(body)
-        if isinstance(parsed, dict):
-            return parsed
-    except orjson.JSONDecodeError:
+        return dict(_JSON_REQUEST_BODY.validate_python(orjson.loads(body)))
+    except (orjson.JSONDecodeError, ValidationError):
         pass
     return {}
 
@@ -187,6 +188,23 @@ def is_otlp_trace_request(request: HTTPConnection) -> bool:
     if request.scope.get("type") != "http":
         return False
     return request.scope.get("method") == "POST" and get_route_path(request.scope) in {"/v1/traces", "/v1/logs"}
+
+
+def _parse_form_metadata(raw_metadata: str) -> object:
+    """The JSON body path rejects a lone surrogate escape (``"\\ud800"``) with a
+    400 because no provider or database can encode it. ``json.loads`` accepts
+    the escape, so the multipart ``metadata`` field gets the same check."""
+    parsed: Final[object] = json.loads(raw_metadata)
+    try:
+        json.dumps(parsed, ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError as e:
+        raise ProxyException(
+            message=f"Invalid form payload: metadata {e}",
+            type="invalid_request_error",
+            param="metadata",
+            code=status.HTTP_400_BAD_REQUEST,
+        ) from e
+    return parsed
 
 
 async def read_request_body(request: Request | None) -> dict:
@@ -236,9 +254,13 @@ async def read_request_body(request: Request | None) -> dict:
                     param="request_body",
                     code=status.HTTP_400_BAD_REQUEST,
                 )
-            parsed_body = dict(form_data)
-            if "metadata" in parsed_body and isinstance(parsed_body["metadata"], str):
-                parsed_body["metadata"] = json.loads(parsed_body["metadata"])
+            form_body: Final = dict(form_data)
+            raw_metadata: Final = form_body.get("metadata")
+            parsed_body = (
+                {**form_body, "metadata": _parse_form_metadata(raw_metadata)}
+                if isinstance(raw_metadata, str)
+                else form_body
+            )
         else:
             # Read the request body
             body: Final = await request.body()
@@ -249,7 +271,7 @@ async def read_request_body(request: Request | None) -> dict:
                 parsed_body = {}
             else:
                 try:
-                    parsed_body = orjson.loads(body)
+                    parsed_body = dict(_JSON_REQUEST_BODY.validate_python(orjson.loads(body)))
                 except orjson.JSONDecodeError as e:
                     # The surrogate-repair fallback below runs two full-body re.sub
                     # passes, which block the event loop on multi-MB malformed bodies.
@@ -275,8 +297,9 @@ async def read_request_body(request: Request | None) -> dict:
                     body_str = re.sub(r"(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]", "", body_str)
 
                     try:
-                        parsed_body = json.loads(body_str)
-                        json.dumps(parsed_body, ensure_ascii=False).encode("utf-8")
+                        decoded_body: Final = _DECODED_JSON.validate_python(json.loads(body_str))
+                        json.dumps(decoded_body, ensure_ascii=False).encode("utf-8")
+                        parsed_body = dict(_JSON_REQUEST_BODY.validate_python(decoded_body))
                     except (json.JSONDecodeError, UnicodeEncodeError):
                         # json.loads accepts lone surrogate escapes that no provider can encode
                         verbose_proxy_logger.error("Invalid JSON payload received: %s", e)
@@ -291,6 +314,34 @@ async def read_request_body(request: Request | None) -> dict:
         safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
         return parsed_body
 
+    except ValidationError as e:
+        from fastapi.routing import APIRoute
+
+        from litellm.proxy.auth.auth_utils import (
+            request_dispatched_to_pass_through_endpoint,
+            request_dispatched_to_provider_pass_through,
+        )
+        from litellm.proxy.lens.buffering import LensRoute
+
+        route: Final[object] = request.scope.get("route") if request is not None else None
+        if request is not None and (
+            request_dispatched_to_pass_through_endpoint(request)
+            or request_dispatched_to_provider_pass_through(request)
+            or isinstance(route, LensRoute)
+            or (
+                isinstance(route, APIRoute)
+                and route.body_field is not None
+                and not route.body_field.field_info.is_required()
+                and (await request.body()).strip() == b"null"
+            )
+        ):
+            return {}
+        raise ProxyException(
+            message="Invalid JSON payload: expected an object",
+            type="invalid_request_error",
+            param="request_body",
+            code=status.HTTP_400_BAD_REQUEST,
+        ) from e
     except (json.JSONDecodeError, orjson.JSONDecodeError, ProxyException) as e:
         # Re-raise ProxyException as-is
         verbose_proxy_logger.error("Invalid JSON payload received: %s", e)
@@ -370,6 +421,16 @@ def safe_set_request_parsed_body(
 _safe_set_request_parsed_body: Final = safe_set_request_parsed_body
 
 
+def detach_request_parsed_body(
+    request: Request, request_data: Mapping[str, object]
+) -> dict[str, object]:  # mutable-ok: the client's body copy, which the base tag merges write into
+    client_body: Final = dict(request_data)
+    cached: Final[object] = request.scope.get("parsed_body")
+    if isinstance(cached, tuple) and cached[1] is request_data:
+        request.scope["parsed_body"] = (cached[0], client_body)  # rebind-ok: cache holds the client copy
+    return client_body
+
+
 def rewrite_request_model(
     request_data: dict[str, object],  # mutable-ok: the request body is rewritten in place for every downstream reader
     request: Request | None,
@@ -382,7 +443,9 @@ def rewrite_request_model(
     if request is None:
         return
     cached_body: Final = _safe_get_request_parsed_body(request=request)
-    body: Final = {**cached_body, "model": model} if cached_body is not None else request_data
+    body: Final = (
+        {**_JSON_REQUEST_BODY.validate_python(cached_body), "model": model} if cached_body is not None else request_data
+    )
     safe_set_request_parsed_body(request=request, parsed_body=body)
     request._json = body  # pyright: ignore[reportPrivateUsage]  # Starlette JSON cache
     request._body = orjson.dumps(body)  # pyright: ignore[reportPrivateUsage]  # Starlette body cache
@@ -665,7 +728,7 @@ def get_tags_from_request_body(request_body: Mapping[str, object]) -> list[str]:
     if isinstance(metadata, str):
         from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
-        parsed: Final[object] = safe_json_loads(metadata)
+        parsed: Final[object] = _DECODED_JSON.validate_python(safe_json_loads(metadata))
         metadata = parsed if isinstance(parsed, dict) else {}
     elif not isinstance(metadata, dict):
         metadata = {}

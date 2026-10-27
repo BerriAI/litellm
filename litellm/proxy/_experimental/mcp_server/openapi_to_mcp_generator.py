@@ -9,7 +9,7 @@ import os
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
-from typing import Any, Final, TypedDict
+from typing import Final, Literal, Protocol, TypeAlias, TypedDict, overload
 from urllib.parse import quote
 
 import httpx
@@ -91,14 +91,38 @@ class _OpenAPIOperation(TypedDict, total=False):
     requestBody: _OpenAPIRequestBody
 
 
-class _OpenAPIPathItem(TypedDict, total=False):
-    summary: str
-    description: str
-    parameters: Sequence[_OpenAPIParameter]
+_OpenAPIMethod: TypeAlias = Literal["get", "post", "put", "delete", "patch"]
+
+
+class _OpenAPIPathItem(Protocol):
+    def __contains__(self, key: object, /) -> bool: ...
+
+    def __getitem__(self, key: _OpenAPIMethod, /) -> _OpenAPIOperation: ...
+
+    @overload
+    def get(self, key: _OpenAPIMethod, /) -> _OpenAPIOperation | None: ...
+
+    @overload
+    def get(
+        self, key: Literal["parameters"], default: Sequence[_OpenAPIParameter], /
+    ) -> Sequence[_OpenAPIParameter]: ...
 
 
 class _OpenAPIComponents(TypedDict, total=False):
     parameters: Mapping[str, _OpenAPIParameter]
+
+
+class _OpenAPIServer(TypedDict):
+    url: ReadOnly[str]
+
+
+class _OpenAPISpec(TypedDict, total=False):
+    paths: ReadOnly[Mapping[str, _OpenAPIPathItem]]
+    components: ReadOnly[_OpenAPIComponents]
+    servers: ReadOnly[Sequence[_OpenAPIServer]]
+    host: ReadOnly[str]
+    schemes: ReadOnly[Sequence[str]]
+    basePath: ReadOnly[str]
 
 
 # Store the base URL and headers globally
@@ -157,7 +181,7 @@ def _sanitize_path_parameter_value(param_value: object, param_name: str) -> str:
     return quote(value_str, safe="")
 
 
-def load_openapi_spec(filepath: str) -> dict[str, object]:
+def load_openapi_spec(filepath: str) -> _OpenAPISpec:
     """
     Sync wrapper. For URL specs, use the shared/custom MCP httpx client.
     """
@@ -175,7 +199,7 @@ def load_openapi_spec(filepath: str) -> dict[str, object]:
     return asyncio.run(load_openapi_spec_async(filepath))
 
 
-async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> dict[str, Any]:
+async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> _OpenAPISpec:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
         r: Final[httpx.Response] = (
@@ -194,7 +218,7 @@ async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None
         return json.load(f)
 
 
-def get_base_url(spec: Mapping[str, Any], spec_path: str | None = None) -> str:
+def get_base_url(spec: _OpenAPISpec, spec_path: str | None = None) -> str:
     """Extract base URL from OpenAPI spec."""
     # OpenAPI 3.x
     if "servers" in spec and spec["servers"]:
@@ -604,13 +628,13 @@ def create_tool_function(
     return tool_function
 
 
-def register_tools_from_openapi(spec: Mapping[str, Any], base_url: str) -> None:
+def register_tools_from_openapi(spec: _OpenAPISpec, base_url: str) -> None:
     """Register MCP tools from OpenAPI specification."""
-    paths: Final[Mapping[str, Mapping[str, _OpenAPIOperation]]] = spec.get("paths", {})
+    paths: Final = spec.get("paths", {})
     used_names: Final = set()
 
     for path, path_item in paths.items():
-        for method in ["get", "post", "put", "delete", "patch"]:
+        for method in ("get", "post", "put", "delete", "patch"):
             if method in path_item:
                 operation = path_item[method]
 

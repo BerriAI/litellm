@@ -11,6 +11,7 @@ from typing import Final, Literal
 
 from pydantic import JsonValue
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 
@@ -52,12 +53,15 @@ def _sanitized_bedrock_tool_name(raw_name: JsonValue) -> str:
 
 def _to_bedrock_tool_spec(tool: JsonValue) -> dict[str, JsonValue]:
     fields: Final = _json_dict(tool)
-    name: Final = _sanitized_bedrock_tool_name(fields.get("name", ""))
+    chat_function: Final = _json_dict(fields.get("function"))
+    spec: Final = chat_function or fields
+    name: Final = _sanitized_bedrock_tool_name(spec.get("name", ""))
+    schema_field: Final = "parameters" if chat_function else "input_schema"
     return {
         "toolSpec": {
             "name": name,
-            "description": fields.get("description") or name,
-            "inputSchema": {"json": fields.get("input_schema", {"type": "object", "properties": {}})},
+            "description": spec.get("description") or name,
+            "inputSchema": {"json": spec.get(schema_field, {"type": "object", "properties": {}})},
         }
     }
 
@@ -233,9 +237,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_region_name=aws_region_name,
         )
-        endpoint: Final = f"{base_url}/model/{encoded_model_id}/count-tokens"
-
-        return endpoint
+        return join_api_base(base_url, f"model/{encoded_model_id}/count-tokens")
 
     def transform_bedrock_response_to_anthropic(
         self, bedrock_response: Mapping[str, JsonValue]

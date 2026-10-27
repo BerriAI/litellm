@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 import litellm.litellm_core_utils
@@ -27,6 +28,7 @@ from litellm.llms.base_llm.base_utils import (
     ResponseFormatSchema,
     names_a_response_format_property,
     partial_response_format_answer,
+    response_format_answer_json,
     response_format_envelope_contents,
     split_response_format_answer,
 )
@@ -74,9 +76,14 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.llms.base_llm.chat.transformation import BaseConfig
 
+_THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
+
 
 def _loads_stream_chunk(payload: str) -> dict[str, object]:
     return json.loads(payload)
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 _EnvelopeVerdict = Literal["undecided", "pass_through", "hold"]
@@ -98,17 +105,17 @@ def _key_after_a_string_verdict(string_value_start: str, schema: ResponseFormatS
     next_key: Final = _STRING_VALUE_THEN_KEY.match(string_value_start)
     if next_key is None:
         return "undecided"
-    return "pass_through" if next_key.group(1) in schema.property_names else "hold"
+    return "pass_through" if next_key.group(1) in schema.declared_names else "hold"
 
 
 def _is_a_label(text: str, schema: ResponseFormatSchema, tool_name: str) -> bool:
-    return text in schema.property_names or text == tool_name
+    return text in schema.declared_names or text == tool_name
 
 
 def _label_verdict(label: str, next_key: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:
     if _is_a_label(label, schema, tool_name):
         return "hold"
-    return "pass_through" if next_key in schema.property_names else "undecided"
+    return "pass_through" if next_key in schema.declared_names else "undecided"
 
 
 def _leading_labels_verdict(string_value_start: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:
@@ -153,26 +160,26 @@ def _prefix_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name:
             return "hold"
         if first_value is None and _NAME_VALUE_PREFIX.match(buffered_json):
             return "undecided"
-    if first_key.group(1) == "values" and "values" not in schema.property_names:
+    if first_key.group(1) == "values" and "values" not in schema.declared_names:
         return "hold"
-    if first_key.group(1) in schema.property_names or not schema.property_names:
+    if first_key.group(1) in schema.declared_names or not schema.declared_names:
         return "pass_through"
     return _first_value_verdict(buffered_json[first_key.end() :], schema, tool_name)
 
 
 def _held_answer(held: str, schema: ResponseFormatSchema) -> str:
     try:
-        payload: Final[object] = json.loads(held)
+        payload: Final = _DECODED_JSON.validate_python(json.loads(held))
     except (json.JSONDecodeError, RecursionError):
         return held
     contents: Final = response_format_envelope_contents(payload, schema, RESPONSE_FORMAT_TOOL_NAME)
-    return held if contents is None else json.dumps(contents)
+    return held if contents is None else response_format_answer_json(contents)
 
 
 def _split_answer_text(blocks: tuple[str, ...], schema: ResponseFormatSchema) -> str:
     answer: Final = split_response_format_answer(blocks, schema)
     if answer is not None:
-        return json.dumps(answer)
+        return response_format_answer_json(answer)
     return "".join(_held_answer(block, schema) for block in blocks)
 
 
@@ -685,6 +692,7 @@ class ModelResponseIterator:
         self._response = response
         self.content_blocks: list[ContentBlockDelta] = []
         self.tool_index = -1
+        self.thinking_block_index = -1
         self.json_mode = json_mode
         self.speed = speed
         self._cumulative_usage: Mapping[str, object] = MappingProxyType({})
@@ -832,22 +840,37 @@ class ModelResponseIterator:
                     ChatCompletionThinkingBlock(
                         type="thinking",
                         thinking=thinking_content,
+                        index=self.thinking_block_index,
                     )
                 ]
                 provider_specific_fields["thinking_blocks"] = thinking_blocks
 
             signature: Final = content_block["delta"].get("signature")
             if isinstance(signature, str) and signature:
-                thinking_blocks = [ChatCompletionThinkingBlock(type="thinking", thinking="", signature=signature)]
+                thinking_blocks = [
+                    ChatCompletionThinkingBlock(
+                        type="thinking", thinking="", signature=signature, index=self.thinking_block_index
+                    )
+                ]
                 provider_specific_fields["thinking_blocks"] = thinking_blocks
                 if reasoning_content is None:
                     reasoning_content = ""
         elif "content" in content_block["delta"] and content_block["delta"].get("type") == "compaction_delta":
-            # Handle compaction delta
+            compaction_delta: Final = content_block["delta"]["content"]
             provider_specific_fields["compaction_delta"] = {
                 "type": "compaction_delta",
-                "content": content_block["delta"]["content"],
+                "content": compaction_delta,
             }
+            if self.compaction_blocks and isinstance(compaction_delta, str):
+                streamed_summary: Final = self.compaction_blocks[-1].get("content")
+                self.compaction_blocks = [
+                    *self.compaction_blocks[:-1],
+                    {
+                        **self.compaction_blocks[-1],
+                        "content": (streamed_summary if isinstance(streamed_summary, str) else "") + compaction_delta,
+                    },
+                ]
+                provider_specific_fields["compaction_blocks"] = self.compaction_blocks
 
         return (
             text,
@@ -869,6 +892,7 @@ class ModelResponseIterator:
             ChatCompletionRedactedThinkingBlock(
                 type="redacted_thinking",
                 data=content_block_start["content_block"]["data"],
+                index=self.thinking_block_index,
             )
         ]
         provider_specific_fields["thinking_blocks"] = thinking_blocks
@@ -970,6 +994,8 @@ class ModelResponseIterator:
                 self.content_blocks = []  # reset content blocks when new block starts
                 # Track current content block type for filtering deltas
                 self.current_content_block_type = content_block_start["content_block"]["type"]
+                if self.current_content_block_type in _THINKING_BLOCK_TYPES:
+                    self.thinking_block_index += 1
                 if content_block_start["content_block"]["type"] == "text":
                     text = self._release_answer_close() + content_block_start["content_block"]["text"]
                 elif (
@@ -1053,13 +1079,14 @@ class ModelResponseIterator:
                         # Fixes: https://github.com/BerriAI/litellm/issues/18137
                         self.web_search_results.append(content_block_start["content_block"])
                         provider_specific_fields["web_search_results"] = self.web_search_results
-                    elif content_type != "tool_search_tool_result":
-                        # Handle other tool results (code execution, etc.)
-                        # Skip tool_search_tool_result as it's internal metadata
+                    else:
                         self.tool_results.append(content_block_start["content_block"])
                         provider_specific_fields["tool_results"] = self.tool_results
-                        # Convert to provider-neutral code_interpreter_results
-                        provider_specific_fields["code_interpreter_results"] = self._build_code_interpreter_results()
+                        if content_type != "tool_search_tool_result":
+                            # Convert to provider-neutral code_interpreter_results
+                            provider_specific_fields["code_interpreter_results"] = (
+                                self._build_code_interpreter_results()
+                            )
 
             elif type_chunk == "content_block_stop":
                 ContentBlockStop(**chunk)
@@ -1267,7 +1294,7 @@ class ModelResponseIterator:
             return None
         self._streamed_answer_keys = streamed | frozenset(fields)
         separator: Final = ", " if streamed else ""
-        return f"{separator}{json.dumps(fields)[1:-1]}" if fields else ""
+        return f"{separator}{response_format_answer_json(fields)[1:-1]}" if fields else ""
 
     def _flush_response_format_buffer(self) -> str:
         schema: Final = self.response_format_schema
@@ -1297,6 +1324,17 @@ class ModelResponseIterator:
         if self.response_format_schema is None or not blocks:
             return ""
         return _split_answer_text(blocks, self.response_format_schema)
+
+    def cut_stream_chunk(self) -> ModelResponseStream | None:
+        unsent: Final = self._flush_response_format_buffer() if self._response_format_buffer.getvalue() else ""
+        text: Final = unsent + self._release_answer_close() + self._drain_split_answer_blocks()
+        if not text:
+            return None
+        return ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(content=text))],
+            id=self.response_id,
+            model=self.served_model,
+        )
 
     def _handle_message_delta(
         self, chunk: dict
@@ -1412,6 +1450,9 @@ class ModelResponseIterator:
                     result = self._handle_accumulated_json_chunk(data_str="", is_final=True)
                     if result is not None:
                         return result
+                cut_stream_chunk = self.cut_stream_chunk()
+                if cut_stream_chunk is not None:
+                    return cut_stream_chunk
                 raise StopIteration
             except ValueError as e:
                 raise RuntimeError(f"Error receiving chunk from stream: {e}")
@@ -1458,6 +1499,9 @@ class ModelResponseIterator:
                     result = self._handle_accumulated_json_chunk(data_str="", is_final=True)
                     if result is not None:
                         return result
+                cut_stream_chunk = self.cut_stream_chunk()
+                if cut_stream_chunk is not None:
+                    return cut_stream_chunk
                 raise StopAsyncIteration
             except ValueError as e:
                 raise RuntimeError(f"Error receiving chunk from stream: {e}")

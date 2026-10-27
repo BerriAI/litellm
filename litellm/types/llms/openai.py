@@ -2,7 +2,7 @@ import builtins
 from collections.abc import Iterable, Mapping
 from enum import Enum
 from os import PathLike
-from typing import IO, Any, Final, Generic, Literal, Optional, TypeAlias, Union
+from typing import IO, TYPE_CHECKING, Any, Final, Generic, Literal, Optional, TypeAlias, Union
 
 import httpx
 from openai import Omit
@@ -55,6 +55,7 @@ except (ImportError, AttributeError):
 
 from typing import Annotated
 
+from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from openai.types.responses.response_create_params import (
     Reasoning,
     ResponseIncludable,
@@ -91,9 +92,13 @@ from litellm.types.responses.main import (
     OutputCodeInterpreterCall,
     OutputFunctionToolCall,
     OutputImageGenerationCall,
+    OutputToolSearchCall,
 )
 
 from .base import CachedTokensDetails
+
+if TYPE_CHECKING:
+    from litellm.types.utils import Usage
 
 FileContent = IO[bytes] | bytes | PathLike
 
@@ -118,6 +123,7 @@ class BinaryResponseSummary(TypedDict):
     object: ReadOnly[Literal["binary"]]
     content_type: ReadOnly[str | None]
     num_bytes: ReadOnly[int]
+    usage: NotRequired[ReadOnly[Mapping[str, builtins.object]]]
 
 
 _ResponseT = TypeVar("_ResponseT", bound=httpx.Response | SDKResponse, default=httpx.Response)
@@ -125,6 +131,7 @@ _ResponseT = TypeVar("_ResponseT", bound=httpx.Response | SDKResponse, default=h
 
 class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT]):
     _hidden_params: dict
+    usage: "Usage | None"
     response: _ResponseT  # pyright: ignore[reportIncompatibleVariableOverride]  # SDK accepts both backends at runtime
 
     @property
@@ -138,6 +145,7 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT
     def __init__(self, response: _ResponseT) -> None:
         super().__init__(response)  # pyright: ignore[reportArgumentType]  # SDK accepts both backends at runtime
         self._hidden_params = {}
+        self.usage = None
 
     @property
     def content_type(self) -> str | None:
@@ -145,11 +153,12 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT
         return headers.get("content-type")
 
     def logging_summary(self) -> BinaryResponseSummary:
-        return {
+        summary: Final[BinaryResponseSummary] = {
             "object": "binary",
             "content_type": self.content_type,
             "num_bytes": self._num_bytes(),
         }
+        return summary if self.usage is None else {**summary, "usage": self.usage.model_dump()}
 
     def _num_bytes(self) -> int:
         try:
@@ -674,12 +683,12 @@ class ChatCompletionCachedContent(TypedDict):
 
 class PromptCacheBreakpoint(TypedDict):
     mode: ReadOnly[Literal["explicit"]]
-    ttl: NotRequired[ReadOnly[Literal["30m"]]]
+    ttl: NotRequired[ReadOnly[Literal["30m", "12h"]]]
 
 
 class PromptCacheOptions(TypedDict, total=False):
     mode: ReadOnly[Literal["implicit", "explicit"]]
-    ttl: ReadOnly[Literal["30m"]]
+    ttl: ReadOnly[Literal["30m", "12h"]]
 
 
 class ChatCompletionThinkingBlock(TypedDict, total=False):
@@ -687,12 +696,14 @@ class ChatCompletionThinkingBlock(TypedDict, total=False):
     thinking: str
     signature: str | None
     cache_control: dict | ChatCompletionCachedContent | None
+    index: ReadOnly[int]
 
 
 class ChatCompletionRedactedThinkingBlock(TypedDict, total=False):
     type: Required[Literal["redacted_thinking"]]
     data: str
     cache_control: dict | ChatCompletionCachedContent | None
+    index: ReadOnly[int]
 
 
 class ChatCompletionReasoningSummaryTextBlock(TypedDict, total=False):
@@ -1076,6 +1087,7 @@ class ChatCompletionToolParam(OpenAIChatCompletionToolParam, total=False):
     cache_control: ChatCompletionCachedContent
     allowed_callers: list[str]
     eager_input_streaming: ReadOnly[bool]
+    defer_loading: ReadOnly[bool]
 
 
 class Function(TypedDict, total=False):
@@ -1281,7 +1293,12 @@ class ShellToolParam(TypedDict, total=False):
     """Environment config: ``type`` (e.g. ``\"container_auto\"``, ``\"container_reference\"``, ``\"local\"``), optional ``container_id``, ``network_policy``, ``domain_secrets``, ``skills``."""
 
 
-ALL_RESPONSES_API_TOOL_PARAMS = ToolParam | ComputerToolParam | ShellToolParam
+class OpenAIToolSearchToolParam(TypedDict, total=False):
+    type: Required[ReadOnly[Literal["tool_search"]]]
+    execution: ReadOnly[str]
+
+
+ALL_RESPONSES_API_TOOL_PARAMS = ToolParam | ComputerToolParam | ShellToolParam | OpenAIToolSearchToolParam
 
 
 class PromptObject(TypedDict, total=False):
@@ -1365,10 +1382,23 @@ class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     model_config = {"extra": "allow"}
 
 
+class CacheWriteTokensDetails(BaseLiteLLMOpenAIResponseObject):
+    ttl_30m_tokens: int
+    ttl_12h_tokens: int
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+def _is_none(value: object) -> bool:
+    return value is None
+
+
 class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     audio_tokens: int | None = None
     cached_tokens: int = 0
     cached_tokens_details: CachedTokensDetails | None = None
+    cache_write_tokens: int | None = Field(default=None, exclude_if=_is_none)
+    cache_write_tokens_details: CacheWriteTokensDetails | None = Field(default=None, exclude_if=_is_none)
     image_tokens: int | None = None
     text_tokens: int | None = None
     video_tokens: int | None = None
@@ -1412,10 +1442,26 @@ class WebSearchToolUsage(LiteLLMBaseModel):
     num_requests: NonNegativeInt
 
 
+class ImageGenTokenDetails(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    image_tokens: NonNegativeInt = 0
+    text_tokens: NonNegativeInt = 0
+
+
+class ImageGenToolUsage(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    total_tokens: NonNegativeInt = 0
+    input_tokens_details: ImageGenTokenDetails | None = None
+    output_tokens_details: ImageGenTokenDetails | None = None
+
+
 class ResponsesToolUsage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     web_search: WebSearchToolUsage | None = None
+    image_gen: ImageGenToolUsage | None = None
 
 
 ResponsesAPIStatus = Literal["completed", "failed", "in_progress", "cancelled", "queued", "incomplete"]
@@ -1423,6 +1469,17 @@ ResponsesAPIStatus = Literal["completed", "failed", "in_progress", "cancelled", 
 The status of the response generation.
 One of: completed, failed, in_progress, cancelled, queued, or incomplete.
 """
+
+
+_NULL_DROPPED_OUTPUT_ITEM_KEYS: Final = frozenset(
+    (
+        ("reasoning", "status"),
+        ("reasoning", "content"),
+        ("reasoning", "encrypted_content"),
+        ("tool_search_call", "created_by"),
+        ("tool_search_output", "created_by"),
+    )
+)
 
 
 class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
@@ -1444,6 +1501,8 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             | ResponseFunctionToolCall
             | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
+            | OutputToolSearchCall
+            | ResponseCompactionItem
         ]
     )
     parallel_tool_calls: bool | None = None
@@ -1513,8 +1572,12 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             return serialized
         return [
             (
-                {k: v for k, v in item.items() if v is not None or k not in ("status", "content", "encrypted_content")}
-                if isinstance(item, dict) and item.get("type") == "reasoning"
+                {
+                    k: v
+                    for k, v in item.items()
+                    if v is not None or (item.get("type"), k) not in _NULL_DROPPED_OUTPUT_ITEM_KEYS
+                }
+                if isinstance(item, dict)
                 else item
             )
             for item in serialized
@@ -1672,6 +1735,7 @@ class ResponsePartAddedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.RESPONSE_PART_ADDED]
     item_id: str
     output_index: int
+    summary_index: int = 0
     part: dict
 
 
@@ -2245,6 +2309,16 @@ class OpenAIRealtimeContentPartDone(TypedDict):
     type: Literal["response.content_part.done"]
 
 
+class OpenAIRealtimeFunctionCallArgumentsDelta(TypedDict):
+    type: ReadOnly[Literal["response.function_call_arguments.delta"]]
+    event_id: ReadOnly[str]
+    response_id: ReadOnly[str]
+    item_id: ReadOnly[str]
+    output_index: ReadOnly[int]
+    call_id: ReadOnly[str]
+    delta: ReadOnly[str]
+
+
 class OpenAIRealtimeFunctionCallArgumentsDone(TypedDict):
     type: Literal["response.function_call_arguments.done"]
     event_id: str
@@ -2412,6 +2486,7 @@ OpenAIRealtimeEvents = (
     | OpenAIRealtimeResponseAudioDone
     | OpenAIRealtimeContentPartDone
     | OpenAIRealtimeOutputItemDone
+    | OpenAIRealtimeFunctionCallArgumentsDelta
     | OpenAIRealtimeFunctionCallArgumentsDone
     | OpenAIRealtimeDoneEvent
     | OpenAIRealtimeInputAudioBufferSpeechEvent

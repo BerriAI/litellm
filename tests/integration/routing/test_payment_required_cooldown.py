@@ -43,7 +43,7 @@ from integration.routing.test_payment_required_mapping import (
 from pydantic import JsonValue
 from redis import Redis
 
-pytestmark: Final = pytest.mark.timeout(300)
+pytestmark: Final = [pytest.mark.timeout(300), pytest.mark.shares_worker_state]
 
 COOLDOWN_SECONDS: Final = 300
 RELOAD_SECONDS: Final = 2

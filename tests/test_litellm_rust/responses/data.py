@@ -1,10 +1,9 @@
 from typing import Final
 
 import litellm
-from litellm.rust_bridge.catalog import Route
 from tests.test_litellm_rust.support.gaps import gap
 from tests.test_litellm_rust.support.recording_server import RecordingServer
-from tests.test_litellm_rust.support.routing import call_natively
+from tests.test_litellm_rust.support.routing import call_public
 
 RESPONSES_MODEL: Final = "openai/gpt-6.1-sol"
 RESPONSES_TEXT: Final = "Hello from native Responses"
@@ -59,8 +58,7 @@ RATE_LIMITED: Final = _error("rate_limit_exceeded")
 
 
 async def call(server: RecordingServer, *, asynchronous: bool = True, **kwargs: object) -> object:
-    return await call_natively(
-        Route.RESPONSES,
+    return await call_public(
         litellm.responses,
         litellm.aresponses,
         REQUEST,
@@ -71,5 +69,7 @@ async def call(server: RecordingServer, *, asynchronous: bool = True, **kwargs: 
 
 
 SYNC_DEPLOYMENT_HOOK: Final = gap("native sync calls skip the async pre-call deployment hook")
-STREAMING: Final = gap("native Responses streaming declines to Python", raises=RuntimeError)
+STREAMING: Final = gap(
+    "native Responses streaming is unsupported, the catalog keeps it on Python", raises=litellm.APIConnectionError
+)
 BODY_HOOKS: Final = gap("native Responses does not run the handler body hooks")
