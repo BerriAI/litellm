@@ -256,6 +256,18 @@
     "supported_endpoints": [
       "/v1/chat/completions",
       "/v1/responses"
+    ],
+  "watt": {
+    "base_url": "https://api.watt-cloud.com/v1",
+    "api_key_env": "WATT_API_KEY",
+    "api_base_env": "WATT_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses",
+      "/v1/messages"
     ]
   }
 }

@@ -75684,6 +75684,7 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing",
         "supports_web_search": true
     },
+<<<<<<< HEAD
     "gpt-6.1-terra": {
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_12hr": 2.5e-06,
@@ -76005,5 +76006,336 @@
             "high",
             "max"
         ]
+    },
+    "watt/DeepSeek-V4-Flash": {
+        "cache_read_input_token_cost": 2.8e-08,
+        "input_cost_per_token": 1.4e-07,
+        "litellm_provider": "watt",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "source": "https://www.watt-cloud.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "watt/DeepSeek-V4-Flash-0731": {
+        "cache_read_input_token_cost": 1.4e-08,
+        "input_cost_per_token": 4.4e-07,
+        "litellm_provider": "watt",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "source": "https://www.watt-cloud.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "watt/DeepSeek-V4-Pro": {
+        "cache_read_input_token_cost": 1.4e-07,
+        "input_cost_per_token": 1.6e-06,
+        "litellm_provider": "watt",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "source": "https://www.watt-cloud.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "watt/DeepSeek-V4.1-Flash": {
+        "cache_read_input_token_cost": 6e-09,
+        "input_cost_per_token": 2.85e-07,
+        "litellm_provider": "watt",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "source": "https://www.watt-cloud.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "watt/DeepSeek-V4.1-Flash-1017": {
+        "cache_read_input_token_cost": 6e-09,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "watt",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "source": "https://www.watt-cloud.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "watt/GLM-5.1": {
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 1.38e-06,
+        "litellm_provider": "watt",
+        "max_input_tokens": 202752,
+        "mode": "chat",
+        "source": "https://www.watt-cloud.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "watt/GLM-5.2": {
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "watt",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "source": "https://www.watt-cloud.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "watt/GLM-5.3": {
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "watt",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "source": "https://www.watt-cloud.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "watt/GLM-5.3-Flash": {
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "watt",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "source": "https://www.watt-cloud.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "watt/Hy4-preview": {
+        "cache_read_input_token_cost": 4.2e-08,
+        "input_cost_per_token": 8.34e-07,
+        "litellm_provider": "watt",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "source": "https://www.watt-cloud.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "watt/Kimi-K2.5": {
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "watt",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "source": "https://www.watt-cloud.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "watt/Kimi-K2.7-Code": {
+        "cache_read_input_token_cost": 1.9e-07,
+        "input_cost_per_token": 9.5e-07,
+        "litellm_provider": "watt",
+        "max_input_tokens": 271360,
+        "mode": "chat",
+        "source": "https://www.watt-cloud.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "watt/Kimi-K3": {
+        "cache_read_input_token_cost": 3e-07,
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "watt",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "source": "https://www.watt-cloud.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "watt/Kimi-K3.1-Pro": {
+        "cache_read_input_token_cost": 2e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "watt",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "source": "https://www.watt-cloud.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "watt/MiniMax-M3": {
+        "cache_read_input_token_cost": 6e-08,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "watt",
+        "max_input_tokens": 524288,
+        "mode": "chat",
+        "source": "https://www.watt-cloud.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "watt/Qwen3.5-122B-A10B": {
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "watt",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "source": "https://www.watt-cloud.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "watt/Qwen3.5-27B": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "watt",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "source": "https://www.watt-cloud.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "watt/Qwen3.5-35B-A3B": {
+        "input_cost_per_token": 2.5e-07,
+        "litellm_provider": "watt",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "source": "https://www.watt-cloud.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "watt/Qwen3.5-397B-A17B": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "watt",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "source": "https://www.watt-cloud.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     }
 }
