@@ -59,6 +59,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.utils import CredentialItem
+from litellm.utils import get_requester_metadata
 
 
 def test_check_if_token_is_service_account():
@@ -264,6 +265,43 @@ async def test_add_litellm_data_to_request_keeps_requester_ip_address_for_guardr
     )
 
     assert updated_data["metadata"]["requester_ip_address"] == "203.0.113.9"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "data, expected",
+    (
+        ({"model": "gpt-4o"}, None),
+        ({"model": "gpt-4o", "metadata": {"team": "search"}}, {"team": "search"}),
+    ),
+)
+async def test_proxy_forwards_only_caller_metadata_to_openai(
+    monkeypatch: pytest.MonkeyPatch, data: dict[str, object], expected: dict[str, str] | None
+) -> None:
+    from litellm.proxy import proxy_server
+
+    settings: Final = {}
+    monkeypatch.setattr(proxy_server, "general_settings", settings)
+    request_mock: Final = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json", "user-agent": "test-agent"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    updated_data: Final = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", user_id="u1"),
+        proxy_config=MagicMock(),
+        general_settings=settings,
+        version="test-version",
+    )
+
+    assert get_requester_metadata(updated_data["metadata"]) == expected, f"metadata={updated_data['metadata']!r}"
 
 
 @pytest.mark.asyncio
