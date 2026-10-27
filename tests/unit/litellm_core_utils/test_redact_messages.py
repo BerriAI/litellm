@@ -26,15 +26,16 @@ import litellm
 from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.litellm_core_utils.redact_messages import (
     _redact_responses_api_output,
     _redacted_responses_api_response,
     perform_redaction,
     redacted_model_call_details_for_custom_logger,
+    redacted_response_obj_for_custom_logger,
     redacted_standard_logging_payload,
     should_redact_message_logging,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.responses.main import mock_responses_api_response
 from litellm.types.router import BaselineRouteStamp
 from litellm.types.utils import (
@@ -176,7 +177,11 @@ def test_redaction_hides_a_compaction_summary_in_responses_api_output(shape: str
         object="response",
         status="completed",
         output=[
-            {"type": "compaction", "id": "cmp_1", "encrypted_content": json.dumps({"type": "compaction", "content": SECRET})}
+            {
+                "type": "compaction",
+                "id": "cmp_1",
+                "encrypted_content": json.dumps({"type": "compaction", "content": SECRET}),
+            }
         ],
     )
     result: Final = response if shape == "object" else response.model_dump()
@@ -2041,3 +2046,32 @@ async def test_redaction_with_metadata_completion_api():
     response = standard_logging_payload["response"]
     assert response["choices"][0]["message"]["content"] == "redacted-by-litellm"
     assert standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
+
+
+def test_perform_redaction_strips_the_matched_text_from_the_bedrock_guardrail_traces() -> None:
+    finding = {
+        "guardrail": {
+            "inputAssessment": {
+                "gid": {
+                    "sensitiveInformationPolicy": {
+                        "piiEntities": [{"type": "US_SSN", "match": "123-45-6789", "action": "ANONYMIZED"}]
+                    }
+                }
+            }
+        }
+    }
+    response = litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "hi"}}], model="x")
+    setattr(response, "trace", copy.deepcopy(finding))
+    setattr(response, "amazon-bedrock-trace", copy.deepcopy(finding))
+    opted_out: Final = CustomLogger(message_logging=False)
+
+    redacted: Final = redacted_response_obj_for_custom_logger(response, opted_out)
+    redacted_dict: Final = redacted_response_obj_for_custom_logger(
+        {"choices": [], "trace": copy.deepcopy(finding)}, opted_out
+    )
+
+    assert isinstance(redacted, litellm.ModelResponse)
+    assert "123-45-6789" not in redacted.model_dump_json()
+    assert "US_SSN" in redacted.model_dump_json(), "the finding stays, only its matched text goes"
+    assert "123-45-6789" not in str(redacted_dict)
+    assert "123-45-6789" in response.model_dump_json(), "the caller's own response is not redacted"
