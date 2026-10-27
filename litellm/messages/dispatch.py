@@ -3,10 +3,8 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Itera
 from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
-from litellm.exceptions import BadRequestError
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.pass_through.messages import handler as main
-from litellm.rust_bridge import detectors
+from litellm.rust_bridge import detectors, provider
 from litellm.rust_bridge.catalog import Feature, Route, RouteContext, Target
 from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.messages import detectors as route_detectors
@@ -21,7 +19,6 @@ from litellm.rust_bridge.public_call import (
     native_call,
     native_call_hook,
     optional_sequence,
-    optional_str,
     signature,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
@@ -75,16 +72,6 @@ def _public_request(
     return native_call(legacy, args, _native_kwargs(fields, kwargs))
 
 
-def _resolved(request: NativeCall) -> tuple[str, str | None]:
-    model: Final = str(request.resolved["model"])
-    provider: Final = optional_str(request.resolved.get("custom_llm_provider"))
-    try:
-        resolved_model, resolved_provider, _, _ = get_llm_provider(model, provider)
-    except BadRequestError:
-        return model, provider
-    return resolved_model, resolved_provider
-
-
 def _target(request: NativeCall, model: str, provider: str | None) -> Target:
     requested_model: Final = str(request.resolved["model"])
     model_info: Final = request.resolved.get("model_info")
@@ -119,33 +106,47 @@ _ASYNC_FEATURES: Final[detectors.Detectors] = MappingProxyType(
         **_FEATURES,
         Feature.PRE_REQUEST_HOOK: route_detectors.pre_request_hook,
         Feature.WEBSEARCH_INTERCEPTION: route_detectors.websearch_interception,
-        Feature.MESSAGES_INTERCEPTOR: route_detectors.intercepted,
     }
 )
 
 
-def _context(request: NativeCall, features: detectors.Detectors) -> RouteContext:
+def _features(
+    request: NativeCall, provider: str | None, features: detectors.Detectors, intercepting: bool
+) -> frozenset[Feature]:
+    detected: Final = detectors.detected(features, request)
+    if not intercepting or not route_detectors.intercepted(request, provider):
+        return detected
+    return detected | {Feature.MESSAGES_INTERCEPTOR}
+
+
+def _context(request: NativeCall, features: detectors.Detectors, intercepting: bool) -> RouteContext:
     requested_model: Final = str(request.resolved["model"])
-    model, provider = _resolved(request)
-    return RouteContext(
-        Route.MESSAGES,
-        provider=provider,
-        model=requested_model,
-        target=_target(request, model, provider),
-        features=detectors.detected(features, request),
-    )
+    resolution: Final = provider.resolve(request)
+    match resolution:
+        case provider.Resolved(model=resolved_model, provider=resolved_provider):
+            return RouteContext(
+                Route.MESSAGES,
+                provider=resolved_provider,
+                model=requested_model,
+                target=_target(request, resolved_model, resolved_provider),
+                features=_features(request, resolved_provider, features, intercepting),
+            )
+        case provider.Unresolved():
+            return RouteContext(
+                Route.MESSAGES, model=requested_model, features=_features(request, None, features, intercepting)
+            )
 
 
 _DISPATCH: Final = PublicDispatch(
     route=Route.MESSAGES,
     request=lambda args, kwargs: _public_request(_MESSAGES, args, kwargs),
-    context=lambda request: _context(request, _FEATURES),
+    context=lambda request: _context(request, _FEATURES, intercepting=False),
 )
 
 _ADISPATCH: Final = PublicDispatch(
     route=Route.MESSAGES,
     request=lambda args, kwargs: _public_request(_AMESSAGES, args, kwargs),
-    context=lambda request: _context(request, _ASYNC_FEATURES),
+    context=lambda request: _context(request, _ASYNC_FEATURES, intercepting=True),
 )
 
 
