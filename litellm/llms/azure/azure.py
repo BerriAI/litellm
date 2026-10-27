@@ -1195,7 +1195,9 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
             provider_config: Final = get_azure_image_generation_config(data.get("model", "dall-e-2"))
             if provider_config is not None:
-                return provider_config.transform_image_generation_response(
+                from litellm.llms.azure_ai.image_generation.cost_calculator import record_megapixel_usage
+
+                image_response: Final = provider_config.transform_image_generation_response(
                     model=data.get("model", "dall-e-2"),
                     raw_response=httpx_response,
                     model_response=model_response or ImageResponse(),
@@ -1205,6 +1207,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     litellm_params=data,
                     encoding=litellm.encoding,
                 )
+                record_megapixel_usage(image_response, httpx_response.content)
+                return image_response
 
             else:
                 response = httpx_response.json()
@@ -1351,12 +1355,14 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 additional_args={"complete_input_dict": data},
                 original_response=response,
             )
-            # return response
-            return convert_to_model_response_object(
+            from litellm.llms.azure_ai.image_generation.cost_calculator import record_megapixel_usage
+
+            converted_response: Final = convert_to_model_response_object(
                 response_object=response,
                 model_response_object=model_response,
                 response_type="image_generation",
             )
+            record_megapixel_usage(converted_response, httpx_response.content)
         except AzureOpenAIError as e:
             raise e
         except Exception as e:
@@ -1365,6 +1371,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 raise AzureOpenAIError(status_code=error_code, message=str(e))
             else:
                 raise AzureOpenAIError(status_code=500, message=str(e))
+        else:
+            return converted_response
 
     def audio_speech(
         self,

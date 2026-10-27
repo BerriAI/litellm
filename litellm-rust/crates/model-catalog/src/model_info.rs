@@ -196,6 +196,8 @@ pub struct ModelInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_cost_per_image_token_batches: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_cost_per_megapixel: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub input_cost_per_pixel: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_cost_per_query: Option<f64>,
@@ -314,6 +316,8 @@ pub struct ModelInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_cost_per_character_above_128k_tokens: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_cost_per_first_megapixel: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub output_cost_per_image: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_cost_per_image_1024: Option<f64>,
@@ -343,6 +347,8 @@ pub struct ModelInfo {
     pub output_cost_per_image_4k: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_cost_per_image_token: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_cost_per_megapixel: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_cost_per_pixel: Option<f64>,
     /// USD per reasoning/thinking token, when billed separately.

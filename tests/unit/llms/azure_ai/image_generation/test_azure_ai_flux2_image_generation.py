@@ -1,9 +1,11 @@
-from collections.abc import Mapping
+import json
+from collections.abc import Callable, Mapping
 from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
@@ -251,3 +253,183 @@ def test_flux2_response_preserves_mapped_dimensions():
         encoding=None,
     )
     assert response.size == "2048x1024"
+
+
+FOUNDRY_BASE: Final = "https://flux-billing.services.ai.azure.com"
+
+
+def _flux2_route(provider_path: str) -> str:
+    return rf"https://flux-billing\.services\.ai\.azure\.com/providers/blackforestlabs/v1/{provider_path}\?.*"
+
+
+def _metered_body(output_mp: float, input_mp: float) -> Mapping[str, object]:
+    return {
+        "created": 1,
+        "data": [{"b64_json": "aW1n"}],
+        "request_meta": {"cost": 999.0, "input_mp": input_mp, "output_mp": output_mp, "total_pixels": 1},
+    }
+
+
+def _price(model: str, key: str) -> float:
+    price: Final = litellm.model_cost[model][key]
+    assert isinstance(price, float) and price > 0
+    return price
+
+
+# request_meta pairs Azure returned for FLUX.2 [pro] on 2026-10-27, whose credit charges matched whole megapixels
+# rounded up: one 512x512 reference reported input_mp 0.25 and two of them reported 2.0
+@pytest.mark.parametrize(
+    ("output_mp", "input_mp", "additional_output_megapixels", "input_megapixels"),
+    [
+        (0.25, 0.0, 0, 0),
+        (1.5, 0.0, 1, 0),
+        (2.07, 0.0, 2, 0),
+        (1.0, 0.25, 0, 1),
+        (1.0, 1.5, 0, 2),
+        (1.0, 2.0, 0, 2),
+    ],
+)
+@respx.mock
+def test_flux2_pro_generation_bills_the_reported_megapixels_rounded_up(
+    output_mp: float, input_mp: float, additional_output_megapixels: int, input_megapixels: int
+) -> None:
+    respx.post(url__regex=_flux2_route("flux-2-pro")).mock(
+        return_value=httpx.Response(200, json=_metered_body(output_mp, input_mp))
+    )
+
+    response: Final = litellm.image_generation(
+        model="azure_ai/flux.2-pro", prompt="A red fox", api_base=FOUNDRY_BASE, api_key="test-key"
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        _price("azure_ai/flux.2-pro", "output_cost_per_first_megapixel")
+        + additional_output_megapixels * _price("azure_ai/flux.2-pro", "output_cost_per_megapixel")
+        + input_megapixels * _price("azure_ai/flux.2-pro", "input_cost_per_megapixel")
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_flux2_pro_generation_bills_the_reported_megapixels(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(url__regex=_flux2_route("flux-2-pro")).mock(
+        return_value=httpx.Response(200, json=_metered_body(1.5, 0.25))
+    )
+
+    response: Final = await litellm.aimage_generation(
+        model="azure_ai/flux.2-pro", prompt="A red fox", api_base=FOUNDRY_BASE, api_key="test-key"
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        _price("azure_ai/flux.2-pro", "output_cost_per_first_megapixel")
+        + _price("azure_ai/flux.2-pro", "output_cost_per_megapixel")
+        + _price("azure_ai/flux.2-pro", "input_cost_per_megapixel")
+    )
+
+
+@respx.mock
+def test_flux2_flex_generation_bills_every_reported_megapixel_at_one_rate() -> None:
+    respx.post(url__regex=_flux2_route("flux-2-flex")).mock(
+        return_value=httpx.Response(200, json=_metered_body(1.5, 0.25))
+    )
+
+    response: Final = litellm.image_generation(
+        model="azure_ai/FLUX.2-flex", prompt="A red fox", api_base=FOUNDRY_BASE, api_key="test-key"
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        2 * _price("azure_ai/FLUX.2-flex", "output_cost_per_megapixel")
+        + _price("azure_ai/FLUX.2-flex", "input_cost_per_megapixel")
+    )
+
+
+@pytest.mark.parametrize(
+    ("deployment_prices", "expected_cost"),
+    [
+        (
+            {},
+            lambda price: price("output_cost_per_first_megapixel")
+            + price("output_cost_per_megapixel")
+            + price("input_cost_per_megapixel"),
+        ),
+        ({"output_cost_per_image": 0.05}, lambda _: 0.05),
+        (
+            {"output_cost_per_megapixel": 0.02},
+            lambda price: price("output_cost_per_first_megapixel") + 0.02 + price("input_cost_per_megapixel"),
+        ),
+        (
+            {"output_cost_per_first_megapixel": 0.04, "output_cost_per_megapixel": 0.02, "input_cost_per_megapixel": 0.01},
+            lambda _: 0.04 + 0.02 + 0.01,
+        ),
+    ],
+)
+@respx.mock
+def test_flux2_router_deployment_prices_layer_over_the_catalog_megapixel_prices(
+    deployment_prices: Mapping[str, float], expected_cost: Callable[[Callable[[str], float]], float]
+) -> None:
+    respx.post(url__regex=_flux2_route("flux-2-pro")).mock(
+        return_value=httpx.Response(200, json=_metered_body(1.5, 0.25))
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "flux-2-pro",
+                "litellm_params": {
+                    "model": "azure_ai/flux.2-pro",
+                    "api_base": FOUNDRY_BASE,
+                    "api_key": "test-key",
+                    **deployment_prices,
+                },
+            }
+        ]
+    )
+
+    response: Final = router.image_generation(model="flux-2-pro", prompt="A red fox")
+
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        expected_cost(lambda key: _price("azure_ai/flux.2-pro", key))
+    )
+
+
+@pytest.mark.parametrize(
+    "request_meta",
+    [
+        None,
+        {"input_mp": 0.0, "output_mp": 0.0},
+        {"input_mp": -1.0, "output_mp": 1.0},
+        {"input_mp": 0.0, "output_mp": float("inf")},
+        {"input_mp": 0.0},
+    ],
+)
+@respx.mock
+def test_flux2_pro_generation_without_usable_megapixels_keeps_the_per_image_price(
+    request_meta: Mapping[str, float] | None,
+) -> None:
+    body: Final = {"created": 1, "data": [{"b64_json": "aW1n"}], "request_meta": request_meta}
+    respx.post(url__regex=_flux2_route("flux-2-pro")).mock(
+        return_value=httpx.Response(200, content=json.dumps(body).encode())
+    )
+
+    response: Final = litellm.image_generation(
+        model="azure_ai/flux.2-pro", prompt="A red fox", api_base=FOUNDRY_BASE, api_key="test-key"
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        _price("azure_ai/flux.2-pro", "output_cost_per_image")
+    )
+
+
+@respx.mock
+def test_flux2_pro_generation_bills_no_references_when_input_megapixels_are_null() -> None:
+    body: Final = {"created": 1, "data": [{"b64_json": "aW1n"}], "request_meta": {"input_mp": None, "output_mp": 1.5}}
+    respx.post(url__regex=_flux2_route("flux-2-pro")).mock(return_value=httpx.Response(200, json=body))
+
+    response: Final = litellm.image_generation(
+        model="azure_ai/flux.2-pro", prompt="A red fox", api_base=FOUNDRY_BASE, api_key="test-key"
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        _price("azure_ai/flux.2-pro", "output_cost_per_first_megapixel")
+        + _price("azure_ai/flux.2-pro", "output_cost_per_megapixel")
+    )

@@ -1,5 +1,7 @@
 import json
+from collections.abc import Callable, Mapping
 from datetime import datetime
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -540,6 +542,41 @@ def test_flux_2_relay_through_the_provider_route_is_costed_per_image():
     assert isinstance(result, ImageResponse)
     assert logging_obj.call_type == "aimage_generation"
     assert logging_obj.response_cost_calculator(result=result) == pytest.approx(per_image)
+
+
+@pytest.mark.parametrize(
+    ("model", "native_path", "catalog_key", "expected_cost"),
+    [
+        (
+            "FLUX.2-pro",
+            "providers/blackforestlabs/v1/flux-2-pro",
+            "azure_ai/flux.2-pro",
+            lambda prices: prices["output_cost_per_first_megapixel"]
+            + prices["output_cost_per_megapixel"]
+            + prices["input_cost_per_megapixel"],
+        ),
+        (
+            "FLUX.2-flex",
+            "providers/blackforestlabs/v1/flux-2-flex",
+            "azure_ai/FLUX.2-flex",
+            lambda prices: 2 * prices["output_cost_per_megapixel"] + prices["input_cost_per_megapixel"],
+        ),
+    ],
+)
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_flux_2_relay_is_costed_from_the_reported_megapixels(
+    model: str, native_path: str, catalog_key: str, expected_cost: Callable[[Mapping[str, float]], float]
+) -> None:
+    metered_body: Final = {
+        **IMAGE_BODY,
+        "request_meta": {"cost": 999.0, "input_mp": 0.25, "output_mp": 1.5, "total_pixels": 1},
+    }
+    result, logging_obj = _relay_logging_result(AzureAIPassthroughConfig(), model, native_path, metered_body)
+
+    assert logging_obj.call_type == "aimage_generation"
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(
+        expected_cost(litellm.model_cost[catalog_key])
+    )
 
 
 def test_rejected_rerank_relay_keeps_the_passthrough_object_and_call_type():
