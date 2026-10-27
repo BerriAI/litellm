@@ -19,6 +19,7 @@ from collections.abc import (
     Awaitable,
     Callable,
     Coroutine,
+    Iterable,
     Iterator,
     Mapping,
     Sequence,
@@ -51,7 +52,7 @@ from typing import (
 
 import anyio
 import httpx
-from typing_extensions import Never, ReadOnly, TypedDict
+from typing_extensions import Never, NotRequired, ReadOnly, TypedDict
 
 from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import (
@@ -183,6 +184,7 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
 from litellm.proxy.common_utils.config_sync_pubsub import publish_config_param_change
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.db import tool_registry_writer
 from litellm.proxy.db.create_views import (
     create_missing_views,
     create_view_tolerating_race,
@@ -190,6 +192,7 @@ from litellm.proxy.db.create_views import (
 )
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
 from litellm.proxy.db.db_url_settings import (
     DatabaseURLSettings,
     add_missing_query_params,
@@ -323,10 +326,22 @@ class _RelTuplesRow(TypedDict):
     reltuples: ReadOnly[int]
 
 
+class _TeamMemberRow(TypedDict):
+    role: ReadOnly[Literal["admin", "user"]]
+    user_id: ReadOnly[NotRequired[str | None]]
+    user_email: ReadOnly[NotRequired[str | None]]
+
+
+class _TeamMembershipRow(TypedDict):
+    user_id: ReadOnly[str | None]
+    team_members_with_roles: ReadOnly[Iterable[_TeamMemberRow] | None]
+
+
 _VIEW_SETUP_POLL_INTERVAL_SECONDS: Final = 5.0
 _VIEW_SETUP_DEADLINE_SECONDS: Final = 15 * 60.0
 _VIEW_SETUP_GATE_TABLE: Final = '"LiteLLM_SpendLogs"'
 _VIEW_SETUP_GATE_PROBE_ROWS: Final = TypeAdapter(tuple[Mapping[str, bool], ...])
+_DELEGATED_ATTRIBUTE: Final = TypeAdapter(object)
 
 _ViewSetupOutcome: TypeAlias = Literal["ready", "timed_out"]
 _ViewSetupAttempt: TypeAlias = Literal["ready", "table_missing"] | Exception
@@ -362,6 +377,47 @@ class _UpdateManyBatch(Protocol):
     def litellm_teamtable(self) -> _EndUserBatchTable: ...
 
     async def commit(self) -> None: ...
+
+
+def _update_many_batch(db: PrismaWrapper | RoutingPrismaWrapper) -> _UpdateManyBatch:
+    return db.batch_()
+
+
+def _query_raw_rows(
+    db: PrismaWrapper | RoutingPrismaWrapper, query: str, *args: object
+) -> Awaitable[Sequence[Mapping[str, object]]]:
+    return db.query_raw(query, *args)
+
+
+def _query_first_row(
+    db: PrismaWrapper | RoutingPrismaWrapper, query: str, *args: object
+) -> Awaitable[Mapping[str, object] | None]:
+    return db.query_first(query, *args)
+
+
+def _team_member_for_user(row: _TeamMembershipRow) -> Member | None:
+    members_with_roles: Final = row["team_members_with_roles"]
+    if members_with_roles is None:
+        return None
+    user_id: Final = row["user_id"]
+    if user_id is None:
+        return None
+    matches: Final = [
+        Member(**member)
+        for member in members_with_roles
+        if member.get("user_id") is not None and user_id == member.get("user_id")
+    ]
+    return matches[-1] if matches else None
+
+
+class _EndUserSpendTransaction(Protocol):
+    def batch_(self) -> contextlib.AbstractAsyncContextManager[_EndUserSpendBatch]: ...
+
+
+def _end_user_spend_transaction(
+    db: PrismaWrapper | RoutingPrismaWrapper, timeout: timedelta
+) -> contextlib.AbstractAsyncContextManager[_EndUserSpendTransaction]:
+    return db.tx(timeout=timeout)
 
 
 unified_guardrail: Final = UnifiedLLMGuardrails()
@@ -543,7 +599,7 @@ class _UpstreamStreamBoundary(Generic[_T]):
         self.failure: BaseException | None = None
 
     def __getattr__(self, name: str) -> object:
-        return getattr(self._source, name)
+        return _DELEGATED_ATTRIBUTE.validate_python(getattr(self._source, name))
 
     def __aiter__(self) -> "_UpstreamStreamBoundary[_T]":
         return self
@@ -1331,7 +1387,8 @@ def _stamp_deployment_attribution(
     callbacks key off it and must not count a proxy-side reject against the deployment. A failure
     after the provider handoff keeps the metadata the router stamped; a request that never reached a
     provider is flagged ``PROXY_REJECTED_BEFORE_ROUTING_KEY`` (deployment metrics key off it) whatever
-    its metadata says, since ``metadata.model_info`` can be caller supplied."""
+    its metadata says, since ``metadata.model_info`` can be caller supplied. Its ``deployment`` and
+    ``model_group`` always come from the router config, never from the caller's metadata."""
     attribution: Final = _deployment_attribution_for_model_group(model_group, team_id)
     if "custom_llm_provider" in attribution:
         litellm_params["custom_llm_provider"] = attribution["custom_llm_provider"]
@@ -1346,9 +1403,13 @@ def _stamp_deployment_attribution(
     if not isinstance(metadata, dict):
         return attribution
     metadata.setdefault("model_info", attribution["model_info"])
-    metadata.setdefault("deployment", attribution["deployment"])
-    if isinstance(model_group, str):
-        metadata.setdefault("model_group", model_group)
+    routing: Final = MappingProxyType(
+        {"deployment": attribution["deployment"], **({"model_group": model_group} if model_group else {})}
+    )
+    metadata.update(routing)
+    litellm_metadata: Final = litellm_params.get("litellm_metadata")
+    if isinstance(litellm_metadata, dict):
+        litellm_metadata.update(routing)
     return attribution
 
 
@@ -1420,7 +1481,17 @@ def _call_type_for_route(route: str | None) -> str | None:
     return call_types[0].value if len(operations) == 1 else None
 
 
+REJECTED_BEFORE_REQUEST_SETUP_KEY: Final = "litellm_rejected_before_request_setup"
+REJECTED_BEFORE_REQUEST_SETUP: Final = object()
+"""Stored under ``REJECTED_BEFORE_REQUEST_SETUP_KEY`` on ``request_data`` when the failure handler finds no logging
+object, meaning the request died (auth, body parsing, model resolution) before the pipeline set one up. A sentinel
+object rather than ``True`` because ``request_data`` is the client body: JSON cannot forge this identity, so a
+client can neither hide a guardrail block nor force a row by sending the key or a ``litellm_call_id`` itself."""
+
 _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
+_PROXY_ONLY_ERROR_LOGGED_FIELDS: Final = frozenset(
+    {"model", "messages", "input", "prompt", "user", "stream", "litellm_call_id"}
+)
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
 
 
@@ -1453,6 +1524,57 @@ def _client_disconnected(exception: Exception) -> bool:
 
 def _provider_billed_the_failure(exception: Exception) -> bool:
     return _timed_out_reading_from_provider(exception) or _client_disconnected(exception)
+
+
+def _as_str_mapping(value: object) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        return MappingProxyType({})
+    return cast(  # cast-ok: the runtime Mapping check validates the container shape
+        Mapping[str, object], value
+    )
+
+
+def _proxy_only_error_logged_metadata_keys(*, authenticated: bool, past_pre_call: bool) -> frozenset[str]:
+    return frozenset(
+        key
+        for key, logged in (("tags", authenticated), ("standard_logging_guardrail_information", past_pre_call))
+        if logged
+    )
+
+
+def _is_logged_metadata_value(key: str, value: object) -> bool:
+    if key != "tags":
+        return True
+    tags: Final = cast(list[object], value) if isinstance(value, list) else None  # cast-ok: isinstance checked the list
+    return tags is not None and all(isinstance(item, str) for item in tags)
+
+
+def _proxy_only_error_log_metadata(
+    value: object, logged_keys: frozenset[str]
+) -> dict[str, object] | None:  # mutable-ok: router attribution stamps the logged metadata in place
+    metadata: Final = _as_str_mapping(value)
+    if not isinstance(value, Mapping):
+        return None
+    return {
+        key: value for key, value in metadata.items() if key in logged_keys and _is_logged_metadata_value(key, value)
+    }
+
+
+def _proxy_only_error_log_fields(
+    request_data: Mapping[str, object], logged_metadata_keys: frozenset[str]
+) -> Mapping[str, object]:
+    metadata_fields: Final = {
+        key: filtered_metadata
+        for key in ("metadata", "litellm_metadata")
+        if (filtered_metadata := _proxy_only_error_log_metadata(request_data.get(key), logged_metadata_keys))
+        is not None
+    }
+    return MappingProxyType(
+        {
+            **{key: value for key, value in request_data.items() if key in _PROXY_ONLY_ERROR_LOGGED_FIELDS},
+            **metadata_fields,
+        }
+    )
 
 
 def _failure_fields_to_lift(
@@ -3715,6 +3837,7 @@ class ProxyLogging:
                 user_api_key_dict=user_api_key_dict,
                 route=route,
                 original_exception=original_exception,
+                error_type=error_type,
             )
 
         request_data.update(
@@ -3809,6 +3932,7 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         route: str | None = None,
         original_exception: Exception | None = None,
+        error_type: ProxyErrorTypes | None = None,
     ):
         """
         Handle logging for proxy only errors by calling `litellm_logging_obj.async_failure_handler`
@@ -3817,39 +3941,67 @@ class ProxyLogging:
         """
         litellm_logging_obj: Logging | None = request_data.get("litellm_logging_obj", None)
         set_up_by_request: Final = litellm_logging_obj is not None
+        request_fields: Final = cast(Mapping[str, object], request_data)  # cast-ok: request bodies are str-keyed JSON
+        logged_metadata_keys: Final = _proxy_only_error_logged_metadata_keys(
+            authenticated=error_type != ProxyErrorTypes.auth_error, past_pre_call=set_up_by_request
+        )
+        user_api_key_logged_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+            user_api_key_dict=user_api_key_dict
+        )
         if litellm_logging_obj is None:
             from litellm._uuid import uuid
 
             request_data.setdefault("litellm_call_id", str(uuid.uuid4()))
-            user_api_key_logged_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
-                user_api_key_dict=user_api_key_dict
-            )
 
             litellm_logging_obj, data = litellm.utils.function_setup(
                 original_function=route or "IGNORE_THIS",
                 rules_obj=litellm.utils.Rules(),
                 start_time=datetime.now(),
-                **request_data,
+                **_proxy_only_error_log_fields(  # pyright: ignore[reportArgumentType]  # the allowlist never carries is_async_call
+                    request_fields, logged_metadata_keys
+                ),
             )
             request_data["litellm_logging_obj"] = litellm_logging_obj  # rebind-ok: lifted then popped by the caller
+            request_data.update({REJECTED_BEFORE_REQUEST_SETUP_KEY: REJECTED_BEFORE_REQUEST_SETUP})
             if "metadata" not in request_data:
                 request_data["metadata"] = {}
             request_data["metadata"].update(user_api_key_logged_metadata)
 
         if litellm_logging_obj is not None:
             ## UPDATE LOGGING INPUT
-            _optional_params: Final = {}
-            _litellm_params: Final = {}
+            _optional_params: Final[dict[str, object]] = {}  # mutable-ok: filled below, then handed to the logger
+            _litellm_params: Final[dict[str, object]] = {}  # mutable-ok: filled below, then handed to the logger
 
             litellm_param_keys: Final = LoggedLiteLLMParams.__annotations__.keys()
-            for k, v in request_data.items():
+            for k, v in _proxy_only_error_log_fields(request_fields, logged_metadata_keys).items():
                 if k in litellm_param_keys:
                     _litellm_params[k] = v
                 elif k not in ("model", "user", "litellm_logging_obj"):
                     _optional_params[k] = v
 
+            existing: Final = _as_str_mapping(
+                litellm_logging_obj.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
+            )
+            litellm_params: Final = {
+                **_litellm_params,
+                "metadata": {
+                    **_as_str_mapping(existing.get("metadata")),
+                    **_as_str_mapping(_litellm_params.get("metadata")),
+                    **user_api_key_logged_metadata,
+                },
+                **{
+                    key: {
+                        **_as_str_mapping(existing.get(key)),
+                        **_as_str_mapping(value),
+                        **user_api_key_logged_metadata,
+                    }
+                    for key, value in _litellm_params.items()
+                    if key == "litellm_metadata"
+                },
+            }
+
             attribution: Final = _stamp_deployment_attribution(
-                _litellm_params,
+                litellm_params,
                 request_data.get("model"),
                 user_api_key_dict.team_id,
                 dispatched=_reached_deployment(litellm_logging_obj),
@@ -3859,7 +4011,7 @@ class ProxyLogging:
                 model=request_data.get("model", ""),
                 user=request_data.get("user", ""),
                 optional_params=_optional_params,
-                litellm_params=_litellm_params,
+                litellm_params=litellm_params,
                 **(
                     {"custom_llm_provider": attribution["custom_llm_provider"]}
                     if "custom_llm_provider" in attribution
@@ -4790,31 +4942,22 @@ class ProxyLogging:
         logging_obj._deferred_stream_complete_args = None
         return True
 
-    async def arelease_max_parallel_requests_on_disconnect(
+    async def arelease_max_parallel_requests(
         self,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> None:
         """
-        Release the api-key max_parallel_requests slot when a streaming
-        response is cancelled mid-flight (client disconnect) and no logging
-        callback fired for it. Neither the success nor failure callback runs on
-        the resulting CancelledError / GeneratorExit, so the pre-call +1 would
-        otherwise leak.
-
-        Awaited from the shielded streaming cleanup rather than scheduled
-        fire-and-forget, so the caller can make it the single owner of the
-        release: when a disconnect-time success event does fire (partial-spend
-        billing or a deferred-guardrail flush), that event's own limiter
-        callback releases the slot and this is not called at all. Two
-        concurrent releases of the same acquisition would otherwise race and
-        double-decrement under the limiter's in-memory fallback.
+        Release an ended request's v3 concurrency acquisition independently of logging.
+        The request stash serializes release with callbacks and clears the acquisition,
+        so repeated cleanup cannot release another request's slot.
         """
         limiter: Final = self.get_proxy_hook("parallel_request_limiter")
         if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
             return
         await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
 
-    _arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests_on_disconnect
+    arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests
+    _arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests
 
     async def arelease_responses_websocket_slot(self, user_api_key_dict: UserAPIKeyAuth) -> None:
         """Release the slot a Responses WebSocket took at admission. Only call this once that admission succeeded:
@@ -5494,7 +5637,9 @@ class PrismaClient:
 
             raise e
 
-    async def _query_first_with_cached_plan_fallback(self, sql_query: str, *args) -> dict | None:
+    async def _query_first_with_cached_plan_fallback(
+        self, sql_query: str, *args: object
+    ) -> Mapping[str, object] | None:
         """
         Execute a query, recovering once from PostgreSQL's "cached plan must not
         change result type" error.
@@ -5745,7 +5890,7 @@ class PrismaClient:
                         LIMIT $1
                         OFFSET $2
                         """
-                        response = await self.db.query_raw(sql_query, limit, offset)
+                        response = await _query_raw_rows(self.db, sql_query, limit, offset)
                 return response
             elif table_name == "spend":
                 verbose_proxy_logger.debug("PrismaClient: get_data: table_name == 'spend'")
@@ -5889,7 +6034,7 @@ class PrismaClient:
                     """
 
                     response = (
-                        await self.writer_db.query_first(sql_query, hashed_token)
+                        await _query_first_row(self.writer_db, sql_query, hashed_token)
                         if use_writer
                         else await self._query_first_with_cached_plan_fallback(sql_query, hashed_token)
                     )
@@ -5925,31 +6070,14 @@ class PrismaClient:
                         if response["team_blocked"] is None:
                             response["team_blocked"] = False
 
-                        team_member: Member | None = None
-                        if response["team_members_with_roles"] is not None and response["user_id"] is not None:
-                            ## find the team member corresponding to user id
-                            """
-                            [
-                                {
-                                    "role": "admin",
-                                    "user_id": "default_user_id",
-                                    "user_email": null
-                                },
-                                {
-                                    "role": "user",
-                                    "user_id": null,
-                                    "user_email": "test@email.com"
-                                }
-                            ]
-                            """
-                            for tm in response["team_members_with_roles"]:
-                                if tm.get("user_id") is not None and response["user_id"] == tm.get("user_id"):
-                                    team_member = Member(**tm)
+                        ## find the team member corresponding to user id
+                        team_member: Final = _team_member_for_user(response)
                         response["team_member"] = team_member
-                        response = LiteLLM_VerificationTokenView(**response, last_refreshed_at=time.time())
+                        token_view: Final = LiteLLM_VerificationTokenView(**response, last_refreshed_at=time.time())
                         # for prisma we need to cast the expires time to str
-                        if response.expires is not None and isinstance(response.expires, datetime):
-                            response.expires = response.expires.isoformat()
+                        if token_view.expires is not None and isinstance(token_view.expires, datetime):
+                            token_view.expires = token_view.expires.isoformat()
+                        response = token_view
                     return response
         except Exception as e:
             import traceback
@@ -6032,13 +6160,12 @@ class PrismaClient:
             elif table_name == "user":
                 db_data = self.jsonify_object(data=data)
                 try:
-                    new_user_row: Final = await UserRepository(self).table.upsert(
-                        where={"user_id": data["user_id"]},
-                        data={
-                            "create": {**db_data},
-                            "update": {},  # don't do anything if it already exists
-                        },
-                    )
+                    new_user_row: Final = await UserRepository(self).upsert_user(db_data)
+                    if new_user_row is None:
+                        raise HTTPException(
+                            status_code=403,
+                            detail="SSO for more than 5 users requires a LiteLLM Enterprise license. Existing users can still sign in.",
+                        )
                 except Exception as e:
                     if (
                         "Foreign key constraint failed on the field: `LiteLLM_UserTable_organization_id_fkey (index)`"
@@ -6240,7 +6367,7 @@ class PrismaClient:
                 """
                 Batch write update queries
                 """
-                batcher: _UpdateManyBatch = self.db.batch_()
+                batcher: _UpdateManyBatch = _update_many_batch(self.db)
                 for idx, t in enumerate(data_list):
                     # check if plain text or hash
                     if t.token.startswith("sk-"):
@@ -6265,7 +6392,7 @@ class PrismaClient:
                 """
                 Batch write update queries
                 """
-                batcher = self.db.batch_()
+                batcher = _update_many_batch(self.db)
                 for user in sorted(data_list, key=attrgetter("user_id")):
                     try:
                         data_json = self.jsonify_object(data=user.model_dump(exclude_none=True))
@@ -6290,7 +6417,7 @@ class PrismaClient:
                 """
                 Batch write update queries
                 """
-                batcher = self.db.batch_()
+                batcher = _update_many_batch(self.db)
                 for enduser in data_list:
                     try:
                         data_json = self.jsonify_object(data=enduser.model_dump(exclude_none=True))
@@ -6315,7 +6442,7 @@ class PrismaClient:
                 """
                 Batch write update queries
                 """
-                batcher = self.db.batch_()
+                batcher = _update_many_batch(self.db)
                 for budget in data_list:
                     try:
                         data_json = self.jsonify_object(data=budget.model_dump(exclude_none=True))
@@ -6338,7 +6465,7 @@ class PrismaClient:
                 and isinstance(data_list, list)
             ):
                 # Batch write update queries
-                batcher = self.db.batch_()
+                batcher = _update_many_batch(self.db)
                 for idx, team in enumerate(data_list):
                     try:
                         data_json = self.jsonify_team_object(db_data=team.model_dump(exclude_none=True))
@@ -7003,7 +7130,7 @@ class PrismaClient:
                 # caller's own retried query, a stronger check than SELECT 1,
                 # and a reader that fails to come back sets `_reader_unavailable`
                 # so reads fall through to the writer just recreated here.
-                await self.writer_db.query_raw("SELECT 1")
+                await _query_raw_rows(self.writer_db, "SELECT 1")
                 # A recreate can decline: the optimistic-lock guard no-ops when
                 # the writer generation moved since cycle entry, and the routing
                 # wrapper then leaves the reader untouched as well. Callers that
@@ -7351,7 +7478,7 @@ class PrismaClient:
 
     async def _view_setup_gate_table_present(self) -> bool:
         rows: Final = _VIEW_SETUP_GATE_PROBE_ROWS.validate_python(
-            await self.db.query_raw("SELECT to_regclass($1) IS NOT NULL AS present", _VIEW_SETUP_GATE_TABLE)
+            await _query_raw_rows(self.db, "SELECT to_regclass($1) IS NOT NULL AS present", _VIEW_SETUP_GATE_TABLE)
         )
         return rows[0]["present"]
 
@@ -7361,7 +7488,7 @@ class PrismaClient:
                 await asyncio.sleep(self._db_health_watchdog_interval_seconds)
                 async with db_span("db_health_watchdog", None):
                     await asyncio.wait_for(
-                        self.db.query_raw("SELECT 1"),
+                        _query_raw_rows(self.db, "SELECT 1"),
                         timeout=self._db_health_watchdog_probe_timeout_seconds,
                     )
                 if isinstance(self.db, RoutingPrismaWrapper) and self.db.writer_unavailable:
@@ -7421,7 +7548,7 @@ class PrismaClient:
     async def _writer_is_read_only(self, writer: PrismaWrapper) -> bool:
         """True iff the pooled writer session answers reads but rejects writes (SQLSTATE 25006)."""
         rows: Final = _WRITER_WRITABILITY_PROBE_ROWS.validate_python(
-            await writer.query_raw(_WRITER_WRITABILITY_PROBE_SQL)
+            await _query_raw_rows(writer, _WRITER_WRITABILITY_PROBE_SQL)
         )
         return any(row.get("transaction_read_only") == "on" for row in rows)
 
@@ -7448,7 +7575,7 @@ class PrismaClient:
         """
         sql_query: Final = "SELECT 1"
         async with db_span("health_check", None):
-            response: Final[object] = await wrapper.query_raw(sql_query)
+            response: Final[object] = await _query_raw_rows(wrapper, sql_query)
         return response
 
     async def _probe_answers_now(self, wrapper: PrismaWrapper) -> bool:
@@ -8001,7 +8128,7 @@ class ProxyUpdateSpend:
             try:
                 async with (
                     db_span("update_end_user_spend", "LiteLLM_EndUserTable"),
-                    prisma_client.db.tx(timeout=timedelta(seconds=60)) as transaction,
+                    _end_user_spend_transaction(prisma_client.db, timedelta(seconds=60)) as transaction,
                 ):
                     batcher: _EndUserSpendBatch
                     async with transaction.batch_() as batcher:
@@ -8142,6 +8269,18 @@ class ProxyUpdateSpend:
         if general_settings.get("disable_spend_updates") is True:
             return True
         return False
+
+
+async def commit_tool_discoveries(prisma_client: PrismaClient, proxy_logging_obj: ProxyLogging) -> None:
+    """Scheduler job writing discovered tools to LiteLLM_ToolTable, on its own lock, next to update_spend."""
+    writer: Final = proxy_logging_obj.db_spend_update_writer
+    await tool_registry_writer.commit_tool_discoveries(
+        prisma_client=prisma_client,
+        tool_discovery_queue=writer.tool_discovery_queue,
+        redis_update_buffer=writer.redis_update_buffer,
+        pod_lock_manager=writer.pod_lock_manager,
+        use_redis_buffer=RedisUpdateBuffer.should_commit_spend_updates_to_redis(),
+    )
 
 
 async def update_spend(

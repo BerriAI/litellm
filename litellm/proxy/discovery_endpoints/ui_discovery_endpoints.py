@@ -4,8 +4,8 @@ from typing import Final
 
 from fastapi import APIRouter
 
-from litellm.proxy._experimental.mcp_server.stdio_gate import is_mcp_stdio_enabled
 from litellm.proxy.common_utils.html_forms.default_credentials_hint import should_hide_default_credentials_hint
+from litellm.proxy.mcp_server.stdio_gate import is_mcp_stdio_enabled
 from litellm.types.proxy.discovery_endpoints.ui_discovery_endpoints import (
     UiDiscoveryEndpoints,
 )

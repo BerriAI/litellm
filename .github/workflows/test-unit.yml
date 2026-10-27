@@ -425,6 +425,7 @@ jobs:
               tests/unit/realtime_api
               tests/unit/rerank_api
               tests/unit/search
+              tests/unit/text_completions
               tests/unit/vector_stores
               tests/unit/videos
             python-version: "3.12"
@@ -578,13 +579,13 @@ jobs:
 
           - shard: mcp-elicitation
             test-path: |-
-              tests/unit/experimental_mcp_client/test_mcp_client.py
-              tests/unit/proxy/_experimental/mcp_server/test_capabilities.py
-              tests/unit/proxy/_experimental/mcp_server/test_interactions.py
-              tests/unit/proxy/_experimental/mcp_server/test_mcp_elicitation_handler.py
-              tests/unit/proxy/_experimental/mcp_server/test_mcp_server_manager.py
-              tests/unit/proxy/_experimental/mcp_server/test_mcp_server_tool_calls_and_headers.py
-              tests/unit/proxy/_experimental/mcp_server/test_operations.py
+              tests/unit/mcp_client/test_mcp_client.py
+              tests/unit/proxy/mcp_server/test_capabilities.py
+              tests/unit/proxy/mcp_server/test_interactions.py
+              tests/unit/proxy/mcp_server/test_mcp_elicitation_handler.py
+              tests/unit/proxy/mcp_server/test_mcp_server_manager.py
+              tests/unit/proxy/mcp_server/test_mcp_server_tool_calls_and_headers.py
+              tests/unit/proxy/mcp_server/test_operations.py
             python-version: "3.12"
             workers: 4
             reruns: 0
@@ -602,7 +603,7 @@ jobs:
               tests/unit/proxy/spend_tracking
               --ignore=tests/unit/proxy/spend_tracking/test_search_api_logging.py
               tests/unit/proxy/pass_through_endpoints
-              tests/unit/proxy/experimental
+              tests/unit/proxy/mcp_server/test_tool_registry.py
               tests/unit/proxy/common_utils
               --ignore=tests/unit/proxy/common_utils/test_cache_aware_routing.py
               --ignore=tests/unit/proxy/common_utils/test_check_batch_cost.py
@@ -810,14 +811,14 @@ jobs:
 
           - shard: mcp-oauth
             test-path: |-
-              tests/unit/proxy/_experimental/mcp_server/test_discoverable_endpoints.py
-              tests/unit/proxy/_experimental/mcp_server/test_mcp_server_manager.py
-              tests/unit/proxy/_experimental/mcp_server/test_db_credentials.py
-              tests/unit/proxy/_experimental/mcp_server/test_gateway_dcr_flow.py
-              tests/unit/proxy/_experimental/mcp_server/test_mcp_oauth_passthrough_tools.py
-              tests/unit/proxy/_experimental/mcp_server/test_mcp_max_concurrent_requests.py
-              tests/unit/proxy/_experimental/mcp_server/faults/test_list_outcomes.py
-              tests/unit/proxy/_experimental/mcp_server/outbound_credentials
+              tests/unit/proxy/mcp_server/test_discoverable_endpoints.py
+              tests/unit/proxy/mcp_server/test_mcp_server_manager.py
+              tests/unit/proxy/mcp_server/test_db_credentials.py
+              tests/unit/proxy/mcp_server/test_gateway_dcr_flow.py
+              tests/unit/proxy/mcp_server/test_mcp_oauth_passthrough_tools.py
+              tests/unit/proxy/mcp_server/test_mcp_max_concurrent_requests.py
+              tests/unit/proxy/mcp_server/faults/test_list_outcomes.py
+              tests/unit/proxy/mcp_server/outbound_credentials
             python-version: "3.12"
             workers: 4
             reruns: 2
@@ -827,19 +828,21 @@ jobs:
 
           - shard: mcp-server
             test-path: |-
+              tests/unit/mcp_client
               tests/unit/experimental_mcp_client
+              tests/unit/proxy/mcp_server
               tests/unit/proxy/_experimental/mcp_server
               tests/unit/responses/mcp
-              --ignore=tests/unit/experimental_mcp_client/test_mcp_client.py
-              --ignore=tests/unit/proxy/_experimental/mcp_server/test_capabilities.py
-              --ignore=tests/unit/proxy/_experimental/mcp_server/test_interactions.py
-              --ignore=tests/unit/proxy/_experimental/mcp_server/test_mcp_elicitation_handler.py
-              --ignore=tests/unit/proxy/_experimental/mcp_server/test_mcp_server_manager.py
-              --ignore=tests/unit/proxy/_experimental/mcp_server/test_mcp_server_tool_calls_and_headers.py
-              --ignore=tests/unit/proxy/_experimental/mcp_server/test_operations.py
-              --ignore=tests/unit/proxy/_experimental/mcp_server/test_discoverable_endpoints.py
-              --ignore=tests/unit/proxy/_experimental/mcp_server/test_db_credentials.py
-              --ignore=tests/unit/proxy/_experimental/mcp_server/outbound_credentials
+              --ignore=tests/unit/mcp_client/test_mcp_client.py
+              --ignore=tests/unit/proxy/mcp_server/test_capabilities.py
+              --ignore=tests/unit/proxy/mcp_server/test_interactions.py
+              --ignore=tests/unit/proxy/mcp_server/test_mcp_elicitation_handler.py
+              --ignore=tests/unit/proxy/mcp_server/test_mcp_server_manager.py
+              --ignore=tests/unit/proxy/mcp_server/test_mcp_server_tool_calls_and_headers.py
+              --ignore=tests/unit/proxy/mcp_server/test_operations.py
+              --ignore=tests/unit/proxy/mcp_server/test_discoverable_endpoints.py
+              --ignore=tests/unit/proxy/mcp_server/test_db_credentials.py
+              --ignore=tests/unit/proxy/mcp_server/outbound_credentials
             python-version: "3.12"
             workers: 4
             reruns: 0
@@ -949,7 +952,7 @@ jobs:
             dist: loadscope
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        timeout-minutes: 3
+        timeout-minutes: ${{ matrix.shard == 'db-and-spend' && 10 || 3 }}
         with:
           persist-credentials: false
           fetch-depth: ${{ matrix.shard == 'db-and-spend' && '0' || '1' }}
