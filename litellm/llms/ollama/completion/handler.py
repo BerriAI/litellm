@@ -7,11 +7,14 @@ Ollama /chat/completion calls handled in llm_http_handler.py
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, Protocol, TypedDict
 
+import httpx
 from typing_extensions import NotRequired, ReadOnly
 
 import litellm
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.types.utils import EmbeddingResponse
+
+from ..common_utils import OllamaError
 
 
 class TokenEncoder(Protocol):
@@ -41,6 +44,23 @@ def _prepare_ollama_embedding_payload(
             if isinstance(data["options"], dict):
                 data["options"].update({k: v})
     return data
+
+
+def _parse_ollama_embedding_response(response: httpx.Response) -> OllamaEmbeddingResponse:
+    try:
+        parsed: Final[OllamaEmbeddingResponse] = response.json()
+    except ValueError as e:
+        status_code: Final = response.status_code if response.status_code >= 400 else 502
+        body_snippet: Final = response.text[:200].strip() if response.text else "<empty body>"
+        raise OllamaError(
+            status_code=status_code,
+            message=(
+                f"Ollama embedding endpoint returned a non-JSON response "
+                f"with status {response.status_code} and body {body_snippet!r}"
+            ),
+            headers=response.headers,
+        ) from e
+    return parsed
 
 
 def _process_ollama_embedding_response(
@@ -94,7 +114,7 @@ async def ollama_aembeddings(
     data: Final = _prepare_ollama_embedding_payload(model, prompts, optional_params)
 
     response: Final = await litellm.module_level_aclient.post(url=ensure_api_route(api_base, "api/embed"), json=data)
-    response_json: Final[OllamaEmbeddingResponse] = response.json()
+    response_json: Final[OllamaEmbeddingResponse] = _parse_ollama_embedding_response(response)
 
     return _process_ollama_embedding_response(
         response_json=response_json,
@@ -118,7 +138,7 @@ def ollama_embeddings(
     data: Final = _prepare_ollama_embedding_payload(model, prompts, optional_params)
 
     response: Final = litellm.module_level_client.post(url=ensure_api_route(api_base, "api/embed"), json=data)
-    response_json: Final[OllamaEmbeddingResponse] = response.json()
+    response_json: Final[OllamaEmbeddingResponse] = _parse_ollama_embedding_response(response)
 
     return _process_ollama_embedding_response(
         response_json=response_json,
