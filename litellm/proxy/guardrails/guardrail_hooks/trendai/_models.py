@@ -14,6 +14,7 @@ class TrendAISettings(BaseModel, frozen=True):
     timeout: float = 5.0
     stream_overlap_size: int = 256
     response_content_chunk_size_bytes: int = 49_500
+    streaming_buffer_until_moderated: bool = True
 
 
 class TrendAIChatMessage(BaseModel, frozen=True):
