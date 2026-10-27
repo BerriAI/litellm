@@ -48094,6 +48094,16 @@ export interface components {
             field_schema: {
                 [key: string]: unknown;
             };
+            /**
+             * Logo Url Dark Via Proxy
+             * @default false
+             */
+            logo_url_dark_via_proxy: boolean;
+            /**
+             * Logo Url Via Proxy
+             * @default false
+             */
+            logo_url_via_proxy: boolean;
             /** Values */
             values: {
                 [key: string]: unknown;

@@ -39,8 +39,8 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.plumbing.context import set_request_root_span
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-from litellm.llms.anthropic.pass_through.messages.streaming_iterator import closing_superseded_attempt
-from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator import (
+from litellm.llms.anthropic.messages.native.streaming_iterator import closing_superseded_attempt
+from litellm.llms.anthropic.messages.native.agentic_streaming_iterator import (
     SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES,
 )
 from litellm.llms.bedrock.common_utils import BedrockError

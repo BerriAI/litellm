@@ -9610,12 +9610,18 @@ class ProviderConfigManager:
             return litellm.DatabricksDecisionsConfig()
         if provider == LlmProviders.HOSTED_VLLM:
             return litellm.HostedVLLMDecisionsConfig()
+        if provider == LlmProviders.LM_STUDIO:
+            return litellm.LMStudioDecisionsConfig()
         if provider == LlmProviders.LAYA:
             return litellm.LayaDecisionsConfig()
         if provider == LlmProviders.BESPOKE:
             return litellm.BespokeDecisionsConfig()
-        if provider == LlmProviders.OPENAI:
-            return litellm.OpenAIDecisionsConfig()
+        if provider in (LlmProviders.OPENAI, LlmProviders.AZURE):
+            configs: Final = {
+                LlmProviders.OPENAI: litellm.OpenAIDecisionsConfig,
+                LlmProviders.AZURE: litellm.AzureDecisionsConfig,
+            }
+            return configs[provider]()
         if provider == LlmProviders.AZURE_AI:
             return litellm.AzureAIDecisionsConfig()
         return None
@@ -9662,7 +9668,7 @@ class ProviderConfigManager:
                 return BedrockMantleAnthropicMessagesConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
             if "claude" in model_lower:
-                from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
+                from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation import (
                     VertexAIPartnerModelsAnthropicMessagesConfig,
                 )
 

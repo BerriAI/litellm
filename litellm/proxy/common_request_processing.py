@@ -4687,6 +4687,7 @@ class ProxyBaseLLMRequestProcessing:
             total_tokens=total_tokens,
             completion_tokens_details=usage.get("completion_tokens_details"),
             prompt_tokens_details=usage.get("prompt_tokens_details"),
+            server_tool_use=usage.get("server_tool_use"),
         )
 
     @staticmethod
