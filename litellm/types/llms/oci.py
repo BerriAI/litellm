@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 
-from pydantic import SerializeAsAny
+from pydantic import ConfigDict, Field, SerializeAsAny
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -295,7 +295,7 @@ class CohereChatRequest(LiteLLMBaseModel):
     """Cohere chat request model."""
 
     # Required fields
-    message: str
+    message: str = ""
     apiFormat: Literal["COHERE"] = "COHERE"
 
     # Optional fields
@@ -313,6 +313,7 @@ class CohereChatRequest(LiteLLMBaseModel):
     stopSequences: list[str] | None = None
     seed: int | None = None
     tools: list[CohereTool] | None = None
+    toolResults: list[CohereToolResult] | None = None
     # NOTE: OCI's Cohere chat endpoint does not accept ``toolChoice`` — see
     # ``OCIChatConfig.openai_to_oci_cohere_param_map`` which marks
     # ``tool_choice`` as unsupported. The field is intentionally absent here
@@ -351,10 +352,12 @@ class CohereUsage(LiteLLMBaseModel):
 class CohereCitation(LiteLLMBaseModel):
     """Citation in Cohere response."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     start: int
     end: int
     text: str
-    document_ids: list[str]
+    document_ids: list[str] = Field(default_factory=list, alias="documentIds")
 
 
 class CohereSearchQuery(LiteLLMBaseModel):
