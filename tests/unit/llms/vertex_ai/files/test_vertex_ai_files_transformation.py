@@ -2081,15 +2081,21 @@ def _google_rows_flagged_only_on_vertex(monkeypatch: pytest.MonkeyPatch, model_n
     )
 
 
-def _upload_rows(entries: Iterable[Mapping[str, object]], deployment_model: str | None) -> list[object]:
+def _upload_rows(
+    entries: Iterable[Mapping[str, object]], deployment_model: str | None, deployment_drop_params: bool | None = None
+) -> list[object]:
     """The Vertex rows a jsonl upload stores, built through the create-file transform the way the proxy's
-    `?model=<deployment>` branch runs it, with the deployment's model in litellm_params"""
+    `?model=<deployment>` branch runs it, with the deployment's model and drop_params in litellm_params"""
     jsonl: Final = "\n".join(json.dumps(dict(entry)) for entry in entries).encode()
+    litellm_params: Final[dict[str, object]] = {
+        **({"model": deployment_model} if deployment_model else {}),
+        **({"drop_params": deployment_drop_params} if deployment_drop_params is not None else {}),
+    }
     request: Final = VertexAIFilesConfig().transform_create_file_request(
         model="",
         create_file_data={"file": ("batch.jsonl", jsonl, "application/jsonl"), "purpose": "batch"},
         optional_params={},
-        litellm_params={"model": deployment_model} if deployment_model else {},
+        litellm_params=litellm_params,
     )
     assert isinstance(request, dict)
     body: Final = b"".join(request["streaming_media_upload"]["body_stream"].iter_bytes())
@@ -2116,6 +2122,19 @@ def test_batch_row_keeping_a_gemini_prefix_drops_the_knobs_under_global_drop_par
     _google_rows_flagged_only_on_vertex(monkeypatch, "gemini-zeta-9")
     monkeypatch.setattr(litellm, "drop_params", True)
     (row,) = _upload_rows([_chat_entry("gemini/gemini-zeta-9", _SAMPLING_KNOBS)], deployment_model)
+    assert _generation_config(TypeAdapter(Mapping[str, object]).validate_python(row)) == {"max_output_tokens": 5}
+
+
+def test_batch_row_for_a_flagged_gemini_model_drops_the_knobs_under_the_deployment_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A batch deployment with `drop_params: true` in its litellm_params gets the knobs dropped the way a
+    real-time call on that deployment does, instead of a 400 that only the global switch could avoid"""
+    _google_rows_flagged_only_on_vertex(monkeypatch, "gemini-zeta-9")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    (row,) = _upload_rows(
+        [_chat_entry("gemini-zeta-9", _SAMPLING_KNOBS)], "vertex_ai/gemini-zeta-9", deployment_drop_params=True
+    )
     assert _generation_config(TypeAdapter(Mapping[str, object]).validate_python(row)) == {"max_output_tokens": 5}
 
 

@@ -697,7 +697,9 @@ def _batch_row_model(deployment_model: str | None, row_model: object) -> str:
     binds the job to, else the row's own id for a direct SDK upload that names no deployment. The Google
     namespace comes off either way, as ``get_llm_provider`` does for a live call, so a ``gemini/`` id copied
     from an AI Studio call lands on its Vertex row instead of past every row."""
-    chosen: Final = deployment_model if deployment_model else row_model if isinstance(row_model, str) else ""
+    chosen: Final = deployment_model if deployment_model else row_model
+    if not isinstance(chosen, str):
+        raise TypeError("`body.model` on batch requests must be a string, but was missing or not a string")
     namespace: Final = next((ns for ns in _GOOGLE_MODEL_NAMESPACES if chosen.startswith(ns)), "")
     return chosen.removeprefix(namespace)
 
@@ -879,7 +881,7 @@ class _OpenAIToVertexBatchUploadStream(BaseFileUploadStream):
         self,
         openai_file_content: FileTypes,
         map_openai_to_vertex_params: Callable[[dict[str, object]], dict[str, object]],
-        deployment_model: str | None,
+        deployment_model: str | None = None,
     ) -> None:
         self._openai_file_content = openai_file_content
         self._map_openai_to_vertex_params = map_openai_to_vertex_params
@@ -1143,15 +1145,16 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         sampling_params: Final = tuple(
             p for p in ("temperature", "top_p", "top_k") if openai_request_body.get(p) is not None
         )
+        drop_params: Final = drops_unsupported_params(openai_request_body.get("drop_params", deployment_drop_params))
         if sampling_params and not VertexGeminiConfig.supports_sampling_params(model, "vertex_ai"):
             VertexGeminiConfig.reject_unsupported_sampling_param(
-                model=model, param=", ".join(sampling_params), drop_params=False
+                model=model, param=", ".join(sampling_params), drop_params=drop_params
             )
         vertex_params: Final = config.map_openai_params(
             model=model,
             non_default_params=openai_request_body,
             optional_params={},
-            drop_params=drops_unsupported_params(openai_request_body.get("drop_params", deployment_drop_params)),
+            drop_params=drop_params,
             allow_integer_enums=False,
         )
         return vertex_params
