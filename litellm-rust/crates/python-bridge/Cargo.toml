@@ -53,7 +53,7 @@ pyo3.workspace = true
 prost.workspace = true
 pyo3-async-runtimes.workspace = true
 reqwest.workspace = true
-redis = { version = "1.7.0", features = ["tls-rustls"] }
+redis = { workspace = true, features = ["tls-rustls"] }
 serde_json.workspace = true
 strum.workspace = true
 veil.workspace = true
