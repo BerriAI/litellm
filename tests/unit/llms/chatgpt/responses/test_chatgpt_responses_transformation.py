@@ -242,6 +242,111 @@ class TestChatGPTResponsesAPITransformation:
         }
 
     @pytest.mark.parametrize(
+        "content",
+        [
+            "You are a helpful assistant.",
+            [{"type": "input_text", "text": "You are a helpful assistant."}],
+        ],
+    )
+    @pytest.mark.parametrize("role", ["system", "developer"])
+    def test_chatgpt_moves_system_messages_into_instructions(self, role: str, content: object) -> None:
+        """The ChatGPT backend rejects system/developer items in input with a 400."""
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.2-codex",
+            input=[
+                {"role": role, "content": content},
+                {"role": "user", "content": "Hello"},
+            ],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == [{"role": "user", "content": "Hello"}]
+        assert "You are a helpful assistant." in request["instructions"]
+        assert request["instructions"].startswith("You are Codex, based on GPT-5.")
+
+    def test_chatgpt_moves_typed_system_items_into_instructions(self) -> None:
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.2-codex",
+            input=[
+                {
+                    "type": "message",
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": "You are helpful"}],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Hello"}],
+                },
+            ],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert [item["role"] for item in request["input"]] == ["user"]
+        assert "You are helpful" in request["instructions"]
+
+    def test_chatgpt_merges_system_messages_with_explicit_instructions(self) -> None:
+        config: Final = ChatGPTResponsesAPIConfig()
+        request: Final = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.2-codex",
+            input=[
+                {"role": "system", "content": "System prompt here"},
+                {"role": "user", "content": "Hello"},
+            ],
+            response_api_optional_request_params={"instructions": "User-provided instructions"},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        instructions: Final = request["instructions"]
+        assert instructions.startswith("You are Codex, based on GPT-5.")
+        assert "User-provided instructions" in instructions
+        assert "System prompt here" in instructions
+        assert instructions.index("User-provided instructions") < instructions.index("System prompt here")
+
+    def test_chatgpt_does_not_duplicate_default_instructions(self) -> None:
+        config: Final = ChatGPTResponsesAPIConfig()
+        defaults: Final = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.2-codex",
+            input=[{"role": "user", "content": "Hello"}],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )["instructions"]
+        request: Final = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.2-codex",
+            input=[{"role": "system", "content": "Be concise"}, {"role": "user", "content": "Hello"}],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["instructions"].count(defaults) == 1
+        assert request["instructions"].endswith("Be concise")
+
+    def test_chatgpt_leaves_input_without_system_messages_untouched(self) -> None:
+        config: Final = ChatGPTResponsesAPIConfig()
+        original_input: Final = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+        ]
+        request: Final = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.2-codex",
+            input=original_input,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == original_input
+
+    @pytest.mark.parametrize(
         ("model_name", "response_model"),
         [
             ("chatgpt/gpt-5.2-codex", "gpt-5.2-codex"),

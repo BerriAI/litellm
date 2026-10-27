@@ -41,6 +41,45 @@ if TYPE_CHECKING:
 
 _CHATGPT_SERVICE_TIERS: Final = {"default": "default", "priority": "priority", "fast": "priority"}
 
+# The ChatGPT backend answers 400 {"detail":"System messages are not allowed"} when
+# these roles show up in `input`; the Responses API models them with `instructions`.
+_SYSTEM_ROLES: Final = frozenset({"system", "developer"})
+
+
+def _is_system_item(item: object) -> bool:
+    return isinstance(item, Mapping) and item.get("role") in _SYSTEM_ROLES
+
+
+def _content_text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, (list, tuple)):
+        return "".join(
+            block["text"] for block in content if isinstance(block, Mapping) and isinstance(block.get("text"), str)
+        )
+    return ""
+
+
+def _system_item_text(item: object) -> str:
+    """Text of one system/developer item, stripped, or "" when there is none."""
+    if not isinstance(item, Mapping) or item.get("role") not in _SYSTEM_ROLES:
+        return ""
+    return _content_text(item.get("content")).strip()
+
+
+def _extract_system_instructions(input: object) -> str:
+    """Pull the text out of system/developer input items so it can move into `instructions`."""
+    if not isinstance(input, (list, tuple)):
+        return ""
+    texts: Final = (text for text in map(_system_item_text, input) if text)
+    return "\n\n".join(texts)
+
+
+def _without_system_items(input: object) -> object:
+    if not isinstance(input, (list, tuple)):
+        return input
+    return [item for item in input if not _is_system_item(item)]
+
 
 class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def __init__(self, authenticator: Authenticator | None = None) -> None:
@@ -107,12 +146,16 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             headers,
         )
         base_instructions: Final = get_chatgpt_default_instructions()
+        system_instructions: Final = _extract_system_instructions(request.get("input"))
+        if system_instructions:
+            request["input"] = _without_system_items(request.get("input"))
         existing_instructions: Final = request.get("instructions")
-        if existing_instructions:
-            if base_instructions not in existing_instructions:
-                request["instructions"] = f"{base_instructions}\n\n{existing_instructions}"
-        else:
-            request["instructions"] = base_instructions
+        instruction_parts: Final = [base_instructions]
+        if existing_instructions and base_instructions not in existing_instructions:
+            instruction_parts.append(existing_instructions)
+        if system_instructions:
+            instruction_parts.append(system_instructions)
+        request["instructions"] = "\n\n".join(instruction_parts)
         request["store"] = False
         request["stream"] = True
         include: Final = list(request.get("include") or [])
