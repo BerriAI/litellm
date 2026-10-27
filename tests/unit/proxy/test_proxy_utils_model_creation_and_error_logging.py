@@ -116,51 +116,132 @@ async def test_proxy_only_error_log_marks_no_upstream_llm_call():
 
 
 @pytest.mark.asyncio
-async def test_proxy_only_error_log_keeps_litellm_metadata_in_litellm_params():
-    """Responses API requests carry guardrail info under ``litellm_metadata``
-    (not ``metadata``). It must land in litellm_params so
-    ``merge_litellm_metadata`` can surface ``guardrail_information`` in the
-    spend-log failure row, matching the chat completions path."""
-    from litellm.proxy._types import UserAPIKeyAuth
+@pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
+async def test_proxy_only_error_log_drops_caller_guardrail_information_without_logging_object(
+    metadata_field: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    guardrail_info: Final = [
+        {
+            "guardrail_name": "caller-guardrail",
+            "guardrail_status": "guardrail_intervened",
+            "guardrail_cost": 123.45,
+        }
+    ]
+    request_data: Final[dict[str, object]] = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+        metadata_field: {"tags": ["t"], "standard_logging_guardrail_information": guardrail_info},
+    }
 
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
-    captured = {}
-    guardrail_info = [{"guardrail_name": "test-guard", "guardrail_status": "blocked"}]
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-rejected", team_id="team-a", request_route="/v1/chat/completions"),
+        route="/v1/chat/completions",
+        original_exception=HTTPException(status_code=400, detail="blocked"),
+    )
 
-    def fake_update_environment_variables(self, *args, **kwargs):
-        captured["litellm_params"] = kwargs.get("litellm_params")
-        captured["optional_params"] = kwargs.get("optional_params")
+    details: Final = request_data["litellm_logging_obj"].model_call_details
+    assert details["standard_logging_object"] is not None
+    assert details["litellm_params"][metadata_field]["tags"] == ["t"]
+    assert "standard_logging_guardrail_information" not in details["litellm_params"][metadata_field]
+    assert "guardrail_cost" not in str(details["standard_logging_object"])
+    assert "litellm_metadata" not in details["optional_params"]
 
-    from litellm.litellm_core_utils.litellm_logging import Logging
 
-    orig_update_env = Logging.update_environment_variables
-    orig_pre_call = Logging.pre_call
-    orig_async_failure = Logging.async_failure_handler
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
+async def test_proxy_only_error_log_keeps_tags_and_drops_caller_logging_fields(
+    metadata_field: str,
+) -> None:
+    request_data: Final[dict[str, object]] = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+        metadata_field: {
+            "langsmith_base_url": "https://caller.invalid",
+            "langsmith_api_key": "caller-key",
+            "tags": ["t"],
+            "user_api_key_team_id": "caller-team",
+            "user_api_key_hash": "caller-hash",
+            "user_api_key_auth_metadata": {"caller": "metadata"},
+        },
+        "langsmith_base_url": "https://caller.invalid",
+        "standard_callback_dynamic_params": {"gcs_path_service_account": "/caller/sa.json"},
+    }
 
-    async def _noop_async_failure(self, *args, **kwargs):
-        return None
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-rejected", team_id="team-a", request_route="/v1/chat/completions"),
+        route="/v1/chat/completions",
+        original_exception=Exception("bad key"),
+    )
 
-    Logging.update_environment_variables = fake_update_environment_variables
-    Logging.pre_call = lambda self, *args, **kwargs: None
-    Logging.async_failure_handler = _noop_async_failure
-    try:
-        await proxy_logging_obj._handle_logging_proxy_only_error(
-            request_data={
-                "model": "gpt-4o",
-                "input": "blocked prompt",
-                "litellm_metadata": {"standard_logging_guardrail_information": guardrail_info},
-            },
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/v1/responses"),
-            route="/v1/responses",
-            original_exception=HTTPException(status_code=400, detail="blocked"),
-        )
-    finally:
-        Logging.update_environment_variables = orig_update_env
-        Logging.pre_call = orig_pre_call
-        Logging.async_failure_handler = orig_async_failure
+    details: Final = request_data["litellm_logging_obj"].model_call_details
+    assert "caller" not in str(details["standard_callback_dynamic_params"])
+    assert "langsmith_base_url" not in details
+    assert "caller" not in str(details["litellm_params"])
+    assert details["litellm_params"][metadata_field]["tags"] == ["t"]
+    assert details["litellm_params"]["metadata"]["user_api_key_team_id"] == "team-a"
+    assert details["litellm_params"][metadata_field]["user_api_key_team_id"] == "team-a"
 
-    assert captured["litellm_params"]["litellm_metadata"]["standard_logging_guardrail_information"] == guardrail_info
-    assert "litellm_metadata" not in captured["optional_params"]
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
+async def test_proxy_only_error_log_drops_malformed_metadata_tags(metadata_field: str) -> None:
+    guardrail_info: Final = [{"guardrail_name": "g", "guardrail_status": "guardrail_intervened"}]
+    request_data: Final[dict[str, object]] = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+        metadata_field: {"tags": 123, "standard_logging_guardrail_information": guardrail_info},
+    }
+
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-rejected", team_id="team-a", request_route="/v1/chat/completions"),
+        route="/v1/chat/completions",
+        original_exception=Exception("bad key"),
+    )
+
+    details: Final = request_data["litellm_logging_obj"].model_call_details
+    assert details["standard_logging_object"] is not None
+    assert "tags" not in details["litellm_params"][metadata_field]
+    assert "standard_logging_guardrail_information" not in details["litellm_params"][metadata_field]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
+async def test_proxy_only_error_log_builds_payload_when_logging_object_has_malformed_tags(
+    metadata_field: str,
+) -> None:
+    request_data: Final[dict[str, object]] = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+        "litellm_call_id": "malformed-tags-call",
+        metadata_field: {"tags": 123},
+    }
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=real_datetime.datetime.now(),
+        **request_data,
+    )
+
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data={**request_data, "litellm_logging_obj": logging_obj},
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-blocked", team_id="team-a", request_route="/v1/chat/completions"),
+        route="/v1/chat/completions",
+        original_exception=HTTPException(status_code=400, detail="Content blocked"),
+    )
+
+    standard_logging_object: Final = logging_obj.model_call_details["standard_logging_object"]
+    assert standard_logging_object is not None
+    assert standard_logging_object["model"] == request_data["model"]
+    assert standard_logging_object["metadata"]["user_api_key_team_id"] == "team-a"
+    assert 123 not in standard_logging_object["request_tags"]
 
 
 @pytest.mark.asyncio

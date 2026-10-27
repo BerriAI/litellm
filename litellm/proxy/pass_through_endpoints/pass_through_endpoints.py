@@ -118,6 +118,7 @@ from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy modul
     _key_or_team_allows_client_pricing_override,  # pyright: ignore[reportPrivateUsage]  # reuse the proxy's pricing trust policy
     _strip_client_pricing_overrides,  # pyright: ignore[reportPrivateUsage]  # sanitize before trusted hooks add guardrail costs
     get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
+    strip_client_guardrail_information,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.route_priority import (
@@ -1195,10 +1196,11 @@ async def pass_through_request(
             _parsed_body,
         )
 
+        client_body: Final = TypeAdapter(dict[str, object]).validate_python(_parsed_body)
+        strip_client_guardrail_information(client_body)
         if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
-            pricing_body: Final = TypeAdapter(dict[str, object]).validate_python(_parsed_body)
-            _strip_client_pricing_overrides(pricing_body)
-            _parsed_body = pricing_body
+            _strip_client_pricing_overrides(client_body)
+        _parsed_body = client_body
         if custom_llm_provider in ("laya", "bespoke"):
             decision_request: Final = TypeAdapter(Mapping[str, object]).validate_python(_parsed_body)
             checkpoint: Final = validate_oss_request(custom_llm_provider, decision_request)
