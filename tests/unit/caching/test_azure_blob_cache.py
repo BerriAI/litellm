@@ -157,8 +157,34 @@ def test_blob_cache_sync_set_cache(mock_azure_dependencies):
 
     # Verify the call was made correctly
     cache.container_client.upload_blob.assert_called_once_with(
-        "sync_test_key", '{"sync_key": "sync_value", "number": 123}'
+        "sync_test_key", '{"sync_key": "sync_value", "number": 123}', overwrite=True
     )
+
+
+def test_blob_cache_sync_set_cache_replaces_an_existing_key(mock_azure_dependencies):
+    """Re-caching a key must replace the blob, as the async path already does.
+
+    `ContainerClient.upload_blob` defaults to `overwrite=False` and raises
+    `ResourceExistsError` for a key that is already present. `set_cache`
+    swallows that, so without `overwrite=True` the entry silently never updates.
+    """
+    from azure.core.exceptions import ResourceExistsError
+
+    cache = AzureBlobCache("https://my-test-host", "test-container")
+
+    existing_keys = {"sync_test_key"}
+
+    def upload_blob(name, data, **kwargs):
+        if name in existing_keys and not kwargs.get("overwrite"):
+            raise ResourceExistsError("The specified blob already exists.")
+        existing_keys.add(name)
+        return MagicMock()
+
+    cache.container_client.upload_blob.side_effect = upload_blob
+
+    cache.set_cache("sync_test_key", {"v": 2})
+
+    assert cache.container_client.upload_blob.call_args.kwargs.get("overwrite") is True
 
 
 def test_blob_cache_sync_get_cache_not_found(mock_azure_dependencies):
