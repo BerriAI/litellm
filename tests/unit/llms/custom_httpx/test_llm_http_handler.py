@@ -5726,8 +5726,8 @@ async def test_async_anthropic_messages_handler_filters_betas_by_the_azure_ai_ro
 
     monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
     anthropic_beta_headers_manager._BETA_HEADERS_CONFIG = None
-    foundry_api_base = "https://my-resource.services.ai.azure.com/anthropic"
-    upstream_response = httpx.Response(
+    foundry_api_base: Final = "https://my-resource.services.ai.azure.com/anthropic"
+    upstream_response: Final = httpx.Response(
         200,
         json={
             "id": "msg_123",
@@ -5740,9 +5740,9 @@ async def test_async_anthropic_messages_handler_filters_betas_by_the_azure_ai_ro
         },
         request=httpx.Request("POST", f"{foundry_api_base}/v1/messages"),
     )
-    mock_client = AsyncMock(spec=AsyncHTTPHandler)
+    mock_client: Final = AsyncMock(spec=AsyncHTTPHandler)
     mock_client.post = AsyncMock(return_value=upstream_response)
-    mock_logging_obj = Mock()
+    mock_logging_obj: Final = Mock()
     mock_logging_obj.model_call_details = {}
     mock_logging_obj.stream = False
     mock_logging_obj.dynamic_success_callbacks = None
@@ -5761,5 +5761,5 @@ async def test_async_anthropic_messages_handler_filters_betas_by_the_azure_ai_ro
         kwargs={"extra_headers": {"anthropic-beta": "advisor-tool-2026-03-01,thinking-binding-controls-2026-08-01"}},
     )
 
-    sent_headers = mock_client.post.call_args.kwargs["headers"]
+    sent_headers: Final = mock_client.post.call_args.kwargs["headers"]
     assert sent_headers["anthropic-beta"] == "thinking-binding-controls-2026-08-01"

@@ -98,6 +98,8 @@ pub enum AnthropicBeta {
     McpServers20251204,
     #[strum(serialize = "mid-conversation-output-config-2026-07-01")]
     MidConversationOutputConfig20260701,
+    #[strum(serialize = "mid-conversation-system-clear-at-2026-08-21")]
+    MidConversationSystemClearAt20260821,
     #[strum(serialize = "mid-conversation-tool-changes-2026-07-01")]
     MidConversationToolChanges20260701,
     #[strum(serialize = "output-128k-2025-02-19")]
@@ -129,7 +131,7 @@ pub enum AnthropicBeta {
 }
 
 impl AnthropicBeta {
-    pub const KNOWN: [Self; 40] = [
+    pub const KNOWN: [Self; 41] = [
         Self::Oauth20250420,
         Self::WebFetch20250910,
         Self::WebSearch20250305,
@@ -157,6 +159,7 @@ impl AnthropicBeta {
         Self::McpClient20251120,
         Self::McpServers20251204,
         Self::MidConversationOutputConfig20260701,
+        Self::MidConversationSystemClearAt20260821,
         Self::MidConversationToolChanges20260701,
         Self::Output128k20250219,
         Self::PromptCachingScope20260105,
@@ -257,10 +260,14 @@ impl AnthropicBeta {
             }
             Self::MidConversationOutputConfig20260701
             | Self::MidConversationToolChanges20260701 => &[
-                BetaProvider::AzureAi,
                 BetaProvider::BedrockConverse,
                 BetaProvider::BedrockMantle,
-                BetaProvider::VertexAi,
+                BetaProvider::Databricks,
+            ],
+            Self::MidConversationSystemClearAt20260821 => &[
+                BetaProvider::BedrockConverse,
+                BetaProvider::Bedrock,
+                BetaProvider::BedrockMantle,
                 BetaProvider::Databricks,
             ],
             Self::Output128k20250219 | Self::TokenEfficientTools20250219 => &[
@@ -429,6 +436,7 @@ mod tests {
             AnthropicBeta::McpClient20251120,
             AnthropicBeta::McpServers20251204,
             AnthropicBeta::MidConversationOutputConfig20260701,
+            AnthropicBeta::MidConversationSystemClearAt20260821,
             AnthropicBeta::MidConversationToolChanges20260701,
             AnthropicBeta::Output128k20250219,
             AnthropicBeta::PromptCachingScope20260105,
