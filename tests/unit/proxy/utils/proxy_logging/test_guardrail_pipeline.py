@@ -1348,6 +1348,34 @@ async def test_post_call_pipeline_steps_are_named_only_once_they_run(
     assert data["metadata"]["applied_guardrails"] == ["first"]
 
 
+class _OpensLitellmMetadataOnResponseGuardrail(_PipelineStepGuardrail):
+    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+        self.calls += 1
+        data["litellm_metadata"] = {"user_api_key_hash": "hashed"}
+
+
+@pytest.mark.asyncio
+async def test_post_call_pipeline_names_every_step_that_ran_in_metadata_after_a_step_opens_litellm_metadata(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    first = _OpensLitellmMetadataOnResponseGuardrail("first", "post_call")
+    second = _PipelineStepGuardrail("second", "post_call")
+    monkeypatch.setattr(litellm, "callbacks", [first, second])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+
+    data = await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data=_two_step_pipeline_data("post_call", "next"),
+        call_type="completion",
+    )
+    await proxy_logging.post_call_success_hook(
+        data=data, response=litellm.ModelResponse(), user_api_key_dict=make_user_api_key_auth()
+    )
+
+    assert (first.calls, second.calls) == (1, 1)
+    assert data["metadata"]["applied_guardrails"] == ["first", "second"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("asks_for", "request_route", "streams_live", "expected_header"),

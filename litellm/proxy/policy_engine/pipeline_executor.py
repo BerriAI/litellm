@@ -355,6 +355,22 @@ async def _run_pre_call_hook(
     return payload
 
 
+def _name_step_that_ran(
+    request_data: dict[str, object],  # mutable-ok: the request payload the step's name is recorded on
+    metadata_key: Literal["metadata", "litellm_metadata"],
+    guardrail_name: str,
+) -> None:
+    """Name a step that ran in the applied guardrails of the metadata bucket the pipeline's request started with."""
+    existing: Final = request_data.get(metadata_key)
+    bucket: Final[dict[str, object]] = (  # mutable-ok: the request's own metadata bucket, written in place
+        cast("dict[str, object]", existing)  # cast-ok: metadata buckets are str-keyed
+        if isinstance(existing, dict)
+        else {}
+    )
+    request_data[metadata_key] = bucket  # rebind-ok: the step's name is recorded on the request payload
+    add_guardrail_to_applied_guardrails_header(request_data={metadata_key: bucket}, guardrail_name=guardrail_name)
+
+
 def _release_original_chunks(
     guardrail_name: str,
     reason: str,
@@ -415,6 +431,9 @@ class PipelineExecutor:
             PipelineExecutionResult with terminal action and step results
         """
         step_results: Final[list[PipelineStepResult]] = []
+        metadata_key: Final = get_metadata_variable_name_from_kwargs(
+            cast(Mapping[str, object], data)  # cast-ok: the request payload is str-keyed
+        )
         working_data = data.copy()
         if "metadata" in working_data:
             working_data["metadata"] = working_data["metadata"].copy()
@@ -433,6 +452,7 @@ class PipelineExecutor:
                 data=working_data,
                 user_api_key_dict=user_api_key_dict,
                 call_type=call_type,
+                metadata_key=metadata_key,
                 raw_request_snapshot=raw_request_snapshot,
                 streaming_chunks=streaming_chunks,
                 endpoint_translation=endpoint_translation,
@@ -506,6 +526,7 @@ class PipelineExecutor:
         user_api_key_dict: "UserAPIKeyAuth",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
         stream_already_sent: bool,
+        metadata_key: Literal["metadata", "litellm_metadata"],
     ) -> None:
         """Run one streaming post_call step through the endpoint translation, delivering
         text and tool-call rewrites on translations that support ended-stream write-back. A
@@ -553,7 +574,7 @@ class PipelineExecutor:
             return
         finally:
             if not callback.records_own_guardrail_information:
-                add_guardrail_to_applied_guardrails_header(request_data=hook_input, guardrail_name=step.guardrail)
+                _name_step_that_ran(hook_input, metadata_key, step.guardrail)
         discard_reason: Final = observer.discard_reason(rewrite_undeliverable_reason)
         if discard_reason is not None:
             _release_original_chunks(step.guardrail, discard_reason, streaming_chunks, originals)
@@ -565,6 +586,7 @@ class PipelineExecutor:
         data: dict,
         user_api_key_dict: "UserAPIKeyAuth",
         call_type: str,
+        metadata_key: Literal["metadata", "litellm_metadata"],
         raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
         streaming_chunks: list[object] | None = None,  # mutable-ok: shared buffered-stream chunks, read per step
         endpoint_translation: "BaseTranslation | None" = None,
@@ -626,10 +648,15 @@ class PipelineExecutor:
                     user_api_key_dict=user_api_key_dict,
                     litellm_logging_obj=data.get("litellm_logging_obj"),
                     stream_already_sent=stream_already_sent,
+                    metadata_key=metadata_key,
                 )
                 response = None
             elif mode == "post_call":
-                add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=step.guardrail)
+                _name_step_that_ran(
+                    cast(dict[str, object], data),  # cast-ok: the request payload is str-keyed
+                    metadata_key,
+                    step.guardrail,
+                )
                 response = await target.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict,
                     data=data,

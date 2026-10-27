@@ -1157,6 +1157,7 @@ async def test_pipeline_step_keeps_native_hook_when_opted_out(monkeypatch):
         data=data,
         user_api_key_dict=MagicMock(),
         call_type="completion",
+        metadata_key="metadata",
     )
 
     assert outcome == "pass"
@@ -1431,6 +1432,27 @@ async def test_streaming_step_records_the_guardrail_in_the_applied_guardrails_he
     result = await _run_streaming_step(_WritingTranslation(), [_chunk()])
 
     assert result.modified_data["metadata"]["applied_guardrails"] == ["masker"]
+
+
+class _LitellmMetadataOpeningGuardrail(CustomGuardrail):
+    """Opens ``litellm_metadata`` on the request while scanning, as the A2A translation does."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        request_data["litellm_metadata"] = {"user_api_key_hash": "hashed"}
+        return inputs
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_is_named_in_the_metadata_the_request_started_with(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [_LitellmMetadataOpeningGuardrail()])
+
+    result = await _run_streaming_step(_WritingTranslation(), [_chunk()])
+
+    assert result.modified_data["metadata"]["applied_guardrails"] == ["masker"]
+    assert "applied_guardrails" not in result.modified_data["litellm_metadata"]
 
 
 @pytest.mark.asyncio

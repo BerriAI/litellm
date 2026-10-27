@@ -516,6 +516,90 @@ def test_the_spend_log_and_the_trace_name_only_the_steps_that_ran(
     ] * len(spans), spans
 
 
+def _agent_card(name: str, url: str) -> dict[str, object]:
+    return {
+        "protocolVersion": "0.3",
+        "name": name,
+        "description": "Scripted agent that answers every message with one text part",
+        "version": "1.0.0",
+        "url": url,
+        "capabilities": {"streaming": True},
+        "defaultInputModes": ["text"],
+        "defaultOutputModes": ["text"],
+        "skills": [],
+    }
+
+
+@pytest.fixture(scope="module")
+def agent(rig: _Rig) -> Iterator[str]:
+    name: Final = f"pipeline-agent-{uuid.uuid4().hex}"
+
+    def answer(request: Request) -> Reply:
+        if request.method == "GET":
+            return Reply(body=json.dumps(_agent_card(name, f"{peer.url}/")).encode())
+        message: Final = {
+            "kind": "message",
+            "role": "agent",
+            "messageId": uuid.uuid4().hex,
+            "parts": [{"kind": "text", "text": "guarded"}],
+        }
+        return Reply(
+            body=json.dumps({"jsonrpc": "2.0", "id": json.loads(request.body)["id"], "result": message}).encode()
+        )
+
+    with wire_server(answer) as peer:
+        identity: Final = str(
+            rig.gateway.post(
+                "/v1/agents", {"agent_name": name, "agent_card_params": _agent_card(name, f"{peer.url}/")}
+            )["agent_id"]
+        )
+        yield identity
+        rig.gateway.request("DELETE", f"/v1/agents/{identity}")
+
+
+@pytest.mark.parametrize(
+    ("tag", "expected"),
+    [
+        pytest.param(_SCANS_AFTER_RELEASE, [_LIVE_FIRST, _LIVE_SECOND], id="every-step-passes"),
+        pytest.param(
+            _RESPONSE_MOVES_PAST_FIRST, [_RESPONSE_BLOCKER, _RESPONSE_SECOND], id="first-step-flags-and-moves-on"
+        ),
+    ],
+)
+def test_an_agent_message_names_every_response_step_that_ran_in_the_spend_log_and_the_trace(
+    rig: _Rig, agent: str, tag: str, expected: list[str]
+) -> None:
+    since: Final = recorded_spans(rig.traces)[0]
+    rig.vendor.drain()
+    message: Final = {
+        "kind": "message",
+        "role": "user",
+        "messageId": uuid.uuid4().hex,
+        "parts": [{"kind": "text", "text": f"hello {uuid.uuid4().hex}"}],
+    }
+    with rig.gateway.scenario() as scenario:
+        team: Final = scenario.team(metadata={"tags": [tag]})
+        response: Final = rig.gateway.request(
+            "POST",
+            f"/a2a/{agent}",
+            {"jsonrpc": "2.0", "id": uuid.uuid4().hex, "method": "message/send", "params": {"message": message}},
+            key=scenario.key(team_id=team),
+            headers={"Accept": "application/json"},
+        )
+    assert response.status_code == 200, response.text
+    assert list(_steps_that_ran(rig)) == expected
+    rows: Final = eventually(
+        lambda: rig.gateway.rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE team_id = %s', (team,)),
+        lambda found: len(found) == 1,
+        seconds=70,
+    )
+    spans: Final = eventually(lambda: _spans_naming_guardrails(rig, since, team), bool, seconds=30)
+    assert sorted(object_value(rows[0]["metadata"]).get("applied_guardrails") or []) == expected, rows
+    assert [sorted(ast.literal_eval(str(span["attributes"]["metadata.applied_guardrails"]))) for span in spans] == [
+        expected
+    ] * len(spans), spans
+
+
 def _openai_chat(base: str, key: str, model: str) -> str | None:
     with (
         httpx.Client(timeout=30, trust_env=False) as transport,
