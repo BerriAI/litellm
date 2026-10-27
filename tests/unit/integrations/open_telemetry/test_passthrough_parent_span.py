@@ -130,18 +130,16 @@ def _model_response() -> ModelResponse:
 
 # Real Anthropic SSE stream (single text block) reused for the streaming path.
 STREAM_CHUNKS = [
-    "event: message_start",
-    'data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5-20250929","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":17,"output_tokens":5}}}',
-    "event: content_block_start",
-    'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
-    "event: content_block_delta",
-    'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello world"}}',
-    "event: content_block_stop",
-    'data: {"type":"content_block_stop","index":0}',
-    "event: message_delta",
-    'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}',
-    "event: message_stop",
-    'data: {"type":"message_stop"}',
+    "event: message_start\n"
+    'data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5-20250929","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":17,"output_tokens":5}}}\n\n',
+    "event: content_block_start\n"
+    'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+    "event: content_block_delta\n"
+    'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello world"}}\n\n',
+    'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+    "event: message_delta\n"
+    'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}\n\n',
+    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
 ]
 
 
@@ -231,7 +229,7 @@ def test_streaming_passthrough_links_to_server_root(
     logging_obj, _kwargs, start_time = _build_logging_obj_wired_to_root(
         root, stream=True
     )
-    raw_bytes = ["\n".join(STREAM_CHUNKS).encode("utf-8")]
+    raw_bytes = ["".join(STREAM_CHUNKS).encode("utf-8")]
     end_time = datetime.now()
     asyncio.run(
         PassThroughStreamingHandler._route_streaming_logging_to_handler(
