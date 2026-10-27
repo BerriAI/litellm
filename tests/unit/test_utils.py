@@ -7049,6 +7049,51 @@ class TestVerboseRequestLineRedaction:
         assert self.FAKE_API_KEY not in caplog.text
         assert "litellm.opaque('REDACTED', model='synthetic-model')" in caplog.text
 
+    @pytest.mark.parametrize("async_prefix", [False, True])
+    def test_async_varargs_without_sync_signature_hide_credentials(
+        self,
+        async_prefix: bool,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from litellm.utils import print_args_passed_to_litellm
+
+        async def opaque_async(*args: object, **kwargs: object) -> None:
+            pass
+
+        async def aopaque(*args: object, **kwargs: object) -> None:
+            pass
+
+        function: Final = aopaque if async_prefix else opaque_async
+        with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
+            print_args_passed_to_litellm(function, (self.FAKE_API_KEY,), {"model": "synthetic-model"})
+        assert self.FAKE_API_KEY not in caplog.text
+        assert f"litellm.{function.__name__}('REDACTED', model='synthetic-model')" in caplog.text
+
+    @pytest.mark.parametrize("error_type", [TypeError, ValueError])
+    def test_unavailable_signature_hides_all_positional_values(
+        self,
+        error_type: type[Exception],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from litellm.utils import print_args_passed_to_litellm
+
+        class OpaqueCallable:
+            __name__ = "opaque"
+
+            @property
+            def __signature__(self) -> inspect.Signature:
+                raise error_type("signature unavailable")
+
+            def __call__(self, *args: object, **kwargs: object) -> None:
+                pass
+
+        with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
+            print_args_passed_to_litellm(
+                OpaqueCallable(), (self.FAKE_API_KEY, self.FAKE_API_KEY), {"model": "synthetic-model"}
+            )
+        assert self.FAKE_API_KEY not in caplog.text
+        assert "litellm.opaque('REDACTED', 'REDACTED', model='synthetic-model')" in caplog.text
+
     def test_positional_only_and_surplus_arguments_are_sanitized(
         self,
         caplog: pytest.LogCaptureFixture,

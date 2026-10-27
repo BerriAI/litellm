@@ -8541,19 +8541,23 @@ def get_valid_models(
         return []  # NON-Blocking
 
 
-def _request_logging_parameters(original_function: Callable[..., object]) -> tuple[str, ...]:
+def _positional_request_parameter_names(original_function: Callable[..., object]) -> tuple[str, ...]:
     parameters: Final = inspect.signature(original_function).parameters.values()
-    positional: Final = tuple(
+    return tuple(
         parameter.name
         for parameter in parameters
         if parameter.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
     )
+
+
+def _request_logging_parameters(original_function: Callable[..., object]) -> tuple[str, ...]:
+    positional: Final = _positional_request_parameter_names(original_function)
     if positional or not inspect.iscoroutinefunction(original_function):
         return positional
     if original_function.__name__.startswith("a"):
         synchronous: Final = getattr(inspect.getmodule(original_function), original_function.__name__[1:], None)
         if callable(synchronous) and not inspect.iscoroutinefunction(synchronous):
-            return _request_logging_parameters(synchronous)
+            return _positional_request_parameter_names(synchronous)
     return ()
 
 

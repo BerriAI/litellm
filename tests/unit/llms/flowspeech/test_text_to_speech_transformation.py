@@ -232,7 +232,9 @@ def test_gateway_base_preserves_prefix_without_duplicating_endpoint(base, expect
 @pytest.mark.parametrize("prefix", ["/p%2Fq", "/p%2fq", "/p%252Fq", "/p%3Fq", "/p%23q"])
 @pytest.mark.parametrize("suffix", ["/", "/api/v1/tts/jobs", "/api/v1/tts/jobs/"])
 def test_gateway_prefix_preserves_encoded_path(prefix, suffix):
-    url = FlowSpeechTextToSpeechConfig().get_complete_url("flowspeech-tts", f"https://gateway.example{prefix}{suffix}", {})
+    url = FlowSpeechTextToSpeechConfig().get_complete_url(
+        "flowspeech-tts", f"https://gateway.example{prefix}{suffix}", {}
+    )
     assert httpx.URL(url).raw_path == f"{prefix}/api/v1/tts/jobs".encode("ascii")
     assert httpx.URL(url).query == b""
     assert httpx.URL(url).fragment == ""
@@ -426,7 +428,7 @@ async def test_positional_key_debug_controls(
         assert request.headers["authorization"] == f"Bearer {SECRET_SENTINEL}"
         return httpx.Response(400, json={"error": {"code": "synthetic", "message": "synthetic", "retryable": False}})
 
-    with pytest.raises(litellm.BadRequestError if asynchronous else FlowSpeechException) as error:
+    async def call() -> None:
         if asynchronous:
             async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
                 await litellm.aspeech(
@@ -437,6 +439,9 @@ async def test_positional_key_debug_controls(
                 litellm.speech(
                     "flowspeech/flowspeech-tts", "Hello", "Kore", SECRET_SENTINEL, client=client, max_retries=0
                 )
+
+    with pytest.raises(litellm.BadRequestError if asynchronous else FlowSpeechException) as error:
+        await call()
     captured: Final = capsys.readouterr()
     assert SECRET_SENTINEL not in caplog.text + captured.out + captured.err
     assert ("Request to litellm:" in caplog.text) is debug
