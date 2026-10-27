@@ -4066,6 +4066,72 @@ class TestHasAttributeErrorInChain:
         assert _has_attribute_error_in_chain(exc_a) is False
 
 
+_COMPACTION_ITEM: Final = {
+    "type": "compaction",
+    "encrypted_content": json.dumps({"type": "compaction", "content": "the cat is named Biscuit"}),
+}
+_HISTORY_BEFORE_COMPACTION: Final = (
+    {"role": "user", "content": "a long turn " * 200},
+    {"role": "assistant", "content": "a long reply " * 200},
+)
+_TURN_AFTER_COMPACTION: Final = {"role": "user", "content": "what is the cat's name?"}
+
+
+class TestHandleLLMApiExceptionPricesWhatTheServerDispatched:
+    async def _failed_prompt_tokens(
+        self,
+        route_type: Literal["acompletion", "aresponses"],
+        logged_call_type: str,
+        request_input: list[dict[str, str]],
+    ) -> int:
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4o", "input": request_input})
+        cursor_caller: Final = ProxyUserAPIKeyAuth(request_route="/cursor/chat/completions")
+        mock_request: Final = MagicMock(spec=Request)
+        mock_request.headers = {}
+        proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alert_types = []
+        _, logging_obj = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=cursor_caller,
+            proxy_logging_obj=proxy_logging,
+            proxy_config=MagicMock(spec=ProxyConfig),
+            route_type=route_type,
+        )
+        logging_obj.model_call_details.update(
+            first_api_call_start_time=datetime.datetime.now(),
+            messages=request_input,
+            call_type=logged_call_type,
+        )
+        with pytest.raises(ProxyException):
+            await processing_obj.handle_llm_api_exception(
+                e=Exception("boom"),
+                user_api_key_dict=cursor_caller,
+                proxy_logging_obj=proxy_logging,
+            )
+        return processing_obj.data["combined_usage_object"].prompt_tokens
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "route_type, logged_call_type, trims_at_the_compaction",
+        [("aresponses", "aresponses", True), ("acompletion", "responses", False)],
+    )
+    async def test_a_failed_call_counts_from_the_newest_compaction_only_when_dispatched_as_responses(
+        self,
+        route_type: Literal["acompletion", "aresponses"],
+        logged_call_type: str,
+        trims_at_the_compaction: bool,
+    ) -> None:
+        async def prompt_tokens(request_input: list[dict[str, str]]) -> int:
+            return await self._failed_prompt_tokens(route_type, logged_call_type, request_input)
+
+        resent: Final = await prompt_tokens([*_HISTORY_BEFORE_COMPACTION, _COMPACTION_ITEM, _TURN_AFTER_COMPACTION])
+        dispatched_after_trim: Final = await prompt_tokens([_COMPACTION_ITEM, _TURN_AFTER_COMPACTION])
+
+        assert (resent == dispatched_after_trim) is trims_at_the_compaction
+        assert resent >= dispatched_after_trim
+
+
 @pytest.mark.asyncio
 class TestHandleLLMApiExceptionDictDetail:
     """
@@ -10109,6 +10175,32 @@ class TestInjectCostIntoUsageDict:
 
 
 class TestProcessChunkWithCostInjection:
+    @pytest.mark.parametrize("model", ["claude-opus-5-5", "vertex_ai/claude-opus-5-5"])
+    @pytest.mark.parametrize("search_requests", [None, "null", 0, 1, 2])
+    def test_claude_search_stream_cost_matches_complete_usage(
+        self, monkeypatch: pytest.MonkeyPatch, model: str, search_requests: int | Literal["null"] | None
+    ) -> None:
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        usage: Final = litellm.Usage(
+            prompt_tokens=10760,
+            completion_tokens=399,
+            total_tokens=11159,
+            server_tool_use={"web_search_requests": search_requests} if isinstance(search_requests, int) else None,
+        )
+        wire_usage: Final = usage.model_dump() | ({"server_tool_use": None} if search_requests == "null" else {})
+        event: Final = {"object": "chat.completion.chunk", "choices": [], "usage": wire_usage}
+        chunk: Final = f"data: {json.dumps(event)}\n\n".encode()
+
+        result: Final = ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(chunk, model)
+
+        assert isinstance(result, bytes)
+        payload: Final = json.loads(result.decode().removeprefix("data: "))
+        expected_cost: Final = litellm.completion_cost(
+            model=model, completion_response=litellm.ModelResponse(usage=usage)
+        )
+        assert payload["usage"]["cost"] == pytest.approx(expected_cost)
+        assert "cost" not in event["usage"]
+
     def test_complete_usage_frame_chunk_is_injected(self, monkeypatch):
         monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
         chunk = (
@@ -10817,6 +10909,7 @@ class TestDetachedStreamFailureHook:
                 "user_api_key_dict": user_api_key_dict,
                 "original_exception": failure,
                 "request_data": processing_obj.data,
+                "dispatched_call_type": "anthropic_messages",
             }
         ]
 
@@ -11960,3 +12053,24 @@ class TestResponseCostFromLoggingObjForCacheHits:
         )
 
         assert cost == ""
+
+
+def test_maybe_get_model_id_reads_the_chat_metadata_the_router_updated_in_place():
+    processing_obj: Final = ProxyBaseLLMRequestProcessing(data={"metadata": {"model_info": {"id": "declared-text"}}})
+
+    assert processing_obj.maybe_get_model_id(None) == "declared-text"
+
+
+def test_maybe_get_model_id_prefers_litellm_metadata_over_caller_metadata_without_a_deployment():
+    processing_obj: Final = ProxyBaseLLMRequestProcessing(
+        data={
+            "metadata": {"trace_id": "t-1"},
+            "litellm_metadata": {"model_info": {"id": "vision"}},
+        }
+    )
+
+    assert processing_obj.maybe_get_model_id(None) == "vision"
+
+
+def test_maybe_get_model_id_returns_none_before_the_router_picked_a_deployment():
+    assert ProxyBaseLLMRequestProcessing(data={"metadata": {}}).maybe_get_model_id(None) is None

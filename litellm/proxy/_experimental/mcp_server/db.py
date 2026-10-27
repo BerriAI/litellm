@@ -165,6 +165,7 @@ _CLIENT_FORWARDED_AUTH_TYPES: Final["frozenset[str]"] = frozenset({"true_passthr
 _MINTED_TOKEN_CREDENTIAL_FIELDS: Final["frozenset[str]"] = frozenset({"access_token", "refresh_token", "expires_in"})
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _bind_submitted_oauth_client(
@@ -339,7 +340,7 @@ def _decrypt_env_vars_on_returned_row(row: object) -> None:
         return
     if isinstance(env_vars, str):
         try:
-            env_vars = json.loads(env_vars)
+            env_vars = _DECODED_JSON.validate_python(json.loads(env_vars))
         except (json.JSONDecodeError, TypeError):
             return
         if not isinstance(env_vars, list):
@@ -476,8 +477,9 @@ def _prepare_mcp_server_data(
     # Serialize JSON fields from ``data_dict`` (not ``data``) so the
     # exclude_unset filter is respected. Reading back from ``data`` would
     # reintroduce defaults (e.g. ``env={}``) for fields the caller never set.
-    if data_dict.get("static_headers") is not None:
-        data_dict["static_headers"] = encrypt_secret_map(data_dict["static_headers"])
+    static_headers: Final[Mapping[str, str] | None] = data_dict.get("static_headers")
+    if static_headers is not None:
+        data_dict["static_headers"] = encrypt_secret_map(static_headers)
 
     # env_vars is read from ``data_dict`` (not ``data``) like every other JSON
     # column so the exclude_unset filter is respected: a partial update that
@@ -489,11 +491,13 @@ def _prepare_mcp_server_data(
         _encrypt_global_env_var_values(serialized_env_vars)
         data_dict["env_vars"] = safe_dumps(serialized_env_vars)
 
-    if data_dict.get("mcp_info") is not None:
-        data_dict["mcp_info"] = safe_dumps(data_dict["mcp_info"])
+    mcp_info: Final[object] = data_dict.get("mcp_info")
+    if mcp_info is not None:
+        data_dict["mcp_info"] = safe_dumps(mcp_info)
 
-    if data_dict.get("env") is not None:
-        data_dict["env"] = encrypt_secret_map(data_dict["env"])
+    env: Final[Mapping[str, str] | None] = data_dict.get("env")
+    if env is not None:
+        data_dict["env"] = encrypt_secret_map(env)
 
     if "tool_name_to_display_name" in data_dict:
         data_dict["tool_name_to_display_name"] = safe_dumps(data_dict["tool_name_to_display_name"] or {})

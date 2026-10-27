@@ -23,6 +23,7 @@ from litellm.integrations.opentelemetry import (
     OpenTelemetry,
     OpenTelemetryConfig,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.secret_managers.main import str_to_bool
@@ -271,7 +272,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         return tuple(dict.fromkeys(candidates))
 
     @staticmethod
-    def _set_langfuse_specific_attributes(span: Span, kwargs: Mapping[str, Any], response_obj):
+    def _set_langfuse_specific_attributes(span: Span, kwargs: Mapping[str, object], response_obj):
         """
         Sets Langfuse specific metadata attributes onto the OTEL span.
 
@@ -283,7 +284,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         from litellm.integrations.arize._utils import safe_set_attribute
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-        dynamic_params: Final = kwargs.get("standard_callback_dynamic_params")
+        dynamic_params: Final = as_str_mapping(kwargs.get("standard_callback_dynamic_params"))
         langfuse_environment: Final = (
             dynamic_params.get("langfuse_environment") if dynamic_params else None
         ) or os.environ.get("LANGFUSE_TRACING_ENVIRONMENT")
@@ -324,7 +325,7 @@ class LangfuseOtelLogger(OpenTelemetry):
     @staticmethod
     def _set_trace_fields(
         span: Span,
-        kwargs: Mapping[str, Any],
+        kwargs: Mapping[str, object],
         metadata: Mapping[str, object],
         input_json: str | None,
         output_json: str | None,

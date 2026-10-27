@@ -112,6 +112,13 @@ def _heuristic_v2_artifact() -> TrainedTierArtifact:
     )
 
 
+def _answer_deployments_named(router: MagicMock) -> None:
+    """Make a mock router answer `deployments_named` from its own `model_list`, the way Router answers from its index."""
+    router.deployments_named.side_effect = lambda name: (
+        tuple(deployment for deployment in router.model_list if deployment["model_name"] == name) or None
+    )
+
+
 @pytest.fixture
 def mock_router_instance():
     """Create a mock LiteLLM Router instance."""
@@ -1064,6 +1071,11 @@ class TestCustomDimensions:
                 {"patterns": [r"\bCREATE\s{1,4}TABLE\b", r"\bALTER\s{1,4}TABLE\b"]},
                 "create table widgets (id integer); ALTER TABLE widgets ADD label text;",
                 id="regex",
+            ),
+            pytest.param(
+                {"patterns": [r"\b(?P<verb>create|alter)\s{1,4}?table\b"]},
+                "CREATE TABLE widgets (id integer)",
+                id="named-group-alternation-lazy-repeat",
             ),
         ],
     )
@@ -3176,7 +3188,7 @@ class TestCapabilityClassifier:
             {"model_name": "efficient-model", "litellm_params": {"input_cost_per_token": 0.000001}},
             {"model_name": "capable-model", "litellm_params": {"input_cost_per_token": 0.00001}},
         ]
-        mock_router_instance.model_name_to_deployment_indices = {"efficient-model": [0], "capable-model": [1]}
+        _answer_deployments_named(mock_router_instance)
         router: Final = self._router(
             mock_router_instance,
             adaptive=True,
@@ -5665,7 +5677,7 @@ class TestAdaptiveSoftFloors:
                 "model_info": {"adaptive_router_preferences": {"quality_tier": 3, "strengths": []}},
             },
         ]
-        router.model_name_to_deployment_indices = {"cheap": [0], "premium": [1]}
+        _answer_deployments_named(router)
         return router
 
     @pytest.fixture
@@ -6824,7 +6836,7 @@ class TestTierModelAffinity:
     ) -> ComplexityRouter:
         mock_router_instance.cache = DualCache()
         mock_router_instance.model_list = []
-        mock_router_instance.model_name_to_deployment_indices = {}
+        _answer_deployments_named(mock_router_instance)
         return ComplexityRouter(
             model_name="affinity-router",
             litellm_router_instance=mock_router_instance,
@@ -7542,7 +7554,7 @@ class TestSessionAffinity:
                 "model_info": {},
             },
         ]
-        mock_router_instance.model_name_to_deployment_indices = {"cheap": [0]}
+        _answer_deployments_named(mock_router_instance)
         router = ComplexityRouter(
             model_name="hybrid",
             litellm_router_instance=mock_router_instance,
@@ -11346,7 +11358,7 @@ class TestClientHousekeepingCalls:
                 "model_info": {"adaptive_router_preferences": {"quality_tier": 3, "strengths": []}},
             },
         ]
-        adaptive_instance.model_name_to_deployment_indices = {"cheap": [0], "premium": [1]}
+        _answer_deployments_named(adaptive_instance)
         router = ComplexityRouter(
             model_name="hybrid",
             litellm_router_instance=adaptive_instance,
@@ -13437,7 +13449,7 @@ class TestPlanModeTierFloor:
                 "model_info": {"adaptive_router_preferences": {"quality_tier": 3, "strengths": []}},
             },
         ]
-        adaptive_instance.model_name_to_deployment_indices = {"cheap": [0], "premium": [1]}
+        _answer_deployments_named(adaptive_instance)
         router = ComplexityRouter(
             model_name="hybrid",
             litellm_router_instance=adaptive_instance,
@@ -14936,7 +14948,7 @@ class TestModalityRouting:
         elif path == "adaptive_pick_rewritten":
             config["adaptive"] = True
             mock_router_instance.model_list = []
-            mock_router_instance.model_name_to_deployment_indices = {}
+            _answer_deployments_named(mock_router_instance)
         router = self._router(mock_router_instance, config, vision)
         result = await router.async_pre_routing_hook(model="m", request_kwargs=request_kwargs, messages=messages)
         assert result.model == expected_model
