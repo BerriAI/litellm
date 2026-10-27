@@ -31,7 +31,7 @@ def test_old_deep_import_is_the_new_module_object_and_warns(monkeypatch: pytest.
 def test_old_package_attribute_access_reaches_renamed_subpackage(monkeypatch: pytest.MonkeyPatch) -> None:
     _forget_old_package(monkeypatch)
     with pytest.warns(DeprecationWarning, match=NEW_PACKAGE):
-        old_package = importlib.import_module(OLD_PACKAGE)
+        old_package: Final = importlib.import_module(OLD_PACKAGE)
 
     assert old_package.messages is importlib.import_module(f"{NEW_PACKAGE}.native")  # pyright: ignore[reportAny]  # module attributes are untyped
     assert old_package.messages.handler is importlib.import_module(f"{NEW_PACKAGE}.native.handler")  # pyright: ignore[reportAny]  # module attributes are untyped
