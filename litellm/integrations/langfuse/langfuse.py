@@ -15,6 +15,7 @@ from packaging.version import Version
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import MAX_LANGFUSE_INITIALIZED_CLIENTS
+from litellm.cost_calculator import get_usage_object
 from litellm.integrations.langfuse.langfuse_mock_client import (
     create_mock_langfuse_client,
     should_use_langfuse_mock,
@@ -32,6 +33,7 @@ from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.llms.custom_httpx.http_handler import get_httpx_client
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.secret_managers.main import str_to_bool
+from litellm.types.decisions import DecisionsResponse, OpenAIDecisionResponse
 from litellm.types.integrations.langfuse import *
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import (
@@ -584,7 +586,9 @@ class LangFuseLogger:
         | TranscriptionResponse
         | RerankResponse
         | HttpxBinaryResponseContent
-        | ResponsesAPIResponse,
+        | ResponsesAPIResponse
+        | DecisionsResponse
+        | OpenAIDecisionResponse,
         prompt: dict,
         level: str,
         status_message: str | None,
@@ -634,6 +638,9 @@ class LangFuseLogger:
         elif response_obj is not None and isinstance(response_obj, litellm.ResponsesAPIResponse):
             input = prompt
             output = self._get_responses_api_content_for_langfuse(response_obj)
+        elif response_obj is not None and isinstance(response_obj, (DecisionsResponse, OpenAIDecisionResponse)):
+            input = prompt
+            output = response_obj.model_dump(mode="json", exclude={"usage"})
         elif (
             kwargs.get("call_type") is not None
             and kwargs.get("call_type") == "_arealtime"
@@ -859,10 +866,14 @@ class LangFuseLogger:
             usage = None
             usage_details = None
             if response_obj is not None:
-                if hasattr(response_obj, "id") and response_obj.get("id", None) is not None:
+                if isinstance(response_obj, _ResponseWithId) and getattr(response_obj, "id", None) is not None:
                     generation_id = _logging_id(start_time, response_obj)
                 _raw_usage_obj: Final[_UsageObject | None] = getattr(response_obj, "usage", None)
-                _usage_obj: Final = _chat_usage(_raw_usage_obj)
+                _usage_obj: Final = (
+                    get_usage_object(response_obj)
+                    if isinstance(response_obj, (DecisionsResponse, OpenAIDecisionResponse))
+                    else _chat_usage(_raw_usage_obj)
+                )
 
                 if _usage_obj:
                     # Safely get usage values, defaulting None to 0 for Langfuse compatibility.

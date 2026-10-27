@@ -434,6 +434,49 @@ async def test_langfuse_logging_vllm_embedding(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("response_id", [None, "decision-1"])
+async def test_langfuse_logging_systemone(
+    langfuse_export: tuple[respx.Route, str], respx_mock: respx.MockRouter, response_id: str | None
+) -> None:
+    route, trace_id = langfuse_export
+    answers: Final = {"urgent": {"type": "noul", "noul": 0.87}}
+    upstream: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(
+        json={
+            **({"id": response_id} if response_id is not None else {}),
+            "model": "typesafe/jev-1.13",
+            "answers": answers,
+            "usage": {"input_tokens": 283, "output_tokens": 20},
+        }
+    )
+    await litellm.asystemone(
+        model="openrouter/typesafe/jev-1.13",
+        state="Customer writes: my payout has failed three days in a row.",
+        questions={"urgent": {"type": "noul", "instructions": "Is this urgent?"}},
+        api_key="caller-key",
+        metadata={"trace_id": trace_id},
+    )
+    await _flush_langfuse()
+    assert upstream.call_count == 1
+    generations: Final = tuple(
+        TypeAdapter(dict[str, object]).validate_python(span["attributes"])
+        for span in _exported_spans(route)
+        if span["trace_id"] == resolve_trace_id(trace_id)
+        and TypeAdapter(dict[str, object]).validate_python(span["attributes"]).get("langfuse.observation.type")
+        == "generation"
+    )
+    assert len(generations) == 1
+    assert generations[0]["langfuse.observation.usage_details"] == {
+        "input": 283,
+        "output": 20,
+        "total": 303,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+    }
+    output: Final = TypeAdapter(dict[str, object]).validate_python(generations[0]["langfuse.observation.output"])
+    assert output["answers"] == answers
+
+
+@pytest.mark.asyncio
 async def test_langfuse_logging_with_router(langfuse_export: tuple[respx.Route, str]) -> None:
     route, trace_id = langfuse_export
     router: Final = litellm.Router(
