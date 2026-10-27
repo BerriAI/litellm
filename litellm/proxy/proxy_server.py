@@ -2485,7 +2485,7 @@ origins, allow_cors_credentials = _get_cors_config()
 # get current directory
 try:
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    packaged_ui_path: Final = os.path.join(current_dir, "_experimental", "out")
+    packaged_ui_path: Final = os.path.join(current_dir, "ui", "out")
     ui_path = packaged_ui_path
     litellm_asset_prefix: Final = "/litellm-asset-prefix"
 
@@ -2779,7 +2779,7 @@ try:
 except Exception:
     pass
 current_dir = os.path.dirname(os.path.abspath(__file__))
-# ui_path = os.path.join(current_dir, "_experimental", "out")
+# ui_path = os.path.join(current_dir, "ui", "out")
 # # Mount this test directory instead
 # app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
@@ -19206,7 +19206,7 @@ async def get_favicon():
     )
 
     current_dir: Final = os.path.dirname(os.path.abspath(__file__))
-    default_favicon: Final = os.path.join(current_dir, "_experimental", "out", "favicon.ico")
+    default_favicon: Final = os.path.join(current_dir, "ui", "out", "favicon.ico")
 
     favicon_url: Final = os.getenv("LITELLM_FAVICON_URL", "")
 

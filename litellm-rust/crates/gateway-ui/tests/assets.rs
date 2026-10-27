@@ -208,7 +208,7 @@ async fn logo_discovery_points_to_served_image(dashboard: App) {
 #[tokio::test]
 async fn committed_dashboard_export_serves_every_logo(#[case] path: &str) {
     let export = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../litellm/proxy/_experimental/out");
+        .join("../../../litellm/proxy/ui/out");
     let response = litellm_gateway_ui::dashboard_assets(export)
         .oneshot(Request::get(path).body(Body::empty()).unwrap())
         .await

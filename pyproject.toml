@@ -328,7 +328,7 @@ features = ["extension-module"]
 profile = "release"
 editable-profile = "dev"
 include = [
-    "litellm/proxy/_experimental/out/**",
+    "litellm/proxy/ui/out/**",
     "litellm/router_strategy/complexity_router/artifacts/*.json",
     "litellm/router_strategy/complexity_router/fuse_presets.json",
     "litellm/proxy/model_insights_tasks.json",

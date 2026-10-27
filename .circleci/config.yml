@@ -842,8 +842,8 @@ jobs:
       - run:
           name: Use built UI bundle
           command: |
-            rm -rf litellm/proxy/_experimental/out
-            cp -r ui-bundle/out litellm/proxy/_experimental/out
+            rm -rf litellm/proxy/ui/out
+            cp -r ui-bundle/out litellm/proxy/ui/out
       - wait_for_service:
           url: tcp://localhost:5432
           timeout: "30"
@@ -983,8 +983,8 @@ jobs:
       - run:
           name: Use built UI bundle
           command: |
-            rm -rf litellm/proxy/_experimental/out
-            cp -r ui-bundle/out litellm/proxy/_experimental/out
+            rm -rf litellm/proxy/ui/out
+            cp -r ui-bundle/out litellm/proxy/ui/out
       - wait_for_service:
           url: tcp://localhost:5432
           timeout: "30"
