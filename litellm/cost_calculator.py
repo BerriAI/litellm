@@ -1609,7 +1609,7 @@ def completion_cost(
     call_type: CallTypesLiteral | None = None,
     ### REGION ###
     custom_llm_provider: str | None = None,
-    region_name=None,  # used for bedrock pricing
+    region_name: str | None = None,  # used for bedrock pricing
     ### IMAGE GEN ###
     size: str | None = None,
     quality: str | None = None,
