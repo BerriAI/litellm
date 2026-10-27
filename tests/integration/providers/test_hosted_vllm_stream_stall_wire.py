@@ -16,7 +16,6 @@ from integration._support.client import (
     object_value,
     string_value,
 )
-from integration._support.database import read_rows
 from integration._support.openai_wire import (
     answering_model_discovery,
     chat_stream,
@@ -43,8 +42,8 @@ _RESPONSES_TARGET: Final = "/v1/responses"
 _STREAM_TIMEOUT_SECONDS: Final = 1
 _DEPLOYMENT_TIMEOUT_SECONDS: Final = 30
 _PAUSE_SECONDS: Final = 3.0
-_HOLD_SECONDS: Final = 30.0
 _ROW_SECONDS: Final = 60
+_HOLD_SECONDS: Final = 2.0 * _ROW_SECONDS
 _EXTRA: Final[dict[str, JsonValue]] = {"num_retries": 0, "cache": {"no-cache": True}}
 _ROWS: Final = 'SELECT status, metadata FROM "LiteLLM_SpendLogs" WHERE model_group=%s'
 _EITHER_GROUP_ROWS: Final = 'SELECT status, metadata FROM "LiteLLM_SpendLogs" WHERE model_group IN (%s, %s)'
@@ -159,14 +158,14 @@ def _error_class(message: JsonValue) -> str:
     return string_value(message).split(":", 1)[0]
 
 
-def _failure_row(query: str, groups: tuple[str, ...]) -> dict[str, JsonValue]:
-    rows: Final = eventually(lambda: read_rows(query, groups), lambda found: len(found) >= 1, seconds=_ROW_SECONDS)
+def _failure_row(gateway: Gateway, query: str, groups: tuple[str, ...]) -> dict[str, JsonValue]:
+    rows: Final = eventually(lambda: gateway.rows(query, groups), lambda found: len(found) >= 1, seconds=_ROW_SECONDS)
     assert [row["status"] for row in rows] == ["failure"], rows
     return object_value(object_value(rows[0]["metadata"])["error_information"])
 
 
-def _logged_failure(model: str) -> tuple[JsonValue, JsonValue]:
-    error: Final = _failure_row(_ROWS, (model,))
+def _logged_failure(gateway: Gateway, model: str) -> tuple[JsonValue, JsonValue]:
+    error: Final = _failure_row(gateway, _ROWS, (model,))
     return error["error_code"], error["error_class"]
 
 
@@ -188,7 +187,7 @@ def test_a_chat_stream_that_stalls_past_its_stream_timeout_ends_with_a_408_timeo
         events: Final = parse_sse(response.text)
         assert _chat_errors(events[:-1]) == () and "error" in events[-1].data, response.text
         error: Final = object_value(events[-1].data["error"])
-        observed: Final = (error["code"], _error_class(error["message"]), *_logged_failure(model))
+        observed: Final = (error["code"], _error_class(error["message"]), *_logged_failure(gateway, model))
         assert observed == ("408", "litellm.Timeout", "408", "Timeout"), (error, observed)
         assert _upstream_targets(wire) == (target,)
 
@@ -205,7 +204,7 @@ def test_a_native_responses_stream_that_stalls_past_its_stream_timeout_fails_wit
         assert "response.output_text.delta" in types, response.text
         assert types[-1] == "response.failed" and "response.completed" not in types, response.text
         failed: Final = object_value(object_value(events[-1].data["response"])["error"])
-        observed: Final = (failed["code"], *_logged_failure(model))
+        observed: Final = (failed["code"], *_logged_failure(gateway, model))
         assert observed == ("request_timeout", "408", "Timeout"), (failed, observed)
         assert _upstream_targets(wire) == (_RESPONSES_TARGET,)
 
@@ -222,7 +221,7 @@ def test_a_messages_stream_that_stalls_past_its_stream_timeout_ends_with_a_timeo
         assert "content_block_delta" in types and "message_stop" not in types, response.text
         assert types[-1] == "error", response.text
         error: Final = object_value(events[-1].data["error"])
-        observed: Final = (_error_class(error["message"]), *_logged_failure(model))
+        observed: Final = (_error_class(error["message"]), *_logged_failure(gateway, model))
         assert observed == ("litellm.Timeout", "408", "Timeout"), (error, observed)
         assert _upstream_targets(wire) == (_CHAT_TARGET,)
 
@@ -238,7 +237,7 @@ def test_a_chat_stream_that_never_pauses_is_answered_in_full_under_the_same_stre
         assert _chat_errors(events) == (), response.text
         assert _finish_reasons(events) == ("stop",), response.text
         assert _upstream_targets(wire) == (_CHAT_TARGET,)
-        rows: Final = eventually(lambda: read_rows(_ROWS, (model,)), lambda found: len(found) >= 1, _ROW_SECONDS)
+        rows: Final = eventually(lambda: gateway.rows(_ROWS, (model,)), lambda found: len(found) >= 1, _ROW_SECONDS)
         assert [row["status"] for row in rows] == ["success"], rows
 
 
@@ -302,7 +301,7 @@ def test_a_deployment_whose_stream_stalls_stays_out_of_cooldown(
     with _peer(shape) as wire, cooldown_rig.gateway.scenario() as scenario:
         group, identity = _deployment(scenario, wire, backend)
         response: Final = _streamed(cooldown_rig.gateway, endpoint, group)
-        error: Final = _failure_row(_ROWS, (group,))
+        error: Final = _failure_row(cooldown_rig.gateway, _ROWS, (group,))
         assert not cooled(cooldown_rig.cache, identity), (error, response.text)
 
 
@@ -324,7 +323,7 @@ def _fallback_cooled(cooldown_rig: _CooldownRig, fallback_shape: Shape) -> tuple
         primary, _ = _deployment(scenario, failing)
         fallback, identity = _deployment(scenario, fallback_wire)
         response: Final = _streamed(cooldown_rig.gateway, "chat", primary, fallbacks=[fallback])
-        error: Final = _failure_row(_EITHER_GROUP_ROWS, (primary, fallback))
+        error: Final = _failure_row(cooldown_rig.gateway, _EITHER_GROUP_ROWS, (primary, fallback))
         assert _upstream_targets(fallback_wire) == (_CHAT_TARGET,), response.text
         return cooled(cooldown_rig.cache, identity), error, response.text
 

@@ -10,20 +10,33 @@ Authentication priority:
 3. Databricks SDK automatic auth - Fallback (uses unified auth)
 """
 
+import hashlib
 import os
 import re
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, Protocol
 from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict
 
 import litellm
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 
 _DEFAULT_M2M_TOKEN_LIFETIME_SECONDS: Final = 3600
+_TOKEN_EXPIRY_BUFFER_SECONDS: Final = 60
+
+
+class _TokenCache(Protocol):
+    def get_cache(self, key: str) -> object: ...
+
+    def set_cache(self, key: str, value: str, *, ttl: int) -> None: ...
+
+
+_OAUTH_TOKENS: Final[_TokenCache] = InMemoryCache(max_size_in_memory=64)
 
 
 class DatabricksException(BaseLLMException):
@@ -278,10 +291,10 @@ class DatabricksBase:
         if normalized_api_base.endswith("/ai-gateway/mlflow/v1"):
             return normalized_api_base
         if normalized_api_base.endswith("/serving-endpoints"):
-            return f"{normalized_api_base.removesuffix('/serving-endpoints')}/ai-gateway/mlflow/v1"
+            return join_api_base(normalized_api_base.removesuffix("/serving-endpoints"), "ai-gateway/mlflow/v1")
         api_base_parts: Final = urlsplit(normalized_api_base)
         if api_base_parts.path in ("", "/"):
-            return f"{normalized_api_base}/ai-gateway/mlflow/v1"
+            return join_api_base(normalized_api_base, "ai-gateway/mlflow/v1")
         return api_base
 
     def get_oauth_m2m_token(
@@ -291,6 +304,26 @@ class DatabricksBase:
         client_secret: str,
     ) -> str:
         return self.get_oauth_m2m_token_and_lifetime(api_base, client_id, client_secret).access_token
+
+    def get_cached_oauth_m2m_token(
+        self,
+        api_base: str,
+        client_id: str,
+        client_secret: str,
+        *,
+        token_cache: _TokenCache = _OAUTH_TOKENS,
+    ) -> str:
+        workspace: Final = self.workspace_root(api_base)
+        secret_digest: Final = hashlib.sha256(client_secret.encode()).hexdigest()
+        cache_key: Final = f"{workspace}|{client_id}|{secret_digest}"
+        cached: Final = token_cache.get_cache(cache_key)
+        if isinstance(cached, str):
+            return cached
+        token: Final = self.get_oauth_m2m_token_and_lifetime(workspace, client_id, client_secret)
+        ttl: Final = token.expires_in - _TOKEN_EXPIRY_BUFFER_SECONDS
+        if ttl > 0:
+            token_cache.set_cache(cache_key, token.access_token, ttl=ttl)
+        return token.access_token
 
     def get_oauth_m2m_token_and_lifetime(
         self,
@@ -319,7 +352,7 @@ class DatabricksBase:
 
         api_base_parts: Final = urlsplit(api_base)
         workspace_url: Final = urlunsplit((api_base_parts.scheme, api_base_parts.netloc, "", "", ""))
-        token_url: Final = f"{workspace_url}/oidc/v1/token"
+        token_url: Final = join_api_base(workspace_url, "oidc/v1/token")
 
         try:
             response: Final = requests.post(
@@ -477,5 +510,6 @@ class DatabricksBase:
         # Debug logging with redaction (never log actual tokens)
         verbose_logger.debug("Databricks request headers: %s", self.redact_headers_for_logging(headers))
 
-        endpoint_path: Final = "" if custom_endpoint is True else DATABRICKS_ENDPOINT_PATHS[endpoint_type]
-        return f"{api_base}{endpoint_path}", headers
+        if custom_endpoint is True:
+            return api_base, headers
+        return join_api_base(api_base, DATABRICKS_ENDPOINT_PATHS[endpoint_type]), headers

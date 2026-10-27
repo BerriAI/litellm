@@ -1,17 +1,23 @@
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final
 from unittest.mock import patch
 
+import httpx
 import pytest
+from pydantic import JsonValue
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.anthropic.wif import get_anthropic_wif_token
 from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
+from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
 from litellm.llms.tencent.messages.transformation import TencentAnthropicMessagesConfig
+from litellm.types.llms.anthropic import AnthropicFinishReason
 from litellm.types.router import GenericLiteLLMParams
 from tests.unit.llms.anthropic.test_anthropic_wif import (
     ScriptedPoster,
@@ -25,6 +31,52 @@ _WIF_PARAMS: Final[dict] = {
     "anthropic_organization_id": "org-uuid-1",
     "anthropic_identity_token_file": "/var/run/secrets/identity-token",
 }
+
+
+@pytest.mark.parametrize("config", (AnthropicMessagesConfig(), OpenAILikeAnthropicMessagesConfig()), ids=type)
+@pytest.mark.parametrize(
+    ("stop_reason", "stop_fields", "expected_stop_sequence"),
+    (
+        pytest.param("end_turn", {}, None, id="end_turn_missing"),
+        pytest.param("max_tokens", {}, None, id="max_tokens_missing"),
+        pytest.param("tool_use", {}, None, id="tool_use_missing"),
+        pytest.param("end_turn", {"stop_sequence": None}, None, id="explicit_null"),
+        pytest.param("stop_sequence", {"stop_sequence": ", 7"}, ", 7", id="matched_stop"),
+    ),
+)
+def test_native_response_defaults_stop_sequence_without_changing_other_fields(
+    config: AnthropicMessagesConfig,
+    stop_reason: AnthropicFinishReason,
+    stop_fields: Mapping[str, str | None],
+    expected_stop_sequence: str | None,
+) -> None:
+    upstream: Final[dict[str, JsonValue]] = {
+        "id": "msg_test",
+        "type": "message",
+        "role": "assistant",
+        "model": "test-model",
+        "content": [{"type": "text", "text": "ok"}],
+        "stop_reason": stop_reason,
+        "usage": {"input_tokens": 19, "output_tokens": 42},
+        **stop_fields,
+    }
+    logging_obj: Final = Logging(
+        model="test-model",
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="test-call",
+        function_id="test-function",
+    )
+    response: Final = config.transform_anthropic_messages_response(
+        model="test-model", raw_response=httpx.Response(200, json=upstream), logging_obj=logging_obj
+    )
+
+    assert response == {
+        **upstream,
+        "stop_sequence": expected_stop_sequence,
+    }
 
 
 def test_workload_identity_allowed_for_anthropic() -> None:
@@ -300,3 +352,67 @@ async def test_a_json_provider_gets_safeguards_and_the_beta_together_unless_drop
     assert sent.headers["anthropic-beta"] == forwarded_beta
     assert "safeguard_results" not in response
     assert response["content"][0]["text"] == "hello"
+
+
+@pytest.mark.parametrize(
+    ("drop_params", "expected_tool_result_content"),
+    [
+        (True, [{"type": "text", "text": "sunny"}]),
+        (None, [{"type": "text", "text": 5}, {"type": "text", "text": "sunny"}]),
+    ],
+    ids=["drop_params", "no_drop_params"],
+)
+def test_drop_params_drops_a_non_string_tool_result_text_on_the_native_request(
+    drop_params, expected_tool_result_content
+):
+    messages = [
+        {"role": "user", "content": "What is the weather?"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01",
+                    "content": [{"type": "text", "text": 5}, {"type": "text", "text": "sunny"}],
+                }
+            ],
+        },
+    ]
+
+    request = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-sonnet-4-5",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 64},
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+
+    assert request["messages"][2]["content"][0]["content"] == expected_tool_result_content
+
+
+def test_drop_params_forwards_a_non_object_message_item_as_sent_on_the_native_request():
+    tool_result_turn = {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_01",
+                "content": [{"type": "text", "text": None}, {"type": "text", "text": "sunny"}],
+            }
+        ],
+    }
+
+    request = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-sonnet-4-5",
+        messages=[{"role": "user", "content": "What is the weather?"}, 7, tool_result_turn],
+        anthropic_messages_optional_request_params={"max_tokens": 64},
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={},
+    )
+
+    assert request["messages"][1] == 7
+    assert request["messages"][2]["content"][0]["content"] == [{"type": "text", "text": "sunny"}]

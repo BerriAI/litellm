@@ -2,8 +2,11 @@
 User repository for database operations on LiteLLM_UserTable.
 """
 
+import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager, contextmanager
+from contextvars import ContextVar
 from itertools import chain
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -35,11 +38,27 @@ ORDER BY p.user_id
 """
 
 _PLACEHOLDER_ROWS_ADAPTER: Final = TypeAdapter(tuple[SCIMPlaceholder, ...])
+_FREE_SSO_CREATION: Final[ContextVar[tuple[str | None, object] | None]] = ContextVar("free_sso_creation", default=None)
+
+
+@contextmanager
+def free_sso_user_creation(user_id: str | None, *, enabled: bool = True) -> Generator[None]:
+    token: Final = _FREE_SSO_CREATION.set((user_id, asyncio.current_task()) if enabled else None)
+    try:
+        yield
+    finally:
+        _FREE_SSO_CREATION.reset(token)
 
 
 class _UserDb(Protocol):
     @property
     def litellm_usertable(self) -> TableActions["prisma_models.LiteLLM_UserTable"]: ...
+
+
+class _UserTransaction(_UserDb, Protocol):
+    async def execute_raw(self, query: str) -> int: ...
+
+    async def query_raw(self, query: str) -> object: ...
 
 
 class _PrismaClientView(Protocol):
@@ -48,6 +67,16 @@ class _PrismaClientView(Protocol):
 
     @property
     def writer_db(self) -> _UserDb: ...
+
+    def tx(self) -> AbstractAsyncContextManager[_UserTransaction]: ...
+
+
+async def _count_billable_users(table: TableActions["prisma_models.LiteLLM_UserTable"]) -> int:
+    from prisma import Json
+
+    total: Final = await table.count()
+    deactivated: Final = await table.count(where={"metadata": {"path": ["scim_active"], "equals": Json(False)}})
+    return max(0, total - deactivated)
 
 
 class UserRepository(BaseRepository[LiteLLM_UserTable]):
@@ -137,11 +166,32 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
         null, or true all count, so seats are counted as total users minus
         the deactivated ones.
         """
-        from prisma import Json  # pyright: ignore[reportUnknownVariableType]
+        return await _count_billable_users(self.table)
 
-        total: Final = await self.count()
-        deactivated: Final = await self.count(where={"metadata": {"path": ["scim_active"], "equals": Json(False)}})
-        return max(0, total - deactivated)
+    async def upsert_user(self, data: Mapping[str, object]) -> "prisma_models.LiteLLM_UserTable | None":
+        """Return the user row, or None when a new free SSO user would exceed capacity."""
+        scope: Final = _FREE_SSO_CREATION.get()
+        if (
+            scope is None
+            or (scope[0] is not None and scope[0] != data["user_id"])
+            or scope[1] is not asyncio.current_task()
+        ):
+            return await self.table.upsert(
+                where={"user_id": data["user_id"]}, data={"create": dict(data), "update": {}}
+            )
+
+        client: Final[_PrismaClientView] = self.prisma_client
+        async with client.tx() as transaction:
+            await transaction.execute_raw("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+            await transaction.query_raw("SELECT 1 AS locked FROM pg_advisory_xact_lock(468530001)")
+            existing: Final = await transaction.litellm_usertable.find_unique(where={"user_id": data["user_id"]})
+            if existing is not None:
+                return existing
+            if await _count_billable_users(transaction.litellm_usertable) >= 5:
+                return None
+            return await transaction.litellm_usertable.upsert(
+                where={"user_id": data["user_id"]}, data={"create": dict(data), "update": {}}
+            )
 
     async def create_user(
         self,

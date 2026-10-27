@@ -3,9 +3,13 @@ Helper util for handling bedrock-specific cost calculation
 - e.g.: prompt caching
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+import litellm
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    generic_cost_per_token,
+    get_provider_specific_geo_multiplier,
+)
 
 if TYPE_CHECKING:
     from litellm.types.utils import Usage
@@ -17,9 +21,13 @@ def cost_per_token(model: str, usage: "Usage", service_tier: str | None = None) 
 
     Follows the same logic as Anthropic's cost per token calculation.
     """
-    return generic_cost_per_token(
+    model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="bedrock")
+    prompt_cost, completion_cost = generic_cost_per_token(
         model=model,
         usage=usage,
         custom_llm_provider="bedrock",
         service_tier=service_tier,
+        model_info=model_info,
     )
+    geo_multiplier: Final = get_provider_specific_geo_multiplier(model_info=model_info, usage=usage)
+    return prompt_cost * geo_multiplier, completion_cost * geo_multiplier

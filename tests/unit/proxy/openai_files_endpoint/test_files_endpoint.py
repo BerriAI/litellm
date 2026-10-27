@@ -1,5 +1,6 @@
 import json
 from typing import Final, List, Optional
+from urllib.parse import quote
 from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
@@ -12,7 +13,7 @@ from pytest_mock import MockerFixture
 import litellm
 from litellm import Router
 from litellm.files.types import FileContentStreamingResult
-from litellm.proxy._types import LiteLLM_UserTableFiltered, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_UserTableFiltered, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.hooks import get_proxy_hook
 from litellm.proxy.management_endpoints.internal_user_endpoints import ui_view_users
 from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import (
@@ -235,23 +236,112 @@ def test_invalid_purpose(mocker: MockerFixture, monkeypatch, llm_router: Router)
     assert error["param"] == "purpose"
 
 
-def test_get_file_content_rejects_raw_cloud_storage_uri(llm_router: Router):
-    """A raw s3:// file id must be rejected on the proxy content endpoint.
+RAW_GCS_OUTPUT_FILE_ID: Final = (
+    "gs://my-gcs-bucket/litellm-vertex-files/publishers/google/models/gemini-3.8-flash/"
+    "prediction-model-2026-09-10T20:27:18.178864Z/predictions.jsonl"
+)
+RAW_S3_OUTPUT_FILE_ID: Final = "s3://my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
 
-    Such an id is not a managed unified id, so it would otherwise skip the
-    owner/team access check and let a caller read another tenant's batch output
-    object by its key. Callers must use the managed unified file id.
-    """
-    from urllib.parse import quote
 
-    s3_file_id = "s3://my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
-    response = client.get(
-        f"/v1/files/{quote(s3_file_id, safe='')}/content?provider=bedrock",
-        headers={"Authorization": "Bearer test-key"},
+def _ids_a_server_hands_the_route_for(raw_id: str, provider: str) -> tuple[tuple[str, str], ...]:
+    encoded_once: Final = quote(raw_id, safe="")
+    return ((raw_id, provider), (encoded_once, provider), (quote(encoded_once, safe=""), provider))
+
+
+RAW_CLOUD_FILE_IDS_AS_THE_ROUTE_RECEIVES_THEM: Final = _ids_a_server_hands_the_route_for(
+    RAW_GCS_OUTPUT_FILE_ID, "vertex_ai"
+) + _ids_a_server_hands_the_route_for(RAW_S3_OUTPUT_FILE_ID, "bedrock")
+
+
+def _testclient_path_segment_delivering(route_file_id: str) -> str:
+    return quote(quote(route_file_id, safe=""), safe="")
+
+
+def _override_auth(
+    monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture, llm_router: Router, user_role: LitellmUserRoles
+) -> ProxyLogging:
+    import litellm.proxy.proxy_server as ps
+
+    proxy_logging_obj: Final = setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key", user_role=user_role, user_id="test-user"
     )
+    return proxy_logging_obj
 
-    assert response.status_code == 400
-    assert "managed file id" in response.json()["error"]["message"].lower()
+
+@pytest.mark.parametrize(("route_file_id", "provider"), RAW_CLOUD_FILE_IDS_AS_THE_ROUTE_RECEIVES_THEM)
+def test_get_file_content_answers_403_for_a_raw_cloud_id_from_a_non_admin_key(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    llm_router: Router,
+    route_file_id: str,
+    provider: str,
+):
+    import litellm.proxy.proxy_server as ps
+
+    _override_auth(monkeypatch, mocker, llm_router, LitellmUserRoles.INTERNAL_USER)
+    afile_content: Final = mocker.AsyncMock()
+    monkeypatch.setattr(litellm, "afile_content", afile_content)
+
+    try:
+        response: Final = client.get(
+            f"/v1/files/{_testclient_path_segment_delivering(route_file_id)}/content?provider={provider}",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 403, response.text
+    assert "proxy admin" in response.json()["error"]["message"]
+    afile_content.assert_not_called()
+
+
+@pytest.mark.parametrize(("route_file_id", "provider"), RAW_CLOUD_FILE_IDS_AS_THE_ROUTE_RECEIVES_THEM)
+def test_get_file_content_forwards_a_raw_cloud_id_from_a_proxy_admin_key(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    llm_router: Router,
+    route_file_id: str,
+    provider: str,
+):
+    import litellm.proxy.proxy_server as ps
+
+    _override_auth(monkeypatch, mocker, llm_router, LitellmUserRoles.PROXY_ADMIN)
+    content: Final = b'{"custom_id": "request-1"}\n'
+
+    async def _stream():
+        yield content
+
+    async def _provider_file_content(**kwargs: object) -> FileContentStreamingResult | HttpxBinaryResponseContent:
+        if kwargs.get("stream"):
+            return FileContentStreamingResult(stream_iterator=_stream(), headers={"content-length": str(len(content))})
+        return HttpxBinaryResponseContent(
+            response=httpx.Response(
+                status_code=200, content=content, headers={"content-type": "application/octet-stream"}
+            )
+        )
+
+    afile_content: Final = mocker.AsyncMock(side_effect=_provider_file_content)
+    monkeypatch.setattr(litellm, "afile_content", afile_content)
+
+    try:
+        response: Final = client.get(
+            f"/v1/files/{_testclient_path_segment_delivering(route_file_id)}/content?provider={provider}",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert response.content == content
+    afile_content.assert_called_once()
+    assert afile_content.call_args.kwargs["custom_llm_provider"] == provider
+    assert afile_content.call_args.kwargs["file_id"] == route_file_id
 
 
 def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: Router):
@@ -632,6 +722,16 @@ def _router_with_executed_batch_model() -> Router:
                 "litellm_params": {"model": "gemini/gemini-2.0-flash"},
                 "model_info": {"id": "gemini-2.0-flash-id"},
             },
+            {
+                "model_name": "vertex-batch-drop",
+                "litellm_params": {"model": "vertex_ai/gemini-2.5-flash", "drop_params": True},
+                "model_info": {"id": "vertex-batch-drop-id"},
+            },
+            {
+                "model_name": "vertex-batch-keep",
+                "litellm_params": {"model": "vertex_ai/gemini-2.5-flash", "drop_params": False},
+                "model_info": {"id": "vertex-batch-keep-id"},
+            },
         ]
     )
 
@@ -847,6 +947,39 @@ def test_batch_upload_for_a_provider_model_still_goes_to_the_provider(batch_uplo
     stored.assert_not_awaited()
     provider_upload.assert_awaited_once()
     assert provider_upload.call_args.kwargs["custom_llm_provider"] == "gemini"
+
+
+@pytest.mark.parametrize(
+    "model, expected_drop_params",
+    [("vertex-batch-drop", True), ("vertex-batch-keep", False)],
+)
+def test_batch_upload_for_a_provider_model_carries_the_deployment_drop_params(
+    batch_upload_seams, model: str, expected_drop_params: bool
+):
+    _, provider_upload, _ = batch_upload_seams
+
+    response = _upload_batch_file({"x-litellm-model": model}, {})
+
+    assert response.status_code == 200, response.text
+    assert provider_upload.call_args.kwargs["drop_params"] is expected_drop_params
+
+
+def test_batch_upload_for_a_provider_model_without_deployment_drop_params_sends_no_drop_params(batch_upload_seams):
+    _, provider_upload, _ = batch_upload_seams
+
+    response = _upload_batch_file({"x-litellm-model": "gemini-2.0-flash"}, {})
+
+    assert response.status_code == 200, response.text
+    assert "drop_params" not in provider_upload.call_args.kwargs
+
+
+def test_batch_upload_keeps_the_callers_drop_params_over_the_deployment(batch_upload_seams):
+    _, provider_upload, _ = batch_upload_seams
+
+    response = _upload_batch_file({"x-litellm-model": "vertex-batch-keep", "user-agent": "claude-cli/2.1.0"}, {})
+
+    assert response.status_code == 200, response.text
+    assert provider_upload.call_args.kwargs["drop_params"] is True
 
 
 @pytest.mark.skip(reason="mock respx fails on ci/cd - unclear why")

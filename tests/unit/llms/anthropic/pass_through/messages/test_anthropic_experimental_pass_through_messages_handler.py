@@ -6,6 +6,7 @@ import uuid
 from typing import Any, Dict, Final, List
 
 import httpx
+import responses
 import respx
 import pytest
 from fastapi.testclient import TestClient
@@ -31,7 +32,58 @@ from litellm.utils import _invalidate_model_cost_lowercase_map
 import unittest.mock
 
 
-def test_anthropic_experimental_pass_through_messages_handler():
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("stream", [False, True], ids=["complete", "stream"])
+async def test_openai_messages_forwards_stop_sequences_to_chat_completions(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool, stream: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response: Final = (
+        httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-stop-sequences",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4o-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": ""}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
+            },
+        )
+        if not stream
+        else httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text='data: {"id":"chatcmpl-stop-sequences","object":"chat.completion.chunk","created":1,'
+            '"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":""},"finish_reason":"stop"}]}\n\n'
+            "data: [DONE]\n\n",
+        )
+    )
+    with respx.mock as upstream:
+        chat: Final = upstream.post("https://api.openai.com/v1/chat/completions").mock(return_value=response)
+        create: Final = litellm.anthropic.messages.acreate if is_async else litellm.anthropic.messages.create
+        pending: Final = create(
+            model="openai/gpt-4o-mini",
+            max_tokens=80,
+            messages=[{"role": "user", "content": "hi"}],
+            stop_sequences=["STOPPROBE", "ENDPROBE"],
+            stream=stream,
+            api_key="test-api-key",
+        )
+        result: Final = await pending if is_async else pending
+        if stream:
+            chunks: Final = [chunk async for chunk in result] if is_async else list(result)
+            assert "message_stop" in "".join(chunk.decode() if isinstance(chunk, bytes) else chunk for chunk in chunks)
+        else:
+            assert result["content"] == [{"type": "text", "text": ""}]
+        body: Final = json.loads(chat.calls.last.request.content)
+        assert body["stop"] == ["STOPPROBE", "ENDPROBE"]
+        assert "stop_sequences" not in body
+
+
+@pytest.mark.parametrize("stop_sequences", [None, []], ids=["no-stops", "empty-stops"])
+def test_anthropic_experimental_pass_through_messages_handler(stop_sequences):
     """
     Test that api key is passed to litellm.responses for OpenAI models.
     OpenAI and Azure models are routed directly to the Responses API.
@@ -47,6 +99,7 @@ def test_anthropic_experimental_pass_through_messages_handler():
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 model="openai/claude-3-5-sonnet-20240620",
                 api_key="test-api-key",
+                stop_sequences=stop_sequences,
             )
         except (ValueError, TypeError, AttributeError) as e:
             print(f"Error: {e}")
@@ -1103,7 +1156,9 @@ async def test_messages_honors_a_chat_pin_on_a_prefixed_responses_deployment(
     litellm.in_memory_llm_clients_cache.flush_cache()
 
     with respx.mock(assert_all_called=True) as respx_mock:
-        upstream: Final = respx_mock.route(host="api.perplexity.ai").mock(side_effect=httpx.ConnectError("cut at the wire"))
+        upstream: Final = respx_mock.route(host="api.perplexity.ai").mock(
+            side_effect=httpx.ConnectError("cut at the wire")
+        )
         with pytest.raises(litellm.exceptions.InternalServerError):
             await litellm.anthropic.messages.acreate(
                 max_tokens=100,
@@ -1524,6 +1579,7 @@ async def test_provider_messages_api_base_env_is_not_shadowed_by_the_chat_defaul
 
     assert seen_urls == ["https://deepseek.internal.example/anthropic/v1/messages"]
 
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_forwards_safeguards_and_unknown_beta_to_anthropic():
     """Shapes are what Claude Code 2.1.278 sends and api.anthropic.com returns, captured 2026-09-21."""
@@ -1638,7 +1694,9 @@ def _claude_code_auto_mode_request() -> tuple[list[dict[str, object]], list[dict
     return safeguards, safeguard_results
 
 
-def _upstream_answering_with(safeguard_results: list[dict[str, object]], captured: dict[str, object]) -> AsyncHTTPHandler:
+def _upstream_answering_with(
+    safeguard_results: list[dict[str, object]], captured: dict[str, object]
+) -> AsyncHTTPHandler:
     def upstream_records_the_request(request: httpx.Request) -> httpx.Response:
         captured["body"] = json.loads(request.content)
         captured["anthropic-beta"] = request.headers.get("anthropic-beta")
@@ -1664,7 +1722,9 @@ def _upstream_answering_with(safeguard_results: list[dict[str, object]], capture
 
 
 _CLIENT_BETA_HEADERS: Final = (
-    pytest.param({"anthropic-beta": "dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14"}, id="client_sends_beta"),
+    pytest.param(
+        {"anthropic-beta": "dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14"}, id="client_sends_beta"
+    ),
     pytest.param({"anthropic-beta": "interleaved-thinking-2025-05-14"}, id="client_omits_beta"),
     pytest.param({}, id="client_sends_no_beta_header"),
 )
@@ -1702,16 +1762,20 @@ async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_bet
 @pytest.mark.asyncio
 @pytest.mark.parametrize("client_headers", _CLIENT_BETA_HEADERS)
 async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_beta_to_vertex(
-    local_beta_headers_config, client_headers
-):
+    local_beta_headers_config: None, client_headers: dict[str, str]
+) -> None:
     """Vertex rawPredict takes the beta as the `anthropic-beta` header and 400s on `safeguards` without it, so the beta rides along with the field."""
     from litellm.llms.anthropic.pass_through.messages import handler
-    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
     safeguards, safeguard_results = _claude_code_auto_mode_request()
     captured: dict[str, object] = {}
 
-    with patch.object(VertexBase, "_ensure_access_token", return_value=("test-token", "test-project")):
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as oauth:
+        oauth.add(
+            responses.POST,
+            "https://oauth2.googleapis.com/token",
+            json={"access_token": "test-token", "expires_in": 3600},
+        )
         response = await handler.anthropic_messages(
             max_tokens=16,
             messages=[{"role": "user", "content": "hi"}],
@@ -1719,7 +1783,14 @@ async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_bet
             custom_llm_provider="vertex_ai",
             vertex_project="test-project",
             vertex_location="global",
-            vertex_credentials="{}",
+            vertex_credentials=json.dumps(
+                {
+                    "type": "authorized_user",
+                    "client_id": "synthetic-client",
+                    "client_secret": "synthetic-secret",
+                    "refresh_token": "synthetic-refresh",
+                }
+            ),
             client=_upstream_answering_with(safeguard_results, captured),
             safeguards=safeguards,
             extra_headers=client_headers,
@@ -1789,7 +1860,11 @@ def _tool_use_sse(model: str) -> bytes:
             "delta": {"type": "input_json_delta", "partial_json": json.dumps(_CURL_TOOL_USE["input"])},
         },
         {"type": "content_block_stop", "index": 0},
-        {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None}, "usage": {"output_tokens": 4}},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+            "usage": {"output_tokens": 4},
+        },
         {"type": "message_stop"},
     )
     return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events).encode()
@@ -1957,26 +2032,20 @@ async def test_anthropic_messages_litellm_router_latency_metadata_tracking():
         print("Call kwargs:", json.dumps(call_kwargs, indent=2, default=str))
 
         # Verify that litellm_metadata was passed and contains _latency_per_deployment
-        assert (
-            "litellm_metadata" in call_kwargs
-        ), "litellm_metadata should be passed to anthropic_messages"
+        assert "litellm_metadata" in call_kwargs, "litellm_metadata should be passed to anthropic_messages"
 
         litellm_metadata = call_kwargs["litellm_metadata"]
         assert litellm_metadata is not None, "litellm_metadata should not be None"
-        assert isinstance(
-            litellm_metadata, dict
-        ), "litellm_metadata should be a dictionary"
+        assert isinstance(litellm_metadata, dict), "litellm_metadata should be a dictionary"
 
         # Verify _latency_per_deployment is present
-        assert (
-            "_latency_per_deployment" in litellm_metadata
-        ), "litellm_metadata should contain _latency_per_deployment field"
+        assert "_latency_per_deployment" in litellm_metadata, (
+            "litellm_metadata should contain _latency_per_deployment field"
+        )
 
         # Verify the structure of _latency_per_deployment
         latency_per_deployment = litellm_metadata["_latency_per_deployment"]
-        assert isinstance(
-            latency_per_deployment, dict
-        ), "_latency_per_deployment should be a dictionary"
+        assert isinstance(latency_per_deployment, dict), "_latency_per_deployment should be a dictionary"
 
         print(f"✅ Latency per deployment data: {latency_per_deployment}")
 
@@ -2028,6 +2097,7 @@ async def test_anthropic_messages_with_extra_headers():
         ],
         "model": "claude-haiku-4-5-20251001",
         "stop_reason": "end_turn",
+        "stop_sequence": None,
         "usage": {"input_tokens": 10, "output_tokens": 20},
     }
 
@@ -2091,6 +2161,7 @@ async def test_anthropic_messages_with_thinking():
         ],
         "model": "claude-haiku-4-5-20251001",
         "stop_reason": "end_turn",
+        "stop_sequence": None,
         "usage": {"input_tokens": 10, "output_tokens": 20},
     }
 
@@ -2134,9 +2205,7 @@ async def test_anthropic_messages_bedrock_credentials_passthrough():
     when using anthropic.messages.acreate with a bedrock model
     """
     # Mock the get_credentials method
-    with unittest.mock.patch.object(
-        BaseAWSLLM, "get_credentials"
-    ) as mock_get_credentials:
+    with unittest.mock.patch.object(BaseAWSLLM, "get_credentials") as mock_get_credentials:
         # Create a proper mock for credentials with the necessary attributes
         mock_credentials = unittest.mock.MagicMock()
         mock_credentials.access_key = "mock_access_key"
@@ -2147,9 +2216,7 @@ async def test_anthropic_messages_bedrock_credentials_passthrough():
         # We also need to mock the actual AWS request signing to avoid real API calls
         with unittest.mock.patch("botocore.auth.SigV4Auth.add_auth"):
             # Set up mock for AsyncHTTPHandler.post to avoid actual API calls
-            with unittest.mock.patch(
-                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
-            ) as mock_post:
+            with unittest.mock.patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
                 # Configure mock response
                 mock_response = unittest.mock.MagicMock()
                 mock_response.raise_for_status = unittest.mock.MagicMock()
@@ -2191,9 +2258,7 @@ async def test_anthropic_messages_bedrock_credentials_passthrough():
 
                 # Assert that our test credentials were passed correctly
                 for param_name, param_value in aws_params.items():
-                    assert (
-                        call_args[param_name] == param_value
-                    ), f"Parameter {param_name} was not passed correctly"
+                    assert call_args[param_name] == param_value, f"Parameter {param_name} was not passed correctly"
 
 
 @pytest.mark.asyncio
@@ -2211,6 +2276,7 @@ async def test_anthropic_messages_bedrock_dynamic_region():
         "content": [{"type": "text", "text": "This is a mock response"}],
         "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "stop_reason": "end_turn",
+        "stop_sequence": None,
         "usage": {"input_tokens": 10, "output_tokens": 20},
     }
 
@@ -2221,11 +2287,8 @@ async def test_anthropic_messages_bedrock_dynamic_region():
     # Patch necessary AWS components
     with (
         unittest.mock.patch("botocore.auth.SigV4Auth.add_auth"),
-        unittest.mock.patch.object(
-            BaseAWSLLM, "get_credentials"
-        ) as mock_get_credentials,
+        unittest.mock.patch.object(BaseAWSLLM, "get_credentials") as mock_get_credentials,
     ):
-
         # Setup mock credentials
         mock_credentials = unittest.mock.MagicMock()
         mock_credentials.access_key = "test_access_key"
@@ -2254,9 +2317,9 @@ async def test_anthropic_messages_bedrock_dynamic_region():
 
         # Check that the URL contains the correct region
         url = call_args.kwargs.get("url", "")
-        assert (
-            f"bedrock-runtime.{test_region}.amazonaws.com" in url
-        ), f"URL does not contain the correct region. URL: {url}"
+        assert f"bedrock-runtime.{test_region}.amazonaws.com" in url, (
+            f"URL does not contain the correct region. URL: {url}"
+        )
 
         # Verify get_credentials was called with the correct region
         mock_get_credentials.assert_called_once()
@@ -2294,3 +2357,42 @@ async def test_anthropic_messages_with_safeguards_and_no_classifier_keep_the_ups
 
     assert rejected.value.status_code == 400
     assert "invalid_request_error" in str(rejected.value)
+
+
+def test_native_messages_tool_config_point_marks_last_tool_and_drops_the_key(monkeypatch):
+    """LIT-9880 on /v1/messages: the hook wrote the tool_config point back into kwargs and the
+    native path dropped it silently, so the tools went out without any cache breakpoint."""
+    from litellm.llms.anthropic.pass_through.messages import handler
+
+    captured = {}
+
+    def fake_native(**kwargs):
+        captured["params"] = kwargs["anthropic_messages_optional_request_params"]
+        captured["kwargs"] = kwargs["kwargs"]
+        captured["messages"] = kwargs["messages"]
+        return "native-passthrough"
+
+    monkeypatch.setattr(handler.base_llm_http_handler, "anthropic_messages_handler", fake_native)
+    tools = [{"name": f"tool_{i}", "description": f"Tool {i}", "input_schema": {"type": "object"}} for i in range(2)]
+    tools_before = copy.deepcopy(tools)
+
+    result = handler.anthropic_messages_handler(
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hello"}],
+        model="anthropic/claude-opus-4-6",
+        api_key="sk-test",
+        tools=tools,
+        litellm_metadata={},
+        cache_control_injection_points=[
+            {"location": "message", "role": "user"},
+            {"location": "tool_config", "control": {"type": "ephemeral", "ttl": "1h"}},
+        ],
+    )
+
+    assert result == "native-passthrough"
+    assert "cache_control_injection_points" not in captured["params"]
+    assert "cache_control_injection_points" not in captured["kwargs"]
+    assert captured["params"]["tools"][-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert "cache_control" not in captured["params"]["tools"][0]
+    assert captured["messages"][0]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert tools == tools_before
