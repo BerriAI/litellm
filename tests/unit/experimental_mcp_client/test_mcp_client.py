@@ -699,8 +699,7 @@ class TestMCPClientInstructionsCapture:
 
     @pytest.mark.asyncio
     @patch("litellm.experimental_mcp_client.client.ClientSession")
-    async def test_none_instructions_stays_none(self, mock_session_cls):
-        """When upstream returns no instructions the field stays None."""
+    async def test_missing_instructions_are_recorded_as_empty(self, mock_session_cls: MagicMock) -> None:
         client = MCPClient(
             server_url="http://example.com/mcp",
             transport_type="http",
@@ -723,7 +722,7 @@ class TestMCPClientInstructionsCapture:
             return "done"
 
         await client._execute_session_operation(transport_ctx, _op)
-        assert client._last_initialize_instructions is None
+        assert client._last_initialize_instructions == ""
 
 
 # ---------------------------------------------------------------------------

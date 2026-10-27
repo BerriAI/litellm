@@ -2076,6 +2076,7 @@ class MCPServerManager:
         self._listed_tools_by_server_id: dict[str, _ListedToolsByCaller] = {}  # mutable-ok: refreshed per tools/list
         self._listed_tools_generations: dict[str, int] = {}  # mutable-ok: bumped per server save
         self._upstream_initialize_instructions_by_server_id: dict[str, str] = {}
+        self._initialize_instructions_generations: Mapping[str, int] = MappingProxyType({})
         # Per-server monotonic timestamp of last upstream prefetch attempt (success,
         # empty result, or failure). Used to throttle re-probes for servers that do
         # not return instructions, and to apply a short cooldown after failures.
@@ -2448,10 +2449,18 @@ class MCPServerManager:
             return current
         raise HTTPException(status_code=503, detail="OAuth metadata discovery changed repeatedly; retry shortly")
 
-    def _remember_upstream_initialize_instructions(self, server: MCPServer, client: MCPClient) -> None:
+    def initialize_instructions_generation(self, server_id: str) -> int:
+        return self._initialize_instructions_generations.get(server_id, 0)
+
+    def _remember_upstream_initialize_instructions(self, server: MCPServer, client: MCPClient, generation: int) -> None:
         raw: Final[str | None] = getattr(client, "_last_initialize_instructions", None)
-        if raw and str(raw).strip():
-            self._upstream_initialize_instructions_by_server_id[server.server_id] = str(raw).strip()
+        if raw is None or generation != self.initialize_instructions_generation(server.server_id):
+            return
+        instructions: Final = raw.strip()
+        if instructions:
+            self._upstream_initialize_instructions_by_server_id[server.server_id] = instructions
+        else:
+            self._upstream_initialize_instructions_by_server_id.pop(server.server_id, None)
 
     async def ensure_upstream_initialize_instructions_cached(self, server: MCPServer) -> None:
         """
@@ -2495,6 +2504,7 @@ class MCPServerManager:
         # Record the attempt up-front so that a failure / empty response does not
         # cause every subsequent initialize request to re-open the upstream session.
         self._upstream_initialize_instructions_probed_at[server.server_id] = time.monotonic()
+        generation: Final = self.initialize_instructions_generation(server.server_id)
 
         try:
             resolved_static_headers: Final = await self._resolve_static_headers_with_env_vars(
@@ -2514,7 +2524,7 @@ class MCPServerManager:
                 return "ok"
 
             await asyncio.wait_for(client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT)
-            self._remember_upstream_initialize_instructions(server, client)
+            self._remember_upstream_initialize_instructions(server, client, generation)
         except Exception as e:
             verbose_logger.debug(
                 "Upstream initialize instructions prefetch failed for %s: %s",
@@ -4475,6 +4485,7 @@ class MCPServerManager:
             oauth2_headers=oauth2_headers,
         )
         listed_generation: Final = self._listed_tools_generations.get(server.server_id, 0)
+        instructions_generation: Final = self.initialize_instructions_generation(server.server_id)
 
         try:
             # Tool *listing* must not be blocked by missing per-user env vars —
@@ -4592,7 +4603,7 @@ class MCPServerManager:
                     else ListToolsResult(tools=await self._fetch_tools_with_timeout(client, server.name))
                 )
                 tools = page.tools
-                self._remember_upstream_initialize_instructions(server, client)
+                self._remember_upstream_initialize_instructions(server, client, instructions_generation)
 
             guarded_tools: Final = await self._guard_tool_catalog(
                 server=server,
@@ -4650,10 +4661,6 @@ class MCPServerManager:
             )
             raise_classified_list_failure(e, server.name, suppress_challenge=server.is_dcr_bridge)
 
-    def clear_initialize_instructions(self) -> None:
-        self._upstream_initialize_instructions_by_server_id.clear()
-        self._upstream_initialize_instructions_probed_at.clear()
-
     def invalidate_discovery_lists(self, server_id: str) -> None:
         self._upstream_initialize_instructions_by_server_id.pop(server_id, None)
         self._upstream_initialize_instructions_probed_at.pop(server_id, None)
@@ -4667,6 +4674,12 @@ class MCPServerManager:
         )
 
         self.invalidate_discovery_lists(server_id)
+        self._initialize_instructions_generations = MappingProxyType(
+            {
+                **self._initialize_instructions_generations,
+                server_id: self.initialize_instructions_generation(server_id) + 1,
+            }
+        )
         self._drop_listed_tools(server_id)
         invalidate_oauth_metadata_cache(server_id)
 
@@ -6532,6 +6545,7 @@ class MCPServerManager:
             GuardrailRaisedException: If guardrails block the call
             HTTPException: If an HTTP error occurs
         """
+        instructions_generation: Final = self.initialize_instructions_generation(mcp_server.server_id)
         server_auth_header: Final = _server_auth_header_for(mcp_server, mcp_server_auth_headers, mcp_auth_header)
 
         # Extract subject token for OAuth2 Token Exchange (OBO) and ID-JAG flows
@@ -6761,7 +6775,7 @@ class MCPServerManager:
         # If proxy_logging_obj is not None, the tool call result is at index 1 (after the during hook task)
         result_index: Final = 1 if proxy_logging_obj else 0
         result: Final = mcp_responses[result_index]
-        self._remember_upstream_initialize_instructions(mcp_server, client)
+        self._remember_upstream_initialize_instructions(mcp_server, client, instructions_generation)
 
         return (
             bind_target(result, mcp_server)
@@ -7513,6 +7527,7 @@ class MCPServerManager:
         """
         from datetime import datetime
 
+        instructions_generation: Final = self.initialize_instructions_generation(server_id)
         server: Final = self.get_mcp_server_by_id(server_id)
         if not server:
             verbose_logger.warning("MCP Server %s not found", server_id)
@@ -7574,7 +7589,7 @@ class MCPServerManager:
                     client.run_with_session(_noop, quiet_on_error=True),
                     timeout=MCP_HEALTH_CHECK_TIMEOUT,
                 )
-                self._remember_upstream_initialize_instructions(server, client)
+                self._remember_upstream_initialize_instructions(server, client, instructions_generation)
                 status = "healthy"
             except asyncio.TimeoutError:
                 health_check_error = f"Health check timed out after {MCP_HEALTH_CHECK_TIMEOUT} seconds"

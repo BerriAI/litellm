@@ -6572,7 +6572,7 @@ class TestEnsureUpstreamInitializeInstructionsCached:
         server = _make_instruction_server(server_id="empty-server", instructions=None)
         fake_client = MagicMock()
         fake_client.run_with_session = AsyncMock(return_value="ok")
-        fake_client._last_initialize_instructions = None  # upstream sent nothing
+        fake_client._last_initialize_instructions = ""  # upstream sent nothing
 
         create = AsyncMock(return_value=fake_client)
         with patch.object(global_mcp_server_manager, "create_mcp_client", create):

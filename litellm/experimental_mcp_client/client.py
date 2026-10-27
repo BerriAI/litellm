@@ -792,7 +792,7 @@ class MCPClient:
                         init_result: Final = await self._prepare_session(session)
                         instructions: Final = getattr(init_result, "instructions", None)
                         self._last_initialize_instructions = (
-                            instructions.strip() or None if isinstance(instructions, str) else None
+                            instructions.strip() if isinstance(instructions, str) else ""
                         )
                         result: Final = await operation(session)
                     except BaseException as operation_error:
