@@ -93,6 +93,10 @@ impl Pipeline {
         self
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.ops.len()
+    }
+
     pub(crate) async fn run(&self, connection: &Connection) -> Vec<Result<Value, Error>> {
         let groups = self.groups(connection);
         let settled = join_all(
