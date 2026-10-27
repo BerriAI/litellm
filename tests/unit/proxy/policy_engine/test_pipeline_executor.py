@@ -1440,7 +1440,7 @@ class _SelfRecordingGuardrail(_TextReturningGuardrail):
 
 
 @pytest.mark.asyncio
-async def test_streaming_step_whose_guardrail_records_its_own_results_is_named(monkeypatch):
+async def test_streaming_step_whose_guardrail_records_its_own_results_is_named(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "callbacks", [_SelfRecordingGuardrail(["hello world"])])
 
     result = await _run_streaming_step(_WritingTranslation(), [_chunk()])
@@ -1466,7 +1466,9 @@ class _LitellmMetadataOpeningGuardrail(CustomGuardrail):
 
 
 @pytest.mark.asyncio
-async def test_streaming_step_is_named_in_the_metadata_the_request_started_with(monkeypatch):
+async def test_streaming_step_is_named_in_the_metadata_the_request_started_with(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(litellm, "callbacks", [_LitellmMetadataOpeningGuardrail()])
 
     result = await _run_streaming_step(_WritingTranslation(), [_chunk()])
@@ -1476,7 +1478,9 @@ async def test_streaming_step_is_named_in_the_metadata_the_request_started_with(
 
 
 @pytest.mark.asyncio
-async def test_streaming_step_that_flags_the_stream_is_named_when_the_pipeline_moves_on(monkeypatch):
+async def test_streaming_step_that_flags_the_stream_is_named_when_the_pipeline_moves_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(litellm, "callbacks", [_BlockingStreamGuardrail()])
 
     result = await _run_streaming_step(_WritingTranslation(), [_chunk()])

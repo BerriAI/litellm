@@ -1209,8 +1209,11 @@ def _two_step_pipeline_data(
     [("allow", (1, 0), ["first"]), ("next", (1, 1), ["first", "second"])],
 )
 async def test_pre_call_hook_names_only_the_pre_call_pipeline_steps_that_ran(
-    proxy_logging, make_user_api_key_auth, monkeypatch, first_on_pass, expected_calls, expected_header
-):
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
+    first_on_pass: str,
+    expected_calls: tuple[int, int],
+    expected_header: list[str],
+) -> None:
     first = _PipelineStepGuardrail("first", "pre_call")
     second = _PipelineStepGuardrail("second", "pre_call")
     monkeypatch.setattr(litellm, "callbacks", [first, second])
@@ -1227,8 +1230,8 @@ async def test_pre_call_hook_names_only_the_pre_call_pipeline_steps_that_ran(
 
 @pytest.mark.asyncio
 async def test_pre_call_hook_names_a_skipped_step_whose_guardrail_also_runs_outside_the_pipeline(
-    proxy_logging, make_user_api_key_auth, monkeypatch
-):
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
+) -> None:
     first = _PipelineStepGuardrail("first", "pre_call")
     second = _PipelineStepGuardrail("second", ["pre_call", "post_call"])
     monkeypatch.setattr(litellm, "callbacks", [first, second])
@@ -1264,8 +1267,9 @@ _PIPELINE_STEP_ERRORS: Final = (
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error", _PIPELINE_STEP_ERRORS)
 async def test_pre_call_hook_names_a_step_that_raised_before_the_pipeline_moved_on(
-    proxy_logging, make_user_api_key_auth, monkeypatch, error
-):
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+) -> None:
     first = _RaisingPipelineStepGuardrail("first", error)
     second = _PipelineStepGuardrail("second", "pre_call")
     monkeypatch.setattr(litellm, "callbacks", [first, second])
@@ -1283,8 +1287,9 @@ async def test_pre_call_hook_names_a_step_that_raised_before_the_pipeline_moved_
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error", _PIPELINE_STEP_ERRORS)
 async def test_deployment_hook_still_runs_a_pipeline_step_that_raised(
-    proxy_logging, make_user_api_key_auth, monkeypatch, error
-):
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+) -> None:
     first = _RaisingPipelineStepGuardrail("first", error)
     second = _PipelineStepGuardrail("second", "pre_call")
     monkeypatch.setattr(litellm, "callbacks", [first, second])
@@ -1317,8 +1322,8 @@ class _OpensLitellmMetadataGuardrail(_PipelineStepGuardrail):
 
 @pytest.mark.asyncio
 async def test_pre_call_hook_names_a_step_that_ran_in_the_litellm_metadata_a_later_step_opened(
-    proxy_logging, make_user_api_key_auth, monkeypatch
-):
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
+) -> None:
     first = _PipelineStepGuardrail("first", "pre_call")
     second = _OpensLitellmMetadataGuardrail("second", "pre_call")
     monkeypatch.setattr(litellm, "callbacks", [first, second])
@@ -1337,8 +1342,8 @@ async def test_pre_call_hook_names_a_step_that_ran_in_the_litellm_metadata_a_lat
 
 @pytest.mark.asyncio
 async def test_post_call_pipeline_steps_are_named_only_once_they_run(
-    proxy_logging, make_user_api_key_auth, monkeypatch
-):
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
+) -> None:
     first = _PipelineStepGuardrail("first", "post_call")
     second = _PipelineStepGuardrail("second", "post_call")
     monkeypatch.setattr(litellm, "callbacks", [first, second])
@@ -1369,8 +1374,8 @@ class _OpensLitellmMetadataOnResponseGuardrail(_PipelineStepGuardrail):
 
 @pytest.mark.asyncio
 async def test_post_call_pipeline_names_every_step_that_ran_in_metadata_after_a_step_opens_litellm_metadata(
-    proxy_logging, make_user_api_key_auth, monkeypatch
-):
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
+) -> None:
     first = _OpensLitellmMetadataOnResponseGuardrail("first", "post_call")
     second = _PipelineStepGuardrail("second", "post_call")
     monkeypatch.setattr(litellm, "callbacks", [first, second])
@@ -1405,8 +1410,12 @@ async def test_post_call_pipeline_names_every_step_that_ran_in_metadata_after_a_
     ],
 )
 async def test_pre_call_hook_names_up_front_the_post_call_steps_a_stream_runs_after_its_headers(
-    proxy_logging, make_user_api_key_auth, monkeypatch, asks_for, request_route, streams_live, expected_header
-):
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
+    asks_for: dict[str, object],
+    request_route: str,
+    streams_live: bool,
+    expected_header: list[str] | None,
+) -> None:
     guardrails = [_PipelineStepGuardrail(name, "post_call") for name in ("first", "second")]
     for guardrail in guardrails:
         guardrail.streaming_buffer_until_moderated = not streams_live
