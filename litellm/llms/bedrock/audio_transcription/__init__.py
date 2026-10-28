@@ -1,12 +1,12 @@
 import base64
 import math
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Final
 
 import httpx
 from pydantic import BaseModel, ConfigDict
 
-from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext
@@ -45,16 +45,20 @@ def _rejection(key: str, value: object) -> str | None:
     return None
 
 
+@dataclass(frozen=True, slots=True)
+class UnsupportedTranscriptionParams:
+    message: str
+
+
 def map_openai_transcription_params(
     non_default_params: Mapping[str, object], drop_params: bool
-) -> Mapping[str, object]:
+) -> Mapping[str, object] | UnsupportedTranscriptionParams:
     rejections: Final = {
         key: reason for key, value in non_default_params.items() if (reason := _rejection(key, value)) is not None
     }
     if rejections and not drop_params:
-        raise UnsupportedParamsError(
-            message=f"{' '.join(rejections.values())} To drop it from the call, set `litellm.drop_params = True`.",
-            llm_provider="bedrock",
+        return UnsupportedTranscriptionParams(
+            message=f"{' '.join(rejections.values())} To drop it from the call, set `litellm.drop_params = True`."
         )
     return {
         key: _as_float(value) if key == "temperature" else value
