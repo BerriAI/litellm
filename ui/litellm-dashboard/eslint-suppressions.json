@@ -1098,11 +1098,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/usage/_components/components/UsagePageView.tsx": {
-    "react-hooks/purity": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/users/_components/BulkEditUsers.tsx": {
     "prefer-const": {
       "count": 1

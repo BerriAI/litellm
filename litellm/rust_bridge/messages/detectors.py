@@ -73,7 +73,7 @@ def _resolved_provider(request: NativeCall) -> str | None:
 
 def intercepted(request: NativeCall) -> bool:
     """The async Messages handler delegates matching tools to a registered interceptor."""
-    from litellm.llms.anthropic.pass_through.messages.interceptors import get_messages_interceptors
+    from litellm.llms.anthropic.messages.native.interceptors import get_messages_interceptors
 
     tools: Final = optional_sequence(request.resolved.get("tools"))
     if not tools:
@@ -85,6 +85,6 @@ def intercepted(request: NativeCall) -> bool:
 
 def safeguards_classifier(request: NativeCall) -> bool:
     """Python's proxy classifier evaluates dangerous tool use for non-Claude models."""
-    from litellm.llms.anthropic.pass_through.safeguards import native_route_classifies
+    from litellm.llms.anthropic.messages.safeguards import native_route_classifies
 
     return native_route_classifies(str(request.resolved["model"]), request.resolved.get("safeguards"))

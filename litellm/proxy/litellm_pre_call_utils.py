@@ -466,10 +466,7 @@ _ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY: Final = "allow_client_mess
 _CLIENT_PRICING_CONTROL_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.model_fields.keys()) | {"base_model"}
 # ``model_info`` carries the same pricing fields when read by
 # ``use_custom_pricing_for_model``; strip from metadata for the same reason.
-# ``standard_logging_guardrail_information`` is proxy-written telemetry summed
-# into response_cost and spend; a client seeding it forges (even negative)
-# guardrail cost.
-_CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info", "standard_logging_guardrail_information"})
+_CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info"})
 # ``attempted_fallbacks`` and ``original_model_group`` are written by the router
 # and read by spend logs as fact; a client value has no legitimate meaning and no
 # key or team setting keeps it, so the strip is never gated.
@@ -797,6 +794,19 @@ def _strip_client_pricing_overrides(data: dict[str, object]) -> None:
             "metadata to keep these values.",
             ", ".join(stripped),
         )
+
+
+def strip_client_guardrail_information(data: dict[str, object]) -> None:  # mutable-ok: strips the request body in place
+    """Guardrail hooks write this field and its cost is billed, so no key or team setting keeps a caller's value."""
+    for metadata_key in ("metadata", "litellm_metadata"):
+        if (
+            isinstance(metadata := data.get(metadata_key), dict)
+            and "standard_logging_guardrail_information" in metadata
+        ):
+            del metadata["standard_logging_guardrail_information"]
+            verbose_proxy_logger.debug(
+                "Stripped client-supplied guardrail information from request body: %s", metadata_key
+            )
 
 
 def _strip_router_reserved_metadata(
@@ -2525,7 +2535,7 @@ async def add_litellm_data_to_request(
         _headers,
         allow_client_message_redaction_opt_out=_allow_client_message_redaction_opt_out,
     )
-    from litellm.proxy._experimental.mcp_server.utils import upstream_credential_headers
+    from litellm.proxy.mcp_server.utils import upstream_credential_headers
 
     _mcp_credential_headers: Final = upstream_credential_headers(_headers)
     _logging_safe_headers: Final = redact_credential_headers(
@@ -2695,6 +2705,7 @@ async def add_litellm_data_to_request(
     # would silently skip the field.
     if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
         _strip_client_pricing_overrides(data)
+    strip_client_guardrail_information(data)
     _strip_router_reserved_metadata(data)
 
     # Same reason as the strips above: runs after the metadata string-to-dict parse

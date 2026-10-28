@@ -877,6 +877,13 @@ describe("autorouter_presets", () => {
   });
 
   describe("buildPresetPrefill", () => {
+    it.each([undefined, true, false, "clamp"] as const)("preserves a preset's output token policy %s", (mode) => {
+      const preset = getPresetByKey("anthropic_family")!;
+      const config = { ...preset.complexity_router_config, max_tokens_from_tier_model: mode };
+      const prefill = buildPresetPrefill(config, groupsOnly(getRequiredModelsInPreset(preset)));
+      expect(prefill.complexityRouterConfig.max_tokens_from_tier_model).toBe(mode);
+    });
+
     it("preserves Laya settings and drops inactive classifier settings when prefilling", () => {
       const config = {
         tiers: { SIMPLE: ["fast"], MEDIUM: [], COMPLEX: [], REASONING: [] },
