@@ -109,6 +109,12 @@ WORD_NUMBER_SEQUENCE_PATTERN: Final = re.compile(
 )
 WORD_NUMBER_TOKEN_FINDER: Final = re.compile(rf"(?:{WORD_NUMBER_TOKEN_REGEX})", re.IGNORECASE)
 
+
+@functools.cache
+def _overlapping_matches_regex(regex: Pattern[str]) -> Pattern[str]:
+    return re.compile(f"(?=({regex.pattern}))", regex.flags)
+
+
 _logging_only_scan_guardrail: Final[contextvars.ContextVar["ContentFilterGuardrail | None"]] = contextvars.ContextVar(
     "litellm_content_filter_logging_only_scan", default=None
 )
@@ -893,10 +899,10 @@ class ContentFilterGuardrail(CustomGuardrail):
         validator: Callable[[str], bool],
         check_candidate: CandidateCheck,
     ) -> tuple[tuple[int, int], ...]:
-        if regex.search(text) is None:
+        leftmost_spans: Final = tuple(match.span() for match in regex.finditer(text))
+        if not leftmost_spans:
             return ()
-        overlapping_regex: Final = re.compile(f"(?=({regex.pattern}))", regex.flags)
-        candidate_spans: Final = tuple(candidate.span(1) for candidate in overlapping_regex.finditer(text))
+        candidate_spans: Final = (candidate.span(1) for candidate in _overlapping_matches_regex(regex).finditer(text))
         valid_spans: Final = tuple(
             span for span in candidate_spans if check_candidate(validator, text[span[0] : span[1]])
         )
@@ -904,8 +910,8 @@ class ContentFilterGuardrail(CustomGuardrail):
             return ()
         valid_starts: Final = tuple(start for start, _ in valid_spans)
         furthest_valid_ends: Final = tuple(itertools.accumulate((end for _, end in valid_spans), max))
-        return tuple(
-            span for span in candidate_spans if self._overlaps_a_valid_span(span, valid_starts, furthest_valid_ends)
+        return valid_spans + tuple(
+            span for span in leftmost_spans if self._overlaps_a_valid_span(span, valid_starts, furthest_valid_ends)
         )
 
     @staticmethod

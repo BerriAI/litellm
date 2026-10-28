@@ -414,11 +414,13 @@ class TestContentFilterGuardrail:
         [
             ("PIN 4821 4532 0151 1283 0366 thanks", "PIN [CREDIT_CARD_REDACTED] thanks"),
             ("order 4111 4532 0151 1283 0366", "order [CREDIT_CARD_REDACTED]"),
-            ("codes 4532 4532 4532 4532 4532 0151 1283 0366 thanks", "codes 4532 [CREDIT_CARD_REDACTED] thanks"),
+            ("codes 4532 4532 4532 4532 4532 0151 1283 0366 thanks", "codes 4532 4532 4532 4532 [CREDIT_CARD_REDACTED] thanks"),
             ("order 4532 1234 5678 9010 paid by 4532 0151 1283 0366", "order 4532 1234 5678 9010 paid by [CREDIT_CARD_REDACTED]"),
+            ("card 4532 4151 4283 4000 4777 4888 4999 ok", "card [CREDIT_CARD_REDACTED] 4777 4888 4999 ok"),
+            ("card 4532 4111 1111 1116 2025 ok", "card [CREDIT_CARD_REDACTED] 2025 ok"),
         ],
     )
-    async def test_checksum_pattern_masks_a_valid_card_with_the_candidates_overlapping_it(self, text: str, expected: str):
+    async def test_checksum_pattern_masks_a_valid_card_with_the_base_matches_overlapping_it(self, text: str, expected: str):
         guardrail: Final = ContentFilterGuardrail(
             guardrail_name="test-checksum-overlap",
             patterns=[
