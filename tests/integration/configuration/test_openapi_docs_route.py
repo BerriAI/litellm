@@ -15,7 +15,6 @@ from litellm.proxy._lazy_features import LAZY_FEATURES
 DOCS_SECONDS: Final = 120
 COLD_DOCS: Final = 4
 CHATS: Final = 8
-CHAT_MODEL: Final = "openai/gpt-5.4-mini"
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 OWNED_PROXY_TIMEOUT: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 TWO_OWNED_PROXIES_TIMEOUT: Final = pytest.mark.timeout(2 * (2 * graceful_stop_seconds() + 120))
@@ -87,7 +86,8 @@ def test_chat_completions_overlapping_a_cold_openapi_build_all_succeed(gateway: 
         owned.gateway.scenario() as scenario,
         ThreadPoolExecutor(CHATS + 1) as pool,
     ):
-        key: Final = scenario.key(models=[CHAT_MODEL])
+        model: Final = scenario.model()
+        key: Final = scenario.key(models=[model])
         docs: Final = pool.submit(owned.gateway.request, "GET", "/openapi.json")
         chats: Final = tuple(
             pool.map(
@@ -95,7 +95,7 @@ def test_chat_completions_overlapping_a_cold_openapi_build_all_succeed(gateway: 
                     "POST",
                     "/v1/chat/completions",
                     {
-                        "model": CHAT_MODEL,
+                        "model": model,
                         "messages": [{"role": "user", "content": f"overlapping docs build {index}"}],
                         "cache": {"no-cache": True},
                     },
