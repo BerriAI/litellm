@@ -724,3 +724,129 @@ class TestDailyLimits:
             router.discard()
 
         assert served == ["a", "b", "b", "b"]
+
+
+RESET_AT_EIGHT = datetime(2026, 10, 28, 8, 0, 0, tzinfo=timezone.utc)
+RESET_TIME_DEPLOYMENT = {**RPD_DEPLOYMENT, "litellm_params": {"model": "gpt-4.1-mini", "rpd": 2, "reset_time": "08:00"}}
+
+
+class TestResetTime:
+    def test_rpd_window_starts_over_at_reset_time_not_midnight(self):
+        clock = Clock(RESET_AT_EIGHT - timedelta(hours=9))
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=clock)
+
+        assert _pre_call(check, RESET_TIME_DEPLOYMENT) == RESET_TIME_DEPLOYMENT
+        clock.now = RESET_AT_EIGHT - timedelta(hours=7)
+        assert _pre_call(check, RESET_TIME_DEPLOYMENT) == RESET_TIME_DEPLOYMENT
+        clock.now = RESET_AT_EIGHT - timedelta(minutes=1)
+        with pytest.raises(litellm.RateLimitError, match="RPD limit=2, current usage=3") as exc_info:
+            _pre_call(check, RESET_TIME_DEPLOYMENT)
+        assert exc_info.value.response.headers["retry-after"] == "60"
+
+        clock.now = RESET_AT_EIGHT
+        assert _pre_call(check, RESET_TIME_DEPLOYMENT) == RESET_TIME_DEPLOYMENT
+
+    @pytest.mark.asyncio
+    async def test_async_rpd_window_starts_over_at_reset_time_not_midnight(self):
+        clock = Clock(RESET_AT_EIGHT - timedelta(hours=9))
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=clock)
+
+        assert await _async_pre_call(check, RESET_TIME_DEPLOYMENT) == RESET_TIME_DEPLOYMENT
+        clock.now = RESET_AT_EIGHT - timedelta(hours=7)
+        assert await _async_pre_call(check, RESET_TIME_DEPLOYMENT) == RESET_TIME_DEPLOYMENT
+        clock.now = RESET_AT_EIGHT - timedelta(minutes=1)
+        with pytest.raises(litellm.RateLimitError, match="RPD limit=2, current usage=3") as exc_info:
+            await _async_pre_call(check, RESET_TIME_DEPLOYMENT)
+        assert exc_info.value.response.headers["retry-after"] == "60"
+
+        clock.now = RESET_AT_EIGHT
+        assert await _async_pre_call(check, RESET_TIME_DEPLOYMENT) == RESET_TIME_DEPLOYMENT
+
+    @pytest.mark.parametrize(
+        ("now", "seconds_to_reset"),
+        [
+            (RESET_AT_EIGHT + timedelta(seconds=1), 86399),
+            (datetime(2026, 10, 28, 23, 59, 30, tzinfo=timezone.utc), 28830),
+            (datetime(2026, 10, 29, 7, 30, 0, tzinfo=timezone.utc), 1800),
+        ],
+    )
+    def test_daily_429_retry_after_is_seconds_until_reset_time(self, now: datetime, seconds_to_reset: int):
+        deployment = {**RPD_DEPLOYMENT, "litellm_params": {"model": "gpt-4.1-mini", "rpd": 0, "reset_time": "08:00"}}
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(now))
+
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            _pre_call(check, deployment)
+
+        assert exc_info.value.response.headers["retry-after"] == str(seconds_to_reset)
+
+    @pytest.mark.asyncio
+    async def test_tokens_logged_before_reset_time_do_not_count_after_it(self):
+        deployment = {**RPD_DEPLOYMENT, "litellm_params": {"model": "gpt-4.1-mini", "tpd": 100, "reset_time": "08:00"}}
+        clock = Clock(RESET_AT_EIGHT - timedelta(minutes=1))
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=clock)
+        await _async_log_success(
+            check,
+            {
+                "litellm_params": {"reset_time": "08:00", "metadata": {}},
+                "standard_logging_object": {
+                    "model_id": "daily-test-id",
+                    "total_tokens": 120,
+                    "hidden_params": {"litellm_model_name": "gpt-4.1-mini"},
+                },
+            },
+        )
+        with pytest.raises(litellm.RateLimitError, match="TPD limit=100, current usage=120"):
+            await _async_pre_call(check, deployment)
+
+        clock.now = RESET_AT_EIGHT
+        assert await _async_pre_call(check, deployment) == deployment
+
+    @pytest.mark.asyncio
+    async def test_tokens_logged_with_reset_time_in_model_info_land_in_the_same_window(self):
+        deployment = {
+            "litellm_params": {"model": "gpt-4.1-mini", "tpd": 100},
+            "model_info": {"id": "daily-test-id", "reset_time": "08:00"},
+            "model_name": "daily-model",
+        }
+        clock = Clock(RESET_AT_EIGHT - timedelta(minutes=1))
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=clock)
+        await _async_log_success(
+            check,
+            {
+                "litellm_params": {"metadata": {"model_info": {"id": "daily-test-id", "reset_time": "08:00"}}},
+                "standard_logging_object": {
+                    "model_id": "daily-test-id",
+                    "total_tokens": 120,
+                    "hidden_params": {"litellm_model_name": "gpt-4.1-mini"},
+                },
+            },
+        )
+        with pytest.raises(litellm.RateLimitError, match="TPD limit=100, current usage=120"):
+            await _async_pre_call(check, deployment)
+
+        clock.now = RESET_AT_EIGHT
+        assert await _async_pre_call(check, deployment) == deployment
+
+    def test_reset_time_in_model_info_is_honored(self):
+        deployment = {
+            "litellm_params": {"model": "gpt-4.1-mini", "rpd": 0},
+            "model_info": {"id": "daily-test-id", "reset_time": "08:00"},
+            "model_name": "daily-model",
+        }
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(RESET_AT_EIGHT - timedelta(minutes=30)))
+
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            _pre_call(check, deployment)
+
+        assert exc_info.value.response.headers["retry-after"] == "1800"
+
+    def test_router_rejects_a_reset_time_that_is_not_hh_mm(self):
+        with pytest.raises(Exception, match="reset_time"):
+            Router(
+                model_list=[
+                    {
+                        "model_name": "daily-group",
+                        "litellm_params": {"model": "gpt-4.1-mini", "rpd": 2, "reset_time": "8am"},
+                    }
+                ]
+            )
