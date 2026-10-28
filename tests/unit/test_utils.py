@@ -951,6 +951,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_priority": {"type": "number"},
                 "cache_creation_input_token_cost_ultrafast": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
+                "explicit_cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_32k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_100k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_100k_tokens_batches": {"type": "number"},
@@ -1058,6 +1059,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "image_edit",
                         "embedding",
                         "evaluation",
+                        "extraction",
                         "guardrail",
                         "image_generation",
                         "video_generation",
@@ -1138,6 +1140,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_box_questions": {"type": "boolean"},
                 "supports_vision": {"type": "boolean"},
                 "supports_web_search": {"type": "boolean"},
+                "supports_bedrock_native_structured_output": {"type": "boolean"},
                 "token_count_framing": {"type": "integer"},
                 "token_count_model": {
                     "type": "object",
@@ -8683,9 +8686,9 @@ def test_models_by_provider():
             continue
         elif k == "sample_spec":
             continue
-        elif v["litellm_provider"] == "sagemaker" or v["litellm_provider"] == "bedrock_converse":
+        elif v["litellm_provider"] in ("sagemaker", "bedrock_converse", "openinfer"):
             continue
-        elif v.get("mode") in ("search", "decisions", "evaluation"):
+        elif v.get("mode") in ("search", "decisions", "evaluation", "extraction"):
             continue
         else:
             providers.add(v["litellm_provider"])

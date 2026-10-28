@@ -632,7 +632,7 @@ class TestBedrockClaude35SonnetContextWindow:
             assert not set(above_200k_fields).intersection(rows[model])
 
 
-PROVIDER_LABELS_WITHOUT_A_MODEL_SET: Final = frozenset({"sagemaker", "bedrock_converse"})
+PROVIDER_LABELS_WITHOUT_A_MODEL_SET: Final = frozenset({"sagemaker", "bedrock_converse", "openinfer"})
 MODES_SERVED_OUTSIDE_THE_LLM_PROVIDER_REGISTRY: Final = frozenset({"search", "decisions", "evaluation"})
 VERTEX_FAMILIES_A_VERTEX_WILDCARD_GRANT_DOES_NOT_LIST: Final = frozenset(
     {
