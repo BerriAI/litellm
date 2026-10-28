@@ -4015,6 +4015,32 @@ def test_output_item_done_with_stream_map_keeps_empty_delta():
         ({"type": "required"}, "required"),
         ("auto", "auto"),
         ({"type": "function", "function": {"name": "get_weather"}}, {"type": "function", "name": "get_weather"}),
+        (
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {
+                    "mode": "required",
+                    "tools": [
+                        {"type": "function", "function": {"name": "get_weather"}},
+                        {"type": "custom", "custom": {"name": "apply_patch"}},
+                        {"type": "mcp", "server_label": "deepwiki"},
+                    ],
+                },
+            },
+            {
+                "type": "allowed_tools",
+                "mode": "required",
+                "tools": [
+                    {"type": "function", "name": "get_weather"},
+                    {"type": "custom", "name": "apply_patch"},
+                    {"type": "mcp", "server_label": "deepwiki"},
+                ],
+            },
+        ),
+        (
+            {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "get_weather"}]},
+            {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "get_weather"}]},
+        ),
     ],
 )
 async def test_acompletion_bridge_normalizes_tool_choice_on_the_wire(

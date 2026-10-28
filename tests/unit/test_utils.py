@@ -101,6 +101,7 @@ from litellm.utils import (
     calculate_max_parallel_requests,
     client,
     get_non_default_completion_params,
+    get_optional_params,
     get_optional_params_image_gen,
     get_prompt_cache_min_tokens,
     get_supported_openai_params,
@@ -8263,6 +8264,107 @@ def test_validate_tool_choice_without_model_is_still_a_400():
         validate_chat_completion_tool_choice({"type": "bogus"})
     assert exc_info.value.status_code == 400
     assert exc_info.value.model == ""
+
+
+CHAT_ALLOWED_TOOLS: Final = {
+    "type": "allowed_tools",
+    "allowed_tools": {
+        "mode": "required",
+        "tools": [
+            {"type": "function", "function": {"name": "get_weather"}},
+            {"type": "custom", "custom": {"name": "apply_patch"}},
+            {"type": "mcp", "server_label": "deepwiki"},
+        ],
+    },
+}
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        CHAT_ALLOWED_TOOLS,
+        {
+            "type": "allowed_tools",
+            "mode": "required",
+            "tools": [
+                {"type": "function", "name": "get_weather"},
+                {"type": "custom", "name": "apply_patch"},
+                {"type": "mcp", "server_label": "deepwiki"},
+            ],
+        },
+    ],
+    ids=["chat_nested", "responses_flat"],
+)
+def test_validate_tool_choice_allowed_tools_takes_the_chat_shape(tool_choice):
+    """Both OpenAI allowed_tools shapes are accepted and come out in the chat completions shape."""
+    assert validate_chat_completion_tool_choice(tool_choice, model=MODEL) == CHAT_ALLOWED_TOOLS
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "allowed_tools"},
+        {"type": "allowed_tools", "mode": "required"},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "sometimes", "tools": []}},
+        {"type": "allowed_tools", "allowed_tools": "get_weather", "mode": "auto"},
+    ],
+)
+def test_validate_tool_choice_malformed_allowed_tools_is_a_400(tool_choice):
+    with pytest.raises(litellm.BadRequestError, match="Invalid tool choice") as exc_info:
+        validate_chat_completion_tool_choice(tool_choice, model=MODEL)
+    assert exc_info.value.status_code == 400
+
+
+ALLOWED_TOOLS_REQUEST_TOOLS: Final = [
+    {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}}}
+]
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(("model", "custom_llm_provider"), [("gpt-5.5", "openai"), ("gpt-5.5", "azure")])
+def test_get_optional_params_keeps_allowed_tools_for_openai_shaped_providers(model, custom_llm_provider):
+    optional_params = get_optional_params(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        tools=ALLOWED_TOOLS_REQUEST_TOOLS,
+        tool_choice=CHAT_ALLOWED_TOOLS,
+    )
+    assert optional_params["tool_choice"] == CHAT_ALLOWED_TOOLS
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [("claude-haiku-4-5", "anthropic"), ("gemini-2.5-flash", "gemini"), ("deepseek-chat", "deepseek")],
+)
+def test_get_optional_params_rejects_allowed_tools_a_provider_cannot_take(model, custom_llm_provider):
+    with pytest.raises(litellm.UnsupportedParamsError, match="does not support an allowed_tools tool_choice") as exc_info:
+        get_optional_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            tools=ALLOWED_TOOLS_REQUEST_TOOLS,
+            tool_choice=CHAT_ALLOWED_TOOLS,
+        )
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [("claude-haiku-4-5", "anthropic"), ("gemini-2.5-flash", "gemini"), ("deepseek-chat", "deepseek")],
+)
+def test_get_optional_params_drops_allowed_tools_under_drop_params(model, custom_llm_provider):
+    optional_params = get_optional_params(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        tools=ALLOWED_TOOLS_REQUEST_TOOLS,
+        tool_choice=CHAT_ALLOWED_TOOLS,
+        drop_params=True,
+    )
+    assert "tool_choice" not in optional_params
+    assert optional_params["tools"]
 
 
 @pytest.fixture()

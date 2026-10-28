@@ -5,6 +5,7 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 import json
 import os
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import suppress
 from itertools import accumulate, chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, Union, cast
@@ -17,6 +18,7 @@ from openai.types.responses.response_input_param import (
     ResponseCustomToolCallOutputParam,
     ResponseCustomToolCallParam,
 )
+from openai.types.responses.tool_choice_allowed_param import ToolChoiceAllowedParam
 from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomParam
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
 from openai.types.responses.tool_param import FunctionToolParam
@@ -26,6 +28,10 @@ import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import supports_openai_prompt_cache_breakpoint
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    ALLOWED_TOOL_CHOICE_ADAPTER,
+    to_responses_allowed_tool_choice,
+)
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     responses_reasoning_items_from_thinking_blocks,
@@ -732,13 +738,22 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
     def _normalize_tool_choice_for_responses_api(
         self, tool_choice: _ToolChoiceT
-    ) -> _ToolChoiceT | ToolChoiceFunctionParam | ToolChoiceCustomParam | Literal["auto", "none", "required"]:
+    ) -> (
+        _ToolChoiceT
+        | ToolChoiceFunctionParam
+        | ToolChoiceCustomParam
+        | ToolChoiceAllowedParam
+        | Literal["auto", "none", "required"]
+    ):
         """Chat tool_choice nests the name under function/custom; Responses API expects top-level name."""
         if not isinstance(tool_choice, dict):
             return tool_choice
         choice_type: Final = tool_choice.get("type")
         if isinstance(choice_type, str) and choice_type in ("auto", "none", "required"):
             return choice_type
+        if choice_type == "allowed_tools":
+            with suppress(ValidationError):
+                return to_responses_allowed_tool_choice(ALLOWED_TOOL_CHOICE_ADAPTER.validate_python(tool_choice))
         if choice_type not in ("function", "custom"):
             return tool_choice
         if isinstance(tool_choice.get("name"), str) and tool_choice.get("name"):
