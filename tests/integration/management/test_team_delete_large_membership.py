@@ -573,7 +573,6 @@ def test_two_deletes_racing_on_one_team_write_one_tombstone_and_one_audit_row(ga
         user: Final = scenario.user()
         team: Final = _create_team(scenario)
         _bulk_member_add(owned.gateway, team, [user])
-        fence: Final = _generate_key(scenario)
 
         with psycopg.connect(os.environ["DATABASE_URL"]) as holder:
             holder.execute(TAKE_TEAM_LOCK_SQL, (team,))
@@ -589,16 +588,9 @@ def test_two_deletes_racing_on_one_team_write_one_tombstone_and_one_audit_row(ga
         assert [row["team_id"] for row in tombstones] == [team]
         assert _roster_user_ids(tombstones[0]["members_with_roles"]) == sorted([PROXY_ADMIN, user])
 
-        fenced: Final = owned.gateway.request("POST", "/key/delete", {"keys": [fence]})
-        assert fenced.status_code == 200, fenced.text
-        eventually(
-            lambda: _deleted_audit_rows(_hashed(fence), "LiteLLM_VerificationToken"),
-            lambda found: len(found) == 1,
-            seconds=30,
-        )
-        team_audit_rows: Final = _deleted_audit_rows(team, "LiteLLM_TeamTable")
-        assert len(team_audit_rows) == 1, team_audit_rows
-        assert object_value(team_audit_rows[0]["before_value"])["team_id"] == team
+    team_audit_rows: Final = _deleted_audit_rows(team, "LiteLLM_TeamTable")
+    assert len(team_audit_rows) == 1, team_audit_rows
+    assert object_value(team_audit_rows[0]["before_value"])["team_id"] == team
 
 
 def test_second_delete_of_the_same_team_is_404_with_one_tombstone(gateway: Gateway) -> None:
