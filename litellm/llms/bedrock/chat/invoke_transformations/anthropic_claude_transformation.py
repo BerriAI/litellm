@@ -25,6 +25,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_INVOKE_TRACE_FIELD,
     apply_bedrock_invoke_structured_output,
+    bedrock_capability_model,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
     bedrock_supports_tool_search,
@@ -88,6 +89,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
     def should_strip_billing_metadata(self) -> bool:
         return True
+
+    def default_max_tokens_model(self, model: str, litellm_params: Mapping[str, object]) -> str:
+        return bedrock_capability_model(model, litellm_params.get("base_model"))
 
     def get_supported_openai_params(self, model: str) -> list[str]:
         return AnthropicConfig.get_supported_openai_params(self, model)

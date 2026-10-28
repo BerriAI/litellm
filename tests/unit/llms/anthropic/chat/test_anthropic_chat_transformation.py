@@ -2646,14 +2646,16 @@ def test_get_config_does_not_leak_module_constants():
         assert forbidden not in cfg
 
 
-def _claude_body_without_max_tokens(config: AnthropicConfig, model: str) -> dict:
-    return config.transform_request(
+def _default_max_tokens_sent(config: AnthropicConfig, model: str, litellm_params: dict[str, object] | None = None) -> int:
+    max_tokens: Final = config.transform_request(
         model=model,
         messages=[{"role": "user", "content": "hi"}],
         optional_params={},
-        litellm_params={},
+        litellm_params=litellm_params or {},
         headers={},
-    )
+    )["max_tokens"]
+    assert isinstance(max_tokens, int)
+    return max_tokens
 
 
 @pytest.mark.parametrize(
@@ -2675,17 +2677,31 @@ def test_claude_host_without_max_tokens_sends_the_hosts_mapped_cap(
     mapped_cap: Final = litellm.model_cost[cost_map_key]["max_output_tokens"]
     assert mapped_cap < DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS, "the case needs a mapped cap below the fallback"
 
-    assert _claude_body_without_max_tokens(config_cls(), model)["max_tokens"] == mapped_cap
+    assert _default_max_tokens_sent(config_cls(), model) == mapped_cap
 
 
-def test_vertex_claude_default_max_tokens_prefers_the_vertex_row_over_the_anthropic_row(
-    local_model_cost_map, monkeypatch: pytest.MonkeyPatch
-):
+def test_vertex_claude_default_max_tokens_prefers_the_vertex_row_over_the_anthropic_row(local_model_cost_map):
     vertex_cap: Final = litellm.model_cost["claude-sonnet-4-6"]["max_output_tokens"] // 2
-    monkeypatch.setitem(litellm.model_cost["vertex_ai/claude-sonnet-4-6"], "max_output_tokens", vertex_cap)
-    litellm.get_model_info.cache_clear()
+    litellm.register_model(
+        {"vertex_ai/claude-sonnet-4-6": {**litellm.model_cost["vertex_ai/claude-sonnet-4-6"], "max_output_tokens": vertex_cap}},
+        persist_across_reloads=False,
+    )
 
-    assert _claude_body_without_max_tokens(VertexAIAnthropicConfig(), "claude-sonnet-4-6")["max_tokens"] == vertex_cap
+    assert _default_max_tokens_sent(VertexAIAnthropicConfig(), "claude-sonnet-4-6") == vertex_cap
+
+
+def test_bedrock_invoke_inference_profile_arn_without_max_tokens_sends_its_base_models_cap(local_model_cost_map):
+    base_model: Final = "anthropic.claude-haiku-4-5-20251001-v1:0"
+    mapped_cap: Final = litellm.model_cost[base_model]["max_output_tokens"]
+    assert mapped_cap < DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS, "the case needs a mapped cap below the fallback"
+
+    sent: Final = _default_max_tokens_sent(
+        AmazonAnthropicClaudeConfig(),
+        "invoke/anthropic/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+        {"base_model": f"bedrock/{base_model}"},
+    )
+
+    assert sent == mapped_cap
 
 
 @pytest.mark.parametrize(

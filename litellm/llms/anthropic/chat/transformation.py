@@ -109,8 +109,8 @@ from litellm.utils import (
     Usage,
     add_dummy_tool,
     any_assistant_message_has_thinking_blocks,
+    cached_get_model_info_helper,
     get_max_tokens,
-    get_model_info,
     has_tool_call_blocks,
     last_assistant_with_tool_calls_has_no_thinking_blocks,
     supports_mid_conversation_system,
@@ -509,6 +509,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return config
 
+    def default_max_tokens_model(self, model: str, litellm_params: Mapping[str, object]) -> str:
+        return model
+
     @staticmethod
     def get_max_tokens_for_model(model: str | None = None, custom_llm_provider: str | None = None) -> int:
         """
@@ -521,7 +524,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             None
             if custom_llm_provider is None
             else _none_on_error(
-                lambda: get_model_info(model, custom_llm_provider=custom_llm_provider).get("max_output_tokens")
+                lambda: cached_get_model_info_helper(model, custom_llm_provider).get("max_output_tokens")
             )
         )
         if host_max_tokens is not None:
@@ -2399,7 +2402,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         ## Load Config
         config: Final[Mapping[str, object]] = MappingProxyType(
-            litellm.AnthropicConfig.get_config(model=model, custom_llm_provider=self.custom_llm_provider)
+            litellm.AnthropicConfig.get_config(
+                model=self.default_max_tokens_model(model, _LITELLM_PARAMS_ADAPTER.validate_python(litellm_params)),
+                custom_llm_provider=self.custom_llm_provider,
+            )
         )
         for k, v in config.items():
             if (
