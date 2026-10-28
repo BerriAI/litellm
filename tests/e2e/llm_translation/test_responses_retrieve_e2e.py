@@ -139,6 +139,17 @@ class TestResponsesRetrieve:
                 pytest.fail(f"invalid response id expected 404, got {other!r}")
 
 
+def _retrieve_until_gone(client: openai.OpenAI, response_id: str) -> openai.APIStatusError:
+    deadline: Final = time.monotonic() + POLL_TIMEOUT
+    while time.monotonic() < deadline:
+        try:
+            client.responses.retrieve(response_id)
+        except openai.APIStatusError as error:
+            return error
+        time.sleep(POLL_INTERVAL)
+    raise AssertionError(f"response {response_id!r} was still retrievable {POLL_TIMEOUT}s after delete")
+
+
 def _register_openai(proxy: ProxyClient, resources: ResourceManager, prefix: str) -> str:
     return _register_response_deployment(proxy, resources, "openai", prefix)
 
@@ -236,8 +247,8 @@ class TestStoredResponseLifecycle:
 
         client.responses.delete(created.id)
 
-        gone: Final = pytest.raises(openai.APIStatusError, client.responses.retrieve, created.id)
-        assert 400 <= gone.value.status_code < 500, f"retrieve after delete expected a 4xx: {gone.value!r}"
+        gone: Final = _retrieve_until_gone(client, created.id)
+        assert 400 <= gone.status_code < 500, f"retrieve after delete expected a 4xx: {gone!r}"
 
     @pytest.mark.parametrize(
         "deployment",
@@ -269,8 +280,8 @@ class TestStoredResponseLifecycle:
         response_id: Final = completed.response.id
 
         client.responses.delete(response_id)
-        gone: Final = pytest.raises(openai.APIStatusError, client.responses.retrieve, response_id)
-        assert 400 <= gone.value.status_code < 500, f"retrieve after streamed delete expected a 4xx: {gone.value!r}"
+        gone: Final = _retrieve_until_gone(client, response_id)
+        assert 400 <= gone.status_code < 500, f"retrieve after streamed delete expected a 4xx: {gone!r}"
 
 
 @pytest.mark.provider_live

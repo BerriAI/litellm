@@ -1,5 +1,7 @@
 import asyncio
 import json
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -29,6 +31,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INVALID_VIRTUAL_KEY_ERROR_MARKER
 from litellm.exceptions import BudgetExceededError
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import (
     ModelAccessDeniedProxyException,
     ProxyErrorTypes,
@@ -665,7 +668,7 @@ async def test_expired_key_error_log_names_the_key_owner(
     ):
         verbose_proxy_logger.propagate = True
         try:
-            with caplog.at_level("ERROR", logger="LiteLLM Proxy"), pytest.raises(ProxyException):
+            with caplog.at_level("WARNING", logger="LiteLLM Proxy"), pytest.raises(ProxyException):
                 await handler.handle_authentication_error(
                     expired_key_error,
                     MagicMock(),
@@ -684,6 +687,70 @@ async def test_expired_key_error_log_names_the_key_owner(
     assert "Expired Key" in logged and "Requester IP Address:" in logged, logged
     if expected_fragment is not None:
         assert expected_fragment in logged, logged
+    if absent_fragment is not None:
+        assert absent_fragment not in logged, logged
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "looked_up, logged_fragment, absent_fragment",
+    [
+        pytest.param(
+            "d748053a" * 8,
+            "Exception occured - Authentication Error, Invalid proxy server token passed. key="
+            + "d748053a" * 8
+            + ", not found in db. Create key via `/key/generate` call.",
+            None,
+            id="operator_wording_and_hash_kept_in_log",
+        ),
+        pytest.param(
+            "abc\nforged log line",
+            "key=abc\\nforged log line, not found in db",
+            "\nforged log line",
+            id="control_chars_in_hash_cannot_forge_log_lines",
+        ),
+    ],
+)
+async def test_unknown_key_error_log_keeps_the_operator_wording_the_401_hides(
+    looked_up, logged_fragment, absent_fragment, caplog
+):
+    """A wrong key gets a generic 401, while the one auth failure log line, a WARNING with no
+    traceback, keeps the operator wording and the hash that was looked up, next to the requester IP."""
+    from litellm.constants import INVALID_API_KEY_ERROR_MESSAGE
+    from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
+
+    with (
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch("litellm.proxy.auth.auth_exception_handler.seed_request_identity"),
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        verbose_proxy_logger.propagate = True
+        try:
+            with caplog.at_level("WARNING", logger="LiteLLM Proxy"), pytest.raises(ProxyException) as exc_info:
+                await UserAPIKeyAuthExceptionHandler().handle_authentication_error(
+                    KeyNotFoundError(looked_up),
+                    MagicMock(),
+                    {"model": "gpt-4o"},
+                    "/v1/chat/completions",
+                    None,
+                    "sk-raw-key",
+                )
+        finally:
+            verbose_proxy_logger.propagate = False
+
+    assert exc_info.value.message == INVALID_API_KEY_ERROR_MESSAGE
+    records = [r for r in caplog.records if "user_api_key_auth(): Exception occured" in r.getMessage()]
+    assert len(records) == 1, [r.getMessage() for r in caplog.records]
+    assert records[0].levelname == "WARNING" and records[0].exc_info is None
+    logged = records[0].getMessage()
+    assert "Requester IP Address:" in logged and logged_fragment in logged, logged
     if absent_fragment is not None:
         assert absent_fragment not in logged, logged
 
@@ -747,6 +814,65 @@ def _http_request(client_host: str | None = "10.1.2.3", headers: dict[str, str] 
             "headers": [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()],
         }
     )
+
+
+class _AuthFailureRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.data: dict[str, object] | None = None
+        self.error: Exception | None = None
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict[str, object],
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> HTTPException | None:
+        self.data = dict(request_data)
+        self.error = original_exception
+        return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_data", [[], None, "metadata", 1, True])
+@pytest.mark.parametrize("error_kind", ["auth", "budget", "database"])
+async def test_auth_error_preserves_classification_with_non_object_context(
+    monkeypatch: pytest.MonkeyPatch, request_data: object, error_kind: str
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(litellm, "budget_exceeded_status_code", 429)
+    errors: Final = {
+        "auth": HTTPException(status_code=401, detail="Invalid API key"),
+        "budget": BudgetExceededError(current_cost=2, max_budget=1),
+        "database": httpx.ConnectError("Database unavailable"),
+    }
+    error: Final = errors[error_kind]
+    expected: Final = _as_proxy_exception(error)
+    recorder: Final = _AuthFailureRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(proxy_server, "general_settings", {"allow_requests_on_db_unavailable": False})
+
+    with pytest.raises(ProxyException) as exc_info:
+        await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
+            error,
+            _http_request(headers={"user-agent": "shape-regression"}),
+            request_data,
+            "/key/info",
+            None,
+            "sk-test",
+        )
+
+    assert exc_info.value.code == expected.code
+    assert exc_info.value.type == expected.type
+    assert exc_info.value.message == expected.message
+    assert recorder.error is error
+    assert recorder.data is not None
+    metadata: Final = recorder.data["metadata"]
+    assert isinstance(metadata, Mapping)
+    assert metadata["requester_ip_address"] == "10.1.2.3"
+    assert metadata["user_agent"] == "shape-regression"
 
 
 @pytest.mark.asyncio
@@ -1023,10 +1149,16 @@ def _marked_malformed_key_error() -> HTTPException:
                 message="Authentication Error", type=ProxyErrorTypes.auth_error, param=None, code=401
             ),
             False,
-            "ERROR",
-            id="expected_401_no_traceback",
+            "WARNING",
+            id="proxy_exception_401_warning_no_traceback",
         ),
         pytest.param(ValueError("unexpected internal error"), True, "ERROR", id="unexpected_error_keeps_traceback"),
+        pytest.param(
+            Exception("No api key passed in."),
+            True,
+            "ERROR",
+            id="bare_exception_coerced_to_401_still_keeps_traceback",
+        ),
         pytest.param(
             _marked_malformed_key_error(),
             False,
@@ -1036,8 +1168,14 @@ def _marked_malformed_key_error() -> HTTPException:
         pytest.param(
             HTTPException(status_code=401, detail="LiteLLM Virtual Key expected. Received=test"),
             False,
+            "WARNING",
+            id="http_exception_401_warning_no_traceback",
+        ),
+        pytest.param(
+            ProxyException(message="Forbidden", type=ProxyErrorTypes.auth_error, param=None, code=403),
+            False,
             "ERROR",
-            id="phrase_without_marker_stays_loud",
+            id="403_stays_error_without_traceback",
         ),
     ],
 )
@@ -1064,7 +1202,7 @@ async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
         try:
             try:
                 raise auth_error
-            except (ProxyException, ValueError, HTTPException) as caught:
+            except Exception as caught:
                 with caplog.at_level(expect_level, logger="LiteLLM Proxy"), pytest.raises((ProxyException, HTTPException)):
                     await handler.handle_authentication_error(
                         caught,

@@ -755,3 +755,20 @@ def test_chained_heuristic_and_judge_prompt_claim_each_active_capability(
         assert count_capability_routers(({"litellm_params": params},), capability=capability) == (
             1 if capability.key in expected else 0
         )
+
+
+def test_deployed_decision_classifier_is_a_model_access_dependency() -> None:
+    dependencies: Final = strategy_router_dependencies(
+        {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "classifier_type": "oss_classifier",
+                "opensource_classifier_config": {"deployment_name": "decision-deployment"},
+                "tiers": {"SIMPLE": "cheap"},
+            },
+        }
+    )
+    assert tuple((dependency.model_name, dependency.role) for dependency in dependencies) == (
+        ("cheap", "tier"),
+        ("decision-deployment", "classifier"),
+    )

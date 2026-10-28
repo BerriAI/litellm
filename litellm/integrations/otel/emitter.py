@@ -13,6 +13,7 @@ from opentelemetry.trace.status import Status, StatusCode
 
 from litellm.integrations.otel.mappers import resolve_mappers
 from litellm.integrations.otel.mappers.base import AttributeMapper, AttrValue, SpanData
+from litellm.integrations.otel.mappers.langfuse import LANGFUSE_REQUEST_METADATA_ATTRIBUTES
 from litellm.integrations.otel.mappers.openinference import fit_indexed_messages
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.model.payloads import (
@@ -91,13 +92,28 @@ def span_attribute_limit(span: Span) -> int | None:
     return span._limits.max_span_attributes  # pyright: ignore[reportPrivateUsage]  # SDK has no public getter
 
 
+def _carried_keys(
+    attributes: Mapping[str, AttrValue] | tuple[tuple[str, AttrValue], ...],
+) -> frozenset[str]:
+    """The keys a span already carries: a live span exposes a ``Mapping``, an ended one a tuple of pairs."""
+    if isinstance(attributes, Mapping):
+        return frozenset(attributes)
+    return frozenset(key for key, _value in attributes)
+
+
+def carried_keys(span: Span) -> frozenset[str]:
+    """The attribute keys ``span`` already holds, empty for a span that exposes none."""
+    if not isinstance(span, ReadableSpan):
+        return frozenset()
+    return _carried_keys(span.attributes or ())
+
+
 def attribute_budget(span: Span, reserved: int) -> int | None:
-    """How many mapped attributes fit on ``span`` next to what it already carries and ``reserved`` more."""
+    """How many new attribute keys fit on ``span`` next to what it already carries and ``reserved`` more."""
     limit: Final = span_attribute_limit(span)
     if limit is None:
         return None
-    on_span: Final = len(span.attributes or ()) if isinstance(span, ReadableSpan) else 0
-    return limit - on_span - reserved
+    return limit - len(carried_keys(span)) - reserved
 
 
 def stamp_error(
@@ -284,8 +300,16 @@ class SpanEmitter:
         )
         stamped_later: Final = error_attributes(error) if error else _NO_ATTRIBUTES
         reserved: Final = len(stamped_later.keys() - mapped.keys())
-        for key, value in fit_indexed_messages(mapped, attribute_budget(span, reserved)).items():
-            span.set_attribute(key, value)
+        overwrites: Final = carried_keys(span) & mapped.keys()
+        # The Langfuse request metadata sheds first, so a span at its attribute limit loses nothing else to it.
+        fitted: Final = fit_indexed_messages(
+            MappingProxyType({key: value for key, value in mapped.items() if key not in overwrites}),
+            attribute_budget(span, reserved),
+            LANGFUSE_REQUEST_METADATA_ATTRIBUTES,
+        )
+        for key, value in mapped.items():
+            if key in overwrites or key in fitted:
+                span.set_attribute(key, value)
         if error:
             stamped: Final = stamp_error(span, error)
             if stamped is not None and self._event_recorder is not None and role is SpanRole.LLM_CALL:

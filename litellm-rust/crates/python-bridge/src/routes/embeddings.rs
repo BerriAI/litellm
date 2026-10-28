@@ -32,7 +32,7 @@ mod tests {
             let locals = PyDict::new(py);
             py.run(
                 c"from types import SimpleNamespace
-call = SimpleNamespace(args=(), kwargs={}, bound={'model':'test-model','input':'hello'})",
+call = SimpleNamespace(args=(), kwargs={'model':'test-model','input':'hello'}, base={})",
                 Some(&locals),
                 Some(&locals),
             )

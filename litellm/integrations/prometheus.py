@@ -14,6 +14,7 @@ from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast
 
+import openai
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
@@ -21,11 +22,15 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import (
+    AUTH_OBJECTS_TARGET,
+    LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     PROMETHEUS_OVERFLOW_SERIES_LABEL_VALUE,
     PROXY_LLM_PROVIDER_FALLBACK,
     PROXY_REJECTED_BEFORE_ROUTING_KEY,
 )
 from litellm.exceptions import (
+    CallerCredentialAuthenticationError,
+    MalformedRequestFieldError,
     validate_rate_limit_category,
     validate_rate_limit_type,
 )
@@ -45,23 +50,23 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
 )
+from litellm.litellm_core_utils.get_llm_provider_logic import is_registered_custom_provider
 from litellm.litellm_core_utils.service_tier_utils import (
     get_service_tier_from_standard_logging_payload,
 )
+from litellm.llms.github_copilot.per_user_auth import github_copilot_user_session_from
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.models.end_user import LiteLLM_EndUserTable
-from litellm.proxy._types import (
-    LiteLLM_DeletedVerificationToken,
-    LiteLLM_TeamTable,
-    LiteLLM_UserTable,
-    UserAPIKeyAuth,
-)
-from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
+from litellm.models.team import LiteLLM_TeamTable
+from litellm.models.user import LiteLLM_UserTable
+from litellm.models.verification_token import LiteLLM_DeletedVerificationToken
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.table_repositories import EndUserRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
+from litellm.router_utils.router_callbacks.track_deployment_metrics import find_deployment_metadata
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.prometheus import *
 from litellm.types.integrations.prometheus import (
@@ -69,6 +74,7 @@ from litellm.types.integrations.prometheus import (
     sanitize_prometheus_label_value,
     validate_prometheus_deployment_and_latency_caller_identity,
 )
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.carried_budget_state import (
     KeyBudgetSnapshot,
     OrgBudgetSnapshot,
@@ -256,10 +262,35 @@ class _LabeledMetric:
 _MetricLike: TypeAlias = "NoOpMetric | _LabeledMetric | MetricWrapperBase"
 
 _SeriesLimitT: Final = TypeVar("_SeriesLimitT", int, float)
+_REQUEST_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _POSITIVE_SERIES_CAP: Final[TypeAdapter[int]] = TypeAdapter(Annotated[int, Field(gt=0)])
 _POSITIVE_SERIES_TTL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(gt=0)])
 _SERIES_CLEANUP_INTERVAL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(ge=0)])
 _DEFAULT_SERIES_CLEANUP_INTERVAL_SECONDS: Final = 60.0
+_ADDITIONAL_HEADERS: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
+_LOGGED_FIELDS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_NO_LOGGED_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _logged_fields(value: object) -> Mapping[str, object]:
+    try:
+        return _LOGGED_FIELDS.validate_python(value)
+    except ValidationError:
+        return _NO_LOGGED_FIELDS
+
+
+def _is_llm_provider(name: str) -> bool:
+    routable: Final = (
+        name in litellm.provider_list or JSONProviderRegistry.exists(name) or is_registered_custom_provider(name)
+    )
+    return routable and name not in litellm._known_custom_logger_compatible_callbacks  # pyright: ignore[reportPrivateUsage]  # the router treats these prefixes as prompt-management deployments
+
+
+def _deployment_model_provider(deployment: object) -> str:
+    if not isinstance(deployment, str):
+        return ""
+    prefix, separator, _ = deployment.partition("/")
+    return prefix if separator and _is_llm_provider(prefix) else ""
 
 
 def _number_or_none(value: object, limit: TypeAdapter[_SeriesLimitT]) -> _SeriesLimitT | None:
@@ -268,6 +299,15 @@ def _number_or_none(value: object, limit: TypeAdapter[_SeriesLimitT]) -> _Series
     try:
         return limit.validate_python(value)
     except ValidationError:
+        return None
+
+
+def _gauge_reading_or_none(value: object) -> float | None:
+    if not isinstance(value, str | int | float):
+        return None
+    try:
+        return float(value)
+    except (ValueError, OverflowError):
         return None
 
 
@@ -324,6 +364,87 @@ def _get_proxy_llm_router() -> Router | None:
     except Exception:
         return None
     return llm_router
+
+
+_CALLER_CREDENTIAL_FIELDS: Final = frozenset(
+    {
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_web_identity_token",
+        "azure_ad_token",
+        "azure_password",
+        "azure_scope",
+        "azure_username",
+        "client_id",
+        "client_secret",
+        "gigachat_access_token",
+        "litellm_credential_name",
+        "oci_fingerprint",
+        "oci_key",
+        "oci_key_file",
+        "oci_tenancy",
+        "oci_user",
+        "tenant_id",
+        "token",
+        "user_config",
+        "vertex_ai_credentials",
+        "vertex_credentials",
+        "watsonx_credentials",
+        "wx_credentials",
+        "zen_api_key",
+    }
+)
+
+
+_CALLER_ENDPOINT_FIELDS: Final = frozenset(
+    {"aws_bedrock_runtime_endpoint", "aws_sts_endpoint", "deployment_url", "s3_endpoint_url", "sagemaker_base_url"}
+)
+
+
+_CALLER_TRANSPORT_FIELDS: Final = frozenset(
+    {"api_key", "extra_headers", "headers", "organization", "provider_specific_header"}
+)
+
+
+def _sent_a_provider_credential_or_endpoint(caller_body: Mapping[str, object]) -> bool:
+    """True when the caller's request body, or its ``extra_body``, carries a provider credential field or a
+    provider endpoint field."""
+    sent: Final = {*caller_body, *_logged_fields(caller_body.get("extra_body"))}
+    return not (_CALLER_CREDENTIAL_FIELDS.isdisjoint(sent) and _CALLER_ENDPOINT_FIELDS.isdisjoint(sent))
+
+
+def _used_a_caller_credential(logged_call: Mapping[str, object]) -> bool:
+    """True when the provider was called with a credential or at an endpoint that belongs to the caller rather than
+    the deployment: an api_key, header, OpenAI organization or other provider credential or endpoint field the caller
+    sent with the request, a stored credential the caller picked by name, the caller's own Anthropic OAuth token, the caller's own GitHub Copilot connection, or the
+    caller's identity token that a token-exchange deployment trades in on every call."""
+    litellm_params: Final = _logged_fields(logged_call.get("litellm_params"))
+    proxy_server_request: Final = _logged_fields(litellm_params.get("proxy_server_request"))
+    caller_credential_fields: Final = proxy_server_request.get("caller_credential_fields")
+    logged_metadata: Final = _logged_fields(_logged_fields(logged_call.get("standard_logging_object")).get("metadata"))
+    return (
+        (
+            isinstance(caller_credential_fields, tuple)
+            and any(field in caller_credential_fields for field in _CALLER_TRANSPORT_FIELDS)
+        )
+        or _sent_a_provider_credential_or_endpoint(_logged_fields(proxy_server_request.get("body")))
+        or bool(litellm_params.get("token_exchange_endpoint"))
+        or logged_metadata.get("used_client_oauth_token") is True
+        or github_copilot_user_session_from(litellm_params) is not None
+    )
+
+
+def _is_deployment_failure(exception: openai.APIError, logged_call: Mapping[str, object]) -> bool:
+    """True for an error raised while calling the deployment with its own credential, on a request the proxy
+    did not reject itself. An error LiteLLM raises before it calls the provider, such as a missing deployment key,
+    is not one."""
+    return not (
+        isinstance(exception, CallerCredentialAuthenticationError)
+        or bool(logged_call.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL))
+        or logged_call.get("api_call_start_time") is None
+        or _used_a_caller_credential(logged_call)
+    )
 
 
 def _bounded_requested_model_label(requested_model: object, router_originated: bool = False) -> str | None:
@@ -1716,12 +1837,25 @@ class PrometheusLogger(CustomLogger):
         # increment litellm_proxy_total_requests_metric for all successful requests
         # (both streaming and non-streaming) in this single location to prevent
         # double-counting that occurs when async_post_call_success_hook also increments
+        request_metadata: Final = {
+            **_REQUEST_METADATA_ADAPTER.validate_python(get_litellm_metadata_from_kwargs(kwargs)),
+            **_REQUEST_METADATA_ADAPTER.validate_python(_metadata),
+        }
+        original_model_group: Final = request_metadata.get("original_model_group")
+        request_enum_values: Final = replace(
+            enum_values,
+            requested_model=(
+                original_model_group
+                if isinstance(original_model_group, str) and original_model_group
+                else standard_logging_payload["model_group"]
+            ),
+        )
         PrometheusLogger._inc_labeled_counter(
             self,
             self.litellm_proxy_total_requests_metric,
             "litellm_proxy_total_requests_metric",
-            enum_values,
-            label_context=label_context,
+            request_enum_values,
+            label_context=PrometheusLabelFactoryContext(request_enum_values),
         )
 
     def _increment_token_metrics(
@@ -2771,6 +2905,8 @@ class PrometheusLogger(CustomLogger):
         information from various callback function signatures and determines if the request
         represents an invalid API key attempt that should be filtered from metrics.
 
+        An error raised while calling the deployment with its own credential is never skipped.
+
         Args:
             kwargs: Dictionary potentially containing exception and other data
             user_api_key_dict: User API key authentication object (currently unused)
@@ -2789,6 +2925,11 @@ class PrometheusLogger(CustomLogger):
 
         if exception is None and kwargs:
             exception = kwargs.get("exception")
+
+        if isinstance(exception, openai.APIError) and _is_deployment_failure(
+            exception, _LOGGED_FIELDS.validate_python(kwargs or {})
+        ):
+            return False
 
         if self._is_invalid_api_key_request(status_code, exception=exception):
             verbose_logger.debug(
@@ -2836,6 +2977,25 @@ class PrometheusLogger(CustomLogger):
                 e,
             )
             return None
+
+    @staticmethod
+    def _extract_deployment_api_provider(request_kwargs: Mapping[str, object]) -> str:
+        """
+        Provider of the deployment a failed call was routed to: the resolved
+        ``custom_llm_provider`` on ``litellm_params``, then the one recorded on
+        ``standard_logging_object``, then the provider prefix of the deployment
+        model the router wrote into the request metadata (``azure/my-gpt`` ->
+        ``azure``) when that prefix is an LLM provider the router accepts.
+        Returns an empty string otherwise.
+        """
+        litellm_params: Final = _logged_fields(request_kwargs.get("litellm_params"))
+        provider: Final = litellm_params.get("custom_llm_provider") or _logged_fields(
+            request_kwargs.get("standard_logging_object")
+        ).get("custom_llm_provider")
+        if isinstance(provider, str) and provider:
+            return provider
+        deployment_metadata: Final = find_deployment_metadata(litellm_params)
+        return _deployment_model_provider(deployment_metadata.get("deployment") if deployment_metadata else None)
 
     @staticmethod
     def _extract_api_provider_from_exception(exception: Exception) -> str | None:
@@ -3100,18 +3260,24 @@ class PrometheusLogger(CustomLogger):
             if exception is not None:
                 exception_status = str(getattr(exception, "status_code", None))
                 if exception_status == "None" or not exception_status:
-                    code: Final = getattr(exception, "code", None)
+                    code: Final[object] = getattr(exception, "code", None)
                     if code is not None:
                         exception_status = str(code)
 
             # On LiteLLM-side rejects (no deployment picked), route request_kwargs["model"]
             # into requested_model and leave deployment-scoped labels empty.
-            deployment_selected: Final = bool(model_id) and not _litellm_params.get(PROXY_REJECTED_BEFORE_ROUTING_KEY)
+            deployment_selected: Final = (
+                bool(model_id)
+                and not _litellm_params.get(PROXY_REJECTED_BEFORE_ROUTING_KEY)
+                and not isinstance(exception, MalformedRequestFieldError)
+            )
             if deployment_selected:
                 label_litellm_model_name = litellm_model_name
                 label_model_id = model_id
                 label_api_base = api_base
-                label_api_provider = llm_provider
+                label_api_provider = self._extract_deployment_api_provider(
+                    _LOGGED_FIELDS.validate_python(request_kwargs)
+                )
                 label_requested_model = model_group or litellm_model_name
                 label_model_group = model_group
             else:
@@ -3347,12 +3513,11 @@ class PrometheusLogger(CustomLogger):
                     model_group=enum_values.model_group,
                 )
 
-            remaining_requests: int | None = None
-            remaining_tokens: int | None = None
-            if additional_headers := standard_logging_payload["hidden_params"]["additional_headers"]:
-                # OpenAI / OpenAI Compatible headers
-                remaining_requests = additional_headers.get("x_ratelimit_remaining_requests", None)
-                remaining_tokens = additional_headers.get("x_ratelimit_remaining_tokens", None)
+            additional_headers: Final = _ADDITIONAL_HEADERS.validate_python(
+                standard_logging_payload["hidden_params"]["additional_headers"] or {}
+            )
+            remaining_requests: Final = _gauge_reading_or_none(additional_headers.get("x_ratelimit_remaining_requests"))
+            remaining_tokens: Final = _gauge_reading_or_none(additional_headers.get("x_ratelimit_remaining_tokens"))
 
             if litellm_overhead_time_ms := standard_logging_payload["hidden_params"].get("litellm_overhead_time_ms"):
                 _labels = prometheus_label_factory(
@@ -3370,7 +3535,7 @@ class PrometheusLogger(CustomLogger):
                 label_context=label_context,
             )
 
-            if remaining_requests:
+            if remaining_requests is not None:
                 """
                 "model_group",
                 "api_provider",
@@ -3384,7 +3549,7 @@ class PrometheusLogger(CustomLogger):
                 )
                 self.litellm_remaining_requests_metric.labels(**_labels).set(remaining_requests)
 
-            if remaining_tokens:
+            if remaining_tokens is not None:
                 _labels = prometheus_label_factory(
                     supported_enum_labels=self.get_labels_for_metric(metric_name="litellm_remaining_tokens_metric"),
                     enum_values=enum_values,

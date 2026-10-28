@@ -195,7 +195,7 @@ If a step is missing, the test is not done. That is the whole pattern
 
 ## Style: lay the pattern down in a class
 
-Keep the cases for one feature inside a class so the file reads as a spec for how that feature behaves in production. The class name says what is under test; each method is one behavior. Think of it as documenting the contract, with the rough intent being
+Keep the cases for one feature inside a class so the file reads as a spec for how that feature behaves in production. The class name says what is under test. Each method is one behavior. Think of it as documenting the contract, with the rough intent being
 
 ```python
 # pseudo-code to convey intent
@@ -211,9 +211,9 @@ class TestPromptCompression:
         assert response.cost == compressed_value  # the cost was actually reduced
 ```
 
-That snippet only conveys intent. What you actually write uses the real harness: the `client` fixture for your suite, the `scoped_key` fixture for an auto-deleted key, typed pydantic bodies from `models.py`, and `unwrap(...)` on the tagged-union result. `tests/e2e/llm_translation/test_custom_pricing_e2e.py` is the reference to copy from; it creates a scoped key, drives a real gemini call, polls `/spend/logs` to a deadline for the cost-breakdown row, then asserts the input and output costs match the configured custom rates and that a sibling deployment kept its own price. Read it before writing yours
+That snippet only conveys intent. What you actually write uses the real harness: the `client` fixture for your suite, the `scoped_key` fixture for an auto-deleted key, typed pydantic bodies from `models.py`, and `unwrap(...)` on the tagged-union result. `tests/e2e/llm_translation/test_custom_pricing_e2e.py` is the reference to copy from. It creates a scoped key, drives a real gemini call, polls `/spend/logs` to a deadline for the cost-breakdown row, then asserts the input and output costs match the configured custom rates and that a sibling deployment kept its own price. Read it before writing yours
 
-## Use the shared transport; never touch requests directly
+## Use the shared transport, never touch requests directly
 
 Every HTTP call goes through the shared transport, never through `requests.*` in a test. `e2e_http.py` is the only module permitted to call `requests.*`, and that is enforced in CI by `tests/code_coverage_tests/check_e2e_no_raw_requests.py`. A test that imports requests will fail the check
 
@@ -227,7 +227,7 @@ The shape is layered so tests stay declarative
 
 Each suite provides its own `client` fixture (see `llm_translation/passthrough_client.py`), a frozen dataclass that holds the shared `ProxyClient` (as `.proxy`) and adds suite-specific routes. Cleanup runs through that same `ProxyClient`, so whatever keys or customers your test creates get torn down by the `resources` fixture
 
-Request and response bodies are typed pydantic models in `models.py`; only the fields a test reads are modelled, and nothing passes raw dicts. Outcomes come back as a `Result[R]` tagged union (`Success`, `NetworkError`, `UnauthorizedError`, `RateLimitedError`, `ValidationError`, `UnknownApiError`). Handle them with `match`, or call `unwrap(...)` when a non-success should fail the test. The harness hard-fails and never skips: a test marked `e2e` fails when no proxy answers its liveness probe, and once a request reaches the proxy any wrong behavior is likewise a hard failure, so a missing proxy turns the run red instead of being mistaken for a pass
+Request and response bodies are typed pydantic models in `models.py`. Only the fields a test reads are modelled, and nothing passes raw dicts. Outcomes come back as a `Result[R]` tagged union (`Success`, `NetworkError`, `UnauthorizedError`, `RateLimitedError`, `ValidationError`, `UnknownApiError`). Handle them with `match`, or call `unwrap(...)` when a non-success should fail the test. The harness hard-fails and never skips: a test marked `e2e` fails when no proxy answers its liveness probe, and once a request reaches the proxy any wrong behavior is likewise a hard failure, so a missing proxy turns the run red instead of being mistaken for a pass
 
 Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure coverage of the harness itself lives in `tests/e2e_harness/` and runs without a proxy (`LITELLM_MASTER_KEY=sk-harness uv run pytest tests/e2e_harness`). A test that needs proxy configuration the default stack does not carry goes behind an opt-in marker (`managed_files`, `prompt_caching_stack`, `weekly`), each deselected unless its env var is set; `OPT_IN_MARKERS` in `conftest.py` maps marker to env var, and the coverage collector counts such a cell only where the env var is set. Use `scoped_key` for a fresh all-models key that auto-deletes, `resources` when you need to create and tear down more than a key, and `unique_marker()` from `e2e_config` to keep prompts, tags, and customer ids from colliding across concurrent runs and the shared response cache
 
@@ -260,56 +260,4 @@ The semantic header set is `content-type`, `accept`, `anthropic-version`, `anthr
 
 Excluded transport and telemetry headers are `host`, `content-length`, `connection`, `accept-encoding`, `user-agent`, `traceparent`, `tracestate`, `x-request-id`, `x-client-request-id` and `x-stainless-*`. Inbound transfer-encoding is unsupported; send JSON with content-length framing. The destination represents host identity and the relay carries original body bytes. Replay does not verify credentials, SDK timeout/retry behavior, transport performance, model availability or stateful remote IDs. Live relay uses original request bytes and header values, never the stored identity
 
-Strict replay harness regression tests live in `tests/code_coverage_tests/test_provider_replay_harness.py`. The CircleCI `provider_replay_harness` job runs them alongside the provider-edge and fixture tests at the root of `tests/e2e_harness/` with `--noconftest -o "pythonpath=tests/e2e tests/e2e_harness"`; they need only synthetic HTTP providers and temporary fixture storage
-
-
-## MCP OAuth happy path
-
-`test_mcp_oauth_happy_path_e2e.py` runs one shared scenario with four variants:
-aggregate gateway SSO and explicitly configured per-server JWT, each directly
-against Linear and through the live provider edge. The edge forwards to real
-Linear without replay and compares the forwarded bearer to the encrypted
-canonical user/server credential. This observes the forwarding boundary, not
-Linear's internal logs. Direct variants independently exercise discovery
-
-Use the existing database preparation, Prisma generation and Keycloak setup.
-Build and stage the dashboard from the tested checkout as in the UI runner.
-Provide `DATABASE_URL`, `LITELLM_MASTER_KEY`, `LITELLM_SALT_KEY`, `LITELLM_LICENSE`,
-and the `E2E_KEYCLOAK_*` settings. Capture a test-account Linear login using
-`mcp/linear_session_capture.py` and set `E2E_LINEAR_STORAGE_STATE` to that private
-file. The test workspace must contain a team. Do not publish browser state or
-raw test/proxy output
-
-```bash
-E2E_MCP_OAUTH_LIVE=1 E2E_FIXTURE_MODE=live E2E_PROVIDER_CACHE=0 \
-  uv run --no-sync pytest tests/e2e/mcp/test_mcp_oauth_happy_path_e2e.py \
-  --rootdir=. --reruns 0
-```
-
-The test starts and restarts its own source-built proxy on a free loopback port,
-retaining its database and SSO client but no Redis or process-local cache. It
-does not restart an existing proxy or clear shared databases. Gateway login,
-consent, immediate list/call and post-restart reconnect must all succeed. The
-aggregate client never injects a gateway header; the explicitly labeled JWT
-variant configures `x-litellm-api-key` for the first consent and reconnects with
-only its gateway JWT after restart
-
-`.github/workflows/test-mcp-oauth-e2e.yml` automatically requests a run for
-same-repository pull requests changing MCP, gateway authentication/SSO, consent
-UI, dependencies or the relevant E2E harness/workflow paths. It retains manual
-`workflow_dispatch` for targeted verification. The four cases run in the
-protected `e2e-changed` environment after its normal deployment approval;
-reviewers should approve and inspect this separate OAuth check when it appears.
-Fork pull requests do not run this credentialed job; use a reviewed
-same-repository branch for their verification. The workflow's path-filtered
-check is not configured here as a globally required branch-protection check.
-Provision `E2E_LINEAR_STORAGE_STATE_B64` as a secret there and retain the existing E2E license/AWS role configuration. A missing or
-expired session fails the job; collection, deselection and skips are not passes.
-No LLM call is needed
-
-Coverage remains limited to authorization-code OAuth over HTTP. M2M, OBO,
-PKCE passthrough, static/BYOK, ID-JAG, forwarding, SigV4 and stdio are outside this
-scenario; consult the registry and LIT-3559 for their existing coverage and gaps.
-LIT-4506 owns broader isolation/failure regressions. LIT-7737 retains ownership
-of dependency/Python compatibility and its matrix; this test reuses its delivered
-environment and does not change dependency constraints or compatibility gates
+Strict replay harness regression tests live in `tests/code_coverage_tests/test_provider_replay_harness.py`. The `python` job in `.github/workflows/test-linting.yml` runs them alongside the provider-edge and fixture tests at the root of `tests/e2e_harness/` with `--noconftest -o addopts= -o "pythonpath=tests/e2e tests/e2e_harness" -p no:rerunfailures`; they need only synthetic HTTP providers and temporary fixture storage

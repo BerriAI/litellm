@@ -29,11 +29,11 @@ tests:
   - contains:
       path: spec.template.spec.containers[0].env
       content:
-        name: LITELLM_LENS_SERVICE_TOKEN
+        name: LENS_GATEWAY_SECRET
         valueFrom:
           secretKeyRef:
-            name: lens-service
-            key: service-token
+            name: lens-test-lens-gateway
+            key: gateway-secret
 - it: routes uploads directly to Lens instead of the gateway
   template: ingress.yaml
   set:

@@ -1,7 +1,9 @@
 mod auth;
 mod error;
+mod redis;
 mod secrets;
 pub use error::Error;
+pub use redis::RedisClients;
 
 use std::{sync::Arc, time::Instant};
 
@@ -40,9 +42,9 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
         HttpSettingsLayer::from_environment(&lookup),
         HttpSettingsLayer {
             ssl_verify: settings.ssl_verify.as_ref().map(|value| match value {
-                litellm_config::Flag::Boolean(true) => SslVerify::Enabled,
-                litellm_config::Flag::Boolean(false) => SslVerify::Disabled,
-                litellm_config::Flag::String(value) => SslVerify::parse(value),
+                litellm_config::Spelled::Value(true) => SslVerify::Enabled,
+                litellm_config::Spelled::Value(false) => SslVerify::Disabled,
+                litellm_config::Spelled::Text(value) => SslVerify::parse(value),
             }),
             ssl_certificate: settings.ssl_certificate.as_ref().map(Into::into),
             ssl_security_level: settings.ssl_security_level.clone(),
@@ -68,6 +70,17 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
         secrets,
         ModelRouter::from_model_list(&config.model_list),
     )?))
+}
+
+pub async fn build_redis(config: &Config) -> Result<RedisClients, Error> {
+    let environment = secrets::environment_values(&config.environment_variables)?;
+    let lookup = |name: &str| {
+        environment
+            .get(name)
+            .map(|value| value.expose().to_owned())
+            .or_else(|| std::env::var(name).ok())
+    };
+    redis::connect(config, &lookup).await
 }
 
 pub async fn build_mcp(
@@ -128,10 +141,15 @@ pub fn router(
             litellm_gateway_auth::authenticate,
         ))
         .layer(axum::middleware::from_fn(log_request));
+    let health = Router::new().route("/health/readiness", axum::routing::get(readiness));
     match ui {
-        Some(ui) => inference.merge(ui),
-        None => inference,
+        Some(ui) => inference.merge(ui).merge(health),
+        None => inference.merge(health),
     }
+}
+
+async fn readiness() -> axum::Json<serde_json::Value> {
+    axum::Json(serde_json::json!({"status": "healthy", "db": "Not connected"}))
 }
 
 async fn log_request(request: Request, next: Next) -> Response {
