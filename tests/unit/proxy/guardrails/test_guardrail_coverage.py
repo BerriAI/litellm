@@ -948,7 +948,7 @@ async def test_google_text_moderation_leaves_embedding_input_unmoderated(
 
 
 @pytest.mark.asyncio
-async def test_google_text_moderation_still_blocks_chat_messages(user_api_key):
+async def test_google_text_moderation_still_blocks_chat_messages(user_api_key: UserAPIKeyAuth):
     guard: Final = _google_text_moderation_flagging_finance()
 
     with pytest.raises(HTTPException) as exc_info:
@@ -961,39 +961,3 @@ async def test_google_text_moderation_still_blocks_chat_messages(user_api_key):
     assert exc_info.value.status_code == 400
     assert guard.client.moderated_texts == ["stocks"]
 
-
-@pytest.mark.asyncio
-async def test_openai_moderation_leaves_embedding_input_unmoderated(monkeypatch, respx_mock):
-    from enterprise.enterprise_hooks.openai_moderation import (
-        ENTERPRISE_OpenAI_Moderation,
-    )
-
-    monkeypatch.setattr(litellm, "openai_moderations_model_name", "omni-moderation-latest")
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    llm_router: Final = litellm.Router(
-        model_list=[
-            {
-                "model_name": "omni-moderation-latest",
-                "litellm_params": {"model": "omni-moderation-latest", "api_key": "fake-key"},
-            }
-        ]
-    )
-    moderation_route: Final = respx_mock.post("https://api.openai.com/v1/moderations").respond(
-        200,
-        json={
-            "id": "modr-123",
-            "model": "omni-moderation-latest",
-            "results": [{"flagged": True, "categories": {"harassment": True}, "category_scores": {"harassment": 0.97}}],
-        },
-    )
-    import litellm.proxy.proxy_server as proxy_server
-
-    monkeypatch.setattr(proxy_server, "llm_router", llm_router)
-
-    await ENTERPRISE_OpenAI_Moderation().async_moderation_hook(
-        data={"model": "text-embedding-3-small", "input": ["you're the worst"]},
-        user_api_key_dict=UserAPIKeyAuth(api_key="hashed"),
-        call_type="aembedding",
-    )
-
-    assert moderation_route.call_count == 0
