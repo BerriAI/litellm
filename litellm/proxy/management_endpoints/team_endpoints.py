@@ -1498,11 +1498,13 @@ def _check_team_model_budget_update_authority(
     for entry, proposed in requested.items():
         existing = _existing_model_cap(existing_model_max_budget.get(entry))
         if existing is not None:
-            _check_existing_model_cap_kept(entry=entry, proposed=proposed, existing=existing)
+            _check_existing_model_cap_kept(entry=entry, cap_entry=entry, proposed=proposed, existing=existing)
             continue
         governing = resolve_model_budget(model=entry, model_max_budget=existing_model_max_budget, team_id=data.team_id)
         if governing is not None and entry_names_model(entry=governing.budget_model, model=entry):
-            _check_existing_model_cap_kept(entry=entry, proposed=proposed, existing=governing.budget_config)
+            _check_existing_model_cap_kept(
+                entry=entry, cap_entry=governing.budget_model, proposed=proposed, existing=governing.budget_config
+            )
         _check_new_entry_outranks_no_cap(
             entry=entry,
             existing_model_max_budget=existing_model_max_budget,
@@ -1511,7 +1513,7 @@ def _check_team_model_budget_update_authority(
         )
 
 
-def _check_existing_model_cap_kept(entry: str, proposed: BudgetConfig, existing: BudgetConfig) -> None:
+def _check_existing_model_cap_kept(entry: str, cap_entry: str, proposed: BudgetConfig, existing: BudgetConfig) -> None:
     if existing.max_budget is None or not _looser_model_cap(proposed=proposed, cap=existing):
         return
     raise HTTPException(
@@ -1519,8 +1521,8 @@ def _check_existing_model_cap_kept(entry: str, proposed: BudgetConfig, existing:
         detail={
             "error": (
                 f"Only a proxy admin can raise a team's model_max_budget for {entry!r} or change its "
-                f"budget_duration. Current max_budget={existing.max_budget} per {existing.budget_duration}, "
-                f"requested={proposed.max_budget} per {proposed.budget_duration}."
+                f"budget_duration. Current max_budget={existing.max_budget} per {existing.budget_duration} "
+                f"(entry {cap_entry!r}), requested={proposed.max_budget} per {proposed.budget_duration}."
             )
         },
     )

@@ -17571,6 +17571,26 @@ def test_team_admin_cannot_loosen_team_model_caps(requested) -> None:
     assert "proxy admin" in exc.value.detail["error"]
 
 
+def test_team_cap_refusal_names_the_entry_holding_the_cap() -> None:
+    from litellm.proxy.management_endpoints.team_endpoints import _check_team_model_budget_update_authority
+
+    with pytest.raises(HTTPException) as exc:
+        _check_team_model_budget_update_authority(
+            data=UpdateTeamRequest(
+                team_id="t1",
+                model_max_budget={
+                    **_EXISTING_TEAM_MODEL_CAPS,
+                    "openai/gpt-4o": {"max_budget": 1000.0, "budget_duration": "1d"},
+                },
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin"),
+            existing_model_max_budget=_EXISTING_TEAM_MODEL_CAPS,
+        )
+    assert exc.value.status_code == 403
+    assert "for 'openai/gpt-4o'" in exc.value.detail["error"]
+    assert "(entry 'gpt-4o')" in exc.value.detail["error"]
+
+
 @pytest.mark.parametrize(
     "requested",
     [
