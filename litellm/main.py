@@ -8881,6 +8881,83 @@ def speech(
             client=client,
             _is_async=aspeech or False,
         )
+    elif custom_llm_provider == "flowspeech":
+        from litellm.llms.flowspeech.text_to_speech.handler import FlowSpeechTTS
+        from litellm.llms.flowspeech.text_to_speech.transformation import (
+            FlowSpeechJob,
+            FlowSpeechTextToSpeechConfig,
+        )
+
+        if text_to_speech_provider_config is None:
+            text_to_speech_provider_config = (  # rebind-ok: provider config is resolved lazily for speech dispatch
+                FlowSpeechTextToSpeechConfig()
+            )
+
+        if not isinstance(text_to_speech_provider_config, FlowSpeechTextToSpeechConfig):
+            raise TypeError("FlowSpeech TTS configuration has an unexpected type")
+        flowspeech_config: Final = text_to_speech_provider_config
+
+        if api_base is not None:
+            litellm_params_dict["api_base"] = api_base
+        if api_key is not None:
+            litellm_params_dict["api_key"] = api_key
+
+        flowspeech_params: Final = TypeAdapter(Mapping[str, object]).validate_python(litellm_params_dict)
+        flowspeech_headers: Final = flowspeech_config.validate_environment(
+            TypeAdapter(object).validate_python(extra_headers or headers or MappingProxyType({})),
+            model,
+            flowspeech_params.get("api_key"),
+            api_base,
+        )
+        flowspeech_request: Final = flowspeech_config.transform_text_to_speech_request(
+            model=model,
+            input=input,
+            voice=voice if isinstance(voice, str) else None,
+            optional_params=TypeAdapter(Mapping[str, object]).validate_python(optional_params),
+            litellm_params=flowspeech_params,
+            headers=flowspeech_headers,
+        )
+        flowspeech_url: Final = flowspeech_config.get_complete_url(model, api_base, flowspeech_params)
+
+        def flowspeech_post_call(job: FlowSpeechJob) -> None:
+            logging_obj.post_call(  # pyright: ignore[reportUnknownMemberType]  # upstream logging callback has untyped parameters
+                input=input,
+                api_key="",
+                original_response=job.model_dump_json(include={"id", "requestId", "status", "usage"}),
+                additional_args=MappingProxyType({"request_id": job.requestId, "job_id": job.id}),
+            )
+
+        flowspeech_job: Final = FlowSpeechTTS(
+            url=flowspeech_url,
+            headers=MappingProxyType(
+                {
+                    **MappingProxyType(
+                        {key: value for key, value in flowspeech_headers.items() if key.lower() != "idempotency-key"}
+                    ),
+                    **TypeAdapter(Mapping[str, str]).validate_python(flowspeech_request.get("headers"), strict=True),
+                }
+            ),
+            body=TypeAdapter(Mapping[str, object]).validate_python(flowspeech_request.get("dict_body")),
+            timeout=http_timeout,
+            max_retries=max_retries,
+            on_completed=flowspeech_post_call,
+        )
+        logging_obj.pre_call(  # pyright: ignore[reportUnknownMemberType]  # upstream logging callback has untyped parameters
+            input=input,
+            api_key="",
+            additional_args=MappingProxyType({"api_base": flowspeech_url, "request_id": flowspeech_job.request_id}),
+        )
+        flowspeech_client: Final = TypeAdapter(object).validate_python(
+            client.client if isinstance(client, (HTTPHandler, AsyncHTTPHandler)) else client
+        )
+        if aspeech:
+            if flowspeech_client is not None and not isinstance(flowspeech_client, httpx.AsyncClient):
+                raise ValueError("FlowSpeech client must match the synchronous or asynchronous speech call")
+            response = flowspeech_job.arun(flowspeech_client)  # rebind-ok: provider branch sets dispatch result
+        else:
+            if flowspeech_client is not None and not isinstance(flowspeech_client, httpx.Client):
+                raise ValueError("FlowSpeech client must match the synchronous or asynchronous speech call")
+            response = flowspeech_job.run(flowspeech_client)  # rebind-ok: provider branch sets dispatch result
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         from litellm.llms.vertex_ai.text_to_speech.transformation import (
             VertexAILyriaTextToSpeechConfig,

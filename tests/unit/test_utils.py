@@ -4,6 +4,7 @@ import base64
 import copy
 import contextlib
 import contextvars
+import inspect
 import io
 import json
 import logging
@@ -22,6 +23,7 @@ import httpx
 import pytest
 import respx
 from jsonschema import Draft7Validator, validate
+from pydantic import ValidationError
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
@@ -6985,6 +6987,344 @@ class TestVerboseRequestLineRedaction:
     developer what they called."""
 
     FAKE_API_KEY: Final = "sk-fake-lit6823-0000000000000000"
+
+    @pytest.mark.parametrize("verbose", [False, True])
+    @pytest.mark.parametrize(
+        "args, kwargs",
+        [
+            (["synthetic-model", "SYNTHETIC-BOUNDARY-SECRET"], {"api_key": "SYNTHETIC-BOUNDARY-SECRET"}),
+            ("SYNTHETIC-BOUNDARY-SECRET", {"model": "synthetic-model"}),
+            (None, {"api_key": "SYNTHETIC-BOUNDARY-SECRET"}),
+            ((), [("api_key", "SYNTHETIC-BOUNDARY-SECRET")]),
+            ((), {123: "SYNTHETIC-BOUNDARY-SECRET"}),
+            ((), {b"api_key": "SYNTHETIC-BOUNDARY-SECRET"}),
+        ],
+    )
+    def test_malformed_request_containers_do_not_emit_or_raise(
+        self,
+        args: object,
+        kwargs: object,
+        verbose: bool,
+        caplog: pytest.LogCaptureFixture,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from litellm.utils import print_args_passed_to_litellm
+
+        monkeypatch.setattr(litellm, "set_verbose", verbose)
+        monkeypatch.setattr("litellm._logging.set_verbose", verbose)
+        with caplog.at_level(logging.DEBUG if not verbose else logging.WARNING, logger=verbose_logger.name):
+            print_args_passed_to_litellm(litellm.completion, args, kwargs)
+        captured: Final = capsys.readouterr()
+        output: Final = caplog.text + captured.out + captured.err
+        assert "litellm.completion(" not in output
+        assert "SYNTHETIC-BOUNDARY-SECRET" not in output
+
+    def test_disabled_logging_does_not_validate_or_emit_request_containers(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from litellm.utils import print_args_passed_to_litellm
+
+        adapter: Final = Mock(side_effect=RuntimeError("Disabled logging constructed a validator"))
+        monkeypatch.setattr(litellm, "set_verbose", False)
+        monkeypatch.setattr("litellm._logging.set_verbose", False)
+        with monkeypatch.context() as validation:
+            validation.setattr("litellm.utils.TypeAdapter", adapter)
+            with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+                print_args_passed_to_litellm(
+                    litellm.completion, (self.FAKE_API_KEY,), {"api_key": self.FAKE_API_KEY}
+                )
+        captured: Final = capsys.readouterr()
+        output: Final = caplog.text + captured.out + captured.err
+        assert adapter.call_count == 0
+        assert "litellm.completion(" not in output
+        assert self.FAKE_API_KEY not in output
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("asynchronous", [False, True])
+    @pytest.mark.parametrize("verbose", [False, True])
+    @pytest.mark.parametrize("stage", ["args", "kwargs"])
+    @pytest.mark.parametrize("error_type", [TypeError, ValueError, ValidationError])
+    async def test_shape_validation_failure_keeps_mock_operation_and_drops_error_details(
+        self,
+        asynchronous: bool,
+        verbose: bool,
+        stage: str,
+        error_type: type[Exception],
+        caplog: pytest.LogCaptureFixture,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from pydantic import TypeAdapter
+
+        rendered: Final = Mock()
+
+        class UnrenderedInput:
+            def __repr__(self) -> str:
+                rendered()
+                return "SYNTHETIC-INPUT-REPR"
+
+        signed_url: Final = "https://audio.example.test/result.wav?sig=SYNTHETIC-URL-SECRET"
+        diagnostic: Final = f"SYNTHETIC-INPUT-REPR {self.FAKE_API_KEY} {signed_url}"
+        unrendered: Final = UnrenderedInput()
+
+        def fail_validation(value: object, *, strict: bool) -> None:
+            assert strict is True
+            assert isinstance(value, tuple if stage == "args" else dict)
+            if error_type is ValidationError:
+                TypeAdapter(int).validate_python({"diagnostic": diagnostic, "input": unrendered}, strict=True)
+                pytest.fail("Expected a real Pydantic validation failure")
+            raise error_type(diagnostic, unrendered)
+
+        broken: Final = Mock()
+        broken.validate_python.side_effect = fail_validation
+
+        def adapter_factory(annotation: object) -> object:
+            if annotation == (tuple[object, ...] if stage == "args" else Mapping[str, object]):
+                return broken
+            return TypeAdapter(annotation)
+
+        monkeypatch.setattr(litellm, "set_verbose", verbose)
+        monkeypatch.setattr("litellm._logging.set_verbose", verbose)
+        with monkeypatch.context() as validation:
+            validation.setattr("litellm.utils.TypeAdapter", adapter_factory)
+            with caplog.at_level(logging.DEBUG if not verbose else logging.WARNING, logger=verbose_logger.name):
+                response: Final = (
+                    await litellm.acompletion(
+                        model="openai/synthetic-model",
+                        messages=[{"role": "user", "content": "synthetic input"}],
+                        api_key=self.FAKE_API_KEY,
+                        mock_response="synthetic output",
+                    )
+                    if asynchronous
+                    else litellm.completion(
+                        model="openai/synthetic-model",
+                        messages=[{"role": "user", "content": "synthetic input"}],
+                        api_key=self.FAKE_API_KEY,
+                        mock_response="synthetic output",
+                    )
+                )
+        captured: Final = capsys.readouterr()
+        output: Final = caplog.text + captured.out + captured.err
+        assert response.choices[0].message.content == "synthetic output"
+        assert broken.validate_python.call_count >= 1
+        assert rendered.call_count == 0
+        assert "Skipped malformed request debug logging" in output
+        assert self.FAKE_API_KEY not in output
+        assert signed_url not in output
+        assert "SYNTHETIC-INPUT-REPR" not in output
+        assert all(record.exc_info is None for record in caplog.records)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("asynchronous", [False, True])
+    async def test_disabled_wrapper_logging_does_not_construct_shape_validators(
+        self,
+        asynchronous: bool,
+        caplog: pytest.LogCaptureFixture,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from pydantic import TypeAdapter
+
+        constructed: Final = Mock()
+
+        def adapter_factory(annotation: object) -> object:
+            if annotation in (tuple[object, ...], Mapping[str, object]):
+                constructed(annotation)
+            return TypeAdapter(annotation)
+
+        monkeypatch.setattr(litellm, "set_verbose", False)
+        monkeypatch.setattr("litellm._logging.set_verbose", False)
+        with monkeypatch.context() as validation:
+            validation.setattr("litellm.utils.TypeAdapter", adapter_factory)
+            with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+                response: Final = (
+                    await litellm.acompletion(
+                        model="openai/synthetic-model",
+                        messages=[{"role": "user", "content": "synthetic input"}],
+                        api_key=self.FAKE_API_KEY,
+                        mock_response="synthetic output",
+                    )
+                    if asynchronous
+                    else litellm.completion(
+                        model="openai/synthetic-model",
+                        messages=[{"role": "user", "content": "synthetic input"}],
+                        api_key=self.FAKE_API_KEY,
+                        mock_response="synthetic output",
+                    )
+                )
+        captured: Final = capsys.readouterr()
+        output: Final = caplog.text + captured.out + captured.err
+        assert response.choices[0].message.content == "synthetic output"
+        assert constructed.call_count == 0
+        assert "Skipped malformed request debug logging" not in output
+        assert self.FAKE_API_KEY not in output
+
+    @pytest.mark.parametrize(
+        "function_name", ["speech", "aspeech", "embedding", "aembedding", "completion", "acompletion"]
+    )
+    @pytest.mark.parametrize("verbose", [False, True])
+    def test_positional_credentials_follow_public_signatures(
+        self,
+        function_name: str,
+        verbose: bool,
+        caplog: pytest.LogCaptureFixture,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from litellm.utils import print_args_passed_to_litellm
+
+        function: Final = getattr(litellm, function_name)
+        signature_name: Final = function_name[1:] if function_name in ("aspeech", "aembedding") else function_name
+        signature_function: Final = getattr(litellm, signature_name)
+        sentinel: Final = "SYNTHETIC-POSITIONAL-KEY-ONLY"
+        input_value: Final = "synthetic-input" if signature_name in ("speech", "embedding") else []
+        bound: Final = inspect.signature(signature_function).bind_partial(
+            "synthetic-model", input_value, api_key=sentinel
+        )
+        bound.apply_defaults()
+        args: Final = bound.args
+        monkeypatch.setattr(litellm, "set_verbose", verbose)
+        monkeypatch.setattr("litellm._logging.set_verbose", verbose)
+        with caplog.at_level(logging.DEBUG if not verbose else logging.WARNING, logger=verbose_logger.name):
+            print_args_passed_to_litellm(function, args, {"max_retries": 0})
+        captured: Final = capsys.readouterr()
+        output: Final = caplog.text + captured.out + captured.err
+        assert f"litellm.{function_name}(" in output
+        assert "synthetic-model" in output
+        assert "max_retries=0" in output
+        assert "REDACTED" in output
+        assert sentinel not in output
+        assert sentinel in args
+
+    @pytest.mark.parametrize("field", ["headers", "extra_headers"])
+    @pytest.mark.parametrize("malformed", ["synthetic-header-value", {b"synthetic-header-value": "unused"}])
+    def test_malformed_headers_do_not_reach_request_line(
+        self,
+        field: str,
+        malformed: object,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from litellm.utils import print_args_passed_to_litellm
+
+        with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
+            print_args_passed_to_litellm(litellm.completion, (), {"model": "synthetic-model", field: malformed})
+        assert "synthetic-header-value" not in caplog.text
+        assert f"{field}='REDACTED'" in caplog.text
+        assert "model='synthetic-model'" in caplog.text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("asynchronous", [False, True])
+    @pytest.mark.parametrize("positional", [False, True])
+    async def test_non_speech_mock_completion_preserves_result_and_context(
+        self,
+        asynchronous: bool,
+        positional: bool,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        function: Final = litellm.acompletion if asynchronous else litellm.completion
+        params: Final = {
+            "model": "openai/synthetic-model",
+            "messages": [{"role": "user", "content": "synthetic input"}],
+            "api_key": self.FAKE_API_KEY,
+            "temperature": 0.25,
+            "extra_headers": {"Authorization": self.FAKE_API_KEY, "X-Request-Id": "safe-correlation"},
+        }
+        bound: Final = inspect.signature(function).bind_partial(**params)
+        bound.apply_defaults()
+        args: Final = bound.args if positional else ()
+        kwargs: Final = bound.kwargs if positional else params
+        with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
+            response: Final = (
+                await litellm.acompletion(*args, **kwargs, mock_response="synthetic output")
+                if asynchronous
+                else litellm.completion(*args, **kwargs, mock_response="synthetic output")
+            )
+        assert response.choices[0].message.content == "synthetic output"
+        assert self.FAKE_API_KEY not in caplog.text
+        assert "safe-correlation" in caplog.text
+        assert "synthetic input" in caplog.text
+        assert "0.25" in caplog.text
+        assert params["api_key"] == self.FAKE_API_KEY
+        assert params["extra_headers"]["Authorization"] == self.FAKE_API_KEY
+
+    def test_unidentified_varargs_are_hidden_without_losing_keyword_context(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from litellm.utils import print_args_passed_to_litellm
+
+        def opaque(*args: object, **kwargs: object) -> None:
+            pass
+
+        with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
+            print_args_passed_to_litellm(opaque, (self.FAKE_API_KEY,), {"model": "synthetic-model"})
+        assert self.FAKE_API_KEY not in caplog.text
+        assert "litellm.opaque('REDACTED', model='synthetic-model')" in caplog.text
+
+    @pytest.mark.parametrize("async_prefix", [False, True])
+    def test_async_varargs_without_sync_signature_hide_credentials(
+        self,
+        async_prefix: bool,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from litellm.utils import print_args_passed_to_litellm
+
+        async def opaque_async(*args: object, **kwargs: object) -> None:
+            pass
+
+        async def aopaque(*args: object, **kwargs: object) -> None:
+            pass
+
+        function: Final = aopaque if async_prefix else opaque_async
+        with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
+            print_args_passed_to_litellm(function, (self.FAKE_API_KEY,), {"model": "synthetic-model"})
+        assert self.FAKE_API_KEY not in caplog.text
+        assert f"litellm.{function.__name__}('REDACTED', model='synthetic-model')" in caplog.text
+
+    @pytest.mark.parametrize("error_type", [TypeError, ValueError])
+    def test_unavailable_signature_hides_all_positional_values(
+        self,
+        error_type: type[Exception],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from litellm.utils import print_args_passed_to_litellm
+
+        class OpaqueCallable:
+            __name__ = "opaque"
+
+            @property
+            def __signature__(self) -> inspect.Signature:
+                raise error_type("signature unavailable")
+
+            def __call__(self, *args: object, **kwargs: object) -> None:
+                pass
+
+        with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
+            print_args_passed_to_litellm(
+                OpaqueCallable(), (self.FAKE_API_KEY, self.FAKE_API_KEY), {"model": "synthetic-model"}
+            )
+        assert self.FAKE_API_KEY not in caplog.text
+        assert "litellm.opaque('REDACTED', 'REDACTED', model='synthetic-model')" in caplog.text
+
+    def test_positional_only_and_surplus_arguments_are_sanitized(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from litellm.utils import print_args_passed_to_litellm
+
+        def endpoint(model: str, api_key: str, /, *, timeout: int = 10) -> None:
+            pass
+
+        with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
+            print_args_passed_to_litellm(
+                endpoint, ("synthetic-model", self.FAKE_API_KEY, self.FAKE_API_KEY), {"timeout": 2}
+            )
+        assert self.FAKE_API_KEY not in caplog.text
+        assert "litellm.endpoint('synthetic-model', 'REDACTED', 'REDACTED', timeout=2)" in caplog.text
 
     def _verbose_request_line(self, capsys, monkeypatch, **kwargs) -> str:
         monkeypatch.setattr(litellm, "set_verbose", True)

@@ -94,7 +94,11 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
-from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
+from litellm.litellm_core_utils.secret_redaction import REDACTED
+from litellm.litellm_core_utils.sensitive_data_masker import (
+    redact_credentials_in_payload,
+    redact_credentials_in_request,
+)
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
 from litellm.litellm_core_utils.tool_fields import MalformedField, resolve_deployment_tool_fields
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
@@ -1900,7 +1904,15 @@ def client(original_function):
             return result
 
         # Prints Exactly what was passed to litellm function - don't execute any logic here - it should just print
-        print_args_passed_to_litellm(original_function, args, kwargs)
+        if is_debugging_on():
+            try:
+                print_args_passed_to_litellm(
+                    original_function,
+                    TypeAdapter(tuple[object, ...]).validate_python(args, strict=True),
+                    TypeAdapter(Mapping[str, object]).validate_python(kwargs, strict=True),
+                )
+            except (TypeError, ValueError):
+                print_verbose("Skipped malformed request debug logging")
         start_time: Final = datetime.datetime.now()
         result = None
         logging_obj: LiteLLMLoggingObject | None = kwargs.get("litellm_logging_obj", None)
@@ -2169,7 +2181,15 @@ def client(original_function):
 
     @wraps(original_function)
     async def wrapper_async(*args, **kwargs):
-        print_args_passed_to_litellm(original_function, args, kwargs)
+        if is_debugging_on():
+            try:
+                print_args_passed_to_litellm(
+                    original_function,
+                    TypeAdapter(tuple[object, ...]).validate_python(args, strict=True),
+                    TypeAdapter(Mapping[str, object]).validate_python(kwargs, strict=True),
+                )
+            except (TypeError, ValueError):
+                print_verbose("Skipped malformed request debug logging")
         start_time: Final = datetime.datetime.now()
         call_type: Final = _get_call_type_from_public_name(original_function.__name__)
         result = None
@@ -8532,28 +8552,63 @@ def get_valid_models(
         return []  # NON-Blocking
 
 
-def print_args_passed_to_litellm(original_function, args, kwargs):
+def _positional_request_parameter_names(original_function: Callable[..., object]) -> tuple[str, ...]:
+    parameters: Final = inspect.signature(original_function).parameters.values()
+    return tuple(
+        parameter.name
+        for parameter in parameters
+        if parameter.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    )
+
+
+def _request_logging_parameters(original_function: Callable[..., object]) -> tuple[str, ...]:
+    positional: Final = _positional_request_parameter_names(original_function)
+    if positional or not inspect.iscoroutinefunction(original_function):
+        return positional
+    if original_function.__name__.startswith("a"):
+        synchronous: Final = getattr(inspect.getmodule(original_function), original_function.__name__[1:], None)
+        if callable(synchronous) and not inspect.iscoroutinefunction(synchronous):
+            return _positional_request_parameter_names(synchronous)
+    return ()
+
+
+def _redact_positional_request_args(
+    original_function: Callable[..., object], args: tuple[object, ...]
+) -> tuple[object, ...]:
+    if not args:
+        return ()
+    try:
+        names: Final = _request_logging_parameters(original_function)
+    except (TypeError, ValueError):
+        return (REDACTED,) * len(args)
+    redacted: Final = redact_credentials_in_request(dict(zip(names, args)))
+    return tuple(redacted[name] for name in names[: len(args)]) + (REDACTED,) * max(0, len(args) - len(names))
+
+
+def print_args_passed_to_litellm(original_function: Callable[..., object], args: object, kwargs: object) -> None:
     if not is_debugging_on():
         return
     try:
+        request_args: Final = TypeAdapter(tuple[object, ...]).validate_python(args, strict=True)
+        request_kwargs: Final = TypeAdapter(Mapping[str, object]).validate_python(kwargs, strict=True)
         # we've already printed this for acompletion, don't print for completion
         if (
-            "acompletion" in kwargs
-            and kwargs["acompletion"] is True
+            "acompletion" in request_kwargs
+            and request_kwargs["acompletion"] is True
             and original_function.__name__ == "completion"
-            or "aembedding" in kwargs
-            and kwargs["aembedding"] is True
+            or "aembedding" in request_kwargs
+            and request_kwargs["aembedding"] is True
             and original_function.__name__ == "embedding"
             or (
-                "aimg_generation" in kwargs
-                and kwargs["aimg_generation"] is True
+                "aimg_generation" in request_kwargs
+                and request_kwargs["aimg_generation"] is True
                 and original_function.__name__ == "img_generation"
             )
         ):
             return
 
-        args_str: Final = ", ".join(map(repr, args))
-        redacted_kwargs: Final = redact_credentials_in_payload(kwargs)
+        args_str: Final = ", ".join(map(repr, _redact_positional_request_args(original_function, request_args)))
+        redacted_kwargs: Final = redact_credentials_in_request(request_kwargs)
         kwargs_str: Final = ", ".join(f"{key}={value!r}" for key, value in redacted_kwargs.items())
         print_verbose(
             "\n",
@@ -8561,11 +8616,11 @@ def print_args_passed_to_litellm(original_function, args, kwargs):
         print_verbose(
             "\033[92mRequest to litellm:\033[0m",
         )
-        if args and kwargs:
+        if request_args and request_kwargs:
             print_verbose(f"\033[92mlitellm.{original_function.__name__}({args_str}, {kwargs_str})\033[0m")
-        elif args:
+        elif request_args:
             print_verbose(f"\033[92mlitellm.{original_function.__name__}({args_str})\033[0m")
-        elif kwargs:
+        elif request_kwargs:
             print_verbose(f"\033[92mlitellm.{original_function.__name__}({kwargs_str})\033[0m")
         else:
             print_verbose(f"\033[92mlitellm.{original_function.__name__}()\033[0m")
@@ -10752,6 +10807,12 @@ class ProviderConfigManager:
             )
 
             return ElevenLabsTextToSpeechConfig()
+        elif litellm.LlmProviders.FLOWSPEECH == provider:
+            from litellm.llms.flowspeech.text_to_speech.transformation import (
+                FlowSpeechTextToSpeechConfig,
+            )
+
+            return FlowSpeechTextToSpeechConfig()
         elif litellm.LlmProviders.RUNWAYML == provider:
             from litellm.llms.runwayml.text_to_speech.transformation import (
                 RunwayMLTextToSpeechConfig,

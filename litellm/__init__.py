@@ -674,6 +674,7 @@ nebius_embedding_models: Set = set()
 aiml_models: Set = set()
 deepgram_models: Set = set()
 elevenlabs_models: Set = set()
+flowspeech_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 dashscope_models: Set = set()
 qwencloud_models: Set = set()
 qwen_ai_platform_models: Set = set()
@@ -950,6 +951,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             deepgram_models.add(key)
         elif value.get("litellm_provider") == "elevenlabs":
             elevenlabs_models.add(key)
+        elif value.get("litellm_provider") == "flowspeech":
+            flowspeech_models.add(key)
         elif value.get("litellm_provider") == "heroku":
             heroku_models.add(key)
         elif value.get("litellm_provider") == "dashscope":
@@ -1132,6 +1135,7 @@ model_list = list(
     | nscale_models
     | deepgram_models
     | elevenlabs_models
+    | flowspeech_models
     | dashscope_models
     | qwencloud_models
     | qwen_ai_platform_models
@@ -1248,6 +1252,7 @@ def _build_models_by_provider() -> dict:
         "featherless_ai": featherless_ai_models,
         "deepgram": deepgram_models,
         "elevenlabs": elevenlabs_models,
+        "flowspeech": flowspeech_models,
         "heroku": heroku_models,
         "dashscope": dashscope_models,
         "qwencloud": qwencloud_models,

@@ -560,6 +560,24 @@ def test_every_backend_provider_is_listed_in_add_model_or_frozen_as_unlisted():
     )
 
 
+def test_flowspeech_provider_fields_support_configured_credentials():
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    entry = next(p for p in response.json() if p["litellm_provider"] == "flowspeech")
+    fields = {field["key"]: field for field in entry["credential_fields"]}
+    assert entry["provider_display_name"] == "FlowSpeech"
+    assert entry["default_model_placeholder"] in litellm.models_by_provider["flowspeech"]
+    assert fields["api_key"]["required"] is True
+    assert fields["api_key"]["field_type"] == "password"
+    assert fields["api_base"]["required"] is False
+    assert fields["api_base"]["field_type"] == "text"
+    assert fields["api_base"]["placeholder"] == "https://flowspeech.io"
+
+
 def test_google_ai_studio_provider_fields_expose_api_base():
     """The Google AI Studio (gemini) credential form must let admins set a custom
     api_base so they can point at a Gemini-compatible gateway (e.g. a self-hosted

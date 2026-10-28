@@ -3,7 +3,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from typing import Any, Final
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
 from litellm.litellm_core_utils.secret_redaction import REDACTED
@@ -253,6 +253,51 @@ def mask_sensitive_keys(data: Mapping[str, object], sensitive_fields: set[str]) 
         else:
             masked[key] = value
     return masked
+
+
+_REQUEST_LOG_HEADER_NAMES: Final = frozenset(
+    (
+        "accept",
+        "accept-encoding",
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "set-cookie",
+        "api-key",
+        "x-api-key",
+        "x-goog-api-key",
+        "content-type",
+        "content-length",
+        "user-agent",
+        "idempotency-key",
+        "x-request-id",
+        "x-correlation-id",
+    )
+)
+_REQUEST_LOG_HEADER_ADAPTER: Final = TypeAdapter(Mapping[object, object])
+
+
+def _redact_request_headers(value: object) -> object:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        return REDACTED
+    headers: Final = _REQUEST_LOG_HEADER_ADAPTER.validate_python(value)
+    if any(
+        not isinstance(name, str) or name.lower() not in _REQUEST_LOG_HEADER_NAMES or not isinstance(item, str)
+        for name, item in headers.items()
+    ):
+        return REDACTED
+    return headers
+
+
+def redact_credentials_in_request(data: Mapping[str, object]) -> Mapping[str, object]:
+    return redact_credentials_in_payload(
+        {
+            key: _redact_request_headers(value) if key in ("headers", "extra_headers") else value
+            for key, value in data.items()
+        }
+    )
 
 
 def redact_credentials_in_payload(data: Mapping[str, object]) -> Mapping[str, object]:
