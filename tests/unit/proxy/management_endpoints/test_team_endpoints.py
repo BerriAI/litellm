@@ -17754,6 +17754,14 @@ def test_team_admin_cannot_add_an_entry_that_takes_precedence_over_a_cap(
             _TEAM_OPUS_FAMILY_CAP,
             {**_TEAM_OPUS_FAMILY_CAP, "gemini-3-pro*": {"max_budget": 1000.0, "budget_duration": "1d"}},
         ),
+        (
+            {**_TEAM_OPUS_FAMILY_CAP, "gpt-4o": {"max_budget": 10.0}},
+            {**_TEAM_OPUS_FAMILY_CAP, "gpt-4o": {"max_budget": 10.0, "budget_duration": "1d"}},
+        ),
+        (
+            {"z-anthropic-group": {"max_budget": 10.0}},
+            {"z-anthropic-group": {"max_budget": 10.0, "budget_duration": "1d"}},
+        ),
     ],
     ids=[
         "less_specific_pattern",
@@ -17767,6 +17775,8 @@ def test_team_admin_cannot_add_an_entry_that_takes_precedence_over_a_cap(
         "uncapped_entry_edited",
         "enforced_uncapped_entry_capped",
         "pattern_sharing_only_a_wildcard_route",
+        "unenforced_capped_model_given_a_duration",
+        "unenforced_capped_wildcard_group_given_a_duration",
     ],
 )
 def test_team_admin_can_keep_or_tighten_entries_and_add_ones_that_outrank_no_cap(
