@@ -10,7 +10,7 @@ from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
 )
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
@@ -119,8 +119,8 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         # Manus API uses /v1/responses endpoint (OpenAI-compatible)
         if api_base.endswith("/v1"):
-            return f"{api_base}/responses"
-        return f"{api_base}/v1/responses"
+            return join_api_base(api_base, "responses")
+        return join_api_base(api_base, "v1/responses")
 
     def transform_responses_api_request(
         self,

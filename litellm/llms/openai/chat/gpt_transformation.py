@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     convert_url_to_base64,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -285,7 +286,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         self,
         content_item: OpenAIMessageContentListBlock,
     ) -> OpenAIMessageContentListBlock:
-        litellm_specific_params: Final = {"format"}
+        litellm_specific_params: Final = {"format", "detail", "video_metadata"}
         if content_item.get("type") == "image_url":
             content_item = cast(ChatCompletionImageObject, content_item)
             if isinstance(content_item["image_url"], str):
@@ -293,8 +294,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                     "url": content_item["image_url"],
                 }
             elif isinstance(content_item["image_url"], dict):
-                new_image_url_obj: Final = ChatCompletionImageUrlObject(
-                    **{k: v for k, v in content_item["image_url"].items() if k not in litellm_specific_params}
+                new_image_url_obj: Final = cast(
+                    ChatCompletionImageUrlObject,
+                    {k: v for k, v in content_item["image_url"].items() if k not in {"format", "video_metadata"}},
                 )
                 content_item["image_url"] = new_image_url_obj
         elif content_item.get("type") == "file":
@@ -807,7 +809,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         if endpoint in api_base:
             return api_base
 
-        return f"{api_base}/{endpoint}"
+        return join_api_base(api_base, endpoint)
 
     def validate_environment(
         self,

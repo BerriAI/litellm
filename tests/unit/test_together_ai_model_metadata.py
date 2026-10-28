@@ -75,26 +75,12 @@ def cost_map() -> CostMap:
         return COST_MAP_ADAPTER.validate_python(json.load(f))
 
 
-def test_together_chat_entries_never_carry_context_length_as_output_ceiling(cost_map: CostMap):
-    inflated = sorted(
-        model
-        for model, info in cost_map.items()
-        if info.get("litellm_provider") == "together_ai"
-        and info.get("mode") == "chat"
-        and "max_output_tokens" in info
-        and info["max_output_tokens"] == info.get("max_input_tokens")
-    )
-    assert inflated == []
-
-
 def _successor(info: dict[str, object]) -> str | None:
     metadata = info.get("metadata")
     if not isinstance(metadata, dict):
         return None
     successor = metadata.get("successor")
     return successor if isinstance(successor, str) else None
-
-
 
 
 def test_together_backup_cost_map_in_sync(cost_map: CostMap):

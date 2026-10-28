@@ -71,6 +71,7 @@ from litellm.constants import (
     DEFAULT_TRIM_RATIO,
     FUNCTION_DEFINITION_TOKEN_COUNT,
     HF_CONFIG_FETCH_TIMEOUT_SECONDS,
+    HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,
     INITIAL_RETRY_DELAY,
     JITTER,
     MAX_RETRY_DELAY,
@@ -92,6 +93,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 )
 from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
+from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
 from litellm.litellm_core_utils.tool_fields import MalformedField, resolve_deployment_tool_fields
@@ -217,6 +219,7 @@ def _get_cached_audio_utils():
     return _audio_utils_module
 
 
+from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper as _TextCompletionStreamWrapper
 from litellm.types.llms.openai import (
     AllMessageValues,
     AllPromptValues,
@@ -261,12 +264,16 @@ from litellm.types.utils import (
     SearchProviders,
     SelectTokenizerResponse,
     StreamingChoices,
-    TextChoices,
-    TextCompletionResponse,
     TranscriptionResponse,
     Usage,
     credential_api_key_secret_reference,
     is_litellm_owned_kwarg,
+)
+from litellm.types.utils import (
+    TextChoices as _TextChoices,
+)
+from litellm.types.utils import (
+    TextCompletionResponse as _TextCompletionResponse,
 )
 
 _CALL_TYPE_ENUM_MAP: Final[dict] = {ct.value: ct for ct in CallTypes}
@@ -298,9 +305,13 @@ except (ImportError, AttributeError, TypeError):
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
 from collections.abc import AsyncIterator, Callable, Collection, Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
 
 from typing_extensions import assert_never
+
+TextChoices: TypeAlias = _TextChoices
+TextCompletionResponse: TypeAlias = _TextCompletionResponse
+TextCompletionStreamWrapper: TypeAlias = _TextCompletionStreamWrapper
 
 from litellm import utils as litellm_utils
 
@@ -339,7 +350,8 @@ if TYPE_CHECKING:
 
     # Type stubs for lazy-loaded functions to help mypy understand their types
     # These imports allow mypy to understand the types when these are accessed via __getattr__
-    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+    exception_type: Callable[..., Exception]
+
     from litellm.litellm_core_utils.get_litellm_params import (
         get_base_model_from_litellm_call_metadata,
         get_litellm_params,
@@ -859,6 +871,11 @@ def _is_gemini_model(model: str | None, custom_llm_provider: str | None) -> bool
     return model is not None and "gemini" in model.lower()
 
 
+def is_gemini_tts_model(model: str) -> bool:
+    model_name: Final = model.lower()
+    return "gemini" in model_name and "tts" in model_name
+
+
 def _remove_thought_signature_from_id(tool_call_id: str, separator: str) -> str:
     """
     Remove thought signature from a tool call ID.
@@ -1125,83 +1142,90 @@ def function_setup(
         dynamic_callbacks: Final[list[str | Callable | CustomLogger] | None] = kwargs.pop("callbacks", None)
         all_callbacks: Final = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
-        if len(all_callbacks) > 0:
-            for callback in all_callbacks:
-                # check if callback is a string - e.g. "lago", "openmeter"
-                if isinstance(callback, str):
-                    callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
-                        callback,
-                        internal_usage_cache=None,
-                        llm_router=None,
-                    )
-                    if callback is None or any(
-                        type(cb) is type(callback) for cb in litellm._async_success_callback
-                    ):  # don't double add a callback
-                        continue
-                if callback not in litellm.input_callback:
-                    litellm.input_callback.append(callback)
-                if callback not in litellm.success_callback:
-                    litellm.logging_callback_manager.add_litellm_success_callback(callback)
-                if callback not in litellm.failure_callback:
-                    litellm.logging_callback_manager.add_litellm_failure_callback(callback)
-                if callback not in litellm._async_success_callback:
-                    litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
-                if callback not in litellm._async_failure_callback:
-                    litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)
-            print_verbose(f"Initialized litellm callbacks, Async Success Callbacks: {litellm._async_success_callback}")
+        with litellm.logging_callback_manager.callback_lists_lock:
+            if len(all_callbacks) > 0:
+                for callback in all_callbacks:
+                    # check if callback is a string - e.g. "lago", "openmeter"
+                    if isinstance(callback, str):
+                        callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
+                            callback,
+                            internal_usage_cache=None,
+                            llm_router=None,
+                        )
+                        if callback is None or any(
+                            type(cb) is type(callback) for cb in litellm._async_success_callback
+                        ):  # don't double add a callback
+                            continue
+                    if callback not in litellm.input_callback:
+                        litellm.input_callback.append(callback)
+                    if callback not in litellm.success_callback:
+                        litellm.logging_callback_manager.add_litellm_success_callback(callback)
+                    if callback not in litellm.failure_callback:
+                        litellm.logging_callback_manager.add_litellm_failure_callback(callback)
+                    if callback not in litellm._async_success_callback:
+                        litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
+                    if callback not in litellm._async_failure_callback:
+                        litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)
+                print_verbose(
+                    f"Initialized litellm callbacks, Async Success Callbacks: {litellm._async_success_callback}"
+                )
 
-        if (
-            len(litellm.input_callback) > 0 or len(litellm.success_callback) > 0 or len(litellm.failure_callback) > 0
-        ) and len(callback_list) == 0:
-            callback_list = list(set(litellm.input_callback + litellm.success_callback + litellm.failure_callback))
+            callbacks_to_set_up: Final = (
+                list(set(litellm.input_callback + litellm.success_callback + litellm.failure_callback))
+                if len(callback_list) == 0
+                else []
+            )
+            if callbacks_to_set_up:
+                callback_list = callbacks_to_set_up
+            ## ASYNC CALLBACKS - safety net for callbacks added via direct append
+            if len(litellm.input_callback) > 0:
+                removed_async_items = []
+                for index, callback in enumerate(litellm.input_callback):
+                    if coroutine_checker.is_async_callable(callback):
+                        litellm._async_input_callback.append(callback)
+                        removed_async_items.append(index)
+
+                # Pop the async items from input_callback in reverse order to avoid index issues
+                for index in reversed(removed_async_items):
+                    litellm.input_callback.pop(index)
+            if len(litellm.success_callback) > 0:
+                removed_async_items = []
+                for index, callback in enumerate(litellm.success_callback):
+                    if coroutine_checker.is_async_callable(callback):
+                        litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
+                        removed_async_items.append(index)
+                    elif callback == "dynamodb" or callback == "openmeter":
+                        # dynamo is an async callback, it's used for the proxy and needs to be async
+                        # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
+                        litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
+                        removed_async_items.append(index)
+                    elif callback in litellm._known_custom_logger_compatible_callbacks and isinstance(callback, str):
+                        add_custom_logger_callback_to_specific_event(callback, "success")
+
+                # Pop the async items from success_callback in reverse order to avoid index issues
+                for index in reversed(removed_async_items):
+                    litellm.success_callback.pop(index)
+
+            if len(litellm.failure_callback) > 0:
+                removed_async_items = []
+                for index, callback in enumerate(litellm.failure_callback):
+                    if coroutine_checker.is_async_callable(callback):
+                        litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)
+                        removed_async_items.append(index)
+                    elif callback in litellm._known_custom_logger_compatible_callbacks and isinstance(callback, str):
+                        add_custom_logger_callback_to_specific_event(callback, "failure")
+
+                # Pop the async items from failure_callback in reverse order to avoid index issues
+                for index in reversed(removed_async_items):
+                    litellm.failure_callback.pop(index)
+        if callbacks_to_set_up:
             get_set_callbacks: Final[Callable[[], Callable[..., None]]] = litellm_utils.get_set_callbacks
-            get_set_callbacks()(callback_list=callback_list, function_id=function_id)
-        ## ASYNC CALLBACKS - safety net for callbacks added via direct append
-        if len(litellm.input_callback) > 0:
-            removed_async_items = []
-            for index, callback in enumerate(litellm.input_callback):
-                if coroutine_checker.is_async_callable(callback):
-                    litellm._async_input_callback.append(callback)
-                    removed_async_items.append(index)
-
-            # Pop the async items from input_callback in reverse order to avoid index issues
-            for index in reversed(removed_async_items):
-                litellm.input_callback.pop(index)
-        if len(litellm.success_callback) > 0:
-            removed_async_items = []
-            for index, callback in enumerate(litellm.success_callback):
-                if coroutine_checker.is_async_callable(callback):
-                    litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
-                    removed_async_items.append(index)
-                elif callback == "dynamodb" or callback == "openmeter":
-                    # dynamo is an async callback, it's used for the proxy and needs to be async
-                    # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
-                    litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
-                    removed_async_items.append(index)
-                elif callback in litellm._known_custom_logger_compatible_callbacks and isinstance(callback, str):
-                    add_custom_logger_callback_to_specific_event(callback, "success")
-
-            # Pop the async items from success_callback in reverse order to avoid index issues
-            for index in reversed(removed_async_items):
-                litellm.success_callback.pop(index)
-
-        if len(litellm.failure_callback) > 0:
-            removed_async_items = []
-            for index, callback in enumerate(litellm.failure_callback):
-                if coroutine_checker.is_async_callable(callback):
-                    litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)
-                    removed_async_items.append(index)
-                elif callback in litellm._known_custom_logger_compatible_callbacks and isinstance(callback, str):
-                    add_custom_logger_callback_to_specific_event(callback, "failure")
-
-            # Pop the async items from failure_callback in reverse order to avoid index issues
-            for index in reversed(removed_async_items):
-                litellm.failure_callback.pop(index)
+            get_set_callbacks()(callback_list=callbacks_to_set_up, function_id=function_id)
         ### DYNAMIC CALLBACKS ###
-        dynamic_success_callbacks: list[str | Callable | CustomLogger] | None = None
-        dynamic_async_success_callbacks: list[str | Callable | CustomLogger] | None = None
-        dynamic_failure_callbacks: list[str | Callable | CustomLogger] | None = None
-        dynamic_async_failure_callbacks: Final[list[str | Callable | CustomLogger] | None] = None
+        dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None
+        dynamic_async_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None
+        dynamic_failure_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None
+        dynamic_async_failure_callbacks: Final[list[str | Callable[..., object] | CustomLogger] | None] = None
         if kwargs.get("success_callback", None) is not None and isinstance(kwargs["success_callback"], list):
             removed_async_items = []
             for index, callback in enumerate(kwargs["success_callback"]):
@@ -1617,7 +1641,7 @@ def _deployment_provider(kwargs: Mapping[str, object]) -> str:
         return ""
 
 
-async def async_pre_call_deployment_hook(kwargs: dict[str, Any], call_type: str) -> dict[str, Any]:
+async def async_pre_call_deployment_hook(kwargs: Mapping[str, object], call_type: str) -> dict[str, Any]:
     """
     Allow modifying the request just before it's sent to the deployment.
 
@@ -2597,19 +2621,14 @@ def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
 
     try:
         result: Final = _return_huggingface_tokenizer(model)
-        if result is not None:
+        if result is not None and not isinstance(result, _HuggingFaceTokenizerLoadFailure):
             return result
     except Exception as e:
         from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted, ProcessReservedForForking
 
         if isinstance(e, (ForkedAfterNativeRuntimeStarted, ProcessReservedForForking)):
             raise
-        verbose_logger.warning(
-            "Falling back to tiktoken for %s; token counts may be approximate. "
-            "For Python Hugging Face tokenization, install tokenizers and huggingface-hub. Error: %s",
-            json.dumps(redact_secrets(model)),
-            json.dumps(redact_secrets(str(e))),
-        )
+        _warn_huggingface_tokenizer_fallback(model, str(e))
 
     # default - tiktoken
     return _return_openai_tokenizer(model)
@@ -2649,13 +2668,39 @@ def huggingface_tokenizer_kind(model: str) -> HuggingFaceTokenizerKind | None:
     return None
 
 
-def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | None:
+@dataclass(frozen=True, slots=True)
+class _HuggingFaceTokenizerLoadFailure:
+    reason: str
+
+
+def _warn_huggingface_tokenizer_fallback(model: str, reason: str) -> None:
+    verbose_logger.warning(
+        "Falling back to tiktoken for %s; token counts may be approximate. "
+        "For Python Hugging Face tokenization, install tokenizers and huggingface-hub. Error: %s",
+        json.dumps(redact_secrets(model)),
+        json.dumps(redact_secrets(reason)),
+    )
+
+
+def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | _HuggingFaceTokenizerLoadFailure | None:
     kind: Final = huggingface_tokenizer_kind(model)
-    if kind is None:
+    if kind is None or (kind not in _BUNDLED_TOKENIZER_LOAD_LOCKS and is_offline_mode()):
         return None
+    backend: Final = _huggingface_tokenizer_backend()
+    key: Final = _huggingface_tokenizer_failure_key(kind, backend)
     with _BUNDLED_TOKENIZER_LOAD_LOCKS.get(kind, nullcontext()):
-        tokenizer: Final = _load_huggingface_tokenizer(kind, _huggingface_tokenizer_backend())
+        cached_failure: Final = _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.get_cache(key)
+        if isinstance(cached_failure, _HuggingFaceTokenizerLoadFailure):
+            return cached_failure
+        tokenizer: Final = _load_huggingface_tokenizer_recording_failure(kind, backend, key)
+    if isinstance(tokenizer, _HuggingFaceTokenizerLoadFailure):
+        _warn_huggingface_tokenizer_fallback(model, tokenizer.reason)
+        return tokenizer
     return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+
+
+def _huggingface_tokenizer_failure_key(kind: HuggingFaceTokenizerKind, backend: Decision) -> str:
+    return f"{kind}:{backend.name}"
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
@@ -2678,6 +2723,21 @@ def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind, backend: Decisio
             return tokenizer_dispatch.from_pretrained("Xenova/llama-3-tokenizer")
         case _:
             assert_never(kind)
+
+
+def _load_huggingface_tokenizer_recording_failure(
+    kind: HuggingFaceTokenizerKind, backend: Decision, key: str
+) -> HuggingFace | _HuggingFaceTokenizerLoadFailure:
+    try:
+        return _load_huggingface_tokenizer(kind, backend)
+    except Exception as error:
+        from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted, ProcessReservedForForking
+
+        if isinstance(error, (ForkedAfterNativeRuntimeStarted, ProcessReservedForForking)):
+            raise
+        failure: Final = _HuggingFaceTokenizerLoadFailure(reason=str(error))
+        _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.set_cache(key, failure, ttl=HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS)
+        return failure
 
 
 def encode(model="", text="", custom_tokenizer: dict | None = None):
@@ -2904,12 +2964,14 @@ def supports_native_streaming(model: str, custom_llm_provider: str | None) -> bo
     Raises:
     Exception: If the given model is not found in model_prices_and_context_window.json.
     """
+    from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
+
     try:
-        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+        resolved_model, resolved_provider = resolve_model_and_provider_for_metadata(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-        model_info: Final = get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        model_info: Final = get_model_info_helper(model=resolved_model, custom_llm_provider=resolved_provider)
         supports_native_streaming = model_info.get("supports_native_streaming", True)
         if supports_native_streaming is None:
             supports_native_streaming = True
@@ -4227,7 +4289,7 @@ def get_optional_params_embeddings(
 
     # retrieve all parameters passed to the function
     passed_params: Final = locals()
-    custom_llm_provider = passed_params.pop("custom_llm_provider", None)
+    passed_params.pop("custom_llm_provider", None)
     special_params: Final = passed_params.pop("kwargs")
 
     passed_params.pop("drop_params", None)
@@ -4265,7 +4327,7 @@ def get_optional_params_embeddings(
     provider_config: BaseEmbeddingConfig | None = None
 
     optional_params = {}
-    if custom_llm_provider is not None and custom_llm_provider in LlmProviders._member_map_.values():
+    if custom_llm_provider in LlmProviders._member_map_.values():
         provider_config = ProviderConfigManager.get_provider_embedding_config(
             model=model,
             provider=LlmProviders(custom_llm_provider),
@@ -6017,11 +6079,8 @@ def get_max_tokens(model: str) -> int | None:
             return None
 
     try:
-        if model in litellm.model_cost:
-            if "max_output_tokens" in litellm.model_cost[model]:
-                return litellm.model_cost[model]["max_output_tokens"]
-            elif "max_tokens" in litellm.model_cost[model]:
-                return litellm.model_cost[model]["max_tokens"]
+        if model in litellm.model_cost and "max_output_tokens" in litellm.model_cost[model]:
+            return litellm.model_cost[model]["max_output_tokens"]
         get_llm_provider: Final = litellm_utils.get_llm_provider
         model, custom_llm_provider, _, _ = get_llm_provider(model=model)
         if custom_llm_provider == "huggingface":
@@ -6030,8 +6089,6 @@ def get_max_tokens(model: str) -> int | None:
         if model in litellm.model_cost:  # check if extracted model is in model_list
             if "max_output_tokens" in litellm.model_cost[model]:
                 return litellm.model_cost[model]["max_output_tokens"]
-            elif "max_tokens" in litellm.model_cost[model]:
-                return litellm.model_cost[model]["max_tokens"]
         else:
             raise Exception()
         return None
@@ -6680,7 +6737,7 @@ def get_model_info_helper(
 
             returned_model_info: Final = ModelInfoBase(
                 key=key,
-                max_tokens=_model_info.get("max_tokens", None),
+                max_tokens=_model_info.get("max_output_tokens") or _model_info.get("max_input_tokens"),
                 max_input_tokens=_model_info.get("max_input_tokens", None),
                 max_output_tokens=_model_info.get("max_output_tokens", None),
                 input_cost_per_token=_input_cost_per_token,
@@ -6713,6 +6770,13 @@ def get_model_info_helper(
                 ),
                 cache_read_input_token_cost=_model_info.get("cache_read_input_token_cost", None),
                 cache_read_input_audio_token_cost=_model_info.get("cache_read_input_audio_token_cost", None),
+                cache_read_input_audio_token_cost_flex=_model_info.get("cache_read_input_audio_token_cost_flex", None),
+                cache_read_input_audio_token_cost_priority=_model_info.get(
+                    "cache_read_input_audio_token_cost_priority", None
+                ),
+                cache_read_input_audio_token_cost_batches=_model_info.get(
+                    "cache_read_input_audio_token_cost_batches", None
+                ),
                 explicit_cache_read_input_token_cost=_model_info.get("explicit_cache_read_input_token_cost", None),
                 prompt_cache_min_tokens=_model_info.get("prompt_cache_min_tokens", None),
                 cache_read_input_token_cost_above_200k_tokens=_model_info.get(
@@ -6757,6 +6821,36 @@ def get_model_info_helper(
                 cache_creation_input_token_cost_above_1hr=_model_info.get(
                     "cache_creation_input_token_cost_above_1hr", None
                 ),
+                cache_creation_input_token_cost_above_12hr=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr", None
+                ),
+                cache_creation_input_token_cost_above_12hr_flex=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_flex", None
+                ),
+                cache_creation_input_token_cost_above_12hr_priority=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_priority", None
+                ),
+                cache_creation_input_token_cost_above_12hr_above_272k_tokens=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_above_272k_tokens", None
+                ),
+                cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex", None
+                ),
+                cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority", None
+                ),
+                cache_creation_input_token_cost_above_12hr_batches=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_batches", None
+                ),
+                cache_creation_input_token_cost_above_12hr_ultrafast=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_ultrafast", None
+                ),
+                cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches", None
+                ),
+                cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast", None
+                ),
                 off_peak_pricing=_model_info.get("off_peak_pricing", None),
                 input_cost_per_character=_model_info.get("input_cost_per_character", None),
                 input_cost_per_token_above_128k_tokens=_model_info.get("input_cost_per_token_above_128k_tokens", None),
@@ -6780,6 +6874,8 @@ def get_model_info_helper(
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
                 input_cost_per_text_message=_model_info.get("input_cost_per_text_message", None),
                 input_cost_per_audio_token=_model_info.get("input_cost_per_audio_token", None),
+                input_cost_per_audio_token_flex=_model_info.get("input_cost_per_audio_token_flex", None),
+                input_cost_per_audio_token_priority=_model_info.get("input_cost_per_audio_token_priority", None),
                 input_cost_per_image_token=_model_info.get("input_cost_per_image_token", None),
                 input_cost_per_video_token=_model_info.get("input_cost_per_video_token", None),
                 input_cost_per_audio_token_batches=_model_info.get("input_cost_per_audio_token_batches", None),
@@ -7896,84 +7992,6 @@ def register_prompt_template(
     return litellm.custom_prompt_dict
 
 
-class TextCompletionStreamWrapper:
-    def __init__(
-        self,
-        completion_stream,
-        model,
-        stream_options: dict | None = None,
-        custom_llm_provider: str | None = None,
-    ):
-        self.completion_stream = completion_stream
-        self.model = model
-        self.stream_options = stream_options
-        self.custom_llm_provider = custom_llm_provider
-
-    def __iter__(self):
-        return self
-
-    def __aiter__(self):
-        return self
-
-    def convert_to_text_completion_object(self, chunk: ModelResponse):
-        try:
-            response: Final = TextCompletionResponse()
-            response["id"] = chunk.get("id", None)
-            response["object"] = "text_completion"
-            response["created"] = chunk.get("created", None)
-            response["model"] = chunk.get("model", None)
-            text_choices: Final = TextChoices()
-            if isinstance(chunk, Choices):  # chunk should always be of type StreamingChoices
-                raise Exception
-            delta: Final = chunk["choices"][0]["delta"]
-            text_choices["text"] = delta["content"]
-            text_choices["reasoning_content"] = delta.get("reasoning_content")
-            text_choices["index"] = chunk["choices"][0]["index"]
-            text_choices["finish_reason"] = chunk["choices"][0]["finish_reason"]
-            response["choices"] = [text_choices]
-
-            # only pass usage when stream_options["include_usage"] is True
-            if self.stream_options and self.stream_options.get("include_usage", False) is True:
-                response["usage"] = chunk.get("usage", None)
-
-            return response
-        except Exception as e:
-            raise Exception(f"Error occurred converting to text completion object - chunk: {chunk}; Error: {e}")
-
-    def __next__(self):
-        # model_response = ModelResponse(stream=True, model=self.model)
-        TextCompletionResponse()
-        try:
-            for chunk in self.completion_stream:
-                if chunk == "None" or chunk is None:
-                    raise Exception
-                processed_chunk = self.convert_to_text_completion_object(chunk=chunk)
-                return processed_chunk
-            raise StopIteration
-        except StopIteration:
-            raise StopIteration
-        except Exception as e:
-            exception_type: Final = litellm_utils.exception_type
-            raise exception_type(
-                model=self.model,
-                custom_llm_provider=self.custom_llm_provider or "",
-                original_exception=e,
-                completion_kwargs={},
-                extra_kwargs={},
-            )
-
-    async def __anext__(self):
-        try:
-            async for chunk in self.completion_stream:
-                if chunk == "None" or chunk is None:
-                    raise Exception
-                processed_chunk = self.convert_to_text_completion_object(chunk=chunk)
-                return processed_chunk
-            raise StopIteration
-        except StopIteration:
-            raise StopAsyncIteration
-
-
 def mock_stream_usage_chunk(model_response: ModelResponseStream, model: str, prompt_tokens: int) -> ModelResponseStream:
     return ModelResponseStream(
         id=model_response.id,
@@ -8219,9 +8237,7 @@ def trim_messages(
         if max_tokens is None:
             # Check if model is valid
             if model in litellm.model_cost:
-                max_tokens_for_model: Final = litellm.model_cost[model].get(
-                    "max_input_tokens", litellm.model_cost[model]["max_tokens"]
-                )
+                max_tokens_for_model: Final = litellm.model_cost[model]["max_input_tokens"]
                 max_tokens = int(max_tokens_for_model * trim_ratio)
             else:
                 # if user did not specify max (input) tokens
@@ -8293,6 +8309,26 @@ def trim_messages(
 
 
 from litellm.caching.in_memory_cache import InMemoryCache
+
+
+class _HuggingFaceTokenizerLoadFailureCache(Protocol):
+    def get_cache(self, key: str) -> object | None: ...
+
+    def set_cache(self, key: str, value: object, ttl: float | None = None) -> None: ...
+
+    def flush_cache(self) -> None: ...
+
+
+_HUGGINGFACE_TOKENIZER_LOAD_FAILURES: Final[_HuggingFaceTokenizerLoadFailureCache] = (
+    cast(  # cast-ok: cache methods are untyped
+        _HuggingFaceTokenizerLoadFailureCache,
+        InMemoryCache(
+            max_size_in_memory=16,
+            default_ttl=HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,
+            clock=lambda: time.monotonic(),
+        ),
+    )
+)
 
 
 class AvailableModelsCache(InMemoryCache):
@@ -9031,8 +9067,9 @@ _get_bundled_model_cost_map = get_bundled_model_cost_map
 def _get_model_cost_entry_for_provider_config(
     model: str,
     provider: LlmProviders,
-) -> dict[str, object]:
+) -> Mapping[str, object]:
     candidate_keys: Final = (model, f"{provider.value}/{model}")
+    model_info: Mapping[str, object] | None
     for model_key in candidate_keys:
         model_info = litellm.model_cost.get(model_key)
         if model_info is not None:
@@ -9096,6 +9133,7 @@ class ProviderConfigManager:
             LlmProviders.DATABRICKS: (lambda: litellm.DatabricksConfig(), False),
             LlmProviders.XAI: (lambda: litellm.XAIChatConfig(), False),
             LlmProviders.ZAI: (lambda: litellm.ZAIChatConfig(), False),
+            LlmProviders.OPENCODE_GO: (ProviderConfigManager.get_opencode_go_config, True),
             LlmProviders.LAMBDA_AI: (lambda: litellm.LambdaAIChatConfig(), False),
             LlmProviders.INCEPTION: (lambda: litellm.InceptionChatConfig(), False),
             LlmProviders.LLAMA: (lambda: litellm.LlamaAPIConfig(), False),
@@ -9286,6 +9324,12 @@ class ProviderConfigManager:
         from litellm.llms.bedrock.common_utils import get_bedrock_chat_config
 
         return get_bedrock_chat_config(model=model)
+
+    @staticmethod
+    def get_opencode_go_config(model: str) -> BaseConfig:
+        from litellm.llms.opencode.chat.transformation import go_chat_config
+
+        return go_chat_config(model)
 
     @staticmethod
     def get_bedrock_mantle_config(model: str) -> BaseConfig:
@@ -9522,7 +9566,7 @@ class ProviderConfigManager:
 
             return get_nvidia_nim_rerank_config(model)
         elif litellm.LlmProviders.VERTEX_AI == provider:
-            return litellm.VertexAIRerankConfig()
+            return ProviderConfigManager._get_vertex_ai_rerank_config_cached()
         elif litellm.LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIRerankConfig()
         elif litellm.LlmProviders.VOYAGE == provider:
@@ -9540,6 +9584,11 @@ class ProviderConfigManager:
 
             return get_dashscope_family_rerank_config(provider.value)
         return litellm.CohereRerankConfig()
+
+    @staticmethod
+    @lru_cache(maxsize=1)
+    def _get_vertex_ai_rerank_config_cached() -> BaseRerankConfig:
+        return litellm.VertexAIRerankConfig()
 
     @staticmethod
     def get_provider_decisions_config(model: str, provider: LlmProviders) -> BaseDecisionsConfig | None:
@@ -9561,12 +9610,18 @@ class ProviderConfigManager:
             return litellm.DatabricksDecisionsConfig()
         if provider == LlmProviders.HOSTED_VLLM:
             return litellm.HostedVLLMDecisionsConfig()
+        if provider == LlmProviders.LM_STUDIO:
+            return litellm.LMStudioDecisionsConfig()
         if provider == LlmProviders.LAYA:
             return litellm.LayaDecisionsConfig()
         if provider == LlmProviders.BESPOKE:
             return litellm.BespokeDecisionsConfig()
-        if provider == LlmProviders.OPENAI:
-            return litellm.OpenAIDecisionsConfig()
+        if provider in (LlmProviders.OPENAI, LlmProviders.AZURE):
+            configs: Final = {
+                LlmProviders.OPENAI: litellm.OpenAIDecisionsConfig,
+                LlmProviders.AZURE: litellm.AzureDecisionsConfig,
+            }
+            return configs[provider]()
         if provider == LlmProviders.AZURE_AI:
             return litellm.AzureAIDecisionsConfig()
         return None
@@ -9590,6 +9645,11 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> BaseAnthropicMessagesConfig | None:
+        if provider == LlmProviders.OPENCODE_GO:
+            from litellm.llms.opencode.common_utils import go_endpoint
+            from litellm.llms.opencode.messages.transformation import OpenCodeGoMessagesConfig
+
+            return OpenCodeGoMessagesConfig() if go_endpoint(model) == "/v1/messages" else None
         model_lower: Final = model.lower()
         if litellm.LlmProviders.ANTHROPIC == provider:
             return litellm.AnthropicMessagesConfig()
@@ -9608,7 +9668,7 @@ class ProviderConfigManager:
                 return BedrockMantleAnthropicMessagesConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
             if "claude" in model_lower:
-                from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
+                from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation import (
                     VertexAIPartnerModelsAnthropicMessagesConfig,
                 )
 
@@ -9816,6 +9876,11 @@ class ProviderConfigManager:
         if provider is None:
             return None
 
+        if provider == LlmProviders.OPENCODE_GO:
+            from litellm.llms.opencode.common_utils import go_endpoint
+            from litellm.llms.opencode.responses.transformation import OpenCodeGoResponsesConfig
+
+            return OpenCodeGoResponsesConfig() if go_endpoint(model or "") == "/v1/responses" else None
         if litellm.LlmProviders.OPENAI == provider:
             return litellm.OpenAIResponsesAPIConfig()
         elif litellm.LlmProviders.AZURE == provider:
@@ -9955,6 +10020,10 @@ class ProviderConfigManager:
         model: str | None,
         provider: LlmProviders,
     ) -> BaseLLMModelInfo | None:
+        if provider == LlmProviders.OPENCODE_GO:
+            from litellm.llms.opencode.chat.transformation import OpenCodeGoChatConfig
+
+            return OpenCodeGoChatConfig()
         if LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIConfig()
         elif LlmProviders.BASETEN == provider:
@@ -10567,6 +10636,7 @@ class ProviderConfigManager:
         from litellm.llms.serper.search.transformation import SerperSearchConfig
         from litellm.llms.tavily.search.transformation import TavilySearchConfig
         from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
+        from litellm.llms.xai.search.transformation import XAISearchConfig
         from litellm.llms.you_com.search.transformation import YouComSearchConfig
 
         PROVIDER_TO_CONFIG_MAP: Final = {
@@ -10591,6 +10661,7 @@ class ProviderConfigManager:
             SearchProviders.NIMBLE: NimbleSearchConfig,
             SearchProviders.BING_GROUNDING: BingGroundingSearchConfig,
             SearchProviders.DEEPSEEK: DeepSeekSearchConfig,
+            SearchProviders.XAI: XAISearchConfig,
         }
         config_class: Final = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:
@@ -10857,18 +10928,12 @@ def extract_duration_from_srt_or_vtt(srt_or_vtt_content: str) -> float | None:
     # Regular expression to match timestamps in the format "hh:mm:ss,ms" or "hh:mm:ss.ms"
     timestamp_pattern: Final = r"(\d{2}):(\d{2}):(\d{2})[.,](\d{3})"
 
-    timestamps: Final[Sequence[tuple[str, str, str, str]]] = re.findall(timestamp_pattern, srt_or_vtt_content)
-
-    if not timestamps:
-        return None
+    timestamps: Final = re.finditer(timestamp_pattern, srt_or_vtt_content)
 
     # Convert timestamps to seconds and find the max (end time)
-    durations: Final = []
-    match: tuple[str, str, str, str]
-    for match in timestamps:
-        hours, minutes, seconds, milliseconds = map(int, match)
-        total_seconds = hours * 3600 + minutes * 60 + seconds + milliseconds / 1000.0
-        durations.append(total_seconds)
+    durations: Final = [
+        int(match[1]) * 3600 + int(match[2]) * 60 + int(match[3]) + int(match[4]) / 1000.0 for match in timestamps
+    ]
 
     return max(durations) if durations else None
 

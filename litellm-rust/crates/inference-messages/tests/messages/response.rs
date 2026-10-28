@@ -2,7 +2,6 @@ use litellm_host::{
     interceptors::{ExecutionFacts, ResultSource},
     lifecycle::ExecutionEvent,
 };
-use litellm_http::transport::Error as TransportError;
 use litellm_inference_messages::{MessagesCallResponse, messages_body};
 use litellm_inference_testing::{
     RecordingSecrets, http_config, no_secrets, provider_http, resources,
@@ -166,17 +165,21 @@ async fn a_json_error_envelope_is_kept_verbatim(call: MessagesCall) {
     .await
     .expect_err("upstream error propagates");
 
-    let Error::Transport(TransportError::Http { status, body }) = error else {
+    let Some((status, body)) = error.upstream_response() else {
         panic!("{error:?}");
     };
     assert_eq!(status, 400);
-    assert_eq!(serde_json::from_str::<Value>(&body).unwrap(), envelope);
+    assert_eq!(serde_json::from_str::<Value>(body).unwrap(), envelope);
 }
 
 #[rstest]
+#[case::ascii(format!("{}private-tail", "x".repeat(600)))]
+#[case::unicode(format!("{}private-tail", "é".repeat(600)))]
 #[tokio::test]
-async fn a_long_error_body_is_truncated_at_the_documented_cap(call: MessagesCall) {
-    let long = "x".repeat(600);
+async fn a_long_error_body_is_preserved_with_bounded_diagnostics(
+    call: MessagesCall,
+    #[case] long: String,
+) {
     let upstream = upstream([ResponseTemplate::new(500).set_body_string(long.clone())]).await;
 
     let error = run(MessagesCall {
@@ -187,13 +190,13 @@ async fn a_long_error_body_is_truncated_at_the_documented_cap(call: MessagesCall
     .await
     .expect_err("upstream error propagates");
 
-    assert_eq!(
-        error,
-        Error::Transport(TransportError::Http {
-            status: 500,
-            body: format!("{}... (truncated)", &long[..256])
-        })
-    );
+    assert_eq!(error.upstream_response(), Some((500, long.as_str())));
+    let diagnostic_body: String = long.chars().take(256).collect();
+    let report = litellm_error::Report::new(&error).to_string();
+    assert!(report.ends_with(&format!("{diagnostic_body}... (truncated)")));
+    assert_eq!(report.matches(&diagnostic_body).count(), 1, "{report}");
+    assert!(!report.contains("private-tail"), "{report}");
+    assert!(!format!("{error:?}").contains("private-tail"));
 }
 
 #[rstest]
@@ -216,11 +219,8 @@ async fn an_upstream_error_keeps_its_status_and_body(call: MessagesCall, #[case]
     .expect_err("upstream error propagates");
 
     assert_eq!(
-        error,
-        Error::Transport(TransportError::Http {
-            status,
-            body: "upstream said no".into()
-        })
+        error.upstream_response(),
+        Some((status, "upstream said no"))
     );
 }
 
@@ -242,7 +242,7 @@ async fn an_unreadable_success_body_is_an_invalid_response(
     .await
     .expect_err("an unreadable body fails");
 
-    assert!(matches!(error, Error::InvalidResponse(_)), "{error:?}");
+    assert!(error.is_response(), "{error:?}");
 }
 
 #[rstest]
@@ -259,7 +259,23 @@ async fn a_provider_slower_than_the_timeout_fails_the_call(call: MessagesCall) {
     .await
     .expect_err("the call times out");
 
-    assert!(matches!(error, Error::Transport(_)), "{error:?}");
+    assert!(error.dispatched(), "{error:?}");
+    assert!(!error.is_request(), "{error:?}");
+    assert_eq!(error.upstream_response(), None);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_transport_error_does_not_echo_the_provider_url(call: MessagesCall) {
+    let error = run(MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(format!("{UNREACHABLE_BASE}/tenant-token-1234")),
+        ..call
+    })
+    .await
+    .expect_err("nothing is listening");
+
+    assert!(!error.to_string().contains("tenant-token-1234"), "{error}");
 }
 
 #[rstest]
@@ -305,8 +321,11 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
 fn a_body_that_does_not_parse_is_an_invalid_request(#[case] raw: Value) {
     let error = messages_body(object(raw)).expect_err("the body is rejected");
 
+    assert!(error.is_request(), "{error:?}");
     assert!(
-        matches!(&error, Error::InvalidRequest(message) if message.to_string().starts_with("invalid Anthropic messages request: ")),
+        litellm_error::Report::new(&error)
+            .to_string()
+            .contains("invalid Anthropic messages request"),
         "{error:?}"
     );
 }

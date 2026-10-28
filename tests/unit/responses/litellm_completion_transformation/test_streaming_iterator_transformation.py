@@ -1524,3 +1524,37 @@ async def test_caller_function_named_like_the_search_tool_streams_as_function_ca
 
     assert [(item["type"], item["name"]) for item in output] == [("function_call", "tool_search_tool_regex")]
     assert "response.function_call_arguments.done" in [event["type"] for event in events]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_a_compaction_block_without_its_summary_streams_no_compaction_item(sync_mode: bool):
+    deltas: Final = (
+        Delta(
+            role="assistant",
+            content="",
+            provider_specific_fields={"compaction_blocks": [{"type": "compaction", "content": None}]},
+        ),
+        Delta(content="Ok."),
+    )
+    chunks: Final = tuple(
+        ModelResponseStream(
+            id=CHAT_COMPLETION_ID,
+            created=1748575031,
+            model="claude-sonnet-5-5",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(index=0, delta=delta, finish_reason="stop" if index == len(deltas) - 1 else None)
+            ],
+        )
+        for index, delta in enumerate(deltas)
+    )
+    iterator: Final = _build_iterator(chunks)
+    events: Final = (
+        [event.model_dump(exclude_none=True) for event in iterator]
+        if sync_mode
+        else [event.model_dump(exclude_none=True) async for event in iterator]
+    )
+
+    assert [event["item"]["type"] for event in events if "item" in event] == ["message", "message"]
+    assert [item["type"] for item in events[-1]["response"]["output"]] == ["message"]
