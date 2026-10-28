@@ -8,10 +8,14 @@ Source: litellm/llms/perplexity/responses/transformation.py
 """
 
 import json
+from typing import Final, cast
 
 import httpx
 import pytest
+import respx
+from pydantic import TypeAdapter
 
+import litellm
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -19,6 +23,17 @@ from litellm.llms.perplexity.responses.transformation import PerplexityResponses
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
+
+
+_SUCCESS_RESPONSE: Final[dict[str, object]] = {
+    "id": "resp_moderation_test",
+    "object": "response",
+    "created_at": 1700000000,
+    "status": "completed",
+    "model": "openai/gpt-5.2",
+    "output": [],
+    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+}
 
 
 class TestPerplexityResponsesTransformation:
@@ -587,3 +602,54 @@ class TestPerplexityResponsesTransformation:
         assert result.type == "response.completed"
         assert result.response.usage.cost == 0.0003
         assert isinstance(result.response.usage.cost, float)
+
+
+@pytest.mark.asyncio
+async def test_aresponses_rejects_moderation_for_perplexity_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "drop_params", False)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/responses").mock(
+        return_value=httpx.Response(200, json=_SUCCESS_RESPONSE)
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        await litellm.aresponses(
+            model="perplexity/openai/gpt-5.2",
+            api_base="https://api.perplexity.ai",
+            api_key="fake-api-key",
+            input="hi",
+            moderation={"model": "omni-moderation-latest"},
+        )
+
+    assert upstream.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_aresponses_drops_perplexity_moderation_when_drop_params_is_enabled(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "drop_params", False)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/responses").mock(
+        return_value=httpx.Response(200, json=_SUCCESS_RESPONSE)
+    )
+
+    response: Final = await litellm.aresponses(
+        model="perplexity/openai/gpt-5.2",
+        api_base="https://api.perplexity.ai",
+        api_key="fake-api-key",
+        input="hi",
+        moderation={"model": "omni-moderation-latest"},
+        drop_params=True,
+    )
+
+    request_body: Final = TypeAdapter(dict[str, object]).validate_python(
+        cast(object, json.loads(upstream.calls[0].request.read()))
+    )
+    assert response.status == "completed"
+    assert upstream.call_count == 1
+    assert "moderation" not in request_body
