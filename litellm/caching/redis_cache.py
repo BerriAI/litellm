@@ -1738,7 +1738,9 @@ class RedisCache(BaseCache):
             return key_value_dict
 
     @_redis_circuit_breaker_guard
-    async def async_get_cache(self, key, parent_otel_span: Span | None = None, **kwargs):
+    async def async_get_cache(
+        self, key, parent_otel_span: Span | None = None, *, raise_on_error: bool = False, **kwargs
+    ):
         from redis.asyncio import Redis
 
         _redis_client: Final[Redis] = self.init_async_client()
@@ -1781,6 +1783,8 @@ class RedisCache(BaseCache):
                 )
             )
             print_verbose(f"litellm.caching.caching: async get() - Got exception from REDIS: {e}")
+            if raise_on_error:
+                raise
             _record_swallowed_redis_failure(self._circuit_breaker, e)
 
     @_redis_circuit_breaker_guard

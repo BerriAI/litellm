@@ -298,7 +298,7 @@ class RoutingPrismaWrapper:
 
     def __getattr__(self, name: str) -> Any:
         if name in _TOP_LEVEL_READ_METHODS:
-            return getattr(self.read_target, name)
+            return _DELEGATED_ATTRIBUTE.validate_python(getattr(self.read_target, name))
         writer_attr: Final = _DELEGATED_ATTRIBUTE.validate_python(getattr(self._writer, name))
         # Per-model action accessors are non-callable instances that expose
         # both `find_many` and `create`. Methods like execute_raw / batch_ /

@@ -5,7 +5,7 @@ import uuid
 from collections.abc import AsyncGenerator, AsyncIterable, Iterator, Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
-    Any,  # noqa: TID251  # the streaming hook and the flush copy pass provider chunks through untyped
+    Any,  # noqa: TID251  # the streaming hook passes provider chunks through untyped
     ClassVar,
     Final,
     Literal,
@@ -23,7 +23,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.litellm_core_utils.core_helpers import attribute_items
+from litellm.litellm_core_utils.core_helpers import attribute_items, attribute_or_none, iter_items, require_attributes
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -99,13 +99,8 @@ class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
     pass
 
 
-class _ContentDelta(Protocol):
-    content: object
-
-
-class _FinishingDelta(Protocol):
-    content: object
-    tool_calls: object
+class _DeepCopyable(Protocol):
+    def model_copy(self, *, deep: bool) -> object: ...
 
 
 class LLMShieldProxyGuardrail(CustomGuardrail):
@@ -494,7 +489,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         sse: Final = AnthropicSSERestorer(step)
         events: Final = ResponsesStreamRestorer(step, rehydrate)
         carries: Final[CarryWindows] = {}
-        last_chunk = None  # rebind-ok: tracks the most recent chunk for the final flush.
+        last_chunk = None  # rebind-ok: tracks the most recent chunk with choices for the final flush.
 
         async for chunk in response:
             if isinstance(chunk, (bytes, str)):
@@ -506,7 +501,8 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
                     yield event
                 continue
             restored_chunk = detached(chunk)
-            last_chunk = restored_chunk
+            if getattr(restored_chunk, "choices", None):
+                last_chunk = restored_chunk
             for choice in attribute_items(restored_chunk, "choices"):
                 await self._restore_choice(choice, carries, session_id)
             yield restored_chunk
@@ -527,7 +523,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         one tool call's accumulating `arguments`. A shared window would splice the text
         held back for one stream onto another.
         """
-        delta: Final = getattr(choice, "delta", None)
+        delta: Final = attribute_or_none(choice, "delta")
         index: Final = choice_index(choice)
         is_final: Final = bool(getattr(choice, "finish_reason", None))
         if isinstance(choice, TextChoices):
@@ -565,7 +561,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
 
     async def _restore_content_window(
         self,
-        delta: _ContentDelta,
+        delta: object,
         key: CarryKey,
         carries: CarryWindows,
         session_id: str,
@@ -573,19 +569,19 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
     ) -> None:
         """Restores one delta's content through its own window."""
         carry: Final = carries.get(key, "")
-        text: Final = getattr(delta, "content", None)
+        text: Final = attribute_or_none(delta, "content")
 
         if not isinstance(text, str) or not text:
             if is_final and carry:
                 flushed, remaining = await self._stream_step("", carry, True, session_id)
                 carries[key] = remaining  # rebind-ok: this stream's window advances.
                 if flushed:
-                    delta.content = flushed
+                    write_field(delta, "content", flushed)
             return
 
         emitted, remaining = await self._stream_step(text, carry, is_final, session_id)
         carries[key] = remaining  # rebind-ok: this stream's window advances.
-        delta.content = emitted
+        write_field(delta, "content", emitted)
 
     async def _restore_tool_call_window(
         self,
@@ -617,7 +613,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
 
     async def _flush_finished_choice(
         self,
-        delta: _FinishingDelta,
+        delta: object,
         choice_index: int,
         carries: CarryWindows,
         session_id: str,
@@ -642,12 +638,12 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             if not text:
                 continue
             if tool_index is None:
-                delta.content = text
+                write_field(delta, "content", text)
             else:
                 continuations.extend(continuation_delta(tool_index, text))
         if continuations:
-            existing: Final = tuple(getattr(delta, "tool_calls", None) or ())
-            delta.tool_calls = [*existing, *continuations]
+            existing: Final = tuple(attribute_items(delta, "tool_calls"))
+            write_field(delta, "tool_calls", [*existing, *continuations])
 
     async def _flush_trailing(
         self, last_chunk: object, carries: CarryWindows, session_id: str
@@ -675,7 +671,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             chunk = self._chunk_for_choice(last_chunk, choice_index)
             if chunk is None:
                 continue
-            choice: object = chunk.choices[0]
+            choice = read_list(chunk, "choices")[0]
             delta = read_field(choice, "delta")
             if isinstance(choice, TextChoices):
                 choice.text = text
@@ -687,26 +683,26 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             yield chunk
 
     @staticmethod
-    def _chunk_for_choice(last_chunk: Any, index: int) -> Any:
+    def _chunk_for_choice(last_chunk: object, index: int) -> object | None:
         """A single-choice copy of the last chunk, carrying only `index`.
 
         Emitting one choice per chunk keeps a flush from reading as content on a
         choice it does not belong to.
         """
-        chunk: Final = last_chunk.model_copy(deep=True)
-        raw_choices: Final = getattr(chunk, "choices", None)
+        chunk: Final = require_attributes(last_chunk, _DeepCopyable, "model_copy").model_copy(deep=True)
+        raw_choices: Final = attribute_or_none(chunk, "choices")
         if not raw_choices:
             return None
-        choices: Final[tuple[object, ...]] = tuple(raw_choices)
+        choices: Final = tuple(iter_items(raw_choices))
         position: Final = next((at for at, choice in enumerate(choices) if choice_index(choice) == index), 0)
-        kept: Final = raw_choices[position]
-        if getattr(kept, "delta", None) is None and not isinstance(kept, TextChoices):
+        kept: Final = choices[position]
+        if attribute_or_none(kept, "delta") is None and not isinstance(kept, TextChoices):
             return None
-        kept.index = index
-        kept.finish_reason = None
-        chunk.choices = [kept]
+        write_field(kept, "index", index)
+        write_field(kept, "finish_reason", None)
+        write_field(chunk, "choices", [kept])
         if hasattr(chunk, "usage"):
-            del chunk.usage
+            delattr(chunk, "usage")
         return chunk
 
     async def _stream_step(self, text: str, carry: str, final: bool, session_id: str) -> tuple[str, str]:

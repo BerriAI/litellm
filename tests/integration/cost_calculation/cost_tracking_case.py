@@ -85,6 +85,16 @@ class CostMapEntry(BaseModel):
     cache_read_input_token_cost: float | None = None
     cache_creation_input_token_cost: float | None = None
     cache_creation_input_token_cost_above_1hr: float | None = None
+    cache_creation_input_token_cost_above_12hr: float | None = None
+    cache_creation_input_token_cost_above_12hr_flex: float | None = None
+    cache_creation_input_token_cost_above_12hr_priority: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority: float | None = None
+    cache_creation_input_token_cost_above_12hr_batches: float | None = None
+    cache_creation_input_token_cost_above_12hr_ultrafast: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast: float | None = None
     cache_creation_input_token_cost_above_1hr_above_200k_tokens: float | None = None
     cache_read_input_token_cost_above_200k_tokens: float | None = None
     cache_creation_input_token_cost_above_200k_tokens: float | None = None
