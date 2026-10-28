@@ -1235,8 +1235,8 @@ def test_public_mcp_hub_derives_publication_metadata_without_mutating_registry(
     expected_listed: bool,
     stored_public: bool | None,
 ) -> None:
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
     from litellm.proxy._types import MCPTransport
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     app: Final = FastAPI()
@@ -1275,7 +1275,7 @@ def test_public_mcp_hub_derives_publication_metadata_without_mutating_registry(
         patch("litellm.public_mcp_servers", [server.server_id] if explicit else []),
         patch("litellm.public_mcp_hub_strict_whitelist", strict),
         patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
             manager,
         ),
     ):
@@ -1307,7 +1307,7 @@ def test_public_mcp_hub_returns_empty_when_whitelist_unset():
     with (
         patch("litellm.public_mcp_servers", None),
         patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
             mock_manager,
         ),
     ):
@@ -1345,7 +1345,7 @@ def test_public_mcp_hub_does_not_expose_upstream_url():
     with (
         patch("litellm.public_mcp_servers", ["listed"]),
         patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
             mock_manager,
         ),
     ):

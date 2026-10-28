@@ -28,7 +28,7 @@ from typing import (
 
 import httpx
 from openai._streaming import SSEDecoder
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import TypeIs
 
 import litellm
@@ -166,6 +166,7 @@ def _typed_gets_litellm_params(fn: _GetsLitellmParams) -> _GetsLitellmParams:
 
 _SHOULD_STORE_RESULT_IN_CACHE_ATTR: Final = "_should_store_result_in_cache"
 _UNMASK_PII_TEXT_ATTR: Final = "_unmask_pii_text"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _load_json_object(payload: str | bytes) -> dict[str, object]:
@@ -175,7 +176,7 @@ def _load_json_object(payload: str | bytes) -> dict[str, object]:
 
 def _load_json_value(payload: str | bytes) -> object:
     """Parse a JSON payload whose top-level shape the caller narrows itself."""
-    return json.loads(payload)
+    return _DECODED_JSON.validate_python(json.loads(payload))
 
 
 def _model_id_from_metadata(litellm_metadata: Mapping[str, object] | None) -> str | None:
@@ -364,6 +365,7 @@ class BaseResponsesAPIStreamingIterator:
     """
 
     _pending_logging_tasks: tuple[asyncio.Task[object], ...] = ()
+    _started_tool_call: bool = False
     _earlier_rounds_spend: BilledRoundsSpend | None = None
 
     def __init__(
@@ -487,12 +489,16 @@ class BaseResponsesAPIStreamingIterator:
                     _args_delta: Final = getattr(openai_responses_api_chunk, "delta", None)
                     if isinstance(_args_delta, str):
                         self._generated_tool_arguments += _args_delta
+                if _event_type in _CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS:
+                    self._started_tool_call = True
                 _stream_model_id: Final = _model_id_from_metadata(self.litellm_metadata)
                 if _event_type in (
                     ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                     ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                 ):
                     _item: Final[object] = getattr(openai_responses_api_chunk, "item", None)
+                    if getattr(_item, "type", None) in _CLIENT_RUN_TOOL_CALL_ITEM_TYPES:
+                        self._started_tool_call = True
                     if _item is not None:
                         ResponsesAPIRequestUtils.encode_container_id_on_output_item(
                             item=_item,
@@ -1042,6 +1048,11 @@ class BaseResponsesAPIStreamingIterator:
         self._pending_logging_tasks = ()
         if pending:
             await asyncio.wait(pending)
+
+    @property
+    def started_tool_call(self) -> bool:
+        """Whether the stream began a tool call, which a text continuation could never finish."""
+        return self._started_tool_call
 
     def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None:
         """
@@ -1689,13 +1700,26 @@ def _usage_as_model(usage: object) -> ResponseAPIUsage | None:
         return None
 
 
-_TOOL_ARGUMENTS_DELTA_EVENTS: Final = frozenset(
+_CLIENT_RUN_TOOL_CALL_ITEM_TYPES: Final = frozenset(
+    {
+        "function_call",
+        "custom_tool_call",
+        "mcp_approval_request",
+        "computer_call",
+        "local_shell_call",
+        "shell_call",
+        "apply_patch_call",
+    }
+)
+_CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS: Final = frozenset(
     {
         ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
         ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DELTA,
-        ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA,
     }
 )
+_TOOL_ARGUMENTS_DELTA_EVENTS: Final = _CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS | {
+    ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA
+}
 
 
 def _estimate_usage_from_text(

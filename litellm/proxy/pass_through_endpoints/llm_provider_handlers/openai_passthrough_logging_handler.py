@@ -10,6 +10,7 @@ from typing import Final, Literal, TypeAlias
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -95,6 +96,8 @@ def is_openai_compatible_url(url_route: str | None) -> bool:
     hostname: Final = parsed_url.hostname
     if not hostname:
         return False
+    if hostname == "chatgpt.com" and parsed_url.path.startswith("/backend-api/codex/"):
+        return True
     if _hostname_matches(hostname, _OPENAI_HOSTNAMES):
         return True
     if _hostname_matches(hostname, _AZURE_OPENAI_HOSTNAMES):
@@ -198,7 +201,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         if not url_route:
             return False
         parsed_url: Final = urlparse(url_route)
-        return _is_openai_compatible_host(parsed_url.hostname) and (
+        return is_openai_compatible_url(url_route) and (
             "/v1/responses" in parsed_url.path or "/responses" in parsed_url.path
         )
 
@@ -424,7 +427,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             ) = None
             handler_instance: Final = OpenAIPassthroughLoggingHandler()
 
-            custom_llm_provider: Final = kwargs.get("custom_llm_provider", "openai")
+            custom_llm_provider: Final = TypeAdapter(str).validate_python(
+                kwargs.get("custom_llm_provider", logging_obj.model_call_details.get("custom_llm_provider", "openai"))
+            )
 
             if is_chat_completions:
                 # Handle chat completions with existing logic

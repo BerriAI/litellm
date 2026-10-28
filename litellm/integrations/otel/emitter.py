@@ -13,6 +13,7 @@ from opentelemetry.trace.status import Status, StatusCode
 
 from litellm.integrations.otel.mappers import resolve_mappers
 from litellm.integrations.otel.mappers.base import AttributeMapper, AttrValue, SpanData
+from litellm.integrations.otel.mappers.langfuse import LANGFUSE_REQUEST_METADATA_ATTRIBUTES
 from litellm.integrations.otel.mappers.openinference import fit_indexed_messages
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.model.payloads import (
@@ -300,9 +301,11 @@ class SpanEmitter:
         stamped_later: Final = error_attributes(error) if error else _NO_ATTRIBUTES
         reserved: Final = len(stamped_later.keys() - mapped.keys())
         overwrites: Final = carried_keys(span) & mapped.keys()
+        # The Langfuse request metadata sheds first, so a span at its attribute limit loses nothing else to it.
         fitted: Final = fit_indexed_messages(
             MappingProxyType({key: value for key, value in mapped.items() if key not in overwrites}),
             attribute_budget(span, reserved),
+            LANGFUSE_REQUEST_METADATA_ATTRIBUTES,
         )
         for key, value in mapped.items():
             if key in overwrites or key in fitted:

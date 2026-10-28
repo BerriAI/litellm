@@ -21,7 +21,7 @@ from litellm.llms.azure_ai.common_utils import (
     is_foundry_model_inference_base,
 )
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
-from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 from litellm.llms.openai.common_utils import drop_params_from_unprocessable_entity_error
 from litellm.llms.openai.openai import OpenAIChatCompletionResponseIterator, OpenAIConfig
 from litellm.llms.xai.chat.transformation import XAIChatConfig
@@ -397,7 +397,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         return data
 
     def _drop_tool_level_extra_fields(self, request_data: dict, error_text: str) -> dict:
-        fields_to_drop: Final = set(re.findall(r"tools\[\d+\]\.([\w-]+)", error_text))
+        fields_to_drop: Final[Collection[str]] = set(re.findall(r"tools\[\d+\]\.([\w-]+)", error_text))
         tools: Final = request_data.get("tools")
         if fields_to_drop and isinstance(tools, list):
             for tool in tools:

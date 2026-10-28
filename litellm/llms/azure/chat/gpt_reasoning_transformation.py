@@ -1,0 +1,117 @@
+"""Support for Azure OpenAI gpt-5 model family."""
+
+from collections.abc import Collection
+from typing import ClassVar, Final
+
+import litellm
+from litellm.llms.openai.chat.gpt_reasoning_transformation import (
+    OpenAIGPT5Config,
+    is_gpt_reasoning_series_name,
+)
+from litellm.types.llms.openai import AllMessageValues
+
+from .gpt_transformation import AzureOpenAIConfig
+
+
+class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
+    """Azure specific handling for gpt-5 models.
+
+    reasoning_effort none joins xhigh as opt-in here: Azure rejected it on every gpt-5
+    deployment before gpt-5.1 (https://github.com/BerriAI/litellm/issues/16704), and a deployment
+    name the map never heard of must not forward it. See
+    https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/reasoning
+    """
+
+    GPT5_SERIES_ROUTE = "gpt5_series/"
+    OPT_IN_REASONING_EFFORTS: ClassVar[frozenset[str]] = frozenset(("xhigh", "none"))
+
+    @classmethod
+    def _model_map_lookup_name(cls, model: str) -> str:
+        """Normalise an Azure routing name to its cost-map key.
+
+        Neither ``gpt5_series/gpt-5.1`` nor a bare ``gpt-5.1`` is a key in
+        model_prices_and_context_window.json; ``azure/gpt-5.1`` is. Overriding the shared
+        resolver rather than one lookup means the supports, explicitly-disabled and
+        default-effort answers all read the same entry.
+
+        An ``azure_ai/`` name reaches this config when ``get_llm_provider`` re-routes a Foundry
+        deployment on an OpenAI-v1 host to the azure provider with the prefix intact. It is the
+        same product the azure_ai config reads ``azure_ai/<model>`` for, so that row answers when
+        the map carries it, and the azure/ twin when it does not.
+        """
+        if model.startswith(cls.GPT5_SERIES_ROUTE):
+            return "azure/" + model[len(cls.GPT5_SERIES_ROUTE) :]
+        if model.startswith("azure/"):
+            return model
+        if model.startswith("azure_ai/"):
+            return model if model in litellm.model_cost else "azure/" + model.removeprefix("azure_ai/")
+        return "azure/" + model
+
+    @classmethod
+    def is_model_gpt_5_model(cls, model: str) -> bool:
+        return is_gpt_reasoning_series_name(model) or "gpt5_series" in model
+
+    def get_supported_openai_params(self, model: str) -> list[str]:
+        """Get supported parameters for Azure OpenAI GPT-5 models.
+
+        Azure OpenAI GPT-5.2/5.4 models support logprobs, unlike OpenAI's GPT-5.
+        This overrides the parent class to add logprobs support back for gpt-5.2+.
+
+        Reference:
+        - Tested with Azure OpenAI GPT-5.2 (api-version: 2025-01-01-preview)
+        - Azure returns logprobs successfully despite Microsoft's general
+          documentation stating reasoning models don't support it.
+        """
+        params = OpenAIGPT5Config.get_supported_openai_params(self, model=model)
+
+        # Azure supports tool_choice for GPT-5 deployments, but the base GPT-5 config
+        # can drop it when the deployment name isn't in the OpenAI model registry.
+        if "tool_choice" not in params:
+            params.append("tool_choice")
+
+        # Only gpt-5.2+ has been verified to support logprobs on Azure.
+        # The base OpenAI class includes logprobs for gpt-5.1+, but Azure
+        # hasn't verified support for gpt-5.1, so remove them unless gpt-5.2/5.4+.
+        if self._supports_reasoning_effort_level(model, "none") and not self.is_model_gpt_5_2_model(model):
+            params = [p for p in params if p not in ["logprobs", "top_logprobs"]]
+        elif self.is_model_gpt_5_2_model(model):
+            azure_supported_params: Final = ["logprobs", "top_logprobs"]
+            params.extend(azure_supported_params)
+
+        return params
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+        api_version: str = "",
+        *,
+        declared_reasoning_efforts: Collection[str] = (),
+    ) -> dict:
+        return OpenAIGPT5Config.map_openai_params(
+            self,
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+            declared_reasoning_efforts=declared_reasoning_efforts,
+        )
+
+    def transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        model = model.replace(self.GPT5_SERIES_ROUTE, "")
+        return super().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )

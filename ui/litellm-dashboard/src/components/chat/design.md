@@ -182,6 +182,8 @@ At 600px and below, a compact header keeps the workspace switcher beside the lab
 
 The landing page reuses Moyai's left-aligned 720px home content, dot/grid backdrop, 46px heading, 132px editor and compact starter rows. `ChatModelPicker` sits at the right of the composer action row, matching Moyai's model selector position. Selecting a model chooses chat or image generation. Preserve LiteLLM's existing model access and request behavior; do not copy Moyai product or backend logic.
 
+Configured organization branding appears above the account row in the expanded sidebar and mobile navigation. Light and dark variants fall back to the available image when only one is configured. Private filesystem images use the proxy image endpoint without exposing their paths. With no configured branding, the logo row is absent. The existing collapsed rail hides it along with the account row.
+
 ### ScrollArea
 
 **Known gotcha — cost real debugging time:** a `ScrollArea` won't actually scroll if its container is sized with `max-height` instead of `height`, even though the box _looks_ correctly capped. Radix's `ScrollArea` viewport is `size-full` (`height: 100%`), and CSS percentage-height resolution requires the ancestor chain to have a genuinely _definite_ height — `max-height` on a flex container doesn't count as definite for this purpose, even though the browser renders the box at the capped size. The result: the viewport silently grows to its full content height instead of 100% of the visible box, `scrollHeight === clientHeight` is reported (no overflow, so no scrollbar), and scroll events fall through to whatever's behind the popover/panel instead of scrolling the list.
@@ -202,7 +204,7 @@ If you need "shrink to fit content, cap at N px" rather than "always N px," you 
 
 ### Input / Textarea
 
-Use `Input` and `Textarea` from `@/components/ui`. Standalone Chat uses `MoyaiChatComposer` for the source editor and toolbar arrangement, preserving submission, cancellation, image attachments and IME handling. Other chat surfaces continue using the shared `ChatComposer` / `InputGroupTextarea`; this visual port is scoped to standalone Chat.
+Use `Input` and `Textarea` from `@/components/ui`. Standalone Chat uses `MoyaiChatComposer` for the source editor and toolbar arrangement, preserving submission, cancellation, attachments and IME handling. Uploads share a limit of four files per message and 10 MB per file. Images retain previews; PDF, DOCX, XLSX, text and code files use named file chips and native Responses `input_file` parts. File support depends on the selected model and provider. Attachment bytes stay in the existing user-scoped IndexedDB store; history metadata stays small. Legacy DOC/XLS files are not accepted. Other chat surfaces continue using the shared `ChatComposer` / `InputGroupTextarea`; this visual port is scoped to standalone Chat.
 
 ```tsx
 import { Input } from "@/components/ui/input";
