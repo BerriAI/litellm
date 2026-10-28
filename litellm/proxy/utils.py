@@ -148,6 +148,7 @@ from litellm.integrations.custom_guardrail import (
     ModifyResponseException,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.logging_only_input_scan import start_input_scans
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import add_langfuse_trace_id_to_alert
@@ -259,6 +260,7 @@ from litellm.proxy.policy_engine.pipeline_executor import (
 )
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
+from litellm.proxy.prompts.prompt_registry import parse_prompt_version
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.table_repositories import (
@@ -2959,8 +2961,6 @@ class ProxyLogging:
             and prompt_id is not None
             and (call_type == "completion" or call_type == "acompletion" or call_type == "aresponses")
         ):
-            from litellm.proxy.prompts.prompt_registry import parse_prompt_version
-
             await self._process_prompt_template(
                 data=data,
                 litellm_logging_obj=litellm_logging_obj,
@@ -3115,6 +3115,15 @@ class ProxyLogging:
                     raw_request_snapshot=raw_request_snapshot,
                     user_api_key_dict=user_api_key_dict,
                     call_type=call_type,
+                )
+
+            if data is not None and litellm_logging_obj is not None and not (skip_guardrails or guardrails_only):
+                litellm_logging_obj.track_logging_only_input_scans(
+                    start_input_scans(
+                        caps.resolved_callbacks,
+                        data,  # pyright: ignore[reportUnknownArgumentType]  # pre_call_hook's data is the untyped request dict
+                        call_type,
+                    )
                 )
 
             if data is not None:

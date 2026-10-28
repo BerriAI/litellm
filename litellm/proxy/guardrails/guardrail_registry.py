@@ -15,7 +15,11 @@ import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, GUARDRAIL_ROTATION_ATTEMPTS
+from litellm.constants import (
+    DEFAULT_MAX_RECURSE_DEPTH,
+    GUARDRAIL_ROTATION_ATTEMPTS,
+    LOGGING_ONLY_VERDICT_TIMEOUT_SECONDS,
+)
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.guardrail_translation.utils import (
@@ -53,6 +57,7 @@ from litellm.types.guardrails import (
     GuardrailEventHooks,
     LakeraCategoryThresholds,
     LitellmParams,
+    LoggingOnlyScope,
     SupportedGuardrailIntegrations,
     with_tolerated_stream_scope,
 )
@@ -617,6 +622,54 @@ def _logging_only_continue_error(guardrail_name: str, litellm_params: LitellmPar
     return None
 
 
+def _logging_only_input_timing_error(
+    custom_guardrail_callback: CustomGuardrail,
+    guardrail_name: str,
+    litellm_params: LitellmParams,
+    logging_only_scope: LoggingOnlyScope | None,
+) -> str | None:
+    if litellm_params.logging_only_input_timing != "on_arrival":
+        if litellm_params.logging_only_verdict_timeout is None:
+            return None
+        return (
+            f"Guardrail {guardrail_name}: logging_only_verdict_timeout is set, but logging_only_input_timing is "
+            "not on_arrival, so it would never apply. Set logging_only_input_timing: on_arrival or remove "
+            "logging_only_verdict_timeout."
+        )
+    if GuardrailEventHooks.logging_only.value not in configured_event_hooks(litellm_params.mode):
+        return (
+            f"Guardrail {guardrail_name}: logging_only_input_timing is on_arrival, but mode does not include "
+            "logging_only, so it would never apply. Add logging_only to mode or remove logging_only_input_timing."
+        )
+    if not custom_guardrail_callback.supports_logging_only_scope():
+        return (
+            f"Guardrail {guardrail_name}: logging_only_input_timing=on_arrival is not supported by this guardrail, "
+            "whose logging_only hook scans on its own. Remove logging_only_input_timing."
+        )
+    if logging_only_scope != "input":
+        return (
+            f"Guardrail {guardrail_name}: logging_only_input_timing=on_arrival only applies with "
+            "logging_only_scope: input. Set logging_only_scope: input or remove logging_only_input_timing."
+        )
+    return None
+
+
+def _logging_only_errors(
+    custom_guardrail_callback: CustomGuardrail, guardrail_name: str, litellm_params: LitellmParams
+) -> tuple[str | None, str | None, str | None]:
+    scope_error: Final = _logging_only_scope_error(custom_guardrail_callback, guardrail_name, litellm_params)
+    return (
+        scope_error,
+        _logging_only_continue_error(guardrail_name, litellm_params),
+        _logging_only_input_timing_error(
+            custom_guardrail_callback,
+            guardrail_name,
+            litellm_params,
+            None if scope_error is not None else litellm_params.logging_only_scope,
+        ),
+    )
+
+
 def _configure_callback_scoping(
     custom_guardrail_callback: CustomGuardrail,
     guardrail_name: str,
@@ -624,12 +677,11 @@ def _configure_callback_scoping(
     *,
     reject_invalid_logging_only_scope: bool = False,
 ) -> None:
-    logging_only_scope_error: Final = _logging_only_scope_error(
+    logging_only_scope_error, logging_only_continue_error, logging_only_input_timing_error = _logging_only_errors(
         custom_guardrail_callback, guardrail_name, litellm_params
     )
-    logging_only_continue_error: Final = _logging_only_continue_error(guardrail_name, litellm_params)
     if reject_invalid_logging_only_scope:
-        for error in (logging_only_scope_error, logging_only_continue_error):
+        for error in (logging_only_scope_error, logging_only_continue_error, logging_only_input_timing_error):
             if error is not None:
                 raise ValueError(error)
     if logging_only_scope_error is not None:
@@ -642,12 +694,21 @@ def _configure_callback_scoping(
             "%s Ignoring logging_only_continue_on_input_failure; the guardrail keeps its configured mode.",
             logging_only_continue_error.replace("\r", "").replace("\n", ""),
         )
+    if logging_only_input_timing_error is not None:
+        verbose_proxy_logger.error(
+            "%s Ignoring logging_only_input_timing and logging_only_verdict_timeout; the request is scanned after "
+            "the call.",
+            logging_only_input_timing_error.replace("\r", "").replace("\n", ""),
+        )
     logging_only_scope: Final = None if logging_only_scope_error is not None else litellm_params.logging_only_scope
     custom_guardrail_callback.logging_only_scope = logging_only_scope
     custom_guardrail_callback.logging_only_continue_on_input_failure = (
         logging_only_continue_error is None
         and logging_only_scope is None
         and litellm_params.logging_only_continue_on_input_failure is True
+    )
+    on_arrival: Final = (
+        logging_only_input_timing_error is None and litellm_params.logging_only_input_timing == "on_arrival"
     )
     for scoping_param in (
         "skip_system_message_in_guardrail",
@@ -670,6 +731,12 @@ def _configure_callback_scoping(
         )
     if isinstance(custom_guardrail_callback, CustomGuardrail):  # pyright: ignore[reportUnnecessaryIsInstance]  # module-path classes may only subclass CustomLogger
         custom_guardrail_callback.apply_stream_scope(litellm_params.stream_scope)
+        custom_guardrail_callback.configure_logging_only_input_timing(
+            "on_arrival" if on_arrival else "after_call",
+            litellm_params.logging_only_verdict_timeout
+            if on_arrival and litellm_params.logging_only_verdict_timeout is not None
+            else LOGGING_ONLY_VERDICT_TIMEOUT_SECONDS,
+        )
     _apply_configured_bool_overrides(custom_guardrail_callback, litellm_params)
 
 
@@ -684,7 +751,12 @@ def parse_tolerant_litellm_params(
     try:
         return params_model(**litellm_params_data)
     except ValidationError as validation_error:
-        tolerated_fields: Final = ("logging_only_scope", "logging_only_continue_on_input_failure")
+        tolerated_fields: Final = (
+            "logging_only_scope",
+            "logging_only_continue_on_input_failure",
+            "logging_only_input_timing",
+            "logging_only_verdict_timeout",
+        )
         error_locs: Final = {tuple(error["loc"]) for error in validation_error.errors()}
         tolerated_locs: Final = frozenset((field,) for field in tolerated_fields)
         if any(loc not in tolerated_locs for loc in error_locs):
@@ -871,10 +943,7 @@ class InMemoryGuardrailHandler:
         litellm_params: Final = LitellmParams(**params) if isinstance(params, dict) else params
         guardrail_name: Final = guardrail.get("guardrail_name", "Unknown")
         for custom_guardrail_callback in self._tracked_callbacks(guardrail_id):
-            for error in (
-                _logging_only_scope_error(custom_guardrail_callback, guardrail_name, litellm_params),
-                _logging_only_continue_error(guardrail_name, litellm_params),
-            ):
+            for error in _logging_only_errors(custom_guardrail_callback, guardrail_name, litellm_params):
                 if error is not None:
                     raise ValueError(error)
 

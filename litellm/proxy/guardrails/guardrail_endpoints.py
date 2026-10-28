@@ -91,6 +91,7 @@ router: Final = APIRouter()
 GUARDRAIL_REGISTRY: Final = GuardrailRegistry()
 _DECODED_JSON: Final = TypeAdapter(object)
 _DECODED_YAML: Final = TypeAdapter(object)
+_LOGGING_ONLY_INPUT_TIMING_FIELDS: Final = ("logging_only_input_timing", "logging_only_verdict_timeout")
 
 
 def _as_str_object_mapping(mapping: Mapping[str, object]) -> Mapping[str, object]:
@@ -1307,6 +1308,13 @@ async def patch_guardrail(
                     and mode_lacks_logging_only
                     else {}
                 ),
+                **{
+                    field: None
+                    for field in _LOGGING_ONLY_INPUT_TIMING_FIELDS
+                    if mode_lacks_logging_only
+                    and field not in requested_litellm_params
+                    and getattr(parsed_litellm_params, field) is not None
+                },
             }
         )
         litellm_params: Final = (
@@ -1343,7 +1351,8 @@ async def patch_guardrail(
             IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
                 guardrail=guardrail,
                 reject_invalid_logging_only_scope=bool(
-                    {"logging_only_scope", "logging_only_continue_on_input_failure"} & set(requested_litellm_params)
+                    {"logging_only_scope", "logging_only_continue_on_input_failure", *_LOGGING_ONLY_INPUT_TIMING_FIELDS}
+                    & set(requested_litellm_params)
                 ),
             )
             verbose_proxy_logger.info(
