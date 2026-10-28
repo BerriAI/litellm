@@ -1,8 +1,10 @@
 {
     "sample_spec": {
+        "browser_open_cost_per_request": 0.0,
         "code_interpreter_cost_per_session": 0.0,
         "computer_use_input_cost_per_1k_tokens": 0.0,
         "computer_use_output_cost_per_1k_tokens": 0.0,
+        "cost_per_additional_result": 0.0,
         "deprecation_date": "date when the model becomes deprecated in the format YYYY-MM-DD",
         "file_search_cost_per_1k_calls": 0.0,
         "file_search_cost_per_gb_per_day": 0.0,
@@ -38198,6 +38200,7 @@
         "source": "https://console.groq.com/docs/model/meta-llama/llama-prompt-guard-2-86m"
     },
     "groq/openai/gpt-oss-120b": {
+        "browser_open_cost_per_request": 0.001,
         "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "groq",
@@ -38218,6 +38221,7 @@
         "supports_web_search": true
     },
     "groq/openai/gpt-oss-20b": {
+        "browser_open_cost_per_request": 0.001,
         "cache_read_input_token_cost": 3.75e-08,
         "input_cost_per_token": 7.5e-08,
         "litellm_provider": "groq",
@@ -38238,6 +38242,7 @@
         "supports_web_search": true
     },
     "groq/openai/gpt-oss-safeguard-20b": {
+        "browser_open_cost_per_request": 0.001,
         "cache_read_input_token_cost": 3.7e-08,
         "input_cost_per_token": 7.5e-08,
         "litellm_provider": "groq",
@@ -44788,21 +44793,25 @@
         "supports_tool_choice": false
     },
     "parallel_ai/search": {
+        "cost_per_additional_result": 0.001,
         "input_cost_per_query": 0.005,
         "litellm_provider": "parallel_ai",
         "mode": "search"
     },
     "parallel_ai/search-fast": {
+        "cost_per_additional_result": 0.001,
         "input_cost_per_query": 0.001,
         "litellm_provider": "parallel_ai",
         "mode": "search"
     },
     "parallel_ai/search-pro": {
+        "cost_per_additional_result": 0.001,
         "input_cost_per_query": 0.005,
         "litellm_provider": "parallel_ai",
         "mode": "search"
     },
     "parallel_ai/search-turbo": {
+        "cost_per_additional_result": 0.001,
         "input_cost_per_query": 0.001,
         "litellm_provider": "parallel_ai",
         "mode": "search"
@@ -45650,6 +45659,11 @@
         "supported_endpoints": [
             "/v1/images/generations"
         ]
+    },
+    "replicate/default-gpu": {
+        "cost_per_second": 0.0014,
+        "litellm_provider": "replicate",
+        "mode": "chat"
     },
     "replicate/meta/llama-2-13b": {
         "input_cost_per_token": 1e-07,

@@ -9,7 +9,6 @@ action kinds off `executed_tools` into `usage.server_tool_use`.
 
 from typing import TYPE_CHECKING, Final
 
-from litellm.constants import GROQ_BROWSER_VISIT_WEBSITE_COST_PER_CALL
 from litellm.types.utils import Usage
 
 if TYPE_CHECKING:
@@ -27,4 +26,5 @@ def cost_per_web_search_request(usage: Usage, model_info: "ModelInfo") -> float:
         return 0.0
     searches: Final = server_tool_use.web_search_requests or 0
     opens: Final = server_tool_use.browser_open_requests or 0
-    return searches * cost_per_search + opens * GROQ_BROWSER_VISIT_WEBSITE_COST_PER_CALL
+    cost_per_open: Final = model_info.get("browser_open_cost_per_request") or 0.0
+    return searches * cost_per_search + opens * cost_per_open

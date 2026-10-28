@@ -559,7 +559,6 @@ TOKEN_COUNTER_MAX_CONCURRENT_COUNTS: Final = get_env_int_in_range(
 MAX_TILE_WIDTH: Final = get_env_int("MAX_TILE_WIDTH", 512)
 MAX_TILE_HEIGHT: Final = get_env_int("MAX_TILE_HEIGHT", 512)
 OPENAI_FILE_SEARCH_COST_PER_1K_CALLS: Final = get_env_float("OPENAI_FILE_SEARCH_COST_PER_1K_CALLS", 2.5 / 1000)
-GROQ_BROWSER_VISIT_WEBSITE_COST_PER_CALL: Final = 1.0 / 1000
 # Azure OpenAI Assistants feature costs
 # Source: https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/
 AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY: Final = get_env_float("AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY", 0.1)

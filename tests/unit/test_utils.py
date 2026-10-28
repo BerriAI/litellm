@@ -1290,6 +1290,8 @@ _COST_MAP_ROW_SCHEMA: Final = {
                 "additionalProperties": False,
             },
             "citation_cost_per_token": {"type": "number"},
+            "browser_open_cost_per_request": {"type": "number"},
+            "cost_per_additional_result": {"type": "number"},
             "supported_modalities": {
                 "type": "array",
                 "items": {

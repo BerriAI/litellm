@@ -455,6 +455,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     annotation_cost_per_page: float | None  # for OCR models
     annotation_cost_per_page_batches: ReadOnly[float | None]
     search_context_cost_per_query: SearchContextCostPerQuery | None  # Cost for using web search tool
+    browser_open_cost_per_request: ReadOnly[float | None]
+    cost_per_additional_result: ReadOnly[float | None]
     web_search_billing_unit: (
         Literal["per_query", "per_prompt"] | None
     )  # "per_query" (Gemini 3.x) or "per_prompt" (Gemini 2.x)
@@ -4097,6 +4099,8 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_video_per_second: float | None = None
     output_cost_per_audio_per_second: float | None = None
     search_context_cost_per_query: dict[str, Any] | None = None
+    browser_open_cost_per_request: float | None = None
+    cost_per_additional_result: float | None = None
     google_maps_grounding_cost_per_query: float | None = None
     citation_cost_per_token: float | None = None
     cache_read_input_token_cost_above_272k_tokens: float | None = None
