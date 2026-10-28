@@ -1,3 +1,6 @@
+import asyncio
+import json
+import logging
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -304,6 +307,73 @@ def _completion_kwargs(provider: str, client, **overrides) -> dict:
         "client": client,
         **overrides,
     }
+
+
+_REASONING_EFFORT_422: Final = {
+    "error": {
+        "message": json.dumps(
+            {"detail": [{"loc": ["body", "reasoning_effort"], "msg": "Extra inputs are not permitted"}]}
+        )
+    }
+}
+_CHAT_COMPLETION: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-6.1-sol",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+_CHAT_COMPLETION_STREAM: Final = (
+    'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-6.1-sol",'
+    '"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}\n\n'
+    "data: [DONE]\n\n"
+)
+
+
+def _answer_422_while_reasoning_effort_is_sent(request: httpx.Request) -> httpx.Response:
+    body: Final = json.loads(request.content)
+    if "reasoning_effort" in body:
+        return httpx.Response(422, json=_REASONING_EFFORT_422)
+    if body.get("stream"):
+        return httpx.Response(200, text=_CHAT_COMPLETION_STREAM, headers={"content-type": "text/event-stream"})
+    return httpx.Response(200, json=_CHAT_COMPLETION)
+
+
+async def _complete_through_the_422_retry(call_shape: str) -> str:
+    transport: Final = httpx.MockTransport(_answer_422_while_reasoning_effort_is_sent)
+    kwargs: Final = {
+        "model": "gpt-6.1-sol",
+        "messages": [{"role": "user", "content": "hi"}],
+        "reasoning_effort": "high",
+    }
+    if call_shape == "sync":
+        sync_client: Final = openai.OpenAI(api_key="sk-not-a-real-key", http_client=httpx.Client(transport=transport))
+        return litellm.completion(**kwargs, client=sync_client).choices[0].message.content
+    async_client: Final = openai.AsyncOpenAI(
+        api_key="sk-not-a-real-key", http_client=httpx.AsyncClient(transport=transport)
+    )
+    if call_shape == "async":
+        return (await litellm.acompletion(**kwargs, client=async_client)).choices[0].message.content
+    stream: Final = await litellm.acompletion(**kwargs, client=async_client, stream=True)
+    return "".join([chunk.choices[0].delta.content or "" async for chunk in stream])
+
+
+@pytest.mark.parametrize("call_shape", ["sync", "async", "async_stream"])
+def test_a_422_naming_reasoning_effort_drops_it_with_one_warning(
+    call_shape: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        content: Final = asyncio.run(_complete_through_the_422_retry(call_shape))
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+
+    assert content == "ok"
+    assert len(drop_warnings) == 1
+    assert all(
+        fragment in drop_warnings[0]
+        for fragment in ("reasoning_effort='high'", "gpt-6.1-sol", "(drop_params=True)", "422")
+    )
 
 
 @pytest.mark.parametrize("provider", ["openai", "azure"])

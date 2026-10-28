@@ -158,7 +158,7 @@ async def test_openai_model_does_not_forward_stream_options_to_responses_api():
         await litellm.anthropic.messages.acreate(
             max_tokens=100,
             messages=[{"role": "user", "content": "Hello, how are you?"}],
-            model="openai/gpt-5.5",
+            model="openai/gpt-6.1-sol",
             api_key="test-api-key",
             stream_options={"include_usage": True},
         )
@@ -668,7 +668,9 @@ class TestThinkingSummaryPreservation:
         )
 
         thinking = {"type": "enabled", "budget_tokens": 5000, "summary": "concise"}
-        result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(thinking)
+        result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(
+            thinking, model="openai/gpt-6.1-sol"
+        )
         assert result == {"effort": "high", "summary": "concise"}
 
     def test_responses_adapter_no_summary_by_default(self):
@@ -682,7 +684,9 @@ class TestThinkingSummaryPreservation:
         try:
             litellm.reasoning_auto_summary = False
             thinking = {"type": "enabled", "budget_tokens": 5000}
-            result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(thinking)
+            result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(
+                thinking, model="openai/gpt-6.1-sol"
+            )
             assert result == {"effort": "high"}
             assert result is not None and "summary" not in result
         finally:

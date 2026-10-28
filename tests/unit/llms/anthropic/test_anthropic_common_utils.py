@@ -11,6 +11,7 @@ Verifies that:
 """
 
 import json
+import logging
 import os
 import sys
 import threading
@@ -4512,13 +4513,22 @@ def test_shared_legacy_thinking_translation_rejects_a_non_numeric_budget(budget_
 
 @pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize("budget_tokens", _NON_NUMERIC_BUDGETS)
-def test_shared_legacy_thinking_translation_drops_a_non_numeric_budget_under_drop_params(budget_tokens: object) -> None:
+def test_shared_legacy_thinking_translation_drops_a_non_numeric_budget_under_drop_params(
+    budget_tokens: object, caplog: pytest.LogCaptureFixture
+) -> None:
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
     optional_params: Final = {"thinking": {"type": "enabled", "budget_tokens": budget_tokens}}
 
-    AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
-        model="claude-opus-5", optional_params=optional_params, custom_llm_provider="azure_ai", drop_params=True
-    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
+            model="claude-opus-5", optional_params=optional_params, custom_llm_provider="azure_ai", drop_params=True
+        )
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
 
     assert optional_params == {"thinking": {"type": "adaptive"}}
+    assert len(drop_warnings) == 1
+    assert all(
+        fragment in drop_warnings[0]
+        for fragment in (f"thinking.budget_tokens={budget_tokens!r}", "claude-opus-5", "(drop_params=True)")
+    )

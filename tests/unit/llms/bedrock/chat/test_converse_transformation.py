@@ -1,6 +1,7 @@
 import base64
 import copy
 import json
+import logging
 import os
 import re
 from collections.abc import Iterator, Mapping
@@ -1729,6 +1730,24 @@ def test_bedrock_deepseek_r1_reasoning_params_not_forwarded_by_map(param):
         headers={},
     )
     assert request.get("additionalModelRequestFields") is None
+
+
+def test_bedrock_deepseek_r1_reasoning_effort_drop_warns_once(caplog: pytest.LogCaptureFixture) -> None:
+    model: Final = "bedrock/converse/us.deepseek.r1-v1:0"
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = AmazonConverseConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "high", "max_tokens": 100},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+    assert "reasoning_effort" not in optional_params
+    assert optional_params["maxTokens"] == 100
+    assert len(drop_warnings) == 1
+    assert "reasoning_effort='high'" in drop_warnings[0]
+    assert repr(model) in drop_warnings[0]
+    assert "drop_params" not in drop_warnings[0]
 
 
 def test_bedrock_deepseek_v3_reasoning_effort_forwarded_raw():

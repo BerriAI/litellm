@@ -48,6 +48,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     message_field,
     parts_of,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING,
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
@@ -1174,9 +1175,12 @@ class AmazonConverseConfig(BaseConfig):
                         drop_params=drop_params,
                     )
             elif param == "reasoning_effort" and isinstance(value, str) and drop_reasoning_effort_param:
-                verbose_logger.debug(
-                    "Dropping unsupported `reasoning_effort` param for Bedrock model=%s; it always reasons and rejects it.",
+                warn_dropped_reasoning(
+                    param,
+                    value,
                     model,
+                    "it always reasons and Bedrock rejects reasoning_effort for it.",
+                    drop_params_gated=False,
                 )
             elif (
                 param == "reasoning_effort"

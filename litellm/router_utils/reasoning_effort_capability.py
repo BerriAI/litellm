@@ -35,7 +35,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
-from litellm.litellm_core_utils.reasoning_effort_utils import reasoning_effort_from_thinking
+from litellm.litellm_core_utils.reasoning_effort_utils import reasoning_effort_from_thinking_silently
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, validated_object_mapping
 from litellm.types.llms.anthropic import AnthropicThinkingParam
 from litellm.types.llms.openai import REASONING_EFFORT
@@ -170,7 +170,7 @@ def with_adaptive_thinking_as_effort(
     params: Mapping[str, object], *, model: str, custom_llm_provider: str, drop_params: bool
 ) -> Mapping[str, object]:
     translated: Final = dict(params)
-    AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
+    AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model_silently(
         model=model, optional_params=translated, custom_llm_provider=custom_llm_provider, drop_params=drop_params
     )
     return translated
@@ -178,7 +178,7 @@ def with_adaptive_thinking_as_effort(
 
 def thinking_budget_effort(thinking: object, *, model: str, custom_llm_provider: str, drop_params: bool) -> str | None:
     if custom_llm_provider in _PROVIDERS_SENDING_THINKING_AS_EFFORT:
-        return reasoning_effort_from_thinking(thinking, drop_params=drop_params)
+        return reasoning_effort_from_thinking_silently(thinking, drop_params=drop_params)
     adaptive_config: Final = as_str_mapping(
         with_adaptive_thinking_as_effort(
             {"thinking": thinking}, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
@@ -189,7 +189,7 @@ def thinking_budget_effort(thinking: object, *, model: str, custom_llm_provider:
         return adaptive_effort if isinstance(adaptive_effort, str) else None
     if "thinking" in (get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider) or ()):
         return None
-    return reasoning_effort_from_thinking(thinking, drop_params=drop_params)
+    return reasoning_effort_from_thinking_silently(thinking, drop_params=drop_params)
 
 
 def provider_reads_thinking(thinking: object, *, model: str, custom_llm_provider: str, drop_params: bool) -> bool:

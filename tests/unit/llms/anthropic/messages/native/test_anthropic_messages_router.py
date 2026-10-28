@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import struct
 import uuid
 from collections.abc import AsyncIterable, Mapping
@@ -760,24 +761,32 @@ async def test_native_messages_send_no_effort_for_a_default_effort_beside_a_thin
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model_info", [None, _DECLARING_LOW_AND_HIGH])
 @pytest.mark.parametrize("drop_globally", [False, True])
-async def test_native_messages_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude(
+async def test_native_messages_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude_with_one_warning(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     model_info: Mapping[str, object] | None,
     drop_globally: bool,
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", drop_globally)
     request_drop: Final = {} if drop_globally else {"drop_params": True}
 
-    dropped: Final = await _native_opus_body_sent(
-        respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": "lots"}, **request_drop
-    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        dropped: Final = await _native_opus_body_sent(
+            respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": "lots"}, **request_drop
+        )
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
     adaptive_alone: Final = await _native_opus_body_sent(
         respx_mock, model_info, thinking={"type": "adaptive"}, **request_drop
     )
 
     assert "output_config" not in adaptive_alone
     assert dropped == adaptive_alone
+    assert len(drop_warnings) == 1
+    assert all(
+        fragment in drop_warnings[0]
+        for fragment in ("thinking.budget_tokens='lots'", "claude-opus-5-5", "(drop_params=True)")
+    )
 
 
 _MIXED_GROUP: Final = "gpt-5.6-mixed"

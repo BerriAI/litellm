@@ -910,7 +910,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 except openai.UnprocessableEntityError as e:
                     ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                     if litellm.drop_params is True or drop_params is True:
-                        inference_params = drop_params_from_unprocessable_entity_error(e, inference_params)
+                        inference_params = drop_params_from_unprocessable_entity_error(
+                            e, inference_params, model=model, drop_params_gated=True
+                        )
                     else:
                         raise e
                     # e.message
@@ -1066,7 +1068,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             except openai.UnprocessableEntityError as e:
                 ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                 if litellm.drop_params is True or drop_params is True:
-                    data = drop_params_from_unprocessable_entity_error(e, data)
+                    data = drop_params_from_unprocessable_entity_error(e, data, model=model, drop_params_gated=True)
                 else:
                     raise e
                 # e.message
@@ -1220,7 +1222,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             except openai.UnprocessableEntityError as e:
                 ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                 if litellm.drop_params is True or drop_params is True:
-                    data = drop_params_from_unprocessable_entity_error(e, data)
+                    data = drop_params_from_unprocessable_entity_error(e, data, model=model, drop_params_gated=True)
                 else:
                     raise e
             except (

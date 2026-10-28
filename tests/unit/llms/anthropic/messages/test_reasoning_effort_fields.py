@@ -162,7 +162,8 @@ class TestAdapterAdaptiveThinking:
 
         adapter = LiteLLMAnthropicMessagesAdapter()
         result = adapter.translate_anthropic_thinking_to_reasoning_effort(
-            {"type": "adaptive"}
+            {"type": "adaptive"},
+            model="openai/gpt-6.1-sol",
         )
         assert result == "medium"
 
@@ -198,6 +199,7 @@ class TestAdapterAdaptiveThinking:
         result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(
             thinking={"type": "adaptive"},
             output_config={"effort": "xhigh"},
+            model="openai/gpt-6.1-sol",
         )
         assert result is not None
         assert result["effort"] == "xhigh"
@@ -210,6 +212,7 @@ class TestAdapterAdaptiveThinking:
 
         result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(
             thinking={"type": "adaptive"},
+            model="openai/gpt-6.1-sol",
         )
         assert result is not None
         assert result["effort"] == "medium"

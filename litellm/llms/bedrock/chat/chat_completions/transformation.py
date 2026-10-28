@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     inline_remote_image_urls,
     inline_remote_media,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token
@@ -121,6 +122,13 @@ def without_refused_reasoning_effort(model: str, params: Mapping[str, object]) -
     effort: Final = params.get("reasoning_effort")
     if not isinstance(effort, str) or effort not in chat_completions_reasoning_efforts_refused_for(model):
         return params
+    warn_dropped_reasoning(
+        "reasoning_effort",
+        effort,
+        model,
+        "AWS's Chat Completions endpoint rejects that level for this model family, so AWS applies its default effort.",
+        drop_params_gated=False,
+    )
     return _without_params(params, frozenset(("reasoning_effort",)))
 
 
@@ -444,6 +452,14 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
                     "`litellm.drop_params = True` to drop them"
                 ),
                 status_code=400,
+            )
+        if malformed_effort:
+            warn_dropped_reasoning(
+                "reasoning_effort",
+                raw_params["reasoning_effort"],
+                model,
+                "Bedrock's Chat Completions endpoint takes it only as a string, so AWS applies its default effort.",
+                drop_params_gated=True,
             )
         rejected_stop: Final = frozenset(("stop",)) if bedrock_rejects_stop_sequences(model) else frozenset[str]()
         return dict(

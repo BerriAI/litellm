@@ -34,7 +34,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     message_field,
     parts_of,
 )
-from litellm.litellm_core_utils.reasoning_effort_utils import non_numeric_thinking_budget_error
+from litellm.litellm_core_utils.reasoning_effort_utils import DroppedThinkingBudget, non_numeric_thinking_budget_error
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.wif import (
     aget_anthropic_wif_token,
@@ -512,11 +512,11 @@ def _numeric_budget_tokens(budget_tokens: object) -> int | None:
         return None
 
 
-def _legacy_budget_tokens(budget_tokens: object, *, drop_params: bool) -> int | None:
+def _legacy_budget_tokens(budget_tokens: object, *, drop_params: bool) -> int | DroppedThinkingBudget:
     if (numeric := _numeric_budget_tokens(budget_tokens)) is not None:
         return numeric
     if drop_params or litellm.drop_params is True:
-        return None
+        return DroppedThinkingBudget(budget_tokens)
     raise non_numeric_thinking_budget_error(budget_tokens)
 
 
@@ -985,6 +985,22 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         custom_llm_provider: str,
         drop_params: bool,
     ) -> None:
+        dropped: Final = AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model_silently(
+            model=model,
+            optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            drop_params=drop_params,
+        )
+        if dropped is not None:
+            dropped.warn(model)
+
+    @staticmethod
+    def translate_legacy_thinking_for_adaptive_model_silently(
+        model: str,
+        optional_params: MutableMapping[str, object],  # mutable-ok: in-place out-param like the sibling helpers
+        custom_llm_provider: str,
+        drop_params: bool,
+    ) -> DroppedThinkingBudget | None:
         """Translate legacy ``thinking.type=enabled`` to adaptive for the
         adaptive-thinking models that reject it (4.7+ and the 5 families).
         Models flagged ``supports_legacy_thinking`` (the 4.6 family) accept the
@@ -993,12 +1009,12 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         ``output_config.effort`` is never overridden.
         """
         if not AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
-            return
+            return None
         if AnthropicModelInfo._supports_legacy_thinking(model, custom_llm_provider):
-            return
+            return None
         thinking: Final = validated_object_mapping(optional_params.get("thinking"))
         if thinking is None or thinking.get("type") != "enabled":
-            return
+            return None
 
         budget_tokens: Final = _legacy_budget_tokens(thinking.get("budget_tokens", 0), drop_params=drop_params)
         display: Final = thinking.get("display")
@@ -1007,8 +1023,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             thinking, rebuilt_keys=frozenset(("type", "budget_tokens", "display")), drop_params=drop_params
         )
         optional_params["thinking"] = {**carried_keys, "type": "adaptive", **supported_display}
-        if budget_tokens is None:
-            return
+        if isinstance(budget_tokens, DroppedThinkingBudget):
+            return budget_tokens
         effort: Final = AnthropicModelInfo._legacy_budget_to_effort(
             model=model, budget_tokens=budget_tokens, custom_llm_provider=custom_llm_provider
         )
@@ -1017,6 +1033,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             "effort": effort,
             **(existing_output_config if isinstance(existing_output_config, dict) else MappingProxyType({})),
         }
+        return None
 
     @staticmethod
     def _legacy_budget_to_effort(model: str, budget_tokens: int, custom_llm_provider: str) -> str:

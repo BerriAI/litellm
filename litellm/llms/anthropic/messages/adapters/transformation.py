@@ -656,6 +656,7 @@ class LiteLLMAnthropicMessagesAdapter:
     def translate_anthropic_thinking_to_reasoning_effort(
         thinking: AnthropicThinkingParam,
         *,
+        model: str,
         drop_params: bool = True,
     ) -> str | None:
         """
@@ -675,7 +676,7 @@ class LiteLLMAnthropicMessagesAdapter:
         if thinking_type == "disabled":
             return "none"
         elif thinking_type == "enabled":
-            return reasoning_effort_from_thinking(thinking, drop_params=drop_params)
+            return reasoning_effort_from_thinking(thinking, model=model, drop_params=drop_params)
         elif thinking_type == "adaptive":
             # Adaptive thinking: effort is controlled by output_config.effort,
             # not budget_tokens. Return a default; caller should override with
@@ -742,7 +743,7 @@ class LiteLLMAnthropicMessagesAdapter:
             return {"thinking": thinking}
         else:
             reasoning_effort: Final = LiteLLMAnthropicMessagesAdapter.translate_anthropic_thinking_to_reasoning_effort(
-                thinking
+                thinking, model=model
             )
             if reasoning_effort:
                 return {
@@ -1180,7 +1181,7 @@ class LiteLLMAnthropicMessagesAdapter:
             return
 
         reasoning_effort: Final = declared_effort or self.translate_anthropic_thinking_to_reasoning_effort(
-            cast(AnthropicThinkingParam, thinking), drop_params=drop_params
+            cast(AnthropicThinkingParam, thinking), model=model, drop_params=drop_params
         )
         if not reasoning_effort:
             return

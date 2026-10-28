@@ -9342,9 +9342,10 @@ def test_a_non_numeric_thinking_budget_on_adaptive_claude_is_rejected_with_a_400
 @pytest.mark.parametrize("drop_globally", [False, True])
 @pytest.mark.parametrize("model_info", [None, _OPUS_DECLARING_LOW_AND_HIGH])
 @pytest.mark.parametrize("body_sent", [_anthropic_chat_body_sent, _bedrock_converse_request_fields_sent])
-def test_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude(
+def test_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude_with_one_warning(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     body_sent: Callable[..., Mapping[str, object]],
     model_info: Mapping[str, object] | None,
     drop_globally: bool,
@@ -9352,13 +9353,40 @@ def test_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude(
     monkeypatch.setattr(litellm, "drop_params", drop_globally)
     request_drop: Final = {} if drop_globally else {"drop_params": True}
 
-    dropped: Final = body_sent(
-        respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": "lots"}, **request_drop
-    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        dropped: Final = body_sent(
+            respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": "lots"}, **request_drop
+        )
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
     adaptive_alone: Final = body_sent(respx_mock, model_info, thinking={"type": "adaptive"}, **request_drop)
 
     assert "output_config" not in adaptive_alone
     assert dropped == adaptive_alone
+    assert len(drop_warnings) == 1
+    assert all(
+        fragment in drop_warnings[0]
+        for fragment in ("thinking.budget_tokens='lots'", "claude-opus-5-5", "(drop_params=True)")
+    )
+
+
+@pytest.mark.parametrize("model_info", [None, _KIMI_DEPLOYMENT])
+def test_drop_params_drops_a_non_numeric_thinking_budget_on_hosted_vllm_with_one_warning(
+    respx_mock: respx.MockRouter, caplog: pytest.LogCaptureFixture, model_info: Mapping[str, object] | None
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        sent: Final = _chat_body_sent(
+            respx_mock,
+            "hosted_vllm/my-kimi",
+            None,
+            model_info,
+            thinking={"type": "enabled", "budget_tokens": "lots"},
+            drop_params=True,
+        )
+
+    assert not {"reasoning_effort", "thinking"} & sent.keys()
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+    assert len(drop_warnings) == 1
+    assert all(fragment in drop_warnings[0] for fragment in ("thinking.budget_tokens='lots'", "my-kimi"))
 
 
 @pytest.mark.parametrize("model", ["azure_ai/my-kimi", "hosted_vllm/my-kimi"])
