@@ -2039,7 +2039,7 @@ class TestFailureOnlyDestination:
         assert {s.name for s in dest_exporter.get_finished_spans()} == {"POST /v1/chat/completions", "chat gpt-4"}
 
     @pytest.mark.parametrize("call_failed", [False, True], ids=["success", "failure"])
-    def test_the_operators_own_exporter_keeps_every_request(self, call_failed):
+    def test_the_operators_own_exporter_keeps_every_request(self, call_failed: bool):
         global_exporter, dest_exporter = InMemorySpanExporter(), InMemorySpanExporter()
 
         self._run(self._fan_out(dest_exporter, global_exporter), call_failed=call_failed)
@@ -2047,7 +2047,7 @@ class TestFailureOnlyDestination:
         assert {s.name for s in global_exporter.get_finished_spans()} == self.NAMES
         assert {s.name for s in dest_exporter.get_finished_spans()} == (self.NAMES if call_failed else set())
 
-    def test_a_flood_of_held_trees_warns_that_failures_can_be_lost(self, caplog):
+    def test_a_flood_of_held_trees_warns_that_failures_can_be_lost(self, caplog: pytest.LogCaptureFixture):
         dest_exporter = InMemorySpanExporter()
         provider: Final = self._fan_out(dest_exporter)
 
@@ -2066,7 +2066,9 @@ class TestFailureOnlyDestination:
         assert warnings[0].startswith("OTel V2 fan-out: 1 request trees"), warnings[0]
         assert dest_exporter.get_finished_spans() == ()
 
-    def test_a_request_that_outgrows_its_span_cap_warns_that_its_failure_can_be_lost(self, caplog):
+    def test_a_request_that_outgrows_its_span_cap_warns_that_its_failure_can_be_lost(
+        self, caplog: pytest.LogCaptureFixture
+    ):
         dest_exporter = InMemorySpanExporter()
         provider: Final = self._fan_out(dest_exporter)
 
@@ -2388,16 +2390,19 @@ class TestProviderWiring:
         assert deliverable_destinations(lambda: expected, TracerProvider()) == ()
         assert in_fresh_context(run) == expected
 
-    def test_auth_reads_no_key_or_team_config_when_nothing_can_deliver_a_destination(self, monkeypatch):
+    def test_auth_reads_no_key_or_team_config_when_nothing_can_deliver_a_destination(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
         from litellm.proxy import litellm_pre_call_utils
         from litellm.proxy.auth.user_api_key_auth import _seed_request_destinations
 
         resolved: Final[list[UserAPIKeyAuth]] = []
-        monkeypatch.setattr(
-            litellm_pre_call_utils,
-            "resolve_tenant_otel_destinations",
-            lambda auth, _headers=None: resolved.append(auth) or (LANGFUSE_DEST,),
-        )
+
+        def resolve(auth: UserAPIKeyAuth, _headers: object = None) -> tuple[OtelDestination, ...]:
+            resolved.append(auth)
+            return (LANGFUSE_DEST,)
+
+        monkeypatch.setattr(litellm_pre_call_utils, "resolve_tenant_otel_destinations", resolve)
         monkeypatch.setattr(otel_logger, "fan_out_provider", TracerProvider)
 
         def run():
@@ -4124,7 +4129,9 @@ class TestConfigTeamDestinations:
         ],
         ids=["key-logging", "team-logging", "team-callback-settings", "unconfigured-team"],
     )
-    def test_a_level_that_wins_over_the_config_keeps_it_out(self, monkeypatch, auth):
+    def test_a_level_that_wins_over_the_config_keeps_it_out(
+        self, monkeypatch: pytest.MonkeyPatch, auth: UserAPIKeyAuth
+    ):
         monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["cfg-team.internal"], raising=False)
 
         assert resolve_tenant_otel_destinations(auth) == ()
