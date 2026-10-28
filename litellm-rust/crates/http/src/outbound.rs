@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use reqwest::{
-    Request,
+    Request, Url,
     header::{CONTENT_TYPE, HeaderMap},
 };
 use serde::Serialize;
@@ -28,11 +28,11 @@ pub fn json(
     timeout: Option<Duration>,
 ) -> Result<Request, Error> {
     let body = serde_json::to_vec(body).map_err(|error| Error::RequestBody(error.to_string()))?;
-    let with_headers = headers
-        .iter()
-        .fold(http::Request::post(url), |builder, (name, value)| {
-            builder.header(name, value)
-        });
+    let url = Url::parse(url).map_err(|error| Error::Request(error.to_string()))?;
+    let with_headers = headers.iter().fold(
+        http::Request::post(url.as_str()),
+        |builder, (name, value)| builder.header(name, value),
+    );
     let has_content_type = with_headers
         .headers_ref()
         .is_some_and(|headers| headers.contains_key(CONTENT_TYPE));
@@ -63,6 +63,7 @@ mod tests {
     use std::sync::Mutex;
 
     use reqwest::header::HeaderValue;
+    use rstest::rstest;
     use serde_json::json;
 
     use super::*;
@@ -159,19 +160,76 @@ mod tests {
         assert_eq!(error, Error::ComputedHeader("authorization".into()));
     }
 
-    #[test]
-    fn a_request_that_cannot_be_sent_fails_when_it_is_built() {
-        assert!(matches!(
-            json("not a url", &[], &json!({}), None),
-            Err(Error::Request(_))
-        ));
-        assert!(matches!(
+    #[rstest]
+    #[case::unicode_domain("https://例え.test/v1/chat/completions")]
+    #[case::unicode_path("https://provider.test/模型/v1/chat/completions")]
+    #[case::unicode_query("https://provider.test/v1/chat/completions?region=日本")]
+    #[case::ascii("https://provider.test/v1/chat/completions?region=us-east-1")]
+    #[case::escaped("https://provider.test/%E6%A8%A1%E5%9E%8B?q=%E6%97%A5%E6%9C%AC")]
+    fn provider_urls_keep_reqwest_normalization(#[case] url: &str) {
+        let body = json!({"text": "日本"});
+        let timeout = Duration::from_secs(7);
+        let expected = reqwest::Client::new()
+            .post(url)
+            .header(CONTENT_TYPE, "application/json")
+            .header("x-caller", "kept")
+            .body(serde_json::to_vec(&body).unwrap())
+            .timeout(timeout)
+            .build()
+            .unwrap();
+        let signer = Recording::default();
+        let request = signed(
             json(
-                "https://u.test/",
-                &[("x-bad".into(), "\u{7f}".into())],
-                &json!({}),
-                None
-            ),
+                url,
+                &[("x-caller".into(), "kept".into())],
+                &body,
+                Some(timeout),
+            )
+            .unwrap(),
+            &signer,
+        )
+        .unwrap();
+
+        assert_eq!(request.url(), expected.url());
+        assert_eq!(request.method(), expected.method());
+        assert_eq!(request.timeout(), expected.timeout());
+        assert_eq!(
+            request.headers()[CONTENT_TYPE],
+            expected.headers()[CONTENT_TYPE]
+        );
+        assert_eq!(
+            request.headers()["x-caller"],
+            expected.headers()["x-caller"]
+        );
+        assert_eq!(request.headers()["authorization"], "signed");
+        assert_eq!(
+            request.body().unwrap().as_bytes(),
+            expected.body().unwrap().as_bytes()
+        );
+        assert_eq!(
+            request.body().unwrap().as_bytes().unwrap(),
+            signer.0.lock().unwrap().as_slice()
+        );
+    }
+
+    #[rstest]
+    #[case::relative_url("not a url", "kept")]
+    #[case::invalid_host("https://[", "kept")]
+    #[case::invalid_port("https://u.test:invalid", "kept")]
+    #[case::invalid_header("https://u.test/", "\u{7f}")]
+    fn a_request_that_cannot_be_sent_fails_when_it_is_built(
+        #[case] url: &str,
+        #[case] header: &str,
+    ) {
+        assert!(
+            reqwest::Client::new()
+                .post(url)
+                .header("x-caller", header)
+                .build()
+                .is_err()
+        );
+        assert!(matches!(
+            json(url, &[("x-caller".into(), header.into())], &json!({}), None),
             Err(Error::Request(_))
         ));
     }
