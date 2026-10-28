@@ -123,7 +123,7 @@ def test_streamed_llama_3_chat_after_a_failed_download_counts_usage_without_reac
     identity: Final = f"chatcmpl-{uuid.uuid4().hex}"
     with wire_server(_stream_without_usage(identity)) as upstream, owned.gateway.scenario() as scenario:
         model: Final = _llama_3(scenario, upstream.url)
-        assert _local_count(owned.gateway, model)[0] == "openai_tokenizer"
+        counted: Final = _local_count(owned.gateway, model)
         attempted: Final = hub.received.qsize()
         with owned.gateway.client.stream(
             "POST",
@@ -140,11 +140,12 @@ def test_streamed_llama_3_chat_after_a_failed_download_counts_usage_without_reac
             lines: Final = tuple(line for line in response.iter_lines() if line.startswith("data: "))
         retried: Final = hub.received.qsize() - attempted
         sent: Final = tuple((request.method, request.target) for request in upstream.drain())
+    assert counted[0] == "openai_tokenizer", counted
     assert lines[-1] == "data: [DONE]", lines
     chunks: Final = tuple(_Chunk.model_validate_json(line.removeprefix("data: ")) for line in lines[:-1])
     assert {chunk.id for chunk in chunks} == {identity}, lines
     usages: Final = tuple(chunk.usage for chunk in chunks if chunk.usage is not None)
-    assert len(usages) == 1 and usages[0].prompt_tokens > 0, lines
+    assert tuple(usage.prompt_tokens for usage in usages) == (counted[1],), (counted, lines)
     assert sent == (("POST", "/chat/completions"),), sent
     assert retried == 0, f"{retried} hub requests while streaming after the download already failed"
 
