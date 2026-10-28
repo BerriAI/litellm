@@ -2581,7 +2581,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             # Some responses (MCP CallToolResult, DecisionsResponse, list) have no
             # .get(). They carry no LLM response fields, so treat them as None.
             if not callable(getattr(response_obj, "get", None)):
-                response_obj = None
+                response_obj = None  # rebind-ok: no .get() means no LLM response fields
 
             # The unique identifier for the LLM call.
             # Completions have a provider response ID (e.g. "chatcmpl-xxx"),
