@@ -179,6 +179,35 @@ mod tests {
         });
     }
 
+    #[rstest::rstest]
+    #[case::ascii("busy ".repeat(80))]
+    #[case::unicode("é".repeat(300))]
+    fn long_provider_bodies_reach_python_intact(
+        #[case] message: String,
+        #[values(RequestMarker::Unmarked, RequestMarker::Messages)] marker: RequestMarker,
+    ) {
+        let envelope = serde_json::json!({
+            "type": "error",
+            "error": {"type": "overloaded_error", "message": message},
+            "request_id": "provider-request",
+        });
+        let body = envelope.to_string();
+        let error = litellm_http::Error::upstream(529, body.clone()).into();
+        Python::initialize();
+        Python::attach(|py| {
+            let upstream = route_failure(py, error, marker, Ok).unwrap();
+            assert!(upstream.is_instance_of::<RustUpstreamError>(py));
+            let ((status, returned_body), headers) = upstream_payload(py, &upstream);
+            assert_eq!(status, 529);
+            assert_eq!(returned_body, body);
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&returned_body).unwrap(),
+                envelope
+            );
+            assert!(headers.is_empty());
+        });
+    }
+
     #[test]
     fn missing_api_key_stays_a_runtime_error_while_other_auth_failures_are_value_errors() {
         Python::initialize();
