@@ -353,6 +353,35 @@ def test_a_database_refusing_work_during_a_failover_answers_503(postgres_refusal
     assert (wrapped.code, wrapped.type) == ("503", "no_db_connection")
 
 
+@pytest.mark.parametrize(
+    "localized_refusal",
+    [
+        {
+            "error_code": "P2010",
+            "message": "Raw query failed. Message: `FEHLER: kann UPDATE nicht in einer Nur-Lese-Transaktion ausführen`",
+            "meta": {"code": "25006"},
+        },
+        {
+            "message": 'PostgresError { code: "57P01", message: "Verbindung wird abgebrochen", severity: "FATAL" }',
+        },
+    ],
+)
+def test_a_failover_refusal_in_a_localized_postgres_answers_503(localized_refusal: dict[str, object]) -> None:
+    refused: Final = prisma.errors.DataError({"user_facing_error": localized_refusal})
+
+    wrapped: Final = proxy_exception_for(refused, default_status_code=400)
+
+    assert (wrapped.code, wrapped.type) == ("503", "no_db_connection")
+
+
+def test_a_failover_phrase_outside_the_database_is_not_reported_as_a_database_outage() -> None:
+    callback_down: Final = ValueError("FATAL: the database system is starting up")
+
+    wrapped: Final = proxy_exception_for(callback_down, default_status_code=400)
+
+    assert (wrapped.code, wrapped.type) == ("400", "invalid_request_error")
+
+
 def test_a_database_dropped_mid_query_answers_503_though_prisma_fails_to_name_the_error() -> None:
     engine_reply_with_null_meta: Final = [{"user_facing_error": {"error_code": "P1001", "message": "", "meta": None}}]
     with pytest.raises(AttributeError) as raised:

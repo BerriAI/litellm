@@ -18440,6 +18440,8 @@ async def async_queue_request(
             raise ProxyException(
                 message=e.message, type="invalid_request_error", param=getattr(e, "param", None), code=e.status_code
             ) from e
+        if isinstance(e, ProxyException):
+            raise
         raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
 
 
@@ -19719,6 +19721,8 @@ async def update_config(
     except Exception as e:
         verbose_proxy_logger.error("litellm.proxy.proxy_server.update_config(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
+        if isinstance(e, ProxyException):
+            raise
         raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
 
 
@@ -20900,6 +20904,8 @@ async def get_config(
         }
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.get_config(): Exception occured - %s", e)
+        if isinstance(e, ProxyException):
+            raise
         raise proxy_exception_for(e, default_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from e
 
 

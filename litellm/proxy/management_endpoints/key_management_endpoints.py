@@ -4088,6 +4088,8 @@ async def update_key_fn(
         # update based on remaining passed in values
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_key_fn(): Exception occured - %s", e)
+        if isinstance(e, ProxyException):
+            raise
         raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
 
 
@@ -7231,6 +7233,8 @@ async def list_keys(
 
     except Exception as e:
         verbose_proxy_logger.exception("Error in list_keys: %s", e)
+        if isinstance(e, ProxyException):
+            raise
         raise proxy_exception_for(e, default_status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR) from e
 
 
@@ -7375,6 +7379,8 @@ async def key_aliases(
 
     except Exception as e:
         verbose_proxy_logger.exception("Error in key_aliases: %s", e)
+        if isinstance(e, ProxyException):
+            raise
         raise proxy_exception_for(e, default_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from e
 
 

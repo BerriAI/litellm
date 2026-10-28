@@ -23396,6 +23396,31 @@ async def test_update_key_reports_a_bad_budget_duration_as_a_request_error_not_a
 
 
 @pytest.mark.asyncio
+async def test_update_key_passes_its_own_rejection_through_without_making_it_its_own_cause(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import update_key_fn
+
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr(  # test-quality-ok: the endpoint reads proxy_server.prisma_client itself, no parameter to inject
+        "litellm.proxy.proxy_server.prisma_client", prisma_client
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_key_fn(
+            request=MagicMock(spec=Request),
+            data=UpdateKeyRequest(key="sk-missing", max_budget=5),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("404", "not_found_error")
+    assert exc_info.value.__cause__ is None
+
+
+@pytest.mark.asyncio
 async def test_key_aliases_answers_503_when_the_database_is_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
     import prisma.errors
 

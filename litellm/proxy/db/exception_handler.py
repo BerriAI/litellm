@@ -221,12 +221,6 @@ class PrismaDBExceptionHandler:
                 "network is unreachable",
                 "no route to host",
                 "broken pipe",
-                "is not currently accepting connections",
-                "the database system is starting up",
-                "the database system is shutting down",
-                "the database system is in recovery mode",
-                "the database system is not yet accepting connections",
-                "terminating connection due to administrator command",
             )
             if any(keyword in error_message for keyword in connection_keywords):
                 return True
@@ -384,8 +378,6 @@ class PrismaDBExceptionHandler:
         if PrismaDBExceptionHandler.is_prisma_engine_internal_error(e):
             return True
         if "cached plan must not change result type" in str(e).lower():
-            return True
-        if "in a read-only transaction" in str(e).lower():
             return True
 
         # OSError already covers ConnectionError and (Py3.3+) TimeoutError.

@@ -1397,6 +1397,8 @@ async def organization_member_add(
         )
     except Exception as e:
         verbose_proxy_logger.exception("Error adding member to organization: %s", e)
+        if isinstance(e, ProxyException):
+            raise
         raise proxy_exception_for(e, default_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from e
 
 

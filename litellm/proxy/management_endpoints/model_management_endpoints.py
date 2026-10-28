@@ -2609,6 +2609,8 @@ async def delete_model(
 
     except Exception as e:
         verbose_proxy_logger.exception("Failed to delete model. Due to error - %s", e)
+        if isinstance(e, ProxyException):
+            raise
         raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
 
 
@@ -2864,6 +2866,8 @@ async def add_new_model(
 
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.add_new_model(): Exception occured - %s", e)
+        if isinstance(e, ProxyException):
+            raise
         raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
 
 
@@ -3074,6 +3078,8 @@ async def update_model(
             return None if model_response is None else _model_write_response(model_response, member_write)
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_model(): Exception occured - %s", e)
+        if isinstance(e, ProxyException):
+            raise
         raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
 
 

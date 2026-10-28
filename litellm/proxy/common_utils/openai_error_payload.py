@@ -26,6 +26,17 @@ _OPENAI_ERROR_TYPE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
 
 _AUTH_FAILURE_STATUS_CODES: Final = frozenset({status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN})
 
+_FAILOVER_SQLSTATES: Final = frozenset({"25006", "57P01", "57P02", "57P03"})
+
+_FAILOVER_REFUSALS: Final = (
+    "is not currently accepting connections",
+    "the database system is starting up",
+    "the database system is shutting down",
+    "the database system is in recovery mode",
+    "the database system is not yet accepting connections",
+    "terminating connection due to administrator command",
+)
+
 
 def attribute_of(value: object, name: str, default: object = None) -> object:
     return getattr(value, name, default)
@@ -106,8 +117,18 @@ def _prisma_is_loaded() -> bool:
 def _is_prisma_outage(exc: Exception) -> bool:
     if PrismaDBExceptionHandler.is_prisma_engine_internal_error(exc):
         return True
-    raised_by_prisma: Final = type(exc).__module__.partition(".")[0] == "prisma"
-    return raised_by_prisma and PrismaDBExceptionHandler.is_database_service_unavailable_error(exc)
+    if type(exc).__module__.partition(".")[0] != "prisma":
+        return False
+    return PrismaDBExceptionHandler.is_database_service_unavailable_error(exc) or _is_failover_refusal(exc)
+
+
+def _is_failover_refusal(exc: Exception) -> bool:
+    if PrismaDBExceptionHandler.is_read_only_transaction_error(exc):
+        return True
+    if PrismaDBExceptionHandler.postgres_sqlstate(exc) in _FAILOVER_SQLSTATES:
+        return True
+    message: Final = str(exc).lower()
+    return any(refusal in message for refusal in _FAILOVER_REFUSALS)
 
 
 def _openai_shaped_proxy_exception(exc: Exception, message: str, status_code: int) -> ProxyException:

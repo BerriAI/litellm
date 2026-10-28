@@ -683,6 +683,8 @@ async def health_services_endpoint(
     except Exception as e:
         verbose_proxy_logger.error("litellm.proxy.proxy_server.health_services_endpoint(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
+        if isinstance(e, ProxyException):
+            raise
         raise proxy_exception_for(e, default_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from e
 
 
