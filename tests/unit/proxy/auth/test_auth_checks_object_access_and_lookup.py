@@ -27,6 +27,7 @@ from litellm.proxy._types import (
     LiteLLM_EndUserTable,
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TagTable,
+    LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -48,6 +49,8 @@ from litellm.proxy.auth.auth_checks import (
     _check_agent_access_group_model_access,
     check_end_user_budget,
     _check_team_member_budget,
+    personal_key_owner_teams,
+    personal_key_owner_teams_with_status,
     fetch_key_object_from_db_with_reconnect,
     _get_fuzzy_user_object,
     CallerTeamLoader,
@@ -82,6 +85,7 @@ from litellm.constants import (
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import check_api_key_for_custom_headers_or_pass_through_endpoints
+from litellm.proxy.utils import ProxyLogging
 from litellm.proxy import proxy_server
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_bearer_token, encrypt_value_helper
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -3750,6 +3754,85 @@ async def test_tag_max_budget_check_still_enforces_registered_tag_over_budget():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("client_tags", "key_metadata"),
+    [
+        (b'"run-123"', {"tags": ["engineering"]}),
+        (b'""', {}),
+        (b"{}", {}),
+        (b"false", {}),
+        (b"0", {}),
+    ],
+    ids=["string_replaced_by_key_tags", "empty_string", "empty_object", "false", "zero"],
+)
+async def test_common_checks_rejects_a_spent_mapped_tag_whatever_non_list_tags_the_client_sends(
+    client_tags: bytes, key_metadata: dict[str, list[str]]
+):
+    from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+    from litellm.proxy.utils import ProxyLogging
+
+    async def fake_find_many(**kwargs):
+        if "where" not in kwargs:
+            return [_tag_registry_row("usecase:spent")]
+        return [_tag_db_row(name, max_budget=1.0) for name in kwargs["where"]["tag_name"]["in"]]
+
+    async def spent_tag_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return 1.5 if counter_key == "spend:tag:usecase:spent" else fallback_spend
+
+    async def receive():
+        return {
+            "type": "http.request",
+            "body": b'{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"metadata":{"tags":'
+            + client_tags
+            + b"}}",
+        }
+
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=fake_find_many)
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json"), (b"baggage", b"entrypoint=spent")],
+        },
+        receive,
+    )
+    request_body: Final = await read_request_body(request)
+    await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+        request,
+        request_body,
+        {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
+        None,
+        MagicMock(),
+    )
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.get_current_spend", spent_tag_spend),
+        pytest.raises(litellm.BudgetExceededError) as exc_info,
+    ):
+        await common_checks(
+            request_body=request_body,
+            team_object=None,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route="/v1/chat/completions",
+            llm_router=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+            valid_token=UserAPIKeyAuth(token="test-token", metadata=key_metadata),
+            request=request,
+        )
+    assert exc_info.value.entity_id == "usecase:spent"
+
+
+@pytest.mark.asyncio
 async def test_get_team_object_raises_404_when_not_found():
     from unittest.mock import AsyncMock, MagicMock
 
@@ -4640,6 +4723,188 @@ async def test_check_team_member_budget_dispatches_the_configured_alert_before_t
     assert (call_info.spend, call_info.max_budget) == (0.10, 0.10)
     assert (call_info.user_id, call_info.user_email, call_info.team_id) == ("user-1", "member@co.com", "team-1")
     assert call_info.max_budget_alert_emails == {"50": [], "100": ["finance@co.com"]}
+
+
+@pytest.mark.asyncio
+async def test_personal_key_owner_teams_reports_over_budget_and_blocked_teams(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.auth import auth_checks
+
+    cache: Final = UserApiKeyCache()
+    logging_obj: Final = ProxyLogging(user_api_key_cache=cache)
+    owner: Final = LiteLLM_UserTable(
+        user_id="owner",
+        teams=["team-a", "team-b", "team-blocked", "team-other-org"],
+    )
+    loaded_teams: Final = {
+        "team-a": LiteLLM_TeamTable(team_id="team-a", organization_id="org-1"),
+        "team-b": LiteLLM_TeamTable(team_id="team-b", organization_id="org-1"),
+        "team-blocked": LiteLLM_TeamTable(team_id="team-blocked", organization_id="org-1", blocked=True),
+        "team-other-org": LiteLLM_TeamTable(team_id="team-other-org", organization_id="org-2"),
+    }
+    memberships: Final = {
+        "team-a": LiteLLM_TeamMembership(
+            user_id="owner",
+            team_id="team-a",
+            spend=1.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=5.0),
+        ),
+        "team-b": LiteLLM_TeamMembership(
+            user_id="owner",
+            team_id="team-b",
+            spend=1.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
+        ),
+    }
+    get_user = AsyncMock(return_value=owner)
+    get_membership = AsyncMock(side_effect=lambda *, team_id, **_: memberships[team_id])
+
+    async def get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        return loaded_teams[team_id]
+
+    async def current_spend(
+        counter_key: str,
+        fallback_spend: float,
+        max_budget: float | None = None,
+    ) -> float:
+        assert counter_key.startswith("spend:team_member:") and max_budget is not None
+        return fallback_spend
+
+    monkeypatch.setattr(litellm, "personal_key_model_access_from_teams", True)
+    monkeypatch.setattr(auth_checks, "get_user_object", get_user)
+    monkeypatch.setattr(auth_checks, "get_team_object", get_team_object)
+    monkeypatch.setattr(auth_checks, "get_team_membership", get_membership)
+    monkeypatch.setattr(proxy_server, "get_current_spend", current_spend)
+
+    result: Final = await personal_key_owner_teams_with_status(
+        valid_token=UserAPIKeyAuth(api_key="sk-personal", user_id="owner", org_id="org-1"),
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+        proxy_logging_obj=logging_obj,
+    )
+
+    assert tuple(team.team_id for team in result.teams) == ("team-a",)
+    assert {team.team_id for team in result.withheld} == {"team-b", "team-blocked"}
+    assert all(team.team_id != "team-other-org" for team in (*result.teams, *result.withheld))
+    assert result.unreadable is False
+    assert get_user.await_count == 1
+    assert {call.kwargs["team_id"] for call in get_membership.await_args_list} == {"team-a", "team-b"}
+
+
+@pytest.mark.asyncio
+async def test_personal_key_owner_teams_check_db_only_refreshes_cached_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.auth import auth_checks
+
+    user_id = "owner-cache-refresh"
+    cached_owner: Final = LiteLLM_UserTable(
+        user_id=user_id,
+        user_email="owner@example.com",
+        teams=["team-a"],
+    )
+    database_owner: Final = LiteLLM_UserTable(
+        user_id=user_id,
+        user_email="owner@example.com",
+        teams=[],
+    )
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(key=user_id, value=cached_owner, model_type=LiteLLM_UserTable)
+    logging_obj: Final = ProxyLogging(user_api_key_cache=cache)
+    prisma: Final = MagicMock()
+    prisma.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=database_owner)
+    monkeypatch.setattr(auth_checks, "get_team_object", AsyncMock(return_value=LiteLLM_TeamTable(team_id="team-a")))
+    monkeypatch.setattr(auth_checks, "get_team_membership", AsyncMock(return_value=None))
+    valid_token: Final = UserAPIKeyAuth(api_key="sk-personal", user_id=user_id)
+
+    cached_result: Final = await personal_key_owner_teams_with_status(
+        valid_token=valid_token,
+        prisma_client=prisma,
+        user_api_key_cache=cache,
+        proxy_logging_obj=logging_obj,
+    )
+    fresh_result: Final = await personal_key_owner_teams_with_status(
+        valid_token=valid_token,
+        prisma_client=prisma,
+        user_api_key_cache=cache,
+        proxy_logging_obj=logging_obj,
+        check_db_only=True,
+    )
+
+    assert tuple(team.team_id for team in cached_result.teams) == ("team-a",)
+    assert fresh_result.teams == ()
+    prisma.writer_db.litellm_usertable.find_unique.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_personal_key_owner_teams_check_db_only_uses_fresh_membership_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.auth import auth_checks
+
+    user_id: Final = "owner-membership-refresh"
+    team_id: Final = "team-membership-refresh"
+    cached_membership: Final = LiteLLM_TeamMembership(
+        user_id=user_id,
+        team_id=team_id,
+        spend=1.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=5.0),
+    )
+    database_membership: Final = LiteLLM_TeamMembership(
+        user_id=user_id,
+        team_id=team_id,
+        spend=10.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=5.0),
+    )
+    database_row: Final = MagicMock()
+    database_row.dict.return_value = database_membership.model_dump(mode="python")
+    prisma: Final = MagicMock()
+    prisma.db.litellm_teammembership.find_unique = AsyncMock()
+    prisma.writer_db.litellm_teammembership.find_unique = AsyncMock(return_value=database_row)
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=auth_checks.team_membership_reservation_cache_key(user_id=user_id, team_id=team_id),
+        value=cached_membership,
+        model_type=LiteLLM_TeamMembership,
+    )
+    logging_obj: Final = ProxyLogging(user_api_key_cache=cache)
+    owner: Final = LiteLLM_UserTable(user_id=user_id, teams=[team_id])
+    team: Final = LiteLLM_TeamTable(team_id=team_id)
+
+    async def current_spend(
+        counter_key: str,
+        fallback_spend: float,
+        max_budget: float | None = None,
+    ) -> float:
+        return fallback_spend
+
+    monkeypatch.setattr(litellm, "personal_key_model_access_from_teams", True)
+    monkeypatch.setattr(auth_checks, "get_user_object", AsyncMock(return_value=owner))
+    monkeypatch.setattr(auth_checks, "get_team_object", AsyncMock(return_value=team))
+    monkeypatch.setattr(proxy_server, "get_current_spend", current_spend)
+    valid_token: Final = UserAPIKeyAuth(api_key="sk-personal", user_id=user_id)
+
+    cached_result: Final = await personal_key_owner_teams_with_status(
+        valid_token=valid_token,
+        prisma_client=prisma,
+        user_api_key_cache=cache,
+        proxy_logging_obj=logging_obj,
+    )
+    fresh_result: Final = await personal_key_owner_teams_with_status(
+        valid_token=valid_token,
+        prisma_client=prisma,
+        user_api_key_cache=cache,
+        proxy_logging_obj=logging_obj,
+        check_db_only=True,
+    )
+
+    assert tuple(team.team_id for team in cached_result.teams) == (team_id,)
+    assert cached_result.withheld == ()
+    assert fresh_result.teams == ()
+    assert tuple(team.team_id for team in fresh_result.withheld) == (team_id,)
+    prisma.db.litellm_teammembership.find_unique.assert_not_awaited()
+    prisma.writer_db.litellm_teammembership.find_unique.assert_awaited_once()
 
 
 @pytest.mark.parametrize(
@@ -8423,6 +8688,84 @@ async def test_get_team_membership_db_fetch_returns_validated_membership():
 
 
 @pytest.mark.asyncio
+async def test_get_team_membership_check_db_only_bypasses_stale_cache():
+    from litellm.proxy._types import LiteLLM_TeamMembership
+    from litellm.proxy.auth.auth_checks import get_team_membership
+    from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
+
+    cache: Final = UserApiKeyCache()
+    cache_key: Final = team_membership_reservation_cache_key(user_id="u-fresh", team_id="t-fresh")
+    stale_membership: Final = LiteLLM_TeamMembership(user_id="u-fresh", team_id="t-fresh", spend=1.0)
+    await cache.async_set_cache(key=cache_key, value=stale_membership, model_type=LiteLLM_TeamMembership)
+
+    database_row: Final = MagicMock()
+    database_row.dict.return_value = {"user_id": "u-fresh", "team_id": "t-fresh", "spend": 9.0}
+    prisma: Final = MagicMock()
+    prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=database_row)
+    prisma.writer_db.litellm_teammembership.find_unique = AsyncMock(return_value=database_row)
+
+    cached: Final = await get_team_membership(
+        user_id="u-fresh",
+        team_id="t-fresh",
+        prisma_client=prisma,
+        user_api_key_cache=cache,
+    )
+    fresh: Final = await get_team_membership(
+        user_id="u-fresh",
+        team_id="t-fresh",
+        prisma_client=prisma,
+        user_api_key_cache=cache,
+        check_db_only=True,
+    )
+
+    assert cached is not None and cached.spend == 1.0
+    assert fresh is not None and fresh.spend == 9.0
+    prisma.db.litellm_teammembership.find_unique.assert_not_awaited()
+    prisma.writer_db.litellm_teammembership.find_unique.assert_awaited_once()
+    with pytest.raises(Exception, match=r"^No db connected$"):
+        await get_team_membership(
+            user_id="u-fresh",
+            team_id="t-fresh",
+            prisma_client=None,
+            user_api_key_cache=cache,
+            check_db_only=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_get_team_membership_cache_miss_reads_replica_and_check_db_only_reads_writer():
+    from litellm.proxy.auth.auth_checks import get_team_membership
+
+    reader_row: Final = MagicMock()
+    reader_row.dict.return_value = {"user_id": "u-read", "team_id": "t-read", "spend": 2.0}
+    writer_row: Final = MagicMock()
+    writer_row.dict.return_value = {"user_id": "u-read", "team_id": "t-read", "spend": 9.0}
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=reader_row)
+    prisma_client.writer_db.litellm_teammembership.find_unique = AsyncMock(return_value=writer_row)
+    cache: Final = UserApiKeyCache()
+
+    reader_membership: Final = await get_team_membership(
+        user_id="u-read",
+        team_id="t-read",
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+    )
+    writer_membership: Final = await get_team_membership(
+        user_id="u-read",
+        team_id="t-read",
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+        check_db_only=True,
+    )
+
+    assert reader_membership is not None and reader_membership.spend == 2.0
+    assert writer_membership is not None and writer_membership.spend == 9.0
+    prisma_client.db.litellm_teammembership.find_unique.assert_awaited_once()
+    prisma_client.writer_db.litellm_teammembership.find_unique.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_get_team_membership_negative_caches_a_missing_row():
     """
     Regression (LIT-7358): a member with no LiteLLM_TeamMembership row is the common lite-login case,
@@ -11277,3 +11620,84 @@ async def test_authoritative_group_grants_propagate_policy_outages(
             await get_agent_ids_from_access_groups(["group"], check_db_only=True)
     else:
         assert await get_agent_ids_from_access_groups(["group"]) == []
+
+
+def _client_tag_request(client_tags, baggage):
+    return Request(
+        {
+            "type": "http",
+            "headers": [
+                *([(b"baggage", b"entrypoint=a")] if baggage else []),
+                *([(b"x-litellm-tags", b"usecase:a")] if client_tags == "header" else []),
+            ],
+        }
+    )
+
+
+def _client_tag_body(client_tags, client_slot):
+    if client_tags is None or client_tags == "header":
+        return {}
+    return {client_slot: client_tags if isinstance(client_tags, str) else {"tags": client_tags}}
+
+
+def _client_tag_rejection(route, data, request):
+    from litellm.proxy.auth.auth_checks import _reject_clientside_metadata_tags_check
+
+    try:
+        _reject_clientside_metadata_tags_check({"reject_clientside_metadata_tags": True}, data, route, request)
+    except ProxyException as error:
+        return error.code
+    return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/chat/completions", "/v1/messages", "/v1/responses"])
+@pytest.mark.parametrize("client_tags", [None, [], ["usecase:a"], '{"tags":["usecase:a"]}', "header"])
+@pytest.mark.parametrize("client_slot", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("baggage", [True, False])
+async def test_baggage_mapping_rejects_exactly_the_client_tags_rejected_without_it(
+    route, client_tags, client_slot, baggage
+):
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    unmapped_request = _client_tag_request(client_tags, baggage=False)
+    unmapped = _client_tag_body(client_tags, client_slot)
+    LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(unmapped, route)
+    LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(unmapped_request, unmapped, UserAPIKeyAuth(api_key="qa-key"))
+
+    mapped_request = _client_tag_request(client_tags, baggage=baggage)
+    mapped = _client_tag_body(client_tags, client_slot)
+    LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(mapped, route)
+    await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+        mapped_request,
+        mapped,
+        {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
+        None,
+        MagicMock(),
+    )
+    LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(mapped_request, mapped, UserAPIKeyAuth(api_key="qa-key"))
+
+    assert _client_tag_rejection(route, mapped, mapped_request) == _client_tag_rejection(
+        route, unmapped, unmapped_request
+    )
+    if client_tags is None and baggage:
+        assert "usecase:a" in mapped["metadata" if "chat/completions" in route else "litellm_metadata"]["tags"]
+
+
+@pytest.mark.asyncio
+async def test_baggage_mapping_still_rejects_client_metadata_tags():
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    request = _client_tag_request(["usecase:b"], baggage=True)
+    data = {"metadata": {"tags": ["usecase:b"]}}
+    await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+        request,
+        data,
+        {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
+        None,
+        MagicMock(),
+    )
+    assert _client_tag_rejection("/v1/chat/completions", data, request) == "400"
+    from litellm.utils import get_request_guardrails
+
+    assert get_request_guardrails(data) == []

@@ -47,13 +47,13 @@ class QualityRouter(CustomLogger):
         model_name: str,
         litellm_router_instance: "Router",
         default_model: str | None = None,
-        quality_router_config: dict[str, Any] | None = None,
+        quality_router_config: Mapping[str, object] | None = None,
     ):
         self.model_name = model_name
         self.litellm_router_instance = litellm_router_instance
 
         if quality_router_config:
-            self.config = QualityRouterConfig(**quality_router_config)
+            self.config = QualityRouterConfig.model_validate(dict(**quality_router_config))
         else:
             self.config = QualityRouterConfig()
 
@@ -185,7 +185,7 @@ class QualityRouter(CustomLogger):
                 if isinstance(raw_prefs, RoutingPreferences):
                     prefs = raw_prefs
                 elif isinstance(raw_prefs, dict):
-                    prefs = RoutingPreferences(**raw_prefs)
+                    prefs = RoutingPreferences.model_validate(dict(**raw_prefs))
                 else:
                     # A Pydantic object of some other shape — coerce via its dict.
                     prefs = RoutingPreferences(

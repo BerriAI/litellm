@@ -154,6 +154,12 @@ vi.mock("@/components/common_components/team_multi_select", () => ({
   ),
 }));
 
+vi.mock("@/components/common_components/CustomerMultiSelect", () => ({
+  default: ({ value, onChange }: { value: readonly string[]; onChange: (ids: string[]) => void }) => (
+    <button onClick={() => onChange(["customer-1", "customer-2"])}>Customer Multi Select {value.join(",")}</button>
+  ),
+}));
+
 // Mock useTeams hook
 vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
   default: vi.fn(() => ({
@@ -917,6 +923,36 @@ describe("EntityUsage", () => {
     });
   });
 
+  it("uses customer aliases from activity metadata without loading the customer directory", async () => {
+    mockCustomerDailyActivityCall.mockResolvedValue({
+      ...mockSpendData,
+      results: mockSpendData.results.map((day) => ({
+        ...day,
+        breakdown: {
+          ...day.breakdown,
+          entities: {
+            "customer-1": {
+              ...day.breakdown.entities["tag-1"],
+              metadata: { alias: "Selected Customer" },
+            },
+          },
+        },
+      })),
+    });
+    render(<StatefulEntityUsage {...defaultProps} entityType="customer" entityList={null} />);
+    expect(await screen.findByText("Selected Customer")).toBeInTheDocument();
+  });
+
+  it("passes multiple selected customers to the activity request", async () => {
+    render(<StatefulEntityUsage {...defaultProps} entityType="customer" entityList={null} />);
+    fireEvent.click(screen.getByRole("button", { name: "Customer Multi Select" }));
+    await waitFor(() => {
+      expect(mockCustomerDailyActivityCall).toHaveBeenLastCalledWith(
+        expect.objectContaining({ entityIds: ["customer-1", "customer-2"] }),
+      );
+    });
+  });
+
   it("should fallback to team_alias when entityList is null", async () => {
     render(<StatefulEntityUsage {...defaultProps} entityList={null} />);
 
@@ -1356,9 +1392,10 @@ describe("EntityUsage", () => {
 
     render(<StatefulEntityUsage {...defaultProps} entityType="team" />);
 
-    await waitFor(() => {
-      expect(screen.getAllByText(/Fetching spend data failed/).length).toBeGreaterThan(0);
-    });
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Failed to load spend data");
+    expect(alert).toHaveTextContent("aggregated unavailable");
+    expect(within(alert).getByRole("button", { name: "Retry" })).toBeInTheDocument();
     expect(mockDailyActivityAggregatedCall.mock.calls.filter((c) => c[0] === "team")).toHaveLength(1);
   });
 

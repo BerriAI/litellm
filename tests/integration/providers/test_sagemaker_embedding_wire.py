@@ -37,7 +37,7 @@ from integration._support.sagemaker_embedding import (
 from integration._support.wire import Request, Wire, wire_server
 from pydantic import JsonValue
 
-pytestmark = pytest.mark.timeout(240)
+pytestmark: Final = [pytest.mark.timeout(240), pytest.mark.shares_worker_state]
 
 _NO_CACHE: Final[dict[str, JsonValue]] = {"no-cache": True}
 _SPEND_ROW: Final = 'SELECT status, call_type, model_group FROM "LiteLLM_SpendLogs" WHERE litellm_call_id=%s'

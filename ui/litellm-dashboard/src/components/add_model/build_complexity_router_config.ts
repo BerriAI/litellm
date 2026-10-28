@@ -226,7 +226,7 @@ export interface BuildComplexityRouterConfigParams {
   routeHousekeepingToCheapestTier?: boolean;
   housekeepingPatterns?: string[];
   reminderMarkers?: ReminderMarkerPair[];
-  maxTokensFromTierModel?: boolean;
+  maxTokensFromTierModel?: ComplexityRouterConfigValue["max_tokens_from_tier_model"];
   classifierPluginTimeoutMs?: number;
 }
 
@@ -310,7 +310,7 @@ export interface ComplexityRouterConfigPayload {
   route_housekeeping_to_cheapest_tier?: boolean;
   housekeeping_patterns?: string[];
   reminder_markers?: ReminderMarkerPair[];
-  max_tokens_from_tier_model?: boolean;
+  max_tokens_from_tier_model?: ComplexityRouterConfigValue["max_tokens_from_tier_model"];
   classifier_plugin_timeout_ms?: number;
 }
 
@@ -827,7 +827,9 @@ export const buildComplexityRouterConfig = ({
     ...cleanedLists,
     ...(routeHousekeepingToCheapestTier === false && { route_housekeeping_to_cheapest_tier: false }),
     ...(cleanedReminderMarkers && cleanedReminderMarkers.length > 0 && { reminder_markers: cleanedReminderMarkers }),
-    ...(maxTokensFromTierModel === false && { max_tokens_from_tier_model: false }),
+    ...((maxTokensFromTierModel === false || maxTokensFromTierModel === "clamp") && {
+      max_tokens_from_tier_model: maxTokensFromTierModel,
+    }),
     ...(hasValidCustomClassifierTimeout && { classifier_plugin_timeout_ms: classifierPluginTimeoutMs }),
     ...scorerKnobs,
   };

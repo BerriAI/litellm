@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal
 from pydantic import ConfigDict, StringConstraints, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
-from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.router import Router
