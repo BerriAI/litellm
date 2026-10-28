@@ -4928,7 +4928,19 @@ def test_another_resource_in_a_404_is_not_permanent_loss(resource_id: str, other
 
 
 @pytest.mark.parametrize("resource_id", ("batch-123", "file-123", "gs://bucket/job/predictions.jsonl"))
-@pytest.mark.parametrize("message", ("No object found with id '{id}'.", 'File "{id}" does not exist', "{id} not found"))
+@pytest.mark.parametrize(
+    "message",
+    (
+        "No object found with id '{id}'.",
+        'File "{id}" does not exist',
+        "{id} not found",
+        "No such object: {id}.",
+        "{id}: not found",
+        "Missing {id}, giving up",
+        "Not found (id {id})",
+        "Not found ({id})",
+    ),
+)
 def test_a_404_naming_the_exact_resource_is_permanent_loss(resource_id: str, message: str) -> None:
     from litellm.exceptions import NotFoundError
     from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost

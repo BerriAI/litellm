@@ -42,7 +42,8 @@ if TYPE_CHECKING:
 
 
 def _error_names_resource(error: Exception, resource_id: str) -> bool:
-    return resource_id in re.findall(r"""[^\s"'`<>]+""", str(error))
+    tokens: Final = re.findall(r"""[^\s"'`<>(]+""", str(error))
+    return any(token.rstrip(".,:;)") == resource_id for token in tokens)
 
 
 CHECK_BATCH_COST_USER_AGENT = "LiteLLM Proxy/CheckBatchCost"
