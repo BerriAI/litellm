@@ -14,9 +14,7 @@ import httpx
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
-from litellm.llms.vertex_ai.common_utils import (
-    vertex_request_labels_from_litellm_params,
-)
+from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.rerank import (
@@ -151,7 +149,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         # When return_documents is False, we want to ignore record details (return only IDs)
         request_data["ignoreRecordDetailsInResponse"] = not return_documents
 
-        user_labels: Final = vertex_request_labels_from_litellm_params(litellm_params)
+        user_labels: Final = pop_vertex_request_labels(None, litellm_params)
         if user_labels:
             request_data["userLabels"] = user_labels
 
