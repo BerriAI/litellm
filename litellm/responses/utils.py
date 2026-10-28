@@ -32,6 +32,7 @@ from litellm.types.responses.main import DecodedResponseId
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CompletionTokensDetailsWrapper,
+    ModelInfo,
     PromptTokensDetailsWrapper,
     ProviderSpecificHeader,
     SpecialEnums,
@@ -1405,20 +1406,46 @@ def reasoning_with_summary_default(
 
 
 _SUMMARY_VALUES: Final = frozenset((*get_args(ReasoningSummaryLevel), None))
-_OPENAI_REASONING_FIELD_VALUES: Final = MappingProxyType(
-    {
-        "summary": _SUMMARY_VALUES,
-        "mode": frozenset(("standard", "pro")),
-        "context": frozenset(("auto", "current_turn", "all_turns")),
-    }
-)
 
 
-def _openai_accepts_reasoning_field(key: str, value: object) -> bool:
+def _openai_model_info(model: str) -> ModelInfo | None:
+    from litellm.utils import ModelInfoLookupMiss, lookup_model_info_for_registration
+
+    model_info: Final = lookup_model_info_for_registration(model.removeprefix("responses/"), "openai")
+    return None if isinstance(model_info, ModelInfoLookupMiss) else model_info
+
+
+def _openai_reasoning_field_values(model: str) -> Mapping[str, frozenset[str | None]]:
+    model_info: Final = _openai_model_info(model)
+    return MappingProxyType(
+        {
+            "summary": _SUMMARY_VALUES,
+            "mode": frozenset(model_info.get("reasoning_modes") or ()) if model_info is not None else frozenset(),
+            "context": frozenset(model_info.get("reasoning_contexts") or ()) if model_info is not None else frozenset(),
+        }
+    )
+
+
+def _openai_accepts_reasoning_field(
+    key: str, value: object, values_by_field: Mapping[str, frozenset[str | None]]
+) -> bool:
     if key == "effort":
         return True
-    allowed: Final = _OPENAI_REASONING_FIELD_VALUES.get(key)
+    allowed: Final = values_by_field.get(key)
     return allowed is not None and isinstance(value, str | None) and value in allowed
+
+
+def _openai_accepted_reasoning(reasoning: Mapping[str, object], model: str) -> Mapping[str, object]:
+    values_by_field: Final = _openai_reasoning_field_values(model)
+    return {
+        key: value for key, value in reasoning.items() if _openai_accepts_reasoning_field(key, value, values_by_field)
+    }
+
+
+def _additional_drop_paths(additional_drop_params: object) -> tuple[str, ...]:
+    if additional_drop_params.__class__ is not list:
+        return ()
+    return tuple(path for path in iter_items(additional_drop_params) if isinstance(path, str))
 
 
 def openai_bridge_reasoning(
@@ -1428,20 +1455,19 @@ def openai_bridge_reasoning(
     summary_alias: object,
     model: str,
     drop_params: bool,
-    additional_drop_params: Sequence[str],
+    additional_drop_params: object,
 ) -> Mapping[str, object] | None:
-    if "reasoning_effort" in additional_drop_params:
+    if not effort_kept:
         return None
-    validated: Final = requested if effort_kept else {key: value for key, value in requested.items() if key != "effort"}
-    if not validated and summary_alias is None:
-        return None
-    with_summary: Final = reasoning_with_summary_default(validated, summary_alias, model, "openai")
+    with_summary: Final = reasoning_with_summary_default(requested, summary_alias, model, "openai")
     accepted: Final = (
-        {key: value for key, value in with_summary.items() if _openai_accepts_reasoning_field(key, value)}
+        _openai_accepted_reasoning(with_summary, model)
         if drop_params and OpenAIGPTConfig.is_openai_catalog_model(model)
         else {**with_summary}
     )
     remaining: Final = as_str_mapping(
-        _apply_nested_drop_params({"reasoning_effort": accepted}, list(additional_drop_params)).get("reasoning_effort")
+        _apply_nested_drop_params(
+            {"reasoning_effort": accepted}, list(_additional_drop_paths(additional_drop_params))
+        ).get("reasoning_effort")
     )
     return remaining or None

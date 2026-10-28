@@ -2139,6 +2139,8 @@ def openai_responses_route(
                 "mode": "chat",
                 "supports_reasoning": True,
                 "supports_minimal_reasoning_effort": False,
+                "reasoning_modes": ["standard", "pro"],
+                "reasoning_contexts": ["auto", "current_turn", "all_turns"],
                 "input_cost_per_token": 0.0,
                 "output_cost_per_token": 0.0,
             }
@@ -2189,6 +2191,7 @@ def openai_responses_route(
             {"reasoning_summary": "auto"},
             {"effort": "low", "context": "current_turn", "summary": None},
         ),
+        ({"mode": "pro", "context": "all_turns"}, {}, {"mode": "pro", "context": "all_turns"}),
         ("low", {}, {"effort": "low"}),
     ],
 )
@@ -2214,23 +2217,16 @@ def test_openai_responses_bridge_sends_the_whole_reasoning_effort_dict(
 
 
 @pytest.mark.parametrize(
-    "reasoning_effort, summary_alias, expected_reasoning",
+    "reasoning_effort, summary_alias",
     [
-        (
-            {"effort": "minimal", "mode": "pro", "context": "current_turn"},
-            {},
-            {"mode": "pro", "context": "current_turn"},
-        ),
-        ({"effort": "minimal", "mode": "pro", "summary": "auto"}, {}, {"mode": "pro", "summary": "auto"}),
-        ({"effort": "minimal", "mode": "pro"}, {"reasoning_summary": "auto"}, {"mode": "pro", "summary": "auto"}),
-        ({"effort": "minimal"}, {"reasoning_summary": "auto"}, {"summary": "auto"}),
-        ({"effort": "minimal"}, {}, None),
+        ({"effort": "minimal", "mode": "pro", "context": "current_turn"}, {}),
+        ({"effort": "minimal", "mode": "pro", "summary": "auto"}, {}),
+        ({"effort": "minimal", "mode": "pro"}, {"reasoning_summary": "auto"}),
     ],
 )
-def test_openai_responses_bridge_drops_only_a_refused_effort_from_a_reasoning_effort_dict(
+def test_openai_responses_bridge_sends_no_reasoning_when_drop_params_drops_a_refused_effort(
     reasoning_effort: dict[str, str],
     summary_alias: dict[str, str],
-    expected_reasoning: dict[str, str] | None,
     openai_responses_route: respx.Route,
 ):
     litellm.completion(
@@ -2243,7 +2239,7 @@ def test_openai_responses_bridge_drops_only_a_refused_effort_from_a_reasoning_ef
     )
 
     request_body: Final = json.loads(openai_responses_route.calls[0].request.content)
-    assert request_body.get("reasoning") == expected_reasoning
+    assert "reasoning" not in request_body
 
 
 def test_openai_responses_bridge_drops_a_reasoning_effort_dict_for_a_model_without_reasoning(
@@ -2300,6 +2296,76 @@ def test_openai_responses_bridge_drops_reasoning_fields_openai_refuses_only_unde
     assert request_body["reasoning"] == expected_reasoning
 
 
+@pytest.mark.parametrize(
+    "declared, drop_params, expected_reasoning",
+    [
+        (
+            {"reasoning_modes": ["standard"], "reasoning_contexts": ["auto", "current_turn"]},
+            True,
+            {"effort": "low"},
+        ),
+        (
+            {"reasoning_modes": ["pro"], "reasoning_contexts": ["all_turns"]},
+            True,
+            {"effort": "low", "mode": "pro", "context": "all_turns"},
+        ),
+        ({}, True, {"effort": "low"}),
+        (
+            {"reasoning_modes": ["standard"], "reasoning_contexts": ["auto", "current_turn"]},
+            False,
+            {"effort": "low", "mode": "pro", "context": "all_turns"},
+        ),
+    ],
+)
+def test_openai_responses_bridge_drops_a_mode_or_context_the_model_does_not_list_only_under_drop_params(
+    declared: dict[str, list[str]],
+    drop_params: bool,
+    expected_reasoning: dict[str, str],
+    openai_responses_route: respx.Route,
+):
+    litellm.register_model(
+        {
+            "gpt-6.1-reasoning-test": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "supports_reasoning": True,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+                **declared,
+            }
+        },
+        persist_across_reloads=False,
+    )
+
+    litellm.completion(
+        model="openai/responses/gpt-6.1-reasoning-test",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort={"effort": "low", "mode": "pro", "context": "all_turns"},
+        drop_params=drop_params,
+        api_key="fake-key",
+    )
+
+    request_body: Final = json.loads(openai_responses_route.calls[0].request.content)
+    assert request_body["reasoning"] == expected_reasoning
+
+
+def test_openai_responses_bridge_drops_mode_and_context_under_drop_params_for_a_catalog_model_with_no_cost_entry(
+    openai_responses_route: respx.Route,
+):
+    litellm.open_ai_chat_completion_models.add("unpriced-reasoning-model")
+
+    litellm.completion(
+        model="openai/responses/unpriced-reasoning-model",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort={"effort": "low", "mode": "pro", "context": "all_turns"},
+        drop_params=True,
+        api_key="fake-key",
+    )
+
+    request_body: Final = json.loads(openai_responses_route.calls[0].request.content)
+    assert request_body["reasoning"] == {"effort": "low"}
+
+
 def test_openai_responses_bridge_forwards_a_reasoning_effort_dict_whole_for_a_model_outside_the_openai_catalog(
     openai_responses_route: respx.Route,
 ):
@@ -2327,10 +2393,11 @@ def test_openai_responses_bridge_forwards_a_reasoning_effort_dict_whole_for_a_mo
             {"effort": "low", "mode": "pro", "context": "current_turn"},
         ),
         (["reasoning_effort"], {"reasoning_summary": "auto"}, None),
+        ("reasoning_effort", {}, {"effort": "low", "mode": "pro", "context": "current_turn"}),
     ],
 )
 def test_openai_responses_bridge_applies_additional_drop_params_to_a_reasoning_effort_dict(
-    additional_drop_params: list[str],
+    additional_drop_params: list[str] | str,
     summary_alias: dict[str, str],
     expected_reasoning: dict[str, str] | None,
     openai_responses_route: respx.Route,

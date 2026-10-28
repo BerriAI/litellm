@@ -6121,9 +6121,7 @@ def completion(
                     summary_alias=rs_val,
                     model=model,
                     drop_params=drop_unsupported_reasoning,
-                    additional_drop_params=_ADDITIONAL_DROP_PARAMS_ADAPTER.validate_python(
-                        routing_kwargs.get("additional_drop_params") or []
-                    ),
+                    additional_drop_params=routing_kwargs.get("additional_drop_params"),
                 )
             elif isinstance(resolved_reasoning_effort, dict) and "summary" in resolved_reasoning_effort:
                 optional_params["reasoning_effort"] = resolved_reasoning_effort
