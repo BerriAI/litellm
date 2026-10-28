@@ -737,14 +737,12 @@ def test_clear_at_least_counts_the_tool_inputs_it_clears():
     assert applied["cleared_input_tokens"] >= 3 * one_input // 2
 
 
-_ONE_PIXEL_PNG: Final = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
-)
+_512PX_PNG: Final = "iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAYAAAA="
 
 
 def test_clear_at_least_counts_image_results():
     messages = _make_history(n_pairs=4)
-    image: Final = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _ONE_PIXEL_PNG}}
+    image: Final = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _512PX_PNG}}
     for user_msg in messages[2::2]:
         user_msg["content"][0]["content"] = [image]
     new_messages, applied = apply_clear_tool_uses_20250919(
