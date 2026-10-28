@@ -38,5 +38,5 @@ name = "pillow"
 version = "12.3.0"
 ecosystem = "PyPI"
 vulnerability.ignore = true
-effectiveUntil = 2026-10-27
-reason = "pillow 13.0.0 requires Python >= 3.11, so the Python 3.10 resolution of the ci and dev groups stays on 12.3.0; 3.11+ is on 13.0.0"
+effectiveUntil = 2026-11-27
+reason = "pillow 13.0.0 requires Python >= 3.11, so the Python 3.10 resolution of the ci and dev groups stays on 12.3.0; 3.11+ is on 13.0.0; extended to 2026-11-27 with maintainer approval, same date as the dnspython 3.10 entry; remove once 3.10 is dropped or a 12.x fix ships"
