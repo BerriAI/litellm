@@ -24,7 +24,7 @@ import litellm
 from litellm import DualCache
 from litellm.constants import DEFAULT_OPENAI_MODERATIONS_MODEL
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import Choices, Message, ModelResponse
+from litellm.types.utils import CallTypesLiteral, Choices, Message, ModelResponse
 
 
 @pytest.fixture
@@ -937,13 +937,13 @@ def _google_text_moderation_flagging_finance():
     ("call_type", "embedding_input"),
     [("aembedding", "stocks"), ("embedding", ["stocks", "mortgage"])],
 )
-async def test_google_text_moderation_leaves_embedding_input_unmoderated(user_api_key, call_type, embedding_input):
+async def test_google_text_moderation_leaves_embedding_input_unmoderated(
+    user_api_key: UserAPIKeyAuth, call_type: CallTypesLiteral, embedding_input: str | list[str]
+):
     guard: Final = _google_text_moderation_flagging_finance()
     data: Final = {"model": "text-embedding-ada-002", "input": embedding_input}
 
-    result: Final = await guard.async_moderation_hook(data=data, user_api_key_dict=user_api_key, call_type=call_type)
-
-    assert result is data
+    assert await guard.async_moderation_hook(data=data, user_api_key_dict=user_api_key, call_type=call_type) is data
     assert guard.client.moderated_texts == []
 
 
