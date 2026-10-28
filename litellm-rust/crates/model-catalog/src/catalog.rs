@@ -369,22 +369,25 @@ impl Catalog {
                 rejected.entry(key).or_default().push(error);
             }
         }
-        let rejections = rejected
+        let rejections: Vec<_> = rejected
             .into_iter()
-            .map(|(key, errors)| {
-                let bundled_entry = bundled.entries.get(&key).cloned();
-                let replaced_by_bundled = bundled_entry.is_some();
-                if let Some(entry) = bundled_entry {
-                    catalog.entries.insert(key.clone(), entry);
-                }
-                Rejection {
-                    key,
-                    errors,
-                    replaced_by_bundled,
-                }
+            .map(|(key, errors)| Rejection {
+                replaced_by_bundled: bundled.rows().entries.contains_key(&key),
+                key,
+                errors,
             })
             .collect();
-        catalog.names = name_index(&catalog.entries, &catalog.aliases);
+        catalog.store.edit(|rows| {
+            for rejection in rejections
+                .iter()
+                .filter(|rejection| rejection.replaced_by_bundled)
+            {
+                rows.entries.insert(
+                    rejection.key.clone(),
+                    bundled.rows().entries[&rejection.key].clone(),
+                );
+            }
+        });
         (catalog, rejections)
     }
 
