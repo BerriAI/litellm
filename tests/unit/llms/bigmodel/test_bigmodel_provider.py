@@ -573,6 +573,30 @@ def test_prompt_too_long_and_unsafe_content_raise_the_errors_fallbacks_catch(
     assert raised.value.status_code == 400
 
 
+@pytest.mark.parametrize(
+    ("code", "error_class"),
+    ((1261, litellm.ContextWindowExceededError), (1301, litellm.ContentPolicyViolationError)),
+)
+@pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.asyncio
+@respx.mock
+async def test_streamed_prompt_too_long_and_unsafe_content_raise_the_errors_fallbacks_catch(
+    code: int, error_class: type[Exception], is_async: bool
+) -> None:
+    respx.post(f"{BASE}/api/v1/responses").respond(json={"code": code, "msg": "rejected by BigModel", "success": False})
+    params: Final = {"model": f"bigmodel/{MODEL}", "input": "Hello", "stream": True}
+
+    async def call() -> None:
+        if is_async:
+            await litellm.aresponses(**params)
+            return
+        litellm.responses(**params)
+
+    with pytest.raises(error_class, match="rejected by BigModel") as raised:
+        await call()
+    assert raised.value.status_code == 400
+
+
 @pytest.mark.parametrize("route", ("responses", "messages"))
 @pytest.mark.asyncio
 @respx.mock
