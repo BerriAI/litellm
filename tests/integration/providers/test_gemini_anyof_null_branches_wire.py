@@ -360,8 +360,9 @@ def test_a_repeated_identical_request_sends_the_same_folded_union_each_time(gate
         model: Final = _deployment(gateway, scenario, wire, "vertex_ai")
         description: Final = _description()
         path, body = _request_body("chat", model, description, _parameters({"anyOf": [_NULL, _NULL, _STRING]}), False)
-        first: Final = gateway.request("POST", path, body)
-        second: Final = gateway.request("POST", path, body)
+        uncached: Final[dict[str, JsonValue]] = {**body, "cache": {"no-cache": True}}
+        first: Final = gateway.request("POST", path, uncached)
+        second: Final = gateway.request("POST", path, uncached)
         _assert_caller_saw_ok("chat", first, False)
         _assert_caller_saw_ok("chat", second, False)
         assert _json(first)["id"] != _json(second)["id"]

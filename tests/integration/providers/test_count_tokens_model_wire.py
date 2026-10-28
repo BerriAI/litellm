@@ -31,7 +31,6 @@ _PROFILE_ID: Final = "lit9563count"
 _PROFILE_ARN: Final = f"arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/{_PROFILE_ID}"
 _COST_MAP_PATH: Final = Path(__file__).resolve().parents[3] / "model_prices_and_context_window.json"
 _REGION: Final = "us-west-2"
-_COUNT_REGION: Final = "us-east-1"
 _ACCESS_KEY: Final = "AKIAINTEGRATIONCOUNT"
 _SECRET_KEY: Final = "integration-count-secret"
 _PROVIDER_COUNT: Final = 1345
@@ -39,11 +38,36 @@ _COUNT_MODEL_COUNT: Final = 2718
 _FRAMING: Final = 50
 _UNSUPPORTED: Final = "The provided model doesn't support counting tokens."
 _COUNT_TARGET: Final = re.compile(r"^/model/(.+)/count-tokens$")
+_MANTLE_COUNT_TARGET: Final = "/anthropic/v1/messages/count_tokens"
+_MANTLE_VERSION: Final = "2023-06-01"
 _SCRIPTED_STATUS: Final = re.compile(r"status=(\d{3})")
 _SCRIPTED_COUNT_MODEL_STATUS: Final = re.compile(r"count_model=(\d{3})")
 _CREDENTIAL: Final = re.compile(r"Credential=([^/]+)/\d+/([^/]+)/")
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _COST_MAP: Final = TypeAdapter(dict[str, dict[str, JsonValue]])
+
+
+def _shipped_token_count_model(model: str) -> dict[str, JsonValue]:
+    token_count_model: Final = _COST_MAP.validate_json(_COST_MAP_PATH.read_bytes())[model].get("token_count_model")
+    assert isinstance(token_count_model, dict), model
+    return token_count_model
+
+
+def _shipped_token_count_model_field(model: str, field: str) -> str:
+    value: Final = _shipped_token_count_model(model).get(field)
+    assert isinstance(value, str), (model, field, value)
+    return value
+
+
+def _count_model_source(model: str) -> dict[str, JsonValue]:
+    return {
+        "litellm_count_source": "token_count_model",
+        "litellm_count_model": _shipped_token_count_model_field(model, "model"),
+    }
+
+
+_COUNT_REGION: Final = _shipped_token_count_model_field(_SONNET, "region")
+_COUNT_MODEL_SOURCE: Final = _count_model_source(_SONNET)
 
 _SYSTEM: Final = "You are a terse assistant that answers in one sentence"
 _WEATHER_SCHEMA: Final[dict[str, JsonValue]] = {
@@ -62,7 +86,6 @@ _SDK_TOOLS: Final[list[MessageCountTokensToolParam]] = [
         },
     }
 ]
-_COUNT_MODEL_SOURCE: Final = {"litellm_count_source": "token_count_model", "litellm_count_model": _OPUS}
 _OPENAI_PRIMARY: Final = "gpt-count-primary"
 _OPENAI_COUNT_MODEL: Final = "gpt-count-model"
 _OPENAI_COUNT_TARGET: Final = "/v1/responses/input_tokens"
@@ -140,8 +163,17 @@ def _runtime(request: Request) -> Reply:
 
 def _mantle(request: Request) -> Reply:
     model: Final = _JSON_OBJECT.validate_json(request.body).get("model")
+    status: Final = _scripted(_SCRIPTED_COUNT_MODEL_STATUS, request, 200)
+    if status == 200:
+        return _json_reply(200, {"input_tokens": _COUNT_MODEL_COUNT})
+    error_type: Final = {
+        401: "authentication_error",
+        404: "not_found_error",
+        429: "rate_limit_error",
+    }[status]
     return _json_reply(
-        404, {"type": "error", "error": {"type": "not_found_error", "message": f"scripted mantle 404 for {model}"}}
+        status,
+        {"type": "error", "error": {"type": error_type, "message": f"scripted mantle {status} for {model}"}},
     )
 
 
@@ -163,6 +195,24 @@ def _runtime_models(wire: Wire) -> tuple[str, ...]:
 
 def _mantle_models(wire: Wire) -> tuple[JsonValue, ...]:
     return tuple(_JSON_OBJECT.validate_json(request.body).get("model") for request in wire.drain())
+
+
+def _mantle_count_requests(wire: Wire) -> tuple[tuple[tuple[str, str], dict[str, JsonValue]], ...]:
+    requests: Final = tuple(wire.drain())
+    for request in requests:
+        assert (request.method, request.target) == ("POST", _MANTLE_COUNT_TARGET), request.target
+        assert request.headers["anthropic-version"] == _MANTLE_VERSION, request.headers
+        assert request.headers["content-type"] == "application/json", request.headers
+    return tuple((_signer(request), _JSON_OBJECT.validate_json(request.body)) for request in requests)
+
+
+def _mantle_body(prompt: str) -> dict[str, JsonValue]:
+    return {
+        "model": _OPUS_BASE,
+        "messages": [{"role": "user", "content": prompt}],
+        "system": _SYSTEM,
+        "tools": _SDK_TOOLS,
+    }
 
 
 def _url(port: int) -> str:
@@ -255,15 +305,15 @@ def test_shipped_token_count_model_counts_the_request_in_its_region_without_tryi
     ):
         counted: Final = _count(gateway, _deployment(scenario, runtime_port), 404)
         assert (counted.input_tokens, counted.model_extra) == (_COUNT_MODEL_COUNT, _COUNT_MODEL_SOURCE), counted
-        assert _runtime_counts(runtime) == ((_OPUS_BASE, (_ACCESS_KEY, _COUNT_REGION), _converse_body(_prompt(404))),)
-        assert _mantle_models(mantle) == ()
+        assert _runtime_counts(runtime) == ()
+        assert _mantle_count_requests(mantle) == (((_ACCESS_KEY, _COUNT_REGION), _mantle_body(_prompt(404))),)
 
 
 @pytest.mark.parametrize(
     ("count_model_status", "error", "message"),
     [
-        (401, anthropic.AuthenticationError, f"scripted runtime 401 for {_OPUS_BASE}"),
-        (429, anthropic.RateLimitError, f"scripted runtime 429 for {_OPUS_BASE}"),
+        (401, anthropic.AuthenticationError, f"scripted mantle 401 for {_OPUS_BASE}"),
+        (429, anthropic.RateLimitError, f"scripted mantle 429 for {_OPUS_BASE}"),
         (404, anthropic.NotFoundError, f"scripted mantle 404 for {_OPUS_BASE}"),
     ],
 )
@@ -283,9 +333,16 @@ def test_token_count_model_failure_answers_its_error_and_names_the_region_to_ena
     ):
         with pytest.raises(error) as refused:
             _count(gateway, _deployment(scenario, runtime_port), 200, count_model_status=count_model_status)
-        assert message in str(refused.value) and f"{_OPUS} in {_COUNT_REGION}" in str(refused.value), refused.value
-        assert _runtime_models(runtime) == (_OPUS_BASE,)
-        assert _mantle_models(mantle) == ((_OPUS_BASE,) if count_model_status == 404 else ())
+        assert message in str(refused.value) and (
+            f"{_COUNT_MODEL_SOURCE['litellm_count_model']} in {_COUNT_REGION}" in str(refused.value)
+        ), refused.value
+        assert _runtime_counts(runtime) == ()
+        assert _mantle_count_requests(mantle) == (
+            (
+                (_ACCESS_KEY, _COUNT_REGION),
+                _mantle_body(_prompt(200, count_model_status)),
+            ),
+        )
 
 
 def test_framing_is_added_to_the_local_estimate_when_the_runtime_cannot_count(
@@ -359,8 +416,8 @@ def test_inference_profile_arn_counts_with_the_token_count_model_of_its_base_mod
         )
         counted: Final = _count(gateway, model, 404)
         assert (counted.input_tokens, counted.model_extra) == (_COUNT_MODEL_COUNT, _COUNT_MODEL_SOURCE), counted
-        assert _runtime_models(runtime) == (_OPUS_BASE,)
-        assert _mantle_models(mantle) == ()
+        assert _runtime_counts(runtime) == ()
+        assert _mantle_count_requests(mantle) == (((_ACCESS_KEY, _COUNT_REGION), _mantle_body(_prompt(404))),)
 
 
 @pytest.mark.parametrize(

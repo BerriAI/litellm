@@ -31,6 +31,7 @@ from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.common_utils import schema_property_count
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -43,6 +44,8 @@ from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams
 if TYPE_CHECKING:
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.types.llms.openai import AllMessageValues
+
+BEDROCK_INVOKE_TRACE_FIELD: Final = "amazon-bedrock-trace"
 
 
 _ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
@@ -136,6 +139,25 @@ def merge_bedrock_aws_request_params(
             if key not in litellm_params:
                 request_params.pop(key, None)
     return request_params
+
+
+def configured_bedrock_control_plane_endpoint(endpoint: object) -> str | None:
+    """An ``aws_bedrock_control_plane_endpoint`` value without a trailing slash, or None when unset."""
+    if isinstance(endpoint, str) and endpoint.strip():
+        return endpoint.strip().rstrip("/")
+    return None
+
+
+def bedrock_control_plane_base_url(endpoint: object, aws_region_name: str) -> str:
+    """Base URL for Bedrock control-plane calls such as model invocation jobs.
+
+    A configured ``aws_bedrock_control_plane_endpoint`` (a VPC endpoint or a compatible gateway)
+    wins over the regional ``bedrock`` host. ``api_base`` is deliberately not used here, since on a
+    Bedrock deployment it points at the runtime host, which does not serve these APIs.
+    """
+    return configured_bedrock_control_plane_endpoint(endpoint) or (
+        f"https://bedrock.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}"
+    )
 
 
 def s3_static_key_pair(params: Mapping[str, object]) -> tuple[str, str] | None:
@@ -338,6 +360,60 @@ def warn_bedrock_native_output_rejected(model: str, error_text: str) -> None:
 class NativeOutputFallback:
     optional_params: Mapping[str, object]
     litellm_params: Mapping[str, object]
+
+
+_BEDROCK_STRICT_TOOLS_REJECTION: Final = re.compile(
+    r"Too many strict tools \(\d+\)"
+    r"|Schemas contains too many (?:optional parameters|parameters with union types)"
+    r"|[Cc]ompiled grammar (?:is too large|size)"
+    r"|tools\.\d+\.custom(?:\.strict)?: "
+    r"|Grammar compilation timed out"
+)
+_TOOLS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_TOOL_SPEC_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def is_bedrock_strict_tools_rejection(status_code: int, error_text: str) -> bool:
+    return status_code == 400 and _BEDROCK_STRICT_TOOLS_REJECTION.search(error_text) is not None
+
+
+def warn_bedrock_strict_tools_dropped(model: str) -> None:
+    verbose_logger.warning(
+        "Bedrock rejected the strict tool schemas for model=%s, so litellm sent the request again without `strict` "
+        "because drop_params is set.",
+        model,
+    )
+
+
+def _without_strict(tool: Mapping[str, object]) -> Mapping[str, object]:
+    spec_key: Final = next((key for key in ("function", "toolSpec") if key in tool), None)
+    if spec_key is None:
+        return tool
+    spec: Final = _TOOL_SPEC_ADAPTER.validate_python(tool[spec_key])
+    return {**tool, spec_key: {key: value for key, value in spec.items() if key != "strict"}}
+
+
+def _sends_strict(tool: Mapping[str, object], supports_strict_tools: bool) -> bool:
+    if "toolSpec" in tool:
+        return "strict" in _TOOL_SPEC_ADAPTER.validate_python(tool["toolSpec"])
+    if "function" not in tool:
+        return False
+    return supports_strict_tools and bool(_TOOL_SPEC_ADAPTER.validate_python(tool["function"]).get("strict"))
+
+
+def bedrock_strict_tools_fallback(
+    model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+) -> NativeOutputFallback | None:
+    tools: Final = _TOOLS_ADAPTER.validate_python(optional_params.get("tools", ()))
+    supports_strict_tools: Final = bedrock_converse_supports_strict_tools(
+        bedrock_capability_model(model, litellm_params.get("base_model"))
+    )
+    if not any(_sends_strict(tool, supports_strict_tools) for tool in tools):
+        return None
+    return NativeOutputFallback(
+        optional_params={**optional_params, "tools": [_without_strict(tool) for tool in tools]},
+        litellm_params=litellm_params,
+    )
 
 
 def requests_output_config_format(optional_params: Mapping[str, object]) -> bool:
@@ -1286,10 +1362,7 @@ def build_mantle_messages_url(
     """
     override: Final = api_base or aws_bedrock_runtime_endpoint or _mantle_api_base_from_env()
     if override:
-        base: Final = override.rstrip("/")
-        if base.endswith(MANTLE_MESSAGES_PATH):
-            return base
-        return f"{base}{MANTLE_MESSAGES_PATH}"
+        return ensure_api_route(override, MANTLE_MESSAGES_PATH)
     return f"https://bedrock-mantle.{region}.api.aws{MANTLE_MESSAGES_PATH}"
 
 
@@ -2004,8 +2077,13 @@ def get_bedrock_response_stream_shape():
 _BEDROCK_STREAM_OUTPUT_SHAPES: Final = ("ConverseStreamOutput", "ResponseStream")
 
 
+class _ModeledErrorMetadata(TypedDict, total=False):
+    httpStatusCode: ReadOnly[int]
+
+
 def _modeled_error_status(member: Shape) -> int | None:
-    status: Final = (member.metadata or {}).get("error", {}).get("httpStatusCode")
+    error: Final[_ModeledErrorMetadata] = (member.metadata or {}).get("error", {})
+    status: Final = error.get("httpStatusCode")
     return None if status is None else int(status)
 
 

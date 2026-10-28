@@ -25,6 +25,8 @@ CLAUDE_CODE_CLIENT: Final = "claude-code"
 MICROSOFT_365_COPILOT_DEFAULT_TIME_ZONE: Final = "UTC"
 GITHUB_COPILOT_PER_USER_AUTH_TYPE: Final = "per_user_oauth"
 GITHUB_COPILOT_AUTH_TYPE_KEY: Final = "github_copilot_auth_type"
+GITHUB_COPILOT_HOST_KEY: Final = "github_copilot_host"
+GITHUB_COPILOT_DEFAULT_HOST: Final = "github.com"
 GITHUB_COPILOT_USER_TOKEN_SAFETY_MARGIN_SECONDS: Final = 60
 GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS: Final = 60
 GITHUB_COPILOT_DEVICE_FLOW_CACHE_PREFIX: Final = "github_copilot_device_flow"
@@ -154,6 +156,9 @@ DEFAULT_REPLICATE_POLLING_RETRIES: Final = get_env_int("DEFAULT_REPLICATE_POLLIN
 DEFAULT_REPLICATE_POLLING_DELAY_SECONDS: Final = get_env_int("DEFAULT_REPLICATE_POLLING_DELAY_SECONDS", 1)
 DEFAULT_IMAGE_TOKEN_COUNT: Final = get_env_int("DEFAULT_IMAGE_TOKEN_COUNT", 250)
 HF_CONFIG_FETCH_TIMEOUT_SECONDS: Final = 10.0
+HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS: Final = get_env_int_in_range(
+    "HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS", 300, 1, 86400
+)
 
 # Maximum wall-clock seconds a streaming response is allowed to run.
 # Streams exceeding this duration are terminated with a Timeout error.
@@ -191,6 +196,11 @@ DEFAULT_IMAGE_HEIGHT: Final = get_env_int("DEFAULT_IMAGE_HEIGHT", 300)
 # Maps to OpenAI's 50 MB payload limit - requests with images exceeding this size will be rejected
 # Set MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0 to disable image URL handling entirely
 MAX_IMAGE_URL_DOWNLOAD_SIZE_MB: Final = get_env_float("MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 50.0)
+MAX_DECOMPRESSED_REQUEST_BODY_SIZE_MB: Final = get_env_float("MAX_DECOMPRESSED_REQUEST_BODY_SIZE_MB", 50.0)
+MAX_REQUEST_BODY_DECOMPRESSION_RATIO: Final = get_env_int("MAX_REQUEST_BODY_DECOMPRESSION_RATIO", 200)
+MAX_DECOMPRESSED_REQUEST_BODIES_IN_FLIGHT_MB: Final = get_env_float(
+    "MAX_DECOMPRESSED_REQUEST_BODIES_IN_FLIGHT_MB", 200.0
+)
 MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB: Final = get_env_int(
     "MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB", 1024
 )  # 1MB = 1024KB
@@ -251,6 +261,9 @@ MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS: Final = get_env_int("MCP_PER_USER_TOKE
 
 # MCP timeout defaults (seconds). Override via env vars for slow/custom MCP servers.
 MCP_CLIENT_TIMEOUT: Final = get_env_float("LITELLM_MCP_CLIENT_TIMEOUT", 60.0)
+MCP_MAX_SSE_EVENT_SIZE_BYTES: Final = get_env_int_in_range(
+    "LITELLM_MCP_MAX_SSE_EVENT_SIZE_BYTES", 64 * 1024 * 1024, 1, sys.maxsize
+)
 MCP_TOOL_LISTING_TIMEOUT: Final = get_env_float("LITELLM_MCP_TOOL_LISTING_TIMEOUT", 30.0)
 MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES: Final = get_env_int("LITELLM_MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES", 3)
 MCP_UPSTREAM_RATE_LIMIT_BASE_DELAY_SECONDS: Final = get_env_float(
@@ -467,6 +480,7 @@ REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_end_user_sp
 REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_agent_spend_update_buffer"
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_tag_spend_update_buffer"
 REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_window_spend_update_buffer"
+REDIS_TOOL_DISCOVERY_BUFFER_KEY: Final = "litellm_tool_discovery_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT: Final = get_env_int("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100)
 REDIS_SPEND_LOGS_BUFFER_KEY: Final = "litellm_spend_logs_buffer"
 REDIS_SPEND_LOGS_BUFFER_MAX_ROWS: Final = 100000
@@ -598,6 +612,7 @@ NON_LLM_CONNECTION_TIMEOUT: Final = get_env_int(
 )  # timeout for adjacent services (e.g. jwt auth)
 MAX_EXCEPTION_MESSAGE_LENGTH: Final = get_env_int("MAX_EXCEPTION_MESSAGE_LENGTH", 2000)
 MAX_STRING_LENGTH_PROMPT_IN_DB: Final = get_env_int("MAX_STRING_LENGTH_PROMPT_IN_DB", 2048)
+MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB: Final = 64 * 1024
 BEDROCK_MAX_POLICY_SIZE: Final = get_env_int("BEDROCK_MAX_POLICY_SIZE", 75)
 # One entry per distinct AWS credential-argument set. Per-user cost attribution passes the attributed
 # identity as aws_session_name, so this bounds how many attributed identities keep a cached STS session.
@@ -612,7 +627,7 @@ BEDROCK_MIN_THINKING_BUDGET_TOKENS: Final = get_env_int("BEDROCK_MIN_THINKING_BU
 # Anthropic's Messages API rejects thinking.budget_tokens < 1024.
 ANTHROPIC_MIN_THINKING_BUDGET_TOKENS: Final = 1024
 REPLICATE_POLLING_DELAY_SECONDS: Final = get_env_float("REPLICATE_POLLING_DELAY_SECONDS", 0.5)
-DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS: Final = get_env_int("DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS", 4096)
+DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS: Final = get_env_int("DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS", 128000)
 DEFAULT_OCI_CHAT_MAX_TOKENS: Final = 4096
 TOGETHER_AI_4_B: Final = get_env_int("TOGETHER_AI_4_B", 4)
 TOGETHER_AI_8_B: Final = get_env_int("TOGETHER_AI_8_B", 8)
@@ -722,6 +737,7 @@ DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE: Final = os.getenv(
 )
 
 LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED: Final = 499
+LITELLM_CLIENT_DISCONNECT_DETAIL: Final = "Client disconnected the request"
 
 EMAIL_BUDGET_ALERT_TTL: Final = get_env_int("EMAIL_BUDGET_ALERT_TTL", 24 * 60 * 60)  # 24 hours in seconds
 EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE: Final = get_env_float(
@@ -847,6 +863,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "heroku",
     "oci",
     "morph",
+    "opencode_go",
     "lambda_ai",
     "inception",
     "vercel_ai_gateway",
@@ -1018,6 +1035,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api-inference.modelscope.cn/v1",
     "https://api.moonshot.ai/v1",
     "https://api.publicai.co/v1",
+    "https://api.aiand.com/v1",
     "https://api.synthetic.new/openai/v1",
     "https://serverless.tensormesh.ai/v1",
     "https://api.stima.tech/v1",
@@ -1049,7 +1067,7 @@ openai_compatible_endpoints: Final[list[str]] = [
 ]
 
 
-openai_compatible_providers: Final[list] = [
+openai_compatible_providers: Final[list[str]] = [
     "anyscale",
     "groq",
     "nvidia_nim",
@@ -1083,6 +1101,7 @@ openai_compatible_providers: Final[list] = [
     "novita",
     "meta_llama",
     "publicai",  # PublicAI - JSON-configured provider
+    "aiand",  # ai& - JSON-configured provider
     "synthetic",  # Synthetic - JSON-configured provider
     "tensormesh",  # Tensormesh - JSON-configured provider
     "apertis",  # Apertis - JSON-configured provider
@@ -1102,6 +1121,7 @@ openai_compatible_providers: Final[list] = [
     "v0",
     "helicone",
     "morph",
+    "opencode_go",
     "lambda_ai",
     "inception",
     "hyperbolic",
@@ -1640,9 +1660,11 @@ OUTPUT_TOKEN_CEILING_PARAMS: Final = frozenset({"max_tokens", "max_completion_to
 CLIENT_OUTPUT_CEILING_METADATA_KEY: Final = "_client_output_ceiling"
 CONSUMED_REQUEST_TAGS_METADATA_KEY: Final = "_consumed_request_tags"
 ROUTING_REQUEST_TAGS_METADATA_KEY: Final = "_routing_request_tags"
+BAGGAGE_MAPPED_TAGS_METADATA_KEY: Final = "_baggage_mapped_tags"
 VECTOR_STORE_CALLER_METADATA_KWARG: Final = "litellm_vector_store_caller_metadata"
 ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_router_usage_counted_tokens"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
+BILLED_RETRY_ATTEMPT_METADATA_KEY: Final = "billed_retry_attempt"
 MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: Final = "_managed_background_response"
 SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
 SESSION_ID_OMITTED_METADATA_KEY: Final = "litellm_session_id_omitted"
@@ -1806,6 +1828,7 @@ LITELLM_EXECUTED_BATCH_CONCURRENCY: Final = max(1, get_env_int("LITELLM_EXECUTED
 ########################### CLI SSO AUTHENTICATION CONSTANTS ###########################
 LITELLM_CLI_SOURCE_IDENTIFIER: Final = "litellm-cli"
 LITELLM_CLI_SESSION_TOKEN_PREFIX: Final = "litellm-session-token"
+CP_RETURN_TO_COOKIE_PREFIX: Final = "return_to.v1."
 CLI_SSO_SESSION_CACHE_KEY_PREFIX: Final = "cli_sso_session"
 CLI_SSO_SESSION_TTL_SECONDS: Final = 600
 CLI_SESSION_KEY_PREFIX: Final = "cli-session"
@@ -1825,6 +1848,7 @@ LITELLM_UI_SESSION_DURATION: Final = os.getenv("LITELLM_UI_SESSION_DURATION", "2
 
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME: Final = "db_spend_update_job"
+TOOL_DISCOVERY_COMMIT_JOB_NAME: Final = "tool_discovery_commit_job"
 DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME: Final = "db_daily_tag_spend_update_job"
 PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME: Final = "prometheus_emit_budget_metrics"
 CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME: Final = "cloudzero_export_usage_data"
@@ -1849,6 +1873,9 @@ SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS: Final = get_env_float(
 SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS: Final = get_env_float("SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS", 300.0)
 SPEND_LOG_CLEANUP_BATCH_TIMEOUT_SECONDS: Final = get_env_float("SPEND_LOG_CLEANUP_BATCH_TIMEOUT_SECONDS", 30.0)
 SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP: Final = get_env_int("SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP", 100000)
+SPEND_LOG_SIZE_CHECK_JOB_NAME: Final = "spend_log_size_check"
+SPEND_LOG_SIZE_CHECK_INTERVAL: Final = os.getenv("SPEND_LOG_SIZE_CHECK_INTERVAL", "1d")
+SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES: Final = get_env_int("SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES", 10)
 SCHEDULED_JOB_SHUTDOWN_FINISH_TIMEOUT_SECONDS: Final = get_env_float(
     "SCHEDULED_JOB_SHUTDOWN_FINISH_TIMEOUT_SECONDS", 5.0
 )
@@ -1970,6 +1997,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "public_model_groups",
     "public_model_groups_links",
     "cost_discount_config",
+    "apply_search_free_tier",
     "cost_margin_config",
     "block_requests_for_models_without_pricing",
     "budget_exceeded_throttle_percentage",
@@ -2310,6 +2338,7 @@ HARNESS_STDERR_TAIL_LINES: Final = 40
 HARNESS_STREAM_READ_CHUNK_BYTES: Final = 64 * 1024
 HARNESS_EVENT_QUEUE_MAX_SIZE: Final = 1024
 HARNESS_PROCESS_KILL_GRACE_SECONDS: Final = 5.0
+HARNESS_RESUME_COMMAND_TIMEOUT_SECONDS: Final = 30.0
 HARNESS_SNAPSHOT_SKIP_DIRS: Final = frozenset(
     {
         ".git",

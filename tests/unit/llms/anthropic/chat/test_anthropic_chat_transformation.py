@@ -26,12 +26,12 @@ from litellm.llms.anthropic.chat import ModelResponseIterator
 from litellm.llms.anthropic.common_utils import process_anthropic_headers
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.base_llm.base_utils import ResponseFormatSchema, response_format_schema
-from litellm.llms.anthropic.pass_through.messages.transformation import (
+from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
 from litellm.llms.bedrock.claude_platform.transformation import BedrockClaudePlatformConfig
-from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
@@ -2251,6 +2251,38 @@ def test_effort_with_other_features():
     assert "thinking" in result
 
 
+_OBJECT_OUTPUT_FORMAT: Final = {"type": "json_schema", "schema": {"type": "object", "properties": {}}}
+
+
+@pytest.mark.parametrize(
+    ("output_format", "request_drop_params", "global_drop_params", "forwarded"),
+    [
+        pytest.param("json", True, False, False, id="string_dropped_under_request_drop_params"),
+        pytest.param("json", None, True, False, id="string_dropped_under_global_drop_params"),
+        pytest.param("json", None, False, True, id="string_forwarded_without_drop_params"),
+        pytest.param(_OBJECT_OUTPUT_FORMAT, True, False, True, id="object_kept_under_drop_params"),
+    ],
+)
+def test_anthropic_chat_drops_only_a_non_object_output_format_and_only_under_drop_params(
+    output_format: object,
+    request_drop_params: bool | None,
+    global_drop_params: bool,
+    forwarded: bool,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+
+    result = AnthropicConfig().transform_request(
+        model="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={"output_format": output_format},
+        litellm_params={"drop_params": request_drop_params},
+        headers={},
+    )
+
+    assert result.get("output_format") == (output_format if forwarded else None)
+
+
 def test_anthropic_drop_params_strips_output_config_for_pre_4_5_models():
     """``drop_params=True`` strips unsupported ``output_config`` for pre-4.5 models."""
     config = AnthropicConfig()
@@ -2346,10 +2378,8 @@ def test_anthropic_model_supports_effort_param_rejects_non_supporting_models(mod
     "model",
     [
         "claude-opus-4-6",
-        "claude-opus-4-7",
         "claude-opus-4-8",
         "claude-opus-4-6-20260205",
-        "claude-opus-4-7-20260416",
     ],
 )
 def test_anthropic_model_supports_speed_param_recognizes_supporting_models(model):
@@ -2365,6 +2395,10 @@ def test_anthropic_model_supports_speed_param_recognizes_supporting_models(model
         "vertex_ai/claude-opus-4-8",
         "azure_ai/claude-opus-4-8",
         "anthropic.claude-opus-4-8",
+        # Anthropic removed Opus 4.7 fast mode on 2026-07-24 and answers 400 for `speed` on it
+        # (code.claude.com/docs/en/fast-mode, platform.claude.com/docs/en/build-with-claude/fast-mode, read 2026-10-28)
+        "claude-opus-4-7",
+        "claude-opus-4-7-20260416",
     ],
 )
 def test_anthropic_model_supports_speed_param_rejects_non_supporting_models(model):
@@ -2517,18 +2551,6 @@ def test_translate_system_message_preserves_cache_control():
 # ============ Dynamic max_tokens Tests ============
 
 
-def test_get_max_tokens_for_model_claude_3():
-    """
-    Test that get_max_tokens_for_model returns correct value for Claude 3 models.
-    Claude 3 models have max_output_tokens of 4096.
-    """
-    config = AnthropicConfig()
-
-    # Claude 3 Sonnet should return 4096
-    max_tokens = config.get_max_tokens_for_model("claude-3-sonnet-20240229")
-    assert max_tokens == 4096
-
-
 def test_get_max_tokens_for_model_claude_35():
     """
     Test that get_max_tokens_for_model returns correct value for Claude 3.5 models.
@@ -2549,24 +2571,24 @@ def test_get_max_tokens_for_model_claude_35():
 
 def test_get_max_tokens_for_model_unknown():
     """
-    Test that get_max_tokens_for_model returns 4096 fallback for unknown models.
+    Test that get_max_tokens_for_model returns 128000 fallback for unknown models.
     """
     config = AnthropicConfig()
 
-    # Unknown model should return 4096 as fallback
+    # Unknown model should return 128000 as fallback
     max_tokens = config.get_max_tokens_for_model("unknown-model-xyz")
-    assert max_tokens == 4096
+    assert max_tokens == 128000
 
 
 def test_get_max_tokens_for_model_none():
     """
-    Test that get_max_tokens_for_model returns 4096 fallback when model is None.
+    Test that get_max_tokens_for_model returns 128000 fallback when model is None.
     """
     config = AnthropicConfig()
 
-    # None model should return 4096 as fallback
+    # None model should return 128000 as fallback
     max_tokens = config.get_max_tokens_for_model(None)
-    assert max_tokens == 4096
+    assert max_tokens == 128000
 
 
 def test_get_config_with_model_uses_dynamic_max_tokens():
@@ -2607,10 +2629,10 @@ def test_get_config_with_model_uses_dynamic_max_tokens():
 
 def test_get_config_without_model_uses_fallback():
     """
-    Test that get_config without model parameter uses 4096 fallback.
+    Test that get_config without model parameter uses 128000 fallback.
     """
     config = AnthropicConfig.get_config()
-    assert config["max_tokens"] == 4096
+    assert config["max_tokens"] == 128000
 
 
 def test_get_config_does_not_leak_module_constants():
@@ -4657,8 +4679,9 @@ def test_fast_mode_parameter_mapping():
     assert result["speed"] == "fast"
 
 
-def test_anthropic_drop_params_strips_speed_for_unsupported_models():
-    """``drop_params=True`` strips unsupported ``speed`` for non-Opus models."""
+@pytest.mark.parametrize("model", ["claude-sonnet-4-6", "claude-opus-4-7"])
+def test_anthropic_drop_params_strips_speed_for_unsupported_models(model: str):
+    """``drop_params=True`` strips ``speed`` for models without fast mode."""
     config = AnthropicConfig()
     messages = [{"role": "user", "content": "Hello"}]
 
@@ -4666,7 +4689,7 @@ def test_anthropic_drop_params_strips_speed_for_unsupported_models():
     litellm.drop_params = True
     try:
         result = config.transform_request(
-            model="claude-sonnet-4-6",
+            model=model,
             messages=messages,
             optional_params={"speed": "fast", "max_tokens": 1024},
             litellm_params={},
@@ -6113,7 +6136,7 @@ def test_anthropic_messages_request_strips_billing_header_for_minimax():
 
 
 def test_translate_system_message_strips_billing_header_for_bedrock_invoke():
-    from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+    from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeConfig,
     )
 
@@ -6132,7 +6155,7 @@ def test_translate_system_message_strips_billing_header_for_bedrock_invoke():
     [
         ("litellm.llms.anthropic.chat.transformation", "AnthropicConfig", False),
         (
-            "litellm.llms.anthropic.pass_through.messages.transformation",
+            "litellm.llms.anthropic.messages.native.transformation",
             "AnthropicMessagesConfig",
             False,
         ),
@@ -6142,12 +6165,12 @@ def test_translate_system_message_strips_billing_header_for_bedrock_invoke():
             True,
         ),
         (
-            "litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation",
+            "litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation",
             "AmazonAnthropicClaudeConfig",
             True,
         ),
         (
-            "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation",
+            "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation",
             "AmazonAnthropicClaudeMessagesConfig",
             True,
         ),
@@ -6174,7 +6197,7 @@ def test_translate_system_message_strips_billing_header_for_bedrock_invoke():
             True,
         ),
         (
-            "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation",
+            "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation",
             "VertexAIPartnerModelsAnthropicMessagesConfig",
             True,
         ),
@@ -7882,6 +7905,24 @@ def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
             {"summary": "likes tea"},
             id="tool_name_envelope_on_a_schema_allowing_extra_keys",
         ),
+        pytest.param(
+            {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["payload"]},
+            {"payload": {"id": "abc", "rows": 3}},
+            {"payload": {"id": "abc", "rows": 3}},
+            id="key_listed_only_in_required",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "arguments": {"input": _RISK_OBJECT}},
+            _RISK_OBJECT,
+            id="tool_name_envelope_around_an_input_wrapper",
+        ),
+        pytest.param(
+            _PER_USER_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _PER_USER_ANSWER},
+            _PER_USER_ANSWER,
+            id="tool_name_envelope_around_an_answer_with_one_allowed_key",
+        ),
     ],
 )
 def test_convert_tool_response_to_message_unwraps_only_an_unambiguous_schema_envelope(
@@ -7894,6 +7935,31 @@ def test_convert_tool_response_to_message_unwraps_only_an_unambiguous_schema_env
 
     assert message is not None
     assert json.loads(message.content) == expected_content
+
+
+def test_convert_tool_response_to_message_keeps_non_ascii_text_in_an_unwrapped_answer():
+    answer = {"tier": 3, "summary": "Hôtel Lutetia, 東京"}
+
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=_json_tool_call({"input": answer}),
+        response_format_schema=_schema(_RISK_SCHEMA),
+    )
+
+    assert message is not None
+    assert "Hôtel Lutetia, 東京" in message.content
+    assert json.loads(message.content) == answer
+
+
+def test_convert_tool_response_to_message_answer_with_a_lone_surrogate_stays_utf8_encodable():
+    answer = {"tier": 3, "summary": "smile \ud83d end"}
+
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=_json_tool_call({"input": answer}),
+        response_format_schema=_schema(_RISK_SCHEMA),
+    )
+
+    assert message is not None
+    assert json.loads(message.content.encode("utf-8")) == answer
 
 
 _TOO_DEEP_TO_DECODE: Final = "[" * 100_000 + "]" * 100_000

@@ -145,7 +145,9 @@ class UpgradeMonitor:
         self.clock: Final = clock
         self.wall_clock: Final = wall_clock
         self.started: Final = clock()
-        self.status_limit: Final = next(limit.max for limit in CASE.limits if limit.metric == "unexpected_status_count")
+        self.status_limit: Final = next(
+            limit.max for limit in CASE.limits if limit.metric == "unexpected_status_count" and limit.max is not None
+        )
         self.pending: tuple[WireRecord, ...] = ()
         self.processed = 0
         self.successes = 0
@@ -197,6 +199,18 @@ class UpgradeMonitor:
         assert not self.pending, f"{len(self.pending)} successful requests have no matching spend log"
         assert self.persisted_count == self.successes, "Spend-log count does not match successful requests"
         assert not state.pending_indexes or self.overlap_writes > 0, "No persisted requests observed during index work"
+
+
+def upgrade_properties(state: UpgradeState, monitor: UpgradeMonitor) -> tuple[tuple[str, float], ...]:
+    """The upgrade's own numbers under the `perf_` prefix the dashboard ingests, next to the perf rows."""
+    return (
+        ("perf_upgrade_schema_seconds", state.schema_seconds),
+        ("perf_upgrade_index_seconds", state.index_seconds),
+        ("perf_upgrade_overlap_writes", float(monitor.overlap_writes)),
+        ("perf_upgrade_max_lock_waiters", float(monitor.max_lock_waiters)),
+        ("perf_upgrade_pending_indexes", float(len(state.pending_indexes))),
+        ("perf_upgrade_unmatched_requests", float(len(monitor.pending))),
+    )
 
 
 def monitor_for(connection: psycopg.Connection[tuple[object, ...]], urls: tuple[str, ...]) -> UpgradeMonitor:
