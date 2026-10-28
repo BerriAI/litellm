@@ -138,6 +138,9 @@ ignored_function_names = [
     "_pre_call_check_requested_chat_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
     "_deployment_supports_param",  # Tested through the deployment-capability pre-call check tests in test_router.py
     "_capability_model_and_provider",  # Tested through the authenticating-provider pre-call check test in test_router.py
+    "_route_capability_pin",  # Exercised through Decisions routing tests in test_router.py
+    "_deployment_serves_route",  # Exercised through mixed-group Decisions tests in test_router.py
+    "_without_deployments_that_cannot_serve_route",  # Exercised through Decisions routing tests in test_router.py
     "_exact_base_model_max_input_tokens",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_base_model_widened_window",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_provider_model_id",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
@@ -168,6 +171,7 @@ ignored_function_names = [
     "_deployment_field",  # Read by is_batch_capable, tested through the mixed-group tests in test_router.py
     "_deployment_provider",  # Read by without_deployments_that_cannot_batch, tested through the mixed-group tests in test_router.py
     "_cannot_run_batches",  # Tested through the Azure and OpenAI mixed-group acreate_batch tests in test_router.py
+    "_team_deployments_named",  # Tested through the team lookups in the concurrent delete tests in test_router.py
 ]
 
 

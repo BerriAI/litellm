@@ -7,6 +7,7 @@ from typing import Final
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PROXY_LLM_PROVIDER_FALLBACK
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import PriorityReservationDict
 
@@ -85,10 +86,10 @@ def _resolve_provider_from_router_alias(
     if llm_router is None:
         return None
     try:
-        model_list: Final = getattr(llm_router, "model_list", None)
+        model_list: Final[object] = getattr(llm_router, "model_list", None)
         if not model_list:
             return None
-        for deployment in model_list:
+        for deployment in iter_items(model_list):
             if not isinstance(deployment, dict):
                 continue
             if deployment.get("model_name") != model:

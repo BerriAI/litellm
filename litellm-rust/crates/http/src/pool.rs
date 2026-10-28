@@ -6,7 +6,12 @@ use std::{
 
 use reqwest::dns::Resolve;
 
-use crate::{client::Client, config::HttpClientConfig, error::Error, proxy::EnvironmentProxies};
+use crate::{
+    client::Client,
+    config::{HttpClientConfig, Verify},
+    error::Error,
+    proxy::EnvironmentProxies,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ClientVariant {
@@ -62,6 +67,10 @@ impl HttpClientPool {
             },
             ClientVariant::WebSocket => HttpClientConfig {
                 http2: false,
+                verify: match &config.verify {
+                    Verify::BuiltInRoots => Verify::NativeRoots,
+                    verify => verify.clone(),
+                },
                 ..config.clone()
             },
             ClientVariant::Provider | ClientVariant::NoRedirect => config.clone(),
