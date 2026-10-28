@@ -1057,6 +1057,11 @@ def test_eu_jev_decision_rejects_a_model_that_is_not_a_string(model: object) -> 
     assert denied.value.status_code == 400
 
 
+@pytest.mark.usefixtures("configured_eu_jev_route")
+def test_a_pass_through_configured_at_the_eu_jev_decision_path_keeps_the_requested_model() -> None:
+    assert get_model_from_request(request_data={"model": "jeff-latest"}, route="/eu_jev/v1/systemone") == "jeff-latest"
+
+
 def test_laya_model_normalization_does_not_change_other_provider_routes() -> None:
     assert get_model_from_request(request_data={"model": "jev-latest"}, route="/typesafe/v1/systemone") == "jev-latest"
     assert get_model_from_request(request_data={}, route="/laya/health") is None

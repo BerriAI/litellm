@@ -397,7 +397,15 @@ def test_gateway_keeps_memory_summary_and_trims_the_other_debug_routes():
         assert not _is_gateway_route(debug_memory_routes[path]), f"{path} must not be served by the gateway"
 
 
-@pytest.mark.parametrize(("path", "served"), [("/eu_jev/v1/systemone", True), ("/eu_jev/custom", False)])
+@pytest.mark.parametrize(
+    ("path", "served"),
+    [
+        ("/eu_jev/v1/systemone", True),
+        ("/eu_jev/v1/systemone2", False),
+        ("/eu_jev/v1/systemone/{subpath:path}", False),
+        ("/eu_jev/custom", False),
+    ],
+)
 def test_gateway_serves_the_eu_jev_decision_route_and_no_other_eu_jev_path(path: str, served: bool) -> None:
     async def endpoint() -> None:
         return None

@@ -91,6 +91,7 @@ from litellm.proxy.auth.auth_utils import (
     get_request_route,
     request_dispatched_to_pass_through_endpoint,
 )
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
@@ -3422,6 +3423,8 @@ class InitPassThroughEndpointHelpers:
                     return True
 
         comparison_route: Final = InitPassThroughEndpointHelpers._route_for_registry_lookup(route)
+        if RouteChecks.is_builtin_eu_jev_decision_route(route=comparison_route):
+            return True
 
         # Fast path: check if any registered route key contains this path
         # Keys are in format: "{endpoint_id}:exact:{path}:{methods}" or "{endpoint_id}:subpath:{path}:{methods}"
@@ -3504,9 +3507,8 @@ class YieldsToConfiguredPassThroughRoute(APIRoute):
         match, child_scope = super().matches(scope)
         if match is not Match.FULL:
             return match, child_scope
-        request: Final = Request(scope)
         configured: Final = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
-            route=request.url.path, method=request.method
+            route=get_request_route(Request(scope))
         )
         return (match, child_scope) if configured is None else (Match.NONE, {})
 

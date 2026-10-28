@@ -73,6 +73,7 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES: Final = frozenset(
 _PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES: Final = ("/regenerate", "/reset_spend")
 
 _LLM_API_ROUTE_GROUPS: Final = frozenset(("llm_api_routes", "llm_api_routes_without_mcp"))
+_EU_JEV_DECISION_ROUTE: Final = "/eu_jev/v1/systemone"
 _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS: Final = frozenset(("openai_routes", *_LLM_API_ROUTE_GROUPS))
 
 # Writes that only touch the caller's own credential row (BYOK connections and
@@ -503,7 +504,17 @@ class RouteChecks:
         for _llm_passthrough_route in LiteLLMRoutes.mapped_pass_through_routes.value:
             if route == _llm_passthrough_route or route.startswith(_llm_passthrough_route + "/"):
                 return True
-        return False
+        return RouteChecks.is_builtin_eu_jev_decision_route(route=route)
+
+    @staticmethod
+    def is_builtin_eu_jev_decision_route(route: str) -> bool:
+        if route.rstrip("/") != _EU_JEV_DECISION_ROUTE:
+            return False
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: PLC0415  # pass_through_endpoints imports the auth stack
+            InitPassThroughEndpointHelpers,
+        )
+
+        return InitPassThroughEndpointHelpers.get_registered_pass_through_route(route=route.rstrip("/")) is None
 
     @staticmethod
     def _is_get_mcp_server_discovery_route(route: str, request: Request | None) -> bool:

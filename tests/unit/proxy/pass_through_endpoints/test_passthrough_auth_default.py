@@ -141,17 +141,12 @@ async def test_runtime_check_explicit_auth_false_still_skips_validation():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("route", "expected_key"),
-    [("/eu_jev/v1/systemone", "sk-from-header"), ("/eu_jev/custom", "sk-from-bearer")],
-)
-async def test_only_the_eu_jev_decision_route_reads_the_litellm_user_api_key_header(
-    route: str, expected_key: str
-) -> None:
+@pytest.mark.parametrize("route", ["/eu_jev/v1/systemone", "/eu_jev/v1/systemone/extra", "/eu_jev/v1/systemone2"])
+async def test_no_eu_jev_route_reads_the_litellm_user_api_key_header(route: str) -> None:
     request: Final = Request({"type": "http", "headers": [(b"litellm_user_api_key", b"sk-from-header")]})
 
     result: Final = await check_api_key_for_custom_headers_or_pass_through_endpoints(
         request=request, route=route, pass_through_endpoints=None, api_key="sk-from-bearer"
     )
 
-    assert result == expected_key
+    assert result == "sk-from-bearer"
