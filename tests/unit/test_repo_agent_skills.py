@@ -1,4 +1,5 @@
-import subprocess
+from collections.abc import Iterator
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Final
 
@@ -8,14 +9,31 @@ import yaml
 _REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 _SKILLS_DIR: Final = _REPO_ROOT / "skills"
 _SKILL_DIRECTORIES: Final = tuple(sorted(skill_file.parent for skill_file in _SKILLS_DIR.glob("*/SKILL.md")))
-_TRACKED_SKILL_FILES: Final = tuple(
-    _REPO_ROOT / tracked_path
-    for tracked_path in subprocess.run(
-        ["git", "ls-files", "SKILL.md", "*/SKILL.md"], cwd=_REPO_ROOT, check=True, capture_output=True, text=True
-    ).stdout.splitlines()
+_FULL_DEPTH_MAX_DEPTH: Final = 5
+_FULL_DEPTH_SKIPPED_NAMES: Final = frozenset(("node_modules", ".git", "dist", "build", "__pycache__"))
+_GITIGNORED_NAME_PATTERNS: Final = tuple(
+    line.strip().rstrip("/")
+    for line in (_REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    if line.strip() and not line.startswith(("#", "!")) and "/" not in line.strip().rstrip("/")
 )
+
+
+def _absent_from_a_clone_or_skipped_by_the_cli(name: str) -> bool:
+    return name in _FULL_DEPTH_SKIPPED_NAMES or any(fnmatch(name, pattern) for pattern in _GITIGNORED_NAME_PATTERNS)
+
+
+def _full_depth_skill_directories(directory: Path, depth: int) -> Iterator[Path]:
+    if (directory / "SKILL.md").is_file():
+        yield directory
+    if depth == _FULL_DEPTH_MAX_DEPTH:
+        return
+    for child in sorted(directory.iterdir()):
+        if child.is_dir() and not _absent_from_a_clone_or_skipped_by_the_cli(child.name):
+            yield from _full_depth_skill_directories(child, depth + 1)
+
+
 _NON_END_USER_SKILL_DIRECTORIES: Final = tuple(
-    sorted(skill_file.parent for skill_file in _TRACKED_SKILL_FILES if skill_file.parent.parent != _SKILLS_DIR)
+    directory for directory in _full_depth_skill_directories(_REPO_ROOT, 0) if directory.parent != _SKILLS_DIR
 )
 
 
