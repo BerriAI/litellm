@@ -1038,6 +1038,11 @@ def seed_request_identity(user_api_key_dict: object, model: str | None = None) -
         logger.seed_request_identity(user_api_key_dict, model=model)
 
 
+def v2_provider_published() -> bool:
+    """Whether the proxy published a v2 provider at startup, which delivers to the operator's own backends."""
+    return _published_v2_provider is not None
+
+
 def fan_out_provider() -> ApiTracerProvider:
     """The provider :func:`publish_global_otel_v2_provider` gave the tenant fan-out.
 

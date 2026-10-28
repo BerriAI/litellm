@@ -3522,6 +3522,52 @@ class TestLangfuseTenantOnly:
         assert later is at_startup
         assert loggers == [at_startup]
 
+    @staticmethod
+    def _key_logger_beside_the_generic_startup_logger(
+        monkeypatch: pytest.MonkeyPatch, loggers: list[CustomLogger]
+    ) -> OpenTelemetryV2:
+        """``langfuse_otel`` only in a key's logging: the proxy published the generic logger,
+        which exports to the operator's collector, and a key's request builds the Langfuse one."""
+        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+        credential_less_proxy(monkeypatch)
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.local:4318")
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        publish_global_otel_v2_provider(loggers, lambda _p: None)
+
+        def with_destination() -> OpenTelemetryV2 | None:
+            set_request_destinations((LANGFUSE_DEST,))
+            return _maybe_construct_otel_v2("langfuse_otel", loggers)
+
+        is_otel_v2_enabled.cache_clear()
+        logger: Final = in_fresh_context(with_destination)
+        is_otel_v2_enabled.cache_clear()
+        assert isinstance(logger, OpenTelemetryV2)
+        return logger
+
+    def test_a_key_destinations_logger_leaves_the_operators_collector_to_the_published_logger(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The published logger already sends every span to the collector; a copy here doubles each one."""
+        logger: Final = self._key_logger_beside_the_generic_startup_logger(monkeypatch, [])
+
+        assert all(spec.requires_headers and not spec.headers for spec in logger.config.exporters)
+
+    def test_a_key_destinations_logger_is_reused_by_later_requests_without_a_destination(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+        loggers: Final[list[CustomLogger]] = []
+        for_the_key: Final = self._key_logger_beside_the_generic_startup_logger(monkeypatch, loggers)
+
+        is_otel_v2_enabled.cache_clear()
+        later: Final = in_fresh_context(_maybe_construct_otel_v2, "langfuse_otel", loggers)
+        is_otel_v2_enabled.cache_clear()
+
+        assert later is for_the_key
+        assert loggers == [for_the_key]
+
     def test_a_key_destination_gets_the_langfuse_fields_from_the_generic_startup_logger(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

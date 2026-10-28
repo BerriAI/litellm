@@ -5971,11 +5971,12 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
     Returns ``None`` when V2 is off OR when there's no preset registered for
     ``callback_name`` — callers should then fall through to the legacy path.
 
-    A logger built while another V2 logger is already registered keeps only the
-    exporters its own preset contributed, whether or not the operator holds
-    credentials for that backend and whether or not a destination is anchored: the
-    registered logger owns operator delivery, so a copy of the operator's base OTLP
-    exporters here would emit every LLM call a second time into the operator's sink.
+    A logger built while another V2 logger is already registered, or after the proxy
+    published one at startup, keeps only the exporters its own preset contributed,
+    whether or not the operator holds credentials for that backend and whether or not
+    a destination is anchored: that logger owns operator delivery, so a copy of the
+    operator's base OTLP exporters here would emit every LLM call a second time into
+    the operator's sink.
     A preset that contributes no exporter of its own (a mapper over the operator's
     collector) keeps the base exporters, since it has nothing else to deliver through.
     A preset that needs operator credentials it cannot find is allowed to build only
@@ -5986,7 +5987,7 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
     until a key/team destination appears: the proxy builds the operator's callback at
     startup, before any request has resolved a destination, and the legacy path there
     would post every non-team request to the backend keyless. That logger is reused by
-    later calls as long as the preset would again build exporting nowhere; one that
+    later calls as long as a rebuild would again export nowhere; one that
     was degraded for a destination while the preset raises without one is not, since
     the degrade was justified by that destination alone.
     """
@@ -5994,7 +5995,7 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
 
     if not is_otel_v2_enabled():
         return None
-    from litellm.integrations.otel.logger import OpenTelemetryV2, build_otel_v2_logger
+    from litellm.integrations.otel.logger import OpenTelemetryV2, build_otel_v2_logger, v2_provider_published
     from litellm.integrations.otel.plumbing.context import destination_backends
     from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
 
@@ -6022,9 +6023,11 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
         return None
     if _is_credential_gated(built) and not carried and _only_the_placeholder_would_export(built):
         return None
-    if existing is not None and _exports_nowhere(built):
+    config: Final = (
+        _only_the_presets_own_exporters(built, callback_name) if has_v2_logger or v2_provider_published() else built
+    )
+    if existing is not None and _exports_nowhere(config):
         return existing
-    config: Final = _only_the_presets_own_exporters(built, callback_name) if has_v2_logger else built
     if _exports_nowhere(config):
         verbose_logger.warning(
             "OTel V2: no operator credentials for '%s'; only key/team destinations will receive its traces",
