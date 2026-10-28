@@ -18,7 +18,7 @@ import httpx
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
-from litellm.litellm_core_utils.provider_affinity import get_stable_session_id
+from litellm.litellm_core_utils.provider_affinity import get_caller_litellm_session_id, get_stable_session_id
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.utils import ProviderSpecificHeader
 
@@ -398,16 +398,20 @@ def _normalize_litellm_params(litellm_params: object) -> Mapping[str, object]:
 
 
 def _prompt_cache_session_id(prompt_cache_key: object) -> str | None:
-    if not prompt_cache_key:
+    if not isinstance(prompt_cache_key, str) or not prompt_cache_key:
         return None
-    key: Final = str(prompt_cache_key)
-    return key if _safe_header_value(key) == key else hashlib.sha256(key.encode("utf-8", "surrogatepass")).hexdigest()
+    return (
+        prompt_cache_key
+        if _safe_header_value(prompt_cache_key) == prompt_cache_key
+        else hashlib.sha256(prompt_cache_key.encode("utf-8", "surrogatepass")).hexdigest()
+    )
 
 
 def get_chatgpt_session_id(litellm_params: object) -> str | None:
     params: Final = _normalize_litellm_params(litellm_params)
     return (
-        get_stable_session_id(params)
+        get_caller_litellm_session_id(params)
+        or get_stable_session_id(params)
         or _prompt_cache_session_id(params.get("prompt_cache_key"))
         or next(
             (

@@ -116,6 +116,18 @@ class TestGetChatGPTSessionId:
     def test_prompt_cache_key_wins_over_request_scoped_ids(self, request_scoped):
         assert get_chatgpt_session_id({**request_scoped, "prompt_cache_key": "conv-123"}) == "conv-123"
 
+    def test_proxy_mapped_session_header_wins_over_body_session_id(self):
+        assert (
+            get_chatgpt_session_id(
+                {"litellm_session_id": "header-session", "session_id": "body-session", "prompt_cache_key": "conv-123"}
+            )
+            == "header-session"
+        )
+
+    @pytest.mark.parametrize("prompt_cache_key", [{"tenant": "a"}, 12345, True, ["x", "y"]])
+    def test_non_string_prompt_cache_key_is_ignored(self, prompt_cache_key):
+        assert get_chatgpt_session_id({"prompt_cache_key": prompt_cache_key, "litellm_call_id": "call-1"}) == "call-1"
+
     @pytest.mark.parametrize(
         "first, second",
         [("a\nb", "a\tb"), (json.loads('"conv-\\ud800"'), json.loads('"conv-\\udc00"'))],

@@ -53,6 +53,23 @@ def _get_provider_affinity_header_name(litellm_params: object | None, default_he
     return validate_provider_affinity_header_name(header)
 
 
+def _metadata_values(litellm_params: object) -> tuple[object, ...]:
+    return tuple(
+        value for key in ("metadata", "litellm_metadata") if (value := _get_value(litellm_params, key)) is not None
+    )
+
+
+def get_caller_litellm_session_id(litellm_params: object | None) -> str | None:
+    if litellm_params is None:
+        return None
+    has_generated_session_id: Final = any(
+        isinstance(metadata, Mapping) and metadata.get(SESSION_ID_GENERATED_METADATA_KEY)
+        for metadata in _metadata_values(litellm_params)
+    )
+    litellm_session_id: Final = _get_value(litellm_params, "litellm_session_id")
+    return str(litellm_session_id) if litellm_session_id and not has_generated_session_id else None
+
+
 def get_stable_session_id(litellm_params: object | None) -> str | None:
     if litellm_params is None:
         return None
@@ -61,19 +78,11 @@ def get_stable_session_id(litellm_params: object | None) -> str | None:
     if direct_session_id:
         return str(direct_session_id)
 
-    metadata_values: Final[tuple[object, ...]] = tuple(
-        value for key in ("metadata", "litellm_metadata") if (value := _get_value(litellm_params, key)) is not None
-    )
-    has_generated_session_id: Final = any(
-        isinstance(metadata, Mapping) and metadata.get(SESSION_ID_GENERATED_METADATA_KEY)
-        for metadata in metadata_values
-    )
+    caller_session_id: Final = get_caller_litellm_session_id(litellm_params)
+    if caller_session_id:
+        return caller_session_id
 
-    litellm_session_id: Final = _get_value(litellm_params, "litellm_session_id")
-    if litellm_session_id and not has_generated_session_id:
-        return str(litellm_session_id)
-
-    for metadata in metadata_values:
+    for metadata in _metadata_values(litellm_params):
         if (
             isinstance(metadata, Mapping)
             and not metadata.get(SESSION_ID_GENERATED_METADATA_KEY)
