@@ -6736,6 +6736,108 @@ def test_transform_response_finish_reason_stop_when_json_mode_filters_all_tools(
     assert result.choices[0].finish_reason == "stop"
 
 
+def _transform_json_mode_content_blocks(content: list[dict[str, object]]) -> ModelResponse:
+    response_json: Final = {
+        "metrics": {"latencyMs": 100},
+        "output": {"message": {"role": "assistant", "content": content}},
+        "stopReason": "tool_use",
+        "usage": {
+            "inputTokens": 50,
+            "outputTokens": 20,
+            "totalTokens": 70,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+
+    class MockResponse:
+        def json(self) -> dict[str, object]:
+            return response_json
+
+        @property
+        def text(self) -> str:
+            return json.dumps(response_json)
+
+    return AmazonConverseConfig()._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=ModelResponse(),
+        stream=False,
+        logging_obj=None,
+        optional_params={"json_mode": True},
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+
+def test_bedrock_json_mode_preserves_nonblank_text_before_json_tool_call():
+    preamble: Final = "Let me calculate the usable items. "
+    result: Final = _transform_json_mode_content_blocks(
+        [
+            {"text": preamble},
+            {
+                "toolUse": {
+                    "toolUseId": "tooluse_json_001",
+                    "name": "json_tool_call",
+                    "input": {"answer": 42},
+                }
+            },
+        ]
+    )
+
+    message: Final = result.choices[0].message
+    assert message.content == '{"answer": 42}'
+    assert message.provider_specific_fields["json_mode_preamble_text"] == preamble
+
+
+def test_bedrock_json_mode_omits_whitespace_only_preamble():
+    result: Final = _transform_json_mode_content_blocks(
+        [
+            {"text": " \n\t"},
+            {
+                "toolUse": {
+                    "toolUseId": "tooluse_json_001",
+                    "name": "json_tool_call",
+                    "input": {"answer": 42},
+                }
+            },
+        ]
+    )
+
+    message: Final = result.choices[0].message
+    assert message.content == '{"answer": 42}'
+    assert "json_mode_preamble_text" not in (message.provider_specific_fields or {})
+
+
+def test_bedrock_json_mode_preamble_preserves_reasoning_content_fields():
+    reasoning_content: Final = {
+        "reasoningText": {"text": "The answer is 42.", "signature": "signature-1"}
+    }
+    preamble: Final = "Here is the result. "
+    result: Final = _transform_json_mode_content_blocks(
+        [
+            {"reasoningContent": reasoning_content},
+            {"text": preamble},
+            {
+                "toolUse": {
+                    "toolUseId": "tooluse_json_001",
+                    "name": "json_tool_call",
+                    "input": {"answer": 42},
+                }
+            },
+        ]
+    )
+
+    message: Final = result.choices[0].message
+    assert message.content == '{"answer": 42}'
+    assert message.provider_specific_fields["json_mode_preamble_text"] == preamble
+    assert message.provider_specific_fields["reasoningContentBlocks"] == [reasoning_content]
+
+
 def test_transform_response_json_mode_truncated_tool_call_keeps_length_finish_reason():
     """
     When json_mode filters out the synthetic json_tool_call but Bedrock

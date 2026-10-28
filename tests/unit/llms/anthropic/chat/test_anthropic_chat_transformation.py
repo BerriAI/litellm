@@ -9716,6 +9716,69 @@ def test_json_mode_keeps_the_thinking_that_preceded_the_json_tool_call():
     assert [block["signature"] for block in message.thinking_blocks] == [thinking_block["signature"]]
 
 
+def test_json_mode_preserves_nonblank_text_before_json_tool_call():
+    preamble: Final = "Let me calculate the usable items. "
+    body: Final = _json_mode_message_body("tool_use", None)
+    result: Final = _transform_json_mode_body(
+        {**body, "content": [{"type": "text", "text": preamble}, *body["content"]]}
+    )
+
+    message: Final = result.choices[0].message
+    assert message.content == '{"answer": "Hello"}'
+    assert message.provider_specific_fields["json_mode_preamble_text"] == preamble
+
+
+def test_json_mode_preamble_preserves_refusal_provider_fields():
+    preamble: Final = "Let me explain the result. "
+    stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
+    body: Final = _json_mode_message_body("refusal", stop_details)
+    result: Final = _transform_json_mode_body(
+        {**body, "content": [{"type": "text", "text": preamble}, *body["content"]]}
+    )
+
+    message: Final = result.choices[0].message
+    assert message.content == '{"answer": "Hello"}'
+    assert message.provider_specific_fields == {
+        "stop_reason": "refusal",
+        "stop_details": stop_details,
+        "json_mode_preamble_text": preamble,
+    }
+
+
+def test_json_mode_text_without_tool_call_is_unchanged():
+    body: Final = _json_mode_message_body("tool_use", None)
+    result: Final = _transform_json_mode_body(
+        {**body, "content": [{"type": "text", "text": "A plain response."}]}
+    )
+
+    message: Final = result.choices[0].message
+    assert message.content == "A plain response."
+    assert message.tool_calls is None
+    assert "json_mode_preamble_text" not in (message.provider_specific_fields or {})
+
+
+def test_json_mode_with_a_real_tool_keeps_mixed_response_behavior():
+    preamble: Final = "I will look up the details. "
+    body: Final = _json_mode_message_body("tool_use", None)
+    user_tool_call: Final = {
+        "type": "tool_use",
+        "id": "toolu_user",
+        "name": "get_weather",
+        "input": {"location": "San Francisco"},
+    }
+    result: Final = _transform_json_mode_body(
+        {**body, "content": [{"type": "text", "text": preamble}, *body["content"], user_tool_call]}
+    )
+
+    message: Final = result.choices[0].message
+    assert message.content == f'{preamble}{{"answer": "Hello"}}'
+    assert message.tool_calls is not None
+    assert len(message.tool_calls) == 1
+    assert message.tool_calls[0].function.name == "get_weather"
+    assert message.tool_calls[0].function.arguments == '{"location": "San Francisco"}'
+    assert "json_mode_preamble_text" not in (message.provider_specific_fields or {})
+
+
 def test_non_dict_upstream_body_still_transforms_without_refusal_fields() -> None:
     result = AnthropicConfig().transform_parsed_response(
         completion_response=MagicMock(),

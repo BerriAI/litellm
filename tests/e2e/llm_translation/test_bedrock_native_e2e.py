@@ -9,6 +9,8 @@ from __future__ import annotations
 import pytest
 from typing import Final
 
+from openai.types.chat import ChatCompletionMessage
+from openai.types.shared_params.response_format_json_schema import ResponseFormatJSONSchema
 from pydantic import BaseModel, ConfigDict
 
 from e2e_config import unique_marker
@@ -86,6 +88,55 @@ class InvokeResponse(BaseModel):
     content: list[ConverseContent]
 
 
+class WarehouseAnswer(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    answer: int
+
+
+class JsonModePreambleFields(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    json_mode_preamble_text: str | None = None
+
+
+class JsonModeAssistantMessage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    content: str | None = None
+    provider_specific_fields: JsonModePreambleFields | None = None
+
+
+BEDROCK_JSON_SCHEMA_BACKEND: Final = "bedrock/us.anthropic.claude-opus-5-5"
+WAREHOUSE_PROMPT: Final = (
+    "A warehouse has 3 shelves. Shelf A holds 17 boxes of 24 items, shelf B holds 9 boxes of 36 items minus 13 "
+    "damaged items, and shelf C holds twice as many items as shelf B. How many usable items are there in total? "
+    "Work through it carefully, then answer."
+)
+WAREHOUSE_RESPONSE_FORMAT: Final[ResponseFormatJSONSchema] = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "warehouse_answer",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {"answer": {"type": "integer"}},
+            "required": ["answer"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+def _warehouse_message_has_preamble(message: ChatCompletionMessage) -> bool:
+    structured_message: Final = JsonModeAssistantMessage.model_validate(message.model_dump())
+    assert structured_message.content is not None
+    WarehouseAnswer.model_validate_json(structured_message.content)
+    provider_fields: Final = structured_message.provider_specific_fields
+    preamble: Final = provider_fields.json_mode_preamble_text if provider_fields is not None else None
+    return preamble is not None and bool(preamble.strip())
+
+
 def _register(proxy: ProxyClient, resources: ResourceManager) -> tuple[str, str]:
     model = f"e2e-bedrock-native-{unique_marker()}"
     model_id = proxy.create_model(
@@ -143,6 +194,49 @@ class TestBedrockNative:
         assert parsed is not None
         assert parsed.events
         assert all(event.name and event.date and event.participants for event in parsed.events)
+
+    @pytest.mark.provider_live
+    @pytest.mark.covers("llm.chat_completions.bedrock_converse.structured_output.preamble.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_JSON_SCHEMA_BACKEND,),
+            capabilities=(Capability.RESPONSE_SCHEMA,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_bedrock_json_schema_response_exposes_text_before_json_tool_call(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model = f"e2e-bedrock-json-mode-preamble-{unique_marker()}"
+        model_id = proxy.create_model(
+            model,
+            LiteLLMParamsBody(
+                model=BEDROCK_JSON_SCHEMA_BACKEND,
+                aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
+                aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
+                aws_region_name="us-east-1",
+            ),
+        )
+        resources.defer(lambda: proxy.delete_model(model_id))
+        key: Final = resources.key()
+
+        assert any(
+            _warehouse_message_has_preamble(
+                sdk.openai(key)
+                .chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": WAREHOUSE_PROMPT}],
+                    response_format=WAREHOUSE_RESPONSE_FORMAT,
+                    max_tokens=1500,
+                )
+                .choices[0]
+                .message
+            )
+            for _ in range(3)
+        ), "No model-generated preamble appeared in three Bedrock calls"
 
     @pytest.mark.covers("llm.bedrock_native.bedrock_converse.basic.nonstream.works")
     @meta(
