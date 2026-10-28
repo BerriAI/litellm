@@ -132,6 +132,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking,
+    reasoning_effort_from_thinking_silently,
 )
 from litellm.llms.anthropic.common_utils import (
     eager_input_streaming_flag,
@@ -287,6 +288,7 @@ class AnthropicAdapter:
             anthropic_message_request=request_body,
             custom_llm_provider=custom_llm_provider,
             drop_params=drop_params,
+            report_reasoning_drops=True,
         )
 
         return translated_body, tool_name_mapping
@@ -658,6 +660,7 @@ class LiteLLMAnthropicMessagesAdapter:
         *,
         model: str,
         drop_params: bool = True,
+        report_reasoning_drops: bool = False,
     ) -> str | None:
         """
         Translate Anthropic's thinking parameter to OpenAI's reasoning_effort.
@@ -676,7 +679,9 @@ class LiteLLMAnthropicMessagesAdapter:
         if thinking_type == "disabled":
             return "none"
         elif thinking_type == "enabled":
-            return reasoning_effort_from_thinking(thinking, model=model, drop_params=drop_params)
+            if report_reasoning_drops:
+                return reasoning_effort_from_thinking(thinking, model=model, drop_params=drop_params)
+            return reasoning_effort_from_thinking_silently(thinking, drop_params=drop_params)
         elif thinking_type == "adaptive":
             # Adaptive thinking: effort is controlled by output_config.effort,
             # not budget_tokens. Return a default; caller should override with
@@ -1124,6 +1129,7 @@ class LiteLLMAnthropicMessagesAdapter:
         *,
         custom_llm_provider: str | None = None,
         drop_params: bool = True,
+        report_reasoning_drops: bool = False,
     ) -> None:
         """Translate Anthropic thinking to either thinking or reasoning_effort.
 
@@ -1181,7 +1187,10 @@ class LiteLLMAnthropicMessagesAdapter:
             return
 
         reasoning_effort: Final = declared_effort or self.translate_anthropic_thinking_to_reasoning_effort(
-            cast(AnthropicThinkingParam, thinking), model=model, drop_params=drop_params
+            cast(AnthropicThinkingParam, thinking),
+            model=model,
+            drop_params=drop_params,
+            report_reasoning_drops=report_reasoning_drops,
         )
         if not reasoning_effort:
             return
@@ -1240,6 +1249,7 @@ class LiteLLMAnthropicMessagesAdapter:
         custom_llm_provider: str | None = None,
         preserve_midturn_system: bool = False,
         drop_params: bool = True,
+        report_reasoning_drops: bool = False,
     ) -> tuple[ChatCompletionRequest, dict[str, str]]:
         """
         This is used by the beta Anthropic Adapter, for translating anthropic `/v1/messages` requests to the openai format.
@@ -1293,6 +1303,7 @@ class LiteLLMAnthropicMessagesAdapter:
             new_kwargs=new_kwargs,
             custom_llm_provider=custom_llm_provider,
             drop_params=drop_params,
+            report_reasoning_drops=report_reasoning_drops,
         )
         ## CONVERT STOP_SEQUENCES
         self._translate_stop_sequences_to_openai(

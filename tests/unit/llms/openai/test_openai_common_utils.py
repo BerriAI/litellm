@@ -376,6 +376,37 @@ def test_a_422_naming_reasoning_effort_drops_it_with_one_warning(
     )
 
 
+def test_a_422_with_an_unhashable_loc_still_drops_reasoning_effort_with_one_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    detail: Final = [
+        {"loc": ["body", ["messages", 0]], "msg": "Invalid"},
+        {"loc": ["body", "reasoning_effort"], "msg": "Extra inputs are not permitted"},
+    ]
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        if "reasoning_effort" in json.loads(request.content):
+            return httpx.Response(422, json={"error": {"message": json.dumps({"detail": detail})}})
+        return httpx.Response(200, json=_CHAT_COMPLETION)
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    client: Final = openai.OpenAI(
+        api_key="sk-not-a-real-key", http_client=httpx.Client(transport=httpx.MockTransport(answer))
+    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        response: Final = litellm.completion(
+            model="gpt-6.1-sol",
+            messages=[{"role": "user", "content": "hi"}],
+            reasoning_effort="high",
+            client=client,
+        )
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+
+    assert response.choices[0].message.content == "ok"
+    assert len(drop_warnings) == 1
+    assert "reasoning_effort='high'" in drop_warnings[0]
+
+
 @pytest.mark.parametrize("provider", ["openai", "azure"])
 def test_sync_output_limit_400_maps_to_length_truncated_response(provider):
     response = litellm.completion(
