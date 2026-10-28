@@ -29,6 +29,7 @@ from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.types.router import GenericLiteLLMParams
 
 from ...common_utils import (
+    OBJECT_LIST_ADAPTER,
     AnthropicError,
     AnthropicModelInfo,
     merge_anthropic_beta_headers,
@@ -36,6 +37,7 @@ from ...common_utils import (
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
+    tools_without_custom_field,
 )
 from .mid_conversation_system import (
     as_system_content_blocks,
@@ -700,7 +702,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         # Auto-strip advisor blocks from history if advisor tool is absent.
         # Prevents Anthropic 400: advisor_tool_result in history requires advisor tool.
-        _tools: Final = anthropic_messages_optional_request_params.get("tools") or []
+        tools: Final = anthropic_messages_optional_request_params.get("tools")
+        _tools: Final = tools or []
         _has_advisor: Final = any(isinstance(t, dict) and t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for t in _tools)
         if not _has_advisor:
             messages = strip_advisor_blocks_from_messages(messages)
@@ -713,7 +716,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             model=model,
             **anthropic_messages_optional_request_params,
         )
-        return dict(anthropic_messages_request)
+        if not isinstance(tools, list):
+            return dict(anthropic_messages_request)
+        return {
+            **anthropic_messages_request,
+            "tools": tools_without_custom_field(OBJECT_LIST_ADAPTER.validate_python(tools)),
+        }
 
     def transform_anthropic_messages_response(
         self,

@@ -590,15 +590,10 @@ def normalize_custom_field_on_tools(request_body: dict) -> None:
     tools: Final = request_body.get("tools")
     if not tools or not isinstance(tools, list):
         return
-    for tool in tools:
-        if not isinstance(tool, dict):
-            continue
-        custom: dict[str, object] | None = tool.pop("custom", None)
-        if not isinstance(custom, dict) or "defer_loading" in tool:
-            continue
-        deferred: object = custom.get("defer_loading")
-        if isinstance(deferred, bool):
-            tool["defer_loading"] = deferred
+    from litellm.llms.anthropic.common_utils import OBJECT_LIST_ADAPTER, tools_without_custom_field
+
+    normalized_tools: Final = tools_without_custom_field(OBJECT_LIST_ADAPTER.validate_python(tools))
+    request_body["tools"] = normalized_tools  # rebind-ok: out-param
 
 
 _TOOL_DICTS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
