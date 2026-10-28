@@ -3517,7 +3517,7 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "streamlake/GLM-5.3-Flash"
+    "default_model_placeholder": "streamlake/<model-or-endpoint>"
   },
   {
     "provider": "Snowflake",

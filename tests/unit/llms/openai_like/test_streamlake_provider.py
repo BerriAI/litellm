@@ -231,9 +231,7 @@ def test_endpoint_id_call_forwards_tools_and_reasoning_effort_to_streamlake(monk
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     with respx.mock(assert_all_called=True) as respx_mock:
-        route: Final = respx_mock.post(STREAMLAKE_CHAT_URL).mock(
-            return_value=httpx.Response(200, json=response_body)
-        )
+        route: Final = respx_mock.post(STREAMLAKE_CHAT_URL).mock(return_value=httpx.Response(200, json=response_body))
         litellm.completion(
             model="streamlake/ep-test-endpoint",
             messages=[{"role": "user", "content": "weather in Paris?"}],
@@ -300,3 +298,105 @@ def test_named_model_params_follow_the_row_and_fall_back_to_the_provider_default
 def test_streamlake_wildcard_expands_to_every_streamlake_row() -> None:
     expanded: Final = get_known_models_from_wildcard("streamlake/*")
     assert set(expanded) == set(_streamlake_keys(litellm.model_cost))
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_cache_control_marks_reach_streamlake(monkeypatch: pytest.MonkeyPatch) -> None:
+    system_block: Final = {"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}
+    tool: Final = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+        "cache_control": {"type": "ephemeral"},
+    }
+    response_body: Final[dict[str, object]] = {
+        "id": "chatcmpl-streamlake-cache",
+        "object": "chat.completion",
+        "created": 1710000000,
+        "model": "qwen3.8-27b",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+    }
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.post(STREAMLAKE_CHAT_URL).mock(return_value=httpx.Response(200, json=response_body))
+        litellm.completion(
+            model="streamlake/qwen3.8-27b",
+            messages=[{"role": "system", "content": [system_block]}, {"role": "user", "content": "hi"}],
+            api_key="sk-streamlake-test",
+            tools=[tool],
+        )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent["messages"][0]["content"] == [system_block]
+    assert sent["tools"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("model", ("kimi-k2.6", "qwen3.6-27b", "qwen3.6-35b-a3b"))
+def test_reasoning_effort_is_dropped_for_models_streamlake_lists_without_reasoning(
+    model: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # StreamLake's Models Overview (https://www.streamlake.ai/document/DOC/mh1gbfvrdn6hpbzxixv, read 2026-10-28)
+    # gives these models no Reasoning tag, and kimi-k2.6 answers 400 to reasoning_effort under an 8193 token cap
+    response_body: Final[dict[str, object]] = {
+        "id": "chatcmpl-streamlake-reasoning",
+        "object": "chat.completion",
+        "created": 1710000000,
+        "model": model,
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+    }
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.post(STREAMLAKE_CHAT_URL).mock(return_value=httpx.Response(200, json=response_body))
+        litellm.completion(
+            model=f"streamlake/{model}",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="sk-streamlake-test",
+            reasoning_effort="low",
+            drop_params=True,
+        )
+
+    assert "reasoning_effort" not in json.loads(route.calls.last.request.content)
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.completion(
+            model=f"streamlake/{model}",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="sk-streamlake-test",
+            reasoning_effort="low",
+        )
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_streamlake_rows_with_a_cache_read_price_declare_prompt_caching() -> None:
+    cached_rows: Final = tuple(
+        key for key in _streamlake_keys(litellm.model_cost) if "cache_read_input_token_cost" in litellm.model_cost[key]
+    )
+    assert cached_rows
+    assert [key for key in cached_rows if litellm.model_cost[key].get("supports_prompt_caching") is not True] == []
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("model", ("qwen3.8-27b", "qwen3.8-2.4t-a95b"))
+@pytest.mark.parametrize("cache_type", ("ephemeral", None))
+def test_qwen3_8_explicit_cache_hits_and_prefix_hits_use_their_own_read_price(
+    model: str, cache_type: str | None
+) -> None:
+    # StreamLake's price page (https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce, read 2026-10-28) lists
+    # separate PrefixCache and Cache Read prices for Qwen3.8, and its usage tags only explicit hits with cache_type
+    rate_key: Final = "explicit_cache_read_input_token_cost" if cache_type else "cache_read_input_token_cost"
+    row: Final = litellm.model_cost[f"streamlake/{model}"]
+    details: Final = {"cached_tokens": 4000} | ({"cache_type": cache_type} if cache_type else {})
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(prompt_tokens=5000, completion_tokens=100, total_tokens=5100, prompt_tokens_details=details),
+    )
+
+    cost: Final = litellm.completion_cost(
+        completion_response=response, model=f"streamlake/{model}", custom_llm_provider="streamlake"
+    )
+
+    expected: Final = 4000 * row[rate_key] + 1000 * row["input_cost_per_token"] + 100 * row["output_cost_per_token"]
+    assert cost == pytest.approx(expected)

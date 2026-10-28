@@ -269,6 +269,9 @@
       "supports_function_calling": true,
       "supports_reasoning": true
     },
+    "special_handling": {
+      "preserve_cache_control": true
+    },
     "supported_endpoints": ["/v1/chat/completions"]
   }
 }
