@@ -29,13 +29,14 @@ from realtime_client import (
     JsonSchemaProperty,
     RealtimeClient,
     RealtimeProvider,
+    RealtimeSession,
+    ReceivedEvent,
     ResponseCreate,
     ResponseDone,
     ServerEnvelope,
     SessionConfig,
     SessionUpdate,
     as_text,
-    function_call_item,
     parse_last,
     realtime_model,
     transcript,
@@ -64,19 +65,26 @@ TEXT_PARAMS: Final = tuple(
     for p in PROVIDERS
 )
 
+BEDROCK_TOOL_COVERS: Final = pytest.mark.covers(
+    "llm.realtime.bedrock_converse.tool_use.stream.works", exercised_on=["realtime"]
+)
+
 TOOL_PARAMS: Final = tuple(
     pytest.param(
         p,
         id=p.id,
-        marks=meta(
-            Subject(
-                domain=Domain.LLM_TRANSLATION,
-                route=Route.REALTIME,
-                providers=(Provider(p.id),),
-                models=(p.litellm_params.model,),
-                capabilities=(Capability.FUNCTION_CALLING,),
-                mode=Mode.WEBSOCKET,
-            )
+        marks=(
+            meta(
+                Subject(
+                    domain=Domain.LLM_TRANSLATION,
+                    route=Route.REALTIME,
+                    providers=(Provider(p.id),),
+                    models=(p.litellm_params.model,),
+                    capabilities=(Capability.FUNCTION_CALLING,),
+                    mode=Mode.WEBSOCKET,
+                )
+            ),
+            *((BEDROCK_TOOL_COVERS,) if p.id == "bedrock" else ()),
         ),
     )
     for p in PROVIDERS
@@ -164,31 +172,51 @@ def test_tool_call_round_trip(
 
         session.send(user_message("What's the weather in Paris right now?"))
         session.send(ResponseCreate())
-        first = session.collect_until("response.done", timeout=60)
+        final_answer = _tool_call_loop(session, max_rounds=4)
 
-        args_event = parse_last(
-            first, "response.function_call_arguments.done", FunctionCallArgumentsDone
+        assert "72" in transcript(final_answer), (
+            "the answer after the tool results did not use them"
         )
-        assert args_event is not None, "model did not emit a function call"
-        args = WeatherArgs.model_validate_json(args_event.arguments)
 
-        item = function_call_item(first)
-        assert item is not None, "no completed function_call output item"
-        assert item.name == "get_weather"
-        assert item.call_id == args_event.call_id
 
-        tool_result = WeatherResult(city=args.city, temperature_f=72)
-        session.send(
-            ConversationItemCreate(
-                item=FunctionCallOutputItem(
-                    call_id=args_event.call_id, output=tool_result.model_dump_json()
+def _tool_call_loop(session: RealtimeSession, *, max_rounds: int) -> tuple[ReceivedEvent, ...]:
+    """Answer every function_call in each response.done until one arrives without any.
+
+    Nova 2 Sonic emits two tool calls per question, each inside its own response.done,
+    so a one-call round trip cannot wait for "the" follow-up: the second response.done
+    is another call, not the answer. The loop sends one function_call_output per call
+    then a single response.create, and returns the events of the first call-free round."""
+    for round_index in range(max_rounds):
+        events = session.collect_until("response.done", timeout=60)
+        done = parse_last(events, "response.done", ResponseDone)
+        assert done is not None
+        calls = tuple(
+            item for item in done.response.output or () if item.type == "function_call"
+        )
+        if not calls:
+            assert round_index > 0, "model did not emit a function call"
+            return events
+        done_args = tuple(
+            FunctionCallArgumentsDone.model_validate_json(event.payload)
+            for event in events
+            if event.type == "response.function_call_arguments.done"
+        )
+        for item in calls:
+            assert item.name == "get_weather", item
+            args_event = next(
+                event for event in done_args if event.call_id == item.call_id
+            )
+            args = WeatherArgs.model_validate_json(args_event.arguments)
+            tool_result = WeatherResult(city=args.city, temperature_f=72)
+            session.send(
+                ConversationItemCreate(
+                    item=FunctionCallOutputItem(
+                        call_id=args_event.call_id, output=tool_result.model_dump_json()
+                    )
                 )
             )
-        )
         session.send(ResponseCreate())
-        second = session.collect_until("response.done", timeout=60)
-
-        assert "72" in transcript(second), "follow-up did not use the tool result"
+    raise AssertionError(f"still calling tools after {max_rounds} rounds")
 
 
 _REFUSED_UPSTREAMS = (

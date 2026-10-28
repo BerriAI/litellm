@@ -3,7 +3,6 @@ use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
 use litellm_host_python::{InvokeError, PythonBinding, from_py, to_py};
-use litellm_http::transport::Error as TransportError;
 use litellm_inference_messages::{
     Error, MessagesCall, MessagesSettings, MessagesShaping, litellm_params, messages_body,
     route::{Messages, MessagesStreamHead},
@@ -12,7 +11,7 @@ use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
 use litellm_llms_types::headers::ProviderSpecificHeaders;
 use litellm_router_types::LitellmParams;
 use pyo3::{
-    exceptions::{PyException, PyValueError},
+    exceptions::PyException,
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::{PyBytes, PyDict},
@@ -20,39 +19,16 @@ use pyo3::{
 use serde_json::{Map, Value};
 
 use crate::{
-    errors::{RustUpstreamError, route_error_to_pyerr},
-    marshal::{optional_timeout, project_optional_fields, public_response, python_timeout_seconds},
+    errors::{RequestMarker, route_failure},
+    marshal::{
+        ArgumentError, optional_timeout, project_optional_fields, public_response,
+        python_timeout_seconds,
+    },
     python_settings::missing_module,
     routes::RequestView,
 };
 
-const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.messages.route_host";
-const REQUEST_ERROR_MARKER: &str = "messages_request_error";
-
-const BODY_FIELDS: [&str; 22] = [
-    "max_tokens",
-    "metadata",
-    "stop_sequences",
-    "stream",
-    "system",
-    "temperature",
-    "thinking",
-    "tool_choice",
-    "tools",
-    "top_k",
-    "inference_geo",
-    "top_p",
-    "mcp_servers",
-    "context_management",
-    "compaction",
-    "container",
-    "output_format",
-    "speed",
-    "output_config",
-    "cache_control",
-    "reasoning_effort",
-    "safeguards",
-];
+const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.messages";
 
 fn merge_headers(
     forwarded: Option<Map<String, Value>>,
@@ -93,29 +69,6 @@ fn project_litellm_params<'py>(
     Ok(litellm_params(fields.into_iter().chain(folded).collect()))
 }
 
-fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
-    match error {
-        Error::Transport(TransportError::Http { status, body }) => {
-            let error = RustUpstreamError::new_err((status, body));
-            error
-                .value(py)
-                .setattr("headers", Vec::<(String, String)>::new())?;
-            Ok(error)
-        }
-        Error::InvalidRequest(message) => {
-            let error = PyValueError::new_err(message.to_string());
-            error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
-            Ok(error)
-        }
-        Error::MissingField(field) => {
-            let error = PyValueError::new_err(format!("missing required field: {field}"));
-            error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
-            Ok(error)
-        }
-        other => Ok(route_error_to_pyerr(other)),
-    }
-}
-
 /// The Python side of the Messages route: projects the prepared arguments and builds the
 /// public response, chunks and exceptions.
 pub(super) struct MessagesPythonHost {
@@ -140,10 +93,9 @@ impl MessagesPythonHost {
         let string = |name: &str| -> PyResult<Option<String>> {
             argument(name)?.map(|value| value.extract()).transpose()
         };
-        let model = string("model")?.ok_or_else(|| PyValueError::new_err("model is required"))?;
-        let messages =
-            argument("messages")?.ok_or_else(|| PyValueError::new_err("messages is required"))?;
-        let fields = project_optional_fields(BODY_FIELDS, argument)?;
+        let model = string("model")?.ok_or(ArgumentError::Required("model"))?;
+        let messages = argument("messages")?.ok_or(ArgumentError::Required("messages"))?;
+        let fields = self.view.body_params(py, arguments, ROUTE_HOST_MODULE)?;
         let body = [
             ("model".to_string(), Value::String(model.clone())),
             ("messages".to_string(), from_py(&messages)?),
@@ -301,16 +253,13 @@ impl PythonBinding for MessagesPythonHost {
     }
 
     fn map_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
-        if let Error::Secret(source) = &error
-            && let Some(original) = crate::secrets::python_error(py, source.source_error())
-        {
-            return Ok(original);
-        }
-        Ok(self.map_failure(py, native_error(py, error)?))
+        route_failure(py, error, RequestMarker::Messages, |native| {
+            Ok(self.map_failure(py, native))
+        })
     }
 
     fn host_error(error: &PyErr) -> Error {
-        Error::InvalidRequest(error.to_string().into())
+        crate::routes::inference::host_call_error(error)
     }
 }
 
@@ -484,33 +433,9 @@ mod tests {
                     projected,
                     litellm_params(serde_json::from_value(fields).unwrap()).unwrap()
                 ),
-                (Err(error), Err(())) => assert!(matches!(error, Error::InvalidRequest(_))),
+                (Err(error), Err(())) => assert!(error.is_request(), "{error:?}"),
                 (projected, expected) => panic!("got {projected:?}, expected {expected:?}"),
             }
-        });
-    }
-
-    #[rstest]
-    #[case::rejected_request(Error::InvalidRequest("does not support top_k=5".into()), true)]
-    #[case::missing_field(Error::MissingField("max_tokens"), true)]
-    #[case::unresolvable_provider(Error::InvalidProvider("openai".into()), false)]
-    #[case::upstream_failure(
-        Error::Transport(TransportError::Http { status: 400, body: "bad".into() }),
-        false,
-    )]
-    fn only_request_rejections_carry_the_request_error_marker(
-        #[case] error: Error,
-        #[case] marked: bool,
-    ) {
-        Python::initialize();
-        Python::attach(|py| {
-            let native = native_error(py, error).unwrap();
-            let marker = native
-                .value(py)
-                .getattr_opt(REQUEST_ERROR_MARKER)
-                .unwrap()
-                .map(|value| value.extract::<bool>().unwrap());
-            assert_eq!(marker.unwrap_or(false), marked);
         });
     }
 }

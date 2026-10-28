@@ -567,6 +567,16 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     tags: ["Security", "PII", "Prompt Injection", "Runtime"],
     providerKey: "Wingback",
   },
+  {
+    id: "airia",
+    name: "Airia Guardrail",
+    description:
+      "Airia AI security and governance platform. Runtime guardrails for prompt injection, data leakage prevention, and responsible AI, enforced on every prompt and response.",
+    category: "partner",
+    logo: guardrailLogoMap["Airia Guardrail"],
+    tags: ["Security", "Prompt Injection", "PII", "Secrets", "Redaction"],
+    providerKey: "Airia",
+  },
 ];
 
 export const ALL_CARDS = [...LITELLM_CONTENT_FILTER_CARDS, ...DECISION_MODEL_CARDS, ...PARTNER_GUARDRAIL_CARDS];

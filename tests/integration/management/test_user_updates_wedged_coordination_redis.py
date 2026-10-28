@@ -249,27 +249,26 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                     assert timings["c1_survivor"] < _HANDLER_BUDGET_SECONDS, (
                         f"control update on the surviving worker took {timings['c1_survivor']:.3f}s"
                     )
-                    wedged_keys: Final = {users[i] for i in range(_BURST) if i % 5 == 0 and i != 0} | {
-                        f"team_id:{team_id}"
-                    }
+                    wedged_users: Final = {users[i] for i in range(_BURST) if i % 5 == 0 and i != 0}
+                    wedged_team_keys: Final = {f"team_id:{team_id}", f"team_alias:{identity}"}
+                    wedged_keys: Final = wedged_users | wedged_team_keys
+                    wedged_team_updates: Final = 1 + sum(1 for i in range(_BURST) if i % 5 == 3)
 
                     def proxy_log() -> str:
                         return "".join(
                             path.read_text() for path in results_dir.glob("owned-proxy-*.log") if path not in prior_logs
                         )
 
-                    team_wedged_key: Final = f"team_id:{team_id}"
                     eventually(
                         proxy_log,
                         lambda text: (
                             all(
-                                text.count(f"publish for {wedged_key} failed") >= _WEDGED_PUBLISHES_PER_BURST_USER
-                                for wedged_key in wedged_keys
-                                if wedged_key != team_wedged_key
+                                text.count(f"publish for {user} failed") >= _WEDGED_PUBLISHES_PER_BURST_USER
+                                for user in wedged_users
                             )
-                            and (
-                                f"publish for {team_wedged_key} failed" in text
-                                or f"internal usage cache entry {team_wedged_key}" in text
+                            and all(
+                                text.count(f"publish for {team_key} failed") >= wedged_team_updates
+                                for team_key in wedged_team_keys
                             )
                         ),
                         seconds=45,
@@ -459,6 +458,7 @@ def test_user_budget_update_propagates_to_gateway_and_peer(gateway: Gateway, pee
                 == 200
             )
             assert _observed(upstream) == [_chat_observation(warm)]
+            upstream.delete("/__observations").raise_for_status()
         _wait_for_spend(user_id, 0.11)
 
         shrink: Final = gateway.request("POST", "/user/update", {"user_id": user_id, "max_budget": 0.01})
@@ -491,6 +491,7 @@ def test_user_budget_update_propagates_to_gateway_and_peer(gateway: Gateway, pee
                 == 200
             )
             assert _observed(upstream) == [_chat_observation(text)]
+            upstream.delete("/__observations").raise_for_status()
 
         _wait_for_spend(user_id, 0.23)
         email: Final = f"{user_id}@integration.local"
@@ -523,6 +524,7 @@ def test_user_models_update_with_metadata_propagates_to_gateway_and_peer(gateway
                 == 200
             )
             assert _observed(upstream) == [_chat_observation(warm)]
+            upstream.delete("/__observations").raise_for_status()
 
         narrowed: Final = gateway.request(
             "POST",
@@ -564,6 +566,7 @@ def test_user_models_update_with_metadata_propagates_to_gateway_and_peer(gateway
                 == 200
             )
             assert _observed(upstream) == [_chat_observation(text)]
+            upstream.delete("/__observations").raise_for_status()
 
 
 def test_partial_user_update_preserves_sibling_fields(gateway: Gateway) -> None:
@@ -617,6 +620,7 @@ def test_user_models_only_update_is_enforced_on_the_gateway(gateway: Gateway) ->
         warmed: Final = _user_chat(gateway, model, key, warm)
         assert warmed.status_code == 200, warmed.text
         assert _observed(upstream) == [_chat_observation(warm)]
+        upstream.delete("/__observations").raise_for_status()
 
         narrowed: Final = gateway.request("POST", "/user/update", {"user_id": user_id, "models": ["no-default-models"]})
         assert narrowed.status_code == 200, narrowed.text
@@ -635,7 +639,6 @@ def test_user_models_only_update_is_enforced_on_the_gateway(gateway: Gateway) ->
 
 
 def test_user_models_update_without_metadata_propagates_to_gateway_and_peer(gateway: Gateway, peer: Gateway) -> None:
-    pytest.skip("BUG: models-only /user/update leaves warmed peer serving the revoked model with 200")
     with (
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
@@ -645,12 +648,13 @@ def test_user_models_update_without_metadata_propagates_to_gateway_and_peer(gate
         scenario.cleanups.callback(lambda: gateway.request("POST", "/user/delete", {"user_ids": [user_id]}))
         key: Final = string_value(gateway.post("/key/generate", {"user_id": user_id})["key"])
 
-        _observed(upstream)
+        upstream.delete("/__observations").raise_for_status()
         for proxy in (gateway, peer):
             warm: Final = f"warm {uuid.uuid4().hex}"
             warmed: Final = _user_chat(proxy, model, key, warm)
             assert warmed.status_code == 200, warmed.text
             assert _observed(upstream) == [_chat_observation(warm)]
+            upstream.delete("/__observations").raise_for_status()
 
         narrowed: Final = gateway.request("POST", "/user/update", {"user_id": user_id, "models": ["no-default-models"]})
         assert narrowed.status_code == 200, narrowed.text

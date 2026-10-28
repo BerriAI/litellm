@@ -158,3 +158,18 @@ def test_firecrawl_news_entry_with_non_string_date_reports_the_date_next_to_the_
         (("title",), 7),
         (("date",), 1709596800),
     ]
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/firecrawl/v2",
+        "https://gateway.example.com/firecrawl/v2/",
+        "https://gateway.example.com/firecrawl/v2/search/",
+    ],
+)
+def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str) -> None:
+    assert (
+        FirecrawlSearchConfig().get_complete_url(api_base=api_base, optional_params={})
+        == "https://gateway.example.com/firecrawl/v2/search"
+    )

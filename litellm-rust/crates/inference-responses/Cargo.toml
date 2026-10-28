@@ -6,10 +6,12 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+base64.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
 litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }
 litellm-cache-response.workspace = true
+litellm-core-utils.workspace = true
 litellm-host.workspace = true
 litellm-http.workspace = true
 litellm-inference.workspace = true
@@ -23,8 +25,10 @@ tokio-tungstenite.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+litellm-http = { workspace = true, features = ["test-support"] }
 litellm-cache.workspace = true
 litellm-cache-memory.workspace = true
+litellm-error.workspace = true
 litellm-host-native.workspace = true
 litellm-inference-testing.workspace = true
 litellm-tracing.workspace = true

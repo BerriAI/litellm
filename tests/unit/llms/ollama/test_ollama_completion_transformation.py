@@ -973,3 +973,20 @@ def test_ollama_vision_model_sends_the_image_beside_the_user_prompt(respx_mock: 
     assert body["images"] == [image_base64]
     assert body["prompt"] == "### User:\nWhats in this image?\n\n"
     assert response.choices[0].message.content == "A white square"
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "http://gateway.example.com/ollama",
+        "http://gateway.example.com/ollama/",
+        "http://gateway.example.com/ollama/api/generate/",
+    ],
+)
+def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
+    assert (
+        OllamaConfig().get_complete_url(
+            api_base=api_base, api_key=None, model="llama3", optional_params={}, litellm_params={}
+        )
+        == "http://gateway.example.com/ollama/api/generate"
+    )

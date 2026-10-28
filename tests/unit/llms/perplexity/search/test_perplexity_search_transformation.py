@@ -223,3 +223,24 @@ async def test_router_search_with_search_tools(
     assert [(result.title, result.url, result.snippet) for result in response.results] == [
         ("AI news", "https://example.com/news", "Recent AI developments.")
     ]
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/perplexity",
+        "https://gateway.example.com/perplexity/",
+        "https://gateway.example.com/perplexity/search/",
+    ],
+)
+def test_search_ignores_a_trailing_slash_on_api_base(respx_mock: respx.MockRouter, api_base: str) -> None:
+    route: Final = respx_mock.post("https://gateway.example.com/perplexity/search").respond(
+        json={"results": [{"title": "ML", "url": "https://example.com/ml", "snippet": "Machine learning."}]}
+    )
+
+    response: Final = litellm.search(
+        query="machine learning", search_provider="perplexity", api_base=api_base, api_key="test-perplexity-key"
+    )
+
+    assert route.called
+    assert [result.url for result in response.results] == ["https://example.com/ml"]

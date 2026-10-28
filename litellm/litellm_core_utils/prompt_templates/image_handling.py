@@ -29,6 +29,13 @@ _FETCH_ATTEMPTS: Final = 3
 in_memory_cache: Final = InMemoryCache(max_size_in_memory=MAX_IMGS_IN_MEMORY)
 
 
+def _header_value(response: Response, name: str) -> str | None:
+    try:
+        return response.headers[name]
+    except KeyError:
+        return None
+
+
 def _process_image_response(response: Response, url: str) -> str:
     if response.status_code != 200:
         raise litellm.ImageFetchError(
@@ -36,7 +43,7 @@ def _process_image_response(response: Response, url: str) -> str:
         )
 
     # Check size before downloading if Content-Length header is present
-    content_length: Final = response.headers.get("Content-Length")
+    content_length: Final = _header_value(response, "Content-Length")
     if content_length is not None:
         size_mb = int(content_length) / (1024 * 1024)
         if size_mb > MAX_IMAGE_URL_DOWNLOAD_SIZE_MB:
@@ -64,7 +71,7 @@ def _process_image_response(response: Response, url: str) -> str:
         img_type: Final = infer_content_type_from_url_and_content(
             url=url,
             content=bytes(image_bytes),
-            current_content_type=response.headers.get("Content-Type"),
+            current_content_type=_header_value(response, "Content-Type"),
         )
     except ValueError as e:
         raise litellm.ImageFetchError(

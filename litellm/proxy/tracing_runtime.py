@@ -46,10 +46,8 @@ async def manage_tracing(
         return
     try:
         connection: Final = LensConnection.from_env()
-    except ValueError:
-        verbose_proxy_logger.warning(
-            "Agent tracing unavailable: configure LITELLM_LENS_URL and LITELLM_LENS_SERVICE_TOKEN"
-        )
+    except ValueError as error:
+        verbose_proxy_logger.error("Agent tracing store lens failed to start, tracing is disabled: %s", error)
         yield None
         return
     async with client_factory(connection) as client:

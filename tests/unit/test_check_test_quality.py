@@ -640,6 +640,10 @@ _VIOLATING_SNIPPETS: Final = MappingProxyType(
         ),
         "TQ010": ("tests/integration/chaos/test_snippet.py", "import os, signal\n\nos.kill(1, signal.SIGKILL)\n"),
         "TQ011": ("tests/integration/chaos/test_snippet.py", "def test_fast():\n    elapsed = run()\n    assert elapsed < 2\n"),
+        "TQ012": (
+            "tests/integration/_support/snippet.py",
+            "def port():\n    probe.bind(('127.0.0.1', 0))\n    return probe.getsockname()[1]\n",
+        ),
     }
 )
 
@@ -790,6 +794,20 @@ def test_lower_bounds_relative_bounds_counts_and_polling_deadlines_are_left_alon
         f"    {statement}\n"
     )
     assert _chaos_codes(tmp_path, source) == []
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    (
+        ("def port():\n    probe.bind(('127.0.0.1', 0))\n    return probe.getsockname()[1]\n", ["TQ012"]),
+        ("def port():\n    probe.bind((host, 0))\n    _, number = probe.getsockname()\n    return number\n", ["TQ012"]),
+        ("def serve(port):\n    probe.bind(('127.0.0.1', port))\n    return probe.getsockname()[1]\n", []),
+        ("def client():\n    probe.bind(('127.0.0.1', 0))\n\n\ndef other():\n    return probe.getsockname()\n", []),
+    ),
+)
+def test_a_port_read_back_from_a_port_zero_bind_is_flagged_anywhere_under_integration(tmp_path, source, expected):
+    assert _chaos_codes(tmp_path, source, "tests/integration/_support/snippet.py") == expected
+    assert _chaos_codes(tmp_path, source, "tests/unit/test_snippet.py") == []
 
 
 def test_a_clock_bound_name_is_only_an_elapsed_time_in_the_function_that_binds_it(tmp_path):

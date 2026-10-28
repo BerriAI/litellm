@@ -14,7 +14,7 @@ import { SimpleTooltip } from "@/components/ui/tooltip";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { cn } from "@/lib/cva.config";
 import { DECISIONS_DOCS_URL } from "@/lib/decisionModels";
-import { getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
+import { getGatewayBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import { uiHref } from "@/utils/uiHref";
 import { useMutation } from "@tanstack/react-query";
 import { BookOpen, ChevronDown, Eraser, FileText, LoaderCircle, Send } from "lucide-react";
@@ -298,7 +298,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
             </TabsContent>
             <TabsContent value="curl" className="flex min-h-0 flex-1 flex-col">
               <CurlPreview
-                baseUrl={getCustomProxyBaseUrl() ?? getProxyBaseUrl()}
+                baseUrl={getCustomProxyBaseUrl() ?? getGatewayBaseUrl()}
                 endpoint={endpoint}
                 payload={validation.payload === undefined ? rawPayload : JSON.stringify(validation.payload)}
                 authHeaderName={getGlobalLitellmHeaderName()}

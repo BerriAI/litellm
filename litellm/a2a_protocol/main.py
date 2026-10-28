@@ -14,7 +14,9 @@ import datetime
 import uuid
 from collections.abc import AsyncIterator, Coroutine, Mapping
 from types import MappingProxyType, ModuleType
-from typing import TYPE_CHECKING, Any, Final, Optional, cast
+from typing import TYPE_CHECKING, Final, Optional, cast
+
+from typing_extensions import TypedDict, Unpack
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -87,6 +89,10 @@ from litellm.a2a_protocol.exceptions import A2ALocalhostURLError
 
 # Use our custom resolver instead of the default A2A SDK resolver
 A2ACardResolver: Final = LiteLLMA2ACardResolver
+
+
+class _SendMessageOptions(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _set_usage_on_logging_obj(
@@ -563,7 +569,7 @@ async def asend_message(
 def send_message(
     a2a_client: "A2AClientType",
     request: "SendMessageRequest",
-    **kwargs: Any,
+    **kwargs: Unpack[_SendMessageOptions],
 ) -> LiteLLMSendMessageResponse | Coroutine[object, object, LiteLLMSendMessageResponse]:
     """
     Sync: Send a message to an A2A agent.
@@ -596,9 +602,9 @@ def _build_streaming_logging_obj(
     litellm_params: dict[str, object] | None,
     metadata: dict[str, object] | None,
     proxy_server_request: dict[str, object] | None,
+    start_time: datetime.datetime,
 ) -> Logging:
     """Build logging object for streaming A2A requests."""
-    start_time: Final = datetime.datetime.now()
     model: Final = f"a2a_agent/{agent_name}"
 
     logging_obj: Final = Logging(
@@ -712,6 +718,7 @@ async def asend_message_streaming(
     if request is None:
         raise ValueError("request is required")
 
+    called_at: Final = datetime.datetime.now()
     _raw_logging_obj: Final = kwargs.get("litellm_logging_obj")
     logging_obj: Logging | None = _raw_logging_obj if isinstance(_raw_logging_obj, Logging) else None
 
@@ -745,6 +752,7 @@ async def asend_message_streaming(
             litellm_params=litellm_params,
             metadata=metadata,
             proxy_server_request=proxy_server_request,
+            start_time=called_at,
         )
 
     verbose_logger.info("A2A send_message_streaming request_id=%s, agent=%s", request.id, agent_name)

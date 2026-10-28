@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from queue import SimpleQueue
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal, TypeAlias
 from urllib.parse import urlsplit
 
 import anthropic
@@ -36,7 +36,7 @@ from openai.types.responses import ResponseCompletedEvent, ResponseTextDeltaEven
 from pydantic import JsonValue
 
 _CELL_SECONDS: Final = 2 * graceful_stop_seconds() + 120
-pytestmark: Final = pytest.mark.timeout(_CELL_SECONDS)
+pytestmark: Final = [pytest.mark.timeout(_CELL_SECONDS), pytest.mark.shares_worker_state]
 
 _PROXY_CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
 _NO_CACHE: Final[Mapping[str, JsonValue]] = MappingProxyType({"cache": {"no-cache": True}})
@@ -61,6 +61,13 @@ _HEADROOM_RETRIEVE: Final[Mapping[str, JsonValue]] = MappingProxyType(
     }
 )
 _RESPONSES_SEARCH: Final[Mapping[str, JsonValue]] = MappingProxyType({"type": "web_search"})
+_BARE_WEB_SEARCH: Final[Mapping[str, JsonValue]] = MappingProxyType({"type": "web_search"})
+_APP_WEB_SEARCH: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "type": "function",
+        "function": {"name": "web_search", "description": "Search the app index", "parameters": dict(_PARAMETERS)},
+    }
+)
 _BURST_MODEL: Final = f"interception-burst-{uuid.uuid4().hex}"
 _BURST_DEPLOYMENT: Final = iv.deployment("search")
 _STARTED_WORKER: Final = "Started server process ["
@@ -460,6 +467,70 @@ def test_openai_sdk_chat_without_streaming_through_web_search_answers_in_json(ri
     _assert_search_turn(rig, deployment, completion.id)
 
 
+def _assert_answered_in_json(reply: _Stream, text: str) -> str:
+    assert reply.status == 200, reply.text
+    completion: Final = iv.JSON_OBJECT.validate_json(reply.text)
+    (choice,) = rv.ITEMS.validate_python(completion["choices"])
+    assert object_value(choice["message"])["content"] == text, completion
+    return string_value(completion["id"])
+
+
+def _offered_tools(call: Mapping[str, JsonValue]) -> tuple[Mapping[str, JsonValue], ...]:
+    return tuple(rv.ITEMS.validate_python(call["tools"]))
+
+
+def _function_name(tool: Mapping[str, JsonValue]) -> str:
+    return string_value(object_value(tool["function"])["name"])
+
+
+@pytest.mark.parametrize("stream", (pytest.param(True, id="stream"), pytest.param(False, id="json")))
+def test_bare_web_search_type_on_chat_is_searched_and_the_apps_own_web_search_function_reaches_azure_untouched(
+    rig: _Rig, scenario: Scenario, stream: bool
+) -> None:
+    deployment: Final = _deploy(rig, scenario, "search")
+    body: Final = {
+        **_chat_body(deployment, stream=stream),
+        "tools": [dict(_BARE_WEB_SEARCH), dict(_APP_WEB_SEARCH)],
+    }
+    reply: Final = _chat(rig, body)
+    identity: Final = (
+        _assert_restreamed(reply, iv.answer(deployment.name), usage=None)
+        if stream
+        else _assert_answered_in_json(reply, iv.answer(deployment.name))
+    )
+    received: Final = _upstream(rig, deployment)
+    _assert_upstream(received, model_calls=2, searches=1)
+    assert [search["query"] for search in received.searches] == [iv.query(deployment.name)], received.searches
+    offered: Final = _offered_tools(received.model_calls[0])
+    assert [tool.get("type") for tool in offered] == ["function", "function"], offered
+    assert [_function_name(tool) for tool in offered] == [iv.SEARCH_TOOL, "web_search"], offered
+    assert offered[1] == dict(_APP_WEB_SEARCH), offered
+    _assert_landed_once(deployment.model, frozenset({identity}), rows=1)
+
+
+def test_bare_web_search_type_on_messages_through_the_azure_chat_adapter_is_never_searched(
+    rig: _Rig, scenario: Scenario
+) -> None:
+    deployment: Final = _deploy(rig, scenario, "search")
+    reply: Final = _post(
+        rig,
+        "/v1/messages",
+        {
+            "model": deployment.model,
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": f"Search for {deployment.name}"}],
+            "tools": [dict(_BARE_WEB_SEARCH)],
+            **_NO_CACHE,
+        },
+    )
+    assert reply.status == 200, reply.text
+    blocks: Final = rv.ITEMS.validate_python(iv.JSON_OBJECT.validate_json(reply.text)["content"])
+    assert [block.get("text") for block in blocks] == [iv.plain(deployment.name)], reply.text
+    received: Final = _upstream(rig, deployment)
+    _assert_upstream(received, model_calls=1, searches=0)
+    assert [call.get("tools") for call in received.model_calls] == [None], received.model_calls
+
+
 @pytest.mark.parametrize(
     ("tool", "mode"),
     (
@@ -476,6 +547,75 @@ def test_converted_chat_stream_with_usage_replays_the_single_call_usage(
     identity: Final = _assert_restreamed(stream, iv.plain(deployment.name), usage=iv.FIRST_USAGE)
     _assert_upstream(_upstream(rig, deployment), model_calls=1, searches=0)
     _assert_landed_once(deployment.model, frozenset({identity}), rows=1)
+
+
+_SLOW_REPLY_SECONDS: Final = 3.0
+_SHORT_TIMEOUT_SECONDS: Final = 1
+_LONG_STREAM_TIMEOUT_SECONDS: Final = 10
+_MESSAGES_SEARCH_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"name": iv.SEARCH_TOOL, "description": "Search the web", "input_schema": dict(_PARAMETERS)}
+)
+_MESSAGES_LOOKUP_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"name": "lookup", "description": "Look up an order", "input_schema": dict(_PARAMETERS)}
+)
+
+_ConvertedEndpoint: TypeAlias = Literal["chat", "messages"]
+
+
+def _slowly(request: Request) -> Reply:
+    threading.Event().wait(_SLOW_REPLY_SECONDS)
+    return iv.respond(request)
+
+
+def _messages_text(stream: _Stream) -> str:
+    if stream.text.startswith("{"):
+        blocks: Final = rv.ITEMS.validate_python(iv.JSON_OBJECT.validate_json(stream.text)["content"])
+        return "".join(string_value(block["text"]) for block in blocks if block.get("type") == "text")
+    deltas: Final = tuple(
+        object_value(frame["delta"]) for frame in stream.frames if frame.get("type") == "content_block_delta"
+    )
+    return "".join(string_value(delta["text"]) for delta in deltas if delta.get("type") == "text_delta")
+
+
+def _converted_reply_text(rig: _Rig, endpoint: _ConvertedEndpoint, deployment: _Deployment) -> str:
+    if endpoint == "chat":
+        stream: Final = _chat(rig, _chat_body(deployment))
+        _assert_restreamed(stream, iv.plain(deployment.name), usage=None)
+        return stream.content
+    messages: Final = _post(
+        rig,
+        "/v1/messages",
+        {
+            "model": deployment.model,
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": f"Search for {deployment.name}"}],
+            "tools": [dict(_MESSAGES_SEARCH_TOOL), dict(_MESSAGES_LOOKUP_TOOL)],
+            "stream": True,
+            **_NO_CACHE,
+        },
+    )
+    assert messages.status == 200, messages.text
+    return _messages_text(messages)
+
+
+@pytest.mark.parametrize("endpoint", ("chat", "messages"))
+def test_a_converted_stream_slower_than_the_deployment_timeout_is_answered_within_its_stream_timeout(
+    rig: _Rig, scenario: Scenario, endpoint: _ConvertedEndpoint
+) -> None:
+    with wire_server(_slowly) as slow:
+        name: Final = iv.deployment("plain")
+        model: Final = scenario.model(
+            model=f"azure/{name}",
+            api_base=slow.url,
+            api_key=iv.AZURE_KEY,
+            api_version=iv.API_VERSION,
+            timeout=_SHORT_TIMEOUT_SECONDS,
+            stream_timeout=_LONG_STREAM_TIMEOUT_SECONDS,
+        )
+        assert _converted_reply_text(rig, endpoint, _Deployment(model, name)) == iv.plain(name)
+        received: Final = iv.received(slow.drain(), name)
+    _assert_upstream(received, model_calls=1, searches=0)
+    assert not any(call.get("stream") for call in received.model_calls), received.model_calls
 
 
 def test_anthropic_sdk_messages_stream_with_only_web_search_on_azure_answers_from_the_search(

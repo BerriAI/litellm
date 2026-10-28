@@ -5,7 +5,6 @@ from __future__ import annotations
 import io
 import json
 import struct
-import time
 import uuid
 import wave
 import zlib
@@ -16,10 +15,11 @@ from typing import Final, cast
 
 import httpx
 import pytest
-from integration._support.client import JSON_OBJECT, Gateway, string_value
+from integration._support.client import JSON_OBJECT, Gateway, Scenario, string_value
 from integration._support.upstream import delete_scenario, register_scenario
 from integration.cost_calculation.assertions import assert_exact, assert_recount
 from integration.cost_calculation.conftest import (
+    CostRow,
     approx_equal,
     poll_cost_row,
     poll_failure_row,
@@ -29,6 +29,7 @@ from integration.cost_calculation.conftest import (
     register_scenario_deployment,
 )
 from integration.cost_calculation.catalog import STANDALONE_CASES, data_errors
+from integration.cost_calculation.stream_parity.runner import flush_spend_logs
 from integration.cost_calculation.cost_tracking_case import (
     BinaryResponse,
     CostTrackingTestCase,
@@ -40,6 +41,14 @@ from pydantic import JsonValue
 
 if _data_errors := data_errors():
     raise ValueError("\n".join(_data_errors))
+
+
+def _settled_rows(scenario: Scenario, gateway: Gateway, key: str, count: int) -> tuple[CostRow, ...]:
+    """Every row the key will ever get, read after a flush request so a late duplicate cannot hide behind `>= count`."""
+    flush_identity: Final = flush_spend_logs(scenario, gateway, key)
+    settled: Final = tuple(row for row in read_rows_now(key) if row.model_id != flush_identity)
+    assert len(settled) == count, f"expected exactly {count} SpendLogs rows for the key, got {len(settled)}: {settled}"
+    return settled
 
 
 def _marks(case: CostTrackingTestCase) -> tuple[pytest.MarkDecorator, ...]:
@@ -233,7 +242,8 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             row: Final = poll_cost_row(key)
             assert isinstance(expected, RecountExpected)
             assert row.status == "success", f"{case.name}: disconnect row status was {row.status}"
-            assert_recount(case.name, expected, row)
+            assert_recount(case.name, case.response.content_type, expected, row, None)
+            _settled_rows(scenario, gateway, key, 1)
             return
         responses: Final = tuple(
             (
@@ -255,6 +265,7 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             )
             row: Final = poll_failure_row(key)
             assert row.spend == 0, f"{case.name}: failure spend was {row.spend}"
+            _settled_rows(scenario, gateway, key, 1)
             return
         assert response.is_success, f"{case.name}: proxy returned {response.status_code}: {response.text[:400]}"
         if case.upstream_body is not None:
@@ -273,19 +284,14 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             )
         if case.response.content_type == "text/event-stream":
             _assert_stream_has_no_error(response.text)
-        rows: Final = poll_rows(key, len(responses) + (prior_response_id is not None))
+        row_count: Final = len(responses) + (prior_response_id is not None)
+        rows: Final = poll_rows(key, row_count)
         if isinstance(expected, RecountExpected):
             row: Final = rows[0]
-            assert_recount(case.name, expected, row)
+            assert_recount(case.name, case.response.content_type, expected, row, response)
+            _settled_rows(scenario, gateway, key, row_count)
             return
         assert isinstance(expected, ExactExpected)
-        if fallback_deployment is not None:
-            assert deployment is not None
-            time.sleep(3)
-            settled_rows: Final = read_rows_now(key)
-            assert len(settled_rows) == 1
-            assert settled_rows[0].status == "success"
-            assert settled_rows[0].model_id == deployment.identity
         if isinstance(case.response, BinaryResponse):
             header: Final = response.headers.get("x-litellm-response-cost")
             if header is not None:
@@ -329,3 +335,8 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             assert rollups.daily_team.prompt_tokens == expected.prompt_tokens * 3
             assert rollups.daily_team.completion_tokens == expected.completion_tokens * 3
             assert rollups.daily_team.api_requests == 3
+        settled: Final = _settled_rows(scenario, gateway, key, row_count)
+        if fallback_deployment is not None:
+            assert deployment is not None
+            assert settled[0].status == "success"
+            assert settled[0].model_id == deployment.identity

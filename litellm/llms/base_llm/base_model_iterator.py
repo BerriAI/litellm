@@ -3,17 +3,40 @@ from abc import abstractmethod
 from typing import TYPE_CHECKING, Final, cast
 
 import litellm
+from litellm.constants import STREAM_SSE_DONE_STRING
 
 if TYPE_CHECKING:
     import httpx
+from litellm.types.llms.openai import ChatCompletionRedactedThinkingBlock, ChatCompletionThinkingBlock
 from litellm.types.utils import (
     Choices,
     Delta,
     GenericStreamingChunk,
+    Message,
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
 )
+
+
+def _indexed_thinking_block(
+    block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, index: int
+) -> ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock:
+    if block["type"] == "redacted_thinking":
+        return {**block, "index": index}
+    return {**block, "index": index}
+
+
+def _streaming_delta(message: Message) -> Delta:
+    thinking_blocks: Final = message.thinking_blocks if hasattr(message, "thinking_blocks") else None
+    return Delta(
+        **message.model_dump(exclude={"thinking_blocks"}),
+        thinking_blocks=(
+            None
+            if thinking_blocks is None
+            else [_indexed_thinking_block(block, index) for index, block in enumerate(thinking_blocks)]
+        ),
+    )
 
 
 def convert_model_response_to_streaming(
@@ -40,9 +63,7 @@ def convert_model_response_to_streaming(
             streaming_choices.append(
                 StreamingChoices(
                     index=choice.index,
-                    delta=Delta(
-                        **cast(Choices, choice).message.model_dump(),
-                    ),
+                    delta=_streaming_delta(cast(Choices, choice).message),
                     finish_reason=choice.finish_reason,
                 )
             )
@@ -81,6 +102,10 @@ class BaseModelResponseIterator:
         if self.http_response is not None:
             await self.http_response.aclose()
 
+    def close(self) -> None:
+        if self.http_response is not None:
+            self.http_response.close()
+
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
         return GenericStreamingChunk(
             text="",
@@ -118,7 +143,8 @@ class BaseModelResponseIterator:
     def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk | ModelResponseStream:
         # chunk is a str at this point
         stripped_json_chunk: Final = BaseModelResponseIterator._string_to_dict_parser(str_line=str_line)
-        if "[DONE]" in str_line:
+        stripped_sse_chunk: Final = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(str_line)
+        if stripped_sse_chunk is not None and stripped_sse_chunk.strip() == STREAM_SSE_DONE_STRING:
             return GenericStreamingChunk(
                 text="",
                 is_finished=True,

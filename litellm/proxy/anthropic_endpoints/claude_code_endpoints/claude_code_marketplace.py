@@ -21,6 +21,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Annotated, Final, Protocol, TypedDict, get_args
 from urllib.parse import urlsplit
 
@@ -33,7 +34,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, ProxyException, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_skill_access import (
     SkillVisibility,
-    skill_visibility,
+    resolve_skill_visibility,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
@@ -122,7 +123,7 @@ async def get_marketplace(request: Request, key: str | None = None):
 
     Without `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`
     the key is authenticated and the catalog also holds the disabled plugins granted
-    to it through `object_permission.skills` on the key or its team.
+    to it through `object_permission.skills` or an access group on the key or its team.
 
     Returns:
         Marketplace catalog with list of available plugins and their git sources.
@@ -140,7 +141,7 @@ async def get_marketplace(request: Request, key: str | None = None):
         caller: Final[UserAPIKeyAuth | None] = (
             await user_api_key_auth(request=request, api_key=f"Bearer {key}") if key else None
         )
-        visibility: Final[SkillVisibility] = skill_visibility(caller)
+        visibility: Final[SkillVisibility] = await resolve_skill_visibility(caller)
         plugins: Final[Sequence[_PluginRecord]] = await ClaudeCodePluginRepository(prisma_client).table.find_many(
             where=visibility.where()
         )
@@ -299,7 +300,7 @@ def _validate_installation_preference(spec: PluginSpec) -> None:
 
 def _build_plugin_manifest(name: str, spec: PluginSpec) -> Mapping[str, object]:
     """Build the stored manifest dict shared by plugin create and update."""
-    dumped: Final[Mapping[str, object]] = spec.model_dump(exclude_none=True)
+    dumped: Final[Mapping[str, object]] = MappingProxyType(spec.model_dump(exclude_none=True))
     return {"name": name, **{key: value for key, value in dumped.items() if value and key != "name"}}
 
 
@@ -464,7 +465,7 @@ async def list_plugins(
     try:
         prisma_client: Final = await get_prisma_client()
 
-        visibility: Final[SkillVisibility] = skill_visibility(user_api_key_dict)
+        visibility: Final[SkillVisibility] = await resolve_skill_visibility(user_api_key_dict)
         plugins: Final[Sequence[_PluginRecord]] = await ClaudeCodePluginRepository(prisma_client).table.find_many(
             where={"enabled": True} if enabled_only else visibility.where()
         )
@@ -545,7 +546,7 @@ async def get_plugin(
                 detail={"error": f"Plugin '{plugin_name}' not found"},
             )
 
-        if not skill_visibility(user_api_key_dict).allows(plugin):
+        if not (await resolve_skill_visibility(user_api_key_dict)).allows(plugin):
             raise HTTPException(
                 status_code=403,
                 detail={"error": f"Plugin '{plugin_name}' is not granted to this key"},

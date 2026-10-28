@@ -22,7 +22,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
-from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
+from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion, RAGIngestBadRequestError
 
 if TYPE_CHECKING:
     from litellm import Router
@@ -134,7 +134,9 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
             Tuple of (rag_corpus_id, file_id)
         """
         if not self.project_id:
-            raise ValueError("vertex_project is required for Vertex AI RAG ingestion. Set it in vector_store config.")
+            raise RAGIngestBadRequestError(
+                "vertex_project is required for Vertex AI RAG ingestion. Set it in vector_store config."
+            )
 
         # Get or create RAG corpus
         rag_corpus_id = self.vector_store_config.get("vector_store_id")

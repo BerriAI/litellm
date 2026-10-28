@@ -2,12 +2,14 @@
 ## Tests if 'get_end_user_object' works as expected
 
 import sys, os, asyncio, time, random, uuid
+import hashlib
+import json
 import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from types import SimpleNamespace
 from typing import Final
@@ -34,8 +36,11 @@ from litellm.proxy._types import (
     ProxyException,
 )
 from litellm.proxy.utils import PrismaClient
+import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy.auth.auth_checks import (
     can_team_access_model,
+    delete_cache_key_objects,
     is_model_cost_zero,
     virtual_key_soft_budget_check,
     _team_soft_budget_check,
@@ -2169,3 +2174,209 @@ def test_is_mcp_discovery_request(route, request_body, expected):
     from litellm.proxy.auth.auth_checks import is_mcp_discovery_request
 
     assert is_mcp_discovery_request(route=route, request_body=request_body) is expected
+
+
+@pytest.mark.asyncio
+async def test_get_skill_names_from_access_groups_reads_cached_group_rows():
+    from litellm.proxy._types import LiteLLM_AccessGroupTable
+    from litellm.proxy.auth.auth_checks import cache_access_object, get_skill_names_from_access_groups
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    cache = UserApiKeyCache()
+    for group_id, skills in (("group-a", ["skill-a", "shared"]), ("group-b", ["skill-b", "shared"])):
+        await cache_access_object(
+            access_group_id=group_id,
+            access_group_table=LiteLLM_AccessGroupTable(
+                access_group_id=group_id, access_group_name=group_id, access_skill_names=skills
+            ),
+            user_api_key_cache=cache,
+        )
+    untouched_prisma = MagicMock()
+    untouched_prisma.db.litellm_accessgrouptable.find_unique = AsyncMock(
+        side_effect=AssertionError("cache hit must not reach the DB")
+    )
+
+    assert await get_skill_names_from_access_groups(
+        access_group_ids=("group-a", "group-b"),
+        prisma_client=untouched_prisma,
+        user_api_key_cache=cache,
+        proxy_logging_obj=MagicMock(),
+    ) == frozenset({"skill-a", "skill-b", "shared"})
+
+
+class _Pipeline:
+    def __init__(self, send: Callable[[Sequence[str]], Awaitable[None]]) -> None:
+        self._send = send
+        self._messages: list[str] = []
+
+    def publish(self, channel: str, message: str) -> "_Pipeline":
+        self._messages.append(message)
+        return self
+
+    async def execute(self) -> None:
+        await self._send(tuple(self._messages))
+
+
+class _SlowPublishRedisClient:
+    def __init__(self) -> None:
+        self.published: list[str] = []
+
+    async def _send(self, messages: Sequence[str]) -> None:
+        await asyncio.sleep(0.001)
+        self.published.extend(messages)
+
+    async def publish(self, channel: str, message: str) -> int:
+        await self._send((message,))
+        return 1
+
+    def pipeline(self, transaction: bool = True) -> _Pipeline:
+        return _Pipeline(self._send)
+
+
+class _WedgedPublishRedisClient:
+    def __init__(self) -> None:
+        self.release = asyncio.Event()
+
+    async def _send(self, messages: Sequence[str]) -> None:
+        await self.release.wait()
+
+    async def publish(self, channel: str, message: str) -> int:
+        await self._send((message,))
+        return 1
+
+    def pipeline(self, transaction: bool = True) -> _Pipeline:
+        return _Pipeline(self._send)
+
+
+class _PubSubRedisCache:
+    namespace = None
+
+    def __init__(self, client: _SlowPublishRedisClient | _WedgedPublishRedisClient) -> None:
+        self._client = client
+
+    def init_pubsub_client(self) -> _SlowPublishRedisClient | _WedgedPublishRedisClient:
+        return self._client
+
+
+async def _drain_publishes() -> None:
+    await asyncio.gather(*pubsub_module._pending_publishes)  # pyright: ignore[reportPrivateUsage]  # drain module-level tasks
+
+
+@pytest.mark.asyncio
+async def test_evicting_more_keys_than_the_publisher_holds_pending_broadcasts_every_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
+    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
+    client = _SlowPublishRedisClient()
+    hashed_tokens: Final = tuple(f"token-{index}" for index in range(pubsub_module._MAX_PENDING_PUBLISHES + 476))  # pyright: ignore[reportPrivateUsage]  # the cap under test
+
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        return_value=_PubSubRedisCache(client),
+    ):
+        await delete_cache_key_objects(
+            hashed_tokens=hashed_tokens, user_api_key_cache=UserApiKeyCache(), proxy_logging_obj=None
+        )
+        await _drain_publishes()
+
+    assert {json.loads(message)["cache_key"] for message in client.published} == set(hashed_tokens)
+
+
+@pytest.mark.asyncio
+async def test_bulk_eviction_clears_this_worker_before_waiting_on_a_wedged_redis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
+    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
+    monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", 0.5)
+    client = _WedgedPublishRedisClient()
+    cache: Final = UserApiKeyCache(key_object_in_memory_cache=InMemoryCache(max_size_in_memory=2_000))
+    hashed_tokens: Final = tuple(
+        hashlib.sha256(f"token-{index}".encode()).hexdigest()
+        for index in range(600)
+    )
+    for hashed_token in hashed_tokens:
+        cache.in_memory_cache_for(hashed_token).set_cache(key=hashed_token, value={"token": hashed_token})
+    seeded: Final = tuple(
+        token for token in hashed_tokens if cache.in_memory_cache_for(token).get_cache(token) is not None
+    )
+
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        return_value=_PubSubRedisCache(client),
+    ):
+        eviction: Final = asyncio.create_task(
+            delete_cache_key_objects(hashed_tokens=hashed_tokens, user_api_key_cache=cache, proxy_logging_obj=None)
+        )
+        await asyncio.sleep(0.05)
+        still_cached: Final = tuple(
+            token for token in seeded if cache.in_memory_cache_for(token).get_cache(token) is not None
+        )
+        client.release.set()
+        await eviction
+        await _drain_publishes()
+
+    assert seeded == hashed_tokens
+    assert still_cached == ()
+
+
+class _AuthRedisCache:
+    namespace = None
+
+    def __init__(self, entries: dict[str, object]) -> None:
+        self.entries = dict(entries)
+
+    async def async_get_cache(self, key: str, **kwargs: object) -> object | None:
+        return self.entries.get(key)
+
+    def set_cache(self, key: str, value: object, **kwargs: object) -> None:
+        self.entries[key] = value
+
+    async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:
+        self.entries[key] = value
+
+    def delete_cache(self, key: str) -> None:
+        self.entries.pop(key, None)
+
+    async def async_delete_cache(self, key: str) -> None:
+        self.entries.pop(key, None)
+
+    async def delete_cache_keys(self, keys: Sequence[str]) -> None:
+        for key in keys:
+            self.entries.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_bulk_eviction_clears_the_redis_copies_before_waiting_on_a_wedged_broadcast(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
+    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
+    monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", 0.5)
+    client = _WedgedPublishRedisClient()
+    hashed_tokens: Final = tuple(
+        hashlib.sha256(f"token-{index}".encode()).hexdigest()
+        for index in range(600)
+    )
+    redis = _AuthRedisCache({token: {"token": token} for token in hashed_tokens})
+    cache: Final = UserApiKeyCache(key_object_in_memory_cache=InMemoryCache(max_size_in_memory=2_000))
+    cache.attach_redis_cache(redis)  # pyright: ignore[reportArgumentType]  # a dict-backed fake of the Redis layer
+    for hashed_token in hashed_tokens:
+        cache.in_memory_cache_for(hashed_token).set_cache(key=hashed_token, value={"token": hashed_token})
+
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        return_value=_PubSubRedisCache(client),
+    ):
+        eviction: Final = asyncio.create_task(
+            delete_cache_key_objects(hashed_tokens=hashed_tokens, user_api_key_cache=cache, proxy_logging_obj=None)
+        )
+        await asyncio.sleep(0.05)
+        refilled: Final = [token for token in hashed_tokens if await cache.async_get_cache(key=token) is not None]
+        client.release.set()
+        await eviction
+        await _drain_publishes()
+
+    assert refilled == []
+    assert redis.entries == {}

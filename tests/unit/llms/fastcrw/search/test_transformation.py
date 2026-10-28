@@ -99,6 +99,18 @@ def test_get_complete_url_does_not_double_append():
     )
 
 
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://self-hosted.local/api/v1",
+        "https://self-hosted.local/api/v1/",
+        "https://self-hosted.local/api/v1/search/",
+    ],
+)
+def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str) -> None:
+    assert _config().get_complete_url(api_base, {}) == "https://self-hosted.local/api/v1/search"
+
+
 def test_get_complete_url_reads_env_base():
     with patch.dict(
         os.environ, {"CRW_API_BASE": "https://env-base.local/v1"}, clear=True
