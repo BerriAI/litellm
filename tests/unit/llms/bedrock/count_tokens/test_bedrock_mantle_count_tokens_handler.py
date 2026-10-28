@@ -124,6 +124,6 @@ async def test_region_and_endpoint_lookups_leave_the_event_loop_free(monkeypatch
     )
 
     assert vault.read.is_set()
-    assert not vault.stalled_the_loop.is_set()
+    assert not vault.read_on_loop.is_set()
     assert result == {"input_tokens": 2177}
     assert str(mantle.only_request().url) == MANTLE_COUNT_URL

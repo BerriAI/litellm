@@ -176,6 +176,105 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
         assert "error" in events[-1]
 
 
+_COMPACTION_ITEM: Final = {
+    "type": "compaction",
+    "encrypted_content": json.dumps({"type": "compaction", "content": "the cat is named Biscuit"}),
+}
+_HISTORY_BEFORE_COMPACTION: Final = (
+    {"role": "user", "content": "a long turn " * 200},
+    {"role": "assistant", "content": "a long reply " * 200},
+)
+_TURN_AFTER_COMPACTION: Final = {"role": "user", "content": "what is the cat's name?"}
+
+
+async def _cursor_stream_failure_prompt_tokens(
+    monkeypatch: pytest.MonkeyPatch, request_input: list[Mapping[str, str]], fails_after_output: bool
+) -> int:
+    import litellm.proxy.proxy_server as ps
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    class _FailureRowRecorder(CustomLogger):
+        prompt_tokens: int | None = None
+
+        async def async_post_call_failure_hook(
+            self,
+            request_data: dict,
+            original_exception: Exception,
+            user_api_key_dict: object,
+            traceback_str: str | None = None,
+        ) -> None:
+            usage: Final = request_data.get("combined_usage_object")
+            self.prompt_tokens = usage.prompt_tokens if isinstance(usage, litellm.Usage) else None
+
+    model: Final = "gpt-6-astra"
+    upstream_url: Final = "https://streaming.example/v1"
+    created: Final = {
+        "type": "response.created",
+        "sequence_number": 0,
+        "response": {
+            "id": "resp_upstream",
+            "object": "response",
+            "created_at": 1,
+            "status": "in_progress",
+            "model": model,
+            "output": [],
+        },
+    }
+    output_delta: Final = {
+        "type": "response.output_text.delta",
+        "sequence_number": 1,
+        "item_id": "msg_partial",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": "Biscuit",
+    }
+    failed: Final = {"type": "error", "error": {"message": "upstream broke", "code": "server_error", "type": None}}
+    events: Final = (created, output_delta, failed) if fails_after_output else (created, failed)
+    wire: Final = "".join("data: " + json.dumps(event) + "\n\n" for event in events)
+    recorder: Final = _FailureRowRecorder()
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {"model": "openai/" + model, "api_base": upstream_url, "api_key": "fixture-key"},
+            }
+        ],
+        num_retries=0,
+    )
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, _auth_override)
+    with respx.mock as transport:
+        transport.post(upstream_url + "/responses").respond(
+            200, content=wire, headers={"Content-Type": "text/event-stream"}
+        )
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
+            result: Final = await client.post(
+                "/cursor/chat/completions", json={"model": model, "stream": True, "input": request_input}
+            )
+    assert recorder.prompt_tokens is not None, result.text
+    return recorder.prompt_tokens
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fails_after_output", [False, True])
+async def test_a_failed_cursor_stream_counts_its_input_from_the_newest_compaction_item(
+    monkeypatch: pytest.MonkeyPatch, fails_after_output: bool
+) -> None:
+    """Cursor's route maps to no call type, yet it dispatches a Responses call, which sends
+    the provider only the newest compaction item onward, so the failure row counts that much."""
+    resent: Final = await _cursor_stream_failure_prompt_tokens(
+        monkeypatch, [*_HISTORY_BEFORE_COMPACTION, _COMPACTION_ITEM, _TURN_AFTER_COMPACTION], fails_after_output
+    )
+    dispatched_after_trim: Final = await _cursor_stream_failure_prompt_tokens(
+        monkeypatch, [_COMPACTION_ITEM, _TURN_AFTER_COMPACTION], fails_after_output
+    )
+
+    assert resent == dispatched_after_trim
+
+
 @pytest.mark.asyncio
 async def test_responses_api_background_polling_rejects_missing_input():
     from fastapi import Response as FastAPIResponse
@@ -1079,6 +1178,9 @@ def _managed_files_over(table: _UniqueManagedObjectTable) -> tuple[MagicMock, Ma
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
     prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_deprecatedverificationtoken.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_deletedverificationtoken.find_first = AsyncMock(return_value=None)
+    prisma_client.db.litellm_deletedteamtable.find_first = AsyncMock(return_value=None)
     proxy_logging: Final = MagicMock()
     proxy_logging.get_proxy_hook = MagicMock(
         return_value=_PROXY_LiteLLMManagedFiles(internal_usage_cache=DualCache(), prisma_client=prisma_client)
@@ -4829,3 +4931,26 @@ def test_responses_routes_document_response_models_in_openapi_schema():
     assert "output" in ok_200_properties("/v1/responses/{response_id}", "get")
     assert "deleted" in ok_200_properties("/v1/responses/{response_id}", "delete")
     assert "data" in ok_200_properties("/v1/responses/{response_id}/input_items", "get")
+
+
+_COMPACTION_SUMMARY: Final = "The user planned a Tokyo trip."
+_NEXT_TURN: Final = {"type": "message", "role": "user", "content": "And Osaka?"}
+_COMPACTED_INPUT: Final = [
+    {"type": "message", "role": "user", "content": "Plan a Tokyo trip. " * 200},
+    {"type": "message", "role": "assistant", "content": "Day one, Asakusa. " * 200},
+    {
+        "type": "compaction",
+        "id": "cmp_1",
+        "encrypted_content": json.dumps({"type": "compaction", "content": _COMPACTION_SUMMARY}),
+    },
+    _NEXT_TURN,
+]
+_SUMMARY_INPUT: Final = [{"type": "message", "role": "user", "content": _COMPACTION_SUMMARY}, _NEXT_TURN]
+
+
+def test_input_token_count_reads_a_compaction_item_as_its_summary():
+    from litellm.proxy.response_api_endpoints.endpoints import _responses_input_as_token_count_messages
+
+    assert _responses_input_as_token_count_messages(_COMPACTED_INPUT, None) == (
+        _responses_input_as_token_count_messages(_SUMMARY_INPUT, None)
+    )

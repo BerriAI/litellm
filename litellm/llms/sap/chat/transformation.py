@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import message_with_file_parts_as_image_urls
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -25,7 +26,7 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-from ..credentials import get_token_creator
+from ..credentials import AICoreConfiguration, AICoreDeploymentList, get_token_creator
 from .handler import (
     AsyncSAPStreamIterator,
     GenAIHubOrchestrationError,
@@ -186,12 +187,14 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         # Keep a short, tight client lifecycle here to avoid fd leaks
         client: Final = litellm.module_level_client
         # with httpx.Client(timeout=30) as client:
-        deployments: Final = client.get(f"{self.base_url}/lm/deployments", headers=self.headers).json()
+        deployments: Final[AICoreDeploymentList] = client.get(
+            join_api_base(self.base_url, "lm/deployments"), headers=self.headers
+        ).json()
         valid: Final[list[tuple[str, str]]] = []
         for dep in deployments.get("resources", []):
             if dep.get("scenarioId") == "orchestration":
-                cfg = client.get(
-                    f"{self.base_url}/lm/configurations/{dep['configurationId']}",
+                cfg: AICoreConfiguration = client.get(
+                    join_api_base(self.base_url, f"lm/configurations/{dep['configurationId']}"),
                     headers=self.headers,
                 ).json()
                 if cfg.get("executableId") == "orchestration":
@@ -264,7 +267,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ):
-        api_base_: Final = f"{self.deployment_url}/v2/completion"
+        api_base_: Final = join_api_base(self.deployment_url, "v2/completion")
         return api_base_
 
     def _build_prompt_module(

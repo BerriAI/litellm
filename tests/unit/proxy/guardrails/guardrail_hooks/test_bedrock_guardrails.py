@@ -3258,7 +3258,7 @@ async def test_streaming_hook_fails_closed_when_assembler_raises_api_error():
     guardrail = _sse_guardrail()
 
     with patch(
-        "litellm.llms.anthropic.pass_through.stream_assembly.build_complete_streaming_response",
+        "litellm.llms.anthropic.messages.stream_assembly.build_complete_streaming_response",
         side_effect=litellm.APIError(
             status_code=500,
             message="Error building chunks for logging/streaming usage calculation",
@@ -8103,5 +8103,5 @@ async def test_guardrail_secret_lookups_leave_the_event_loop_free(
     )
 
     assert vault.read.is_set()
-    assert not vault.stalled_the_loop.is_set()
+    assert not vault.read_on_loop.is_set()
     assert upstream.calls.last.request.url.host == "bedrock-runtime.us-west-2.amazonaws.com"

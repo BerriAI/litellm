@@ -452,7 +452,7 @@ export interface ComplexityRouterConfigValue {
   route_housekeeping_to_cheapest_tier?: boolean;
   housekeeping_patterns?: string[];
   reminder_markers?: ReminderMarkerPair[];
-  max_tokens_from_tier_model?: boolean;
+  max_tokens_from_tier_model?: boolean | "clamp";
   classifier_plugin_timeout_ms?: number;
 }
 

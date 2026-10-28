@@ -1,9 +1,9 @@
-import base64
 import json
 import os
 import time
 from collections.abc import Mapping
-from typing import Final, TypeAlias
+from functools import lru_cache
+from typing import TYPE_CHECKING, Final
 
 import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -24,8 +24,14 @@ from .common_utils import (
     CHATGPT_OAUTH_TOKEN_URL,
     GetAccessTokenError,
     GetDeviceCodeError,
+    JsonObject,
     RefreshAccessTokenError,
+    decode_jwt_claims,
+    extract_chatgpt_account_id,
 )
+
+if TYPE_CHECKING:
+    from litellm.types.router import GenericLiteLLMParams
 
 TOKEN_EXPIRY_SKEW_SECONDS: Final = 60
 TOKEN_REFRESH_TIMEOUT_SECONDS: Final = 30
@@ -33,15 +39,31 @@ DEVICE_CODE_TIMEOUT_SECONDS: Final = 15 * 60
 DEVICE_CODE_COOLDOWN_SECONDS: Final = 5 * 60
 DEVICE_CODE_POLL_SLEEP_SECONDS: Final = 5
 
-OPENAI_AUTH_CLAIM_KEY: Final = "https://api.openai.com/auth"
-
-JsonObject: TypeAlias = Mapping[str, JsonValue]
-
 _JSON_OBJECT_ADAPTER: Final = TypeAdapter(JsonObject)
 
 
 def _optional_str(value: JsonValue | None) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def get_chatgpt_auth_file(
+    litellm_params: "Mapping[str, object] | GenericLiteLLMParams | None",
+) -> str | None:
+    if litellm_params is None:
+        return None
+    value: Final = (
+        litellm_params.get("chatgpt_auth_file")
+        if isinstance(litellm_params, Mapping)
+        else litellm_params.chatgpt_auth_file
+    )
+    if not isinstance(value, str) or not value:
+        return None
+    return os.path.abspath(os.path.expanduser(value))
+
+
+@lru_cache(maxsize=128)
+def get_cached_authenticator(auth_file: str) -> "Authenticator":
+    return Authenticator(auth_file=auth_file)
 
 
 def _token_refresh_timeout() -> httpx.Timeout:
@@ -53,13 +75,13 @@ def _token_refresh_timeout() -> httpx.Timeout:
 
 
 class Authenticator:
-    def __init__(self) -> None:
-        self.token_dir = os.getenv(
-            "CHATGPT_TOKEN_DIR",
-            os.path.expanduser("~/.config/litellm/chatgpt"),
+    def __init__(self, auth_file: str | None = None) -> None:
+        default_auth_file: Final = os.path.join(
+            os.getenv("CHATGPT_TOKEN_DIR", os.path.expanduser("~/.config/litellm/chatgpt")),
+            os.getenv("CHATGPT_AUTH_FILE", "auth.json"),
         )
-        self.auth_file = os.path.join(self.token_dir, os.getenv("CHATGPT_AUTH_FILE", "auth.json"))
-        self._ensure_token_dir()
+        self.auth_file = os.path.abspath(os.path.expanduser(auth_file or default_auth_file))
+        self.token_dir = os.path.dirname(self.auth_file)
 
     def get_api_base(self) -> str:
         return os.getenv("CHATGPT_API_BASE") or os.getenv("OPENAI_CHATGPT_API_BASE") or CHATGPT_API_BASE
@@ -99,16 +121,18 @@ class Authenticator:
         tokens: Final = self._login_device_code()
         return tokens["access_token"]
 
-    def get_account_id(self) -> str | None:
+    def get_account_id(self, access_token: str | None = None) -> str | None:
         auth_data: Final = self._read_auth_file()
+        if access_token and (not auth_data or auth_data.get("access_token") != access_token):
+            return extract_chatgpt_account_id(access_token)
         if not auth_data:
             return None
         account_id: Final = _optional_str(auth_data.get("account_id"))
         if account_id:
             return account_id
         id_token: Final = auth_data.get("id_token")
-        access_token: Final = auth_data.get("access_token")
-        derived: Final = self._extract_account_id(_optional_str(id_token or access_token))
+        saved_access_token: Final = auth_data.get("access_token")
+        derived: Final = extract_chatgpt_account_id(_optional_str(id_token or saved_access_token))
         if derived:
             self._write_auth_file({**auth_data, "account_id": derived})
         return derived
@@ -129,6 +153,7 @@ class Authenticator:
 
     def _write_auth_file(self, data: JsonObject) -> None:
         try:
+            self._ensure_token_dir()
             with open(self.auth_file, "w") as f:
                 json.dump(data, f)
         except OSError as exc:
@@ -146,32 +171,9 @@ class Authenticator:
         return time.time() >= float(derived_expires_at) - TOKEN_EXPIRY_SKEW_SECONDS
 
     def _get_expires_at(self, token: str) -> int | None:
-        claims: Final = self._decode_jwt_claims(token)
-        exp: Final = claims.get("exp")
+        exp: Final = decode_jwt_claims(token).get("exp")
         if isinstance(exp, (int, float)):
             return int(exp)
-        return None
-
-    def _decode_jwt_claims(self, token: str) -> JsonObject:
-        try:
-            parts: Final = token.split(".")
-            if len(parts) < 2:
-                return {}
-            payload_b64: Final = parts[1] + "=" * (-len(parts[1]) % 4)
-            payload_bytes: Final = base64.urlsafe_b64decode(payload_b64)
-            return _JSON_OBJECT_ADAPTER.validate_python(json.loads(payload_bytes.decode("utf-8")))
-        except Exception:
-            return {}
-
-    def _extract_account_id(self, token: str | None) -> str | None:
-        if not token:
-            return None
-        claims: Final = self._decode_jwt_claims(token)
-        auth_claims: Final = claims.get(OPENAI_AUTH_CLAIM_KEY)
-        if isinstance(auth_claims, dict):
-            account_id: Final = auth_claims.get("chatgpt_account_id")
-            if isinstance(account_id, str) and account_id:
-                return account_id
         return None
 
     def _login_device_code(self) -> dict[str, str]:
@@ -361,15 +363,16 @@ class Authenticator:
             "refresh_token": _optional_str(data.get("refresh_token")) or refresh_token,
             "id_token": id_token,
         }
+        account_id: Final = self.get_account_id()
         auth_data: Final = self._build_auth_record(refreshed)
-        self._write_auth_file(auth_data)
+        self._write_auth_file({**auth_data, "account_id": account_id} if account_id else auth_data)
         return refreshed
 
     def _build_auth_record(self, tokens: dict[str, str]) -> JsonObject:
         access_token: Final = tokens.get("access_token")
         id_token: Final = tokens.get("id_token")
         expires_at: Final = self._get_expires_at(access_token) if access_token else None
-        account_id: Final = self._extract_account_id(id_token or access_token)
+        account_id: Final = extract_chatgpt_account_id(id_token or access_token)
         return {
             "access_token": access_token,
             "refresh_token": tokens.get("refresh_token"),

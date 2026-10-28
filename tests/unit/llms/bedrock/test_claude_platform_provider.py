@@ -705,7 +705,7 @@ async def test_anthropic_messages_claude_platform_workspace_and_region_lookups_l
     )
 
     assert vault.read.is_set()
-    assert not vault.stalled_the_loop.is_set()
+    assert not vault.read_on_loop.is_set()
     assert response["content"][0]["text"] == "ok"
     _assert_gateway_accepted(requests[0], sigv4_without_region)
 
