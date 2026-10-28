@@ -7038,7 +7038,7 @@ def test_deep_merge_dicts_skips_none_and_empty_lists(monkeypatch):
     db_param_value = {
         "max_parallel_requests": None,
         "allowed_models": [],
-        "new_key": "new_value",
+        "store_prompts_in_spend_logs": True,
         "nested": {
             "key1": "updated_value1",
             "key3": "value3",
@@ -7051,7 +7051,7 @@ def test_deep_merge_dicts_skips_none_and_empty_lists(monkeypatch):
 
     assert result["max_parallel_requests"] == 10
     assert result["allowed_models"] == ["gpt-3.5-turbo", "gpt-4"]
-    assert result["new_key"] == "new_value"
+    assert result["store_prompts_in_spend_logs"] is True
     assert result["nested"] == {"key1": "value1", "key2": "value2"}
 
 

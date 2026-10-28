@@ -4355,6 +4355,29 @@ async def test_ProxyConfig__update_general_settings_updates_health_check_retenti
     reschedule.assert_awaited_once()
 
 
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_ignores_a_stored_key_no_settings_api_manages_and_warns_once(
+    monkeypatch, caplog
+):
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    pc = ProxyConfig()
+    stored_row = {"enforce_user_param": True, "store_prompts_in_spend_logs": True}
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await pc._update_general_settings(stored_row)
+        await pc._update_general_settings(stored_row)
+    from litellm.proxy import proxy_server
+
+    assert proxy_server.general_settings["store_prompts_in_spend_logs"] is True
+    assert "enforce_user_param" not in proxy_server.general_settings
+    warnings = [record.getMessage() for record in caplog.records if "enforce_user_param" in record.getMessage()]
+    assert warnings == [
+        "general_settings.enforce_user_param is stored in the database, but no settings API manages it, so the "
+        "stored value is ignored. Set it in the config file to use it."
+    ]
+
+
 def _paused_scheduler(monkeypatch):
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 

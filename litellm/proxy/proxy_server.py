@@ -5549,6 +5549,10 @@ def _reload_settings_store(section: Section, store: SettingsStore, section_confi
         store["pass_through_endpoints"] = serving_pass_throughs
 
 
+def _db_managed_general_settings_keys() -> frozenset[str]:
+    return frozenset((*ConfigGeneralSettings.model_fields, *_CLEANUP_SCHEDULE_KEYS, "allowed_ips", "email_settings"))
+
+
 def _bind_general_settings_store(settings: SettingsStore) -> None:
     global general_settings
     general_settings = settings  # pyright: ignore[reportAssignmentType]  # legacy global accepts mappings
@@ -5699,7 +5703,9 @@ class ProxyConfig:
         # whether an existing request predates the prices it just fetched, and re-serving one
         # costs a single fetch where skipping one leaves it priced wrong indefinitely
         self.model_cost_map_applied_revision: int = 0
-        self.settings: Final[SettingsStore] = SettingsStore("general_settings")
+        self.settings: Final[SettingsStore] = SettingsStore(
+            "general_settings", managed_db_keys=_db_managed_general_settings_keys()
+        )
         self.router_settings: Final[SettingsStore] = SettingsStore("router_settings")
         self.litellm_settings: Final[SettingsStore] = SettingsStore("litellm_settings")
         self.environment_variables: Final[SettingsStore] = SettingsStore("environment_variables")
@@ -5710,6 +5716,7 @@ class ProxyConfig:
         self._db_environment_keys: frozenset[str] = frozenset()
         self._sso_environment_removals: frozenset[str] = frozenset()
         self._warned_shadowed_keys: frozenset[tuple[Section, str]] = frozenset()
+        self._warned_unmanaged_keys: frozenset[str] = frozenset()
         self._db_config_callback_entries: Mapping[tuple[str, str], _DbCallbackRegistration] = MappingProxyType({})
         self._settings_stores: Final[Mapping[Section, SettingsStore]] = MappingProxyType(
             {
@@ -8208,6 +8215,7 @@ class ProxyConfig:
         cache_size_was_db: Final = self.settings.source("user_api_key_cache_max_size") == "db"
         previous_cleanup_schedule: Final = self._resolved_cleanup_schedule()
         self.settings.apply_db_row("general_settings", db_general_settings)
+        self._warn_about_unmanaged_db_settings()
         _bind_general_settings_store(self.settings)
         await self._apply_general_settings_side_effects(
             db_general_settings,
@@ -8425,6 +8433,7 @@ class ProxyConfig:
                 )
 
         self._warn_about_shadowed_db_settings()
+        self._warn_about_unmanaged_db_settings()
         return self._config_with_resolved_settings(config)
 
     async def _apply_db_environment_variables_row(
@@ -8482,6 +8491,16 @@ class ProxyConfig:
                 "%s", config_ownership_message(section=section, key=key, shadows_db_value=True)
             )
         self._warned_shadowed_keys = shadowed
+
+    def _warn_about_unmanaged_db_settings(self) -> None:
+        unmanaged: Final = frozenset(self.settings.unmanaged_db_keys())
+        for key in sorted(unmanaged - self._warned_unmanaged_keys):
+            verbose_proxy_logger.warning(
+                "general_settings.%s is stored in the database, but no settings API manages it, so the stored value "
+                "is ignored. Set it in the config file to use it.",
+                key,
+            )
+        self._warned_unmanaged_keys = unmanaged
 
     def _prepared_db_settings_values(self, section: Section, value: object) -> Mapping[str, SettingsJsonValue]:
         scrubbed: Final = _scrub_db_overlay_remote_module_loads(section=section, db_value=value)
