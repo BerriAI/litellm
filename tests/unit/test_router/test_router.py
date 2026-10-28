@@ -7083,7 +7083,7 @@ async def test_aresponses_streaming_iterator_partial_content_injects_continuatio
     assert new_input[2]["content"][0]["text"] == "The capital of France is"
 
 
-class _NumbersOutput(BaseModel):
+class _NumbersOutput(BaseModel, frozen=True):
     numbers: list[int]
 
 
@@ -7100,39 +7100,54 @@ _NUMBERS_TEXT_FORMAT: Final = {
 }
 
 
+_FORCED_TOOL: Final = {"tool_choice": {"type": "function", "name": "lookup"}}
+_ALLOWED_TOOLS_AUTO: Final = {
+    "tool_choice": {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "lookup"}]}
+}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("request_params", "cut_after_output", "continues"),
+    ("request_params", "cut", "falls_back"),
     [
-        pytest.param({"text": {"format": _NUMBERS_TEXT_FORMAT}}, True, False, id="json_schema"),
-        pytest.param({"text": {"format": {"type": "json_object"}}}, True, False, id="json_object"),
-        pytest.param({"text_format": _NumbersOutput}, True, False, id="sdk_text_format"),
-        pytest.param({"tool_choice": {"type": "function", "name": "lookup"}}, True, False, id="forced_tool"),
-        pytest.param({"text": {"format": {"type": "text"}}}, True, True, id="plain_text"),
-        pytest.param({"text": {"format": _NUMBERS_TEXT_FORMAT}}, False, True, id="json_schema_cut_before_output"),
+        pytest.param({"text": {"format": _NUMBERS_TEXT_FORMAT}}, "text", False, id="json_schema"),
+        pytest.param({"text": {"format": {"type": "json_object"}}}, "text", False, id="json_object"),
+        pytest.param({"text_format": _NumbersOutput}, "text", False, id="sdk_text_format"),
+        pytest.param(_FORCED_TOOL, "text", False, id="forced_tool"),
+        pytest.param({"text": {"format": {"type": "text"}}}, "text", True, id="plain_text"),
+        pytest.param(_ALLOWED_TOOLS_AUTO, "text", True, id="allowed_tools_auto"),
+        pytest.param(_FORCED_TOOL, "tool_arguments", True, id="forced_tool_cut_in_arguments_restarts"),
+        pytest.param(
+            {"text": {"format": _NUMBERS_TEXT_FORMAT}}, "before_output", True, id="json_schema_cut_before_output"
+        ),
     ],
 )
 async def test_aresponses_streaming_iterator_does_not_continue_constrained_output(
-    request_params: Mapping[str, object], cut_after_output: bool, continues: bool
+    request_params: Mapping[str, object], cut: Literal["text", "tool_arguments", "before_output"], falls_back: bool
 ):
-    """A Responses stream cut after it emitted part of a constrained output surfaces the primary's error, since a
-    fallback continuing a JSON document or forced tool call completes with output that breaks the request's
-    contract. Plain text still continues, and a cut before any output still falls back with the request as sent."""
-    primary_delta: Final = MagicMock(type="response.output_text.delta", delta='{"numbers": [1, 2, ')
+    """A Responses stream cut after it emitted part of a constrained text output surfaces the primary's error, since
+    a fallback continuing a JSON document completes with output that breaks the request's contract. Plain text and
+    allowed_tools in auto mode still continue, and a cut before any text, a forced tool's partial arguments included,
+    still falls back with the request as sent."""
+    primary_output: Final = {
+        "text": (MagicMock(type="response.output_text.delta", delta='{"numbers": [1, 2, '),),
+        "tool_arguments": (MagicMock(type="response.function_call_arguments.delta", delta='{"numbers": [1, '),),
+        "before_output": (),
+    }[cut]
     primary_error: Final = litellm.InternalServerError(
         message="The server had an error while processing your request.", model="gpt-4", llm_provider="openai"
     )
     fallback_completed: Final = MagicMock(type="response.completed")
     router: Final = _InjectedFallbackRouter(_AsyncList([fallback_completed]))
     src: Final = _make_responses_iterator(
-        chunks=[primary_delta] if cut_after_output else [],
+        chunks=list(primary_output),
         error=MidStreamFallbackError(
             message="server_error",
             model="gpt-4",
             llm_provider="openai",
             original_exception=primary_error,
-            generated_content=primary_delta.delta if cut_after_output else "",
-            is_pre_first_chunk=not cut_after_output,
+            generated_content=primary_output[0].delta if cut == "text" else "",
+            is_pre_first_chunk=cut == "before_output",
         ),
     )
 
@@ -7148,8 +7163,7 @@ async def test_aresponses_streaming_iterator_does_not_continue_constrained_outpu
     )
     outcome: Final = [item async for item in _events_until_error(wrapped)]
 
-    primary_output: Final = [primary_delta] if cut_after_output else []
-    assert outcome == [*primary_output, fallback_completed if continues else primary_error]
+    assert outcome == [*primary_output, fallback_completed if falls_back else primary_error]
 
 
 @pytest.mark.asyncio

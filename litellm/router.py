@@ -4220,15 +4220,6 @@ class Router:
         wrapper: Final = FallbackResponsesStreamWrapper(stream_with_fallbacks())
         return wrapper
 
-    def _responses_output_constrained(
-        self, request_kwargs: Mapping[str, object], source_iterator: "BaseResponsesAPIStreamingIterator"
-    ) -> bool:
-        cut_deployment_id: Final = (get_hidden_params(source_iterator) or {}).get("model_id")
-        cut_deployment: Final = (
-            self.get_deployment(model_id=cut_deployment_id) if isinstance(cut_deployment_id, str) else None
-        )
-        return constrains_continuation(self._params_sent_to_deployment(request_kwargs, cut_deployment))
-
     async def _aresponses_fallback_attempt(
         self,
         e: "MidStreamFallbackError",
@@ -4248,7 +4239,13 @@ class Router:
         from litellm.exceptions import MidStreamFallbackError
 
         continues_output: Final = bool(e.generated_content) and not e.is_pre_first_chunk
-        if continues_output and self._responses_output_constrained(initial_kwargs, source_iterator):
+        cut_deployment_id: Final = (get_hidden_params(source_iterator) or {}).get("model_id")
+        cut_deployment: Final = (
+            self.get_deployment(model_id=cut_deployment_id) if isinstance(cut_deployment_id, str) else None
+        )
+        if continues_output and constrains_continuation(
+            self._params_sent_to_deployment(initial_kwargs, cut_deployment)
+        ):
             Router._raise_original_mid_stream_error(e)
         partial_usage: Final = Router._extract_partial_responses_usage(source_iterator)
         fallback_response = None  # rebind-ok: pre-init so finally can close it if a fallback was actually attempted
