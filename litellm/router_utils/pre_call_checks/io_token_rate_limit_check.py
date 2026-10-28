@@ -23,6 +23,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET
 from litellm.types.router import RouterCacheEnum, RouterErrors
 from litellm.utils import get_utc_datetime
@@ -96,6 +97,24 @@ def deployment_has_io_token_limits(deployment: dict) -> bool:
     return itpm is not None or otpm is not None
 
 
+_IO_TOKEN_LIMIT_KEYS: Final = frozenset({"itpm", "otpm"})
+_IO_TOKEN_LIMIT_SECTIONS: Final = frozenset({"litellm_params", "model_info"})
+
+
+def without_io_token_limits(deployment: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        key: _without_io_token_limit_keys(value) if key in _IO_TOKEN_LIMIT_SECTIONS else value
+        for key, value in deployment.items()
+        if key not in _IO_TOKEN_LIMIT_KEYS
+    }
+
+
+def _without_io_token_limit_keys(section: object) -> object:
+    if not is_str_keyed_mapping(section):
+        return section
+    return {key: value for key, value in section.items() if key not in _IO_TOKEN_LIMIT_KEYS}
+
+
 def _get_cache_keys(deployment: dict, current_minute: str) -> tuple[str, str] | None:
     model_id: Final = deployment.get("model_info", {}).get("id")
     deployment_name: Final = deployment.get("litellm_params", {}).get("model")
@@ -129,7 +148,7 @@ def _model_max_output_tokens(model_name: str) -> int | None:
     # this lookup is a fallback default and must never fail the request.
     with contextlib.suppress(Exception):
         info: Final = litellm.get_model_info(model=model_name)
-        model_max: Final = info.get("max_output_tokens") or info.get("max_tokens")
+        model_max: Final = info.get("max_output_tokens")
         if model_max is not None:
             return max(0, int(model_max))
     return None

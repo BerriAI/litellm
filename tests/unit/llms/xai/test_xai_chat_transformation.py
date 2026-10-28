@@ -1,11 +1,15 @@
+import json
+import os
 from typing import Final
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.xai.chat.transformation import (
+    XAI_API_BASE,
     XAIChatCompletionStreamingHandler,
     XAIChatConfig,
 )
@@ -163,6 +167,126 @@ class TestXAIUsageNormalization:
         XAIChatConfig.normalize_openai_compatible_usage_totals(usage)
 
         assert usage["total_tokens"] == 200
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_completion_strips_message_names_from_request(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(f"{XAI_API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-xai",
+                "object": "chat.completion",
+                "created": 1234567890,
+                "model": "grok-4.20-beta-latest",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "OK"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="xai/grok-4.20-beta-latest",
+        messages=[
+            {"role": "system", "content": "Be concise", "name": "system_prompt"},
+            {"role": "user", "content": "Say OK", "name": "caller"},
+            {"role": "assistant", "content": "OK", "name": "responder"},
+            {"role": "user", "content": "Again", "name": "caller"},
+        ],
+        api_key="xai-test-key",
+        api_base=XAI_API_BASE,
+    )
+
+    request_body: Final = json.loads(route.calls.last.request.content)
+    assert request_body["messages"] == [
+        {"role": "system", "content": "Be concise"},
+        {"role": "user", "content": "Say OK", "name": "caller"},
+        {"role": "assistant", "content": "OK"},
+        {"role": "user", "content": "Again", "name": "caller"},
+    ]
+    assert response.choices[0].message.content == "OK"
+
+
+@pytest.mark.parametrize(
+    ("final_usage", "expected_usage"),
+    [
+        ({"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3}, (2, 1, 3)),
+        (
+            {
+                "prompt_tokens": 14,
+                "completion_tokens": 10,
+                "total_tokens": 336,
+                "completion_tokens_details": {"reasoning_tokens": 312},
+            },
+            (14, 322, 336),
+        ),
+    ],
+    ids=["plain", "reasoning_folded_into_completion"],
+)
+@pytest.mark.respx(assert_all_called=True)
+def test_streaming_include_usage_surfaces_xai_final_usage_chunk(
+    respx_mock: respx.MockRouter,
+    final_usage: dict[str, object],
+    expected_usage: tuple[int, int, int],
+) -> None:
+    frames: Final = (
+        {
+            "id": "chatcmpl-xai-stream",
+            "object": "chat.completion.chunk",
+            "created": 1234567890,
+            "model": "grok-4.20-beta-latest",
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "OK"}, "finish_reason": None}],
+        },
+        {
+            "id": "chatcmpl-xai-stream",
+            "object": "chat.completion.chunk",
+            "created": 1234567890,
+            "model": "grok-4.20-beta-latest",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        },
+        {
+            "id": "chatcmpl-xai-stream",
+            "object": "chat.completion.chunk",
+            "created": 1234567890,
+            "model": "grok-4.20-beta-latest",
+            "choices": [],
+            "usage": final_usage,
+        },
+    )
+    sse_body: Final = "".join(f"data: {json.dumps(frame)}\n\n" for frame in frames) + "data: [DONE]\n\n"
+    respx_mock.post(f"{XAI_API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            content=sse_body.encode(),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    chunks: Final = list(
+        litellm.completion(
+            model="xai/grok-4.20-beta-latest",
+            messages=[{"role": "user", "content": "Say OK"}],
+            stream=True,
+            stream_options={"include_usage": True},
+            api_key="xai-test-key",
+            api_base=XAI_API_BASE,
+        )
+    )
+
+    usage_chunks: Final = [chunk for chunk in chunks if getattr(chunk, "usage", None) is not None]
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "OK"
+    assert len(usage_chunks) == 1
+    assert (
+        usage_chunks[0].usage.prompt_tokens,
+        usage_chunks[0].usage.completion_tokens,
+        usage_chunks[0].usage.total_tokens,
+    ) == expected_usage
 
 
 class TestXAIChatWebSearchBilling:
@@ -361,3 +485,99 @@ class TestXAIReportedCost:
             0.0,
             0.0037756,
         )
+
+
+def test_xai_chat_config_get_openai_compatible_provider_info():
+    config = XAIChatConfig()
+    api_base, api_key = config.get_openai_compatible_provider_info(api_base=None, api_key=None)
+    assert api_base == XAI_API_BASE
+    assert api_key == os.environ.get("XAI_API_KEY")
+    custom_api_key = "test_api_key"
+    api_base, api_key = config.get_openai_compatible_provider_info(api_base=None, api_key=custom_api_key)
+    assert api_base == XAI_API_BASE
+    assert api_key == custom_api_key
+    with patch.dict("os.environ", {"XAI_API_BASE": "https://env.x.ai/v1", "XAI_API_KEY": "env_api_key"}):
+        api_base, api_key = config.get_openai_compatible_provider_info(None, None)
+        assert api_base == "https://env.x.ai/v1"
+        assert api_key == "env_api_key"
+
+
+def test_xai_chat_config_map_openai_params():
+    """
+    XAI is OpenAI compatible*
+
+    Does not support all OpenAI parameters:
+    - max_completion_tokens -> max_tokens
+
+    """
+    config = XAIChatConfig()
+    non_default_params = {
+        "max_completion_tokens": 100,
+        "frequency_penalty": 0.5,
+        "logit_bias": {"50256": -100},
+        "logprobs": 5,
+        "messages": [{"role": "user", "content": "Hello"}],
+        "model": "xai/grok-beta",
+        "n": 2,
+        "presence_penalty": 0.2,
+        "response_format": {"type": "json_object"},
+        "seed": 42,
+        "stop": ["END"],
+        "stream": True,
+        "stream_options": {},
+        "temperature": 0.7,
+        "tool_choice": "auto",
+        "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+        "top_logprobs": 3,
+        "top_p": 0.9,
+        "user": "test_user",
+        "unsupported_param": "value",
+    }
+    optional_params = {}
+    model = "xai/grok-beta"
+    result = config.map_openai_params(non_default_params, optional_params, model)
+    assert result["max_tokens"] == 100
+    assert result["frequency_penalty"] == 0.5
+    assert result["logit_bias"] == {"50256": -100}
+    assert result["logprobs"] == 5
+    assert result["n"] == 2
+    assert result["presence_penalty"] == 0.2
+    assert result["response_format"] == {"type": "json_object"}
+    assert result["seed"] == 42
+    assert result["stop"] == ["END"]
+    assert result["stream"] is True
+    assert result["stream_options"] == {}
+    assert result["temperature"] == 0.7
+    assert result["tool_choice"] == "auto"
+    assert result["tools"] == [{"type": "function", "function": {"name": "get_weather"}}]
+    assert result["top_logprobs"] == 3
+    assert result["top_p"] == 0.9
+    assert result["user"] == "test_user"
+    assert "unsupported_param" not in result
+
+
+def test_xai_check_for_stop_in_supported_params():
+    supported_params = XAIChatConfig().get_supported_openai_params(model="xai/grok-3-mini")
+    assert "stop" not in supported_params
+
+
+@pytest.mark.parametrize("model", ["xai/grok-4", "xai/grok-4-0709"])
+def test_xai_grok_4_stop_not_supported(model):
+    """
+    Test that grok-4 models do not support the stop parameter
+
+    Issue: https://github.com/BerriAI/litellm/issues/12635
+    """
+    supported_params = XAIChatConfig().get_supported_openai_params(model=model)
+    assert "stop" not in supported_params
+
+
+@pytest.mark.parametrize(
+    "model", ["xai/grok-4", "xai/grok-4-0709", "xai/grok-4-latest", "xai/grok-code-fast", "xai/grok-code-fast-1"]
+)
+def test_xai_grok_4_frequency_penalty_not_supported(model):
+    """
+    Test that grok-4 models do not support the frequency_penalty parameter
+    """
+    supported_params = XAIChatConfig().get_supported_openai_params(model=model)
+    assert "frequency_penalty" not in supported_params

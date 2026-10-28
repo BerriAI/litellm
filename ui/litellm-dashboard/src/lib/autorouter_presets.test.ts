@@ -815,6 +815,24 @@ describe("autorouter_presets", () => {
   });
 
   describe("getReferencedModelsError", () => {
+    it.each(["jev", "heuristic"] as const)(
+      "only checks a removed decision deployment when %s is active",
+      (classifierType) => {
+        const config = {
+          tiers: { SIMPLE: ["solver"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+          classifierType,
+          classifierLlmConfig: undefined,
+          decisionDeploymentName: "removed-decision",
+          semanticMatchingEnabled: false,
+          embeddingModel: undefined,
+        };
+        const availability = groupsOnly(["solver"]);
+        expect(getReferencedModelsError(config, availability)).toBe(
+          classifierType === "jev" ? "Model(s) no longer available: removed-decision" : null,
+        );
+      },
+    );
+
     const tiers = { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] };
     const available = groupsOnly(["gpt-5-nano"]);
     // Both fields are always populated with a model missing from `available`; only the
@@ -859,6 +877,13 @@ describe("autorouter_presets", () => {
   });
 
   describe("buildPresetPrefill", () => {
+    it.each([undefined, true, false, "clamp"] as const)("preserves a preset's output token policy %s", (mode) => {
+      const preset = getPresetByKey("anthropic_family")!;
+      const config = { ...preset.complexity_router_config, max_tokens_from_tier_model: mode };
+      const prefill = buildPresetPrefill(config, groupsOnly(getRequiredModelsInPreset(preset)));
+      expect(prefill.complexityRouterConfig.max_tokens_from_tier_model).toBe(mode);
+    });
+
     it("preserves Laya settings and drops inactive classifier settings when prefilling", () => {
       const config = {
         tiers: { SIMPLE: ["fast"], MEDIUM: [], COMPLEX: [], REASONING: [] },

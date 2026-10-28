@@ -201,11 +201,11 @@ async def test_update_cache_settings_persists_url_precedence(monkeypatch):
     mock_prisma.db.litellm_cacheconfig.upsert = AsyncMock()
 
     proxy_config = MagicMock()
-    proxy_config._encrypt_env_variables = MagicMock(
+    proxy_config.encrypt_env_variables = MagicMock(
         side_effect=lambda environment_variables: dict(environment_variables)
     )
-    proxy_config._decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
-    proxy_config._init_cache = MagicMock()
+    proxy_config.decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
+    proxy_config.init_cache = MagicMock()
     proxy_config.switch_on_llm_response_caching = MagicMock()
 
     with (
@@ -229,7 +229,7 @@ async def test_update_cache_settings_persists_url_precedence(monkeypatch):
             litellm_changed_by=None,
         )
 
-    persisted = proxy_config._encrypt_env_variables.call_args.kwargs["environment_variables"]
+    persisted = proxy_config.encrypt_env_variables.call_args.kwargs["environment_variables"]
     assert persisted["url"] == "redis://:pw@host:6379/1"
     assert persisted["namespace"] == "ns"
     assert "host" not in persisted
@@ -237,7 +237,7 @@ async def test_update_cache_settings_persists_url_precedence(monkeypatch):
     assert "db" not in persisted
     assert "password" not in persisted
 
-    init_params = proxy_config._init_cache.call_args.kwargs["cache_params"]
+    init_params = proxy_config.init_cache.call_args.kwargs["cache_params"]
     assert "host" not in init_params
     assert init_params["url"] == "redis://:pw@host:6379/1"
 
@@ -262,7 +262,7 @@ async def test_get_cache_settings_masks_password_bearing_url():
     mock_prisma.db.litellm_cacheconfig.find_unique = AsyncMock(return_value=cache_row)
 
     proxy_config = MagicMock()
-    proxy_config._decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
+    proxy_config.decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
@@ -505,11 +505,11 @@ async def test_update_cache_settings_emits_audit_log_when_enabled(monkeypatch):
     mock_prisma.db.litellm_cacheconfig.upsert = AsyncMock()
 
     proxy_config = MagicMock()
-    proxy_config._encrypt_env_variables = MagicMock(
+    proxy_config.encrypt_env_variables = MagicMock(
         side_effect=lambda environment_variables: dict(environment_variables)
     )
-    proxy_config._decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
-    proxy_config._init_cache = MagicMock()
+    proxy_config.decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
+    proxy_config.init_cache = MagicMock()
     proxy_config.switch_on_llm_response_caching = MagicMock()
 
     audit_calls = []
@@ -575,11 +575,11 @@ async def test_update_cache_settings_no_audit_when_disabled(monkeypatch):
     mock_prisma.db.litellm_cacheconfig.upsert = AsyncMock()
 
     proxy_config = MagicMock()
-    proxy_config._encrypt_env_variables = MagicMock(
+    proxy_config.encrypt_env_variables = MagicMock(
         side_effect=lambda environment_variables: dict(environment_variables)
     )
-    proxy_config._decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
-    proxy_config._init_cache = MagicMock()
+    proxy_config.decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
+    proxy_config.init_cache = MagicMock()
     proxy_config.switch_on_llm_response_caching = MagicMock()
 
     audit_calls = []
@@ -802,7 +802,7 @@ async def test_get_cache_settings_falls_back_to_redis_env(monkeypatch):
     mock_prisma.db.litellm_cacheconfig.find_unique = AsyncMock(return_value=None)
 
     proxy_config = MagicMock()
-    proxy_config._decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
+    proxy_config.decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
@@ -829,7 +829,7 @@ async def test_get_cache_settings_redacts_password_with_marker(monkeypatch):
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_cacheconfig.find_unique = AsyncMock(return_value=cache_row)
     proxy_config = MagicMock()
-    proxy_config._decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
+    proxy_config.decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
@@ -858,7 +858,7 @@ async def test_get_cache_settings_url_mode_hides_env_discrete_fields(monkeypatch
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_cacheconfig.find_unique = AsyncMock(return_value=cache_row)
     proxy_config = MagicMock()
-    proxy_config._decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
+    proxy_config.decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
@@ -875,11 +875,11 @@ async def test_get_cache_settings_url_mode_hides_env_discrete_fields(monkeypatch
 
 def _mock_proxy_config_identity_crypto():
     proxy_config = MagicMock()
-    proxy_config._encrypt_env_variables = MagicMock(
+    proxy_config.encrypt_env_variables = MagicMock(
         side_effect=lambda environment_variables: dict(environment_variables)
     )
-    proxy_config._decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
-    proxy_config._init_cache = MagicMock()
+    proxy_config.decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
+    proxy_config.init_cache = MagicMock()
     proxy_config.switch_on_llm_response_caching = MagicMock()
     return proxy_config
 
@@ -913,7 +913,7 @@ async def test_update_preserves_stored_password_on_redacted_resubmit(monkeypatch
             litellm_changed_by=None,
         )
 
-    persisted = proxy_config._encrypt_env_variables.call_args.kwargs["environment_variables"]
+    persisted = proxy_config.encrypt_env_variables.call_args.kwargs["environment_variables"]
     assert persisted["host"] == "oldhost"
     assert persisted["namespace"] == "edited"
     assert persisted["password"] == "realpw"
@@ -945,7 +945,7 @@ async def test_update_drops_env_sourced_redacted_secret(monkeypatch):
             litellm_changed_by=None,
         )
 
-    persisted = proxy_config._encrypt_env_variables.call_args.kwargs["environment_variables"]
+    persisted = proxy_config.encrypt_env_variables.call_args.kwargs["environment_variables"]
     assert "password" not in persisted
 
 
@@ -974,7 +974,7 @@ async def test_update_applies_new_password(monkeypatch):
             litellm_changed_by=None,
         )
 
-    persisted = proxy_config._encrypt_env_variables.call_args.kwargs["environment_variables"]
+    persisted = proxy_config.encrypt_env_variables.call_args.kwargs["environment_variables"]
     assert persisted["password"] == "brandnewpw"
 
 
@@ -992,7 +992,7 @@ async def test_test_cache_connection_survives_saved_lookup_failure(monkeypatch):
     # a client whose find_unique is not awaitable, so the saved read raises
     bad_prisma = MagicMock()
     proxy_config = MagicMock()
-    proxy_config._decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
+    proxy_config.decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
 
     cache_instance = MagicMock()
     cache_instance.cache = MagicMock()
@@ -1029,7 +1029,7 @@ async def test_get_cache_settings_does_not_surface_non_display_env_credentials(m
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_cacheconfig.find_unique = AsyncMock(return_value=None)
     proxy_config = MagicMock()
-    proxy_config._decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
+    proxy_config.decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
@@ -1058,7 +1058,7 @@ async def test_test_cache_connection_does_not_log_plaintext_credentials(monkeypa
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_cacheconfig.find_unique = AsyncMock(return_value=existing)
     proxy_config = MagicMock()
-    proxy_config._decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
+    proxy_config.decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
 
     cache_instance = MagicMock()
     cache_instance.cache = MagicMock()
@@ -1096,7 +1096,7 @@ async def test_test_cache_connection_does_not_replay_saved_password_to_new_host(
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_cacheconfig.find_unique = AsyncMock(return_value=existing)
     proxy_config = MagicMock()
-    proxy_config._decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
+    proxy_config.decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
 
     cache_instance = MagicMock()
     cache_instance.cache = MagicMock()

@@ -2513,6 +2513,15 @@ def test_parse_canonical_date_range_reports_missing_then_malformed_dates() -> No
     )
 
 
+def test_parse_canonical_date_range_rejects_end_before_start() -> None:
+    assert parse_canonical_date_range("2026-09-26", "2026-09-24") == InvalidDateRange(
+        reason="end_date must be on or after start_date"
+    )
+    assert parse_canonical_date_range("2026-09-24", "2026-09-24") == CanonicalDateRange(
+        start=date(2026, 9, 24), end=date(2026, 9, 24)
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("start_date", ("2026-9-24", "２０２６-09-24", "2026-09-4"))
 async def test_get_daily_activity_rejects_non_canonical_dates_before_querying(start_date: str) -> None:

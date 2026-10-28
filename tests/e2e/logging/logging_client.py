@@ -704,6 +704,7 @@ class LoggingClient:
         return self.list_langfuse_observations(creds, trace_id=gen.trace_id) or [gen]
 
 
+@step("Retry the call until the fresh key stops answering 401")
 def first_ok(client: LoggingClient, send: Callable[[], StreamingResponse]) -> StreamingResponse:
     """First successful call on a fresh key. A fresh key may briefly 401 until
     the data plane's auth cache picks it up, so retry on 401 to a deadline; a

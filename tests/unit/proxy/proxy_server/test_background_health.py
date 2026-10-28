@@ -178,7 +178,7 @@ async def test_schedule_background_health_check_db_save_creates_task(monkeypatch
 
     import litellm.proxy.health_endpoints._health_endpoints as he
 
-    monkeypatch.setattr(he, "_save_background_health_checks_to_db", _fake_save)
+    monkeypatch.setattr(he, "save_background_health_checks_to_db", _fake_save)
 
     prisma_client = MagicMock()
     shared_manager = SimpleNamespace(pod_id="pod-xyz")
@@ -227,7 +227,7 @@ async def test_schedule_background_health_check_db_save_invalid_no_event_loop_ra
 
     import litellm.proxy.health_endpoints._health_endpoints as he
 
-    monkeypatch.setattr(he, "_save_background_health_checks_to_db", _fake_save)
+    monkeypatch.setattr(he, "save_background_health_checks_to_db", _fake_save)
 
     def _broken_create_task(_coro):
         raise RuntimeError("no running event loop")
@@ -261,7 +261,7 @@ def _capture_saves(monkeypatch, persisted=True):
 
     import litellm.proxy.health_endpoints._health_endpoints as he
 
-    monkeypatch.setattr(he, "_save_background_health_checks_to_db", _fake_save)
+    monkeypatch.setattr(he, "save_background_health_checks_to_db", _fake_save)
     return saves
 
 
@@ -271,7 +271,7 @@ def _cancel_during_save(monkeypatch):
 
     import litellm.proxy.health_endpoints._health_endpoints as he
 
-    monkeypatch.setattr(he, "_save_background_health_checks_to_db", _fake_save)
+    monkeypatch.setattr(he, "save_background_health_checks_to_db", _fake_save)
 
 
 def _schedule_with(lock_manager):
