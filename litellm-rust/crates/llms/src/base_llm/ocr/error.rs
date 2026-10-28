@@ -59,7 +59,7 @@ pub enum Error {
     Pages(PagesFault),
     #[error("invalid OCR features")]
     Features,
-    #[error("Invalid `outputContentFormat`. Expected 'text' or 'markdown'.")]
+    #[error("invalid OCR outputContentFormat, expected text or markdown")]
     OutputContentFormat,
     #[error("OCR model cannot be a dot segment")]
     DotModel,

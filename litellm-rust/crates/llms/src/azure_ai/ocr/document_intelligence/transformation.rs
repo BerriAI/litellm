@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_auth::{InputSource, Sourced};
@@ -143,6 +146,12 @@ struct AzureDocumentIntelligenceLine {
 struct AzureDocumentIntelligenceSpan {
     pub offset: usize,
     pub length: usize,
+}
+
+impl AzureDocumentIntelligenceSpan {
+    fn end(&self) -> usize {
+        self.offset.saturating_add(self.length)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -436,7 +445,9 @@ fn transform_completed_response(
             result.content_format.as_deref() == Some(<&str>::from(OutputContentFormat::Markdown))
                 && result.string_index_type.as_deref() == Some(CODE_POINT_STRING_INDEX)
         })
-        .map(CodePointText::new);
+        .map(|content| {
+            CodePointText::new(content, result.pages.iter().flat_map(|page| &page.spans))
+        });
     let pages = result
         .pages
         .into_iter()
@@ -494,17 +505,24 @@ fn transform_azure_page(
 
 struct CodePointText<'a> {
     text: &'a str,
-    byte_offsets: Vec<usize>,
+    byte_offsets: BTreeMap<usize, usize>,
 }
 
 impl<'a> CodePointText<'a> {
-    fn new(text: &'a str) -> Self {
+    fn new<'s>(
+        text: &'a str,
+        spans: impl Iterator<Item = &'s AzureDocumentIntelligenceSpan>,
+    ) -> Self {
+        let span_bounds = spans
+            .flat_map(|span| [span.offset, span.end()])
+            .collect::<BTreeSet<_>>();
         Self {
             text,
             byte_offsets: text
                 .char_indices()
                 .map(|(byte_offset, _)| byte_offset)
-                .chain(std::iter::once(text.len()))
+                .enumerate()
+                .filter(|(code_point, _)| span_bounds.contains(code_point))
                 .collect(),
         }
     }
@@ -512,12 +530,12 @@ impl<'a> CodePointText<'a> {
     fn slice(&self, span: &AzureDocumentIntelligenceSpan) -> &'a str {
         let byte_offset = |code_point: usize| {
             self.byte_offsets
-                .get(code_point)
+                .get(&code_point)
                 .copied()
                 .unwrap_or(self.text.len())
         };
         self.text
-            .get(byte_offset(span.offset)..byte_offset(span.offset.saturating_add(span.length)))
+            .get(byte_offset(span.offset)..byte_offset(span.end()))
             .unwrap_or_default()
     }
 }
