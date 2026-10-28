@@ -1,10 +1,16 @@
 import json
+from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
+from pydantic import ValidationError
 
 import litellm
 from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
+from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.types.utils import (
@@ -486,6 +492,46 @@ def test_transform_messages_helper_strips_thinking_blocks_but_keeps_reasoning_co
     assert "thinking_blocks" not in out[1]
     assert out[1]["reasoning_content"] == "internal"
     assert out[1]["content"] == "I can help."
+
+
+def test_tool_search_reply_sent_to_fireworks_drops_litellm_response_fields():
+    tool_search_reply = {
+        "role": "assistant",
+        "content": "",
+        "reasoning_items": [{"type": "reasoning", "id": "rs_1", "summary": []}],
+        "provider_specific_fields": {"tool_search_items": [{"type": "tool_search_call", "id": "ts_1"}]},
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                "provider_specific_fields": {"namespace": "weather"},
+            }
+        ],
+    }
+    request = FireworksAIConfig().transform_request(
+        model="accounts/fireworks/models/gpt-oss-120b",
+        messages=[
+            {"role": "user", "content": "Weather in Paris?"},
+            tool_search_reply,
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][1] == {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+            }
+        ],
+    }
 
 
 # -----------------------------------------------------------------------------
@@ -1781,8 +1827,534 @@ def test_streaming_preserves_selected_model_for_private_accounting():
     [
         ("deepseek-r1", "fireworks_ai/accounts/fireworks/models/deepseek-r1"),
         ("glm-5p3-fast", "fireworks_ai/accounts/fireworks/routers/glm-5p3-fast"),
+        ("auto", "fireworks_ai/accounts/fireworks/routers/auto"),
         ("accounts/fireworks/models/deepseek-r1", "fireworks_ai/accounts/fireworks/models/deepseek-r1"),
     ],
 )
 def test_get_model_cost_key_resolves_short_names_to_long_keys(model: str, expected: str) -> None:
     assert FireworksAIConfig().get_model_cost_key(model) == expected
+
+
+_LISTED_ROUTERS = ("auto", "auto-instant", "firerouter")
+
+
+@pytest.mark.parametrize("router", _LISTED_ROUTERS)
+def test_listed_router_short_name_resolves_to_its_catalog_row_and_accepts_tool_choice_and_reasoning(
+    router: str,
+) -> None:
+    info = litellm.get_model_info(model=f"fireworks_ai/{router}")
+    params = FireworksAIConfig().get_supported_openai_params(router)
+
+    assert info["key"] == f"fireworks_ai/accounts/fireworks/routers/{router}"
+    assert {"tools", "tool_choice", "reasoning_effort"} <= set(params), params
+
+
+@pytest.mark.parametrize(
+    "router",
+    [
+        "firerouter/opus",
+        "firerouter/auto",
+        "firerouter/auto-instant",
+        "firerouter/kimi-k3/glm-5p3",
+        "fireworks_ai/firerouter/opus",
+        "accounts/fireworks/routers/firerouter/opus",
+    ],
+)
+def test_custom_firerouter_id_accepts_the_same_tool_choice_and_reasoning_params_as_firerouter(router: str) -> None:
+    params: Final = FireworksAIConfig().get_supported_openai_params(router)
+
+    assert {"tools", "tool_choice", "reasoning_effort"} <= set(params), params
+
+
+@pytest.mark.parametrize("model", ["firerouter-v2", "models/firerouter-opus", "routers/firerouter-opus"])
+def test_names_that_only_start_with_firerouter_do_not_inherit_the_firerouter_row(model: str) -> None:
+    params: Final = FireworksAIConfig().get_supported_openai_params(model)
+
+    assert "tool_choice" not in params, params
+
+
+class _RecordingChatHandler:
+    def __init__(self, reply: dict[str, object]) -> None:
+        self.reply: Final = reply
+        self.request_body: dict[str, object] | None = None
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.request_body = json.loads(request.content)
+        return httpx.Response(200, json=self.reply, request=request)
+
+
+@pytest.mark.parametrize("router", _LISTED_ROUTERS)
+def test_listed_router_request_is_sent_to_the_router_resource_and_billed_at_the_served_models_rate(router: str) -> None:
+    served_model: Final = "glm-5p3-flash"
+    handler: Final = _RecordingChatHandler(
+        {
+            "id": f"chat-{router}",
+            "object": "chat.completion",
+            "created": 1,
+            "model": served_model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 23, "completion_tokens": 41, "total_tokens": 64},
+        }
+    )
+
+    response: Final = litellm.completion(
+        model=f"fireworks_ai/{router}",
+        messages=[{"role": "user", "content": "ping"}],
+        api_key="fw-test-key",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))),
+    )
+
+    served_info: Final = litellm.model_cost[f"fireworks_ai/{served_model}"]
+    expected_cost: Final = 23 * served_info["input_cost_per_token"] + 41 * served_info["output_cost_per_token"]
+    assert handler.request_body is not None
+    assert handler.request_body["model"] == f"accounts/fireworks/routers/{router}"
+    assert expected_cost > 0
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+
+def test_map_openai_params_tool_choice():
+    # Test case 1: tool_choice is "required"
+    result = fireworks.map_openai_params(
+        {"tool_choice": "required"}, {}, "some_model", drop_params=False
+    )
+    assert result == {"tool_choice": "any"}
+
+    # Test case 2: tool_choice is "auto"
+    result = fireworks.map_openai_params(
+        {"tool_choice": "auto"}, {}, "some_model", drop_params=False
+    )
+    assert result == {"tool_choice": "auto"}
+
+    # Test case 3: tool_choice is not present
+    result = fireworks.map_openai_params(
+        {"some_other_param": "value"}, {}, "some_model", drop_params=False
+    )
+    assert result == {}
+
+    # Test case 4: tool_choice is None
+    result = fireworks.map_openai_params(
+        {"tool_choice": None}, {}, "some_model", drop_params=False
+    )
+    assert result == {"tool_choice": None}
+
+
+def test_map_response_format():
+    """
+    json_schema response_format is passed through to Fireworks unchanged.
+
+    Fireworks accepts the OpenAI strict json_schema shape natively. The earlier
+    downgrade to {type: json_object, schema: ...} silently dropped `strict` and
+    `name`, producing a request that Fireworks treats as "any valid JSON" per
+    its docs, disabling grammar-guided decoding.
+
+    Ref: https://docs.fireworks.ai/structured-responses/structured-response-formatting
+    """
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "schema": {
+                "properties": {"result": {"type": "boolean"}},
+                "required": ["result"],
+                "type": "object",
+            },
+            "name": "BooleanResponse",
+            "strict": True,
+        },
+    }
+    result = fireworks.map_openai_params(
+        {"response_format": response_format}, {}, "some_model", drop_params=False
+    )
+    assert result == {"response_format": response_format}
+
+
+def test_get_supported_openai_params_transcription_returns_none():
+    # Fireworks AI deprecated audio transcription on 2026-06-10; the endpoint
+    # is decommissioned. Returning None (not chat-completion params) signals
+    # to callers that transcription is unsupported for this provider.
+    result = get_supported_openai_params(
+        model="fireworks_ai/accounts/fireworks/models/whisper-v3",
+        custom_llm_provider="fireworks_ai",
+        request_type="transcription",
+    )
+    assert result is None
+
+
+@pytest.mark.parametrize(
+    "content, expected_url",
+    [
+        (
+            {"image_url": "http://example.com/image.png"},
+            "http://example.com/image.png",
+        ),
+        (
+            {"image_url": {"url": "http://example.com/image.png"}},
+            {"url": "http://example.com/image.png"},
+        ),
+        (
+            {"image_url": "data:image/png;base64,iVBORw0KGgo="},
+            "data:image/png;base64,iVBORw0KGgo=",
+        ),
+        (
+            {"image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ=="}},
+            {"url": "data:image/jpeg;base64,/9j/4AAQ=="},
+        ),
+        (
+            {"image_url": "Data:image/png;base64,iVBORw0KGgo="},
+            "Data:image/png;base64,iVBORw0KGgo=",
+        ),
+    ],
+)
+def test_transform_inline_no_longer_added(content, expected_url):
+    image_block = {"type": "image_url", **content}
+    messages = [{"role": "user", "content": [image_block]}]
+
+    result = litellm.FireworksAIConfig()._transform_messages_helper(
+        messages=messages,
+        model=VISION_MODEL,
+        litellm_params={},
+    )
+    result_image_block = result[0]["content"][0]
+    if isinstance(expected_url, str):
+        assert result_image_block["image_url"] == expected_url
+    else:
+        assert result_image_block["image_url"]["url"] == expected_url["url"]
+
+
+@pytest.mark.parametrize(
+    "is_disabled",
+    [True, False],
+)
+def test_global_disable_flag_no_longer_adds_transform_inline(is_disabled):
+    url = "http://example.com/image.png"
+    litellm.disable_add_transform_inline_image_block = is_disabled
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": url}],
+        }
+    ]
+    result = litellm.FireworksAIConfig()._transform_messages_helper(
+        messages=messages,
+        model=VISION_MODEL,
+        litellm_params={},
+    )
+    assert result[0]["content"][0]["image_url"] == url
+    litellm.disable_add_transform_inline_image_block = False  # Reset for other tests
+
+
+fireworks = FireworksAIConfig()
+
+
+VISION_MODEL = next(
+    key.removeprefix("fireworks_ai/")
+    for key, info in litellm.model_cost.items()
+    if key.startswith("fireworks_ai/accounts/fireworks/models/") and info.get("supports_vision") is True
+)
+
+
+_CHAT_REPLY: Final = {
+    "id": "chat-1",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "accounts/fireworks/models/llama-v3p1-8b-instruct",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+}
+_FIREWORKS_BASE: Final = "https://api.fireworks.ai/inference/v1"
+_MODELS_URL: Final = f"{_FIREWORKS_BASE}/accounts/acct/models"
+
+
+def _complete_against_reply(reply: object) -> ModelResponse:
+    return litellm.completion(
+        model="fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct",
+        messages=[{"role": "user", "content": "ping"}],
+        api_key="fw-test-key",
+        client=HTTPHandler(
+            client=httpx.Client(
+                transport=httpx.MockTransport(lambda request: httpx.Response(200, json=reply, request=request))
+            )
+        ),
+    )
+
+
+def test_completion_keeps_unmodelled_reply_fields_and_nested_fireworks_metrics() -> None:
+    perf_metrics: Final = {"ttft": 0.1, "per_stage": [{"name": "prefill", "ms": None}]}
+
+    response: Final = _complete_against_reply(
+        {
+            **_CHAT_REPLY,
+            "system_fingerprint": None,
+            "service_tier": "default",
+            "x-trace": {"spans": [1, 2]},
+            "perf_metrics": perf_metrics,
+            "prompt_token_ids": [7, 8, 9],
+        }
+    )
+
+    assert response.model == "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct"
+    assert response.choices[0].message.content == "pong"
+    assert response.model_dump()["service_tier"] == "default"
+    assert response.model_dump()["x-trace"] == {"spans": [1, 2]}
+    assert response._hidden_params["fireworks_perf_metrics"] == perf_metrics
+    assert response._hidden_params["fireworks_prompt_token_ids"] == [7, 8, 9]
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [pytest.param([_CHAT_REPLY], id="list"), pytest.param("pong", id="string"), pytest.param(7, id="number")],
+)
+def test_completion_with_non_object_reply_raises_api_connection_error(reply: object) -> None:
+    with pytest.raises(litellm.APIConnectionError):
+        _complete_against_reply(reply)
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        pytest.param(
+            {"models": [{"name": "accounts/acct/models/a", "state": {"ready": [True]}}, {"name": "b"}], "totalSize": 2},
+            ["fireworks_ai/accounts/acct/models/a", "fireworks_ai/b"],
+            id="listed-models",
+        ),
+        pytest.param({"models": []}, [], id="empty-list"),
+        pytest.param({"models": ""}, [], id="models-empty-string"),
+        pytest.param({"models": {}}, [], id="models-empty-object"),
+        pytest.param({"models": [{"name": ""}]}, ["fireworks_ai/"], id="empty-name"),
+    ],
+)
+def test_get_models_prefixes_each_listed_name(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, body: dict[str, object], expected: list[str]
+) -> None:
+    monkeypatch.setenv("FIREWORKS_ACCOUNT_ID", "acct")
+    respx_mock.get(_MODELS_URL).respond(200, json=body)
+
+    assert FireworksAIConfig().get_models(api_key="fw-test-key", api_base=_FIREWORKS_BASE) == expected
+
+
+@pytest.mark.parametrize(
+    ("body", "missing_key"),
+    [
+        pytest.param({"data": []}, "models", id="no-models-key"),
+        pytest.param({"models": [{"name": "a"}, {"id": "b"}]}, "name", id="entry-without-name"),
+    ],
+)
+def test_get_models_raises_key_error_for_missing_field(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, body: dict[str, object], missing_key: str
+) -> None:
+    monkeypatch.setenv("FIREWORKS_ACCOUNT_ID", "acct")
+    respx_mock.get(_MODELS_URL).respond(200, json=body)
+
+    with pytest.raises(KeyError, match=missing_key):
+        FireworksAIConfig().get_models(api_key="fw-test-key", api_base=_FIREWORKS_BASE)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param([{"name": "a"}], id="top-level-list"),
+        pytest.param({"models": None}, id="models-null"),
+        pytest.param({"models": ["a"]}, id="entry-not-an-object"),
+        pytest.param({"models": [{"name": 7}]}, id="name-not-a-string"),
+    ],
+)
+def test_get_models_rejects_malformed_listing(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, body: object
+) -> None:
+    monkeypatch.setenv("FIREWORKS_ACCOUNT_ID", "acct")
+    respx_mock.get(_MODELS_URL).respond(200, json=body)
+
+    with pytest.raises(ValidationError):
+        FireworksAIConfig().get_models(api_key="fw-test-key", api_base=_FIREWORKS_BASE)
+
+
+def _fireworks_chat_client() -> MagicMock:
+    body: Final = {
+        "id": "chat-user-attribution",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "accounts/fireworks/models/kimi-k3",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    raw_response: Final = MagicMock()
+    raw_response.status_code = 200
+    raw_response.headers = {}
+    raw_response.text = json.dumps(body)
+    raw_response.json = lambda: body
+    client: Final = MagicMock(spec=HTTPHandler)
+    client.post.return_value = raw_response
+    return client
+
+
+@pytest.mark.parametrize(
+    "call_kwargs, expected_user",
+    [
+        pytest.param(
+            {"fireworks_forward_user_id": True, "metadata": {"user_api_key_user_id": "dev-alice"}},
+            "dev-alice",
+            id="opted-in-sends-litellm-user-id",
+        ),
+        pytest.param(
+            {"fireworks_forward_user_id": True, "metadata": {"user_api_key_user_id": "dev-alice"}, "user": "caller"},
+            "dev-alice",
+            id="litellm-user-id-replaces-caller-user",
+        ),
+        pytest.param(
+            {"fireworks_forward_user_id": True, "litellm_metadata": {"user_api_key_user_id": "dev-bob"}},
+            "dev-bob",
+            id="reads-litellm-metadata",
+        ),
+        pytest.param(
+            {
+                "fireworks_forward_user_id": True,
+                "metadata": {"tags": ["caller-tag"]},
+                "litellm_metadata": {"user_api_key_user_id": "dev-bob"},
+            },
+            "dev-bob",
+            id="reads-litellm-metadata-next-to-caller-metadata",
+        ),
+        pytest.param(
+            {"fireworks_forward_user_id": True, "metadata": {"user_api_key_user_id": ""}, "user": "caller"},
+            "caller",
+            id="empty-litellm-user-id-keeps-caller-user",
+        ),
+        pytest.param(
+            {"fireworks_forward_user_id": True, "metadata": {"user_api_key_user_id": None}, "user": "caller"},
+            "caller",
+            id="no-litellm-user-id-keeps-caller-user",
+        ),
+        pytest.param(
+            {"fireworks_forward_user_id": True, "metadata": {"user_api_key_user_id": None}},
+            None,
+            id="no-litellm-user-id-sends-no-user",
+        ),
+        pytest.param(
+            {"metadata": {"user_api_key_user_id": "dev-alice"}, "user": "caller"},
+            "caller",
+            id="not-opted-in-keeps-caller-user",
+        ),
+        pytest.param(
+            {"metadata": {"user_api_key_user_id": "dev-alice"}},
+            None,
+            id="not-opted-in-sends-no-user",
+        ),
+        pytest.param(
+            {"fireworks_forward_user_id": "true", "metadata": {"user_api_key_user_id": "dev-alice"}},
+            None,
+            id="non-bool-flag-is-off",
+        ),
+        pytest.param(
+            {
+                "fireworks_forward_user_id": True,
+                "metadata": {"user_api_key_user_id": "dev-alice"},
+                "extra_body": {"user": "dev-bob", "prompt_cache_max_len": 1},
+            },
+            "dev-alice",
+            id="litellm-user-id-replaces-extra-body-user",
+        ),
+        pytest.param(
+            {"metadata": {"user_api_key_user_id": "dev-alice"}, "extra_body": {"user": "dev-bob"}},
+            "dev-bob",
+            id="not-opted-in-keeps-extra-body-user",
+        ),
+    ],
+)
+def test_completion_forwards_litellm_user_id_as_user(call_kwargs: dict[str, object], expected_user: str | None) -> None:
+    client: Final = _fireworks_chat_client()
+    litellm.completion(
+        model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="fw-test-key",
+        client=client,
+        **call_kwargs,
+    )
+    request_body: Final = json.loads(client.post.call_args.kwargs["data"])
+    assert request_body.get("user") == expected_user
+    assert "fireworks_forward_user_id" not in request_body
+
+
+def test_completion_forwards_litellm_user_id_when_streaming() -> None:
+    client: Final = _fireworks_chat_client()
+    client.post.return_value.iter_lines = lambda: iter(())
+    litellm.completion(
+        model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="fw-test-key",
+        client=client,
+        stream=True,
+        fireworks_forward_user_id=True,
+        metadata={"user_api_key_user_id": "dev-alice"},
+    )
+    request_body: Final = json.loads(client.post.call_args.kwargs["data"])
+    assert request_body["user"] == "dev-alice"
+    assert request_body["stream"] is True
+
+
+FIREWORKS_API_BASE: Final = "https://api.fireworks.ai/inference/v1"
+
+
+def _mock_fireworks_vision_completion(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post(f"{FIREWORKS_API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 1,
+                "model": VISION_MODEL,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("disable_add_transform_inline_image_block", [True, False])
+def test_document_inlining_example(
+    respx_mock: respx.MockRouter, disable_add_transform_inline_image_block: bool
+) -> None:
+    route: Final = _mock_fireworks_vision_completion(respx_mock)
+    content: Final = [
+        {
+            "type": "image_url",
+            "image_url": {"url": "https://storage.googleapis.com/fireworks-public/test/sample_resume.pdf"},
+        },
+        {"type": "text", "text": "What are the candidate's BA and MBA GPAs?"},
+    ]
+
+    litellm.completion(
+        model=f"fireworks_ai/{VISION_MODEL}",
+        messages=[{"role": "user", "content": json.loads(json.dumps(content))}],
+        disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
+        api_key="fireworks-test-key",
+        api_base=FIREWORKS_API_BASE,
+    )
+
+    assert json.loads(route.calls.last.request.content)["messages"] == [{"role": "user", "content": content}]
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_global_disable_flag_with_transform_messages_helper(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_add_transform_inline_image_block", True)
+    route: Final = _mock_fireworks_vision_completion(respx_mock)
+    content: Final = [
+        {"type": "text", "text": "What's in this image?"},
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png"
+            },
+        },
+    ]
+
+    litellm.completion(
+        model=f"fireworks_ai/{VISION_MODEL}",
+        messages=[{"role": "user", "content": json.loads(json.dumps(content))}],
+        api_key="fireworks-test-key",
+        api_base=FIREWORKS_API_BASE,
+    )
+
+    assert json.loads(route.calls.last.request.content)["messages"] == [{"role": "user", "content": content}]

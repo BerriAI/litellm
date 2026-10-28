@@ -148,6 +148,7 @@ class RepelloAIGuardrail(CustomGuardrail):
         guardrail_name: str | None = None,
         event_hook: (GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None) = None,
         default_on: bool = False,
+        timeout: float | None = None,
     ):
         self.repelloai_api_key = api_key or get_secret_str("ARGUS_API_KEY") or get_secret_str("REPELLOAI_API_KEY") or ""
         if not self.repelloai_api_key:
@@ -176,6 +177,7 @@ class RepelloAIGuardrail(CustomGuardrail):
             event_hook=event_hook,
             default_on=default_on,
             supported_event_hooks=list(self.get_supported_event_hooks()),
+            timeout=timeout,
         )
 
     async def _call_analyze(
@@ -201,6 +203,7 @@ class RepelloAIGuardrail(CustomGuardrail):
                 url=endpoint,
                 headers={"X-API-Key": self.repelloai_api_key},
                 json=request,
+                timeout=self.timeout,
             )
             self._raise_for_config_error(response)
             response.raise_for_status()

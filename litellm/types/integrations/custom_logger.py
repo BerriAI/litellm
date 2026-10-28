@@ -1,18 +1,29 @@
 from collections.abc import Mapping
 from typing import Any, Final
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from litellm.types.litellm_params import AgenticSurface
+from litellm.types.llms.base import LiteLLMBaseModel
 
 CHAT_COMPLETION_AGENTIC_SURFACE: Final[AgenticSurface] = "chat_completions"
 RESPONSES_AGENTIC_SURFACE: Final[AgenticSurface] = "responses"
 CODE_INTERPRETER_INTERCEPTION_PREFIX: Final = "_code_interpreter_interception"
 HEADROOM_INTERCEPTION_PREFIX: Final = "_headroom_interception"
+WEBSEARCH_INTERCEPTION_PREFIX: Final = "_websearch_interception"
 HEADROOM_CONVERTED_STREAM_KEY: Final = f"{HEADROOM_INTERCEPTION_PREFIX}_converted_stream"
+WEBSEARCH_CONVERTED_STREAM_KEY: Final = f"{WEBSEARCH_INTERCEPTION_PREFIX}_converted_stream"
+WEBSEARCH_STREAM_OPTIONS_KEY: Final = f"{WEBSEARCH_INTERCEPTION_PREFIX}_stream_options"
+CODE_INTERPRETER_STREAM_OPTIONS_KEY: Final = f"{CODE_INTERPRETER_INTERCEPTION_PREFIX}_stream_options"
+HEADROOM_STREAM_OPTIONS_KEY: Final = f"{HEADROOM_INTERCEPTION_PREFIX}_stream_options"
+STREAM_OPTIONS_STASH_KEYS: Final = (
+    CODE_INTERPRETER_STREAM_OPTIONS_KEY,
+    HEADROOM_STREAM_OPTIONS_KEY,
+    WEBSEARCH_STREAM_OPTIONS_KEY,
+)
 NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES: Final = frozenset(
     (
-        "_websearch_interception",
+        WEBSEARCH_INTERCEPTION_PREFIX,
         "_compression_interception",
         HEADROOM_INTERCEPTION_PREFIX,
     )
@@ -39,6 +50,23 @@ def converted_stream_requested(params: Mapping[str, object]) -> bool:
     return any(bool(params.get(key)) for key in CONVERTED_STREAM_KEYS)
 
 
+def as_converted_stream(
+    params: Mapping[str, object], prefix: str
+) -> dict[str, object]:  # mutable-ok: deployment hooks hand back the kwargs dict their caller keeps editing
+    stream_options: Final = params.get("stream_options")
+    stash: Final = {} if stream_options is None else {f"{prefix}_stream_options": stream_options}
+    return {
+        **{key: value for key, value in params.items() if key != "stream_options"},
+        "stream": False,
+        f"{prefix}_converted_stream": True,
+        **stash,
+    }
+
+
+def stashed_stream_options(params: Mapping[str, object]) -> object:
+    return next((params[key] for key in STREAM_OPTIONS_STASH_KEYS if params.get(key) is not None), None)
+
+
 class AgenticLoopSafetyError(ValueError):
     """
     Raised when an agentic-loop safety rail refuses a rerun.
@@ -54,7 +82,7 @@ class AgenticLoopSafetyError(ValueError):
     """
 
 
-class StandardCustomLoggerInitParams(BaseModel):
+class StandardCustomLoggerInitParams(LiteLLMBaseModel):
     """
     Params for initializing a CustomLogger.
     """
@@ -62,7 +90,7 @@ class StandardCustomLoggerInitParams(BaseModel):
     turn_off_message_logging: bool | None = False
 
 
-class AgenticLoopRequestPatch(BaseModel):
+class AgenticLoopRequestPatch(LiteLLMBaseModel):
     """
     Patch returned by callbacks to request a follow-up LLM call.
     """
@@ -75,7 +103,7 @@ class AgenticLoopRequestPatch(BaseModel):
     kwargs: dict[str, Any] = Field(default_factory=dict)
 
 
-class AgenticLoopPlan(BaseModel):
+class AgenticLoopPlan(LiteLLMBaseModel):
     """
     Typed callback response for agentic-loop reruns.
     """

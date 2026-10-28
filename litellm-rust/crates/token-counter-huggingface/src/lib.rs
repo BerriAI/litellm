@@ -13,11 +13,11 @@ pub use tokenizers::{
 };
 
 pub fn encoding_from_json(json: &str) -> Result<Encoding, Error> {
-    serde_json::from_str(json).map_err(|error| Error::Load(error.into()))
+    serde_json::from_str(json).map_err(Error::EncodingJson)
 }
 
 pub fn encoding_to_json(encoding: &Encoding) -> Result<String, Error> {
-    serde_json::to_string(encoding).map_err(|error| Error::Load(error.into()))
+    serde_json::to_string(encoding).map_err(Error::EncodingJson)
 }
 
 pub struct HuggingFaceTokenizer {
@@ -183,8 +183,13 @@ mod tests {
         assert_eq!(tokenizer.decode(&ids, true).unwrap(), "hello");
     }
 
-    #[test]
-    fn decode_filters_special_added_tokens() {
+    #[rstest::rstest]
+    #[case::skip_special_tokens(true, false)]
+    #[case::keep_special_tokens(false, true)]
+    fn decode_filters_special_added_tokens(
+        #[case] skip_special_tokens: bool,
+        #[case] includes_special_token: bool,
+    ) {
         let json = r#"{
             "version": "1.0",
             "truncation": null,
@@ -212,8 +217,13 @@ mod tests {
         }"#;
         let tokenizer = HuggingFaceTokenizer::from_json(json).unwrap();
 
-        assert!(!tokenizer.decode(&[1, 2], true).unwrap().contains("<s>"));
-        assert!(tokenizer.decode(&[1, 2], false).unwrap().contains("<s>"));
+        assert_eq!(
+            tokenizer
+                .decode(&[1, 2], skip_special_tokens)
+                .unwrap()
+                .contains("<s>"),
+            includes_special_token
+        );
     }
 
     #[test]

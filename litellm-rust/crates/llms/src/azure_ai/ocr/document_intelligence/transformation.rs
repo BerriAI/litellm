@@ -3,28 +3,27 @@ use std::{collections::BTreeSet, time::Duration};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::{AzureAuthInputs, SECRET_NAMES as AZURE_AUTH_SECRET_NAMES};
-use litellm_core_utils::{
-    call_arguments::CallArguments,
-    serde_compat::{FiniteF64, LaxI64},
-    url_utils::ApiUrl,
-};
+use litellm_core_utils::{call_arguments::CallArguments, url_utils::ApiUrl};
+use litellm_llms_types::serde_compat::{FiniteF64, LaxI64};
 use reqwest::Url;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use serde_with::serde_as;
 use tokio::time::Instant;
 
 use crate::base_llm::ocr::{
     document::InlineDocument,
-    error::Error,
+    error::{Error, PagesFault, PollUrl},
     handler::{CallHooks, OcrClient, read_json_response},
     settings::OcrSettings,
     transformation::{
-        BaseOcrConfig, DecodedOcrResponse, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES,
-        OCR_POLL_RETRY_SECS, OcrConnection, OcrCredentialInputs, OcrDocument, OcrPage,
-        OcrPageDimensions, OcrResponseContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
+        BaseOcrConfig, DecodedOcrResponse, OCR_INLINE_MAX_BYTES, OCR_POLL_RETRY_SECS,
+        OcrConnection, OcrCredentialInputs, OcrResponseContext, PreparedOcrRequest,
         ResolvedOcrCredentials, decode_and_normalize_response, decode_response,
     },
+};
+use litellm_llms_types::formats::ocr::{
+    LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrResponseFormat, OcrUsageInfo,
 };
 
 const AZURE_DI_SUBSCRIPTION_HEADER: &str = "Ocp-Apim-Subscription-Key";
@@ -55,37 +54,20 @@ pub enum DocumentIntelligenceRequest {
     },
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(
+    Clone, Debug, PartialEq, strum::EnumString, strum::Display, serde_with::DeserializeFromStr,
+)]
 enum OperationStatus {
+    #[strum(serialize = "succeeded")]
     Succeeded,
+    #[strum(serialize = "running")]
     Running,
+    #[strum(serialize = "notStarted")]
     NotStarted,
+    #[strum(serialize = "failed")]
     Failed,
+    #[strum(default, transparent)]
     Unknown(String),
-}
-
-impl<'de> Deserialize<'de> for OperationStatus {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(match String::deserialize(deserializer)?.as_str() {
-            "succeeded" => Self::Succeeded,
-            "running" => Self::Running,
-            "notStarted" => Self::NotStarted,
-            "failed" => Self::Failed,
-            value => Self::Unknown(value.to_string()),
-        })
-    }
-}
-
-impl std::fmt::Display for OperationStatus {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Succeeded => "succeeded",
-            Self::Running => "running",
-            Self::NotStarted => "notStarted",
-            Self::Failed => "failed",
-            Self::Unknown(value) => value,
-        })
-    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -203,7 +185,10 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
     ) -> Result<String, Error> {
         let endpoint = nonblank(request.connection.api_base.clone())
             .or_else(|| nonblank(request.connection.secret(AZURE_DI_ENDPOINT_ENV)))
-            .ok_or_else(|| Error::Auth(litellm_auth::Error::ProviderAuthentication("Missing Azure Document Intelligence API Base - Set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT or pass api_base".into())))?;
+            .ok_or(Error::Auth(litellm_auth::Error::MissingApiBase {
+                provider: "Azure Document Intelligence",
+                guidance: "Set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT or pass api_base",
+            }))?;
         self.build_ocr_url(
             &endpoint,
             &request.model,
@@ -274,14 +259,12 @@ fn normalize_pages_param(pages: Option<&Value>) -> Result<Option<String>, Error>
         Some(Value::Array(pages)) if pages.iter().all(Value::is_number) => pages
             .iter()
             .map(|page| {
-                let page = page
-                    .as_i64()
-                    .ok_or_else(|| Error::Pages("page index is out of range".into()))?;
+                let page = page.as_i64().ok_or(Error::Pages(PagesFault::OutOfRange))?;
                 if page < 0 {
-                    return Err(Error::Pages("negative page index".into()));
+                    return Err(Error::Pages(PagesFault::Negative));
                 }
                 page.checked_add(1)
-                    .ok_or_else(|| Error::Pages("page index is out of range".into()))
+                    .ok_or(Error::Pages(PagesFault::OutOfRange))
             })
             .collect::<Result<BTreeSet<_>, _>>()?
             .into_iter()
@@ -294,7 +277,7 @@ fn normalize_pages_param(pages: Option<&Value>) -> Result<Option<String>, Error>
                 token
                     .as_str()
                     .map(str::trim)
-                    .ok_or_else(|| Error::Pages("expected only integers or only strings".into()))
+                    .ok_or(Error::Pages(PagesFault::Mixed))
             })
             .collect::<Result<Vec<_>, _>>()?
             .join(","),
@@ -304,13 +287,11 @@ fn normalize_pages_param(pages: Option<&Value>) -> Result<Option<String>, Error>
             .collect::<Vec<_>>()
             .join(","),
         Some(_) => {
-            return Err(Error::Pages(
-                "expected an array of integers or strings, or a native page range".into(),
-            ));
+            return Err(Error::Pages(PagesFault::Shape));
         }
     };
     if !normalized.split(',').all(valid_page_token) {
-        return Err(Error::Pages("invalid native page range".into()));
+        return Err(Error::Pages(PagesFault::Range));
     }
     Ok(Some(normalized))
 }
@@ -476,8 +457,14 @@ async fn read_operation_response(
         .and_then(|value| value.to_str().ok())
         .ok_or(Error::PollLocation)?
         .to_string();
-    let original = Url::parse(original_url).map_err(|_| Error::PollOrigin)?;
-    let operation = Url::parse(&location).map_err(|_| Error::PollOrigin)?;
+    let original = Url::parse(original_url).map_err(|source| Error::InvalidPollUrl {
+        url: PollUrl::Submission,
+        source,
+    })?;
+    let operation = Url::parse(&location).map_err(|source| Error::InvalidPollUrl {
+        url: PollUrl::OperationLocation,
+        source,
+    })?;
     if original.origin() != operation.origin()
         || !operation.username().is_empty()
         || operation.password().is_some()
@@ -522,8 +509,7 @@ async fn poll_operation(
         let response =
             tokio::time::timeout_at(deadline, litellm_http::request::http_request(builder))
                 .await
-                .map_err(|_| Error::PollTimeout)?
-                .map_err(litellm_http::transport::Error::from)?;
+                .map_err(|_| Error::PollTimeout)??;
         let retry = response
             .headers()
             .get(reqwest::header::RETRY_AFTER)
@@ -596,9 +582,7 @@ impl AzureDocumentIntelligenceOcrConfig {
                 )
                 .into_string()
             })
-            .map_err(|_| Error::RequestField {
-                path: "api_base".into(),
-            })
+            .map_err(|error| Error::request_field("api_base", error))
     }
 
     async fn resolve_headers(
@@ -641,7 +625,10 @@ impl AzureDocumentIntelligenceOcrConfig {
         }
         let token = super::super::common_utils::resolve_entra(auth, config, env_lookup)
             .await?
-            .ok_or(Error::MissingAzureDocumentIntelligenceCredentials)?;
+            .ok_or(Error::MissingCredential {
+                credential: "Azure Document Intelligence credentials",
+                guidance: "set AZURE_DOCUMENT_INTELLIGENCE_API_KEY or configure Entra ID",
+            })?;
         super::super::common_utils::validate_destination(connection, token.source())?;
         Ok(
             std::iter::once(("Authorization".into(), format!("Bearer {}", token.value())))
@@ -671,6 +658,43 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+
+    #[rstest]
+    #[case::succeeded("succeeded", OperationStatus::Succeeded)]
+    #[case::running("running", OperationStatus::Running)]
+    #[case::not_started("notStarted", OperationStatus::NotStarted)]
+    #[case::failed("failed", OperationStatus::Failed)]
+    fn operation_status_parses_known_values(
+        #[case] input: &str,
+        #[case] expected: OperationStatus,
+    ) {
+        let parsed = serde_json::from_value::<OperationStatus>(json!(input)).unwrap();
+
+        assert_eq!(parsed, expected);
+        assert_eq!(parsed.to_string(), input);
+    }
+
+    #[rstest]
+    #[case::unknown("queued")]
+    #[case::case_sensitive("NotStarted")]
+    #[case::escaped("future\"\\\n")]
+    #[case::empty("")]
+    fn operation_status_preserves_unknown_values(#[case] input: &str) {
+        let parsed = serde_json::from_value::<OperationStatus>(json!(input)).unwrap();
+
+        assert_eq!(parsed, OperationStatus::Unknown(input.into()));
+        assert_eq!(parsed.to_string(), input);
+    }
+
+    #[rstest]
+    #[case::number(json!(1))]
+    #[case::boolean(json!(true))]
+    #[case::array(json!([]))]
+    #[case::null(Value::Null)]
+    #[case::object(json!({"status": "succeeded"}))]
+    fn operation_status_rejects_non_string_json(#[case] input: Value) {
+        assert!(serde_json::from_value::<OperationStatus>(input).is_err());
+    }
 
     fn map(value: Value) -> Result<DocumentIntelligenceParams, Error> {
         let arguments = serde_json::from_value(value).unwrap();
@@ -823,7 +847,7 @@ mod tests {
             .unwrap_err();
 
         assert!(
-            error
+            litellm_error::Report::new(&error)
                 .to_string()
                 .contains("request-controlled Azure endpoint")
         );

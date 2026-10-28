@@ -13,12 +13,9 @@ def test_qdrant_semantic_cache_initialization(monkeypatch):
     """
     # Mock the httpx clients and API calls
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-        ) as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler.get_httpx_client") as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -75,12 +72,9 @@ def test_qdrant_semantic_cache_get_cache_hit():
     Verifies that cached results are properly retrieved and parsed.
     """
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-        ) as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler.get_httpx_client") as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -155,12 +149,9 @@ def test_qdrant_semantic_cache_rejects_unscoped_cache_hit():
     safely migrated to a generated LiteLLM cache key.
     """
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-        ) as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler.get_httpx_client") as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"result": {"exists": True}}
@@ -316,12 +307,9 @@ def test_qdrant_semantic_cache_get_cache_miss():
     Verifies that None is returned when no similar cached results are found.
     """
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-        ) as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler.get_httpx_client") as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -370,14 +358,9 @@ async def test_qdrant_semantic_cache_async_get_cache_hit():
     Verifies that cached results are properly retrieved and parsed asynchronously.
     """
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-        ) as mock_sync_client,
-        patch(
-            "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
-        ) as mock_async_client,
+        patch("litellm.llms.custom_httpx.http_handler.get_httpx_client") as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_async_client,
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -461,14 +444,9 @@ async def test_qdrant_semantic_cache_async_get_cache_miss():
     Verifies that None is returned when no similar cached results are found.
     """
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-        ) as mock_sync_client,
-        patch(
-            "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
-        ) as mock_async_client,
+        patch("litellm.llms.custom_httpx.http_handler.get_httpx_client") as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_async_client,
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -523,12 +501,9 @@ def test_qdrant_semantic_cache_set_cache():
     Verifies that responses are properly stored in the cache.
     """
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-        ) as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler.get_httpx_client") as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -588,14 +563,9 @@ async def test_qdrant_semantic_cache_async_set_cache():
     Verifies that responses are properly stored in the cache asynchronously.
     """
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-        ) as mock_sync_client,
-        patch(
-            "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
-        ) as mock_async_client,
+        patch("litellm.llms.custom_httpx.http_handler.get_httpx_client") as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_async_client,
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -661,12 +631,9 @@ def test_qdrant_semantic_cache_custom_vector_size():
     creation payload instead of the default 1536.
     """
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-        ) as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler.get_httpx_client") as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         # Mock the collection does NOT exist (so it will be created)
         mock_exists_response = MagicMock()
         mock_exists_response.status_code = 200
@@ -722,12 +689,9 @@ def test_qdrant_semantic_cache_default_vector_size():
     is not provided, and stores it as self.vector_size.
     """
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-        ) as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler.get_httpx_client") as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -758,12 +722,9 @@ def test_qdrant_semantic_cache_large_vector_size():
     for models like Stella, bge-en-icl, etc.
     """
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-        ) as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler.get_httpx_client") as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         # Mock the collection does NOT exist (so it will be created)
         mock_exists_response = MagicMock()
         mock_exists_response.status_code = 200

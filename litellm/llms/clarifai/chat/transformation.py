@@ -1,6 +1,8 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.common_utils import OpenAIError
@@ -19,6 +21,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class ClarifaiConfig(OpenAIGPTConfig):
@@ -72,6 +77,13 @@ class ClarifaiConfig(OpenAIGPTConfig):
         dynamic_api_key: Final = api_key or get_secret_str("CLARIFAI_API_KEY") or ""
         return api_base, dynamic_api_key
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
     def transform_request(self, model, messages, optional_params, litellm_params, headers):
         model = self.get_base_model(model) or model
         return super().transform_request(model, messages, optional_params, litellm_params, headers)
@@ -103,7 +115,7 @@ class ClarifaiConfig(OpenAIGPTConfig):
         )
         ## Reponse
         try:
-            completion_response: Final = raw_response.json()
+            completion_response: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise OpenAIError(
                 status_code=raw_response.status_code,
@@ -111,7 +123,7 @@ class ClarifaiConfig(OpenAIGPTConfig):
                 headers=raw_response.headers,
             ) from e
 
-        response: Final = ModelResponse(**completion_response)
+        response: Final = ModelResponse(**_JSON_OBJECT.validate_python(completion_response))
 
         if response.model is not None:
             response.model = "clarifai/" + model

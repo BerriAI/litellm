@@ -345,3 +345,54 @@ def test_fal_flux_dev_generation_without_deployment_api_base_uses_global_api_bas
                 }
             ]
             assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/fal-ai/flux/dev")]
+
+
+def test_fal_gpt_image_25_edit_sends_multipart_n_as_integer_num_images(gateway: Gateway) -> None:
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.headers["authorization"] == "Key synthetic-fal-key"
+        assert request.target == "/openai/gpt-image-2.5/flare/edit"
+        assert request.headers["content-type"] == "application/json"
+        assert _JSON_OBJECT.validate_json(request.body) == {
+            "prompt": _PROMPT,
+            "image_urls": ["data:image/png;base64," + base64.b64encode(_PNG_BYTES).decode()],
+            "num_images": 2,
+        }
+        return Reply(
+            body=_image_response(
+                (
+                    (f"{wire_url}/files/edit-1.png", 1024, 1536),
+                    (f"{wire_url}/files/edit-2.png", 1024, 1536),
+                ),
+                _PROMPT,
+            )
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        wire_url: Final = wire.url
+        model: Final = scenario.model(model=f"fal_ai/{_EDIT_MODEL}", api_base=wire.url, api_key="synthetic-fal-key")
+        response: Final = gateway.client.post(
+            "/v1/images/edits",
+            data={"model": model, "prompt": _PROMPT, "n": "2"},
+            files={"image": ("red_circle.png", _PNG_BYTES, "image/png")},
+            headers={"Authorization": f"Bearer {gateway.key}"},
+        )
+        assert response.status_code == 200, response.text
+        payload: Final = _JSON_OBJECT.validate_json(response.content)
+        assert payload["data"] == [
+            {
+                "url": f"{wire.url}/files/edit-1.png",
+                "b64_json": None,
+                "revised_prompt": None,
+                "provider_specific_fields": {"width": 1024, "height": 1536, "content_type": "image/png"},
+            },
+            {
+                "url": f"{wire.url}/files/edit-2.png",
+                "b64_json": None,
+                "revised_prompt": None,
+                "provider_specific_fields": {"width": 1024, "height": 1536, "content_type": "image/png"},
+            },
+        ]
+        assert [(request.method, request.target) for request in wire.drain()] == [
+            ("POST", "/openai/gpt-image-2.5/flare/edit")
+        ]

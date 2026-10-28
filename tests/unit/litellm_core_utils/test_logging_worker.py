@@ -6,12 +6,68 @@ import asyncio
 import contextvars
 import io
 import logging
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from litellm.constants import LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS
 from litellm.litellm_core_utils.logging_worker import LoggingWorker
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dispatch", ("worker", "flush", "extracted"))
+async def test_optional_work_budget_preserves_callback_context_and_reserves_logging_time(dispatch: str) -> None:
+    from litellm.litellm_core_utils.logging_worker import optional_callback_budget
+
+    worker: Final = LoggingWorker(timeout=1.0)
+    identity: Final = contextvars.ContextVar("test_callback_identity", default="outside")
+    results: Final[asyncio.Queue[tuple[str, float]]] = asyncio.Queue()
+
+    async def callback() -> None:
+        results.put_nowait((identity.get(), optional_callback_budget(3.0)))
+
+    token: Final = identity.set("request")
+    worker._ensure_queue()
+    worker.enqueue(callback())
+    identity.reset(token)
+    try:
+        if dispatch == "worker":
+            worker.start()
+        elif dispatch == "flush":
+            await worker.flush()
+        else:
+            assert worker._queue is not None
+            await worker._process_single_task(worker._queue.get_nowait())
+        restored_identity, budget = await asyncio.wait_for(results.get(), timeout=2)
+        assert restored_identity == "request"
+        assert 0 < budget <= worker.timeout / 4
+        assert identity.get() == "outside"
+        assert optional_callback_budget(3.0) == 3.0
+    finally:
+        await worker.stop()
+
+
+def test_exit_flush_bounds_optional_work_and_restores_callers_budget() -> None:
+    from queue import SimpleQueue
+
+    from litellm.litellm_core_utils.logging_worker import optional_callback_budget
+
+    worker: Final = LoggingWorker(timeout=1.0)
+    observed: Final[SimpleQueue[float]] = SimpleQueue()
+
+    async def callback() -> None:
+        observed.put(optional_callback_budget(3.0))
+
+    async def enqueue() -> None:
+        worker._ensure_queue()
+        worker.enqueue(callback())
+
+    asyncio.run(enqueue())
+    worker._flush_on_exit()
+    assert observed.qsize() == 1
+    assert 0 < observed.get_nowait() <= worker.timeout / 4
+    assert optional_callback_budget(3.0) == 3.0
 
 
 class _RecordCollector(logging.Handler):
@@ -179,6 +235,41 @@ class TestLoggingWorker:
         asyncio.run(second_script())
 
         assert sorted(fired) == ["first", "second"]
+
+    def test_callback_finishing_after_loop_change_settles_only_its_own_queue(self):
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10, concurrency=1)
+        fired = []
+
+        async def marker(name, delay=0.0):
+            await asyncio.sleep(delay)
+            fired.append(name)
+
+        async def start_slow_callback():
+            worker.ensure_initialized_and_enqueue(marker("slow", delay=0.05))
+            await asyncio.sleep(0.01)
+
+        async def log_on_second_loop():
+            for name in ("b1", "b2", "b3"):
+                worker.ensure_initialized_and_enqueue(marker(name))
+            for _ in range(2):
+                await asyncio.sleep(0)
+
+        first_loop = asyncio.new_event_loop()
+        try:
+            first_loop.run_until_complete(start_slow_callback())
+            first_loop_tasks = tuple(asyncio.all_tasks(first_loop))
+            asyncio.run(log_on_second_loop())
+            first_loop.run_until_complete(asyncio.sleep(0.1))
+            failures = [
+                task.exception()
+                for task in first_loop_tasks
+                if task.done() and not task.cancelled() and task.exception()
+            ]
+        finally:
+            first_loop.close()
+
+        assert failures == []
+        assert "slow" in fired
 
     @pytest.mark.parametrize("stranded", ["still_queued", "dequeued_never_started"])
     def test_flush_on_new_loop_drains_tasks_stranded_on_previous_loop(self, stranded):

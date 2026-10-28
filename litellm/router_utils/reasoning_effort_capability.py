@@ -1,20 +1,17 @@
 """Resolve which reasoning_effort values a deployment, and by intersection a model group, accepts.
 
-An entry that states its levels outright in reasoning_effort_levels is read first and wins
-whole, for a model whose set the per-level flags cannot express: Kimi K3 takes low, high and max,
-and no flag can drop medium because medium has none. Every other entry answers through the
-supports_*_reasoning_effort flags below, whose polarity mirrors how a request path reads that same
-flag. medium and high are unconditional for a reasoning model. minimal and low are opt-out:
-openai/chat/gpt_5_transformation.py refuses them only when the map says false. xhigh and max are
-opt-in. none is opt-out everywhere except the azure gpt-5 family, whose config raises
-UnsupportedParamsError without an explicit true.
+An entry that states its levels outright in reasoning_effort_levels wins whole, for a model whose set
+the per-level flags cannot express (Kimi K3 takes low, high and max, and no flag can drop medium).
+Every other entry answers through its supports_*_reasoning_effort flags, read with the polarity the
+chat gate uses: medium and high are unconditional, minimal and low are opt-out (refused only on an
+explicit false), xhigh is opt-in, and none is opt-out except on the azure gpt-5 family, whose chat
+config refuses it without an explicit true.
 
-xhigh is gated on the request path by the openai and azure gpt-5 configs. max is not gated there at
-all: outside the gpt-6-astra rows every entry carrying supports_max_reasoning_effort is Claude-family,
-and anthropic/chat/transformation.py gates max on the output_config path while its reasoning_effort
-path maps any level to a thinking budget. Making max opt-in is a deliberate trade, then, since an
-explicit flag is the only signal that the tier is a real one rather than litellm rounding the level
-to a budget, and a missing flag costs advisory metadata rather than a rejected request.
+The Responses gate reads none, minimal, low and xhigh as opt-out. Neither gate judges max, which
+Chat Completions refuses and Responses honors on the gpt-6 family, so its flag is advisory and
+advertised opt-in: outside the gpt-6 rows every entry carrying supports_max_reasoning_effort is
+Claude-family, where anthropic/chat/transformation.py gates max on the output_config path, so an
+explicit flag is the only signal that the tier is real.
 
 A deployment the map describes with no effort flags at all resolves to None rather than to the
 opt-out defaults. 689 of the map's 854 reasoning entries carry no flag, and the o-series, xai and
@@ -28,13 +25,25 @@ it above.
 """
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, get_args
+from typing import Final, Literal, TypeAlias, get_args
+
+from typing_extensions import assert_never
 
 import litellm
+from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
+from litellm.litellm_core_utils.reasoning_effort_utils import reasoning_effort_from_thinking
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo, validated_object_mapping
+from litellm.types.llms.anthropic import AnthropicThinkingParam
 from litellm.types.llms.openai import REASONING_EFFORT
 
-REASONING_EFFORT_ADVERTISEMENT_ORDER: Final = get_args(REASONING_EFFORT)
+ReasoningEffortRounding: TypeAlias = Literal["up", "down"]
+RequestedReasoningEffort: TypeAlias = str | Mapping[str, object] | None
+
+REASONING_EFFORT_ADVERTISEMENT_ORDER: Final[tuple[str, ...]] = get_args(REASONING_EFFORT)
 _EMPTY_ENTRY: Final[Mapping[str, object]] = MappingProxyType({})
 
 _EFFORT_FLAGS: Final = (
@@ -80,7 +89,10 @@ def declared_reasoning_efforts(model_info: Mapping[str, object]) -> tuple[str, .
     validate-model-prices-json, but an operator can put this key on a config.yaml model_info block
     where that schema never runs, and one mistyped level must not fail every sibling on the proxy."""
     own: Final = model_info.get(_DECLARED_EFFORTS_KEY)
-    raw: Final = own if own is not None else _bare_model_entry(model_info).get(_DECLARED_EFFORTS_KEY)
+    return _declared_levels(own if own is not None else _bare_model_entry(model_info).get(_DECLARED_EFFORTS_KEY))
+
+
+def _declared_levels(raw: object) -> tuple[str, ...] | None:
     if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
         return None
     declared: Final = frozenset(effort for effort in raw if isinstance(effort, str))
@@ -107,19 +119,347 @@ REASONING_EFFORT_STRENGTH_ORDER: Final = ("minimal", "low", "medium", "high", "x
 _STRENGTH_RANK: Final = MappingProxyType({effort: rank for rank, effort in enumerate(REASONING_EFFORT_STRENGTH_ORDER)})
 
 
-def nearest_declared_reasoning_effort(requested: str, declared: Sequence[str]) -> str:
-    """Rounds a request up to the weakest declared level at least as strong as it, and down to the
-    strongest declared level when it asks for more than the model has, so the caller gets no less
-    reasoning than it asked for instead of a rejected call. none is the off switch rather than a
-    strength, so it is never rounded onto the ladder and no level is rounded down to it: a caller
-    who turned reasoning off must not be billed for it, and a model that cannot turn it off says so
-    itself. A level outside the strength order is likewise returned as is for upstream to judge."""
+def nearest_declared_reasoning_effort(
+    requested: str, declared: Sequence[str], rounding: ReasoningEffortRounding = "up"
+) -> str:
+    """Rounding up takes the weakest declared level at least as strong as the request, else the
+    strongest declared, so the caller gets no less reasoning than it asked for instead of a rejected
+    call. Rounding down mirrors it: the strongest declared level at most as strong, else the
+    weakest. none is the off switch rather than a strength, so it is never rounded onto the ladder
+    and no level is rounded to it: a caller who turned reasoning off must not be billed for it, and
+    a model that cannot turn it off says so itself. A level outside the strength order is likewise
+    returned as is for upstream to judge."""
     ranked: Final = sorted(
         (effort for effort in declared if effort in _STRENGTH_RANK), key=lambda effort: _STRENGTH_RANK[effort]
     )
     if requested in ranked or requested not in _STRENGTH_RANK or not ranked:
         return requested
-    return next((effort for effort in ranked if _STRENGTH_RANK[effort] >= _STRENGTH_RANK[requested]), ranked[-1])
+    strength: Final = _STRENGTH_RANK[requested]
+    match rounding:
+        case "up":
+            return next((effort for effort in ranked if _STRENGTH_RANK[effort] >= strength), ranked[-1])
+        case "down":
+            return next((effort for effort in reversed(ranked) if _STRENGTH_RANK[effort] <= strength), ranked[0])
+        case _:
+            assert_never(rounding)
+
+
+_ROUNDING_KEY: Final = "reasoning_effort_rounding"
+_DEFAULT_EFFORT: Final = "default"
+_EFFORT_KEY: Final = "effort"
+_LOGGABLE_REQUESTED_LEVELS: Final = frozenset((*REASONING_EFFORT_ADVERTISEMENT_ORDER, _DEFAULT_EFFORT))
+_UNRECOGNIZED_LEVEL: Final = "unrecognized"
+_PROVIDERS_SENDING_THINKING_AS_EFFORT: Final = frozenset(("hosted_vllm",))
+
+
+def deployment_reasoning_effort_levels(deployment_model_info: object) -> tuple[str, ...] | None:
+    """Only the deployment's own declaration counts. The router copies it onto the shared
+    provider/model map key, and map entries describe a model rather than what a deployment's
+    endpoint accepts, so reading the map here would round requests for siblings and for models
+    nobody declared levels on."""
+    own_info: Final = as_str_mapping(deployment_model_info)
+    return _declared_levels(own_info.get(_DECLARED_EFFORTS_KEY)) if own_info is not None else None
+
+
+def deployment_rounds_reasoning_effort(deployment_model_info: object) -> bool:
+    declared: Final = deployment_reasoning_effort_levels(deployment_model_info)
+    return declared is not None and any(level in _STRENGTH_RANK for level in declared)
+
+
+def with_adaptive_thinking_as_effort(
+    params: Mapping[str, object], *, model: str, custom_llm_provider: str, drop_params: bool
+) -> Mapping[str, object]:
+    translated: Final = dict(params)
+    AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
+        model=model, optional_params=translated, custom_llm_provider=custom_llm_provider, drop_params=drop_params
+    )
+    return translated
+
+
+def thinking_budget_effort(thinking: object, *, model: str, custom_llm_provider: str, drop_params: bool) -> str | None:
+    if custom_llm_provider in _PROVIDERS_SENDING_THINKING_AS_EFFORT:
+        return reasoning_effort_from_thinking(thinking, drop_params=drop_params)
+    adaptive_config: Final = as_str_mapping(
+        with_adaptive_thinking_as_effort(
+            {"thinking": thinking}, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
+        ).get("output_config")
+    )
+    if adaptive_config is not None:
+        adaptive_effort: Final = adaptive_config.get(_EFFORT_KEY)
+        return adaptive_effort if isinstance(adaptive_effort, str) else None
+    if "thinking" in (get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider) or ()):
+        return None
+    return reasoning_effort_from_thinking(thinking, drop_params=drop_params)
+
+
+def provider_reads_thinking(thinking: object, *, model: str, custom_llm_provider: str, drop_params: bool) -> bool:
+    if custom_llm_provider in _PROVIDERS_SENDING_THINKING_AS_EFFORT:
+        return False
+    if "output_config" in with_adaptive_thinking_as_effort(
+        {"thinking": thinking}, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
+    ):
+        return True
+    return "thinking" in (get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider) or ())
+
+
+def adaptive_thinking_beside_effort(
+    thinking: AnthropicThinkingParam | None,
+    effort: object,
+    *,
+    model: str,
+    custom_llm_provider: str,
+    drop_params: bool,
+) -> Mapping[object, object] | AnthropicThinkingParam | None:
+    if effort == "none":
+        return None
+    translated: Final = with_adaptive_thinking_as_effort(
+        {"thinking": thinking}, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
+    )
+    if "output_config" not in translated:
+        return None
+    return thinking if effort is not None else validated_object_mapping(translated.get("thinking"))
+
+
+def adaptive_thinking_without_effort(
+    thinking: AnthropicThinkingParam | None, *, model: str, custom_llm_provider: str, drop_params: bool
+) -> Mapping[object, object] | AnthropicThinkingParam | None:
+    translated: Final = with_adaptive_thinking_as_effort(
+        {"thinking": thinking}, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
+    )
+    adaptive: Final = validated_object_mapping(translated.get("thinking")) if "output_config" in translated else None
+    return thinking if adaptive is None else adaptive
+
+
+def keeps_effort(requested: RequestedReasoningEffort, resolved: RequestedReasoningEffort) -> bool:
+    """A level dropped under drop_params counts as never sent, like any dropped param, so a thinking
+    budget beside it still decides the effort. default is kept even though it resolves to no level,
+    since the caller asked for the provider's own default in place of the budget's."""
+    requested_level: Final = _requested_level(requested)
+    return requested_level is not None and (
+        requested_level == _DEFAULT_EFFORT or _requested_level(resolved) is not None
+    )
+
+
+def _rounding(value: object) -> ReasoningEffortRounding | None:
+    match value.strip().lower() if isinstance(value, str) else value:
+        case "up":
+            return "up"
+        case "down":
+            return "down"
+        case None:
+            return None
+        case _:
+            verbose_logger.warning(
+                "Ignoring reasoning_effort_rounding=%s, expected 'up' or 'down'", _single_line(value)
+            )
+            return None
+
+
+def _deployment_rounding(deployment_model_info: object) -> ReasoningEffortRounding:
+    own_info: Final = as_str_mapping(deployment_model_info)
+    own: Final = _rounding(own_info.get(_ROUNDING_KEY)) if own_info is not None else None
+    return own or _rounding(litellm.reasoning_effort_rounding) or "up"
+
+
+def _requested_level(requested: RequestedReasoningEffort) -> str | None:
+    if isinstance(requested, str):
+        return requested
+    fields: Final = as_str_mapping(requested)
+    if fields is None:
+        return None
+    level: Final = fields.get(_EFFORT_KEY)
+    return level if isinstance(level, str) else None
+
+
+def _with_level(requested: RequestedReasoningEffort, level: str | None) -> RequestedReasoningEffort:
+    fields: Final = as_str_mapping(requested)
+    if fields is None:
+        return level
+    if level is not None:
+        return {**fields, _EFFORT_KEY: level}
+    rest: Final = {key: value for key, value in fields.items() if key != _EFFORT_KEY}
+    return rest or None
+
+
+def model_group_from_metadata(*metadata: object) -> str | None:
+    mappings: Final = (as_str_mapping(entry) for entry in metadata)
+    groups: Final = (mapping.get("model_group") for mapping in mappings if mapping is not None)
+    return next((group for group in groups if isinstance(group, str)), None)
+
+
+@dataclass(frozen=True, slots=True)
+class DeploymentReasoningEffort:
+    value: RequestedReasoningEffort
+    deployment_accepts_effort: bool
+
+
+def resolve_deployment_reasoning_effort(
+    requested: RequestedReasoningEffort,
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+    deployment_model_info: object,
+    model_group: str | None,
+    drop_params: bool,
+) -> DeploymentReasoningEffort:
+    requested_level: Final = _requested_level(requested)
+    unchanged: Final = DeploymentReasoningEffort(value=requested, deployment_accepts_effort=False)
+    if requested_level is None:
+        return unchanged
+    declared: Final = deployment_reasoning_effort_levels(deployment_model_info)
+    if declared is None:
+        return unchanged
+    rounding: Final = _deployment_rounding(deployment_model_info)
+    rounded_level: Final = (
+        None
+        if requested_level == _DEFAULT_EFFORT
+        else nearest_declared_reasoning_effort(requested_level, declared, rounding)
+    )
+    sent_level: Final = None if drop_params and rounded_level not in declared else rounded_level
+    deployment_accepts_effort: Final = sent_level is not None and len(declared) > 0
+    if sent_level == requested_level:
+        return DeploymentReasoningEffort(value=requested, deployment_accepts_effort=deployment_accepts_effort)
+    _log_remap(
+        requested_level=requested_level,
+        sent_level=sent_level,
+        rounding=rounding,
+        deployment_model=_provider_model(model, custom_llm_provider),
+        deployment_model_info=deployment_model_info,
+        model_group=model_group,
+    )
+    return DeploymentReasoningEffort(
+        value=_with_level(requested, sent_level), deployment_accepts_effort=deployment_accepts_effort
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ChatReasoning:
+    effort: DeploymentReasoningEffort
+    thinking: Mapping[object, object] | AnthropicThinkingParam | None
+    output_config: RequestedReasoningEffort
+
+
+def resolve_chat_reasoning(
+    reasoning_effort: RequestedReasoningEffort,
+    thinking: AnthropicThinkingParam | None,
+    output_config: Mapping[str, object] | None,
+    *,
+    model: str,
+    custom_llm_provider: str,
+    deployment_model_info: object,
+    model_group: str | None,
+    drop_params: bool,
+) -> ChatReasoning:
+    def resolve(requested: RequestedReasoningEffort) -> DeploymentReasoningEffort:
+        return resolve_deployment_reasoning_effort(
+            requested,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            deployment_model_info=deployment_model_info,
+            model_group=model_group,
+            drop_params=drop_params,
+        )
+
+    explicit: Final = resolve(reasoning_effort)
+    output: Final = resolve(output_config).value
+    if thinking is None or deployment_reasoning_effort_levels(deployment_model_info) is None:
+        return ChatReasoning(effort=explicit, thinking=thinking, output_config=output)
+    explicit_kept: Final = keeps_effort(reasoning_effort, explicit.value)
+    if not explicit_kept and not keeps_effort(output_config, output):
+        budget_level: Final = thinking_budget_effort(
+            thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
+        )
+        budget_effort: Final = resolve(budget_level)
+        return ChatReasoning(
+            effort=budget_effort,
+            thinking=thinking
+            if budget_level is None
+            else adaptive_thinking_beside_effort(
+                thinking,
+                budget_effort.value,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                drop_params=drop_params,
+            ),
+            output_config=output,
+        )
+    if not provider_reads_thinking(
+        thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
+    ):
+        return ChatReasoning(
+            effort=explicit if explicit_kept else resolve(_requested_level(output)),
+            thinking=None,
+            output_config=output,
+        )
+    if _requested_level(reasoning_effort if explicit_kept else output_config) != _DEFAULT_EFFORT:
+        return ChatReasoning(effort=explicit, thinking=thinking, output_config=output)
+    return ChatReasoning(
+        effort=explicit,
+        thinking=adaptive_thinking_without_effort(
+            thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
+        ),
+        output_config=output,
+    )
+
+
+def _provider_model(model: str, custom_llm_provider: str | None) -> str:
+    if custom_llm_provider is None or model.startswith(f"{custom_llm_provider}/"):
+        return model
+    return f"{custom_llm_provider}/{model}"
+
+
+def _log_remap(
+    *,
+    requested_level: str,
+    sent_level: str | None,
+    rounding: ReasoningEffortRounding,
+    deployment_model: str,
+    deployment_model_info: object,
+    model_group: str | None,
+) -> None:
+    own_info: Final = as_str_mapping(deployment_model_info)
+    deployment_id: Final = own_info.get("id") if own_info is not None else None
+    logged_requested_level: Final = _single_line(
+        requested_level if requested_level in _LOGGABLE_REQUESTED_LEVELS else _UNRECOGNIZED_LEVEL
+    )
+    logged_sent_level: Final = _single_line(sent_level)
+    logged_deployment_id: Final = _single_line(deployment_id)
+    logged_model_group: Final = _single_line(model_group)
+    logged_deployment_model: Final = _single_line(deployment_model)
+    verbose_logger.info(
+        "reasoning_effort %s sent as %s (rounding %s) to deployment %s, model group %s, model %s",
+        logged_requested_level,
+        logged_sent_level,
+        rounding,
+        logged_deployment_id,
+        logged_model_group,
+        logged_deployment_model,
+        extra={
+            "reasoning_effort_deployment_id": logged_deployment_id,
+            "reasoning_effort_model_group": logged_model_group,
+            "reasoning_effort_deployment_model": logged_deployment_model,
+            "reasoning_effort_requested": logged_requested_level,
+            "reasoning_effort_sent": logged_sent_level,
+            "reasoning_effort_rounding": rounding,
+        },
+    )
+
+
+def _single_line(value: object) -> str | None:
+    return None if value is None else str(value).replace("\r", "").replace("\n", "")
+
+
+def reasoning_effort_needs_allowing(
+    resolved: DeploymentReasoningEffort, *, model: str, custom_llm_provider: str, base_model: str | None
+) -> bool:
+    """A provider that lists reasoning_effort maps it itself, so allowing the raw key as well would
+    send it twice (anthropic turns it into thinking and rejects the raw key). A level outside the
+    declaration is still sent once the deployment declares any, for its backend to judge."""
+    if not resolved.deployment_accepts_effort:
+        return False
+    return "reasoning_effort" not in (
+        get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider, base_model=base_model) or ()
+    )
 
 
 def _supports_none_reasoning_effort(model_info: Mapping[str, object], flag: object) -> bool:
@@ -129,7 +469,7 @@ def _supports_none_reasoning_effort(model_info: Mapping[str, object], flag: obje
     if model_info.get("litellm_provider") != "azure":
         return flag is not False
 
-    from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
+    from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
 
     key: Final = model_info.get("key")
     if not isinstance(key, str) or not AzureOpenAIGPT5Config.is_model_gpt_5_model(key):
@@ -191,7 +531,7 @@ def resolve_supported_reasoning_efforts(
 
     opt_out: Final = frozenset(effort for effort in _OPT_OUT_EFFORTS if flags[effort] is not False)
     opt_in: Final = frozenset(effort for effort in _OPT_IN_EFFORTS if flags[effort] is True)
-    none_level: Final = (
+    none_level: Final[frozenset[str]] = (
         frozenset(("none",)) if _supports_none_reasoning_effort(model_info, flags["none"]) else frozenset()
     )
     allowed: Final = opt_out | _UNCONDITIONAL_EFFORTS | opt_in | none_level

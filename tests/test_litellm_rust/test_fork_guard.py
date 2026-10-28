@@ -66,14 +66,11 @@ _SDK_CONTRACT = textwrap.dedent(
 
     import litellm
     from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
+    from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             self.rfile.read(int(self.headers["Content-Length"]))
-            if self.headers.get("User-Agent", "").startswith("python-httpx"):
-                self.send_response(418)
-                self.end_headers()
-                return
             body = json.dumps({
                 "pages": [{"index": 0, "markdown": "native", "images": [], "dimensions": None}],
                 "model": "mistral-ocr-latest",
@@ -97,8 +94,6 @@ _SDK_CONTRACT = textwrap.dedent(
         "api_base": f"http://127.0.0.1:{server.server_port}",
         "num_retries": 0,
     }
-    litellm.rust(True)
-
     SERVED, REFUSED, OTHER = 0, 3, 4
 
     def outcome(asynchronous):
@@ -108,7 +103,10 @@ _SDK_CONTRACT = textwrap.dedent(
             return REFUSED
         except Exception:
             return OTHER
-        return SERVED if response.pages[0].markdown == "native" else OTHER
+        return SERVED if (
+            response.pages[0].markdown == "native"
+            and get_hidden_params_dict(response).get("additional_headers", {}).get("x-litellm-rust") == "true"
+        ) else OTHER
 
     def forked(asynchronous):
         pid = os.fork()
@@ -138,7 +136,6 @@ def test_sdk_call_in_a_child_forked_after_native_use_raises_instead_of_hanging()
     env = {
         **os.environ,
         "OBJC_DISABLE_INITIALIZE_FORK_SAFETY": "YES",
-        "LITELLM_RUST": "1",
         "LITELLM_LOCAL_MODEL_COST_MAP": "True",
     }
 
@@ -162,8 +159,8 @@ from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer
 from litellm.utils import claude_json_str
 
 catalog.RULES = (
-    RouteRule(Route.TOKENIZER, Rollout.RUST_OPT_IN),
-    RouteRule(Route.TOKEN_COUNTER, Rollout.RUST_OPT_IN),
+    RouteRule(Route.TOKENIZER, Rollout.RUST_REQUIRED),
+    RouteRule(Route.TOKEN_COUNTER, Rollout.RUST_REQUIRED),
     *catalog.RULES,
 )
 litellm.anthropic_models = {*litellm.anthropic_models, "tokenizer-fork-fixture"}
@@ -199,7 +196,9 @@ if pid == 0:
             lambda: _native.TokenCounter.from_tokenizer(encoding),
             lambda: _native.TokenCounter.from_tokenizer(encoding, fast=True),
             lambda: _native.Tokenizer.from_tiktoken("cl100k_base"),
-            lambda: asyncio.run(count_input_tokens({"prompt": "hello"}, b'{"prompt": "hello"}', ("counter-fork-fixture",))),
+            lambda: asyncio.run(
+                count_input_tokens({"prompt": "hello"}, b'{"prompt": "hello"}', ("counter-fork-fixture",))
+            ),
         ):
             try:
                 call()

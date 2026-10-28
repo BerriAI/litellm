@@ -2,12 +2,14 @@
 Azure Anthropic messages transformation config - extends AnthropicMessagesConfig with Azure authentication
 """
 
+from collections.abc import Sequence
 from typing import Any, Final
 
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.llms.azure_ai.anthropic.transformation import azure_anthropic_messages_url
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -29,7 +31,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: Sequence[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -50,7 +52,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
                 litellm_params_obj.api_key = api_key
 
         # Use Azure authentication logic
-        headers = BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
+        headers = BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         # Azure Anthropic uses x-api-key header (not api-key)
         # Convert api-key to x-api-key if present
@@ -95,25 +97,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
                 "Expected format: https://<resource-name>.services.ai.azure.com/anthropic"
             )
 
-        # Ensure the URL ends with /v1/messages
-        api_base = api_base.rstrip("/")
-        if api_base.endswith("/v1/messages") or api_base.endswith("/anthropic/v1/messages"):
-            # Already correct
-            pass
-        else:
-            # Check if /anthropic is already in the path
-            if "/anthropic" in api_base:
-                # /anthropic exists, ensure we end with /anthropic/v1/messages
-                # Extract the base URL up to and including /anthropic
-                parts: Final = api_base.split("/anthropic", 1)
-                api_base = parts[0] + "/anthropic"
-            else:
-                # /anthropic not in path, add it
-                api_base = api_base + "/anthropic"
-            # Add /v1/messages
-            api_base = api_base + "/v1/messages"
-
-        return api_base
+        return azure_anthropic_messages_url(api_base)
 
     def _remove_scope_from_cache_control(self, anthropic_messages_request: dict) -> None:
         """

@@ -8,18 +8,31 @@ Admins use the management endpoints to read and update input_policy / output_pol
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import TOOL_DISCOVERY_COMMIT_JOB_NAME
 from litellm.proxy._types import ToolDiscoveryQueueItem
-from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
+from litellm.proxy.db.db_span import db_span
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
+from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
+    ToolDiscoveryQueue,
+    aggregate_tool_discoveries,
+)
+from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry, db_write_failure_is_requeue_safe
+from litellm.proxy.db.tool_table_bulk_upsert import build_tool_bulk_upsert
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import ToolRepository
+from litellm.repositories.user_repository import UserRepository
+from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.types.tool_management import (
     LiteLLM_ToolTableRow,
+    ToolDiscoveryUser,
     ToolPolicyOverrideRow,
 )
 
@@ -101,72 +114,136 @@ def _row_to_model(row: object) -> LiteLLM_ToolTableRow:
 
 async def batch_upsert_tools(
     prisma_client: "PrismaClient",
-    items: list[ToolDiscoveryQueueItem],
+    items: Sequence[ToolDiscoveryQueueItem],
 ) -> None:
-    """
-    Batch-upsert tool registry rows via Prisma.
+    """Write a batch of discovered tools to LiteLLM_ToolTable in a single statement. Raises on failure so the
+    caller decides whether the rows can be retried."""
+    rows: Final = aggregate_tool_discoveries(items)
+    if not rows:
+        return
+    sql, params = build_tool_bulk_upsert(rows)
+    async with db_span("commit_tool_discoveries", "LiteLLM_ToolTable"):
+        await prisma_client.db.execute_raw(sql, *params)  # pyright: ignore[reportAny]  # untyped prisma client
+    verbose_proxy_logger.debug("tool_registry_writer: upserted %d tool(s)", len(rows))
 
-    On first insert: sets input_policy/output_policy = "untrusted" (default), call_count = 1.
-    On conflict: increments call_count; preserves existing policies.
-    """
+
+async def flush_tool_discovery_queue(prisma_client: "PrismaClient", tool_discovery_queue: ToolDiscoveryQueue) -> None:
+    """One worker's own rows straight to LiteLLM_ToolTable, the path without the Redis buffer."""
+    items: Final = tool_discovery_queue.flush()
     if not items:
         return
     try:
-        data: Final = [item for item in items if item.get("tool_name")]
-        if not data:
-            return
-        now: Final = datetime.now(timezone.utc)
-        table: Final = _tool_table_actions(prisma_client)
-        for item in data:
-            tool_name = item.get("tool_name", "")
-            origin = item.get("origin") or "user_defined"
-            created_by = item.get("created_by") or "system"
-            key_hash = item.get("key_hash")
-            team_id = item.get("team_id")
-            key_alias = item.get("key_alias")
-            user_agent = item.get("user_agent")
-            await table.upsert(
-                where={"tool_name": tool_name},
-                data={
-                    "create": {
-                        "tool_id": str(uuid.uuid4()),
-                        "tool_name": tool_name,
-                        "origin": origin,
-                        "input_policy": "untrusted",
-                        "output_policy": "untrusted",
-                        "call_count": 1,
-                        "created_by": created_by,
-                        "updated_by": created_by,
-                        "key_hash": key_hash,
-                        "team_id": team_id,
-                        "key_alias": key_alias,
-                        "user_agent": user_agent,
-                        "last_used_at": now,
-                    },
-                    "update": {
-                        "call_count": {"increment": 1},
-                        "updated_at": now,
-                        "last_used_at": now,
-                    },
-                },
+        await batch_upsert_tools(prisma_client=prisma_client, items=items)
+    except Exception as e:  # noqa: BLE001  # a lost tool row only delays its discovery, the scheduler job must not fail
+        verbose_proxy_logger.debug("flush_tool_discovery_queue error (non-blocking): %s", e)
+
+
+async def commit_tool_discoveries(
+    prisma_client: "PrismaClient",
+    tool_discovery_queue: ToolDiscoveryQueue,
+    redis_update_buffer: RedisUpdateBuffer,
+    pod_lock_manager: PodLockManager,
+    use_redis_buffer: bool,
+) -> None:
+    """Scheduled alongside update_spend on its own lock, so tool table writes never ride the spend commit.
+
+    With the Redis buffer every worker hands its rows to Redis and the holder of the tool lock writes them all in
+    one statement. Without it each worker writes its own rows."""
+    if not use_redis_buffer:
+        await flush_tool_discovery_queue(prisma_client=prisma_client, tool_discovery_queue=tool_discovery_queue)
+        return
+    await redis_update_buffer.store_tool_discoveries_in_redis(tool_discovery_queue=tool_discovery_queue)
+    if not await pod_lock_manager.acquire_lock(cronjob_id=TOOL_DISCOVERY_COMMIT_JOB_NAME):
+        return
+    try:
+        await _commit_tool_discoveries_from_redis(prisma_client=prisma_client, redis_update_buffer=redis_update_buffer)
+    finally:
+        await pod_lock_manager.release_lock(cronjob_id=TOOL_DISCOVERY_COMMIT_JOB_NAME)
+
+
+async def _commit_tool_discoveries_from_redis(
+    prisma_client: "PrismaClient", redis_update_buffer: RedisUpdateBuffer
+) -> None:
+    """Tool lock holder only: drain every worker's tool rows from Redis and write them in one statement."""
+    items: Final = await redis_update_buffer.get_all_tool_discoveries_from_redis_buffer()
+    if not items:
+        return
+    try:
+        await batch_upsert_tools(prisma_client=prisma_client, items=items)
+    except Exception as e:  # noqa: BLE001  # the rows go back to redis or are dropped, the scheduler job must not fail
+        if db_write_failure_is_requeue_safe(e):
+            await redis_update_buffer.restore_tool_discoveries_to_redis(items)
+            verbose_proxy_logger.error(
+                "Tool discovery - %d tool rows went back to Redis for the next tick. Error: %s", len(items), str(e)
             )
-        verbose_proxy_logger.debug("tool_registry_writer: upserted %d tool(s)", len(data))
-    except Exception as e:
-        verbose_proxy_logger.error("tool_registry_writer batch_upsert_tools error: %s", e)
+            return
+        verbose_proxy_logger.error(
+            "Tool discovery - dropped %d tool rows: the failed statement may have applied or the database "
+            "refused the data, so re-sending it is not safe. Error: %s",
+            len(items),
+            str(e),
+        )
+
+
+_NO_OWNERS: Final[Mapping[str, ToolDiscoveryUser]] = MappingProxyType({})
+
+
+async def _key_owners(prisma_client: "PrismaClient", key_hashes: frozenset[str]) -> Mapping[str, ToolDiscoveryUser]:
+    """Map each key hash to the user that owns the key, skipping keys without an owner or an unknown owner."""
+    if not key_hashes:
+        return _NO_OWNERS
+    keys: Final = await VerificationTokenRepository(prisma_client).find_many_in("token", sorted(key_hashes))
+    owner_ids: Final = frozenset(key.user_id for key in keys if key.user_id)
+    if not owner_ids:
+        return _NO_OWNERS
+    users: Final = await UserRepository(prisma_client).find_many_in("user_id", sorted(owner_ids))
+    users_by_id: Final = MappingProxyType(
+        {
+            user.user_id: ToolDiscoveryUser(
+                user_id=user.user_id, user_email=user.user_email, user_alias=user.user_alias
+            )
+            for user in users
+        }
+    )
+    return MappingProxyType(
+        {key.token: users_by_id[key.user_id] for key in keys if key.token and key.user_id in users_by_id}
+    )
+
+
+async def _key_owners_or_none(
+    prisma_client: "PrismaClient", key_hashes: frozenset[str]
+) -> Mapping[str, ToolDiscoveryUser]:
+    from prisma.errors import PrismaError
+
+    try:
+        return await _key_owners(prisma_client, key_hashes)
+    except PrismaError as e:
+        verbose_proxy_logger.error("tool_registry_writer owner lookup error: %s", e)
+        return _NO_OWNERS
+
+
+async def _with_owners(
+    prisma_client: "PrismaClient", tools: Sequence[LiteLLM_ToolTableRow]
+) -> tuple[LiteLLM_ToolTableRow, ...]:
+    """Attach to each tool the user owning the key that discovered it; tools stay listed when that lookup fails."""
+    owners: Final = await _key_owners_or_none(
+        prisma_client, frozenset(tool.key_hash for tool in tools if tool.key_hash)
+    )
+    return tuple(tool.model_copy(update=MappingProxyType({"user": owners.get(tool.key_hash or "")})) for tool in tools)
 
 
 async def list_tools(
     prisma_client: "PrismaClient",
     input_policy: str | None = None,
 ) -> list[LiteLLM_ToolTableRow]:
-    """Return all tools, optionally filtered by input_policy."""
+    """Return all tools, optionally filtered by input_policy, each with the user owning the key that discovered it."""
     try:
         where: Final[Mapping[str, str]] = {"input_policy": input_policy} if input_policy is not None else {}
         rows: Final = await _tool_table_actions(prisma_client).find_many(
             where=where,
             order={"created_at": "desc"},
         )
-        return [_row_to_model(row) for row in rows]
+        return list(await _with_owners(prisma_client, tuple(_row_to_model(row) for row in rows)))
     except Exception as e:
         verbose_proxy_logger.error("tool_registry_writer list_tools error: %s", e)
         return []
@@ -176,14 +253,14 @@ async def get_tool(
     prisma_client: "PrismaClient",
     tool_name: str,
 ) -> LiteLLM_ToolTableRow | None:
-    """Return a single tool row by tool_name."""
+    """Return a single tool row by tool_name, with the user owning the key that discovered it."""
     try:
         row: Final = await _tool_table_actions(prisma_client).find_unique(
             where={"tool_name": tool_name},
         )
         if row is None:
             return None
-        return _row_to_model(row)
+        return (await _with_owners(prisma_client, (_row_to_model(row),)))[0]
     except Exception as e:
         verbose_proxy_logger.error("tool_registry_writer get_tool error: %s", e)
         return None
@@ -279,8 +356,8 @@ async def list_overrides_for_tool(
         )
         for perm in perms:
             op_id = getattr(perm, "object_permission_id", None) or ""
-            tokens = getattr(perm, "verification_tokens", []) or []
-            teams = getattr(perm, "teams", []) or []
+            tokens: Sequence[object] = getattr(perm, "verification_tokens", []) or []
+            teams: Sequence[object] = getattr(perm, "teams", []) or []
             for t in tokens:
                 out.append(
                     ToolPolicyOverrideRow(

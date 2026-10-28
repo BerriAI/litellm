@@ -37,6 +37,22 @@ impl Lookup for ProcessEnvironment {
     }
 }
 
+pub fn resolve_non_empty(
+    value: Option<&str>,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+    names: &[&str],
+) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            names
+                .iter()
+                .find_map(|name| env_lookup(name).filter(|value| !value.trim().is_empty()))
+        })
+}
+
 pub trait Layer: Default {
     fn or(self, lower: Self) -> Self;
 }

@@ -12,7 +12,7 @@ use azure_identity::{
 };
 use sha2::{Digest, Sha256};
 
-use litellm_auth_types::Error;
+use litellm_auth_types::{Error, ErrorDetail};
 use litellm_auth_types::{InputSource, ResolvedCredential, SecretValue, Sourced};
 
 use super::credential_provider_cache::{
@@ -133,7 +133,9 @@ impl NativeAzureTokenAcquirer {
         let token = credential
             .get_token(&[scope.as_str()], None)
             .await
-            .map_err(|error| Error::AzureTokenAcquisition(error.to_string()))?;
+            .map_err(|error| {
+                Error::CredentialAcquisition(ErrorDetail::failed("Azure token request", error))
+            })?;
         let expires_on = u64::try_from(token.expires_on.unix_timestamp())
             .ok()
             .map(|seconds| UNIX_EPOCH + Duration::from_secs(seconds));
@@ -250,7 +252,9 @@ fn validate_authority(request: &NativeAzureRequest) -> Result<(), Error> {
     let Some(authority) = authority else {
         return Ok(());
     };
-    let url = url::Url::parse(authority.value()).map_err(|_| Error::InvalidAzureAuthority)?;
+    let url = url::Url::parse(authority.value()).map_err(|error| {
+        Error::InvalidConfiguration(ErrorDetail::failed("Azure authority parsing", error))
+    })?;
     if url.scheme() != "https"
         || url.host_str().is_none()
         || !url.username().is_empty()
@@ -259,7 +263,10 @@ fn validate_authority(request: &NativeAzureRequest) -> Result<(), Error> {
         || url.fragment().is_some()
         || !matches!(url.path(), "" | "/")
     {
-        return Err(Error::InvalidAzureAuthority);
+        return Err(Error::InvalidConfiguration(ErrorDetail::InvalidType {
+            field: "Azure authority".into(),
+            expected: "an HTTPS origin without credentials, query, or fragment",
+        }));
     }
     Ok(())
 }
@@ -368,7 +375,9 @@ fn trusted_source(sources: &[InputSource]) -> InputSource {
 }
 
 fn mixed_sources<T>() -> Result<T, Error> {
-    Err(Error::MixedAzureCredentialSources)
+    Err(Error::InvalidConfiguration(
+        ErrorDetail::MixedInputSources { provider: "Azure" },
+    ))
 }
 
 fn build_credential(
@@ -433,7 +442,12 @@ fn build_credential(
         NativeAzureRequest::DeveloperTools { .. } => DeveloperToolsCredential::new(None)
             .map(|credential| credential as Arc<dyn TokenCredential>),
     }
-    .map_err(|error| Error::AzureCredentialInitialization(error.to_string()))
+    .map_err(|error| {
+        Error::InvalidConfiguration(ErrorDetail::failed(
+            "Azure credential initialization",
+            error,
+        ))
+    })
 }
 
 fn client_options(
@@ -638,7 +652,7 @@ mod tests {
         assert_eq!(transport.requests.lock().unwrap().len(), 6);
     }
 
-    #[test]
+    #[rstest::rstest]
     fn request_authority_requires_request_owned_client_secret_identity() {
         let error = ValidatedAzureRequest::new(sourced_client_secret(
             InputSource::Deployment,
@@ -647,10 +661,12 @@ mod tests {
         ))
         .unwrap_err();
 
-        assert!(matches!(
-            error,
-            litellm_auth_types::Error::MixedAzureCredentialSources
-        ));
+        assert!(
+            litellm_error::Report::new(&error).to_string().contains(
+                "request-controlled Azure auth inputs cannot be combined with host credentials"
+            ),
+            "{error:?}"
+        );
     }
 
     #[test]
@@ -665,24 +681,23 @@ mod tests {
         assert_eq!(request.credential_source(), InputSource::Request);
     }
 
-    #[test]
-    fn authority_is_restricted_to_an_https_origin() {
-        for authority in [
-            "http://login.example",
-            "https://user@login.example",
-            "https://login.example/tenant",
-            "https://login.example?target=other",
-        ] {
-            let error = ValidatedAzureRequest::new(sourced_client_secret(
-                InputSource::Deployment,
-                InputSource::Deployment,
-                authority,
-            ))
-            .unwrap_err();
-            assert!(matches!(
-                error,
-                litellm_auth_types::Error::InvalidAzureAuthority
-            ));
-        }
+    #[rstest::rstest]
+    #[case::http("http://login.example")]
+    #[case::userinfo("https://user@login.example")]
+    #[case::path("https://login.example/tenant")]
+    #[case::query("https://login.example?target=other")]
+    fn authority_is_restricted_to_an_https_origin(#[case] authority: &str) {
+        let error = ValidatedAzureRequest::new(sourced_client_secret(
+            InputSource::Deployment,
+            InputSource::Deployment,
+            authority,
+        ))
+        .unwrap_err();
+        assert!(
+            litellm_error::Report::new(&error).to_string().contains(
+                "Azure authority must be an HTTPS origin without credentials, query, or fragment"
+            ),
+            "{error:?}"
+        );
     }
 }

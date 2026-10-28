@@ -1,5 +1,7 @@
+from typing import Final
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 
@@ -7,6 +9,10 @@ from litellm.exceptions import AuthenticationError
 from litellm.llms.github_copilot.common_utils import GetAPIKeyError
 from litellm.llms.github_copilot.messages.transformation import (
     GithubCopilotAnthropicMessagesConfig,
+)
+from litellm.llms.github_copilot.per_user_auth import (
+    GITHUB_COPILOT_USER_SESSION_KWARG_KEY,
+    GithubCopilotUserSession,
 )
 
 
@@ -184,6 +190,26 @@ def test_github_copilot_anthropic_messages_validate_environment_injects_context_
     assert "context-management-2025-06-27" in validated_headers["anthropic-beta"]
 
 
+@pytest.mark.usefixtures("local_beta_headers_config")
+def test_github_copilot_safeguards_do_not_derive_the_dangerous_tool_use_beta() -> None:
+    session: Final = GithubCopilotUserSession(token="gh.test-key", api_base="https://api.githubcopilot.com")
+
+    validated_headers, _ = GithubCopilotAnthropicMessagesConfig().validate_anthropic_messages_environment(
+        headers={},
+        model="github_copilot/claude-haiku-4.5",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "safeguards": ({"type": "dangerous_tool_use"},),
+            "context_management": {"edits": ({"type": "clear_tool_uses_20250919"},)},
+        },
+        litellm_params={GITHUB_COPILOT_USER_SESSION_KWARG_KEY: session},
+        api_key=None,
+        api_base=None,
+    )
+
+    assert validated_headers["anthropic-beta"] == "context-management-2025-06-27"
+
+
 def test_github_copilot_anthropic_messages_validate_environment_auth_error():
     """Test error handling when authentication fails."""
     config = GithubCopilotAnthropicMessagesConfig()
@@ -308,7 +334,7 @@ def test_github_copilot_config_does_not_handle_web_search_natively():
     interception handler short-circuiting Copilot instead of routing to it, even
     though Copilot now has a BaseAnthropicMessagesConfig. The base Anthropic
     config (bedrock/vertex/anthropic path) must report True."""
-    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+    from litellm.llms.anthropic.messages.native.transformation import (
         AnthropicMessagesConfig,
     )
 
@@ -322,3 +348,64 @@ def test_github_copilot_messages_config_probes_capabilities_under_copilot_namesp
     ``anthropic`` namespace and ignored the exact ``github_copilot/claude-*``
     cost-map entries."""
     assert GithubCopilotAnthropicMessagesConfig().custom_llm_provider == "github_copilot"
+
+
+def test_validate_environment_uses_per_user_session_and_skips_authenticator():
+    from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
+
+    config = GithubCopilotAnthropicMessagesConfig()
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.side_effect = AssertionError("shared authenticator must not run")
+    config.authenticator.get_api_base.side_effect = AssertionError("shared authenticator must not run")
+
+    session = GithubCopilotUserSession(token="user-copilot-token", api_base="https://tenant.githubcopilot.com/")
+    headers, api_base = config.validate_anthropic_messages_environment(
+        headers={},
+        model="github_copilot/claude-sonnet-5.5",
+        messages=[],
+        optional_params={},
+        litellm_params={"github_copilot_user_session": session},
+    )
+    assert headers["Authorization"] == "Bearer user-copilot-token"
+    assert api_base == "https://tenant.githubcopilot.com"
+    config.authenticator.get_api_key.assert_not_called()
+
+
+def test_per_user_session_token_wins_over_caller_authorization():
+    from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
+
+    config = GithubCopilotAnthropicMessagesConfig()
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_base.return_value = "https://api.githubcopilot.com"
+    session = GithubCopilotUserSession(token="user-copilot-token", api_base="https://api.githubcopilot.com")
+    headers, _ = config.validate_anthropic_messages_environment(
+        headers={"authorization": "Bearer caller-token"},
+        model="github_copilot/claude-sonnet-4.5",
+        messages=[],
+        optional_params={},
+        litellm_params={"github_copilot_user_session": session},
+    )
+    assert headers["Authorization"] == "Bearer user-copilot-token"
+
+
+def test_transform_response_carries_upstream_usage():
+    config = GithubCopilotAnthropicMessagesConfig()
+    raw = httpx.Response(
+        200,
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "github_copilot/claude-sonnet-5.5",
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 14, "output_tokens": 3},
+        },
+    )
+    result = config.transform_anthropic_messages_response(
+        model="github_copilot/claude-sonnet-5.5",
+        raw_response=raw,
+        logging_obj=MagicMock(),
+    )
+    assert result["usage"]["input_tokens"] == 14
+    assert result["usage"]["output_tokens"] == 3

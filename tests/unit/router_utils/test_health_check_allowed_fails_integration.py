@@ -54,9 +54,7 @@ class TestHealthCheckEndpointExceptionPropagation:
 
         from litellm.proxy.health_check import _perform_health_check
 
-        auth_error = litellm.AuthenticationError(
-            message="Invalid key", llm_provider="openai", model="gpt-4"
-        )
+        auth_error = litellm.AuthenticationError(message="Invalid key", llm_provider="openai", model="gpt-4")
         model_list = [
             {
                 "model_name": "gpt-4",
@@ -67,9 +65,7 @@ class TestHealthCheckEndpointExceptionPropagation:
 
         with patch(
             "litellm.proxy.health_check.litellm.ahealth_check",
-            new=AsyncMock(
-                return_value={"error": "auth failed", "exception": auth_error}
-            ),
+            new=AsyncMock(return_value={"error": "auth failed", "exception": auth_error}),
         ):
             healthy, unhealthy, exc_map = await _perform_health_check(model_list)
 
@@ -85,9 +81,7 @@ class TestHealthCheckEndpointExceptionPropagation:
 
         from litellm.proxy.health_check import _perform_health_check
 
-        raw_exc = litellm.RateLimitError(
-            message="Rate limited", llm_provider="openai", model="gpt-4"
-        )
+        raw_exc = litellm.RateLimitError(message="Rate limited", llm_provider="openai", model="gpt-4")
         model_list = [
             {
                 "model_name": "gpt-4",
@@ -125,18 +119,14 @@ class TestGetAllowedFailsFromPolicyWithHealthCheckExceptions:
             (litellm.BadRequestError, "BadRequestErrorAllowedFails", 7),
         ],
     )
-    def test_policy_resolves_for_health_check_exception_types(
-        self, exception_type, policy_field, threshold
-    ):
+    def test_policy_resolves_for_health_check_exception_types(self, exception_type, policy_field, threshold):
         """Each exception type from a health check should resolve to its policy threshold."""
         policy = AllowedFailsPolicy(**{policy_field: threshold})
         router = Router(
             model_list=[_make_model("d1")],
             allowed_fails_policy=policy,
         )
-        exception = exception_type(
-            message="health check failed", llm_provider="openai", model="gpt-4"
-        )
+        exception = exception_type(message="health check failed", llm_provider="openai", model="gpt-4")
         result = router.get_allowed_fails_from_policy(exception=exception)
         assert result == threshold
 
@@ -153,7 +143,7 @@ class TestGetAllowedFailsFromPolicyWithHealthCheckExceptions:
 
 
 class TestHealthCheckCooldownIntegration:
-    """Test that health check failures trigger cooldown via _set_cooldown_deployments."""
+    """Test that health check failures trigger cooldown via set_cooldown_deployments."""
 
     def test_health_check_failure_increments_failed_calls(self):
         """Health check failure should increment the failed_calls counter."""
@@ -166,9 +156,7 @@ class TestHealthCheckCooldownIntegration:
             allowed_fails_policy=AllowedFailsPolicy(TimeoutErrorAllowedFails=3),
         )
 
-        timeout_exc = litellm.Timeout(
-            message="Health check timeout", model="gpt-4", llm_provider="openai"
-        )
+        timeout_exc = litellm.Timeout(message="Health check timeout", model="gpt-4", llm_provider="openai")
 
         # First call: should not cooldown (1 <= 3)
         result = should_cooldown_based_on_allowed_fails_policy(
@@ -193,9 +181,7 @@ class TestHealthCheckCooldownIntegration:
             allowed_fails_policy=AllowedFailsPolicy(AuthenticationErrorAllowedFails=2),
         )
 
-        auth_exc = litellm.AuthenticationError(
-            message="Invalid key", model="gpt-4", llm_provider="openai"
-        )
+        auth_exc = litellm.AuthenticationError(message="Invalid key", model="gpt-4", llm_provider="openai")
 
         # Fails 1 and 2: should not cooldown
         for _ in range(2):
@@ -249,7 +235,7 @@ class TestHealthCheckCooldownIntegration:
 
     def test_healthy_endpoints_do_not_trigger_cooldown(self):
         """Healthy endpoints should not increment any failure counters."""
-        from litellm.router_utils.cooldown_handlers import _set_cooldown_deployments
+        from litellm.router_utils.cooldown_handlers import set_cooldown_deployments
 
         router = Router(
             model_list=[_make_model("deploy-1")],
@@ -268,7 +254,7 @@ class TestHealthCheckCooldownIntegration:
 
     def test_disable_cooldowns_prevents_health_check_cooldown(self):
         """When disable_cooldowns=True, health check failures should not trigger cooldown."""
-        from litellm.router_utils.cooldown_handlers import _set_cooldown_deployments
+        from litellm.router_utils.cooldown_handlers import set_cooldown_deployments
 
         router = Router(
             model_list=[_make_model("deploy-1"), _make_model("deploy-2", "gpt-5")],
@@ -277,11 +263,9 @@ class TestHealthCheckCooldownIntegration:
             disable_cooldowns=True,
         )
 
-        timeout_exc = litellm.Timeout(
-            message="Health check timeout", model="gpt-4", llm_provider="openai"
-        )
+        timeout_exc = litellm.Timeout(message="Health check timeout", model="gpt-4", llm_provider="openai")
 
-        result = _set_cooldown_deployments(
+        result = set_cooldown_deployments(
             litellm_router_instance=router,
             original_exception=timeout_exc,
             exception_status=500,
@@ -295,7 +279,7 @@ class TestWriteHealthStateIntegration:
     """Test _write_health_state_to_router_cache integrates with cooldown pipeline."""
 
     def test_unhealthy_endpoint_triggers_set_cooldown(self):
-        """_write_health_state_to_router_cache should call _set_cooldown_deployments for unhealthy endpoints."""
+        """_write_health_state_to_router_cache should call set_cooldown_deployments for unhealthy endpoints."""
         import litellm.proxy.proxy_server as proxy_module
         from litellm.proxy.proxy_server import _write_health_state_to_router_cache
 
@@ -305,9 +289,7 @@ class TestWriteHealthStateIntegration:
             enable_health_check_routing=True,
         )
 
-        timeout_exc = litellm.Timeout(
-            message="Health check timeout", model="", llm_provider=""
-        )
+        timeout_exc = litellm.Timeout(message="Health check timeout", model="", llm_provider="")
 
         unhealthy_endpoints = [
             {"model_id": "deploy-1", "error": "timeout"},
@@ -317,9 +299,7 @@ class TestWriteHealthStateIntegration:
         ]
 
         with patch.object(proxy_module, "llm_router", router):
-            with patch(
-                "litellm.router_utils.cooldown_handlers._set_cooldown_deployments"
-            ) as mock_cooldown:
+            with patch("litellm.router_utils.cooldown_handlers.set_cooldown_deployments") as mock_cooldown:
                 _write_health_state_to_router_cache(
                     healthy_endpoints=healthy_endpoints,
                     unhealthy_endpoints=unhealthy_endpoints,
@@ -349,9 +329,7 @@ class TestWriteHealthStateIntegration:
         ]
 
         with patch.object(proxy_module, "llm_router", router):
-            with patch(
-                "litellm.router_utils.cooldown_handlers._set_cooldown_deployments"
-            ) as mock_cooldown:
+            with patch("litellm.router_utils.cooldown_handlers.set_cooldown_deployments") as mock_cooldown:
                 _write_health_state_to_router_cache(
                     healthy_endpoints=[],
                     unhealthy_endpoints=unhealthy_endpoints,
@@ -370,9 +348,7 @@ class TestWriteHealthStateIntegration:
             enable_health_check_routing=True,
         )
 
-        rate_exc = litellm.RateLimitError(
-            message="Rate limited", model="gpt-4", llm_provider="openai"
-        )
+        rate_exc = litellm.RateLimitError(message="Rate limited", model="gpt-4", llm_provider="openai")
 
         unhealthy_endpoints = [
             {"model_id": "deploy-1", "error": "rate limited"},
@@ -382,9 +358,7 @@ class TestWriteHealthStateIntegration:
             with patch(
                 "litellm.router_utils.router_callbacks.track_deployment_metrics.increment_deployment_failures_for_current_minute"
             ) as mock_increment:
-                with patch(
-                    "litellm.router_utils.cooldown_handlers._set_cooldown_deployments"
-                ):
+                with patch("litellm.router_utils.cooldown_handlers.set_cooldown_deployments"):
                     _write_health_state_to_router_cache(
                         healthy_endpoints=[],
                         unhealthy_endpoints=unhealthy_endpoints,
@@ -433,9 +407,7 @@ class TestHealthCheckFilterBypassWithPolicy:
 
         # Filter should pass all through because policy is set
         result = router._filter_health_check_unhealthy_deployments(deployments)
-        assert (
-            len(result) == 2
-        ), "Binary filter should be bypassed when allowed_fails_policy is set"
+        assert len(result) == 2, "Binary filter should be bypassed when allowed_fails_policy is set"
 
     def test_filter_active_when_no_policy(self):
         """Binary health check filter still works when no allowed_fails_policy is configured."""
@@ -497,9 +469,7 @@ class TestHealthCheckFilterBypassWithPolicy:
 
         deployments = [_make_model("deploy-1"), _make_model("deploy-2", "gpt-5")]
 
-        result = await router._async_filter_health_check_unhealthy_deployments(
-            deployments
-        )
+        result = await router._async_filter_health_check_unhealthy_deployments(deployments)
         assert len(result) == 2
 
     def _make_scoped_router_with_unhealthy(self, policy) -> Router:
@@ -535,9 +505,7 @@ class TestHealthCheckFilterBypassWithPolicy:
 
     def test_filter_with_policy_still_applies_to_listed_groups(self):
         """A model-group allowlist keeps the filter active for listed groups even with a policy set."""
-        router = self._make_scoped_router_with_unhealthy(
-            AllowedFailsPolicy(AuthenticationErrorAllowedFails=3)
-        )
+        router = self._make_scoped_router_with_unhealthy(AllowedFailsPolicy(AuthenticationErrorAllowedFails=3))
         deployments = [
             _make_model("bad-listed"),
             _make_model("ok-listed"),
@@ -550,18 +518,14 @@ class TestHealthCheckFilterBypassWithPolicy:
     @pytest.mark.asyncio
     async def test_async_filter_with_policy_still_applies_to_listed_groups(self):
         """Async version: listed groups stay filtered with a policy set, unlisted stay untouched."""
-        router = self._make_scoped_router_with_unhealthy(
-            AllowedFailsPolicy(TimeoutErrorAllowedFails=2)
-        )
+        router = self._make_scoped_router_with_unhealthy(AllowedFailsPolicy(TimeoutErrorAllowedFails=2))
         deployments = [
             _make_model("bad-listed"),
             _make_model("ok-listed"),
             _make_model("bad-unlisted", "gpt-5"),
         ]
 
-        result = await router._async_filter_health_check_unhealthy_deployments(
-            deployments
-        )
+        result = await router._async_filter_health_check_unhealthy_deployments(deployments)
         assert [d["model_info"]["id"] for d in result] == ["ok-listed", "bad-unlisted"]
 
 
@@ -605,7 +569,7 @@ class TestAllDeploymentsInCooldownSafetyNet:
 
         # Simulate all deployments in cooldown
         with patch(
-            "litellm.router._async_get_cooldown_deployments",
+            "litellm.router.async_get_cooldown_deployments",
             new=AsyncMock(return_value=["deploy-1", "deploy-2"]),
         ):
             # The safety net in async_get_available_deployment should restore
@@ -620,9 +584,7 @@ class TestAllDeploymentsInCooldownSafetyNet:
             if not filtered and router.enable_health_check_routing:
                 filtered = _pre
 
-            assert (
-                len(filtered) == 2
-            ), "Safety net should return all deployments when all are in cooldown"
+            assert len(filtered) == 2, "Safety net should return all deployments when all are in cooldown"
 
 
 class TestHealthCheckIgnoreTransientErrors:
@@ -644,9 +606,7 @@ class TestHealthCheckIgnoreTransientErrors:
             health_check_ignore_transient_errors=True,
         )
 
-        rate_exc = litellm.RateLimitError(
-            message="Rate limited", model="gpt-4", llm_provider="openai"
-        )
+        rate_exc = litellm.RateLimitError(message="Rate limited", model="gpt-4", llm_provider="openai")
         assert getattr(rate_exc, "status_code", None) == 429
 
         unhealthy_endpoints = [
@@ -654,9 +614,7 @@ class TestHealthCheckIgnoreTransientErrors:
         ]
 
         with patch.object(proxy_module, "llm_router", router):
-            with patch(
-                "litellm.router_utils.cooldown_handlers._set_cooldown_deployments"
-            ) as mock_cooldown:
+            with patch("litellm.router_utils.cooldown_handlers.set_cooldown_deployments") as mock_cooldown:
                 with patch(
                     "litellm.router_utils.router_callbacks.track_deployment_metrics.increment_deployment_failures_for_current_minute"
                 ) as mock_increment:
@@ -680,18 +638,14 @@ class TestHealthCheckIgnoreTransientErrors:
             health_check_ignore_transient_errors=True,
         )
 
-        timeout_exc = litellm.Timeout(
-            message="Health check timeout exceeded", model="", llm_provider=""
-        )
+        timeout_exc = litellm.Timeout(message="Health check timeout exceeded", model="", llm_provider="")
 
         unhealthy_endpoints = [
             {"model_id": "deploy-1", "error": "timeout"},
         ]
 
         with patch.object(proxy_module, "llm_router", router):
-            with patch(
-                "litellm.router_utils.cooldown_handlers._set_cooldown_deployments"
-            ) as mock_cooldown:
+            with patch("litellm.router_utils.cooldown_handlers.set_cooldown_deployments") as mock_cooldown:
                 _write_health_state_to_router_cache(
                     healthy_endpoints=[],
                     unhealthy_endpoints=unhealthy_endpoints,
@@ -711,18 +665,14 @@ class TestHealthCheckIgnoreTransientErrors:
             health_check_ignore_transient_errors=True,
         )
 
-        auth_exc = litellm.AuthenticationError(
-            message="Invalid key", model="gpt-4", llm_provider="openai"
-        )
+        auth_exc = litellm.AuthenticationError(message="Invalid key", model="gpt-4", llm_provider="openai")
 
         unhealthy_endpoints = [
             {"model_id": "deploy-1", "error": "auth failed"},
         ]
 
         with patch.object(proxy_module, "llm_router", router):
-            with patch(
-                "litellm.router_utils.cooldown_handlers._set_cooldown_deployments"
-            ) as mock_cooldown:
+            with patch("litellm.router_utils.cooldown_handlers.set_cooldown_deployments") as mock_cooldown:
                 _write_health_state_to_router_cache(
                     healthy_endpoints=[],
                     unhealthy_endpoints=unhealthy_endpoints,
@@ -742,9 +692,7 @@ class TestHealthCheckIgnoreTransientErrors:
             health_check_ignore_transient_errors=True,
         )
 
-        rate_exc = litellm.RateLimitError(
-            message="Rate limited", model="gpt-4", llm_provider="openai"
-        )
+        rate_exc = litellm.RateLimitError(message="Rate limited", model="gpt-4", llm_provider="openai")
 
         unhealthy_endpoints = [
             {"model_id": "deploy-1", "error": "rate limited"},
@@ -774,18 +722,14 @@ class TestHealthCheckIgnoreTransientErrors:
             health_check_ignore_transient_errors=False,
         )
 
-        rate_exc = litellm.RateLimitError(
-            message="Rate limited", model="gpt-4", llm_provider="openai"
-        )
+        rate_exc = litellm.RateLimitError(message="Rate limited", model="gpt-4", llm_provider="openai")
 
         unhealthy_endpoints = [
             {"model_id": "deploy-1", "error": "rate limited"},
         ]
 
         with patch.object(proxy_module, "llm_router", router):
-            with patch(
-                "litellm.router_utils.cooldown_handlers._set_cooldown_deployments"
-            ) as mock_cooldown:
+            with patch("litellm.router_utils.cooldown_handlers.set_cooldown_deployments") as mock_cooldown:
                 _write_health_state_to_router_cache(
                     healthy_endpoints=[],
                     unhealthy_endpoints=unhealthy_endpoints,

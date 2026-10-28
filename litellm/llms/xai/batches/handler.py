@@ -10,7 +10,7 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
 )
-from litellm.types.llms.openai import CreateBatchRequest, HttpxBinaryResponseContent
+from litellm.types.llms.openai import CreateBatchRequest, HttpxBinaryResponseContent, OpenAIFileObject
 from litellm.types.utils import LiteLLMBatch, LlmProviders
 
 from .transformation import (
@@ -26,6 +26,7 @@ from .transformation import (
     to_create_batch_body,
     to_litellm_batch,
     to_openai_batch_list,
+    xai_batch_results_file_object,
     xai_batches_url,
 )
 
@@ -39,8 +40,8 @@ class _PageParams(TypedDict):
 
 def _results_params(after: str | None, limit: int | None) -> dict[str, object]:  # mutable-ok: httpx params
     if after is None:
-        return dict(_PageParams(limit=limit or XAI_RESULTS_PAGE_SIZE))  # mutable-ok: httpx params
-    return dict(_PageParams(limit=limit or XAI_RESULTS_PAGE_SIZE, pagination_token=after))  # mutable-ok: httpx params
+        return dict(_PageParams(limit=limit or XAI_RESULTS_PAGE_SIZE))
+    return dict(_PageParams(limit=limit or XAI_RESULTS_PAGE_SIZE, pagination_token=after))
 
 
 def _flatten(pages: list[XAIBatchResultsPage]) -> tuple[XAIBatchResult, ...]:
@@ -69,7 +70,7 @@ class XAIBatchesHandler:
     def _async(self, timeout: float | httpx.Timeout) -> AsyncHTTPHandler:
         return self._async_client or get_async_httpx_client(
             llm_provider=LlmProviders.XAI,
-            params={"timeout": timeout},  # mutable-ok: get_async_httpx_client takes a dict
+            params={"timeout": timeout},
         )
 
     def create_batch(
@@ -82,7 +83,7 @@ class XAIBatchesHandler:
     ) -> LiteLLMBatch | Coroutine[None, None, LiteLLMBatch]:
         url: Final = xai_batches_url(api_base)
         headers: Final = get_xai_auth_headers(api_key=api_key)
-        body: Final = dict(to_create_batch_body(create_batch_data))  # mutable-ok: httpx json body
+        body: Final = dict(to_create_batch_body(create_batch_data))
         endpoint: Final = create_batch_data.get("endpoint") or "/v1/chat/completions"
         if _is_async:
 
@@ -113,6 +114,24 @@ class XAIBatchesHandler:
             return _aretrieve()
         response: Final = self._sync(timeout).get(url, headers=headers, timeout=timeout)
         return to_litellm_batch(XAIBatch.model_validate(raise_for_xai_status(response).json()))
+
+    def batch_results_file(
+        self,
+        _is_async: bool,
+        batch_id: str,
+        api_base: str | None,
+        api_key: str | None,
+        timeout: float | httpx.Timeout,
+    ) -> OpenAIFileObject | Coroutine[None, None, OpenAIFileObject]:
+        """Describe a completed batch's results as a file from one batch read, never downloading the results."""
+        retrieved: Final = self.retrieve_batch(_is_async, batch_id, api_base, api_key, timeout)
+        if isinstance(retrieved, LiteLLMBatch):
+            return xai_batch_results_file_object(retrieved)
+
+        async def _afile() -> OpenAIFileObject:
+            return xai_batch_results_file_object(await retrieved)
+
+        return _afile()
 
     def cancel_batch(
         self,
@@ -177,7 +196,7 @@ class XAIBatchesHandler:
                     )
                     return XAIBatchResultsPage.model_validate(raise_for_xai_status(response).json())
 
-                pages = [await _page(None)]  # mutable-ok: page walk terminates on the cursor, not on a fixed count
+                pages = [await _page(None)]
                 while pages[-1].pagination_token and pages[-1].results:
                     pages.append(await _page(pages[-1].pagination_token))
                 return _jsonl_response(url, _flatten(pages))
@@ -189,7 +208,7 @@ class XAIBatchesHandler:
             response: Final = client.get(url, params=_results_params(after, None), headers=headers, timeout=timeout)
             return XAIBatchResultsPage.model_validate(raise_for_xai_status(response).json())
 
-        pages = [_page(None)]  # mutable-ok: page walk terminates on the cursor, not on a fixed count
+        pages = [_page(None)]
         while pages[-1].pagination_token and pages[-1].results:
             pages.append(_page(pages[-1].pagination_token))
         return _jsonl_response(url, _flatten(pages))

@@ -58,6 +58,26 @@ def test_image_edit_forwards_provider_params_and_extra_body():
     assert response.data
 
 
+def test_image_edit_keeps_an_internal_prefixed_kwarg_out_of_the_provider_request():
+    captured = {}
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_image_edit_request(captured))))
+
+    litellm.image_edit(
+        model="openai/gpt-image-1",
+        image=PNG_BYTES,
+        prompt="add a hat",
+        api_key="sk-test",
+        api_base="https://edit.example/v1",
+        client=client,
+        seed=42,
+        _litellm_undeclared_sentinel="internal",
+    )
+
+    fields = _multipart_text_fields(captured["content_type"], captured["body"])
+    assert "_litellm_undeclared_sentinel" not in fields
+    assert fields["seed"] == "42"
+
+
 def test_image_edit_extra_body_takes_precedence_over_kwargs():
     captured = {}
     client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_image_edit_request(captured))))

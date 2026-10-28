@@ -5,24 +5,57 @@ use thiserror::Error;
 
 use crate::{AliasIssue, Catalog, ModelInfo, UtcHours, Weekday};
 
-/// A registry entry violates the checked-in catalog contract.
 #[derive(Debug, Error)]
 pub enum RegistryValidationError {
-    #[error("{reason}")]
-    Entry { model: String, reason: String },
-    #[error("alias issue: {0:?}")]
+    #[error("invalid registry entry {model:?}")]
+    Entry {
+        model: String,
+        #[source]
+        reason: EntryViolation,
+    },
+    #[error(transparent)]
     Alias(AliasIssue),
 }
 
-/// Validate one registry entry without restricting the tolerant catalog reader.
+#[derive(Debug, Error)]
+pub enum EntryViolation {
+    #[error("entry must be an object")]
+    NotObject,
+    #[error("aliases must be an array")]
+    AliasesNotArray,
+    #[error("aliases must contain strings")]
+    AliasNotString,
+    #[error("entry does not match the model schema")]
+    Schema(#[source] serde_json::Error),
+    #[error("litellm_provider is required")]
+    MissingProvider,
+    #[error("invalid deprecation_date")]
+    DeprecationDate(#[source] time::error::Parse),
+    #[error("off_peak_pricing needs hours or windows")]
+    OffPeakWithoutHours,
+    #[error("off_peak_pricing.hours_utc is invalid")]
+    InvalidHours,
+    #[error("off_peak_pricing.windows is empty")]
+    EmptyWindows,
+    #[error("off_peak_pricing.weekdays is invalid")]
+    InvalidWeekdays,
+    #[error("typed entry could not be serialized")]
+    Serialize(#[source] serde_json::Error),
+    #[error("entry has an unknown field, null, or changed value: {}", fields.join(", "))]
+    ChangedFields { fields: Vec<String> },
+    #[error("{field} must be nonnegative")]
+    Negative { field: String },
+    #[error("{field} must be at least one")]
+    UpliftBelowOne { field: String },
+}
+
 pub fn validate_model_entry(model: &str, value: &Value) -> Result<(), RegistryValidationError> {
-    validate_entry_inner(model, value).map_err(|reason| RegistryValidationError::Entry {
+    validate_entry_inner(value).map_err(|reason| RegistryValidationError::Entry {
         model: model.to_owned(),
         reason,
     })
 }
 
-/// Check every model and alias in a parsed catalog against registry rules.
 pub fn validate_registry(catalog: &Catalog) -> Result<(), RegistryValidationError> {
     if let Some(issue) = catalog.alias_issues().first() {
         return Err(RegistryValidationError::Alias(issue.clone()));
@@ -53,70 +86,61 @@ fn keys(value: &Map<String, Value>) -> BTreeSet<String> {
     value.keys().cloned().collect()
 }
 
-fn symmetric_difference(left: &BTreeSet<String>, right: &BTreeSet<String>) -> BTreeSet<String> {
+fn symmetric_difference(left: &BTreeSet<String>, right: &BTreeSet<String>) -> Vec<String> {
     left.symmetric_difference(right).cloned().collect()
 }
 
-fn validate_entry_inner(model_name: &str, value: &Value) -> Result<(), String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| format!("{model_name} must be an object"))?;
+fn validate_entry_inner(value: &Value) -> Result<(), EntryViolation> {
+    let object = value.as_object().ok_or(EntryViolation::NotObject)?;
     if let Some(aliases) = object.get("aliases") {
-        let names = aliases
-            .as_array()
-            .ok_or_else(|| format!("{model_name}.aliases must be an array"))?;
+        let names = aliases.as_array().ok_or(EntryViolation::AliasesNotArray)?;
         if names.iter().any(|name| !name.is_string()) {
-            return Err(format!("{model_name}.aliases must contain strings"));
+            return Err(EntryViolation::AliasNotString);
         }
     }
-    let info: ModelInfo =
-        serde_json::from_value(value.clone()).map_err(|error| format!("{model_name}: {error}"))?;
+    let info: ModelInfo = serde_json::from_value(value.clone()).map_err(EntryViolation::Schema)?;
     if info.litellm_provider.is_none() {
-        return Err(format!("{model_name}.litellm_provider is required"));
+        return Err(EntryViolation::MissingProvider);
     }
-    validate_dates_and_windows(model_name, &info)?;
-    let serialized = serde_json::to_value(info).map_err(|error| error.to_string())?;
+    validate_dates_and_windows(&info)?;
+    let serialized = serde_json::to_value(info).map_err(EntryViolation::Serialize)?;
     let mut expected = object.clone();
     expected.remove("aliases");
     if !json_eq(&Value::Object(expected.clone()), &serialized) {
         let actual = serialized
             .as_object()
             .expect("ModelInfo serializes as an object");
-        return Err(format!(
-            "{model_name} has an unknown field, null, or changed value: {:?}",
-            symmetric_difference(&keys(&expected), &keys(actual))
-        ));
+        return Err(EntryViolation::ChangedFields {
+            fields: symmetric_difference(&keys(&expected), &keys(actual)),
+        });
     }
-    check_prices(model_name, value)
+    check_prices("", value)
 }
 
-fn validate_dates_and_windows(model_name: &str, info: &ModelInfo) -> Result<(), String> {
+fn validate_dates_and_windows(info: &ModelInfo) -> Result<(), EntryViolation> {
     if let Some(date) = &info.deprecation_date {
         let format = time::format_description::parse_borrowed::<2>("[year]-[month]-[day]").unwrap();
-        time::Date::parse(date, &format)
-            .map_err(|error| format!("{model_name}.deprecation_date: {error}"))?;
+        time::Date::parse(date, &format).map_err(EntryViolation::DeprecationDate)?;
     }
     let Some(pricing) = &info.off_peak_pricing else {
         return Ok(());
     };
     if pricing.hours_utc.is_none() && pricing.windows.is_none() {
-        return Err(format!(
-            "{model_name}.off_peak_pricing needs hours or windows"
-        ));
+        return Err(EntryViolation::OffPeakWithoutHours);
     }
     if let Some(hours) = &pricing.hours_utc {
         validate_hours(hours)?;
     }
     if let Some(windows) = &pricing.windows {
         if windows.is_empty() {
-            return Err(format!("{model_name}.off_peak_pricing.windows is empty"));
+            return Err(EntryViolation::EmptyWindows);
         }
         windows.iter().try_for_each(|window| {
             validate_hours(&window.hours_utc)?;
             if let Some(days) = &window.weekdays
                 && (days.is_empty() || days.iter().any(|day| !valid_weekday(day)))
             {
-                return Err(format!("{model_name}.off_peak_pricing.weekdays is invalid"));
+                return Err(EntryViolation::InvalidWeekdays);
             }
             Ok(())
         })?;
@@ -124,13 +148,13 @@ fn validate_dates_and_windows(model_name: &str, info: &ModelInfo) -> Result<(), 
     Ok(())
 }
 
-fn validate_hours(hours: &UtcHours) -> Result<(), String> {
+fn validate_hours(hours: &UtcHours) -> Result<(), EntryViolation> {
     let values = match hours {
         UtcHours::Single(value) => std::slice::from_ref(value),
         UtcHours::Multiple(values) => values.as_slice(),
     };
     if values.is_empty() || values.iter().any(|value| !valid_utc_window(value)) {
-        return Err("off_peak_pricing.hours_utc is invalid".into());
+        return Err(EntryViolation::InvalidHours);
     }
     Ok(())
 }
@@ -176,7 +200,7 @@ fn valid_weekday(day: &Weekday) -> bool {
     }
 }
 
-fn check_prices(path: &str, value: &Value) -> Result<(), String> {
+fn check_prices(path: &str, value: &Value) -> Result<(), EntryViolation> {
     let Some(object) = value.as_object() else {
         return Ok(());
     };
@@ -188,13 +212,17 @@ fn check_prices(path: &str, value: &Value) -> Result<(), String> {
             && let Some(number) = field.as_f64()
             && number < 0.0
         {
-            return Err(format!("{field_path} must be nonnegative"));
+            return Err(EntryViolation::Negative {
+                field: relative(&field_path),
+            });
         }
         if key.contains("uplift_multiplier")
             && let Some(number) = field.as_f64()
             && number < 1.0
         {
-            return Err(format!("{field_path} must be at least one"));
+            return Err(EntryViolation::UpliftBelowOne {
+                field: relative(&field_path),
+            });
         }
         if matches!(key.as_str(), "range" | "max_results_range")
             && field.as_array().is_some_and(|values| {
@@ -203,7 +231,9 @@ fn check_prices(path: &str, value: &Value) -> Result<(), String> {
                     .any(|value| value.as_f64().is_some_and(|n| n < 0.0))
             })
         {
-            return Err(format!("{field_path} must be nonnegative"));
+            return Err(EntryViolation::Negative {
+                field: relative(&field_path),
+            });
         }
         if matches!(key.as_str(), "metadata" | "provider_specific_entry") {
             return Ok(());
@@ -215,4 +245,8 @@ fn check_prices(path: &str, value: &Value) -> Result<(), String> {
             None => check_prices(&field_path, field),
         }
     })
+}
+
+fn relative(field_path: &str) -> String {
+    field_path.trim_start_matches('.').to_owned()
 }

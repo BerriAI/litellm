@@ -1,12 +1,13 @@
-use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
+use litellm_core_utils::decline::Decline;
+use litellm_llms_types::formats::batches::{BatchRequestCounts, BatchResponse, BatchStatus};
+use litellm_llms_types::formats::messages::MessagesResponse;
+use litellm_llms_types::providers::anthropic::{BATCHES_PATH, MESSAGES_PATH};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
 use url::Url;
 
-use crate::{Error, anthropic::messages::transformation::resolve_anthropic_api_base};
-
-const BATCHES_PATH_SUFFIX: &str = "/v1/messages/batches";
+use crate::{Error, anthropic::common_utils::resolve_anthropic_api_base};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnthropicBatchRequestCounts {
@@ -37,38 +38,16 @@ pub struct AnthropicMessageBatch {
     pub request_counts: AnthropicBatchRequestCounts,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BatchStatus {
-    InProgress,
-    Cancelling,
-    Completed,
+#[derive(Deserialize)]
+struct BatchResultRecord {
+    result: BatchResult,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BatchRequestCounts {
-    pub total: u64,
-    pub completed: u64,
-    pub failed: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LiteLlmMessageBatch {
-    pub id: String,
-    pub object: String,
-    pub endpoint: String,
-    pub input_file_id: String,
-    pub completion_window: String,
-    pub status: BatchStatus,
-    pub output_file_id: String,
-    pub created_at: i64,
-    pub in_progress_at: Option<i64>,
-    pub expires_at: Option<i64>,
-    pub completed_at: Option<i64>,
-    pub expired_at: Option<i64>,
-    pub cancelling_at: Option<i64>,
-    pub cancelled_at: Option<i64>,
-    pub request_counts: BatchRequestCounts,
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum BatchResult {
+    Succeeded { message: Box<MessagesResponse> },
+    Errored { error: Value },
 }
 
 pub trait AnthropicBatchesConfig {
@@ -84,7 +63,7 @@ pub trait AnthropicBatchesConfig {
         &self,
         response: AnthropicMessageBatch,
         now: i64,
-    ) -> Result<LiteLlmMessageBatch, Error>;
+    ) -> Result<BatchResponse, Error>;
 
     fn retrieve_batch_url(
         &self,
@@ -99,9 +78,9 @@ pub trait AnthropicBatchesConfig {
         &self,
         response: AnthropicMessageBatch,
         now: i64,
-    ) -> LiteLlmMessageBatch;
+    ) -> BatchResponse;
 
-    fn transform_batch_results(&self, body: &str) -> Result<Vec<AnthropicMessagesResponse>, Error>;
+    fn transform_batch_results(&self, body: &str) -> Result<Vec<MessagesResponse>, Error>;
 }
 
 pub struct AnthropicBatchesTransformation;
@@ -127,15 +106,16 @@ fn batches_base_url(
 ) -> Result<Url, Error> {
     let api_base = resolve_anthropic_api_base(api_base, env_lookup);
     let api_base = api_base.trim_end_matches('/');
-    let complete_url = if api_base.ends_with(BATCHES_PATH_SUFFIX) {
+    let complete_url = if api_base.ends_with(BATCHES_PATH) {
         api_base.to_string()
-    } else if let Some(base) = api_base.strip_suffix("/v1/messages") {
-        format!("{base}{BATCHES_PATH_SUFFIX}")
+    } else if let Some(base) = api_base.strip_suffix(MESSAGES_PATH) {
+        format!("{base}{BATCHES_PATH}")
     } else {
-        format!("{api_base}{BATCHES_PATH_SUFFIX}")
+        format!("{api_base}{BATCHES_PATH}")
     };
-    Url::parse(&complete_url)
-        .map_err(|error| Error::InvalidRequest(format!("invalid Anthropic API base: {error}")))
+    Url::parse(&complete_url).map_err(|error| {
+        Error::InvalidRequest(crate::ErrorDetail::invalid("Anthropic API base", error))
+    })
 }
 
 impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
@@ -148,15 +128,19 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
     }
 
     fn transform_create_batch_request(&self) -> Result<Value, Error> {
-        Err(Error::Unsupported("Anthropic message batch creation"))
+        Err(Error::Declined(Decline {
+            reason: "Anthropic message batch creation",
+        }))
     }
 
     fn transform_create_batch_response(
         &self,
         _response: AnthropicMessageBatch,
         _now: i64,
-    ) -> Result<LiteLlmMessageBatch, Error> {
-        Err(Error::Unsupported("Anthropic message batch creation"))
+    ) -> Result<BatchResponse, Error> {
+        Err(Error::InvalidResponse(crate::ErrorDetail::Unhandled(
+            "Anthropic message batch creation",
+        )))
     }
 
     fn retrieve_batch_url(
@@ -170,7 +154,12 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
         }
         let mut url = batches_base_url(api_base, env_lookup)?;
         url.path_segments_mut()
-            .map_err(|_| Error::InvalidRequest("Anthropic API base cannot be a base URL".into()))?
+            .map_err(|()| {
+                Error::InvalidRequest(crate::ErrorDetail::Expected {
+                    subject: "Anthropic API base",
+                    expected: "a base URL",
+                })
+            })?
             .push(batch_id);
         Ok(url.into())
     }
@@ -183,7 +172,7 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
         &self,
         response: AnthropicMessageBatch,
         now: i64,
-    ) -> LiteLlmMessageBatch {
+    ) -> BatchResponse {
         let created_at = timestamp(response.created_at.as_deref());
         let ended_at = timestamp(response.ended_at.as_deref());
         let expires_at = timestamp(response.expires_at.as_deref());
@@ -204,10 +193,10 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
             failed: response.request_counts.errored,
         };
 
-        LiteLlmMessageBatch {
+        BatchResponse {
             id: response.id.clone(),
             object: "batch".into(),
-            endpoint: "/v1/messages".into(),
+            endpoint: MESSAGES_PATH.into(),
             input_file_id: "None".into(),
             completion_window: "24h".into(),
             status,
@@ -231,14 +220,28 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
         }
     }
 
-    fn transform_batch_results(&self, body: &str) -> Result<Vec<AnthropicMessagesResponse>, Error> {
+    fn transform_batch_results(&self, body: &str) -> Result<Vec<MessagesResponse>, Error> {
         body.lines()
             .filter(|line| !line.trim().is_empty())
-            .filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
-            .map(|record| {
-                serde_json::from_value(record["result"]["message"].clone()).map_err(|error| {
-                    Error::InvalidResponse(format!("invalid Anthropic batch result: {error}"))
-                })
+            .enumerate()
+            .map(|(index, line)| {
+                let record: BatchResultRecord =
+                    serde_json::from_str(line.trim()).map_err(|error| {
+                        Error::InvalidResponse(crate::ErrorDetail::invalid_line(
+                            "Anthropic batch result",
+                            index + 1,
+                            error,
+                        ))
+                    })?;
+                match record.result {
+                    BatchResult::Succeeded { message } => Ok(*message),
+                    BatchResult::Errored { error } => {
+                        Err(Error::InvalidResponse(crate::ErrorDetail::RemoteFailure {
+                            operation: "Anthropic batch request",
+                            detail: error,
+                        }))
+                    }
+                }
             })
             .collect()
     }
@@ -310,9 +313,8 @@ mod tests {
     }
 
     #[test]
-    fn extracts_message_responses_from_ndjson_and_skips_non_json_lines() {
-        let body = r#"not-json
-{"result":{"message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[],"stop_reason":"end_turn","stop_sequence":null}}}
+    fn extracts_successful_message_responses_from_ndjson() {
+        let body = r#"{"result":{"type":"succeeded","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[],"stop_reason":"end_turn","stop_sequence":null}}}
 "#;
         let messages = ANTHROPIC_BATCHES_TRANSFORMATION
             .transform_batch_results(body)
@@ -322,16 +324,40 @@ mod tests {
         assert_eq!(messages[0].id, "msg_1");
     }
 
-    #[test]
-    fn preserves_python_placeholder_for_batch_creation() {
-        assert!(matches!(
-            ANTHROPIC_BATCHES_TRANSFORMATION.transform_create_batch_request(),
-            Err(Error::Unsupported("Anthropic message batch creation"))
-        ));
+    #[rstest::rstest]
+    #[case::malformed("not-json", "line 1")]
+    #[case::errored(
+        r#"{"result":{"type":"errored","error":{"type":"invalid_request_error"}}}"#,
+        "request failed"
+    )]
+    fn reports_malformed_and_unsuccessful_batch_results(#[case] body: &str, #[case] fact: &str) {
+        let error = ANTHROPIC_BATCHES_TRANSFORMATION
+            .transform_batch_results(body)
+            .unwrap_err();
+        assert!(matches!(error, Error::InvalidResponse(_)), "{error:?}");
+        assert!(
+            litellm_error::Report::new(&error)
+                .to_string()
+                .contains(fact)
+        );
+    }
+
+    #[rstest::rstest]
+    fn batch_creation_only_declines_before_a_provider_response() {
+        let error = ANTHROPIC_BATCHES_TRANSFORMATION
+            .transform_create_batch_request()
+            .unwrap_err();
+        assert!(!error.dispatched());
+        assert_eq!(
+            error.declined().map(|decline| decline.reason),
+            Some("Anthropic message batch creation")
+        );
         let response: AnthropicMessageBatch = serde_json::from_value(json!({})).unwrap();
-        assert!(matches!(
-            ANTHROPIC_BATCHES_TRANSFORMATION.transform_create_batch_response(response, 0),
-            Err(Error::Unsupported("Anthropic message batch creation"))
-        ));
+        let error = ANTHROPIC_BATCHES_TRANSFORMATION
+            .transform_create_batch_response(response, 0)
+            .unwrap_err();
+        assert!(error.dispatched());
+        assert!(error.is_response());
+        assert!(error.declined().is_none());
     }
 }

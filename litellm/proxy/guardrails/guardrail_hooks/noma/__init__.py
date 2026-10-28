@@ -28,6 +28,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         anonymize_input=litellm_params.anonymize_input,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
+        timeout=litellm_params.timeout,
     )
     litellm.logging_callback_manager.add_litellm_callback(_noma_callback)
 
@@ -37,15 +38,22 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
 def initialize_guardrail_v2(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
 
+    extras: Final = litellm_params.model_extra or {}
     _noma_v2_callback: Final = NomaV2Guardrail(
         guardrail_name=guardrail.get("guardrail_name", ""),
         api_key=litellm_params.api_key,
         api_base=litellm_params.api_base,
         application_id=litellm_params.application_id,
+        gateway_name=litellm_params.gateway_name,
         monitor_mode=litellm_params.monitor_mode,
         block_failures=litellm_params.block_failures,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
+        timeout=litellm_params.timeout,
+        streaming_buffer_until_moderated=extras.get("streaming_buffer_until_moderated"),
+        streaming_end_of_stream_only=extras.get("streaming_end_of_stream_only"),
+        streaming_sampling_rate=extras.get("streaming_sampling_rate"),
+        streaming_buffer_release_on_scan=extras.get("streaming_buffer_release_on_scan"),
     )
     litellm.logging_callback_manager.add_litellm_callback(_noma_v2_callback)
 
