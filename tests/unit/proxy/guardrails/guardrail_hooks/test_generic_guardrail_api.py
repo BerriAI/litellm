@@ -1545,6 +1545,26 @@ class TestGenericGuardrailAPIStreamingConfig:
 
         assert GenericGuardrailAPI.get_config_model() is GenericGuardrailAPIConfigModel
 
+    def test_config_model_declares_connection_fields(self):
+        """The dashboard builds a provider's form from this model.
+
+        ``get_provider_specific_params`` renders whatever the config model
+        declares, and the form only offers those keys, so ``api_base`` and
+        ``api_key`` have to be fields here even though the initializer reads
+        them off ``litellm_params`` at runtime. Without them the provider shows
+        no configuration fields at all (BerriAI/litellm#34927).
+        """
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIConfigModel,
+        )
+
+        fields = GenericGuardrailAPIConfigModel.model_json_schema().get("properties", {})
+
+        for field_name in ("api_base", "api_key"):
+            assert field_name in fields, f"{field_name} must be a config model field"
+            assert fields[field_name].get("description"), f"{field_name} needs a description for the form"
+            assert field_name not in GenericGuardrailAPIConfigModel.model_json_schema().get("required", [])
+
     def test_streaming_transform_mode_defaults_block_only(self):
         guardrail = GenericGuardrailAPI(
             api_base="https://api.test.guardrail.com",
