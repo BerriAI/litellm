@@ -10879,11 +10879,14 @@ def test_get_optional_params_keeps_a_tool_config_cache_point_out_of_the_openai_e
     ],
 )
 def test_declared_mid_conversation_system_support_prefers_the_deployment_over_the_cost_map(
-    declare_mid_conversation_system, cost_map_declared, deployment_declared, expected
-):
+    declare_mid_conversation_system: Callable[[str, bool], None],
+    cost_map_declared: bool | None,
+    deployment_declared: bool | None,
+    expected: bool | None,
+) -> None:
     if cost_map_declared is not None:
         declare_mid_conversation_system("hosted_vllm/mid-conversation-probe", cost_map_declared)
-    deployment_model_info = (
+    deployment_model_info: Final = (
         {"id": "deployment-1"}
         if deployment_declared is None
         else {"id": "deployment-1", "supports_mid_conversation_system": deployment_declared}
@@ -10896,7 +10899,7 @@ def test_declared_mid_conversation_system_support_prefers_the_deployment_over_th
     )
 
 
-def test_declared_mid_conversation_system_support_is_none_when_the_model_lookup_raises(monkeypatch):
+def test_declared_mid_conversation_system_support_is_none_when_the_model_lookup_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(litellm.model_cost, "hosted_vllm/unreadable-probe", "not a model info entry")
     litellm.get_model_info.cache_clear()
     assert litellm.utils.declared_mid_conversation_system_support("unreadable-probe", "hosted_vllm", None) is None

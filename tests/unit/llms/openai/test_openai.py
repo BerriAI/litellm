@@ -2,7 +2,7 @@ import asyncio
 import importlib
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from types import ModuleType
 from typing import Final, Literal, Protocol
 from unittest.mock import MagicMock, Mock, patch
@@ -2032,11 +2032,15 @@ def _developer_message_after_a_user_turn() -> list[dict[str, str]]:
     ],
 )
 def test_openai_config_hoists_a_later_developer_message_only_for_a_model_off_openai_that_rejects_it(
-    declare_mid_conversation_system, custom_llm_provider, api_base, declared, expected_roles
-):
+    declare_mid_conversation_system: Callable[[str, bool], None],
+    custom_llm_provider: str,
+    api_base: str,
+    declared: bool | None,
+    expected_roles: list[str],
+) -> None:
     if declared is not None:
         declare_mid_conversation_system(f"{custom_llm_provider}/system-first-model", declared)
-    messages = OpenAIConfig().translate_developer_role_to_system_role(
+    messages: Final = OpenAIConfig().translate_developer_role_to_system_role(
         messages=_developer_message_after_a_user_turn(),
         model="system-first-model",
         custom_llm_provider=custom_llm_provider,

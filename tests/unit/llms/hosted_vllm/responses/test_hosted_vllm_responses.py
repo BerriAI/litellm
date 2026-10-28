@@ -8,11 +8,13 @@ hosted_vllm (and any OpenAI-compatible provider using add_provider_specific_para
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 
 import litellm
@@ -194,40 +196,48 @@ _LATER_DEVELOPER_INPUT: Final = (
 )
 
 
-def _sent_body(mock_client: MagicMock) -> Mapping[str, object]:
-    kwargs: Final = mock_client.post.call_args.kwargs
-    return kwargs["json"] if "json" in kwargs else json.loads(kwargs["data"])
+_VLLM_RESPONSES_URL: Final = "https://test-vllm.example.com/v1/responses"
 
 
+def _vllm_responses_route(output_text: str) -> respx.Route:
+    return respx.post(_VLLM_RESPONSES_URL).mock(
+        return_value=httpx.Response(200, json=_make_mock_responses_api_response(output_text))
+    )
+
+
+def _sent_body(route: respx.Route) -> Mapping[str, object]:
+    return json.loads(route.calls.last.request.content)
+
+
+@respx.mock
 def test_hosted_vllm_responses_folds_a_later_developer_item_into_instructions_for_a_system_first_model(
-    declare_mid_conversation_system,
-):
+    declare_mid_conversation_system: Callable[[str, bool], None],
+) -> None:
     declare_mid_conversation_system("hosted_vllm/Qwen/Qwen3.6-27B", False)
-    mock_client: Final = _make_mock_http_client(_make_mock_responses_api_response("Paris"))
-    with patch("litellm.llms.custom_httpx.llm_http_handler.get_httpx_client", return_value=mock_client):
-        litellm.responses(
-            model="hosted_vllm/Qwen/Qwen3.6-27B",
-            instructions="You are a terse assistant.",
-            input=list(_LATER_DEVELOPER_INPUT),
-            api_base="https://test-vllm.example.com/v1",
-        )
-    body: Final = _sent_body(mock_client)
+    route: Final = _vllm_responses_route("Paris")
+    litellm.responses(
+        model="hosted_vllm/Qwen/Qwen3.6-27B",
+        instructions="You are a terse assistant.",
+        input=list(_LATER_DEVELOPER_INPUT),
+        api_base="https://test-vllm.example.com/v1",
+    )
+    body: Final = _sent_body(route)
     assert body["instructions"] == "You are a terse assistant.\n\nAnswer with exactly one word."
     assert tuple(body["input"]) == (_LATER_DEVELOPER_INPUT[0], _LATER_DEVELOPER_INPUT[2])
 
 
-def test_hosted_vllm_responses_folds_for_a_deployment_declared_system_first_and_sends_a_closing_developer_as_user():
+@respx.mock
+def test_hosted_vllm_responses_folds_for_a_deployment_declared_system_first_and_sends_a_closing_developer_as_user() -> None:
     assistant_turn: Final = {"type": "message", "role": "assistant", "content": "Paris"}
-    mock_client: Final = _make_mock_http_client(_make_mock_responses_api_response("PONG"))
-    with patch("litellm.llms.custom_httpx.llm_http_handler.get_httpx_client", return_value=mock_client):
-        litellm.responses(
-            model="hosted_vllm/Qwen/Qwen3-8B",
-            instructions="You are a terse assistant.",
-            input=[*_LATER_DEVELOPER_INPUT, assistant_turn, {"role": "developer", "content": "Reply with PONG."}],
-            model_info={"id": "deployment-1", "supports_mid_conversation_system": False},
-            api_base="https://test-vllm.example.com/v1",
-        )
-    body: Final = _sent_body(mock_client)
+    route: Final = _vllm_responses_route("PONG")
+    litellm.responses(
+        model="hosted_vllm/Qwen/Qwen3-8B",
+        instructions="You are a terse assistant.",
+        input=[*_LATER_DEVELOPER_INPUT, assistant_turn, {"role": "developer", "content": "Reply with PONG."}],
+        model_info={"id": "deployment-1", "supports_mid_conversation_system": False},
+        api_base="https://test-vllm.example.com/v1",
+    )
+    body: Final = _sent_body(route)
     assert body["instructions"] == "You are a terse assistant.\n\nAnswer with exactly one word."
     assert tuple(body["input"]) == (
         _LATER_DEVELOPER_INPUT[0],
@@ -237,15 +247,15 @@ def test_hosted_vllm_responses_folds_for_a_deployment_declared_system_first_and_
     )
 
 
-def test_hosted_vllm_responses_forwards_a_later_developer_item_in_place_for_an_undeclared_model():
-    mock_client: Final = _make_mock_http_client(_make_mock_responses_api_response("Paris"))
-    with patch("litellm.llms.custom_httpx.llm_http_handler.get_httpx_client", return_value=mock_client):
-        litellm.responses(
-            model="hosted_vllm/Qwen/Qwen3-8B",
-            instructions="You are a terse assistant.",
-            input=list(_LATER_DEVELOPER_INPUT),
-            api_base="https://test-vllm.example.com/v1",
-        )
-    body: Final = _sent_body(mock_client)
+@respx.mock
+def test_hosted_vllm_responses_forwards_a_later_developer_item_in_place_for_an_undeclared_model() -> None:
+    route: Final = _vllm_responses_route("Paris")
+    litellm.responses(
+        model="hosted_vllm/Qwen/Qwen3-8B",
+        instructions="You are a terse assistant.",
+        input=list(_LATER_DEVELOPER_INPUT),
+        api_base="https://test-vllm.example.com/v1",
+    )
+    body: Final = _sent_body(route)
     assert body["instructions"] == "You are a terse assistant."
     assert tuple(body["input"]) == _LATER_DEVELOPER_INPUT

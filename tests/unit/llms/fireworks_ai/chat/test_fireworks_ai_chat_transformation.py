@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -2368,8 +2369,8 @@ _CODEX_DEVELOPER_MESSAGE_AFTER_A_USER_TURN: Final = (
 )
 
 
-def test_translate_developer_role_keeps_a_later_developer_message_in_place_for_an_undeclared_fireworks_model():
-    messages = FireworksAIConfig().translate_developer_role_to_system_role(
+def test_translate_developer_role_keeps_a_later_developer_message_in_place_for_an_undeclared_fireworks_model() -> None:
+    messages: Final = FireworksAIConfig().translate_developer_role_to_system_role(
         messages=_CODEX_DEVELOPER_MESSAGE_AFTER_A_USER_TURN,
         model="accounts/fireworks/models/unlisted-model",
         custom_llm_provider="fireworks_ai",
@@ -2385,8 +2386,8 @@ def test_translate_developer_role_keeps_a_later_developer_message_in_place_for_a
     ]
 
 
-def test_translate_developer_role_leaves_a_leading_system_and_developer_pair_unmerged_for_an_undeclared_model():
-    messages = FireworksAIConfig().translate_developer_role_to_system_role(
+def test_translate_developer_role_leaves_a_leading_system_and_developer_pair_unmerged_for_an_undeclared_model() -> None:
+    messages: Final = FireworksAIConfig().translate_developer_role_to_system_role(
         messages=[
             {"role": "system", "content": "You are Codex"},
             {"role": "developer", "content": "Answer with exactly one word."},
@@ -2407,9 +2408,9 @@ def test_translate_developer_role_leaves_a_leading_system_and_developer_pair_unm
 
 @pytest.mark.parametrize("model", ["qwen3p8-max", "accounts/fireworks/models/qwen3p8-max"])
 def test_translate_developer_role_hoists_a_later_developer_message_for_the_system_first_qwen3p8_model(
-    local_model_cost_map, model
-):
-    messages = FireworksAIConfig().translate_developer_role_to_system_role(
+    local_model_cost_map: None, model: str
+) -> None:
+    messages: Final = FireworksAIConfig().translate_developer_role_to_system_role(
         messages=_CODEX_DEVELOPER_MESSAGE_AFTER_A_USER_TURN,
         model=model,
         custom_llm_provider="fireworks_ai",
@@ -2429,10 +2430,10 @@ def test_translate_developer_role_hoists_a_later_developer_message_for_the_syste
     [(False, ["system", "user", "user"]), (True, ["system", "user", "system", "user"])],
 )
 def test_translate_developer_role_follows_the_deployment_model_info_over_the_cost_map(
-    declare_mid_conversation_system, deployment_declared, expected_roles
-):
+    declare_mid_conversation_system: Callable[[str, bool], None], deployment_declared: bool, expected_roles: list[str]
+) -> None:
     declare_mid_conversation_system("fireworks_ai/accounts/fireworks/models/shared-backend", not deployment_declared)
-    messages = FireworksAIConfig().translate_developer_role_to_system_role(
+    messages: Final = FireworksAIConfig().translate_developer_role_to_system_role(
         messages=_CODEX_DEVELOPER_MESSAGE_AFTER_A_USER_TURN,
         model="accounts/fireworks/models/shared-backend",
         custom_llm_provider="fireworks_ai",

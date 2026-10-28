@@ -641,8 +641,8 @@ def test_litellm_gateway_from_sdk_with_thinking_param(respx_mock):
     assert "Connection error." in str(e)
 
 
-def test_translate_developer_role_leaves_a_later_developer_message_in_place_for_the_downstream_proxy():
-    translated = LiteLLMProxyChatConfig().translate_developer_role_to_system_role(
+def test_translate_developer_role_leaves_a_later_developer_message_in_place_for_the_downstream_proxy() -> None:
+    translated: Final = LiteLLMProxyChatConfig().translate_developer_role_to_system_role(
         messages=[
             {"role": "system", "content": "You are terse."},
             {"role": "user", "content": "Hi there"},

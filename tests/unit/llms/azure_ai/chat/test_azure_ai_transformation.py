@@ -1,5 +1,6 @@
 import json
 import traceback
+from collections.abc import Callable
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -1101,10 +1102,10 @@ def test_map_azure_model_group(model_group_header, expected_model):
 
 
 def test_translate_developer_role_hoists_a_later_developer_message_for_a_model_that_rejects_it(
-    declare_mid_conversation_system,
-):
+    declare_mid_conversation_system: Callable[[str, bool], None],
+) -> None:
     declare_mid_conversation_system("azure_ai/system-first-model", False)
-    messages = AzureAIStudioConfig().translate_developer_role_to_system_role(
+    messages: Final = AzureAIStudioConfig().translate_developer_role_to_system_role(
         messages=[
             {"role": "system", "content": "You are terse."},
             {"role": "user", "content": "Hi there"},

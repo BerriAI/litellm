@@ -1,3 +1,5 @@
+from typing import Final
+
 from litellm.llms.base_llm.base_utils import (
     hoist_developer_messages_into_leading_system_message,
     merge_system_message_runs,
@@ -5,8 +7,8 @@ from litellm.llms.base_llm.base_utils import (
 
 
 class TestMergeSystemMessageRuns:
-    def test_later_developer_message_stays_in_place_while_the_leading_run_folds(self):
-        messages = [
+    def test_later_developer_message_stays_in_place_while_the_leading_run_folds(self) -> None:
+        messages: Final = [
             {"role": "system", "content": "You are Codex"},
             {"role": "developer", "content": "Sandbox: read-only."},
             {"role": "user", "content": "Hi there"},
@@ -20,8 +22,8 @@ class TestMergeSystemMessageRuns:
             {"role": "user", "content": "What is the capital of France?"},
         ]
 
-    def test_run_with_content_that_is_neither_text_nor_blocks_is_forwarded_unmerged(self):
-        messages = [
+    def test_run_with_content_that_is_neither_text_nor_blocks_is_forwarded_unmerged(self) -> None:
+        messages: Final = [
             {"role": "system", "content": "You are Codex"},
             {"role": "developer", "content": {"text": "not a content list"}},
             {"role": "user", "content": "Hi there"},
@@ -32,8 +34,8 @@ class TestMergeSystemMessageRuns:
             {"role": "user", "content": "Hi there"},
         ]
 
-    def test_hoisted_developer_message_with_content_that_is_neither_text_nor_blocks_is_forwarded_unmerged(self):
-        messages = [
+    def test_hoisted_developer_message_with_content_that_is_neither_text_nor_blocks_is_forwarded_unmerged(self) -> None:
+        messages: Final = [
             {"role": "system", "content": "You are Codex"},
             {"role": "user", "content": "Hi there"},
             {"role": "developer", "content": 42},
@@ -48,8 +50,8 @@ class TestMergeSystemMessageRuns:
 
 
 class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
-    def test_single_developer_message(self):
-        messages = [
+    def test_single_developer_message(self) -> None:
+        messages: Final = [
             {"role": "developer", "content": "You are a helpful assistant."},
             {"role": "user", "content": "Hello"},
         ]
@@ -58,8 +60,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "Hello"},
         ]
 
-    def test_consecutive_developer_messages_merge(self):
-        messages = [
+    def test_consecutive_developer_messages_merge(self) -> None:
+        messages: Final = [
             {"role": "developer", "content": "Rule 1: Be concise."},
             {"role": "developer", "content": "Rule 2: Respond in Markdown."},
             {"role": "user", "content": "Hello"},
@@ -69,8 +71,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "Hello"},
         ]
 
-    def test_system_followed_by_developer_merges(self):
-        messages = [
+    def test_system_followed_by_developer_merges(self) -> None:
+        messages: Final = [
             {"role": "system", "content": "Base instructions."},
             {"role": "developer", "content": "Developer override."},
             {"role": "user", "content": "Hello"},
@@ -80,8 +82,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "Hello"},
         ]
 
-    def test_developer_followed_by_system_merges(self):
-        messages = [
+    def test_developer_followed_by_system_merges(self) -> None:
+        messages: Final = [
             {"role": "developer", "content": "Developer instruction."},
             {"role": "system", "content": "System instruction."},
             {"role": "user", "content": "Hello"},
@@ -91,8 +93,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "Hello"},
         ]
 
-    def test_consecutive_native_system_messages_merge(self):
-        messages = [
+    def test_consecutive_native_system_messages_merge(self) -> None:
+        messages: Final = [
             {"role": "system", "content": "System part 1."},
             {"role": "system", "content": "System part 2."},
             {"role": "user", "content": "Hello"},
@@ -102,7 +104,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "Hello"},
         ]
 
-    def test_empty_string_side_does_not_pad(self):
+    def test_empty_string_side_does_not_pad(self) -> None:
         assert list(
             hoist_developer_messages_into_leading_system_message(
                 [{"role": "system", "content": ""}, {"role": "developer", "content": "Rules"}]
@@ -114,8 +116,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             )
         ) == [{"role": "system", "content": "Rules"}]
 
-    def test_empty_string_message_adds_no_block_when_the_run_merges_as_blocks(self):
-        messages = [
+    def test_empty_string_message_adds_no_block_when_the_run_merges_as_blocks(self) -> None:
+        messages: Final = [
             {"role": "system", "content": ""},
             {"role": "developer", "content": [{"type": "text", "text": "Rule 1"}, {"type": "text", "text": "Rule 2"}]},
             {"role": "user", "content": "Hi"},
@@ -125,8 +127,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "Hi"},
         ]
 
-    def test_two_cached_string_messages_keep_one_breakpoint_each(self):
-        messages = [
+    def test_two_cached_string_messages_keep_one_breakpoint_each(self) -> None:
+        messages: Final = [
             {"role": "system", "content": "A", "cache_control": {"type": "ephemeral", "ttl": "5m"}},
             {"role": "system", "content": "B", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
         ]
@@ -140,8 +142,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             },
         ]
 
-    def test_cache_control_supplied_only_by_the_later_message_marks_only_its_block(self):
-        messages = [
+    def test_cache_control_supplied_only_by_the_later_message_marks_only_its_block(self) -> None:
+        messages: Final = [
             {"role": "system", "content": "A"},
             {"role": "developer", "content": "B", "cache_control": {"type": "ephemeral"}},
         ]
@@ -155,8 +157,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             },
         ]
 
-    def test_cache_control_of_the_first_message_stays_on_its_own_block(self):
-        messages = [
+    def test_cache_control_of_the_first_message_stays_on_its_own_block(self) -> None:
+        messages: Final = [
             {"role": "system", "content": "Cached prompt", "cache_control": {"type": "ephemeral"}},
             {"role": "developer", "content": "Additional instructions"},
             {"role": "user", "content": "Hello"},
@@ -172,8 +174,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "Hello"},
         ]
 
-    def test_cached_string_message_merged_with_block_content_keeps_its_breakpoint(self):
-        messages = [
+    def test_cached_string_message_merged_with_block_content_keeps_its_breakpoint(self) -> None:
+        messages: Final = [
             {"role": "system", "content": "Cached prompt", "cache_control": {"type": "ephemeral"}},
             {"role": "user", "content": "Hi there"},
             {"role": "developer", "content": [{"type": "text", "text": "Answer with exactly one word."}]},
@@ -191,8 +193,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "What is the capital of France?"},
         ]
 
-    def test_plain_messages_ahead_of_a_cached_one_keep_their_own_blocks(self):
-        messages = [
+    def test_plain_messages_ahead_of_a_cached_one_keep_their_own_blocks(self) -> None:
+        messages: Final = [
             {"role": "system", "content": "Base"},
             {"role": "developer", "content": "Rule"},
             {"role": "developer", "content": "Cached", "cache_control": {"type": "ephemeral"}},
@@ -210,21 +212,21 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "Hello"},
         ]
 
-    def test_name_of_the_last_named_message_survives_a_long_run(self):
-        messages = [
+    def test_name_of_the_last_named_message_survives_a_long_run(self) -> None:
+        messages: Final = [
             {"role": "system", "content": "Base", "name": "first"},
             *({"role": "developer", "content": f"Rule {index}"} for index in range(2000)),
             {"role": "developer", "content": "Last", "name": "last"},
             {"role": "user", "content": "Hello"},
         ]
-        merged = list(hoist_developer_messages_into_leading_system_message(messages))
+        merged: Final = list(hoist_developer_messages_into_leading_system_message(messages))
         assert len(merged) == 2
         assert merged[0]["name"] == "last"
         assert merged[0]["content"] == "\n\n".join(["Base", *(f"Rule {index}" for index in range(2000)), "Last"])
 
-    def test_billing_metadata_keeps_its_own_block_when_merged(self):
-        billing = {"role": "system", "content": "x-anthropic-billing-header: cc_version=1.0;"}
-        advisory = {"role": "system", "content": "Guardrail advisory: request was flagged"}
+    def test_billing_metadata_keeps_its_own_block_when_merged(self) -> None:
+        billing: Final = {"role": "system", "content": "x-anthropic-billing-header: cc_version=1.0;"}
+        advisory: Final = {"role": "system", "content": "Guardrail advisory: request was flagged"}
         assert list(hoist_developer_messages_into_leading_system_message([billing, advisory])) == [
             {
                 "role": "system",
@@ -244,8 +246,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             }
         ]
 
-    def test_developer_message_after_a_user_turn_is_hoisted_into_the_leading_system_message(self):
-        messages = [
+    def test_developer_message_after_a_user_turn_is_hoisted_into_the_leading_system_message(self) -> None:
+        messages: Final = [
             {"role": "system", "content": "System turn 1"},
             {"role": "user", "content": "User turn 1"},
             {"role": "developer", "content": "Developer turn 2"},
@@ -257,8 +259,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "User turn 2"},
         ]
 
-    def test_developer_message_in_second_position_without_a_leading_system_message_is_hoisted(self):
-        messages = [
+    def test_developer_message_in_second_position_without_a_leading_system_message_is_hoisted(self) -> None:
+        messages: Final = [
             {"role": "user", "content": "Hi there"},
             {"role": "developer", "content": "Answer with exactly one word."},
             {"role": "user", "content": "What is the capital of France?"},
@@ -269,8 +271,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "What is the capital of France?"},
         ]
 
-    def test_every_later_developer_message_is_hoisted_in_order_across_assistant_and_tool_turns(self):
-        messages = [
+    def test_every_later_developer_message_is_hoisted_in_order_across_assistant_and_tool_turns(self) -> None:
+        messages: Final = [
             {"role": "system", "content": "Base"},
             {"role": "user", "content": "Turn 1"},
             {"role": "assistant", "content": "Reply 1"},
@@ -287,8 +289,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "Turn 3"},
         ]
 
-    def test_developer_message_that_closes_the_conversation_after_an_assistant_turn_becomes_a_user_turn(self):
-        messages = [
+    def test_developer_message_that_closes_the_conversation_after_an_assistant_turn_becomes_a_user_turn(self) -> None:
+        messages: Final = [
             {"role": "system", "content": "You are terse."},
             {"role": "user", "content": "Hi there"},
             {"role": "assistant", "content": "Hello! How can I help?"},
@@ -301,8 +303,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "Reply with the single word PONG and nothing else."},
         ]
 
-    def test_closing_developer_message_keeps_its_cache_mark_as_a_user_turn(self):
-        messages = [
+    def test_closing_developer_message_keeps_its_cache_mark_as_a_user_turn(self) -> None:
+        messages: Final = [
             {"role": "user", "content": "Hi there"},
             {"role": "assistant", "content": "Hello! How can I help?"},
             {"role": "developer", "content": "Reply with PONG.", "cache_control": {"type": "ephemeral"}},
@@ -313,8 +315,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             "cache_control": {"type": "ephemeral"},
         }
 
-    def test_only_the_closing_developer_run_after_an_assistant_turn_becomes_user_turns(self):
-        messages = [
+    def test_only_the_closing_developer_run_after_an_assistant_turn_becomes_user_turns(self) -> None:
+        messages: Final = [
             {"role": "system", "content": "Base"},
             {"role": "user", "content": "Turn 1"},
             {"role": "developer", "content": "Update A"},
@@ -332,8 +334,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "Closing C"},
         ]
 
-    def test_developer_message_that_closes_the_conversation_after_a_user_turn_is_hoisted(self):
-        messages = [
+    def test_developer_message_that_closes_the_conversation_after_a_user_turn_is_hoisted(self) -> None:
+        messages: Final = [
             {"role": "user", "content": "Hi there"},
             {"role": "developer", "content": "Reply with exactly one word: the capital of France"},
         ]
@@ -342,8 +344,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "Hi there"},
         ]
 
-    def test_developer_message_that_closes_the_conversation_after_a_tool_result_is_hoisted(self):
-        messages = [
+    def test_developer_message_that_closes_the_conversation_after_a_tool_result_is_hoisted(self) -> None:
+        messages: Final = [
             {"role": "system", "content": "Base"},
             {"role": "user", "content": "Look it up"},
             {
@@ -365,8 +367,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "tool", "tool_call_id": "call_1", "content": "Paris"},
         ]
 
-    def test_hoisted_single_text_block_developer_message_joins_string_instructions_as_text(self):
-        messages = [
+    def test_hoisted_single_text_block_developer_message_joins_string_instructions_as_text(self) -> None:
+        messages: Final = [
             {"role": "system", "content": "You are Codex"},
             {"role": "user", "content": [{"type": "text", "text": "# AGENTS.md"}]},
             {"role": "developer", "content": [{"type": "text", "text": "<permissions instructions>"}]},
@@ -378,8 +380,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": [{"type": "text", "text": "What is the capital of France?"}]},
         ]
 
-    def test_multi_block_developer_message_keeps_its_blocks_after_string_instructions(self):
-        messages = [
+    def test_multi_block_developer_message_keeps_its_blocks_after_string_instructions(self) -> None:
+        messages: Final = [
             {"role": "system", "content": "You are Codex"},
             {"role": "user", "content": "Hi"},
             {"role": "developer", "content": [{"type": "text", "text": "Rule 1"}, {"type": "text", "text": "Rule 2"}]},
@@ -398,8 +400,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "What is the capital of France?"},
         ]
 
-    def test_system_message_without_content_folds_into_the_run_instead_of_raising(self):
-        messages = [
+    def test_system_message_without_content_folds_into_the_run_instead_of_raising(self) -> None:
+        messages: Final = [
             {"role": "system", "content": "Rules"},
             {"role": "system"},
             {"role": "system", "content": None},
@@ -410,8 +412,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "What is the capital of France?"},
         ]
 
-    def test_message_level_cache_control_of_a_block_content_member_lands_on_its_last_block(self):
-        messages = [
+    def test_message_level_cache_control_of_a_block_content_member_lands_on_its_last_block(self) -> None:
+        messages: Final = [
             {
                 "role": "system",
                 "content": [{"type": "text", "text": "Rule 1"}, {"type": "text", "text": "Rule 2"}],
@@ -432,8 +434,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "What is the capital of France?"},
         ]
 
-    def test_message_level_cache_control_does_not_override_a_block_that_already_carries_one(self):
-        messages = [
+    def test_message_level_cache_control_does_not_override_a_block_that_already_carries_one(self) -> None:
+        messages: Final = [
             {
                 "role": "system",
                 "content": [{"type": "text", "text": "Rule 1", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
@@ -453,8 +455,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "What is the capital of France?"},
         ]
 
-    def test_non_consecutive_native_system_messages_stay_where_the_client_put_them(self):
-        messages = [
+    def test_non_consecutive_native_system_messages_stay_where_the_client_put_them(self) -> None:
+        messages: Final = [
             {"role": "system", "content": "System turn 1"},
             {"role": "user", "content": "User turn 1"},
             {"role": "system", "content": "System turn 2"},
@@ -462,8 +464,8 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
         ]
         assert list(hoist_developer_messages_into_leading_system_message(messages)) == messages
 
-    def test_list_content_merge_preserves_block_level_cache_control(self):
-        messages = [
+    def test_list_content_merge_preserves_block_level_cache_control(self) -> None:
+        messages: Final = [
             {"role": "system", "content": [{"type": "text", "text": "Cached", "cache_control": {"type": "ephemeral"}}]},
             {"role": "developer", "content": [{"type": "text", "text": "Extra"}]},
             {"role": "user", "content": "Hello"},

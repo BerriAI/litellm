@@ -183,8 +183,8 @@ def test_litellm_responses():
     assert isinstance(response.usage.completion_tokens_details, CompletionTokensDetails)
 
 
-def test_translate_developer_role_keeps_developer_messages_untouched():
-    messages = [
+def test_translate_developer_role_keeps_developer_messages_untouched() -> None:
+    messages: Final = [
         {"role": "developer", "content": "Answer with exactly one word."},
         {"role": "user", "content": "What is the capital of France?"},
     ]

@@ -1,5 +1,5 @@
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Final, TypedDict, cast
 from unittest.mock import MagicMock, patch
@@ -7,6 +7,7 @@ from urllib.parse import quote
 
 import httpx
 import pytest
+import respx
 from openai.types.responses import (
     EasyInputMessage,
     ResponseFunctionToolCall,
@@ -79,6 +80,14 @@ def _mock_http_client(response_body: Mapping[str, object]) -> MagicMock:
     response.text = json.dumps(response_body)
     client.post.return_value = response
     return client
+
+
+def _fireworks_responses_route(model: str) -> respx.Route:
+    return respx.post(FIREWORKS_RESPONSES_URL).mock(return_value=httpx.Response(200, json=_fireworks_response(model)))
+
+
+def _routed_body(route: respx.Route) -> Mapping[str, object]:
+    return json.loads(route.calls.last.request.content)
 
 
 def _sent_request(client: MagicMock) -> tuple[str, Mapping[str, str], Mapping[str, object]]:
@@ -182,23 +191,23 @@ def test_responses_call_folds_developer_items_into_instructions() -> None:
     )
 
 
+@respx.mock
 def test_responses_call_keeps_developer_items_in_place_for_a_model_that_accepts_later_system_items(
-    declare_mid_conversation_system,
+    declare_mid_conversation_system: Callable[[str, bool], None],
 ) -> None:
     declare_mid_conversation_system("fireworks_ai/accounts/fireworks/models/accepts-later-system", True)
-    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/accepts-later-system"))
-    with patch(HTTPX_CLIENT_FACTORY, return_value=client):
-        litellm.responses(
-            model="fireworks_ai/accounts/fireworks/models/accepts-later-system",
-            instructions="You are Codex",
-            input=[
-                {"role": "user", "content": "Hi there"},
-                {"role": "developer", "content": "Answer with exactly one word."},
-                {"role": "user", "content": "What is the capital of France?"},
-            ],
-            api_key="fw-test-key",
-        )
-    _, _, body = _sent_request(client)
+    route: Final = _fireworks_responses_route("accounts/fireworks/models/accepts-later-system")
+    litellm.responses(
+        model="fireworks_ai/accounts/fireworks/models/accepts-later-system",
+        instructions="You are Codex",
+        input=[
+            {"role": "user", "content": "Hi there"},
+            {"role": "developer", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+        ],
+        api_key="fw-test-key",
+    )
+    body: Final = _routed_body(route)
     assert body["instructions"] == "You are Codex"
     assert tuple(body["input"]) == (
         {"role": "user", "content": "Hi there"},
@@ -207,6 +216,7 @@ def test_responses_call_keeps_developer_items_in_place_for_a_model_that_accepts_
     )
 
 
+@respx.mock
 @pytest.mark.parametrize(
     ("model_info", "closing_role"),
     [(None, "system"), ({"id": "deployment-1", "supports_mid_conversation_system": False}, "user")],
@@ -214,21 +224,20 @@ def test_responses_call_keeps_developer_items_in_place_for_a_model_that_accepts_
 def test_responses_call_sends_the_closing_developer_item_as_a_user_turn_only_for_a_declared_system_first_deployment(
     model_info: Mapping[str, object] | None, closing_role: str
 ) -> None:
-    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
-    with patch(HTTPX_CLIENT_FACTORY, return_value=client):
-        litellm.responses(
-            model="fireworks_ai/accounts/fireworks/models/kimi-k3",
-            input=[
-                {"role": "user", "content": "Hi there"},
-                {"role": "developer", "content": "Answer with exactly one word."},
-                {"role": "user", "content": "What is the capital of France?"},
-                {"type": "message", "role": "assistant", "content": "Paris"},
-                {"role": "developer", "content": "Reply with PONG."},
-            ],
-            model_info=model_info,
-            api_key="fw-test-key",
-        )
-    _, _, body = _sent_request(client)
+    route: Final = _fireworks_responses_route("accounts/fireworks/models/kimi-k3")
+    litellm.responses(
+        model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+        input=[
+            {"role": "user", "content": "Hi there"},
+            {"role": "developer", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+            {"type": "message", "role": "assistant", "content": "Paris"},
+            {"role": "developer", "content": "Reply with PONG."},
+        ],
+        model_info=model_info,
+        api_key="fw-test-key",
+    )
+    body: Final = _routed_body(route)
     assert body["instructions"] == "Answer with exactly one word."
     assert tuple(body["input"]) == (
         {"role": "user", "content": "Hi there"},

@@ -3,6 +3,7 @@ Tests for OpenAI GPT transformation (litellm/llms/openai/chat/gpt_transformation
 """
 import base64
 import json
+from collections.abc import Callable
 from typing import Final
 
 import pytest
@@ -1844,11 +1845,16 @@ def _developer_message_after_a_user_turn() -> list[dict[str, str]]:
     ],
 )
 def test_translate_developer_role_hoists_a_later_developer_message_only_for_a_model_off_openai_that_rejects_it(
-    declare_mid_conversation_system, config, custom_llm_provider, api_base, declared, expected_roles
-):
+    declare_mid_conversation_system: Callable[[str, bool], None],
+    config: OpenAIGPTConfig,
+    custom_llm_provider: str,
+    api_base: str | None,
+    declared: bool | None,
+    expected_roles: list[str],
+) -> None:
     if declared is not None:
         declare_mid_conversation_system(f"{custom_llm_provider}/system-first-model", declared)
-    messages = config.translate_developer_role_to_system_role(
+    messages: Final = config.translate_developer_role_to_system_role(
         messages=_developer_message_after_a_user_turn(),
         model="system-first-model",
         custom_llm_provider=custom_llm_provider,
