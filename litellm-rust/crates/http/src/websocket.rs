@@ -79,7 +79,7 @@ fn validate_response_headers(
         ));
     }
     let protocol_matches = match (offered_protocols, headers.get(SEC_WEBSOCKET_PROTOCOL)) {
-        (None, None) => true,
+        (_, None) => true,
         (Some(offered), Some(selected)) => offered
             .to_str()
             .ok()

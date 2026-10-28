@@ -275,6 +275,41 @@ async fn wss_honors_ssl_verify(#[case] verify: fn(&Pki) -> Verify, #[case] trust
 }
 
 #[rstest]
+#[tokio::test]
+async fn wss_uses_system_roots() {
+    const CHILD_URL: &str = "LITELLM_TEST_SYSTEM_ROOTS_WSS_URL";
+    if let Ok(url) = std::env::var(CHILD_URL) {
+        let mut socket = open(&config(Verify::BuiltInRoots), &url, HeaderMap::new())
+            .await
+            .unwrap();
+        round_trip(&mut socket).await;
+        return;
+    }
+
+    let pki = Pki::new();
+    let (address, _) = serve_tls(&pki, false).await;
+    let url = format!("wss://localhost:{}/responses", address.port());
+    let ca = pki.path("ca.pem");
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "wss_uses_system_roots", "--nocapture"])
+            .env(CHILD_URL, url)
+            .env("SSL_CERT_FILE", ca)
+            .env("SSL_CERT_DIR", "")
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "system-root WSS child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[rstest]
 #[case::with_certificate(true)]
 #[case::without_certificate(false)]
 #[tokio::test]
@@ -390,7 +425,7 @@ async fn invalid_url_is_rejected_before_dispatch(#[case] url: &str) {
     Some("other"),
     false
 )]
-#[case::missing_protocol(Some("websocket"), Some("Upgrade"), Some("events"), None, false)]
+#[case::declined_optional_protocol(Some("websocket"), Some("Upgrade"), Some("events"), None, true)]
 #[case::matching_protocol(
     Some("websocket"),
     Some("Upgrade"),
