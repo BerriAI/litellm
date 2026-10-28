@@ -522,7 +522,7 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nContent-Type: application/pdf; charset=binary\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc",
         )
         .await;
-        let client = Client::no_redirect_for_test();
+        let client = Client::for_test();
         let media = MediaFetcher::for_test(client)
             .fetch(url, policy(3, 0))
             .await
@@ -538,7 +538,7 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc",
         )
         .await;
-        let client = Client::no_redirect_for_test();
+        let client = Client::for_test();
         let error = MediaFetcher::for_test(client)
             .fetch(url, policy(2, 0))
             .await
@@ -553,7 +553,7 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n2\r\nab\r\n2\r\ncd\r\n0\r\n\r\n",
         )
         .await;
-        let client = Client::no_redirect_for_test();
+        let client = Client::for_test();
         let error = MediaFetcher::for_test(client)
             .fetch(url, policy(3, 0))
             .await

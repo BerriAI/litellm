@@ -368,6 +368,7 @@ class BaseResponsesAPIStreamingIterator:
     """
 
     _pending_logging_tasks: tuple[asyncio.Task[object], ...] = ()
+    _started_tool_call: bool = False
     _earlier_rounds_spend: BilledRoundsSpend | None = None
 
     def __init__(
@@ -491,12 +492,16 @@ class BaseResponsesAPIStreamingIterator:
                     _args_delta: Final = getattr(openai_responses_api_chunk, "delta", None)
                     if isinstance(_args_delta, str):
                         self._generated_tool_arguments += _args_delta
+                if _event_type in _CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS:
+                    self._started_tool_call = True
                 _stream_model_id: Final = _model_id_from_metadata(self.litellm_metadata)
                 if _event_type in (
                     ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                     ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                 ):
                     _item: Final[object] = getattr(openai_responses_api_chunk, "item", None)
+                    if getattr(_item, "type", None) in _CLIENT_RUN_TOOL_CALL_ITEM_TYPES:
+                        self._started_tool_call = True
                     if _item is not None:
                         ResponsesAPIRequestUtils.encode_container_id_on_output_item(
                             item=_item,
@@ -1046,6 +1051,11 @@ class BaseResponsesAPIStreamingIterator:
         self._pending_logging_tasks = ()
         if pending:
             await asyncio.wait(pending)
+
+    @property
+    def started_tool_call(self) -> bool:
+        """Whether the stream began a tool call, which a text continuation could never finish."""
+        return self._started_tool_call
 
     def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None:
         """
@@ -1693,13 +1703,26 @@ def _usage_as_model(usage: object) -> ResponseAPIUsage | None:
         return None
 
 
-_TOOL_ARGUMENTS_DELTA_EVENTS: Final = frozenset(
+_CLIENT_RUN_TOOL_CALL_ITEM_TYPES: Final = frozenset(
+    {
+        "function_call",
+        "custom_tool_call",
+        "mcp_approval_request",
+        "computer_call",
+        "local_shell_call",
+        "shell_call",
+        "apply_patch_call",
+    }
+)
+_CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS: Final = frozenset(
     {
         ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
         ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DELTA,
-        ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA,
     }
 )
+_TOOL_ARGUMENTS_DELTA_EVENTS: Final = _CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS | {
+    ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA
+}
 
 
 def _estimate_usage_from_text(

@@ -538,6 +538,7 @@ async fn websocket_operations_trace_outcomes_without_capturing_frames_or_credent
         .logger()
         .instrument(async {
             let connection = ResponsesWebSocketConnection::connect_url(
+                &litellm_http::Client::for_test(),
                 &format!("ws://{address}/responses"),
                 &std::collections::HashMap::from([(
                     "authorization".into(),

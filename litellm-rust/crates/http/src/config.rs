@@ -16,6 +16,7 @@ pub enum Verify {
     Disabled,
     CaBundle(PathBuf),
     BuiltInRoots,
+    NativeRoots,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -98,7 +99,7 @@ impl TryFrom<&HttpClientConfig> for reqwest::ClientBuilder {
 
     fn try_from(config: &HttpClientConfig) -> Result<Self, Self::Error> {
         let base = reqwest::Client::builder()
-            .use_preconfigured_tls(rustls::ClientConfig::try_from(config)?)
+            .tls_backend_preconfigured(rustls::ClientConfig::try_from(config)?)
             .connect_timeout(config.connect_timeout)
             .pool_idle_timeout(config.pool_idle_timeout);
         let with_keepalive = match config.tcp_keepalive {
