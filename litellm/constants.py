@@ -1061,6 +1061,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.scx.ai/v1",
     "https://api.prisminference.com/v1",
     "https://api.reka.ai/v1",
+    "https://ai.topxea.com/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
     "https://api.openinfer.ai/v1",
 ]
@@ -1142,6 +1143,7 @@ openai_compatible_providers: Final[list[str]] = [
     "prism",
     "sail",
     "reka",
+    "topxai",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))

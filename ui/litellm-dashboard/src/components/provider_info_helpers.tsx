@@ -60,6 +60,7 @@ import sonioxLogo from "../../public/assets/logos/soniox.svg";
 import strandsLogo from "../../public/assets/logos/strands.svg";
 import tencentLogo from "../../public/assets/logos/tencent.svg";
 import togetheraiLogo from "../../public/assets/logos/togetherai.svg";
+import topxaiLogo from "../../public/assets/logos/topxai.svg";
 import topazLogo from "../../public/assets/logos/topaz.svg";
 import typesafeLogo from "../../public/assets/logos/typesafe.png";
 import v0Logo from "../../public/assets/logos/v0.svg";
@@ -179,6 +180,7 @@ export enum Providers {
   StrandsDecider = "Strands Decider",
   TEXT_COMPLETION_CODESTRAL = "Text-Completion-Codestral",
   Tencent = "Tencent",
+  TOPXAI = "TopxAI",
   TogetherAI = "TogetherAI",
   TOPAZ = "Topaz",
   Triton = "Triton",
@@ -307,6 +309,7 @@ export const provider_map: Record<string, string> = {
   StrandsDecider: "strands_decider",
   TEXT_COMPLETION_CODESTRAL: "text-completion-codestral",
   Tencent: "tencent",
+  TOPXAI: "topxai",
   TogetherAI: "together_ai",
   TOPAZ: "topaz",
   Triton: "triton",
@@ -415,6 +418,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.StrandsDecider]: strandsLogo.src,
   [Providers.Tencent]: tencentLogo.src,
   [Providers.TEXT_COMPLETION_CODESTRAL]: mistralLogo.src,
+  [Providers.TOPXAI]: topxaiLogo.src,
   [Providers.TogetherAI]: togetheraiLogo.src,
   [Providers.TOPAZ]: topazLogo.src,
   [Providers.Triton]: nvidiaTritonLogo.src,
@@ -490,6 +494,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Snowflake]: "snowflake/mistral-7b",
   [Providers.StrandsDecider]: "strands_decider/strands-decider-2B-hobson-v19",
   [Providers.Tencent]: "tencent/deepseek-v4-pro",
+  [Providers.TOPXAI]: "topxai/claude-sonnet-5-5",
   [Providers.TypeSafe]: "typesafe/jev-latest",
   [Providers.Nace]: "nace/drex-latest",
   [Providers.Vertex_AI]: "gemini-pro",
