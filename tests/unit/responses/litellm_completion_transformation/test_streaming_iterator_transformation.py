@@ -12,6 +12,7 @@ spend tracking stores, so a follow-up previous_response_id still finds the conve
 
 import json
 from collections.abc import Callable
+from itertools import accumulate
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -1580,14 +1581,28 @@ async def test_all_citation_batches_stream_before_message_done(
         }
         for index in range(sum(batches))
     ]
-    chunks: Final = list(_reasoning_then_text_chunks()[:1]) if reasoning_first else []
-    chunks.append(_chunk("Claim"))
-    offset = 0
-    for size in batches:
-        chunk = _chunk("!" if with_text else "", finish_reason="stop" if offset + size == len(annotations) else None)
-        chunk.choices[0].delta.annotations = annotations[offset : offset + size]
-        chunks.append(chunk)
-        offset += size
+    citation_chunks: Final = tuple(
+        ModelResponseStream(
+            id=CHAT_COMPLETION_ID,
+            created=1748575031,
+            model="claude-haiku-4-5",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        role="assistant",
+                        content="!" if with_text else "",
+                        annotations=annotations[end - size : end],
+                    ),
+                    finish_reason="stop" if end == len(annotations) else None,
+                )
+            ],
+        )
+        for size, end in zip(batches, accumulate(batches), strict=True)
+    )
+    reasoning_chunks: Final = _reasoning_then_text_chunks()[:1] if reasoning_first else ()
+    chunks: Final = (*reasoning_chunks, _chunk("Claim"), *citation_chunks)
 
     events: Final = await _collect_events(_build_iterator(chunks), sync_mode)
 
