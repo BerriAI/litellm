@@ -19,7 +19,7 @@ import json
 import re
 import tempfile
 from collections import OrderedDict
-from collections.abc import Generator, Iterator, Sequence
+from collections.abc import Generator, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from functools import partial
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
@@ -600,6 +600,24 @@ def _next_run_state(budget: int, state: tuple[int, int, int], size: int) -> tupl
     return run_id, count + 1, total + size
 
 
+_KEY_PERMISSIONS: Final[TypeAdapter[Mapping[object, object] | None]] = TypeAdapter(Mapping[object, object] | None)
+_METADATA_BUCKET: Final = TypeAdapter(Mapping[str, object])
+
+
+def _key_opted_out(key_auth: object) -> bool:
+    if not isinstance(key_auth, UserAPIKeyAuth):
+        return False
+    permissions: Final = _KEY_PERMISSIONS.validate_python(key_auth.permissions)
+    return permissions is not None and permissions.get(GUARDRAIL_NAME) is False
+
+
+def _request_key_opted_out(data: Mapping[str, object]) -> bool:
+    return any(
+        isinstance(bucket, dict) and _key_opted_out(_METADATA_BUCKET.validate_python(bucket).get("user_api_key_auth"))
+        for bucket in (data.get("metadata"), data.get("litellm_metadata"))
+    )
+
+
 def _value_in_texts(value: str, texts: Sequence[str]) -> str | None:
     """Return the detected value as it appears in ``texts``, decoding it when it came from a JSON-escaped key line."""
     candidates: Final = (value, _json_unescaped(value))
@@ -608,7 +626,7 @@ def _value_in_texts(value: str, texts: Sequence[str]) -> str | None:
 
 class _ENTERPRISE_SecretDetection(CustomGuardrail):
     # Keeps proxied traffic on async_pre_call_hook (the unified apply_guardrail
-    # path skips should_run_check and never sees data["prompt"]).
+    # path never sees data["prompt"]).
     use_native_lifecycle_hooks: ClassVar[bool] = True
 
     def __init__(self, detect_secrets_config: Optional[dict] = None, **kwargs):
@@ -693,12 +711,12 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         return map_tool_json_text(payload, lambda text: pattern.sub("[REDACTED]", text))
 
     async def should_run_check(self, user_api_key_dict: UserAPIKeyAuth) -> bool:
-        if user_api_key_dict.permissions is not None:
-            if GUARDRAIL_NAME in user_api_key_dict.permissions:
-                if user_api_key_dict.permissions[GUARDRAIL_NAME] is False:
-                    return False
+        return not _key_opted_out(user_api_key_dict)
 
-        return True
+    def should_run_guardrail(self, data: Mapping[str, object], event_type: GuardrailEventHooks) -> bool:
+        return super().should_run_guardrail(  # pyright: ignore[reportUnknownMemberType]  # CustomGuardrail.should_run_guardrail leaves data untyped
+            data, event_type
+        ) and not _request_key_opted_out(data)
 
     @log_guardrail_information
     async def apply_guardrail(
@@ -709,8 +727,9 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
         """Unified-interface entrypoint, used by /guardrails/apply_guardrail
-        (the UI test playground). Proxied traffic keeps using
-        ``async_pre_call_hook``, see ``use_native_lifecycle_hooks``."""
+        (the UI test playground) and by the decision and extraction routes,
+        whose request text the native hook never reads. Other proxied traffic
+        keeps using ``async_pre_call_hook``, see ``use_native_lifecycle_hooks``."""
         texts = inputs.get("texts")
         if not texts or not any(texts):
             return inputs

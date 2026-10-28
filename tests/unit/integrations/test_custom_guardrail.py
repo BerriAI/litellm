@@ -15,6 +15,7 @@ from litellm.integrations.custom_guardrail import (
     _request_is_streaming,
     guardrail_request_data_with_streaming,
     log_guardrail_information,
+    runs_through_apply_guardrail,
     without_server_streaming_classification,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -3786,3 +3787,40 @@ def test_default_on_guardrail() -> None:
         )
         is True
     )
+
+
+class _NativeHooksWithApplyGuardrail(_UndecoratedGuardrail):
+    use_native_lifecycle_hooks: ClassVar[bool] = True
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return inputs
+
+
+@pytest.mark.parametrize(
+    ("guardrail_type", "call_type", "expected"),
+    (
+        (_UndecoratedGuardrail, "acompletion", True),
+        (_UndecoratedGuardrail, "aextraction", True),
+        (_NativeHooksWithApplyGuardrail, "acompletion", False),
+        (_NativeHooksWithApplyGuardrail, "aresponses", False),
+        (_NativeHooksWithApplyGuardrail, None, False),
+        (_NativeHooksWithApplyGuardrail, "extraction", True),
+        (_NativeHooksWithApplyGuardrail, "aextraction", True),
+        (_NativeHooksWithApplyGuardrail, "decisions", True),
+        (_NativeHooksWithApplyGuardrail, "adecisions", True),
+        (_NativeHooksWithApplyGuardrail, "systemone", True),
+        (_NativeHooksWithApplyGuardrail, "asystemone", True),
+        (_NativeApplyGuardrail, "aextraction", False),
+        (_InheritedApplyGuardrail, "aextraction", False),
+    ),
+)
+def test_native_hook_guardrails_take_apply_guardrail_only_where_their_hooks_read_no_text(
+    guardrail_type: type[CustomGuardrail], call_type: str | None, expected: bool
+) -> None:
+    assert runs_through_apply_guardrail(guardrail_type(guardrail_name="g"), call_type) is expected

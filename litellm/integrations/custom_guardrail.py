@@ -72,6 +72,25 @@ _PRE_CALL_EXECUTED_TOKEN: Final = secrets.token_hex(16)
 
 _GUARDRAIL_BLOCK_STATUS_CODES: Final = frozenset({400, 403, 422})
 
+APPLY_GUARDRAIL_ONLY_CALL_TYPES: Final[frozenset[str]] = frozenset(
+    call_type.value
+    for call_type in (
+        CallTypes.extraction,
+        CallTypes.aextraction,
+        CallTypes.decisions,
+        CallTypes.adecisions,
+        CallTypes.systemone,
+        CallTypes.asystemone,
+    )
+)
+
+
+def runs_through_apply_guardrail(guardrail: "CustomGuardrail", call_type: str | None) -> bool:
+    return "apply_guardrail" in type(guardrail).__dict__ and (
+        not guardrail.use_native_lifecycle_hooks or call_type in APPLY_GUARDRAIL_ONLY_CALL_TYPES
+    )
+
+
 DEFAULT_ADVISORY_MESSAGE: Final = (
     "The user's latest message was flagged for {reason} by a content safety "
     "guardrail. This may be a false positive. Use your judgment: respond "

@@ -19,6 +19,7 @@ from litellm.constants import LOGS_GUARDRAIL_INFORMATION_MARKER
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
+    runs_through_apply_guardrail,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
@@ -573,9 +574,8 @@ class PipelineExecutor:
         hook_input, scans_raw_request = _prepare_hook_input(step, callback, data, raw_request_snapshot)
         snapshot_entries_before: Final = len(recorded_guardrail_information(hook_input))
 
-        # Use unified_guardrail path if callback implements apply_guardrail
         target: CustomLogger = callback
-        use_unified: Final = PipelineExecutor.supports_unified_execution(callback)
+        use_unified: Final = runs_through_apply_guardrail(callback, call_type)
         if use_unified and streaming_chunks is None:
             hook_input["guardrail_to_apply"] = callback
             target = UnifiedLLMGuardrails()

@@ -415,7 +415,11 @@ class UnifiedLLMGuardrails(CustomLogger):
             )
             return response
 
-        endpoint_translation: Final = _as_endpoint_translation(mappings[CallTypes(call_type)]())
+        translation: Final = mappings[CallTypes(call_type)]()
+        if not translation.scans_responses:
+            return response
+
+        endpoint_translation: Final = _as_endpoint_translation(translation)
 
         try:
             response = await endpoint_translation.process_output_response(

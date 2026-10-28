@@ -275,7 +275,7 @@ def test_process_guardrail_metadata_calls_header_helper(proxy_logging, monkeypat
 
     monkeypatch.setattr(callback_utils, "add_guardrail_to_applied_guardrails_header", fake_add)
     data = {"metadata": {"guardrails": ["g1", "g2"]}}
-    proxy_logging._process_guardrail_metadata(data)
+    proxy_logging._process_guardrail_metadata(data, "completion")
     snapshot = {
         "call_count": len(calls),
         "first_name": calls[0]["name"],
@@ -300,7 +300,7 @@ def test_process_guardrail_metadata_skips_already_applied(proxy_logging, monkeyp
 
     monkeypatch.setattr(callback_utils, "add_guardrail_to_applied_guardrails_header", fake_add)
     data = {"metadata": {"guardrails": ["g1", "g2"], "applied_guardrails": ["g1"]}}
-    proxy_logging._process_guardrail_metadata(data)
+    proxy_logging._process_guardrail_metadata(data, "completion")
     assert calls == ["g2"]
 
 
@@ -312,12 +312,12 @@ def test_process_guardrail_metadata_no_metadata_is_noop(proxy_logging, monkeypat
         "add_guardrail_to_applied_guardrails_header",
         MagicMock(side_effect=AssertionError("should not be called")),
     )
-    proxy_logging._process_guardrail_metadata({})
+    proxy_logging._process_guardrail_metadata({}, "completion")
 
 
 def test_process_guardrail_metadata_invalid_data_raises(proxy_logging):
     with pytest.raises(AttributeError):
-        proxy_logging._process_guardrail_metadata(None)  # type: ignore[arg-type]
+        proxy_logging._process_guardrail_metadata(None, "completion")  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

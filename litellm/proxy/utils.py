@@ -144,8 +144,10 @@ from litellm.exceptions import (
     SensitiveDataRouteException,
 )
 from litellm.integrations.custom_guardrail import (
+    APPLY_GUARDRAIL_ONLY_CALL_TYPES,
     CustomGuardrail,
     ModifyResponseException,
+    runs_through_apply_guardrail,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
@@ -342,6 +344,7 @@ _VIEW_SETUP_DEADLINE_SECONDS: Final = 15 * 60.0
 _VIEW_SETUP_GATE_TABLE: Final = '"LiteLLM_SpendLogs"'
 _VIEW_SETUP_GATE_PROBE_ROWS: Final = TypeAdapter(tuple[Mapping[str, bool], ...])
 _DELEGATED_ATTRIBUTE: Final = TypeAdapter(object)
+_REQUESTED_GUARDRAILS: Final = TypeAdapter(tuple[object, ...])
 
 _ViewSetupOutcome: TypeAlias = Literal["ready", "timed_out"]
 _ViewSetupAttempt: TypeAlias = Literal["ready", "table_missing"] | Exception
@@ -724,6 +727,24 @@ def _partition_post_call_callbacks() -> tuple[tuple[CustomGuardrail, ...], tuple
         tuple(callback for callback in present if not isinstance(callback, CustomGuardrail)),
     )
     return (guardrails, others)
+
+
+def _warn_on_guardrails_that_cannot_scan(requested: tuple[object, ...], call_type: str) -> None:
+    requested_names: Final = frozenset(name for name in requested if isinstance(name, str))
+    unscannable: Final = tuple(
+        callback.guardrail_name
+        for callback in ProxyLogging.callback_capabilities().resolved_callbacks
+        if isinstance(callback, CustomGuardrail)
+        and callback.guardrail_name is not None
+        and (callback.default_on or callback.guardrail_name in requested_names)
+        and "apply_guardrail" not in type(callback).__dict__
+    )
+    if unscannable:
+        verbose_proxy_logger.warning(
+            "Guardrails %s do not implement apply_guardrail, so they cannot scan the text of %s requests",
+            ", ".join(unscannable),
+            call_type,
+        )
 
 
 def _merge_pipeline_metadata_bucket(data: dict, bucket_key: str, modified_bucket_value: object) -> None:
@@ -2369,11 +2390,7 @@ class ProxyLogging:
         Returns:
             Result from the guardrail execution
         """
-        # Use unified_guardrail if callback has apply_guardrail method
-        has_apply_guardrail: Final = "apply_guardrail" in type(callback).__dict__ and not getattr(
-            callback, "use_native_lifecycle_hooks", False
-        )
-        use_unified: Final = has_apply_guardrail and not (
+        use_unified: Final = runs_through_apply_guardrail(callback, call_type) and not (
             hook_type == "during_call" and getattr(callback, "use_native_during_call_hook", False)
         )
         if use_unified:
@@ -2698,7 +2715,7 @@ class ProxyLogging:
             data.pop("prompt_version", None)
             data.pop("prompt_environment", None)
 
-    def _process_guardrail_metadata(self, data: dict) -> None:
+    def _process_guardrail_metadata(self, data: dict, call_type: CallTypesLiteral) -> None:
         """Process guardrails from metadata and add to applied_guardrails."""
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
@@ -2712,6 +2729,15 @@ class ProxyLogging:
             guardrails_in_metadata = metadata_standard.get("guardrails", [])
         elif isinstance(metadata_litellm, dict) and "guardrails" in metadata_litellm:
             guardrails_in_metadata = metadata_litellm.get("guardrails", [])
+
+        if call_type in APPLY_GUARDRAIL_ONLY_CALL_TYPES:
+            _warn_on_guardrails_that_cannot_scan(
+                _REQUESTED_GUARDRAILS.validate_python(guardrails_in_metadata)
+                if isinstance(guardrails_in_metadata, list)
+                else (),
+                call_type,
+            )
+            return
 
         if guardrails_in_metadata and isinstance(guardrails_in_metadata, list):
             applied_guardrails = []
@@ -3014,7 +3040,7 @@ class ProxyLogging:
                 and (guardrails_only or not caps.has_pre_call_override)
             ):
                 if data is not None:
-                    self._process_guardrail_metadata(data)
+                    self._process_guardrail_metadata(data, call_type)
                 return data
 
             parallel_guardrails: Final[tuple[CustomGuardrail, ...]] = (
@@ -3118,17 +3144,17 @@ class ProxyLogging:
                 )
 
             if data is not None:
-                self._process_guardrail_metadata(data)
+                self._process_guardrail_metadata(data, call_type)
 
             return data
         except SensitiveDataRouteException as e:
             data = await self._handle_sensitive_data_route_exception(e, data, user_api_key_dict)
             if data is not None:
-                self._process_guardrail_metadata(data)
+                self._process_guardrail_metadata(data, call_type)
             return data
         except Exception:
             if data is not None:
-                self._process_guardrail_metadata(data)
+                self._process_guardrail_metadata(data, call_type)
             raise
 
     async def _run_parallel_pre_call_guardrails(
@@ -3445,14 +3471,14 @@ class ProxyLogging:
     _callback_capabilities = callback_capabilities
 
     @staticmethod
-    def _stream_requires_guardrail_translation(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    def _route_call_type(user_api_key_dict: UserAPIKeyAuth) -> CallTypes | None:
         route: Final = user_api_key_dict.request_route
-        if not route:
-            return False
-        call_types: Final = get_call_types_for_route(route)
-        if not call_types:
-            return False
-        return call_types[0] in NON_OPENAI_STREAM_GUARDRAIL_TRANSLATION_CALL_TYPES
+        call_types: Final = get_call_types_for_route(route) if route else None
+        return call_types[0] if call_types else None
+
+    @staticmethod
+    def _stream_requires_guardrail_translation(user_api_key_dict: UserAPIKeyAuth) -> bool:
+        return ProxyLogging._route_call_type(user_api_key_dict) in NON_OPENAI_STREAM_GUARDRAIL_TRANSLATION_CALL_TYPES
 
     @staticmethod
     def has_post_call_response_headers_callbacks() -> bool:
@@ -3568,8 +3594,7 @@ class ProxyLogging:
         call_type: CallTypesLiteral,
     ) -> None:
         if (
-            "apply_guardrail" in type(callback).__dict__
-            and not callback.use_native_lifecycle_hooks
+            runs_through_apply_guardrail(callback, call_type)
             and user_api_key_dict is not None
             and not callback.use_native_during_call_hook
         ):
@@ -4137,6 +4162,7 @@ class ProxyLogging:
 
         pipeline_managed: Final = pipeline_managed_guardrail_names(data, "post_call")
         guardrail_callbacks, other_callbacks = _partition_post_call_callbacks()
+        call_type: Final = ProxyLogging._route_call_type(user_api_key_dict)
         try:
             # Merge model-level guardrails before checking which guardrails to run
             guardrail_data: Final = check_and_merge_model_level_guardrails(data=data, llm_router=llm_router)
@@ -4168,7 +4194,7 @@ class ProxyLogging:
 
                 guardrail_response: Any | None = None
 
-                if "apply_guardrail" in type(callback).__dict__ and not callback.use_native_lifecycle_hooks:
+                if runs_through_apply_guardrail(callback, call_type):
                     data["guardrail_to_apply"] = callback
                     guardrail_response = await self._run_guardrail_with_metrics(
                         callback,
@@ -4239,11 +4265,12 @@ class ProxyLogging:
         immediately before awaiting, and the unified hook pops it before its first
         suspension point, so concurrent guardrails never race on that key.
         """
+        call_type: Final = ProxyLogging._route_call_type(user_api_key_dict)
 
         async def _run_one(callback: CustomGuardrail) -> None:
             if callback.should_run_guardrail(data=guardrail_data, event_type=GuardrailEventHooks.post_call) is not True:
                 return
-            if "apply_guardrail" in type(callback).__dict__ and not callback.use_native_lifecycle_hooks:
+            if runs_through_apply_guardrail(callback, call_type):
                 data["guardrail_to_apply"] = callback
                 await self._run_guardrail_with_metrics(
                     callback,

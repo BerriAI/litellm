@@ -3,6 +3,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.caching import DualCache
+from litellm.exceptions import SensitiveDataRouteException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -1060,3 +1061,250 @@ async def test_parallel_post_call_guardrails_keep_native_hook_when_opted_out(mon
 
     assert opted_out.native_hooks_ran == ["post_call"]
     assert routed.native_hooks_ran == []
+
+
+_SECRET = "sk-live-1234"
+
+
+def _applied_guardrails(data):
+    buckets = (data.get("metadata") or {}, data.get("litellm_metadata") or {})
+    return [*buckets[0].get("applied_guardrails", []), *buckets[1].get("applied_guardrails", [])]
+
+
+class _MasksSecretWithNativeHooks(_KeepsNativeHooks):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.scanned = []
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        texts = inputs.get("texts", [])
+        self.scanned.append((input_type, tuple(texts)))
+        return {**inputs, "texts": [text.replace(_SECRET, "[MASKED]") for text in texts]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "data", "expected"),
+    (
+        (
+            "aextraction",
+            {"model": "m", "state": f"paid with {_SECRET}", "fields": {"total": {"type": "number"}}},
+            {"state": "paid with [MASKED]"},
+        ),
+        (
+            "asystemone",
+            {
+                "model": "m",
+                "state": {"ticket": f"my key is {_SECRET}"},
+                "questions": {"leak": {"type": "noul", "instructions": f"Is {_SECRET} a key?"}},
+            },
+            {
+                "state": {"ticket": "my key is [MASKED]"},
+                "questions": {"leak": {"type": "noul", "instructions": "Is [MASKED] a key?"}},
+            },
+        ),
+        (
+            "adecisions",
+            {
+                "model": "m",
+                "input": f"my key is {_SECRET}",
+                "questions": [{"type": "predicate", "instructions": f"Is {_SECRET} a key?"}],
+            },
+            {
+                "input": "my key is [MASKED]",
+                "questions": [{"type": "predicate", "instructions": "Is [MASKED] a key?"}],
+            },
+        ),
+    ),
+)
+async def test_pre_call_hook_scans_decision_and_extraction_text_with_a_native_hook_guardrail(
+    monkeypatch, call_type, data, expected
+):
+    guardrail = _MasksSecretWithNativeHooks(event_hook=GuardrailEventHooks.pre_call, default_on=True)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    result = await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
+        data=data,
+        call_type=call_type,
+    )
+
+    assert {key: result[key] for key in expected} == expected
+    assert guardrail.native_hooks_ran == []
+    assert _applied_guardrails(result) == ["keeps_native"]
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_scans_extraction_state_with_a_native_hook_guardrail(monkeypatch):
+    guardrail = _MasksSecretWithNativeHooks(event_hook=GuardrailEventHooks.during_call, default_on=True)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    await ProxyLogging(user_api_key_cache=DualCache()).during_call_hook(
+        data={"model": "m", "state": f"paid with {_SECRET}", "fields": {"total": {"type": "number"}}},
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
+        call_type="aextraction",
+    )
+
+    assert guardrail.native_hooks_ran == []
+    assert guardrail.scanned == [("request", (f"paid with {_SECRET}",))]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_keeps_native_hook_guardrail_on_its_own_hook_for_chat(monkeypatch):
+    guardrail = _MasksSecretWithNativeHooks(event_hook=GuardrailEventHooks.pre_call, default_on=True)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
+        data={"model": "m", "messages": [{"role": "user", "content": f"my key is {_SECRET}"}]},
+        call_type="acompletion",
+    )
+
+    assert guardrail.native_hooks_ran == ["pre_call"]
+    assert guardrail.scanned == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("run_in_parallel", (False, True))
+async def test_post_call_success_hook_scans_extraction_answers_with_a_native_hook_guardrail(
+    monkeypatch, run_in_parallel
+):
+    from litellm.types.extraction import ExtractionResponse
+
+    guardrail = _MasksSecretWithNativeHooks(
+        event_hook=GuardrailEventHooks.post_call, default_on=True, run_in_parallel=run_in_parallel
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    response = ExtractionResponse.model_validate(
+        {
+            "model": "m",
+            "answers": {"key": {"type": "text", "value": _SECRET}},
+            "truncated": False,
+            "usage": {"input_tokens": 5, "output_tokens": 0},
+        }
+    )
+
+    await ProxyLogging(user_api_key_cache=DualCache()).post_call_success_hook(
+        data={"model": "m", "state": "s", "fields": {"key": {"type": "text"}}},
+        response=response,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/v1/extraction"),
+    )
+
+    assert guardrail.native_hooks_ran == []
+    assert guardrail.scanned == [("response", (_SECRET,))]
+
+
+class _ReadsNoDecisionText(CustomGuardrail):
+    def __init__(self, guardrail_name, **kwargs):
+        super().__init__(guardrail_name=guardrail_name, event_hook=GuardrailEventHooks.pre_call, **kwargs)
+        self.native_hooks_ran = []
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.native_hooks_ran.append(call_type)
+        return data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("call_type", "listed"), (("aextraction", False), ("acompletion", True)))
+async def test_requested_guardrail_without_apply_guardrail_is_listed_only_where_it_reads_the_text(
+    monkeypatch, caplog, call_type, listed
+):
+    requested = _ReadsNoDecisionText("requested-native")
+    default_on = _ReadsNoDecisionText("default-native", default_on=True)
+    scanner = _MasksSecretWithNativeHooks(event_hook=GuardrailEventHooks.pre_call, default_on=True)
+    monkeypatch.setattr(litellm, "callbacks", [requested, default_on, scanner])
+
+    with caplog.at_level("WARNING"):
+        result = await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
+            data={
+                "model": "m",
+                "state": "s",
+                "messages": [{"role": "user", "content": "hi"}],
+                "metadata": {"guardrails": ["requested-native"]},
+            },
+            call_type=call_type,
+        )
+
+    assert requested.native_hooks_ran == [call_type]
+    assert ("requested-native" in _applied_guardrails(result)) is listed
+    warnings = [record.getMessage() for record in caplog.records if "cannot scan" in record.getMessage()]
+    assert warnings == (
+        []
+        if listed
+        else [
+            "Guardrails requested-native, default-native do not implement apply_guardrail, so they cannot scan the text of aextraction requests"
+        ]
+    )
+
+
+class _ReroutesToPrivateModel(CustomGuardrail):
+    def __init__(self):
+        super().__init__(
+            guardrail_name="reroute", event_hook=GuardrailEventHooks.pre_call, default_on=True, run_in_parallel=True
+        )
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        raise SensitiveDataRouteException(
+            route_to_model="private-model", session_id="s1", guardrail_name="reroute", sticky_session_routing=False
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("call_type", "listed"), (("aextraction", False), ("acompletion", True)))
+async def test_rerouted_request_lists_a_requested_guardrail_only_where_it_reads_the_text(
+    monkeypatch, call_type, listed
+):
+    requested = _ReadsNoDecisionText("requested-native")
+    monkeypatch.setattr(litellm, "callbacks", [requested, _ReroutesToPrivateModel()])
+
+    result = await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
+        data={
+            "model": "m",
+            "state": "s",
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {"guardrails": ["requested-native"]},
+        },
+        call_type=call_type,
+    )
+
+    assert result["model"] == "private-model"
+    assert ("requested-native" in _applied_guardrails(result)) is listed
+
+
+class _RecordsScans(_AppliesGuardrail):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.scanned = []
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        self.scanned.append(input_type)
+        return inputs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ("/v1/decisions", "/v1/systemone"))
+async def test_post_call_guardrail_leaves_decision_answers_unscanned_and_unlisted(monkeypatch, route):
+    from litellm.types.decisions import OpenAIDecisionResponse
+
+    guardrail = _RecordsScans(event_hook=GuardrailEventHooks.post_call, default_on=True)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    response = OpenAIDecisionResponse.model_validate(
+        {
+            "model": "m",
+            "answers": [{"type": "refusal", "name": "q"}],
+            "usage": {"input_tokens": 1, "output_tokens": 0, "total_tokens": 1},
+        }
+    )
+    data = {"model": "m", "metadata": {}}
+
+    result = await ProxyLogging(user_api_key_cache=DualCache()).post_call_success_hook(
+        data=data,
+        response=response,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route=route),
+    )
+
+    assert result is response
+    assert guardrail.scanned == []
+    assert _applied_guardrails(data) == []

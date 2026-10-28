@@ -1137,8 +1137,10 @@ class _PolicyOptOutGuardrail(CustomGuardrail):
     def __init__(self):
         super().__init__(guardrail_name="policy-opt-out", default_on=True)
         self.native_pre_call_ran = False
+        self.scanned = []
 
     async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        self.scanned.extend(inputs.get("texts", []))
         return inputs
 
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
@@ -1162,6 +1164,24 @@ async def test_pipeline_step_keeps_native_hook_when_opted_out(monkeypatch):
     assert outcome == "pass"
     assert guardrail.native_pre_call_ran is True
     assert "guardrail_to_apply" not in data
+
+
+@pytest.mark.asyncio
+async def test_pipeline_step_scans_extraction_state_through_apply_guardrail_when_opted_out(monkeypatch):
+    guardrail = _PolicyOptOutGuardrail()
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    outcome, _, _, _ = await PipelineExecutor._run_step(
+        step=PipelineStep(guardrail="policy-opt-out", on_fail="block", on_pass="allow"),
+        mode="pre_call",
+        data={"model": "m", "state": "invoice from vendor", "fields": {"total": {"type": "number"}}},
+        user_api_key_dict=UserAPIKeyAuth(),
+        call_type="aextraction",
+    )
+
+    assert outcome == "pass"
+    assert guardrail.native_pre_call_ran is False
+    assert guardrail.scanned == ["invoice from vendor"]
 
 
 class _TextReturningGuardrail(CustomGuardrail):
