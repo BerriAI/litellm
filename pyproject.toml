@@ -312,7 +312,6 @@ benchmarks = [
     "pytest-codspeed==4.3.0",
     "mcp>=2.3.0,<3",
     "a2a-sdk==1.1.0",
-    "respx==0.22.0",
 ]
 
 [build-system]

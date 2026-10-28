@@ -5074,7 +5074,6 @@ benchmarks = [
     { name = "mcp" },
     { name = "pytest" },
     { name = "pytest-codspeed" },
-    { name = "respx" },
 ]
 ci = [
     { name = "aiodynamo" },
@@ -5304,7 +5303,6 @@ benchmarks = [
     { name = "mcp", specifier = ">=2.3.0,<3" },
     { name = "pytest", specifier = "==9.0.3" },
     { name = "pytest-codspeed", specifier = "==4.3.0" },
-    { name = "respx", specifier = "==0.22.0" },
 ]
 ci = [
     { name = "aiodynamo", specifier = "==24.7" },
