@@ -6134,16 +6134,20 @@ def test_get_standard_logging_object_payload_logs_a_non_finite_response_cost_as_
     assert payload["response_cost"] == 0
 
 
-def test_an_overflowing_custom_price_records_a_zero_response_cost() -> None:
-    response: Final = litellm.completion(
-        model="gpt-4o",
-        mock_response="hi there",
-        messages=[{"role": "user", "content": "hello world"}],
-        input_cost_per_token=1e308,
-        output_cost_per_token=1e308,
-    )
+def test_an_overflowing_custom_price_records_a_zero_response_cost(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        response: Final = litellm.completion(
+            model="gpt-4o",
+            mock_response="hi there",
+            messages=[{"role": "user", "content": "hello world"}],
+            input_cost_per_token=1e308,
+            output_cost_per_token=1e308,
+            litellm_call_id="overflow\nforged log line",
+        )
 
     assert response._hidden_params["response_cost"] == 0.0
+    warnings: Final = [r.getMessage() for r in caplog.records if "non-finite response_cost" in r.getMessage()]
+    assert warnings == ["Recording a non-finite response_cost as 0 for litellm_call_id=overflowforged log line"]
 
 
 def test_get_standard_logging_object_payload_carries_matched_access_groups(logging_obj):

@@ -944,6 +944,10 @@ def finite_cost(value: object) -> float | None:
     return float(value)
 
 
+def single_log_line(value: object) -> str:
+    return str(value).replace("\r", "").replace("\n", "")
+
+
 def finite_reported_cost(value: object) -> float | None:
     cost: Final = finite_cost(value)
     if cost is None and isinstance(value, float):

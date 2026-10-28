@@ -84,6 +84,7 @@ from litellm.litellm_core_utils.core_helpers import (
     proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
     set_response_cost_in_hidden_params,
+    single_log_line,
 )
 from litellm.litellm_core_utils.error_normalization import normalize_error
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
@@ -2195,7 +2196,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if cost is None or finite_cost(cost) is not None:
             return cost
         verbose_logger.warning(
-            "Recording a non-finite response_cost=%s as 0 for litellm_call_id=%s", cost, self.litellm_call_id
+            "Recording a non-finite response_cost as 0 for litellm_call_id=%s", single_log_line(self.litellm_call_id)
         )
         return 0.0
 
