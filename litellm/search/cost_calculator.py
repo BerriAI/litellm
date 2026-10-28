@@ -9,8 +9,10 @@ from typing import Final
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm._cost import Usage as TokenUsage
+from litellm._cost import as_main_cost
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
-from litellm.utils import get_model_info
+from litellm.litellm_core_utils.llm_cost_calc.utils import price_usage, pricing_row
 
 PROVIDER_USAGE_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
     tuple[Mapping[str, object], ...]
@@ -93,28 +95,16 @@ def search_provider_cost_per_query(
         )
         return (input_cost, 0.0)
 
-    model_info: Final = get_model_info(
-        model=_pricing_model(model, custom_llm_provider, optional_params),
-        custom_llm_provider=custom_llm_provider,
+    max_results: Final = (optional_params or {}).get("max_results")
+    return as_main_cost(
+        price_usage(
+            pricing_row(_pricing_model(model, custom_llm_provider, optional_params), custom_llm_provider, None),
+            TokenUsage(
+                prompt_tokens=0,
+                text=0,
+                output_text=0,
+                search_queries=number_of_queries,
+                max_results=max_results if isinstance(max_results, int) and not isinstance(max_results, bool) else None,
+            ),
+        )
     )
-
-    # Check for tiered pricing (e.g., Exa AI based on max_results)
-    tiered_pricing: Final = model_info.get("tiered_pricing")
-    if tiered_pricing and isinstance(tiered_pricing, list):
-        max_results: Final = (optional_params or {}).get("max_results", 10)  # default 10 results
-        cost_per_query = 0.0
-
-        for tier in tiered_pricing:
-            range_min, range_max = tier["max_results_range"]
-            if range_min <= max_results <= range_max:
-                cost_per_query = tier["input_cost_per_query"]
-                break
-        else:
-            # Fallback to highest tier if out of range
-            cost_per_query = tiered_pricing[-1]["input_cost_per_query"]
-    else:
-        # Simple flat rate
-        cost_per_query = float(model_info.get("input_cost_per_query") or 0.0)
-
-    total_cost: Final = number_of_queries * cost_per_query
-    return (total_cost, 0.0)  # (input_cost, output_cost)

@@ -11,7 +11,7 @@ from litellm.constants import (
     FIREWORKS_AI_56_B_MOE,
     FIREWORKS_AI_176_B_MOE,
 )
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.llm_cost_calc.utils import cost_per_text
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import get_model_info
 
@@ -85,7 +85,7 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
     model_info: Final = _resolve_model_info(model)
-    return generic_cost_per_token(
+    return cost_per_text(
         model=model,
         usage=usage,
         custom_llm_provider=model_info["litellm_provider"],

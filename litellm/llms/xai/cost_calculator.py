@@ -9,7 +9,7 @@ import math
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.llm_cost_calc.utils import cost_per_text
 from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
 if TYPE_CHECKING:
@@ -53,7 +53,7 @@ def _split_reported_cost(model: str, usage: Usage, reported_cost: float) -> tupl
     """xAI reports one total, so attribute it to input and output in the ratio our own token math gives."""
     try:
         priced_input, priced_output = _token_math_cost_per_token(model, usage)
-    except Exception:  # noqa: BLE001  # generic_cost_per_token raises bare Exception for unmapped models
+    except Exception:  # noqa: BLE001  # cost_per_text raises bare Exception for unmapped models
         return 0.0, reported_cost
     priced_total: Final = priced_input + priced_output
     if priced_total <= 0:
@@ -105,7 +105,7 @@ def _token_math_cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
         completion_tokens_details=None,
     )
 
-    prompt_cost, completion_cost = generic_cost_per_token(model=model, usage=modified_usage, custom_llm_provider="xai")
+    prompt_cost, completion_cost = cost_per_text(model=model, usage=modified_usage, custom_llm_provider="xai")
 
     return prompt_cost, completion_cost
 

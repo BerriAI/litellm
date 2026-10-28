@@ -19,7 +19,7 @@ import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     resolve_explicit_cache_read_cost_rate,
     calculate_prompt_caching_savings,
-    generic_cost_per_token,
+    cost_per_text,
     get_token_type_cost_breakdown,
 )
 from litellm.llms.dashscope.cost_calculator import (
@@ -475,7 +475,7 @@ class TestDashscopeCostCalculator:
             prompt_tokens_details={"cached_tokens": 600, "cache_type": "ephemeral"},
         )
 
-        prompt_cost, _ = generic_cost_per_token(
+        prompt_cost, _ = cost_per_text(
             model="custom-qwen",
             usage=usage,
             custom_llm_provider="openai",

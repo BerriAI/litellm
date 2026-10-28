@@ -1927,7 +1927,7 @@ def test_gemini_25_explicit_caching_cost_direct_usage():
     This test reproduces the issue from #11156 where cached tokens should receive
     a 75% discount.
     """
-    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+    from litellm.litellm_core_utils.llm_cost_calc.utils import cost_per_text
     from litellm.types.utils import (
         CompletionTokensDetailsWrapper,
         PromptTokensDetailsWrapper,
@@ -1953,7 +1953,7 @@ def test_gemini_25_explicit_caching_cost_direct_usage():
         ),
     )
 
-    input_cost, output_cost = generic_cost_per_token(
+    input_cost, output_cost = cost_per_text(
         model="gemini/gemini-2.5-pro",
         usage=usage,
         custom_llm_provider="gemini",
@@ -1987,13 +1987,13 @@ def test_gemini_25_explicit_caching_cost_direct_usage():
 
 def test_azure_ai_cache_cost_calculation(_local_model_cost_map):
     """
-    Test that azure_ai provider correctly calculates cache costs using generic_cost_per_token.
+    Test that azure_ai provider correctly calculates cache costs using cost_per_text.
 
     This verifies that azure_ai models with custom cache pricing in model_info
     will have their cache_creation_input_token_cost and cache_read_input_token_cost
     applied correctly.
     """
-    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+    from litellm.litellm_core_utils.llm_cost_calc.utils import cost_per_text
     from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
     # Register a custom azure_ai model with cache pricing
@@ -2023,7 +2023,7 @@ def test_azure_ai_cache_cost_calculation(_local_model_cost_map):
         cache_creation_input_tokens=100,  # 100 cache creation tokens
     )
 
-    input_cost, output_cost = generic_cost_per_token(
+    input_cost, output_cost = cost_per_text(
         model=test_model_id,
         usage=usage,
         custom_llm_provider="azure_ai",
@@ -2887,7 +2887,7 @@ def test_completion_cost_service_tier_for_anthropic(_local_model_cost_map):
     Regression for LIT-3771: the Anthropic cost route dropped ``service_tier``,
     so priority requests (whose tier is reported on the response usage) were
     always billed at the standard rate. The tier is captured by the
-    transformation and must flow through to ``generic_cost_per_token``.
+    transformation and must flow through to ``cost_per_text``.
     """
     from litellm import completion_cost
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig

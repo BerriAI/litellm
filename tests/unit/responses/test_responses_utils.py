@@ -8,7 +8,7 @@ import pytest
 
 import litellm
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.llm_cost_calc.utils import cost_per_text
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
@@ -440,7 +440,7 @@ class TestResponseAPILoggingUtils:
         assert usage.prompt_tokens_details.cache_creation_token_details is not None
         assert usage.prompt_tokens_details.cache_creation_token_details.ephemeral_12h_input_tokens == 2_000
         assert usage.prompt_tokens_details.cache_creation_token_details.ephemeral_30m_input_tokens == 3_000
-        cost: Final = generic_cost_per_token(
+        cost: Final = cost_per_text(
             model="test-12h-cache-write",
             usage=usage,
             custom_llm_provider="openai",

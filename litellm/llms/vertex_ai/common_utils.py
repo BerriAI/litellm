@@ -80,18 +80,30 @@ def _vertex_ai_lyria_model_key(model: str) -> str:
     return model if model.startswith("vertex_ai/") else f"vertex_ai/{model}"
 
 
-def _vertex_ai_lyria_generation_cost(model_info: VertexAILyriaModelInfo | None) -> float | None:
-    return None if model_info is None else model_info.get("output_cost_per_image")
-
-
 def get_vertex_ai_lyria_model_info(model: str) -> VertexAILyriaModelInfo | None:
     model_key: Final = _vertex_ai_lyria_model_key(model)
     return _validate_vertex_ai_lyria_model_info(litellm.model_cost.get(model_key))
 
 
-def get_vertex_ai_lyria_generation_cost(model: str) -> float | None:
+def get_vertex_ai_lyria_generation_cost(model: str, generations: int = 1) -> float | None:
+    """``generations`` Lyria generations at the row's per-generation price, None when the model is not a priced Lyria
+    row"""
+    from litellm._cost import ImageOut, Priced
+    from litellm._cost import Usage as TokenUsage
+    from litellm.litellm_core_utils.llm_cost_calc.utils import price_usage
+
     model_key: Final = _vertex_ai_lyria_model_key(model)
-    return _vertex_ai_lyria_generation_cost(_validate_vertex_ai_lyria_model_info(litellm.model_cost.get(model_key)))
+    row: Final = litellm.model_cost.get(model_key)
+    if row is None or _validate_vertex_ai_lyria_model_info(row) is None:
+        return None
+    priced: Final = price_usage(
+        row,
+        TokenUsage(prompt_tokens=0, text=0, output_text=0, images_out=[ImageOut()] * max(generations, 0)),
+        key=model_key,
+    )
+    if not isinstance(priced, Priced) or (generations > 0 and not priced.lines):
+        return None
+    return priced.total
 
 
 class VertexAIError(BaseLLMException):

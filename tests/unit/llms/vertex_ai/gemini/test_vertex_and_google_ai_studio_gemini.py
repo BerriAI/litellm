@@ -19,7 +19,7 @@ from litellm._logging import verbose_logger
 from litellm.cost_calculator import batch_cost_calculator
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token, parse_prompt_tokens_details
+from litellm.litellm_core_utils.llm_cost_calc.utils import cost_per_text, parse_prompt_tokens_details
 from litellm.llms.anthropic.messages.native import handler as anthropic_messages_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
@@ -1620,7 +1620,7 @@ def test_gemini_raw_usage_metadata_prices_cached_audio_at_its_standard_rate() ->
         + 5 * model_info["cache_read_input_audio_token_cost"]
     )
 
-    prompt_cost, _ = generic_cost_per_token(
+    prompt_cost, _ = cost_per_text(
         model="gemini-audio-standard-test-model",
         usage=usage,
         custom_llm_provider="gemini",
@@ -1640,13 +1640,13 @@ def test_gemini_usage_totals_are_subtracted_once_and_audio_cache_rate_matches_au
     cached_usage: Final = _gemini_usage_with_cached_audio(5)
     uncached_usage: Final = _gemini_usage_with_cached_audio(0)
     cached_details: Final = parse_prompt_tokens_details(cached_usage)
-    cached_prompt_cost, _ = generic_cost_per_token(
+    cached_prompt_cost, _ = cost_per_text(
         model="gemini-audio-standard-test-model",
         usage=cached_usage,
         custom_llm_provider="gemini",
         model_info=model_info,
     )
-    uncached_prompt_cost, _ = generic_cost_per_token(
+    uncached_prompt_cost, _ = cost_per_text(
         model="gemini-audio-standard-test-model",
         usage=uncached_usage,
         custom_llm_provider="gemini",
@@ -6299,7 +6299,7 @@ def test_vertex_ai_usage_metadata_with_document_tokens_cached():
         "input_cost_per_token": 2e-6,
         "cache_read_input_token_cost": 5e-7,
     }
-    prompt_cost, _ = generic_cost_per_token(
+    prompt_cost, _ = cost_per_text(
         model="gemini-document-cache-test-model",
         usage=result,
         custom_llm_provider="gemini",

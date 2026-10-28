@@ -442,7 +442,7 @@ class VertexPassthroughLoggingHandler:
         prediction_count: Final = VertexPassthroughLoggingHandler._get_audio_prediction_count(
             json_response=json_response
         )
-        response_cost: Final = (get_vertex_ai_lyria_generation_cost(model=model) or 0.0) * prediction_count
+        response_cost: Final = get_vertex_ai_lyria_generation_cost(model=model, generations=prediction_count) or 0.0
 
         logging_obj.model = model  # rebind-ok: passthrough attribution records the resolved Vertex model
         logging_obj.model_call_details[  # rebind-ok: passthrough attribution enriches callback metadata

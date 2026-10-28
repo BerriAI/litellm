@@ -574,7 +574,7 @@ class TestVertexAILivePassthroughLoggingHandler:
     def test_reporting_tool_use_tokens_does_not_move_the_bill(self, handler, mock_logging_obj):
         """Deliberate boundary: these tokens are reported here, and priced nowhere.
 
-        generic_cost_per_token reads the input bill out of prompt_tokens_details, and falls
+        cost_per_text reads the input bill out of prompt_tokens_details, and falls
         back to prompt_tokens only when the details carry no text or a cache hit overlaps them,
         so adding tool-use tokens to prompt_tokens is worth nothing on an ordinary Live turn and
         over-charges against the cache-overlap correction when it is not. Pricing them belongs

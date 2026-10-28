@@ -693,7 +693,6 @@ FIREWORKS_AI_16_B: Final = get_env_int("FIREWORKS_AI_16_B", 16)
 FIREWORKS_AI_80_B: Final = get_env_int("FIREWORKS_AI_80_B", 80)
 # https://docs.fireworks.ai/guides/prompt-caching (accessed 2026-09-19): serverless cached prompt tokens
 # default to a 50% discount off the input rate
-FIREWORKS_AI_DEFAULT_CACHE_READ_RATE_RATIO: Final = 0.5
 #### Logging callback constants ####
 REDACTED_BY_LITELM_STRING: Final = "REDACTED_BY_LITELM"
 MAX_LANGFUSE_INITIALIZED_CLIENTS: Final = get_env_int("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50)

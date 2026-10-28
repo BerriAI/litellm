@@ -5,6 +5,7 @@ Vertex AI Image Edit Cost Calculator
 from typing import Final
 
 import litellm
+from litellm.litellm_core_utils.llm_cost_calc.utils import image_cost
 from litellm.types.utils import ImageResponse
 
 
@@ -23,10 +24,8 @@ def cost_calculator(
         custom_llm_provider="vertex_ai",
     )
 
-    output_cost_per_image: Final[float] = model_info.get("output_cost_per_image") or 0.0
-
     if not isinstance(image_response, ImageResponse):
         raise ValueError(f"image_response must be of type ImageResponse got type={type(image_response)}")
 
     num_images: Final = len(image_response.data or [])
-    return output_cost_per_image * num_images
+    return image_cost(model_info, num_images) or 0.0

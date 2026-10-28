@@ -16,6 +16,7 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 import litellm
 import litellm._logging
 from litellm import verbose_logger
+from litellm._catalog import CATALOG, Missing
 from litellm._cost import Priced, as_main_cost, call_custom_pricing, custom_pricing_for_call
 from litellm._cost import Usage as TokenUsage
 from litellm.constants import (
@@ -43,13 +44,13 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_cache_writing_cost,
     calculate_cost_component,
     cost_per_text,
-    generic_cost_per_token,
     get_batch_cost_rates,
     get_billable_input_tokens,
     get_regional_uplift_multiplier,
     get_service_tier_cost_key,
     get_token_type_cost_breakdown,
     get_vertex_regional_endpoint_uplift,
+    image_cost,
     parse_prompt_tokens_details,
     price_usage,
     pricing_row,
@@ -111,7 +112,6 @@ from litellm.types.extraction import ExtractionResponse, ExtractionUsage
 from litellm.types.llms.base import CachedTokensDetails, LiteLLMBaseModel
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
-    ImageGenerationRequestQuality,
     OpenAIModerationResponse,
     OpenAIRealtimeStreamList,
     OpenAIRealtimeStreamResponseBaseObject,
@@ -436,7 +436,7 @@ def cost_per_token(
 
     if custom_cost_per_token is not None:
         with custom_pricing_for_call(dict(custom_cost_per_token)):
-            return generic_cost_per_token(
+            return cost_per_text(
                 model=model,
                 usage=_flat_custom_pricing_usage(
                     usage_object, prompt_tokens, completion_tokens, cache_read_input_tokens, cache_creation_input_tokens
@@ -514,7 +514,7 @@ def cost_per_token(
             litellm.model_cost.get(decisions_model_info["key"], {})  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # model cost map is dynamically loaded
         )
         if decisions_overrides:
-            return generic_cost_per_token(
+            return cost_per_text(
                 model=model,
                 usage=usage_block,
                 custom_llm_provider=custom_llm_provider,
@@ -580,7 +580,7 @@ def cost_per_token(
         )
     elif call_type == "atranscription" or call_type == "transcription":
         if _transcription_usage_has_token_details(usage_block):
-            return generic_cost_per_token(
+            return cost_per_text(
                 model=model_without_prefix,
                 usage=usage_block,
                 custom_llm_provider=custom_llm_provider,
@@ -613,7 +613,7 @@ def cost_per_token(
     ) is not None:
         return per_second_cost
     elif call_custom_pricing() is not None and _cost_map_model_info(model, custom_llm_provider) is None:
-        return generic_cost_per_token(
+        return cost_per_text(
             model=model,
             usage=usage_block,
             custom_llm_provider=custom_llm_provider,
@@ -646,7 +646,7 @@ def cost_per_token(
     elif custom_llm_provider == "bedrock":
         resolved_bedrock_info: Final = bedrock_model_info or _bedrock_pricing_info(model, None, "bedrock", False)
         if resolved_bedrock_info is not None:
-            return generic_cost_per_token(
+            return cost_per_text(
                 model=model,
                 usage=usage_block,
                 custom_llm_provider="bedrock",
@@ -699,7 +699,7 @@ def cost_per_token(
             service_tier=service_tier,
         )
     else:
-        return generic_cost_per_token(
+        return cost_per_text(
             model=model,
             usage=usage_block,
             custom_llm_provider=custom_llm_provider,
@@ -2259,15 +2259,15 @@ def _video_input_image_cost(
 ) -> float:
     match usage:
         case {"billable_input_image_count": int(billable_input_images)} if billable_input_images > 0:
-            deployment_rate: Final = model_info.get("input_cost_per_image") if model_info is not None else None
-            image_rate: Final = (
-                deployment_rate
-                if deployment_rate is not None
-                else litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider).get(
-                    "input_cost_per_image"
-                )
+            row: Final = (
+                model_info
+                if model_info is not None and model_info.get("input_cost_per_image") is not None
+                else pricing_row(model, custom_llm_provider, None)
             )
-            return billable_input_images * image_rate if isinstance(image_rate, (int, float)) else 0.0
+            prompt_cost, completion_cost = as_main_cost(
+                price_usage(row, TokenUsage(prompt_tokens=0, text=0, output_text=0, images_in=billable_input_images))
+            )
+            return prompt_cost + completion_cost
         case _:
             return 0.0
 
@@ -2682,57 +2682,19 @@ def default_image_cost_calculator(
     # Parse dimensions
     height, width = map(int, size_str.split("-x-"))
 
-    # Build model names for cost lookup
-    base_model_name = f"{size_str}/{model}"
-    model_name_without_custom_llm_provider: str | None = None
-    if custom_llm_provider and model.startswith(f"{custom_llm_provider}/"):
-        model_name_without_custom_llm_provider = model.replace(f"{custom_llm_provider}/", "")
-        base_model_name = f"{custom_llm_provider}/{size_str}/{model_name_without_custom_llm_provider}"
-    model_name_with_quality: Final = f"{quality}/{base_model_name}" if quality else base_model_name
-    provider_first_model_name_with_quality: Final = (
-        f"{custom_llm_provider}/{quality}/{size_str}/{model_name_without_custom_llm_provider or model}"
-        if quality and custom_llm_provider
-        else None
-    )
-
-    # gpt-image-1 models use low, medium, high quality. If user did not specify quality, use medium fot gpt-image-1 model family
-    model_name_with_v2_quality: Final = f"{ImageGenerationRequestQuality.HIGH.value}/{base_model_name}"
-
-    verbose_logger.debug("Looking up cost for models: %s, %s", model_name_with_quality, base_model_name)
-
-    model_without_provider: Final = f"{size_str}/{model.split('/')[-1]}"
-    model_with_quality_without_provider = f"{quality}/{model_without_provider}" if quality else model_without_provider
-
-    models_to_check: Final = (
-        model_name_with_quality,
-        provider_first_model_name_with_quality,
-        base_model_name,
-        model_name_with_v2_quality,
-        model_with_quality_without_provider,
-        model_without_provider,
-        model,
-        model_name_without_custom_llm_provider,
-    )
-    matched_model: Final = next(
-        (_model for _model in models_to_check if _model is not None and _model in litellm.model_cost), None
-    )
-    if matched_model is None and model_info is None:
+    resolution: Final = CATALOG.resolve_image(model, custom_llm_provider, size=(height, width), quality=quality or None)
+    models_to_check: Final = tuple(resolution.tried) if isinstance(resolution, Missing) else (resolution.key,)
+    if isinstance(resolution, Missing) and model_info is None:
         raise Exception(f"Model not found in cost map. Tried checking {models_to_check}")
 
-    shared_cost_info: Final = litellm.model_cost[matched_model] if matched_model is not None else None
+    shared_cost_info: Final = None if isinstance(resolution, Missing) else litellm.model_cost[resolution.key]
     price_tables: Final = tuple(table for table in (model_info, shared_cost_info) if table is not None)
     image_count: Final = n if n is not None else 1
-    unit_counts: Final = (
-        ("input_cost_per_image", image_count),
-        ("output_cost_per_image", image_count),
-        ("input_cost_per_pixel", height * width * image_count),
-    )
     cost: Final = next(
         (
-            price * units
+            table_cost
             for price_table in price_tables
-            for cost_key, units in unit_counts
-            if isinstance(price := price_table.get(cost_key), (int, float))
+            if (table_cost := image_cost(price_table, image_count, width=int(width), height=int(height))) is not None
         ),
         None,
     )
@@ -3382,7 +3344,7 @@ def _candidate_realtime_token_costs(
     data_residency: str | None,
 ) -> tuple[float, float] | None:
     try:
-        return generic_cost_per_token(
+        return cost_per_text(
             model=model_name,
             usage=combined_usage_object,
             custom_llm_provider=custom_llm_provider,

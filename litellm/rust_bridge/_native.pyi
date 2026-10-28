@@ -156,7 +156,22 @@ class Usage:
         output_video_duration: timedelta | None = None,
         video_resolution: str | None = None,
         text_messages: int = 0,
+        images_in: int = 0,
+        images_out: Sequence[ImageOut] = (),
+        pixels_in: int = 0,
+        search_queries: int = 0,
+        max_results: int | None = None,
+        web_search_requests: int = 0,
+        web_search_context: Literal["low", "medium", "high"] = "medium",
+        maps_grounding_requests: int = 0,
+        citation_tokens: int = 0,
+        browser_opens: int = 0,
+        additional_results: int = 0,
     ) -> None: ...
+
+@final
+class ImageOut:
+    def __init__(self, *, size: str | None = None, width: int | None = None, height: int | None = None) -> None: ...
 
 
 @final
@@ -170,6 +185,8 @@ class CallContext:
         vertex_location: str | None,
         at: datetime,
         custom_pricing: Mapping[str, object] | None,
+        speed: str | None = None,
+        inference_geo: str | None = None,
     ) -> None: ...
 
 @final
@@ -208,6 +225,15 @@ class Catalog:
     def bound_to(module: ModuleType, attr: str) -> Catalog: ...
     def bundled(self) -> Fetched: ...
     def fetch(self, source: Remote | File | Bundled, *, timeout: float, attempts: int) -> Fetched | Unavailable: ...
+    def resolve_image(
+        self,
+        model: str,
+        provider: str | None = None,
+        *,
+        size: tuple[int, int] | None = None,
+        quality: str | None = None,
+    ) -> Resolved | Missing | Invalid: ...
+    def nearest_image_key(self, model: str, provider: str, *, quality: str, size: tuple[int, int]) -> str | None: ...
     def reload(self, source: Remote | File | Bundled) -> Installed | Unavailable: ...
     def provenance(self) -> Provenance | None: ...
     def resolve(self, model: str, provider: str | None = None) -> Resolved | Missing | Invalid: ...

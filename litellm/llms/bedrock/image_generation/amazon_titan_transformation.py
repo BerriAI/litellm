@@ -1,3 +1,5 @@
+from litellm.litellm_core_utils.llm_cost_calc.utils import image_cost
+
 """
 Transformation logic for Amazon Titan Image Generation.
 """
@@ -152,8 +154,7 @@ class AmazonTitanImageGenerationConfig:
         optional_params: dict | None = None,
     ) -> float:
         model_info: Final = get_model_info(model=model)
-        output_cost_per_image: Final = model_info.get("output_cost_per_image") or 0.0
         if not image_response.data:
             return 0.0
         num_images: Final = len(image_response.data)
-        return output_cost_per_image * num_images
+        return image_cost(model_info, num_images) or 0.0

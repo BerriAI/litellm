@@ -6,7 +6,7 @@ Handles Azure AI Foundry Model Router flat cost and other Azure AI specific pric
 from typing import Final
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.llm_cost_calc.utils import cost_per_text
 from litellm.types.utils import Usage
 from litellm.utils import get_model_info
 
@@ -65,9 +65,7 @@ def calculate_azure_model_router_flat_cost(model: str, prompt_tokens: int) -> fl
 
 def _response_model_cost(model: str, usage: Usage, service_tier: str | None) -> tuple[float, float]:
     try:
-        return generic_cost_per_token(
-            model=model, usage=usage, custom_llm_provider="azure_ai", service_tier=service_tier
-        )
+        return cost_per_text(model=model, usage=usage, custom_llm_provider="azure_ai", service_tier=service_tier)
     except Exception as e:
         if not is_azure_model_router(model):
             raise

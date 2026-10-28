@@ -7,7 +7,8 @@ from typing import Final
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.litellm_core_utils.llm_cost_calc.utils import deployment_pricing, resolve_image_model_info
+from litellm._catalog import CATALOG
+from litellm.litellm_core_utils.llm_cost_calc.utils import deployment_pricing, image_cost, resolve_image_model_info
 from litellm.types.utils import ImageObject, ImageResponse, ModelInfo
 
 FAL_KEYED_PRICING_DEFAULT_QUALITY: Final[str] = "high"
@@ -82,38 +83,20 @@ def _parse_keyed_dimensions(size: str | None) -> tuple[int, int] | None:
     return (width, height) if width > 0 and height > 0 else None
 
 
-def _keyed_rows(model: str, quality: str) -> tuple[tuple[int, int, float], ...]:
-    prefix: Final = f"fal_ai/{quality}/"
-    suffix: Final = f"/{model}"
-    return tuple(
-        (width, height, float(raw_cost))
-        for key in (*litellm.model_cost,)
-        if isinstance(key, str) and key.startswith(prefix) and key.endswith(suffix)
-        for size in (key[len(prefix) : -len(suffix)],)
-        for dimensions in (_parse_keyed_dimensions(size),)
-        if dimensions is not None
-        for entry in (_entry(key),)
-        if entry is not None
-        for raw_cost in (entry.get("output_cost_per_image"),)
-        if isinstance(raw_cost, (int, float))
-        for width, height in (dimensions,)
-    )
-
-
 def _keyed_cost_per_image(
     model: str,
     image: object,
     optional_params: Mapping[str, object],
 ) -> float | None:
-    quality: Final = _keyed_quality(optional_params)
-    rows: Final = _keyed_rows(model, quality)
-    if not rows:
-        return None
-    target_dimensions: Final = (
+    """The per-image price of the size-keyed row nearest the image's size"""
+    target: Final = (
         _image_dimensions(image) or _parse_keyed_dimensions(_keyed_size(optional_params)) or _DEFAULT_KEYED_DIMENSIONS
     )
-    target_pixels: Final = target_dimensions[0] * target_dimensions[1]
-    return min(rows, key=lambda row: (abs(row[0] * row[1] - target_pixels), row[0] * row[1]))[2]
+    key: Final = CATALOG.nearest_image_key(
+        model, litellm.LlmProviders.FAL_AI.value, quality=_keyed_quality(optional_params), size=target
+    )
+    entry: Final = _entry(key) if key is not None else None
+    return image_cost(entry, 1) if entry is not None else None
 
 
 def _flat_cost_per_image(

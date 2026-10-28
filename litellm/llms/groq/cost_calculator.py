@@ -16,15 +16,22 @@ if TYPE_CHECKING:
 
 
 def cost_per_web_search_request(usage: Usage, model_info: "ModelInfo") -> float:
-    search_costs: Final = model_info.get("search_context_cost_per_query")
-    cost_per_search: Final = search_costs.get("search_context_size_medium", 0.0) if search_costs else 0.0
+    from litellm._cost import Usage as TokenUsage
+    from litellm.litellm_core_utils.llm_cost_calc.utils import search_cost
+
     try:
         server_tool_use: Final = usage.server_tool_use
     except AttributeError:
         return 0.0
     if server_tool_use is None:
         return 0.0
-    searches: Final = server_tool_use.web_search_requests or 0
-    opens: Final = server_tool_use.browser_open_requests or 0
-    cost_per_open: Final = model_info.get("browser_open_cost_per_request") or 0.0
-    return searches * cost_per_search + opens * cost_per_open
+    return search_cost(
+        model_info,
+        TokenUsage(
+            prompt_tokens=0,
+            text=0,
+            output_text=0,
+            web_search_requests=server_tool_use.web_search_requests or 0,
+            browser_opens=server_tool_use.browser_open_requests or 0,
+        ),
+    )

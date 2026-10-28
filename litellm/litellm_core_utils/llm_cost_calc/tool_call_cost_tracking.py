@@ -281,21 +281,33 @@ class StandardBuiltInToolCostTracking:
         tool_usage: Final = _responses_tool_usage(response_object)
         if tool_usage is None or tool_usage.image_gen is None or tool_usage.image_gen.total_tokens <= 0:
             return None
+        from litellm._cost import Usage as TokenUsage
+        from litellm._cost import as_main_cost
+        from litellm.litellm_core_utils.llm_cost_calc.utils import price_usage, pricing_row
+
         try:
-            model_info: Final = litellm.get_model_info(model=tool_model, custom_llm_provider=custom_llm_provider)
+            row: Final = pricing_row(tool_model, custom_llm_provider, None)
         except Exception as e:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models; fall back
             verbose_logger.debug("Could not resolve pricing for image tool model %s: %s", tool_model, e)
             return None
         image_gen: Final = tool_usage.image_gen
         input_details: Final = image_gen.input_tokens_details
         output_details: Final = image_gen.output_tokens_details
-        token_cost: Final = (
-            (input_details.text_tokens if input_details else 0) * (model_info.get("input_cost_per_token") or 0)
-            + (input_details.image_tokens if input_details else 0) * (model_info.get("input_cost_per_image_token") or 0)
-            + (output_details.image_tokens if output_details else 0)
-            * (model_info.get("output_cost_per_image_token") or 0)
-            + (output_details.text_tokens if output_details else 0) * (model_info.get("output_cost_per_token") or 0)
+        text_in: Final = input_details.text_tokens if input_details else 0
+        image_in: Final = input_details.image_tokens if input_details else 0
+        prompt_cost, completion_cost = as_main_cost(
+            price_usage(
+                row,
+                TokenUsage(
+                    prompt_tokens=text_in + image_in,
+                    text=text_in,
+                    image=image_in,
+                    output_text=output_details.text_tokens if output_details else 0,
+                    output_image=output_details.image_tokens if output_details else 0,
+                ),
+            )
         )
+        token_cost: Final = prompt_cost + completion_cost
         return token_cost if token_cost > 0 else None
 
     @staticmethod

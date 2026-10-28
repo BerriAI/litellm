@@ -9,8 +9,8 @@ from typing import Final
 from litellm import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_image_response_cost_from_usage,
+    cost_per_text,
     flat_image_cost,
-    generic_cost_per_token,
     resolve_image_model_info,
 )
 from litellm.types.utils import ImageResponse, ModelInfo, Usage
@@ -35,9 +35,9 @@ def cost_calculator(
         verbose_logger.debug("No usage data available for %s, cannot calculate token-based cost", model)
         return flat_image_cost(price_table, image_response)
 
-    # A chat Usage with an explicit output breakdown: cost via generic_cost_per_token.
+    # A chat Usage with an explicit output breakdown: cost via cost_per_text.
     if isinstance(usage, Usage) and usage.completion_tokens_details is not None:
-        prompt_cost, completion_cost = generic_cost_per_token(
+        prompt_cost, completion_cost = cost_per_text(
             model=model, usage=usage, custom_llm_provider=provider, model_info=price_table
         )
         return prompt_cost + completion_cost
@@ -54,9 +54,9 @@ def cost_calculator(
             return token_based_cost
 
     # Fallback: a Usage with no output breakdown that the image helper can't read —
-    # cost via generic_cost_per_token (text rate) instead of returning 0.0.
+    # cost via cost_per_text (text rate) instead of returning 0.0.
     if isinstance(usage, Usage):
-        prompt_cost, completion_cost = generic_cost_per_token(
+        prompt_cost, completion_cost = cost_per_text(
             model=model, usage=usage, custom_llm_provider=provider, model_info=price_table
         )
         return prompt_cost + completion_cost

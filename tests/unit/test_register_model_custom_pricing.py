@@ -121,7 +121,7 @@ def test_register_model_inherits_builtin_cache_pricing_for_unmapped_key(monkeypa
 
     Regression for the cache-pricing dropout under partial overrides.
     """
-    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+    from litellm.litellm_core_utils.llm_cost_calc.utils import cost_per_text
     from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
     original_model_cost = litellm.model_cost
@@ -168,7 +168,7 @@ def test_register_model_inherits_builtin_cache_pricing_for_unmapped_key(monkeypa
             cache_creation_input_tokens=200,
         )
 
-        input_cost, output_cost = generic_cost_per_token(
+        input_cost, output_cost = cost_per_text(
             model=registered_key,
             usage=usage,
             custom_llm_provider="bedrock",

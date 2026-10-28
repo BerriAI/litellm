@@ -110,14 +110,14 @@ def _priced(router: "Router", candidate: Baseline) -> tuple[float, Baseline] | N
     dimension to that engine. A candidate that prices to nothing there cannot stand in
     for what the traffic would have cost.
     """
-    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+    from litellm.litellm_core_utils.llm_cost_calc.utils import cost_per_text
 
     provider, _, model_name = candidate.model.partition("/")
     try:
         info: Final = router.cached_deployment_model_info(candidate.deployment_id or "", candidate.model)
         if info is None:
             return None
-        prompt_cost, completion_cost = generic_cost_per_token(
+        prompt_cost, completion_cost = cost_per_text(
             model=model_name or candidate.model,
             usage=_REFERENCE_REQUEST,
             custom_llm_provider=provider,

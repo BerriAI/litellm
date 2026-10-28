@@ -26,7 +26,7 @@ mod _native {
     };
 
     #[pymodule_export]
-    use crate::cost::{CallContext, Line, Priced, PricesHandle, Unpriced, Usage};
+    use crate::cost::{CallContext, ImageOut, Line, Priced, PricesHandle, Unpriced, Usage};
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
     use crate::diagnostics::_panic_for_test;

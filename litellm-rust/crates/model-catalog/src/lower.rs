@@ -2,11 +2,13 @@ use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 use std::num::NonZeroU64;
 
-use litellm_cost::money::UnitPrice;
+use litellm_cost::call::{InferenceGeo, Speed};
+use litellm_cost::money::{Multiplier, UnitPrice};
 use litellm_cost::price::{
     Adjustments, Band, BandEdge, Billing, CacheReadFallback, CacheReadMode, CacheTtl,
     GuardrailUnit, InputUnit, Meter, OffPeak, OffPeakRates, OutputUnit, Price, Prices, Residency,
-    SearchContextSize, TextUnit, TierScope, TokenKind, Uplift, WallClock, WebSearchUnit, When,
+    SearchContextSize, SearchDefaults, TextUnit, TierScope, TokenKind, Uplift, WallClock,
+    WebSearchUnit, When,
 };
 use litellm_cost::schedule::{Schedule, Window};
 
@@ -92,6 +94,10 @@ impl TryFrom<&EntryWire> for Prices {
 
 fn billing(wire: &EntryWire, rates: &BTreeMap<Price, UnitPrice>) -> Billing {
     let provider = wire.attributes.litellm_provider.as_deref();
+    let google = provider.is_some_and(|provider| {
+        provider == "gemini"
+            || (provider.starts_with("vertex_ai") && !provider.contains("anthropic"))
+    });
     let prices_meter = |priced: fn(&Meter) -> bool| rates.keys().any(|price| priced(&price.meter));
     let prices_tokens = prices_meter(|meter| {
         matches!(
@@ -137,9 +143,14 @@ fn billing(wire: &EntryWire, rates: &BTreeMap<Price, UnitPrice>) -> Billing {
             Some(Mode::AudioTranscription) => WallClock::AudioFile,
             Some(_) => WallClock::Never,
         },
-        web_search: match wire.attributes.web_search_billing_unit {
-            Some(WebSearchBillingUnit::PerQuery) => WebSearchUnit::PerQuery,
-            Some(WebSearchBillingUnit::PerPrompt) | None => WebSearchUnit::PerPrompt,
+        web_search: match (wire.attributes.web_search_billing_unit, google) {
+            (Some(WebSearchBillingUnit::PerQuery), _) | (None, false) => WebSearchUnit::PerQuery,
+            (Some(WebSearchBillingUnit::PerPrompt), _) | (None, true) => WebSearchUnit::PerPrompt,
+        },
+        search_defaults: if google {
+            SearchDefaults::Google
+        } else {
+            SearchDefaults::None
         },
         tier_scope: if wire
             .tier_rows
@@ -155,7 +166,21 @@ fn billing(wire: &EntryWire, rates: &BTreeMap<Price, UnitPrice>) -> Billing {
 }
 
 impl From<&EntryWire> for Adjustments {
+    /// `provider_specific_entry.fast` is Anthropic's speed uplift and every other number in it a geo uplift, as
+    /// main's `get_provider_specific_speed_multiplier` and `get_provider_specific_geo_multiplier` read it
     fn from(wire: &EntryWire) -> Self {
+        let provider_specific = wire
+            .attributes
+            .provider_specific_entry
+            .iter()
+            .flatten()
+            .filter_map(|(key, value)| {
+                let uplift = match key.as_str() {
+                    "fast" => Uplift::Speed(Speed::Fast),
+                    geo => Uplift::InferenceGeo(InferenceGeo::new(geo)),
+                };
+                Some((uplift, Multiplier::new(value.as_f64()?)?))
+            });
         Adjustments::new(
             [
                 (Uplift::NonGlobalEndpoint, wire.regional_endpoint_uplift),
@@ -163,7 +188,8 @@ impl From<&EntryWire> for Adjustments {
                 (Uplift::Residency(Residency::Us), wire.residency_uplift_us),
             ]
             .into_iter()
-            .filter_map(|(uplift, factor)| Some((uplift, factor?))),
+            .filter_map(|(uplift, factor)| Some((uplift, factor?)))
+            .chain(provider_specific),
         )
     }
 }
@@ -929,11 +955,16 @@ mod tests {
     #[rstest]
     #[case::tokens_win_over_characters(
         json!({"litellm_provider": "vertex_ai-language-models", "input_cost_per_character": 1e-6, "input_cost_per_token": 1e-6}),
-        Billing::default()
+        Billing { web_search: WebSearchUnit::PerPrompt, search_defaults: SearchDefaults::Google, ..Billing::default() }
     )]
     #[case::characters_only(
         json!({"litellm_provider": "vertex_ai-language-models", "input_cost_per_character": 1e-6}),
-        Billing { text_unit: TextUnit::Character, ..Billing::default() }
+        Billing {
+            text_unit: TextUnit::Character,
+            web_search: WebSearchUnit::PerPrompt,
+            search_defaults: SearchDefaults::Google,
+            ..Billing::default()
+        }
     )]
     #[case::xai_band_is_inclusive(
         json!({"litellm_provider": "xai", "input_cost_per_token": 1e-6}),
@@ -961,7 +992,15 @@ mod tests {
     )]
     #[case::gemini_per_query_search(
         json!({"litellm_provider": "gemini", "web_search_billing_unit": "per_query"}),
-        Billing { web_search: WebSearchUnit::PerQuery, ..Billing::default() }
+        Billing { web_search: WebSearchUnit::PerQuery, search_defaults: SearchDefaults::Google, ..Billing::default() }
+    )]
+    #[case::vertex_rows_take_googles_search_defaults(
+        json!({"litellm_provider": "vertex_ai-language-models"}),
+        Billing { web_search: WebSearchUnit::PerPrompt, search_defaults: SearchDefaults::Google, ..Billing::default() }
+    )]
+    #[case::vertex_claude_rows_bill_search_like_anthropic(
+        json!({"litellm_provider": "vertex_ai-anthropic_models"}),
+        Billing::default()
     )]
     #[case::token_tiers_bill_the_whole_call(
         json!({"litellm_provider": "openai", "tiered_pricing": [{"range": [0, 32000], "input_cost_per_token": 1e-6}]}),
@@ -976,5 +1015,27 @@ mod tests {
         #[case] expected: Billing,
     ) {
         assert_eq!(prices(entry).unwrap().billing(), expected);
+    }
+
+    #[rstest]
+    fn provider_specific_entry_lowers_to_speed_and_geo_uplifts() {
+        let wire = EntryWire::read(
+            json!({"litellm_provider": "anthropic", "provider_specific_entry": {"fast": 6.0, "us": 1.1}})
+                .as_object()
+                .unwrap(),
+        );
+        let adjustments = Adjustments::from(&wire);
+        assert_eq!(
+            adjustments
+                .get(&Uplift::Speed(Speed::Fast))
+                .map(Multiplier::get),
+            Some(6.0)
+        );
+        assert_eq!(
+            adjustments
+                .get(&Uplift::InferenceGeo(InferenceGeo::new("US")))
+                .map(Multiplier::get),
+            Some(1.1)
+        );
     }
 }

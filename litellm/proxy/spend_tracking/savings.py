@@ -22,7 +22,7 @@ from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_prompt_caching_savings,
-    generic_cost_per_token,
+    cost_per_text,
     get_cost_per_unit,
 )
 from litellm.types.integrations.anthropic_cache_control_hook import (
@@ -195,7 +195,7 @@ def _pricing_basis(cost_breakdown: Mapping[str, object] | None) -> PricingBasis:
     they price at standard rates, which is what they already did.
 
     These values survive a JSON round trip on the way here, so none is guaranteed to be
-    a string. `generic_cost_per_token` calls `.lower()` on them without a type check, and
+    a string. `cost_per_text` calls `.lower()` on them without a type check, and
     the resulting `AttributeError` would be swallowed into a silent zero by the caller's
     `except`, so anything that is not a string is dropped here instead.
     """
@@ -215,7 +215,7 @@ def _recorded_token_cost(cost_breakdown: Mapping[str, object] | None) -> float |
     """What the biller charged for this request's tokens, or ``None`` when unrecorded.
 
     ``input_cost`` already carries the cache buckets, so it and ``output_cost`` sum to
-    exactly what `generic_cost_per_token` returns for the same request; the separate
+    exactly what `cost_per_text` returns for the same request; the separate
     ``cache_read_cost`` and ``cache_creation_cost`` entries decompose that sum rather than
     adding to it, and including them would charge those tokens twice.
 
@@ -251,7 +251,7 @@ def _cost_of_usage(
                 model_info=model_info,
             )
         else:
-            prompt_cost, completion_cost = generic_cost_per_token(
+            prompt_cost, completion_cost = cost_per_text(
                 model=model.model,
                 usage=usage,
                 custom_llm_provider=model.provider,

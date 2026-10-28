@@ -6,7 +6,7 @@ from contextvars import ContextVar
 from typing import Final, Literal
 
 from litellm._catalog import Invalid, report_invalid
-from litellm.rust_bridge._native import CallContext, Line, Priced, Prices, Unpriced, Usage
+from litellm.rust_bridge._native import CallContext, ImageOut, Line, Priced, Prices, Unpriced, Usage
 
 Channel = Literal["online", "batch", "decisions"]
 
@@ -45,6 +45,7 @@ def as_main_cost(outcome: Priced | Unpriced | Invalid) -> tuple[float, float]:
 __all__ = [
     "CallContext",
     "Channel",
+    "ImageOut",
     "Line",
     "Priced",
     "Prices",

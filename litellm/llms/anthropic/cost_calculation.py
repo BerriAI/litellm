@@ -8,16 +8,13 @@ from typing import TYPE_CHECKING, Final, Optional
 from pydantic import ValidationError
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
-    generic_cost_per_token,
-    get_provider_specific_geo_multiplier,
-    get_provider_specific_speed_multiplier,
+    cost_per_text,
     get_web_search_requests_from_usage,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo, Usage
-import litellm
 
 
 def cost_per_token(
@@ -36,35 +33,13 @@ def cost_per_token(
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    prompt_cost, completion_cost = generic_cost_per_token(
+    return cost_per_text(
         model=model,
         usage=usage,
         custom_llm_provider="anthropic",
         service_tier=service_tier,
         model_info=model_info,
     )
-
-    # Apply provider_specific_entry multipliers for geo/speed routing
-    try:
-        effective_info: Final = (
-            model_info
-            if model_info is not None
-            else litellm.get_model_info(model=model, custom_llm_provider="anthropic")
-        )
-        geo_multiplier: Final = get_provider_specific_geo_multiplier(model_info=effective_info, usage=usage)
-        speed_multiplier: Final = get_provider_specific_speed_multiplier(model_info=effective_info, usage=usage)
-
-        if speed_multiplier != 1.0:
-            prompt_cost *= speed_multiplier
-            completion_cost *= speed_multiplier
-
-        if geo_multiplier != 1.0:
-            prompt_cost *= geo_multiplier
-            completion_cost *= geo_multiplier
-    except Exception:
-        pass
-
-    return prompt_cost, completion_cost
 
 
 class _AnthropicServerToolUseProbe(LiteLLMBaseModel):
@@ -99,29 +74,15 @@ def get_cost_for_anthropic_web_search(
     model_info: Optional["ModelInfo"] = None,
     usage: Optional["Usage"] = None,
 ) -> float:
-    """
-    Get the cost of using a web search tool for Anthropic.
-    """
-    from litellm.types.utils import SearchContextCostPerQuery
+    """``server_tool_use.web_search_requests`` at the row's medium search context price"""
+    from litellm._cost import Usage as TokenUsage
+    from litellm.litellm_core_utils.llm_cost_calc.utils import search_cost
 
-    ## Check if web search requests are in the usage object
-    if model_info is None:
-        return 0.0
-
-    if usage is None:
+    if model_info is None or usage is None:
         return 0.0
     web_search_requests: Final = get_web_search_requests_from_usage(usage)
     if web_search_requests is None:
         return 0.0
-
-    ## Get the cost per web search request
-    search_context_pricing: Final[SearchContextCostPerQuery] = (
-        model_info.get("search_context_cost_per_query") or SearchContextCostPerQuery()
+    return search_cost(
+        model_info, TokenUsage(prompt_tokens=0, text=0, output_text=0, web_search_requests=web_search_requests)
     )
-    cost_per_web_search_request: Final = search_context_pricing.get("search_context_size_medium", 0.0)
-    if cost_per_web_search_request is None or cost_per_web_search_request == 0.0:
-        return 0.0
-
-    ## Calculate the total cost
-    total_cost: Final = cost_per_web_search_request * web_search_requests
-    return total_cost

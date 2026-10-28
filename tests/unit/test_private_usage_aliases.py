@@ -1480,7 +1480,6 @@ ALIAS_CASES: Final = (
         "get_service_tier_cost_key",
         False,
     ),
-    ("litellm.litellm_core_utils.llm_cost_calc.utils", "", "_is_above_128k", "is_above_128k", False),
     (
         "litellm.litellm_core_utils.llm_request_utils",
         "",

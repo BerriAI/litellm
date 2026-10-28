@@ -245,6 +245,69 @@ impl CatalogHandle {
         })
     }
 
+    /// The row for an image call, through main's size and quality key spellings
+    #[pyo3(signature = (model, provider = None, *, size = None, quality = None))]
+    fn resolve_image(
+        &self,
+        py: Python<'_>,
+        model: &str,
+        provider: Option<&str>,
+        size: Option<(u32, u32)>,
+        quality: Option<&str>,
+    ) -> PyResult<Py<PyAny>> {
+        let dict = self.bound_dict(py)?;
+        let keys = resolve::LiveKeys {
+            dict: &dict,
+            index: &self.index,
+        };
+        let candidates = litellm_model_catalog::ImageCandidates {
+            model: model.to_owned(),
+            provider: provider.map(str::to_owned),
+            size,
+            quality: quality.map(str::to_owned),
+        };
+        resolve::resolve_image(py, &keys, &candidates)
+    }
+
+    /// fal's nearest size row, `{provider}/{quality}/{W}-x-{H}/{model}` with an `output_cost_per_image` price, from the
+    /// provider's keys in the index
+    #[pyo3(signature = (model, provider, *, quality, size))]
+    fn nearest_image_key(
+        &self,
+        py: Python<'_>,
+        model: &str,
+        provider: &str,
+        quality: &str,
+        size: (u32, u32),
+    ) -> PyResult<Option<String>> {
+        let dict = self.bound_dict(py)?;
+        let keys = resolve::LiveKeys {
+            dict: &dict,
+            index: &self.index,
+        };
+        let priced: Vec<String> = keys
+            .provider_keys(provider)
+            .into_iter()
+            .filter(|key| {
+                keys.fields_of(key)
+                    .and_then(|fields| {
+                        fields
+                            .get("output_cost_per_image")
+                            .map(serde_json::Value::is_number)
+                    })
+                    .unwrap_or(false)
+            })
+            .collect();
+        Ok(litellm_model_catalog::nearest_image_key(
+            priced.iter().map(String::as_str),
+            provider,
+            model,
+            quality,
+            size,
+        )
+        .map(str::to_owned))
+    }
+
     /// The keys whose row names this `litellm_provider`, from the index
     fn provider_keys(&self, py: Python<'_>, provider: &str) -> PyResult<Vec<String>> {
         let dict = self.bound_dict(py)?;

@@ -9,7 +9,7 @@ import pytest
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_prompt_caching_savings,
-    generic_cost_per_token,
+    cost_per_text,
     get_token_type_cost_breakdown,
 )
 from litellm.llms.fireworks_ai.cost_calculator import cost_per_token
@@ -213,7 +213,7 @@ def test_fireworks_cache_read_rates_match_breakdown_and_caching_savings():
     assert math.isclose(savings, 300 * INPUT_COST * 0.5, rel_tol=1e-10)
 
 
-def test_generic_cost_per_token_applies_fireworks_cache_read_default_with_or_without_model_info():
+def test_cost_per_text_applies_fireworks_cache_read_default_with_or_without_model_info():
     model = "accounts/fireworks/models/generic-cache-read-test"
     litellm.model_cost = {  # test-quality-ok: the restore_model_cost fixture returns litellm.model_cost to the original object after each test
         **litellm.model_cost,
@@ -227,12 +227,12 @@ def test_generic_cost_per_token_applies_fireworks_cache_read_default_with_or_wit
     usage = _usage(prompt_tokens=1000, cached_tokens=300, completion_tokens=200)
     expected_prompt_cost = (700 * INPUT_COST) + (300 * INPUT_COST * 0.5)
 
-    implicit_model_info_cost, _ = generic_cost_per_token(
+    implicit_model_info_cost, _ = cost_per_text(
         model=model,
         usage=usage,
         custom_llm_provider="fireworks_ai",
     )
-    explicit_model_info_cost, _ = generic_cost_per_token(
+    explicit_model_info_cost, _ = cost_per_text(
         model=model,
         usage=usage,
         custom_llm_provider="fireworks_ai",
@@ -392,6 +392,6 @@ def test_a_routed_xai_model_keeps_xais_inclusive_token_threshold():
 
     routed_prompt_cost, routed_completion_cost = cost_per_token(model=f"fireworks_ai/{key}", usage=usage)
 
-    assert (routed_prompt_cost, routed_completion_cost) == generic_cost_per_token(
+    assert (routed_prompt_cost, routed_completion_cost) == cost_per_text(
         model=key, usage=usage, custom_llm_provider="xai"
     )

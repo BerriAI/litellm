@@ -5,7 +5,7 @@ Helper util for handling openai-specific cost calculation
 
 from typing import Literal
 
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.llm_cost_calc.utils import cost_per_text
 from litellm.types.utils import CallTypes, Usage
 
 
@@ -35,7 +35,7 @@ def cost_per_token(
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    return generic_cost_per_token(
+    return cost_per_text(
         model=model,
         usage=usage,
         custom_llm_provider="openai",

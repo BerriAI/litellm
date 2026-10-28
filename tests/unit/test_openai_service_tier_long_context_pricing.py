@@ -6,7 +6,7 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.llm_cost_calc.utils import cost_per_text
 from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
 REPO_ROOT = Path(__file__).parents[2]
@@ -151,7 +151,7 @@ def test_tiered_long_context_cost_uses_catalog_rates(
         completion_tokens=COMPLETION_TOKENS,
         total_tokens=LONG_CONTEXT_PROMPT_TOKENS + COMPLETION_TOKENS,
     )
-    prompt_cost, completion_cost = generic_cost_per_token(
+    prompt_cost, completion_cost = cost_per_text(
         model=model,
         usage=usage,
         custom_llm_provider="openai",
@@ -169,13 +169,13 @@ def test_gpt_6_astra_ultrafast_long_context_costs_and_controls() -> None:
         total_tokens=301_000,
         prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=100, cache_creation_tokens=200),
     )
-    ultrafast_prompt_cost, ultrafast_completion_cost = generic_cost_per_token(
+    ultrafast_prompt_cost, ultrafast_completion_cost = cost_per_text(
         model="gpt-6-astra",
         usage=ultrafast_usage,
         custom_llm_provider="openai",
         service_tier="ultrafast",
     )
-    standard_prompt_cost, standard_completion_cost = generic_cost_per_token(
+    standard_prompt_cost, standard_completion_cost = cost_per_text(
         model="gpt-6-astra",
         usage=ultrafast_usage,
         custom_llm_provider="openai",
@@ -186,7 +186,7 @@ def test_gpt_6_astra_ultrafast_long_context_costs_and_controls() -> None:
         total_tokens=272_000,
         prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=100, cache_creation_tokens=200),
     )
-    below_threshold_prompt_cost, below_threshold_completion_cost = generic_cost_per_token(
+    below_threshold_prompt_cost, below_threshold_completion_cost = cost_per_text(
         model="gpt-6-astra",
         usage=below_threshold_usage,
         custom_llm_provider="openai",

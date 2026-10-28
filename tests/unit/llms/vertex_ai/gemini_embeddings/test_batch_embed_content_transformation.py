@@ -18,7 +18,7 @@ import respx
 
 import litellm
 from litellm.exceptions import BadRequestError
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.llm_cost_calc.utils import cost_per_text
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     _build_part_for_input,
     file_reference_name,
@@ -348,7 +348,7 @@ class TestProcessEmbedContentResponseUsage:
         assert result.usage.total_tokens == 258
         assert result.usage.prompt_tokens_details.image_tokens == 258
 
-        prompt_cost, _ = generic_cost_per_token(
+        prompt_cost, _ = cost_per_text(
             model=self.MODEL,
             usage=result.usage,
             custom_llm_provider="vertex_ai",
@@ -373,7 +373,7 @@ class TestProcessEmbedContentResponseUsage:
         assert result.usage.prompt_tokens == 12
         assert result.usage.prompt_tokens_details.text_tokens == 12
 
-        prompt_cost, _ = generic_cost_per_token(
+        prompt_cost, _ = cost_per_text(
             model=self.MODEL,
             usage=result.usage,
             custom_llm_provider="vertex_ai",

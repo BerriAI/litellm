@@ -13,7 +13,7 @@ discarded by ``get_model_info``.
 import pytest
 
 import litellm
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.llm_cost_calc.utils import cost_per_text
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.utils import Usage
 
@@ -46,7 +46,7 @@ def test_openai_cache_write_tokens_billed_at_the_cache_creation_rate(local_model
     fresh_tokens = prompt_tokens - cache_write_tokens
     completion_tokens = 5
 
-    prompt_cost, completion_cost = generic_cost_per_token(
+    prompt_cost, completion_cost = cost_per_text(
         model=MODEL,
         usage=_openai_chat_usage(prompt_tokens, cache_write_tokens, completion_tokens),
         custom_llm_provider="openai",
@@ -77,12 +77,12 @@ def test_responses_api_cache_write_costs_the_same_as_chat(local_model_cost_map):
     )
     assert responses_usage.prompt_tokens_details.cache_write_tokens == cache_write_tokens
 
-    responses_prompt_cost, responses_completion_cost = generic_cost_per_token(
+    responses_prompt_cost, responses_completion_cost = cost_per_text(
         model=MODEL,
         usage=responses_usage,
         custom_llm_provider="openai",
     )
-    chat_prompt_cost, chat_completion_cost = generic_cost_per_token(
+    chat_prompt_cost, chat_completion_cost = cost_per_text(
         model=MODEL,
         usage=_openai_chat_usage(prompt_tokens, cache_write_tokens, completion_tokens),
         custom_llm_provider="openai",
@@ -126,7 +126,7 @@ def test_tiered_cache_creation_rates_are_registered_and_billed(
     }[rate_key]
     input_rate = litellm.model_cost[MODEL][input_rate_key]
 
-    prompt_cost, _ = generic_cost_per_token(
+    prompt_cost, _ = cost_per_text(
         model=MODEL,
         usage=_openai_chat_usage(prompt_tokens, cache_write_tokens, completion_tokens=100),
         custom_llm_provider="openai",

@@ -65,8 +65,11 @@ pub struct Billing {
     pub cache_read_fallback: CacheReadFallback,
     /// Whether a row with no token price is priced by wall clock, from its `mode`
     pub wall_clock: WallClock,
-    /// From `web_search_billing_unit`, whether web search and Maps grounding bill per query or once per prompt
+    /// From `web_search_billing_unit`, whether web search and Maps grounding bill per query or once per prompt. A
+    /// Google row without one bills per prompt, Gemini's default, and every other row per query
     pub web_search: WebSearchUnit,
+    /// Prices a Google row bills web search and Maps grounding at when it sets none, Gemini's defaults on main
+    pub search_defaults: SearchDefaults,
     /// Whether `tiered_pricing` bills each meter in its own tier or the whole call at the tier the input picks.
     /// A prompt-token tier table bills the whole call, main's `_get_tiered_base_costs`
     pub tier_scope: TierScope,
@@ -105,9 +108,16 @@ pub enum WallClock {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum WebSearchUnit {
-    PerQuery,
     #[default]
+    PerQuery,
     PerPrompt,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SearchDefaults {
+    #[default]
+    None,
+    Google,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

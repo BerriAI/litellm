@@ -4,12 +4,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use litellm_cost::call::CallContext as CostCallContext;
+use litellm_cost::call::{InferenceGeo, Speed};
 use litellm_cost::price::{
-    Adjustments, CacheReadMode, CacheTtl, Channel, InputUnit, Meter, OutputUnit,
-    Prices as CostPrices, Residency, Resolution, ServiceTier, TextUnit, TokenKind,
+    Adjustments, CacheReadMode, CacheTtl, Channel, Feature, ImageSize, InputUnit, Meter,
+    OutputUnit, Prices as CostPrices, Residency, Resolution, SearchContextSize, ServiceTier,
+    TextUnit, TokenKind,
 };
 use litellm_cost::priced::{Outcome, Quantity, Side};
-use litellm_cost::usage::{Characters, DurationMeter, Usage as CostUsage};
+use litellm_cost::usage::{
+    Characters, DurationMeter, ImageOut as CostImageOut, Images, Search, Usage as CostUsage,
+    WebSearch,
+};
 use litellm_host_python::from_py;
 use litellm_model_catalog::rejects_row;
 use litellm_model_catalog::wire::{EntryWire, Fields, FlatKey};
@@ -190,7 +195,9 @@ impl Usage {
         cache_read_explicit = 0, cache_write_5m = 0, cache_write_1h = 0, cache_write_12h = 0, output_audio = 0,
         output_image = 0, output_video = 0, reasoning = 0, prompt_characters = 0, completion_characters = 0,
         wall_clock = None, input_audio = None, live_voice = None, output_video_duration = None,
-        video_resolution = None, text_messages = 0,
+        video_resolution = None, text_messages = 0, images_in = 0, images_out = Vec::new(), pixels_in = 0,
+        search_queries = 0, max_results = None, web_search_requests = 0, web_search_context = "medium",
+        maps_grounding_requests = 0, citation_tokens = 0, browser_opens = 0, additional_results = 0,
     ))]
     #[expect(
         clippy::too_many_arguments,
@@ -221,7 +228,18 @@ impl Usage {
         output_video_duration: Option<Duration>,
         video_resolution: Option<&str>,
         text_messages: u64,
-    ) -> Self {
+        images_in: u64,
+        images_out: Vec<PyRef<'_, ImageOut>>,
+        pixels_in: u64,
+        search_queries: u64,
+        max_results: Option<u64>,
+        web_search_requests: u64,
+        web_search_context: &str,
+        maps_grounding_requests: u64,
+        citation_tokens: u64,
+        browser_opens: u64,
+        additional_results: u64,
+    ) -> PyResult<Self> {
         let mut usage = CostUsage {
             prompt_tokens,
             ..CostUsage::default()
@@ -276,7 +294,34 @@ impl Usage {
         .filter_map(|(meter, duration)| Some((meter, duration?)))
         .collect();
         usage.text_messages = text_messages;
-        Self(usage)
+        usage.tokens.citation = citation_tokens;
+        usage.images = Images {
+            input: images_in,
+            input_pixels: pixels_in,
+            output: images_out.iter().map(|image| image.0.clone()).collect(),
+        };
+        let context = match web_search_context {
+            "low" => SearchContextSize::Low,
+            "medium" => SearchContextSize::Medium,
+            "high" => SearchContextSize::High,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown search context size {other:?}"
+                )));
+            }
+        };
+        usage.search = Search {
+            queries: search_queries,
+            max_results,
+            web_search: (web_search_requests > 0).then_some(WebSearch {
+                requests: web_search_requests,
+                context,
+            }),
+            maps_grounding: maps_grounding_requests,
+            browser_opens,
+            additional_results,
+        };
+        Ok(Self(usage))
     }
 
     /// The provider-reported prompt size, which picks the band
@@ -286,10 +331,34 @@ impl Usage {
     }
 }
 
+/// One returned image. `size` picks a size-keyed price, `width` and `height` the per-pixel ones
+#[pyclass(frozen, module = "litellm.rust_bridge._native")]
+pub(crate) struct ImageOut(CostImageOut);
+
+#[pymethods]
+impl ImageOut {
+    #[new]
+    #[pyo3(signature = (*, size = None, width = None, height = None))]
+    fn new(size: Option<&str>, width: Option<u32>, height: Option<u32>) -> Self {
+        Self(CostImageOut {
+            size: size.and_then(ImageSize::new),
+            width,
+            height,
+        })
+    }
+}
+
 #[pymethods]
 impl CallContext {
     #[new]
-    #[pyo3(signature = (*, service_tier, channel, data_residency, vertex_location, at, custom_pricing))]
+    #[pyo3(signature = (
+        *, service_tier, channel, data_residency, vertex_location, at, custom_pricing, speed = None,
+        inference_geo = None,
+    ))]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one keyword argument per call fact, the Python signature"
+    )]
     fn new(
         service_tier: Option<&str>,
         channel: &str,
@@ -297,6 +366,8 @@ impl CallContext {
         vertex_location: Option<&str>,
         at: &Bound<'_, PyAny>,
         custom_pricing: Option<&Bound<'_, PyDict>>,
+        speed: Option<&str>,
+        inference_geo: Option<&str>,
     ) -> PyResult<Self> {
         let channel = match channel {
             "online" => Channel::Online,
@@ -328,8 +399,12 @@ impl CallContext {
                 residency: data_residency.and_then(residency),
                 non_global_endpoint: vertex_location
                     .is_some_and(|location| !location.eq_ignore_ascii_case("global")),
-                speed: None,
-                inference_geo: None,
+                speed: (speed == Some("fast")).then_some(Speed::Fast),
+                inference_geo: inference_geo
+                    .filter(|geo| {
+                        !matches!(geo.to_lowercase().as_str(), "global" | "not_available")
+                    })
+                    .map(InferenceGeo::new),
                 at: timestamp(at)?,
                 overlay,
             },
@@ -518,6 +593,28 @@ fn meter_name(meter: &Meter) -> String {
         Meter::Input(InputUnit::AudioSecond) => "input_cost_per_audio_per_second".to_owned(),
         Meter::Output(OutputUnit::VideoSecond) => "output_cost_per_video_per_second".to_owned(),
         Meter::Input(InputUnit::TextMessage) => "input_cost_per_text_message".to_owned(),
+        Meter::Input(InputUnit::Image) => "input_cost_per_image".to_owned(),
+        Meter::Output(OutputUnit::Image(None)) => "output_cost_per_image".to_owned(),
+        Meter::Output(OutputUnit::Image(Some(size))) => {
+            format!("output_cost_per_image_{}", size.as_str())
+        }
+        Meter::Input(InputUnit::Pixel) => "input_cost_per_pixel".to_owned(),
+        Meter::Output(OutputUnit::Pixel) => "output_cost_per_pixel".to_owned(),
+        Meter::Input(InputUnit::Query { .. }) => "input_cost_per_query".to_owned(),
+        Meter::WebSearch(context) => format!(
+            "search_context_cost_per_query.search_context_size_{}",
+            match context {
+                SearchContextSize::Low => "low",
+                SearchContextSize::Medium => "medium",
+                SearchContextSize::High => "high",
+            }
+        ),
+        Meter::Feature(Feature::GoogleMapsGroundingQuery) => {
+            "google_maps_grounding_cost_per_query".to_owned()
+        }
+        Meter::Feature(Feature::CitationToken) => "citation_cost_per_token".to_owned(),
+        Meter::Feature(Feature::BrowserOpen) => "browser_open_cost_per_request".to_owned(),
+        Meter::Feature(Feature::AdditionalResult) => "cost_per_additional_result".to_owned(),
         other => format!("{other:?}"),
     }
 }

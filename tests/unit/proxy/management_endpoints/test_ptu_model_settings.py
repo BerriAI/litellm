@@ -11,7 +11,7 @@ from unittest.mock import patch as patch_ctx
 import pytest
 from fastapi import HTTPException
 
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.llm_cost_calc.utils import cost_per_text
 from litellm.litellm_core_utils.ptu_pricing import ptu_terms
 from litellm.llms.gemini.cost_calculator import cost_per_web_search_request
 from litellm.proxy._types import (
@@ -1089,7 +1089,7 @@ class TestPtuDeploymentsAreNotBilledPerToken:
         registered = router.get_deployment_model_info(model_id="dep-ptu", model_name="dashscope/qwen-flash")
         assert registered is not None
         assert registered["tiered_pricing"] == []
-        assert generic_cost_per_token(
+        assert cost_per_text(
             model="dashscope/qwen-flash",
             usage=Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100),
             custom_llm_provider="dashscope",

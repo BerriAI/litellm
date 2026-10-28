@@ -161,7 +161,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch, Logging, deployment_pricing_model_info
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.llm_cost_calc.utils import cost_per_text
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.served_output_texts import (
@@ -1289,12 +1289,12 @@ def _deployment_priced_input_cost(
     model: str, custom_llm_provider: str | None, prompt_tokens: int, deployment_pricing: ModelInfo
 ) -> float:
     """Input price for the estimated prompt at the deployment's registered rates, read through
-    ``deployment_pricing_model_info`` and priced by ``generic_cost_per_token`` the way the success
+    ``deployment_pricing_model_info`` and priced by ``cost_per_text`` the way the success
     path prices them, so a long-context tier the deployment declares (``input_cost_per_token_above_200k_tokens``)
     is honoured instead of flattened to the standard rate. An entry it cannot price keeps the row at $0."""
     usage: Final = Usage(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens)
     try:
-        prompt_cost, _ = generic_cost_per_token(
+        prompt_cost, _ = cost_per_text(
             model=model,
             usage=usage,
             custom_llm_provider=custom_llm_provider or str(deployment_pricing.get("litellm_provider") or ""),

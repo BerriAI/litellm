@@ -5,9 +5,11 @@ use crate::price::{
     Meter, OffPeakRates, OutputUnit, Price, Prices, ServiceTier, TierScope, TokenKind, Uplift,
     When,
 };
-use crate::price::{Resolution, TextUnit, WallClock};
+use crate::price::{Resolution, SearchDefaults, TextUnit, WallClock, WebSearchUnit};
 use crate::priced::{Line, Outcome, Priced, Quantity, Side};
-use crate::usage::{DurationMeter, Usage};
+use std::num::NonZeroU64;
+
+use crate::usage::{DurationMeter, ImageOut, Usage};
 
 const TEXT_INPUT: Meter = Meter::Input(InputUnit::Token(TokenKind::Text));
 const TEXT_OUTPUT: Meter = Meter::Output(OutputUnit::Token(TokenKind::Text));
@@ -35,6 +37,8 @@ pub fn calculate(
     let billed: Vec<Billed> = token_meters(&rates, usage)
         .chain(character_meters(&rates, usage))
         .chain(second_meters(&rates, usage))
+        .chain(image_meters(&rates, usage))
+        .chain(search_meters(&rates, usage))
         .chain([(
             Meter::Input(InputUnit::TextMessage),
             rates.banded(&Meter::Input(InputUnit::TextMessage)),
@@ -55,7 +59,6 @@ pub fn calculate(
     let missing: Vec<Meter> = billed
         .into_iter()
         .filter_map(|(meter, rate, ..)| rate.is_none().then_some(meter))
-        .chain(without_an_arm(usage))
         .collect();
     if lines.is_empty() && !missing.is_empty() {
         return Outcome::Unpriced { missing };
@@ -437,6 +440,38 @@ impl<'a> Rates<'a> {
         )
     }
 
+    /// `search_provider_cost_per_query`'s tier walk. The tier whose range holds `max_results`, past the last range the
+    /// highest tier, without tiers the flat query price
+    fn query_rate(&self, max_results: u64) -> (Meter, Option<Rate>) {
+        let tiers: Vec<(Option<NonZeroU64>, UnitPrice)> = self
+            .prices
+            .iter()
+            .filter_map(|(price, rate)| match price.meter {
+                Meter::Input(InputUnit::Query { over_results })
+                    if price.channel == Channel::Online =>
+                {
+                    Some((over_results, rate))
+                }
+                _ => None,
+            })
+            .collect();
+        let floor = |over: Option<NonZeroU64>| over.map_or(0, NonZeroU64::get);
+        let held = tiers
+            .iter()
+            .filter(|(over, _)| max_results > floor(*over))
+            .max_by_key(|(over, _)| floor(*over))
+            .or_else(|| tiers.iter().max_by_key(|(over, _)| floor(*over)));
+        match held {
+            Some((over, rate)) => (
+                Meter::Input(InputUnit::Query {
+                    over_results: *over,
+                }),
+                Some(Rate::own(*rate)),
+            ),
+            None => (Meter::Input(InputUnit::Query { over_results: None }), None),
+        }
+    }
+
     /// The first of `meters` with a price, borrowed when it is not the first
     fn first_of(&self, meters: &[Meter]) -> Option<Rate> {
         let (own, rest) = meters.split_first()?;
@@ -556,46 +591,141 @@ impl<'a> Rates<'a> {
     }
 }
 
-/// Meters with usage that no arm prices yet, the per-unit meters 10 adds
-fn without_an_arm(usage: &Usage) -> impl Iterator<Item = Meter> + '_ {
-    let counted = [
-        (usage.images.input, Meter::Input(InputUnit::Image)),
-        (usage.images.input_pixels, Meter::Input(InputUnit::Pixel)),
-        (
-            usage.images.output.len() as u64,
-            Meter::Output(OutputUnit::Image(None)),
-        ),
-        (
-            usage.search.queries,
-            Meter::Input(InputUnit::Query { over_results: None }),
-        ),
-        (
-            usage.search.maps_grounding,
-            Meter::Feature(Feature::GoogleMapsGroundingQuery),
-        ),
-        (
-            usage.search.browser_opens,
-            Meter::Feature(Feature::BrowserOpen),
-        ),
-        (
-            usage.search.additional_results,
-            Meter::Feature(Feature::AdditionalResult),
-        ),
-        (
-            usage.tokens.citation,
-            Meter::Feature(Feature::CitationToken),
-        ),
-    ];
-    let web_search = usage
-        .search
-        .web_search
-        .filter(|search| search.requests > 0)
-        .map(|search| Meter::WebSearch(search.context));
-    counted
-        .into_iter()
-        .filter_map(|(count, meter)| (count > 0).then_some(meter))
-        .chain(web_search)
+const MEGAPIXEL: u64 = 1_048_576;
+
+/// main's `default_image_cost_calculator` and fal's image rules. A requested size with its own price bills that
+/// price, then the first of the input per-image price, the output per-image price and the input per-pixel price
+/// times the image's pixels, then fal's output per-pixel price per started megapixel
+fn image_meters(rates: &Rates<'_>, usage: &Usage) -> Vec<Billed> {
+    let per_image = |image: &ImageOut| -> Billed {
+        let pixels = u64::from(image.width.unwrap_or(0)) * u64::from(image.height.unwrap_or(0));
+        let sized = image.size.clone().and_then(|size| {
+            let meter = Meter::Output(OutputUnit::Image(Some(size)));
+            Some((meter.clone(), rates.banded(&meter)?))
+        });
+        let candidates = [
+            (Meter::Input(InputUnit::Image), 1),
+            (Meter::Output(OutputUnit::Image(None)), 1),
+            (Meter::Input(InputUnit::Pixel), pixels),
+            (
+                Meter::Output(OutputUnit::Pixel),
+                MEGAPIXEL * pixels.div_ceil(MEGAPIXEL),
+            ),
+        ];
+        let flat = || {
+            candidates
+                .into_iter()
+                .filter(|(_, quantity)| *quantity > 0)
+                .find_map(|(meter, quantity)| {
+                    Some((meter.clone(), rates.banded(&meter)?, quantity))
+                })
+        };
+        match sized.map(|(meter, rate)| (meter, rate, 1)).or_else(flat) {
+            Some((meter, rate, quantity)) => (
+                meter,
+                Some(rate),
+                Quantity::Count(quantity),
+                Side::Completion,
+            ),
+            None => (
+                Meter::Output(OutputUnit::Image(None)),
+                None,
+                Quantity::Count(1),
+                Side::Completion,
+            ),
+        }
+    };
+    let input_image = Meter::Input(InputUnit::Image);
+    let input_pixel = Meter::Input(InputUnit::Pixel);
+    usage
+        .images
+        .output
+        .iter()
+        .map(per_image)
+        .chain([
+            (
+                input_image.clone(),
+                rates.banded(&input_image),
+                Quantity::Count(usage.images.input),
+                Side::Prompt,
+            ),
+            (
+                input_pixel.clone(),
+                rates.banded(&input_pixel),
+                Quantity::Count(usage.images.input_pixels),
+                Side::Prompt,
+            ),
+        ])
+        .collect()
 }
+
+/// Search query tiers, web search, Maps grounding, citation tokens, Groq browser opens and Parallel AI's extra
+/// results. Web search and Maps bill once per prompt unless the row bills them per query
+fn search_meters(rates: &Rates<'_>, usage: &Usage) -> Vec<Billed> {
+    let search = &usage.search;
+    let per_prompt = rates.prices.billing().web_search == WebSearchUnit::PerPrompt;
+    let billed_requests = |requests: u64| match per_prompt {
+        true => requests.min(1),
+        false => requests,
+    };
+    let google = rates.prices.billing().search_defaults == SearchDefaults::Google;
+    let default = |price: f64| google.then(|| UnitPrice::new(price)).flatten();
+    let web_search = search.web_search.map(|web_search| {
+        let meter = Meter::WebSearch(web_search.context);
+        let rate = rates.banded(&meter).or_else(|| {
+            default(GOOGLE_WEB_SEARCH_DEFAULT).map(|price| Rate::own(price).borrowed_from(&meter))
+        });
+        (
+            meter,
+            rate,
+            Quantity::Count(billed_requests(web_search.requests)),
+            Side::Prompt,
+        )
+    });
+    let maps = Meter::Feature(Feature::GoogleMapsGroundingQuery);
+    let maps_default = match per_prompt {
+        true => GOOGLE_MAPS_DEFAULT_PER_PROMPT,
+        false => GOOGLE_MAPS_DEFAULT_PER_QUERY,
+    };
+    let maps_line = (
+        maps.clone(),
+        rates
+            .banded(&maps)
+            .or_else(|| default(maps_default).map(|price| Rate::own(price).borrowed_from(&maps))),
+        Quantity::Count(billed_requests(search.maps_grounding)),
+        Side::Prompt,
+    );
+    let feature = |feature: Feature, count: u64| {
+        let meter = Meter::Feature(feature);
+        (
+            meter.clone(),
+            rates.banded(&meter),
+            Quantity::Count(count),
+            Side::Prompt,
+        )
+    };
+    let query = (search.queries > 0).then(|| {
+        let (meter, rate) = rates.query_rate(search.max_results.unwrap_or(DEFAULT_MAX_RESULTS));
+        (meter, rate, Quantity::Count(search.queries), Side::Prompt)
+    });
+    query
+        .into_iter()
+        .chain(web_search)
+        .chain([
+            maps_line,
+            feature(Feature::CitationToken, usage.tokens.citation),
+            feature(Feature::BrowserOpen, search.browser_opens),
+            feature(Feature::AdditionalResult, search.additional_results),
+        ])
+        .collect()
+}
+
+/// Gemini's defaults for a Google row with no web search or Maps grounding price
+const GOOGLE_WEB_SEARCH_DEFAULT: f64 = 0.035;
+const GOOGLE_MAPS_DEFAULT_PER_QUERY: f64 = 0.014;
+const GOOGLE_MAPS_DEFAULT_PER_PROMPT: f64 = 0.025;
+/// The results a search returns when the request names no `max_results`, main's default
+const DEFAULT_MAX_RESULTS: u64 = 10;
 
 fn uplifts(adjustments: &Adjustments, call: &CallContext) -> Vec<Multiplier> {
     let residency = call
@@ -605,7 +735,19 @@ fn uplifts(adjustments: &Adjustments, call: &CallContext) -> Vec<Multiplier> {
         .non_global_endpoint
         .then(|| adjustments.get(&Uplift::NonGlobalEndpoint))
         .flatten();
-    residency.into_iter().chain(endpoint).collect()
+    let speed = call
+        .speed
+        .and_then(|speed| adjustments.get(&Uplift::Speed(speed)));
+    let geo = call
+        .inference_geo
+        .clone()
+        .and_then(|geo| adjustments.get(&Uplift::InferenceGeo(geo)));
+    residency
+        .into_iter()
+        .chain(endpoint)
+        .chain(speed)
+        .chain(geo)
+        .collect()
 }
 
 #[cfg(test)]
@@ -616,7 +758,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::price::{Billing, Residency};
+    use crate::price::{Billing, Residency, SearchContextSize};
 
     fn price(
         meter: &Meter,
@@ -1151,5 +1293,195 @@ mod tests {
         };
         let expected = if prompt > 32_000 { rate } else { 0.1e-6 };
         close(total(&prices, &usage, &call()), 100.0 * expected);
+    }
+
+    fn images(images: Vec<ImageOut>) -> Usage {
+        Usage {
+            images: crate::usage::Images {
+                output: images,
+                ..crate::usage::Images::default()
+            },
+            ..Usage::default()
+        }
+    }
+
+    fn image(size: Option<&str>, width: u32, height: u32) -> ImageOut {
+        ImageOut {
+            size: size.and_then(crate::price::ImageSize::new),
+            width: Some(width),
+            height: Some(height),
+        }
+    }
+
+    #[rstest]
+    #[case::input_price_wins(Some(0.04), Some(0.08), None, 0.04)]
+    #[case::output_price(None, Some(0.08), None, 0.08)]
+    #[case::input_pixels(None, None, Some(1e-8), 1e-8 * 1024.0 * 1024.0)]
+    fn an_image_bills_the_first_per_image_price_in_mains_order(
+        #[case] input: Option<f64>,
+        #[case] output: Option<f64>,
+        #[case] per_pixel: Option<f64>,
+        #[case] expected: f64,
+    ) {
+        let prices = row(input
+            .map(|rate| standard(&Meter::Input(InputUnit::Image), rate))
+            .into_iter()
+            .chain(output.map(|rate| standard(&Meter::Output(OutputUnit::Image(None)), rate)))
+            .chain(per_pixel.map(|rate| standard(&Meter::Input(InputUnit::Pixel), rate))));
+        close(
+            total(
+                &prices,
+                &images(vec![image(None, 1024, 1024), image(None, 1024, 1024)]),
+                &call(),
+            ),
+            2.0 * expected,
+        );
+    }
+
+    #[rstest]
+    fn a_requested_size_with_its_own_price_bills_that_price() {
+        let size = crate::price::ImageSize::new("1K").unwrap();
+        let prices = row([
+            standard(&Meter::Output(OutputUnit::Image(None)), 0.08),
+            standard(&Meter::Output(OutputUnit::Image(Some(size))), 0.03),
+        ]);
+        close(
+            total(
+                &prices,
+                &images(vec![image(Some("1K"), 1024, 1024)]),
+                &call(),
+            ),
+            0.03,
+        );
+    }
+
+    #[rstest]
+    fn output_pixels_bill_per_started_megapixel() {
+        let prices = row([standard(&Meter::Output(OutputUnit::Pixel), 1e-8)]);
+        let outcome = priced(calculate(
+            &prices,
+            &Adjustments::default(),
+            &images(vec![image(None, 1500, 1000)]),
+            &call(),
+        ));
+        assert_eq!(outcome.lines[0].quantity, Quantity::Count(2 * MEGAPIXEL));
+    }
+
+    fn queries(count: u64, max_results: Option<u64>) -> Usage {
+        Usage {
+            search: crate::usage::Search {
+                queries: count,
+                max_results,
+                ..crate::usage::Search::default()
+            },
+            ..Usage::default()
+        }
+    }
+
+    #[rstest]
+    #[case::first_tier(Some(10), 0.005)]
+    #[case::second_tier(Some(50), 0.025)]
+    #[case::past_the_last_range(Some(500), 0.025)]
+    #[case::default_max_results(None, 0.005)]
+    fn a_query_bills_the_tier_its_max_results_falls_in(
+        #[case] max_results: Option<u64>,
+        #[case] rate: f64,
+    ) {
+        let query = |over: u64| {
+            Meter::Input(InputUnit::Query {
+                over_results: NonZeroU64::new(over),
+            })
+        };
+        let prices = row([standard(&query(0), 0.005), standard(&query(25), 0.025)]);
+        close(
+            total(&prices, &queries(2, max_results), &call()),
+            2.0 * rate,
+        );
+    }
+
+    fn web_searches(requests: u64) -> Usage {
+        Usage {
+            search: crate::usage::Search {
+                web_search: Some(crate::usage::WebSearch {
+                    requests,
+                    context: SearchContextSize::Medium,
+                }),
+                ..crate::usage::Search::default()
+            },
+            ..Usage::default()
+        }
+    }
+
+    fn billed(rates: impl IntoIterator<Item = (Price, UnitPrice)>, billing: Billing) -> Prices {
+        Prices::new(rates.into_iter().collect(), None, billing)
+    }
+
+    #[rstest]
+    #[case::per_prompt(WebSearchUnit::PerPrompt, 0.01)]
+    #[case::per_query(WebSearchUnit::PerQuery, 0.03)]
+    fn web_search_bills_once_per_prompt_unless_the_row_bills_per_query(
+        #[case] web_search: WebSearchUnit,
+        #[case] expected: f64,
+    ) {
+        let prices = billed(
+            [standard(&Meter::WebSearch(SearchContextSize::Medium), 0.01)],
+            Billing {
+                web_search,
+                ..Billing::default()
+            },
+        );
+        close(total(&prices, &web_searches(3), &call()), expected);
+    }
+
+    #[rstest]
+    #[case::google_row(SearchDefaults::Google, Some(0.035))]
+    #[case::other_row(SearchDefaults::None, None)]
+    fn a_google_row_without_a_web_search_price_bills_geminis_default(
+        #[case] search_defaults: SearchDefaults,
+        #[case] expected: Option<f64>,
+    ) {
+        let prices = billed(
+            [standard(&TEXT_INPUT, 1e-6)],
+            Billing {
+                search_defaults,
+                web_search: WebSearchUnit::PerPrompt,
+                ..Billing::default()
+            },
+        );
+        let outcome = calculate(&prices, &Adjustments::default(), &web_searches(3), &call());
+        let web_search_total = match outcome {
+            Outcome::Priced(priced) => Some(priced.total.get()),
+            Outcome::Unpriced { .. } => None,
+        };
+        assert_eq!(web_search_total, expected);
+    }
+
+    #[rstest]
+    #[case::fast(Some(crate::call::Speed::Fast), None, 2.0)]
+    #[case::geo(None, Some("US"), 1.1)]
+    #[case::neither(None, None, 1.0)]
+    fn speed_and_geo_uplifts_multiply_every_line(
+        #[case] speed: Option<crate::call::Speed>,
+        #[case] geo: Option<&str>,
+        #[case] factor: f64,
+    ) {
+        let prices = row([standard(&TEXT_INPUT, 1e-6), standard(&TEXT_OUTPUT, 2e-6)]);
+        let adjustments = Adjustments::new([
+            (
+                Uplift::Speed(crate::call::Speed::Fast),
+                Multiplier::new(2.0).unwrap(),
+            ),
+            (
+                Uplift::InferenceGeo(crate::call::InferenceGeo::new("us")),
+                Multiplier::new(1.1).unwrap(),
+            ),
+        ]);
+        let call = CallContext {
+            speed,
+            inference_geo: geo.map(crate::call::InferenceGeo::new),
+            ..call()
+        };
+        let outcome = priced(calculate(&prices, &adjustments, &usage(100, 0, 10), &call));
+        close(outcome.total.get(), (100.0 * 1e-6 + 10.0 * 2e-6) * factor);
     }
 }

@@ -3,7 +3,7 @@ from typing import Final, Literal
 import pytest
 
 import litellm
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.llm_cost_calc.utils import cost_per_text
 from litellm.llms.anthropic.cost_calculation import cost_per_token as anthropic_cost_per_token
 from litellm.proxy.spend_tracking.savings import (
     _baseline_usage,
@@ -108,7 +108,7 @@ def _cached_usage_object() -> dict:
 
 
 def _cost_on(model: str, usage_object: dict) -> float:
-    prompt_cost, completion_cost = generic_cost_per_token(
+    prompt_cost, completion_cost = cost_per_text(
         model=model, usage=Usage(**usage_object), custom_llm_provider="anthropic"
     )
     return prompt_cost + completion_cost
@@ -159,7 +159,7 @@ def _net_caching_savings_against_biller(usage_object: dict, model: str = "claude
 
     Bills the request as it happened, then bills the same token total with nothing
     cached, and returns the difference. Deriving the expectation from
-    ``generic_cost_per_token`` rather than restating the formula is what makes these
+    ``cost_per_text`` rather than restating the formula is what makes these
     tests able to fail: a wrong formula in savings.py cannot also be wrong here.
     """
     prompt_tokens = usage_object["prompt_tokens"]
@@ -245,7 +245,7 @@ def test_caching_savings_agree_with_biller_on_the_request_pricing_basis(
     )
     costs: Final = tuple(
         sum(
-            generic_cost_per_token(
+            cost_per_text(
                 model=model,
                 usage=arm,
                 custom_llm_provider=provider,
@@ -486,8 +486,8 @@ def test_supplied_baseline_usage_is_priced_independently(
     baseline: str, selected: str, actual: Usage, modeled: Usage, loses_money: bool,
 ) -> None:
     result: Final = _savings(baseline, selected, actual, modeled)
-    expected: Final = sum(generic_cost_per_token(model=baseline, usage=modeled, custom_llm_provider="anthropic")) - sum(
-        generic_cost_per_token(model=selected, usage=actual, custom_llm_provider="anthropic")
+    expected: Final = sum(cost_per_text(model=baseline, usage=modeled, custom_llm_provider="anthropic")) - sum(
+        cost_per_text(model=selected, usage=actual, custom_llm_provider="anthropic")
     )
     assert result == pytest.approx(expected)
     assert result is not None and (result < 0) is loses_money

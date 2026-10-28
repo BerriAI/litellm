@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use litellm_host_python::{from_py, to_py};
 use litellm_model_catalog::wire::Fields;
 use litellm_model_catalog::{
-    Candidates, Catalog, Keys, Resolution, RowRef, model_info, rejects_row,
+    Candidates, Catalog, ImageCandidates, Keys, Resolution, RowRef, model_info, rejects_row,
 };
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
@@ -167,34 +167,50 @@ pub(crate) fn resolve(
         Resolution::Missing { tried } => {
             Ok(Missing { tried }.into_pyobject(py)?.into_any().unbind())
         }
-        Resolution::Found { key, .. } => {
-            let (fields, converted) = keys.fields(&key).unwrap_or_default();
-            let errors: Vec<String> = if converted {
-                Catalog::row_errors(&key, &fields)
-                    .iter()
-                    .filter(|error| rejects_row(&error.error))
-                    .map(ToString::to_string)
-                    .collect()
-            } else {
-                vec![format!("{key} must contain JSON-compatible values")]
-            };
-            let fields = Arc::new(fields);
-            if errors.is_empty() {
-                Ok(Resolved { key, fields }
-                    .into_pyobject(py)?
-                    .into_any()
-                    .unbind())
-            } else {
-                Ok(Invalid {
-                    key,
-                    errors,
-                    fields,
-                }
-                .into_pyobject(py)?
-                .into_any()
-                .unbind())
-            }
+        Resolution::Found { key, .. } => found(py, keys, key),
+    }
+}
+
+/// The row at `key` as `Resolved`, or `Invalid` when it fails validation
+pub(crate) fn found(py: Python<'_>, keys: &LiveKeys<'_, '_>, key: String) -> PyResult<Py<PyAny>> {
+    let (fields, converted) = keys.fields(&key).unwrap_or_default();
+    let errors: Vec<String> = if converted {
+        Catalog::row_errors(&key, &fields)
+            .iter()
+            .filter(|error| rejects_row(&error.error))
+            .map(ToString::to_string)
+            .collect()
+    } else {
+        vec![format!("{key} must contain JSON-compatible values")]
+    };
+    let fields = Arc::new(fields);
+    if errors.is_empty() {
+        Ok(Resolved { key, fields }
+            .into_pyobject(py)?
+            .into_any()
+            .unbind())
+    } else {
+        Ok(Invalid {
+            key,
+            errors,
+            fields,
         }
+        .into_pyobject(py)?
+        .into_any()
+        .unbind())
+    }
+}
+
+/// main's `default_image_cost_calculator` lookup, the first of its eight key spellings in the live dict
+pub(crate) fn resolve_image(
+    py: Python<'_>,
+    keys: &LiveKeys<'_, '_>,
+    candidates: &ImageCandidates,
+) -> PyResult<Py<PyAny>> {
+    let tried = candidates.spellings();
+    match tried.iter().find(|key| keys.contains(key)) {
+        Some(key) => found(py, keys, key.clone()),
+        None => Ok(Missing { tried }.into_pyobject(py)?.into_any().unbind()),
     }
 }
 

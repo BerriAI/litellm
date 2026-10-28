@@ -6,7 +6,7 @@ Helper util for handling databricks-specific cost calculation
 from types import MappingProxyType
 from typing import Final
 
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.llm_cost_calc.utils import cost_per_text
 from litellm.types.utils import Usage
 
 _LEGACY_ENDPOINT_NAMES: Final = MappingProxyType(
@@ -41,7 +41,7 @@ def cost_per_token(model: str, usage: Usage, service_tier: str | None = None) ->
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    return generic_cost_per_token(
+    return cost_per_text(
         model=_registry_key(model),
         usage=usage,
         custom_llm_provider="databricks",

@@ -4,7 +4,9 @@ from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
-from litellm.utils import get_model_info
+from litellm._cost import Usage as TokenUsage
+from litellm._cost import as_main_cost
+from litellm.litellm_core_utils.llm_cost_calc.utils import price_usage, pricing_row
 
 PARALLEL_AI_DEFAULT_RESULTS: Final = 10
 PARALLEL_AI_USAGE_PARAM: Final = "_parallel_ai_usage"
@@ -60,16 +62,6 @@ def _effective_max_results(optional_params: Mapping[str, object]) -> int:
     return max_results if max_results is not None else PARALLEL_AI_DEFAULT_RESULTS
 
 
-def _request_cost(mode: str) -> tuple[float, float]:
-    """The per-request price and the price of each result past the included ones"""
-    pricing_model: Final = PARALLEL_AI_PRICING_MODEL_BY_MODE.get(mode, PARALLEL_AI_STANDARD_SEARCH_MODEL)
-    model_info: Final = get_model_info(model=pricing_model, custom_llm_provider="parallel_ai")
-    return (
-        float(model_info.get("input_cost_per_query") or 0.0),
-        float(model_info.get("cost_per_additional_result") or 0.0),
-    )
-
-
 def _additional_results(
     optional_params: Mapping[str, object],
     usage: Sequence[Mapping[str, object]] | None,
@@ -86,8 +78,19 @@ def parallel_ai_search_cost(
     optional_params: Mapping[str, object],
     usage: Sequence[Mapping[str, object]] | None,
 ) -> float:
-    request_cost, additional_result_cost = _request_cost(_effective_mode(optional_params))
+    mode: Final = _effective_mode(optional_params)
+    pricing_model: Final = PARALLEL_AI_PRICING_MODEL_BY_MODE.get(mode, PARALLEL_AI_STANDARD_SEARCH_MODEL)
     request_count_from_usage: Final = _usage_count(usage, "sku_search") if usage is not None else None
-    request_count: Final = request_count_from_usage if request_count_from_usage is not None else 1
-    additional_results: Final = _additional_results(optional_params, usage)
-    return request_count * request_cost + additional_results * additional_result_cost
+    prompt_cost, completion_cost = as_main_cost(
+        price_usage(
+            pricing_row(pricing_model, "parallel_ai", None),
+            TokenUsage(
+                prompt_tokens=0,
+                text=0,
+                output_text=0,
+                search_queries=request_count_from_usage if request_count_from_usage is not None else 1,
+                additional_results=_additional_results(optional_params, usage),
+            ),
+        )
+    )
+    return prompt_cost + completion_cost
