@@ -1738,6 +1738,9 @@ if TYPE_CHECKING:
     from .llms.lm_studio.decisions.transformation import (
         LMStudioDecisionsConfig as LMStudioDecisionsConfig,
     )
+    from .llms.ollama.decisions.transformation import (
+        OllamaDecisionsConfig as OllamaDecisionsConfig,
+    )
     from .llms.laya.decisions.transformation import (
         LayaDecisionsConfig as LayaDecisionsConfig,
     )
