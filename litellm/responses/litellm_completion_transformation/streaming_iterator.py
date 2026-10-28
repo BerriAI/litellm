@@ -30,6 +30,7 @@ from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     PART_UNION_TYPES,
     BaseLiteLLMOpenAIResponseObject,
+    ChatCompletionAnnotation,
     ContentPartAddedEvent,
     ContentPartDoneEvent,
     ContentPartDonePartOutputText,
@@ -56,6 +57,7 @@ from litellm.types.llms.openai import (
     WebSearchCallInProgressEvent,
     WebSearchCallSearchingEvent,
 )
+from litellm.types.responses.main import GenericResponseOutputItemContentAnnotation
 from litellm.types.utils import Delta as ChatCompletionDelta
 from litellm.types.utils import (
     ModelResponse,
@@ -151,6 +153,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.sent_output_content_part_done_event: bool = False
         self.sent_output_item_done_event: bool = False
         self._annotation_index: int = 0
+        self._annotations_awaiting_message: tuple[ChatCompletionAnnotation, ...] = ()
         self.litellm_model_response: ModelResponse | TextCompletionResponse | None = None
         self.completed_response = None
         self.final_text: str = ""
@@ -350,11 +353,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return False
 
         return bool(
-            delta.content
-            or delta.function_call
-            or delta.tool_calls
-            or getattr(delta, "annotations", None)
-            or chunk.choices[0].finish_reason is not None
+            delta.content or delta.function_call or delta.tool_calls or chunk.choices[0].finish_reason is not None
         )
 
     def _reserve_web_search_indexes(self, provider_fields: object) -> None:
@@ -1311,31 +1310,44 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             raise e
 
     def _queue_annotation_events(self, chunk: ModelResponseStream) -> None:
-        annotations: Final = getattr(chunk.choices[0].delta, "annotations", None) if chunk.choices else None
+        chunk_annotations: Final = (getattr(chunk.choices[0].delta, "annotations", None) or ()) if chunk.choices else ()
+        annotations: Final = (*self._annotations_awaiting_message, *chunk_annotations)
         if not annotations:
             return
+        if self._reasoning_active:
+            self._annotations_awaiting_message = annotations
+            return
+        self._annotations_awaiting_message = ()
         if not self.sent_message_item_added_event:
             self._queue_message_item_added_events()
-        item_id: Final = self._cached_item_id
-        assert item_id is not None
+        item_id: Final = self._message_item_id()
         response_annotations: Final = (
             LiteLLMCompletionResponsesConfig.transform_chat_completion_annotations_to_response_output_annotations(
                 annotations=annotations
             )
         )
-        for annotation in response_annotations:
-            self._sequence_number += 1
-            self._pending_response_events.append(
-                OutputTextAnnotationAddedEvent(
-                    type=ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
-                    item_id=item_id,
-                    output_index=self._message_index(),
-                    content_index=0,
-                    annotation_index=self._annotation_index,
-                    annotation=annotation.model_dump(),
-                ).model_copy(update={"sequence_number": self._sequence_number})
-            )
-            self._annotation_index += 1
+        self._pending_response_events.extend(
+            self._annotation_added_event(item_id, annotation) for annotation in response_annotations
+        )
+
+    def _message_item_id(self) -> str:
+        if self._cached_item_id is None:
+            self._cached_item_id = f"msg_{uuid.uuid4()}"
+        return self._cached_item_id
+
+    def _annotation_added_event(
+        self, item_id: str, annotation: GenericResponseOutputItemContentAnnotation
+    ) -> OutputTextAnnotationAddedEvent:
+        event: Final = OutputTextAnnotationAddedEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
+            item_id=item_id,
+            output_index=self._message_index(),
+            content_index=0,
+            annotation_index=self._annotation_index,
+            annotation=annotation.model_dump(),
+        )
+        self._annotation_index += 1
+        return event
 
     def _transform_chat_completion_chunk_to_response_api_chunk(
         self, chunk: ModelResponseStream

@@ -3645,7 +3645,7 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def transform_chat_completion_annotations_to_response_output_annotations(
-        annotations: list[ChatCompletionAnnotation] | None,
+        annotations: Sequence[ChatCompletionAnnotation] | None,
     ) -> list[GenericResponseOutputItemContentAnnotation]:
         response_output_annotations: Final[list[GenericResponseOutputItemContentAnnotation]] = []
 
