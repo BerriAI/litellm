@@ -1,0 +1,7 @@
+:HL["/litellm-asset-prefix/_next/static/chunks/1bnh8r0-prf7e.css","style"]
+:HL["/litellm-asset-prefix/_next/static/chunks/0598zsj78ni2h.css","style"]
+:HL["/litellm-asset-prefix/_next/static/media/83afe278b6a6bb3c-s.p.2bn3s6zvc0dyp.woff2","font",{"crossOrigin":"","type":"font/woff2"}]
+3:[["children",{"s":"__PAGE__","h":160}]]
+2:[["children",{"s":"model-insights","h":96,"c":"$Q3"}]]
+1:[["children",{"s":"(dashboard)","h":96,"c":"$Q2"}]]
+0:{"b":"gyn32IHLXvPl9GksQaEMb","t":{"t":{"s":"","h":80,"c":"$Q1"}}}
