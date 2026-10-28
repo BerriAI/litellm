@@ -6377,7 +6377,9 @@ class Router:
             )
             if deployment_has_mcp and _is_silent_experiment_marker(kwargs.get("litellm_metadata")):
                 return None
-            silent_model: Final[object] = deployment["litellm_params"].get("silent_model")
+            silent_model: Final = cast(  # cast-ok: untyped deployment value is validated by _silent_experiment_targets
+                object, deployment["litellm_params"].get("silent_model")
+            )
             if (
                 silent_model is not None
                 and handler_name in SILENT_MODEL_MIRROR_ALLOWED_CALL_TYPES
@@ -6386,7 +6388,7 @@ class Router:
                 # Snapshot now: `_update_kwargs_with_deployment` below mutates kwargs in place,
                 # and the task only starts running once this coroutine yields.
                 for silent_target in _silent_experiment_targets(silent_model):
-                    silent_kwargs: Final = self._silent_experiment_generic_kwargs(**kwargs)
+                    silent_kwargs = self._silent_experiment_generic_kwargs(**kwargs)
                     if silent_kwargs is not None:
                         asyncio.create_task(
                             self._silent_experiment_ageneric(
