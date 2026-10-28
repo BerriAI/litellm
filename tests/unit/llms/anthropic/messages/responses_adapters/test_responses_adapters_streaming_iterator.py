@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     encrypted_reasoning_signature,
 )
+from litellm.llms.anthropic.messages.native.streaming_iterator import aclose_superseded_attempt
 from litellm.llms.anthropic.messages.native.utils import INCOMPLETE_STREAM_ERROR_MESSAGE
 from litellm.llms.anthropic.messages.responses_adapters.streaming_iterator import (
     AnthropicResponsesStreamWrapper,

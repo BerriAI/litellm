@@ -541,7 +541,7 @@ class AnthropicResponsesStreamWrapper:
             async for chunk in self:
                 yield anthropic_sse_frame(await safeguard_results.observe(chunk))
         finally:
-            from litellm.llms.anthropic.pass_through.messages.streaming_iterator import closing_superseded_attempt
+            from litellm.llms.anthropic.messages.native.streaming_iterator import closing_superseded_attempt
 
             if not closing_superseded_attempt():
                 await self._report_unreported_failure()
