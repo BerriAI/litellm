@@ -2,7 +2,7 @@ import asyncio
 import functools
 import re
 import secrets
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -237,15 +237,17 @@ def _is_legacy_delegate_cold_start(mcp_servers: list[str] | None, client_ip: str
     return True
 
 
-def _caused_by(exc: BaseException, error_type: type[BaseException]) -> bool:
+def _cause_chain(exc: BaseException) -> Iterator[BaseException]:
     link: BaseException | None = exc  # rebind-ok: advances one link of the cause chain per iteration
     for _ in range(_CAUSE_CHAIN_MAX_DEPTH):
         if link is None:
-            return False
-        if isinstance(link, error_type):
-            return True
+            return
+        yield link
         link = link.__cause__ or link.__context__
-    return False
+
+
+def _caused_by(exc: BaseException, error_type: type[BaseException]) -> bool:
+    return any(isinstance(link, error_type) for link in _cause_chain(exc))
 
 
 async def _bearer_is_litellm_credential(token: str) -> bool:
@@ -310,8 +312,8 @@ async def _verify_identity(check: _IdentityCheck, token: str, request: Request) 
             await handle_oauth2_proxy_request(request=request)
         case "jwt":
             await jwt_handler.auth_jwt(token=token)  # pyright: ignore[reportUnknownMemberType]  # returns a bare dict; only whether it raises matters
-        case _:
-            assert_never(check)
+        case _:  # pragma: no cover - exhaustiveness guard, unreachable while the Literal holds
+            assert_never(check)  # pragma: no cover
 
 
 async def _upstream_bearer_identity(token: str, litellm_api_key: str, request: Request) -> UserAPIKeyAuth | None:
