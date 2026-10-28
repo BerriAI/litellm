@@ -1207,7 +1207,7 @@ def test_update_quota_existing_quotaless_model_rejected():
 
 
 def _enforced_new_project_mocks(
-    monkeypatch, team_models: list[str], llm_router: object, quota_setting: object = True
+    monkeypatch: pytest.MonkeyPatch, team_models: list[str], llm_router: object, quota_setting: object = True
 ) -> None:
     from litellm.proxy._types import LiteLLM_TeamTable
     from litellm_enterprise.proxy.management_endpoints import project_endpoints as pe
@@ -1650,14 +1650,14 @@ def _quota_error(
 
 def test_quota_policy_exempts_provider_and_passthrough_name_but_keeps_vertex_strict():
     assert _quota_error(["runway-gen4-turbo", "jev-latest"]) is None
-    error = _quota_error(["gemini-3.8-flash"], rpm={"gemini-3.8-flash": 10})
+    error: Final = _quota_error(["gemini-3.8-flash"], rpm={"gemini-3.8-flash": 10})
     assert error is not None
     assert "gemini-3.8-flash (model_tpm_limit)" in error
 
 
 def test_quota_policy_model_pattern_overrides_its_provider_per_limit():
     assert _quota_error(["veo-3.1-lite-generate-001"], rpm={"veo-3.1-lite-generate-001": 5}) is None
-    error = _quota_error(["veo-3.1-lite-generate-001"], tpm={"veo-3.1-lite-generate-001": 5000})
+    error: Final = _quota_error(["veo-3.1-lite-generate-001"], tpm={"veo-3.1-lite-generate-001": 5000})
     assert error is not None
     assert "veo-3.1-lite-generate-001 (model_rpm_limit)" in error
     assert "model_tpm_limit" not in error
@@ -1685,7 +1685,7 @@ def test_quota_policy_rejects_a_non_positive_limit_set_on_an_exempt_model(
 
 
 def test_quota_policy_error_names_each_model_with_the_limits_it_misses():
-    error = _quota_error(["gemini-3.8-flash", "veo-3.1-lite-generate-001", "runway-gen4-turbo"])
+    error: Final = _quota_error(["gemini-3.8-flash", "veo-3.1-lite-generate-001", "runway-gen4-turbo"])
     assert error is not None
     assert "gemini-3.8-flash (model_rpm_limit and model_tpm_limit)" in error
     assert "veo-3.1-lite-generate-001 (model_rpm_limit)" in error
@@ -1716,7 +1716,7 @@ def test_quota_policy_precedence_is_model_then_pattern_then_provider_then_defaul
 
 
 def test_quota_policy_model_entry_matches_names_literally_apart_from_star():
-    setting = {"models": {"claude-opus-5-5[1m]": [], "gpt.5": []}}
+    setting: Final = {"models": {"claude-opus-5-5[1m]": [], "gpt.5": []}}
     assert _quota_error(["claude-opus-5-5[1m]"], setting=setting) is None
     assert _quota_error(["claude-opus-5-51"], setting=setting) is not None
     assert _quota_error(["gptx5"], setting=setting) is not None
@@ -1726,7 +1726,7 @@ def test_quota_policy_model_on_several_providers_needs_every_required_limit():
     def mixed_providers(_model: str) -> ModelRoute:
         return ModelRoute(providers=frozenset({"runwayml", "vertex_ai"}))
 
-    error = _quota_error(["video-pool"], rpm={"video-pool": 10}, route_of=mixed_providers)
+    error: Final = _quota_error(["video-pool"], rpm={"video-pool": 10}, route_of=mixed_providers)
     assert error is not None
     assert "video-pool (model_tpm_limit)" in error
 
@@ -1786,9 +1786,9 @@ def test_update_quota_policy_resolves_providers_for_the_resulting_models():
     )
     from litellm.proxy.management_helpers.model_quota_policy import parse_model_quota_setting
 
-    policy = parse_model_quota_setting(_CUSTOMER_QUOTA_POLICY)
+    policy: Final = parse_model_quota_setting(_CUSTOMER_QUOTA_POLICY)
     assert policy is not None
-    existing = types.SimpleNamespace(models=["runway-gen4-turbo"], metadata={})
+    existing: Final = types.SimpleNamespace(models=["runway-gen4-turbo"], metadata={})
     assert (
         _raise_on_missing_project_model_quota_on_update(
             UpdateProjectRequest(project_id="p", description="unrelated change"),
@@ -1876,7 +1876,7 @@ def test_quota_policy_rejects_an_unknown_provider_id():
         parse_model_quota_setting({"providers": {"vertex_ai": ["rpm"], "runway": []}})
 
 
-def test_quota_policy_accepts_a_provider_registered_at_runtime(monkeypatch):
+def test_quota_policy_accepts_a_provider_registered_at_runtime(monkeypatch: pytest.MonkeyPatch):
     from litellm.proxy.management_helpers.model_quota_policy import parse_model_quota_setting
 
     monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "qa-custom-llm"])
@@ -2013,6 +2013,8 @@ def _team_pattern_router() -> "litellm.Router":
             {"model_name": "video-named", "litellm_params": dict(_VERTEX_PARAMS)},
             _team_deployment("video-*", "t1", {"model": "runwayml/*"}),
             _team_deployment("video-veo-*", "t2", {"model": "vertex_ai/veo-*", "vertex_project": "qa-project"}),
+            _team_deployment("clip-*x", "t3", {"model": "runwayml/*"}),
+            _team_deployment("clip-x*", "t4", {"model": "vertex_ai/*", "vertex_project": "qa-project"}),
         ],
         model_group_alias={"media": "media-latest"},
     )
@@ -2030,6 +2032,9 @@ def _team_pattern_router() -> "litellm.Router":
         pytest.param("video-*", "video-named", False, id="a-named-deployment-shadows-the-pattern"),
         pytest.param("video-*", "image-gen-1", False, id="a-name-the-pattern-misses"),
         pytest.param("audio-*", "audio-gen-1", True, id="a-pattern-the-write-adds"),
+        pytest.param("clip-*x", "clip-xx", True, id="the-first-registered-of-two-tied-team-patterns"),
+        pytest.param("clip-x*", "clip-xx", False, id="a-tied-team-pattern-registered-first-takes-it"),
+        pytest.param("cli*-xx", "clip-xx", False, id="a-new-pattern-tied-with-a-registered-one"),
     ],
 )
 def test_team_write_serves_the_project_names_a_team_request_routes_through_it(
@@ -2070,8 +2075,8 @@ def test_team_pattern_write_reads_each_served_name_by_the_model_it_calls(model: 
 
 
 @pytest.mark.asyncio
-async def test_new_project_quota_policy_reads_providers_from_router_deployments(monkeypatch):
-    team_models = ["gemini-3.8-flash", "veo-3.1-lite-generate-001", "runway-gen4-turbo", "jev-latest"]
+async def test_new_project_quota_policy_reads_providers_from_router_deployments(monkeypatch: pytest.MonkeyPatch):
+    team_models: Final = ["gemini-3.8-flash", "veo-3.1-lite-generate-001", "runway-gen4-turbo", "jev-latest"]
     _enforced_new_project_mocks(
         monkeypatch, team_models=team_models, llm_router=_customer_router(), quota_setting=_CUSTOMER_QUOTA_POLICY
     )
@@ -2089,7 +2094,7 @@ async def test_new_project_quota_policy_reads_providers_from_router_deployments(
 
 
 @pytest.mark.asyncio
-async def test_new_project_rejects_malformed_quota_setting_instead_of_skipping_it(monkeypatch):
+async def test_new_project_rejects_malformed_quota_setting_instead_of_skipping_it(monkeypatch: pytest.MonkeyPatch):
     _enforced_new_project_mocks(
         monkeypatch,
         team_models=["runway-gen4-turbo"],
@@ -2105,7 +2110,7 @@ async def test_new_project_rejects_malformed_quota_setting_instead_of_skipping_i
 
 
 @pytest.mark.asyncio
-async def test_new_project_checks_permission_before_reading_the_quota_setting(monkeypatch):
+async def test_new_project_checks_permission_before_reading_the_quota_setting(monkeypatch: pytest.MonkeyPatch):
     from litellm_enterprise.proxy.management_endpoints import project_endpoints as pe
 
     _enforced_new_project_mocks(
@@ -2124,7 +2129,7 @@ async def test_new_project_checks_permission_before_reading_the_quota_setting(mo
 
 
 @pytest.mark.asyncio
-async def test_new_project_quota_policy_ignores_model_entries_for_a_team_model_name(monkeypatch):
+async def test_new_project_quota_policy_ignores_model_entries_for_a_team_model_name(monkeypatch: pytest.MonkeyPatch):
     router: Final = litellm.Router(
         model_list=[
             {

@@ -234,8 +234,11 @@ def _routable_name(llm_router: "Router | None", model: str) -> str:
     return model if llm_router is None else llm_router.routable_model_group(model)
 
 
-def _outranks(rival: str, regex: str) -> bool:
-    return PatternUtils.calculate_pattern_specificity(rival) > PatternUtils.calculate_pattern_specificity(regex)
+def _patterns_tried_before(patterns: Sequence[str], regex: str) -> Sequence[str]:
+    if regex in patterns:
+        return patterns[: patterns.index(regex)]
+    specificity: Final = PatternUtils.calculate_pattern_specificity(regex)
+    return tuple(rival for rival in patterns if PatternUtils.calculate_pattern_specificity(rival) >= specificity)
 
 
 def _team_pattern_serves(llm_router: "Router", team_id: str, pattern: str, model: str) -> bool:
@@ -243,14 +246,14 @@ def _team_pattern_serves(llm_router: "Router", team_id: str, pattern: str, model
     if re.match(regex, model) is None or _named_deployments(llm_router, model, team_id):
         return False
     team_router: Final = llm_router.team_pattern_routers.get(team_id)
-    rivals: Final = () if team_router is None else tuple(team_router.patterns)
-    return not any(re.match(rival, model) is not None and _outranks(rival, regex) for rival in rivals)
+    patterns: Final = () if team_router is None else tuple(team_router.patterns)
+    return not any(re.match(rival, model) is not None for rival in _patterns_tried_before(patterns, regex))
 
 
 def team_write_serves(llm_router: "Router | None", team_id: str, public_name: str, model: str) -> bool:
     """Whether a request from the team for ``model`` reaches the team route named ``public_name``: the name
-    itself or an alias of it, or, for a `*` name, a model no named deployment shadows and no more specific
-    team pattern takes."""
+    itself or an alias of it, or, for a `*` name, a model no named deployment shadows and no team pattern the
+    router tries first takes."""
     target: Final = _routable_name(llm_router, model)
     if "*" not in public_name or llm_router is None:
         return target == public_name
