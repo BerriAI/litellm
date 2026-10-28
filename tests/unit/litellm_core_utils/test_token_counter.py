@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import importlib
+import io
 import json
 import os
 import subprocess
@@ -13,12 +14,13 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from itertools import accumulate, chain
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 from unittest.mock import MagicMock, sentinel
 
 import anyio.to_thread
 import pytest
 import tiktoken
+from PIL import Image
 from tokenizers import Regex, Tokenizer, models, pre_tokenizers
 
 from unittest.mock import AsyncMock, patch
@@ -39,7 +41,8 @@ from litellm.litellm_core_utils.token_counter import (
     offload_token_count,
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
-from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from tests.large_text import text
 from tests.unit.litellm_core_utils.event_loop_lag import (
     assert_loop_stayed_free,
@@ -656,6 +659,37 @@ def test_token_counter_tool_choice_adds_nothing_for_deepseek_v4(tool_choice: obj
     ) == token_counter_new(model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools)
 
 
+@pytest.mark.parametrize(
+    ("tool_choice", "expected_tool_choice"),
+    [
+        pytest.param({"type": "auto"}, None, id="anthropic-auto"),
+        pytest.param({"type": "any"}, None, id="anthropic-any"),
+        pytest.param({"type": "none"}, "none", id="anthropic-none"),
+        pytest.param(
+            {"type": "tool", "name": "get_weather"},
+            {"type": "function", "function": {"name": "get_weather"}},
+            id="anthropic-tool",
+        ),
+        pytest.param(
+            {"type": "function", "name": "get_weather"},
+            {"type": "function", "function": {"name": "get_weather"}},
+            id="responses-function",
+        ),
+    ],
+)
+def test_token_counter_counts_anthropic_tool_choices_like_openai_choices(
+    tool_choice: Mapping[str, object], expected_tool_choice: str | Mapping[str, object] | None
+) -> None:
+    messages: Final = cast(list[AllMessageValues], list(_USER_MESSAGES))
+    tools: Final = cast(list[ChatCompletionToolParam], [_openai_tool(_WEATHER_FUNCTION)])
+
+    assert token_counter_new(
+        model="gpt-4", messages=messages, tools=tools, tool_choice=tool_choice
+    ) == token_counter_new(
+        model="gpt-4", messages=messages, tools=tools, tool_choice=expected_tool_choice
+    )
+
+
 @pytest.mark.parametrize("model", ["DeepSeek-V4-Flash-0731", "databricks-qwen35-122b-a10b"])
 @pytest.mark.parametrize(
     "anthropic_tool",
@@ -1171,6 +1205,27 @@ def test_disable_hf_tokenizer_download_keeps_deepseek_v4_on_cl100k(monkeypatch: 
 
     assert counted != _deepseek_token_count(_CODE_SAMPLE)
     assert counted == litellm.token_counter(model="", text=_CODE_SAMPLE)
+
+
+@pytest.mark.parametrize("model", ["llama-2-7b", "meta-llama/llama-3-8b-instruct"])
+def test_offline_mode_counts_downloaded_tokenizer_models_with_tiktoken(monkeypatch: pytest.MonkeyPatch, model: str):
+    _load_huggingface_tokenizer.cache_clear()
+    _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+    monkeypatch.setenv("LITELLM_OFFLINE_MODE", "true")
+
+    with patch("litellm.utils.tokenizer_dispatch.from_pretrained") as from_pretrained:
+        result: Final = _select_tokenizer_helper(model)
+
+    from_pretrained.assert_not_called()
+    assert result["type"] == "openai_tokenizer"
+
+
+def test_offline_mode_keeps_deepseek_v4_on_its_bundled_tokenizer(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LITELLM_OFFLINE_MODE", "true")
+
+    assert litellm.token_counter(model="deepseek/deepseek-v4-flash", text=_CODE_SAMPLE) == _deepseek_token_count(
+        _CODE_SAMPLE
+    )
 
 
 def test_concurrent_first_deepseek_counts_share_one_loaded_tokenizer():
@@ -1770,6 +1825,34 @@ def test_anthropic_image_block_with_empty_base64_data():
     assert tokens > 0
 
 
+def test_token_counter_counts_anthropic_search_result_text() -> None:
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    search_result: Final = {
+        "type": "search_result",
+        "source": "https://example.invalid/notes",
+        "title": "Project notes",
+        "content": [{"type": "text", "text": "The code word is 7f3a."}],
+        "citations": {"enabled": True},
+    }
+
+    assert _count_content_list(len, [search_result], False, None) == len(
+        "https://example.invalid/notesProject notesThe code word is 7f3a."
+    )
+
+
+@pytest.mark.parametrize("nested", (False, True))
+def test_unknown_content_type_remains_a_value_error_with_an_optional_fallback(nested: bool) -> None:
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    unknown: Final = {"type": "future_block"}
+    content: Final = [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [unknown]}] if nested else [unknown]
+
+    with pytest.raises(ValueError, match="Invalid content item type: future_block"):
+        _count_content_list(len, content, False, None)
+    assert _count_content_list(len, content, False, 7) == 7
+
+
 def test_anthropic_image_block_without_source_raises():
     """An `image` block with no `source` raises, matching the OpenAI `image_url`-without-`url` behavior."""
     from litellm.litellm_core_utils.token_counter import _count_content_list
@@ -1992,6 +2075,71 @@ def test_pdf_document_without_pypdf_is_priced_like_an_image(monkeypatch: pytest.
 def _png_data_url(width: int, height: int) -> str:
     ihdr = b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + width.to_bytes(4, "big") + height.to_bytes(4, "big")
     return "data:image/png;base64," + base64.b64encode(ihdr + b"\x08\x06\x00\x00\x00").decode()
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "expected"), [(256, 256, 262), (512, 512, 262), (768, 768, 772), (1024, 1024, 772)]
+)
+@pytest.mark.parametrize("detail", [None, "auto", "high"])
+def test_inline_auto_images_count_high_detail_tiles(width: int, height: int, expected: int, detail: str | None) -> None:
+    image_url = {"url": _png_data_url(width, height)}
+    if detail is not None:
+        image_url["detail"] = detail
+    messages = [{"role": "user", "content": [{"type": "image_url", "image_url": image_url}]}]
+
+    assert token_counter_new(model="gpt-4o", messages=messages) == expected
+
+
+@pytest.mark.parametrize("image_format", ["PNG", "JPEG", "GIF", "WEBP"])
+def test_inline_auto_images_read_supported_formats(image_format: str) -> None:
+    output = io.BytesIO()
+    Image.new("RGB", (1024, 1024)).save(output, format=image_format)
+    url = f"data:image/{image_format.lower()};base64," + base64.b64encode(output.getvalue()).decode()
+
+    assert calculate_img_tokens(url) == 765
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        "https://example.com/image.png",
+        "http://127.0.0.1/image.png",
+        "http://169.254.169.254/latest/meta-data/",
+        "file:///etc/passwd",
+        "data:application/pdf;base64,JVBERi0xLjQK",
+        "data:image/png;base64,%%%",
+        "data:image/png;base64,iVBORw0KGgo=",
+        "data:image/jpeg;base64,/9j/4AAQ",
+        "data:image/png,not-base64",
+        "",
+        _png_data_url(0, 1024),
+        _png_data_url(1024, 0),
+    ],
+)
+def test_auto_image_fallback_does_not_fetch_urls_or_raise(data: str) -> None:
+    # The unit suite disables sockets; a fetch must also not be attempted and swallowed.
+    with patch("httpx.Client.get", side_effect=AssertionError("auto counting must not fetch URLs")) as get:
+        assert calculate_img_tokens(data) == 85
+    get.assert_not_called()
+
+
+def test_auto_image_decode_respects_size_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    counter = importlib.import_module("litellm.litellm_core_utils.token_counter")
+    monkeypatch.setattr(counter, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 24 / (1024 * 1024))
+
+    with patch("base64.b64decode", side_effect=AssertionError("oversized input must not be decoded")) as decode:
+        assert calculate_img_tokens(_png_data_url(1024, 1024)) == 85
+    decode.assert_not_called()
+
+
+def test_low_and_default_image_counts_skip_inline_decoding() -> None:
+    with patch("base64.b64decode", side_effect=AssertionError("fixed counts must not decode")) as decode:
+        assert calculate_img_tokens(_png_data_url(1024, 1024), mode="low") == 85
+        assert (
+            calculate_img_tokens(_png_data_url(1024, 1024), use_default_image_token_count=True)
+            == litellm.constants.DEFAULT_IMAGE_TOKEN_COUNT
+        )
+    decode.assert_not_called()
 
 
 @pytest.mark.parametrize(("width", "height"), [(1, 1), (768, 768), (2000, 768), (768, 2000), (4096, 4096), (8000, 3072)])

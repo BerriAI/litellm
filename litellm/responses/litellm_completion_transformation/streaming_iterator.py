@@ -5,6 +5,7 @@ from itertools import filterfalse
 from typing import Any, Final, cast
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items
 from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params, served_from_cache
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
 from litellm.main import stream_chunk_builder
@@ -84,14 +85,18 @@ def _output_items_with_id(items: tuple[Any, ...], item_type: str, item_id: str |
     )
 
 
+def _is_signed_thinking_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and isinstance(block, dict) and bool(fields.get("signature") or fields.get("data"))
+
+
 def _streams_compaction(chunk: ModelResponseStream) -> bool:
     delta_fields: Final = chunk.choices[0].delta.provider_specific_fields if chunk.choices else None
     return delta_fields is not None and "compaction_blocks" in delta_fields
 
 
 def _delta_has_signed_thinking_block(delta: object) -> bool:
-    blocks: Final = getattr(delta, "thinking_blocks", None) or ()
-    return any(isinstance(b, dict) and (b.get("signature") or b.get("data")) for b in blocks)
+    return any(_is_signed_thinking_block(block) for block in attribute_items(delta, "thinking_blocks"))
 
 
 def _delta_carries_output(delta: ChatCompletionDelta) -> bool:
@@ -418,6 +423,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             if self._is_tool_search_call(call_id, fn_name):
                 self._queue_tool_search_call_added(call_id, output_index, fn_args_delta)
                 continue
+            self._started_tool_call = True
 
             if call_id not in self._tool_args_by_call_id:
                 self._tool_args_by_call_id[call_id] = ""
@@ -1427,7 +1433,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _is_unstreamed_empty_message(self, item: object) -> bool:
         if getattr(item, "type", None) != "message" or self._message_output_index is not None:
             return False
-        return not any(getattr(part, "text", None) for part in getattr(item, "content", None) or ())
+        return not any(getattr(part, "text", None) for part in attribute_items(item, "content"))
 
     def finished_round_event(self) -> ResponseCompletedEvent | ResponseIncompleteEvent | None:
         if not isinstance(self.litellm_model_response, ModelResponse):

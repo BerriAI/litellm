@@ -7,6 +7,7 @@ import {
   type CompliancePrompt,
 } from "@/data/compliancePrompts";
 import useCan from "@/app/(dashboard)/hooks/useCan";
+import { useTerminology } from "@/contexts/TerminologyContext";
 import { getGuardrailsList, testPoliciesAndGuardrails } from "@/components/networking";
 import PolicySelector, { getPolicyOptionEntries } from "@/components/policies/PolicySelector";
 import { Policy } from "@/components/policies/types";
@@ -131,7 +132,8 @@ export default function ComplianceUI({
   proxySettings,
 }: ComplianceUIProps) {
   const canViewPolicies = useCan("viewPolicies");
-  const frameworks = getFrameworks();
+  const term = useTerminology();
+  const frameworks = getFrameworks(term);
 
   const [policyValueToLabel, setPolicyValueToLabel] = useState<Map<string, string>>(new Map());
   const [guardrailOptions, setGuardrailOptions] = useState<GuardrailOption[]>([]);

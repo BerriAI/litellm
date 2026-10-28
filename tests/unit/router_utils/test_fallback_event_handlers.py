@@ -16,7 +16,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import FakeAnthropicMessagesStreamIterator
+from litellm.llms.anthropic.messages.native.fake_stream_iterator import FakeAnthropicMessagesStreamIterator
 from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -1255,7 +1255,12 @@ class TestTriggerCooldownForFailedDeployment:
                     "model_name": "fallback-model",
                     "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
                     "model_info": {"id": "fallback-deployment"},
-                }
+                },
+                {
+                    "model_name": "fallback-model",
+                    "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
+                    "model_info": {"id": "fallback-sibling"},
+                },
             ],
             allowed_fails=0,
             cooldown_time=60,
@@ -1345,7 +1350,12 @@ async def test_a_fallback_deployment_whose_stream_stalled_stays_out_of_cooldown(
                 "model_name": "fallback-model",
                 "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
                 "model_info": {"id": "fallback-deployment"},
-            }
+            },
+            {
+                "model_name": "fallback-model",
+                "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
+                "model_info": {"id": "fallback-sibling"},
+            },
         ],
         allowed_fails=0,
         cooldown_time=60,

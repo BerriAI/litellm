@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { Info } from "lucide-react";
 import { ColumnDef } from "@tanstack/react-table";
 
@@ -28,6 +29,7 @@ import { orgDetailHref, teamDetailHref } from "@/utils/entityLinks";
 
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
+import { KEY_RATE_LIMIT_SORT_FIELDS } from "../key_team_helpers/key_sorting";
 
 interface KeyStatus {
   tone: StatusTone;
@@ -46,6 +48,11 @@ export const KEY_TABLE_SORT_FIELDS: readonly string[] = [
   "created_at",
   "updated_at",
   ...SPEND_BUDGET_SORT_FIELDS.map((field) => field.id),
+  "expires",
+  "last_active",
+  "budget_reset_at",
+  "total_spend",
+  ...KEY_RATE_LIMIT_SORT_FIELDS.map((field) => field.id),
 ];
 
 const getKeyStatus = (key: KeyResponse): KeyStatus => {
@@ -77,7 +84,7 @@ const getKeyStatus = (key: KeyResponse): KeyStatus => {
   };
 };
 
-const InfoHeader = ({ label, tooltip }: { label: string; tooltip: string }) => (
+const InfoHeader = ({ label, tooltip }: { label: ReactNode; tooltip: string }) => (
   <span className="flex items-center gap-1">
     {label}
     <HoverCard>
@@ -252,23 +259,25 @@ export const getKeyTableColumns = ({
     id: "last_active",
     accessorKey: "last_active",
     meta: { title: "Last Active" },
-    header: () => (
+    header: ({ column }) => (
       <InfoHeader
-        label="Last Active"
+        label={<DataTableSortHeader column={column} title="Last Active" />}
         tooltip="This is a new field and is not backfilled. Only new key usage will update this value."
       />
     ),
     size: 130,
-    enableSorting: false,
+    enableSorting: true,
+    sortDescFirst: false,
     cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback="Unknown" />,
   },
   {
     id: "expires",
     accessorKey: "expires",
     meta: { title: "Expires" },
-    header: "Expires",
+    header: ({ column }) => <DataTableSortHeader column={column} title="Expires" />,
     size: 120,
-    enableSorting: false,
+    enableSorting: true,
+    sortDescFirst: false,
     cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback="Never" />,
   },
   {
@@ -313,23 +322,25 @@ export const getKeyTableColumns = ({
     id: "total_spend",
     accessorKey: "total_spend",
     meta: { title: "Lifetime Spend" },
-    header: () => (
+    header: ({ column }) => (
       <InfoHeader
-        label="Lifetime Spend"
+        label={<DataTableSortHeader column={column} title="Lifetime Spend" />}
         tooltip="Cumulative spend across every budget period. Budget resets do not touch this value. Lifetime tracking started with LiteLLM v1.103.0 on September 19, 2026, so keys created earlier only count spend since that upgrade."
       />
     ),
     size: 130,
-    enableSorting: false,
+    enableSorting: true,
+    sortDescFirst: true,
     cell: (info) => <MoneyCell value={info.getValue() as number | null | undefined} showZero />,
   },
   {
     id: "budget_reset_at",
     accessorKey: "budget_reset_at",
     meta: { title: "Budget Reset" },
-    header: "Budget Reset",
+    header: ({ column }) => <DataTableSortHeader column={column} title="Budget Reset" />,
     size: 130,
-    enableSorting: false,
+    enableSorting: true,
+    sortDescFirst: false,
     cell: (info) => <DateCell value={info.getValue() as string | null} fallback="Never" />,
   },
   {
@@ -350,7 +361,7 @@ export const getKeyTableColumns = ({
   {
     id: "rate_limits",
     meta: { title: "Rate Limits" },
-    header: "Rate Limits",
+    header: ({ table }) => <DataTableMultiSortHeader table={table} fields={KEY_RATE_LIMIT_SORT_FIELDS} />,
     size: 140,
     enableSorting: false,
     cell: ({ row }) => {

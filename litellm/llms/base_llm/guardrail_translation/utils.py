@@ -9,6 +9,8 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.llms.openai import AllMessageValues, ResponseAPIUsage
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
 
 def _anthropic_stream_chunk_events(item: object) -> list[dict]:
     if isinstance(item, dict):
@@ -30,7 +32,7 @@ def _anthropic_stream_chunk_events(item: object) -> list[dict]:
             if not payload or payload == "[DONE]":
                 continue
             try:
-                parsed = json.loads(payload)
+                parsed = _DECODED_JSON.validate_python(json.loads(payload))
             except json.JSONDecodeError:
                 continue
             if isinstance(parsed, dict):
