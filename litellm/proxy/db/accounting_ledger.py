@@ -6,9 +6,10 @@ from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias, assert_never
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from pydantic import AwareDatetime, ConfigDict, JsonValue, TypeAdapter
+from typing_extensions import assert_never
 
 from litellm.accounting import CostEvent, DeliveryTarget, EventKind, InboundUsageEvent, OutboundUsageEvent
 from litellm.proxy.db.db_span import db_span
