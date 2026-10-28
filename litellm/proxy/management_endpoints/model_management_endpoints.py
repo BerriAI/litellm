@@ -1164,8 +1164,10 @@ def update_db_model(
                 merged_litellm_params.pop(field, None)
     if updated_patch.model_info:
         for field in updated_patch.model_info.model_fields_set:
-            if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.model_info, field) is None:
-                merged_model_info.pop(field, None)
+            if field not in SPECIAL_MODEL_INFO_PARAMS or getattr(updated_patch.model_info, field) is not None:
+                continue
+            merged_model_info.pop(field, None)
+            if updated_patch.litellm_params is None or field not in updated_patch.litellm_params.model_fields_set:
                 merged_litellm_params.pop(field, None)
         for field in _explicitly_cleared_ptu_fields(updated_patch.model_info):
             merged_model_info.pop(field, None)

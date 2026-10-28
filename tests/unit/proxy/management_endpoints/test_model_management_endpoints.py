@@ -40,7 +40,14 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.router import Router
-from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment, updateLiteLLMParams
+from litellm.types.router import (
+    SPECIAL_MODEL_INFO_PARAMS,
+    Deployment,
+    LiteLLM_Params,
+    ModelInfo,
+    updateDeployment,
+    updateLiteLLMParams,
+)
 
 
 async def _passthrough_row(update_data):
@@ -3806,6 +3813,55 @@ class TestUpdateDBModelClearPricing:
     Restricted to SPECIAL_MODEL_INFO_PARAMS so non-pricing fields (e.g. team_id)
     cannot be cleared via this path.
     """
+
+    @pytest.mark.parametrize("field", tuple(field for field in SPECIAL_MODEL_INFO_PARAMS if field != "tiered_pricing"))
+    @pytest.mark.parametrize("price", (0.000009, 0.0))
+    @pytest.mark.parametrize("existing_price", (None, 0.000002))
+    def test_explicit_price_beats_echoed_model_info_null(
+        self, field: str, price: float, existing_price: float | None
+    ) -> None:
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+        db_model: Final = Deployment(
+            model_name="price-test",
+            litellm_params=LiteLLM_Params.model_validate({"model": "openai/*", field: existing_price}),
+            model_info=ModelInfo(id="dep-pricing-test"),
+        )
+        result: Final = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams.model_validate({field: price}),
+                model_info=ModelInfo.model_validate({"id": "dep-pricing-test", field: None}),
+            ),
+        )
+
+        params: Final = json.loads(result["litellm_params"])
+        info: Final = json.loads(result["model_info"])
+        assert params[field] == price
+        assert field not in info
+
+    @pytest.mark.parametrize("field", tuple(field for field in SPECIAL_MODEL_INFO_PARAMS if field != "tiered_pricing"))
+    def test_model_info_null_still_clears_when_params_omit_that_field(self, field: str) -> None:
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+        db_model: Final = Deployment(
+            model_name="price-test",
+            litellm_params=LiteLLM_Params.model_validate({"model": "openai/*", field: 0.000002}),
+            model_info=ModelInfo(id="dep-pricing-test"),
+        )
+        result: Final = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(tpm=100),
+                model_info=ModelInfo.model_validate({"id": "dep-pricing-test", field: None}),
+            ),
+        )
+
+        params: Final = json.loads(result["litellm_params"])
+        info: Final = json.loads(result["model_info"])
+        assert field not in params
+        assert field not in info
+        assert params["tpm"] == 100
 
     def test_clear_input_cost_removes_from_both_blobs(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
