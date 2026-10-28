@@ -302,7 +302,7 @@ async fn prepare_upload_request<C: BaseOcrConfig<Environment = Vec<(String, Stri
 fn unsupported_source() -> Error {
     Error::UnsupportedDocument {
         provider: "Reducto",
-        guidance: "pass a reducto:// id or a data URI, plain HTTP URLs must be uploaded first",
+        guidance: "pass a reducto:// id or a data URI, or upload the file first for plain HTTP URLs",
     }
 }
 

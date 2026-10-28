@@ -7,12 +7,17 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, ClassVar, Final, Literal, cast
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, Protocol, cast
 from urllib.parse import urlsplit
 
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.integrations.otel.model.metadata import RequestContext, RequestIdentity, allowlisted_metadata
+from litellm.integrations.otel.model.metadata import (
+    RequestContext,
+    RequestIdentity,
+    allowlisted_metadata,
+    exported_request_metadata,
+)
 from litellm.integrations.otel.model.semconv import (
     GenAIOperation,
     GenAIOutputType,
@@ -417,6 +422,7 @@ class LLMCallSpanData:
     response_cost: float | None
     server: ServerInfo | None
     identity: RequestIdentity
+    request_metadata: Mapping[str, str] = field(default_factory=lambda: _EMPTY_METADATA)
     is_streaming: bool | None = None
     cost: LLMCost = field(default_factory=LLMCost)
     tools: tuple[ToolDefinition, ...] = ()
@@ -467,6 +473,7 @@ class LLMCallSpanData:
         context: Final = RequestContext.from_standard_logging_payload(payload)
         metadata: Final = payload.get("metadata")
         decision: Final = metadata["routing_decision"] if metadata and "routing_decision" in metadata else None
+        promoted_metadata: Final = allowlisted_metadata(context.identity.metadata, metadata_keys)
         # Normalize ``response`` to a dict once so the content/id reads below are a
         # plain ``.get`` — no repeated ``isinstance`` guards.
         raw_response: Final = payload.get("response")
@@ -498,7 +505,14 @@ class LLMCallSpanData:
             cost=LLMCost.from_breakdown(cast("Mapping[str, object] | None", payload.get("cost_breakdown"))),
             server=None if cache_hit else ServerInfo.from_api_base(context.api_base),
             identity=context.identity,
-            promoted_metadata=allowlisted_metadata(context.identity.metadata, metadata_keys),
+            request_metadata=exported_request_metadata(
+                {
+                    "user_api_key_team_id": context.identity.team_id,
+                    "user_api_key_team_alias": context.identity.team_alias,
+                    **promoted_metadata,
+                }
+            ),
+            promoted_metadata=promoted_metadata,
             is_streaming=as_bool(payload.get("stream")),
             tools=_extract_tools(params),
             messages_in=_dicts(payload.get("messages")) if capture_content else (),
@@ -716,6 +730,15 @@ def _json_or_none(value: object) -> str | None:
         return None
 
 
+class _EnumValue(Protocol):
+    @property
+    def value(self) -> object: ...
+
+
+def _enum_value(item: _EnumValue) -> object:
+    return item.value
+
+
 def _guardrail_mode_str(value: object) -> str | None:
     """Normalize ``guardrail_mode`` to a stable string.
 
@@ -732,12 +755,12 @@ def _guardrail_mode_str(value: object) -> str | None:
         for item in value:
             if item is None:
                 continue
-            part = as_str(item.value) if isinstance(item, Enum) else as_str(item)
+            part = as_str(_enum_value(item)) if isinstance(item, Enum) else as_str(item)
             if part:
                 parts.append(part)
         return ",".join(parts) or None
     if isinstance(value, Enum):
-        return as_str(value.value)
+        return as_str(_enum_value(value))
     return as_str(value)
 
 

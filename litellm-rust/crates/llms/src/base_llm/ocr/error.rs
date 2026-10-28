@@ -12,7 +12,7 @@ pub enum Error {
     Provider {
         status: u16,
         body: String,
-        headers: HeaderMap,
+        headers: Box<HeaderMap>,
     },
     #[error("File is empty or could not be read")]
     EmptyFile,
@@ -114,6 +114,8 @@ pub enum Error {
     Headers(#[from] litellm_http::request::HeaderError),
     #[error(transparent)]
     Http(#[from] litellm_http::Error),
+    #[error(transparent)]
+    DocumentDownload(litellm_http::Error),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -172,6 +174,14 @@ impl Error {
                 body,
                 headers,
             } => Some((*status, body, headers)),
+            Self::DocumentDownload(error) => error.status().map(|status| {
+                let body = if error.is_timeout() {
+                    "OCR document download timed out"
+                } else {
+                    "OCR document download failed"
+                };
+                (status, body, &*NO_HEADERS)
+            }),
             Self::Http(error) => error
                 .upstream_response()
                 .map(|(status, body)| (status, body, &*NO_HEADERS)),
@@ -249,7 +259,8 @@ impl Error {
             | Self::HostCall
             | Self::Params(_)
             | Self::Headers(_)
-            | Self::Http(_) => false,
+            | Self::Http(_)
+            | Self::DocumentDownload(_) => false,
         }
     }
 
@@ -286,7 +297,7 @@ impl Error {
             | Self::Params(_)
             | Self::Headers(_) => true,
             Self::Auth(error) => error.is_request(),
-            Self::Http(error) => error.is_request(),
+            Self::Http(error) | Self::DocumentDownload(error) => error.is_request(),
             Self::Provider { .. }
             | Self::FileRead { .. }
             | Self::DocumentTask(_)
@@ -317,7 +328,7 @@ impl Error {
             | Self::InvalidPollUrl { .. }
             | Self::PollOrigin
             | Self::PollTimeout => true,
-            Self::Http(error) => error.is_response(),
+            Self::Http(error) | Self::DocumentDownload(error) => error.is_response(),
             Self::Provider { .. }
             | Self::EmptyFile
             | Self::FileRead { .. }

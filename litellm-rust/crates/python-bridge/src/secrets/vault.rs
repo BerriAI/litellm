@@ -2,11 +2,15 @@ mod operation;
 
 pub(super) use operation::{Failure, FailureKind, FailureStage, delete, rotate, write};
 
+use litellm_core_utils::exception_mapping_utils::{
+    TimeoutPhase, timeout_message as transport_timeout_message,
+};
 use litellm_error::Report;
 use litellm_secrets::hashicorp::RawOperationError;
 use pyo3::prelude::*;
 
 use super::mutation::{error_value, http_message, json_value};
+use super::provider::read_timeout_seconds;
 
 const HTTP_TRANSPORT_MODULE: &str = "litellm.rust_bridge.host.http_transport";
 
@@ -130,21 +134,17 @@ fn timeout_message(
             String::new()
         });
     }
-    let elapsed = py
-        .import("builtins")?
-        .call_method1("round", (elapsed.as_secs_f64(), 3))?;
     let kwargs = pyo3::types::PyDict::new(py);
     kwargs.set_item(
         "message",
-        format!(
-            "Connection timed out. Timeout passed={}, time taken={} seconds",
-            context.timeout.as_deref().unwrap_or("None"),
-            elapsed.str()?
+        transport_timeout_message(
+            TimeoutPhase::Read,
+            context.timeout,
+            Some(elapsed.as_secs_f64()),
         ),
     )?;
     kwargs.set_item("model", "default-model-name")?;
     kwargs.set_item("llm_provider", "litellm-httpx-handler")?;
-    kwargs.set_item("headers", pyo3::types::PyDict::new(py))?;
     py.import("litellm.exceptions")?
         .getattr("Timeout")?
         .call((), Some(&kwargs))?
@@ -164,7 +164,7 @@ fn response_text(py: Python<'_>, body: &[u8]) -> PyResult<String> {
 
 #[derive(Default)]
 pub(super) struct ErrorContext {
-    timeout: Option<String>,
+    timeout: Option<f64>,
     aiohttp: bool,
 }
 
@@ -178,7 +178,7 @@ impl ErrorContext {
             return Ok(Self::default());
         }
         Ok(Self {
-            timeout: timeout.map(|value| value.str()?.extract()).transpose()?,
+            timeout: read_timeout_seconds(timeout)?,
             aiohttp: py
                 .import(HTTP_TRANSPORT_MODULE)?
                 .getattr("uses_aiohttp_transport")?

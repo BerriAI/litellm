@@ -35,6 +35,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -1743,7 +1744,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     @staticmethod
     def _extract_masked_entity_count(
-        rules: list[dict[str, Any]],
+        rules: Sequence[Mapping[str, object]],
     ) -> dict[str, int] | None:
         """Count entity-type detections per Cisco rule for the logging payload."""
         if not rules:
@@ -1752,8 +1753,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
         for rule in rules:
             if not isinstance(rule, dict):
                 continue
-            entity_types = rule.get("entity_types") or []
-            for entity_type in entity_types:
+            for entity_type in iter_items(rule.get("entity_types") or ()):
                 if not isinstance(entity_type, str):
                     continue
                 counts[entity_type] = counts.get(entity_type, 0) + 1

@@ -80,10 +80,10 @@ mod tests {
         Error::Provider {
             status: 429,
             body: r#"{"message":"rate limited"}"#.into(),
-            headers: reqwest::header::HeaderMap::from_iter([(
+            headers: Box::new(reqwest::header::HeaderMap::from_iter([(
                 reqwest::header::RETRY_AFTER,
                 reqwest::header::HeaderValue::from_static("17"),
-            )]),
+            )])),
         },
         vec![("retry-after".into(), "17".into())]
     )]
@@ -102,6 +102,68 @@ mod tests {
             let kept: Vec<(String, String)> = value.getattr("headers").unwrap().extract().unwrap();
             assert_eq!(kept, headers);
             assert_eq!(status_code(py, &mapped), Some(429));
+        });
+    }
+
+    #[rstest]
+    #[case::not_found(Some(404), 404, "OCR document download failed")]
+    #[case::rate_limited(Some(429), 429, "OCR document download failed")]
+    #[case::timeout(None, 408, "OCR document download timed out")]
+    #[tokio::test]
+    async fn document_download_failures_keep_the_upstream_exception(
+        #[case] response_status: Option<u16>,
+        #[case] expected_status: u16,
+        #[case] expected_body: &str,
+    ) {
+        use std::time::Duration;
+
+        use litellm_http::{Client, media::MediaFetcher};
+        use litellm_llms::base_llm::ocr::{
+            document::inline_remote_document, transformation::OcrConnection,
+        };
+        use litellm_llms_types::formats::ocr::OcrDocument;
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 1];
+            socket.read_exact(&mut request).await.unwrap();
+            if let Some(status) = response_status {
+                socket.write_all(format!("HTTP/1.1 {status} Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+            } else {
+                std::future::pending::<()>().await;
+            }
+        });
+        let connection = OcrConnection {
+            timeout: Duration::from_millis(100),
+            ..OcrConnection::default()
+        };
+        let error = inline_remote_document(
+            &MediaFetcher::for_test(Client::for_test()),
+            OcrDocument::DocumentUrl {
+                document_url: format!("http://{address}/document.pdf"),
+                extra_fields: Default::default(),
+            },
+            &connection,
+        )
+        .await
+        .unwrap_err();
+        server.abort();
+        if response_status.is_none() {
+            assert!(litellm_error::find::<tokio::time::error::Elapsed>(&error).is_some());
+        }
+        Python::initialize();
+        Python::attach(|py| {
+            let mapped = to_pyerr(error);
+            assert!(mapped.is_instance_of::<RustUpstreamError>(py), "{mapped}");
+            let args: (u16, String) = mapped.value(py).getattr("args").unwrap().extract().unwrap();
+            assert_eq!(args, (expected_status, expected_body.into()));
+            assert_eq!(status_code(py, &mapped), Some(expected_status));
         });
     }
 

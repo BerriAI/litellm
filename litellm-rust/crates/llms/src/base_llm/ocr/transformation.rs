@@ -366,7 +366,7 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
         Error::Provider {
             status: status_code,
             body: error_message,
-            headers,
+            headers: Box::new(headers),
         }
     }
 

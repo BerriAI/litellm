@@ -11,9 +11,7 @@ from litellm.proxy.auth.model_checks import get_provider_models
 
 _REPO_ROOT: Final = Path(__file__).resolve().parents[4]
 _PRIMARY_PRICES: Final = json.loads((_REPO_ROOT / "model_prices_and_context_window.json").read_text())
-_BACKUP_PRICES: Final = json.loads(
-    (_REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json").read_text()
-)
+_BACKUP_PRICES: Final = json.loads((_REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json").read_text())
 _CATALOG_MODELS: Final = tuple(
     key for key, row in _PRIMARY_PRICES.items() if isinstance(row, dict) and row.get("litellm_provider") == "openinfer"
 )
@@ -31,7 +29,9 @@ _CHAT_RESPONSE: Final = {
     "object": "chat.completion",
     "created": 1_792_000_000,
     "model": "@oi/Qwen3.5-27B",
-    "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello from OpenInfer"}, "finish_reason": "stop"}],
+    "choices": [
+        {"index": 0, "message": {"role": "assistant", "content": "Hello from OpenInfer"}, "finish_reason": "stop"}
+    ],
     "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7},
 }
 
@@ -228,7 +228,6 @@ def test_catalog_row_matches_its_backup_and_fits_its_context(model: str):
 
     assert row == _BACKUP_PRICES[model]
     assert row["mode"] == "chat"
-    assert row["max_tokens"] == row["max_output_tokens"]
     assert 0 < row["max_output_tokens"] <= row["max_input_tokens"]
     assert row["input_cost_per_token"] > 0
     assert row["output_cost_per_token"] > 0

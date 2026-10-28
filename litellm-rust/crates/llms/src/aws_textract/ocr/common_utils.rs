@@ -332,7 +332,7 @@ pub(super) fn error_class(body: String, status: u16, headers: reqwest::header::H
         Ok(_) | Err(_) => Error::Provider {
             status,
             body,
-            headers,
+            headers: Box::new(headers),
         },
     }
 }

@@ -1,28 +1,34 @@
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import ANTHROPIC_BATCHES_ROUTE
+from litellm.litellm_core_utils.core_helpers import (
+    native_messages_reported_cost,
+    override_stamped_response_cost,
+    response_cost_in_hidden_params,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
 from litellm.llms.anthropic import get_anthropic_config
-from litellm.llms.anthropic.pass_through.stream_assembly import (
+from litellm.llms.anthropic.messages.stream_assembly import (
     build_complete_streaming_response,
     build_complete_streaming_response_legacy,
     build_usage_only_response_from_chunks,
     collapse_pure_text_chunks,
     split_sse_chunk_into_events,
 )
+from litellm.llms.bedrock.common_utils import BEDROCK_INVOKE_TRACE_FIELD
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
@@ -51,6 +57,49 @@ else:
     EndpointType = Any
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
+def _event_payload(event: str) -> Mapping[str, object] | None:
+    data_lines: Final = tuple(
+        line.strip()[len("data:") :].strip() for line in event.splitlines() if line.strip().startswith("data:")
+    )
+    if not data_lines or data_lines[0] in ("", "[DONE]"):
+        return None
+    try:
+        return _JSON_OBJECT.validate_json(data_lines[0])
+    except ValidationError:
+        return None
+
+
+def _bedrock_trace_payload(all_chunks: Sequence[str | bytes]) -> Mapping[str, object] | None:
+    payloads: Final = (
+        _event_payload(event)
+        for chunk in reversed(all_chunks)
+        for event in reversed(split_sse_chunk_into_events(chunk))
+    )  # comprehension-ok: chunk then event, read newest first
+    return next(
+        (payload for payload in payloads if payload is not None and BEDROCK_INVOKE_TRACE_FIELD in payload), None
+    )
+
+
+def _message_delta_usages(all_chunks: Sequence[str | bytes]) -> Iterator[object]:
+    for chunk in reversed(all_chunks):
+        yield from (
+            payload.get("usage")
+            for payload in map(_event_payload, reversed(split_sse_chunk_into_events(chunk)))
+            if payload is not None and payload.get("type") == "message_delta"
+        )
+
+
+def _stamp_reported_stream_cost(
+    response: ModelResponse, all_chunks: Sequence[str | bytes], logging_obj: LiteLLMLoggingObj
+) -> None:
+    """The final ``message_delta`` is where a provider that prices its own responses reports the cost."""
+    provider: Final = logging_obj.model_call_details.get("custom_llm_provider")
+    costs: Final = (native_messages_reported_cost(usage, provider) for usage in _message_delta_usages(all_chunks))
+    reported: Final = next((cost for cost in costs if cost is not None), None)
+    if reported is not None:
+        override_stamped_response_cost(response, reported)
 
 
 class AnthropicPassthroughLoggingHandler:
@@ -104,6 +153,7 @@ class AnthropicPassthroughLoggingHandler:
             json_mode=False,
             litellm_params={},
         )
+        logging_obj.record_native_bedrock_guardrail(response_body)  # pyright: ignore[reportUnknownArgumentType]  # response_body is an untyped dict param
 
         kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
             litellm_model_response=litellm_model_response,
@@ -222,6 +272,7 @@ class AnthropicPassthroughLoggingHandler:
         )
         if not isinstance(response, ModelResponse):
             return response
+        _stamp_reported_stream_cost(response, all_chunks, litellm_logging_obj)
         recovered_usage: Final = AnthropicPassthroughLoggingHandler._recover_interrupted_stream_output_tokens(
             response=response, all_chunks=all_chunks, model=model
         )
@@ -286,13 +337,21 @@ class AnthropicPassthroughLoggingHandler:
             if custom_llm_provider and not model.startswith(f"{custom_llm_provider}/")
             else model
         )
+        custom_pricing: Final = use_custom_pricing_for_model(
+            litellm_params=(logging_obj.litellm_params if hasattr(logging_obj, "litellm_params") else None)
+        )
+        reported_cost: Final = (
+            response_cost_in_hidden_params(litellm_model_response)
+            if isinstance(litellm_model_response, ModelResponse)
+            else None
+        )
+        if reported_cost is not None and not custom_pricing:
+            return reported_cost
         return litellm.completion_cost(
             completion_response=litellm_model_response,
             model=model_for_cost,
             custom_llm_provider=custom_llm_provider,
-            custom_pricing=use_custom_pricing_for_model(
-                litellm_params=(logging_obj.litellm_params if hasattr(logging_obj, "litellm_params") else None)
-            ),
+            custom_pricing=custom_pricing,
             router_model_id=logging_obj.get_router_model_id(),
         )
 
@@ -500,6 +559,7 @@ class AnthropicPassthroughLoggingHandler:
                 "result": None,
                 "kwargs": {},
             }
+        litellm_logging_obj.record_native_bedrock_guardrail(_bedrock_trace_payload(all_chunks))
         kwargs: Final = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
             litellm_model_response=complete_streaming_response,
             model=model,
