@@ -10,6 +10,7 @@ axum = { workspace = true, features = ["matched-path"] }
 axum-login.workspace = true
 litellm-auth-types.workspace = true
 litellm-config.workspace = true
+litellm-error.workspace = true
 litellm-secrets.workspace = true
 sha2.workspace = true
 subtle.workspace = true

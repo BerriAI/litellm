@@ -44,8 +44,9 @@ from setup.performance_test_case import MockLatency, PerformanceTestCase
 from setup.plan import PlannedRequest, build_plan
 from setup.podcpu import gateway_cpu_sampler
 from setup.provision import MOCK_PROVIDERS, build_setup, guardrail_url, mock_url
+from setup.ramp import step_properties
 from setup.run import run_plan
-from setup.telemetry import read_gateway_telemetry
+from setup.telemetry import read_gateway_telemetry, telemetry_sampler
 
 pytestmark = [pytest.mark.perf, pytest.mark.quiet_stack]
 _SPEND_SAMPLE: Final = 40
@@ -115,7 +116,12 @@ def test_perf_case(
     redis_before: Final = read_redis_counters()
     run_started: Final = time.monotonic()
     traffic_started_at: Final = datetime.now(tz=UTC)
-    with gateway_cpu_sampler() as cpu, redis_monitor() as monitor, connections_sampler() as connections:
+    with (
+        gateway_cpu_sampler() as cpu,
+        redis_monitor() as monitor,
+        connections_sampler() as connections,
+        telemetry_sampler(proxy) as telemetry,
+    ):
         outcome: Final = run_plan(case, plan, setup)
     run_finished: Final = time.monotonic()
     db_after: Final = read_db_counters()
@@ -151,6 +157,10 @@ def test_perf_case(
         telemetry_before=telemetry_before,
         telemetry_after=telemetry_after,
         peak_connections=connections.peak,
+        ramp=case.traffic.ramp,
+        cpu_series=cpu.series,
+        connection_series=connections.series,
+        telemetry_series=telemetry.series,
     )
     rows, exceeded_limits = evaluate(case, observation)
     stall_rows: Final = _event_loop_rows(case, traffic_started_at) if case.event_loop is not None else ()
@@ -162,6 +172,7 @@ def test_perf_case(
     item.user_properties.extend(
         stall_properties(case.event_loop, stall_rows) if case.event_loop is not None else junit_properties(rows)
     )
+    item.user_properties.extend(step_properties(observation.steps()))
     print(render(case, observation, rows))
     if case.event_loop is not None:
         print(render_stalls(case.event_loop, stall_rows))

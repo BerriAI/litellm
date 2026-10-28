@@ -84,7 +84,7 @@ mod tests {
     }
 
     async fn resolve(state: Arc<SecretManagerState>, name: &'static str) -> Option<String> {
-        ResolvedSecrets::from_state(state, litellm_http::Client::plain_for_test())
+        ResolvedSecrets::from_state(state, litellm_http::Client::for_test())
             .resolve(&[name])
             .await
             .unwrap()
@@ -182,7 +182,7 @@ mod tests {
             .await;
         let source = ResolvedSecrets::from_state(
             state(&server, KeyManagementSettings::default()),
-            litellm_http::Client::plain_for_test(),
+            litellm_http::Client::for_test(),
         );
         let snapshot = source.resolve(&[declared]).await.unwrap();
         assert_eq!(snapshot.get(undeclared), None);
@@ -248,7 +248,7 @@ mod tests {
     async fn oidc_failures_are_not_converted_to_missing_secrets() {
         let result = ResolvedSecrets::from_state(
             Arc::new(SecretManagerState::default()),
-            litellm_http::Client::plain_for_test(),
+            litellm_http::Client::for_test(),
         )
         .resolve(&["oidc/"])
         .await;

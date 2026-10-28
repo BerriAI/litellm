@@ -212,7 +212,7 @@ mod tests {
             panic!("on_event yields Emit");
         };
         assert_eq!(raw.body, "raw");
-        reply.send(());
+        reply.send(Ok(()));
 
         let Ok(MachineStep::Complete((sent, ()))) = machine.resume().await else {
             panic!("the call completes with the answers");

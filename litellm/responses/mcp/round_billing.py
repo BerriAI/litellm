@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from types import MappingProxyType
 from typing import Final, TypeVar
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 from pydantic_core import to_jsonable_python
 
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, served_from_cache, set_hidden_params
@@ -46,15 +46,18 @@ def _summed_mapping(first: Mapping[str, object], final: Mapping[str, object]) ->
     return MappingProxyType({key: _summed_entry(key, first, final) for key in keys})
 
 
+def _summed_usage(first: BaseModel, final: BaseModel) -> object:
+    return to_jsonable_python(_summed_mapping(first.model_dump(), final.model_dump()), fallback=dict)
+
+
 def merged_round_usage(first: ResponseAPIUsage | None, final: ResponseAPIUsage | None) -> ResponseAPIUsage | None:
     if first is None or final is None:
         return final if first is None else first
-    return ResponseAPIUsage.model_validate(_summed_mapping(first.model_dump(), final.model_dump()))
+    return ResponseAPIUsage.model_validate(_summed_usage(first, final))
 
 
-def _merged_chat_usage(first: Usage, final: Usage) -> Usage:
-    summed: Final = _summed_mapping(first.model_dump(), final.model_dump())
-    return Usage.model_validate(to_jsonable_python(summed, fallback=dict))
+def merged_chat_usage(first: Usage, final: Usage) -> Usage:
+    return Usage.model_validate(_summed_usage(first, final))
 
 
 def _chat_usage(round_response: ResponsesAPIResponse | ModelResponse) -> Usage | None:
@@ -82,7 +85,7 @@ def _usage_of_both_rounds(
     final_usage: Final = _chat_usage(final)
     if first_usage is None or final_usage is None:
         return final_usage if first_usage is None else first_usage
-    return _merged_chat_usage(first_usage, final_usage)
+    return merged_chat_usage(first_usage, final_usage)
 
 
 def _repeated_fixed_margin(
@@ -103,6 +106,14 @@ def _less_repeated_fixed_margin(summed: Mapping[str, object], repeated: float) -
         {key: total - repeated for key in _TOTALS_WITH_FIXED_MARGIN if isinstance(total := summed.get(key), float)}
     )
     return MappingProxyType({**summed, **charged_once})
+
+
+def breakdown_less_repeated_fixed_margin(
+    breakdown: CostBreakdown | None, repeated_fixed_margin: float
+) -> CostBreakdown | None:
+    if breakdown is None:
+        return None
+    return _COST_BREAKDOWN.validate_python(_less_repeated_fixed_margin(breakdown, repeated_fixed_margin))
 
 
 def summed_cost_breakdown(
