@@ -76179,7 +76179,6 @@
         "use_openai_responses_path": true
     },
     "clf_ai_gateway/glm-5.3": {
-        "max_tokens": 131072,
         "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
         "input_cost_per_token": 5.6e-07,
@@ -76203,7 +76202,6 @@
         "source": "https://clfaigateway.dev/models"
     },
     "clf_ai_gateway/glm-5.3-flash": {
-        "max_tokens": 131072,
         "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
         "input_cost_per_token": 6e-08,
@@ -76229,7 +76227,6 @@
         "source": "https://clfaigateway.dev/models"
     },
     "clf_ai_gateway/glm-5.2": {
-        "max_tokens": 131072,
         "max_input_tokens": 262144,
         "max_output_tokens": 131072,
         "input_cost_per_token": 5.6e-07,
@@ -76254,7 +76251,6 @@
         "source": "https://clfaigateway.dev/models"
     },
     "clf_ai_gateway/glm-4.7-flash": {
-        "max_tokens": 131072,
         "max_input_tokens": 131072,
         "max_output_tokens": 131072,
         "input_cost_per_token": 2.4e-08,
@@ -76275,7 +76271,6 @@
         "source": "https://clfaigateway.dev/models"
     },
     "clf_ai_gateway/deepseek-v4-pro": {
-        "max_tokens": 131072,
         "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
         "input_cost_per_token": 5.28e-07,
@@ -76300,7 +76295,6 @@
         "source": "https://clfaigateway.dev/models"
     },
     "clf_ai_gateway/deepseek-v4-flash": {
-        "max_tokens": 131072,
         "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
         "input_cost_per_token": 1.76e-07,
@@ -76325,7 +76319,6 @@
         "source": "https://clfaigateway.dev/models"
     },
     "clf_ai_gateway/kimi-k2.6": {
-        "max_tokens": 131072,
         "max_input_tokens": 262144,
         "max_output_tokens": 131072,
         "input_cost_per_token": 3.8e-07,
@@ -76350,7 +76343,6 @@
         "source": "https://clfaigateway.dev/models"
     },
     "clf_ai_gateway/kimi-k2.7-code": {
-        "max_tokens": 131072,
         "max_input_tokens": 262144,
         "max_output_tokens": 131072,
         "input_cost_per_token": 3.8e-07,
@@ -76374,7 +76366,6 @@
         "source": "https://clfaigateway.dev/models"
     },
     "clf_ai_gateway/qwen3.8-27b": {
-        "max_tokens": 131072,
         "max_input_tokens": 262144,
         "max_output_tokens": 131072,
         "input_cost_per_token": 1.8e-07,
