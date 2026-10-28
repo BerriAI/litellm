@@ -3675,6 +3675,23 @@ class TestUpdateDBModelKeepsLegacyDropParams:
         assert decrypt_value_helper(value=stored["drop_params"], key="drop_params") == "true"
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"litellm_params_to_remove": ["model"]},
+        {"litellm_params_to_remove": ["temperature"], "litellm_params": {"temperature": 0}},
+        {"litellm_params_to_remove": ["temperature"], "litellm_params": {"temperature": None}},
+    ],
+)
+def test_model_param_removal_rejects_required_and_conflicting_fields(payload: Mapping[str, object]) -> None:
+    from pydantic import ValidationError
+
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import PatchModelRequest
+
+    with pytest.raises(ValidationError):
+        PatchModelRequest.model_validate(payload)
+
+
 def _build_db_model_with_pricing():
     """Wildcard deployment with custom pricing in litellm_params; Deployment.__init__
     mirrors SPECIAL_MODEL_INFO_PARAMS into model_info, so both blobs hold the rate."""
@@ -7528,6 +7545,14 @@ def _stored_model(litellm_params: Mapping[str, object], team_id: str | None) -> 
             {"model": "vertex_ai/gemini-3.8-flash"}, None, updateLiteLLMParams(api_key="qa-rotated-key"), None,
             id="unchanged-route-adds-no-limits",
         ),
+        pytest.param(
+            {"model": "vertex_ai/gemini-3.8-flash", "rpm": 10, "tpm": 1000}, None, updateLiteLLMParams(rpm=0), "rpm",
+            id="required-limit-changed-to-zero",
+        ),
+        pytest.param(
+            {"model": "vertex_ai/gemini-3.8-flash"}, None, updateLiteLLMParams(rpm=10), None,
+            id="legacy-model-without-tpm-stays-editable",
+        ),
     ],
 )
 def test_model_update_requires_only_the_limits_its_new_route_adds(
@@ -7545,6 +7570,7 @@ def _model_update_error(existing: Deployment, incoming: updateLiteLLMParams) -> 
             written_name="media-latest",
             written_team_model=existing.model_info.team_id is not None,
             incoming_params=incoming,
+            remaining_params=existing.litellm_params,
             policy=_CUSTOMER_MODEL_ADD_POLICY,
         )
     except ProxyException as error:
@@ -7766,6 +7792,63 @@ async def test_team_model_update_rejects_moving_its_route_where_its_projects_lac
 
     with pytest.raises(ProxyException) as error:
         await write
+
+    assert error.value.code == "400"
+    assert error.value.message.startswith("projects video-gen list 'jev-latest' without a positive rpm and tpm quota")
+
+
+@pytest.mark.asyncio
+async def test_model_patch_rejects_removing_a_limit_its_route_requires(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import PatchModelRequest
+
+    prisma: Final = MagicMock()
+    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+        return_value=LiteLLM_ProxyModelTable(
+            model_id="vertex-row",
+            model_name="media-latest",
+            litellm_params={"model": "vertex_ai/gemini-3.8-flash", "rpm": 10, "tpm": 1000},
+            model_info={"id": "vertex-row"},
+            created_by="admin",
+            updated_by="admin",
+        )
+    )
+    _use_quota_proxy(monkeypatch, prisma, Router(model_list=[]))
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"enforce_rpm_tpm_on_model_add": {"providers": {"vertex_ai": ["rpm", "tpm"]}}}
+    )
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+
+    with pytest.raises(ProxyException) as error:
+        await patch_model(
+            model_id="vertex-row",
+            patch_data=PatchModelRequest(litellm_params_to_remove=("rpm",)),
+            user_api_key_dict=_ADMIN,
+        )
+
+    assert error.value.code == "400"
+    assert error.value.message.startswith("rpm must be set to a positive value for 'media-latest'")
+    prisma.db.litellm_proxymodeltable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_team_model_patch_rejects_a_removal_that_moves_its_route_where_its_projects_lack_quota(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import PatchModelRequest
+
+    prisma: Final = _media_team_db("jev-latest", {})
+    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=_team_model_row("jev-latest", _TEAM_RUNWAY))
+    _use_quota_proxy(monkeypatch, prisma, _quota_router("jev-latest", {"model": "openai/jev-latest"}, _TEAM_RUNWAY))
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+
+    with pytest.raises(ProxyException) as error:
+        await patch_model(
+            model_id="team-row",
+            patch_data=PatchModelRequest(litellm_params_to_remove=("custom_llm_provider",)),
+            user_api_key_dict=_ADMIN,
+        )
 
     assert error.value.code == "400"
     assert error.value.message.startswith("projects video-gen list 'jev-latest' without a positive rpm and tpm quota")
@@ -8304,6 +8387,55 @@ class TestTeamMemberAutoRouterWrites:
             "tiers": {"SIMPLE": "allowed"},
             "jev_classifier_config" if legacy else "opensource_classifier_config": classifier,
         }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "stored_params,removed,denied_param",
+        [
+            ({"litellm_credential_name": "stored-credential"}, "litellm_credential_name", "litellm_credential_name"),
+            ({"aws_session_tags": [{"Key": "scope", "Value": "restricted"}]}, "aws_session_tags", "aws_session_tags"),
+            ({"api_key": "oidc/file//var/run/token", "api_base": "https://provider.test"}, "api_base", "api_key"),
+            ({"anthropic_issuer_url": "https://issuer.test"}, "anthropic_issuer_url", "anthropic_issuer_url"),
+        ],
+    )
+    async def test_team_admin_cannot_remove_admin_owned_model_params(
+        self, stored_params: Mapping[str, object], removed: str, denied_param: str
+    ) -> None:
+        from litellm.types.proxy.management_endpoints.model_management_endpoints import PatchModelRequest
+
+        row: Final = self._row().model_copy(
+            update={"litellm_params": {"model": "openai/test-model", **stored_params}}
+        )
+        team: Final = self._team().model_copy(update={"members_with_roles": [Member(user_id="owner", role="admin")]})
+        database: Final = self._database(team, row)
+        database.db.litellm_credentialstable.find_unique = AsyncMock(return_value=None)
+        actor: Final = UserAPIKeyAuth(user_id="owner", user_role=LitellmUserRoles.INTERNAL_USER)
+
+        with self._environment(database, row), pytest.raises(ProxyException) as denied:
+            await patch_model(row.model_id, PatchModelRequest(litellm_params_to_remove=(removed,)), actor)
+
+        assert denied.value.code == "403"
+        assert denied.value.param == denied_param
+        database.db.litellm_proxymodeltable.update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_param_removal_cannot_leave_a_strategy_router_without_required_configuration(self) -> None:
+        from litellm.types.proxy.management_endpoints.model_management_endpoints import PatchModelRequest
+
+        row: Final = self._row()
+        database: Final = self._database(self._team(), row)
+        actor: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        with self._environment(database, row), pytest.raises(ProxyException) as denied:
+            await patch_model(
+                row.model_id,
+                PatchModelRequest(litellm_params_to_remove=("complexity_router_config", "complexity_router_default_model")),
+                actor,
+            )
+
+        assert denied.value.code == "400"
+        assert "requires" in denied.value.message
+        database.db.litellm_proxymodeltable.update.assert_not_awaited()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("team_id", [None, "member-team"])
@@ -9395,7 +9527,14 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
             mock_prisma.db.litellm_proxymodeltable.update.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_patch_model_non_admin_cannot_set_wif_field(self):
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("anthropic_keycloak_token_url", "https://identity.example.com/token"),
+            ("chatgpt_auth_file", "/tokens/account-b/auth.json"),
+        ],
+    )
+    async def test_patch_model_non_admin_cannot_set_wif_field(self, field: str, value: str) -> None:
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             patch_model,
         )
@@ -9441,13 +9580,13 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
                     model_id="m1",
                     patch_data=updateDeployment(
                         litellm_params=updateLiteLLMParams(
-                            anthropic_keycloak_token_url="https://attacker.example/token",
+                            **{field: value},
                         )
                     ),
                     user_api_key_dict=non_admin,
                 )
             err = exc_info.value
-            assert getattr(err, "param", "") == "anthropic_keycloak_token_url"
+            assert getattr(err, "param", "") == field
             mock_prisma.db.litellm_proxymodeltable.update.assert_not_called()
 
     @pytest.mark.asyncio
@@ -9506,7 +9645,14 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
             mock_prisma.db.litellm_proxymodeltable.update.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_patch_model_admin_can_set_wif_field(self):
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("anthropic_keycloak_token_url", "https://identity.example.com/token"),
+            ("chatgpt_auth_file", "/tokens/account-b/auth.json"),
+        ],
+    )
+    async def test_patch_model_admin_can_set_wif_field(self, field: str, value: str) -> None:
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             patch_model,
         )
@@ -9557,7 +9703,7 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
                 model_id="m1",
                 patch_data=updateDeployment(
                     litellm_params=updateLiteLLMParams(
-                        anthropic_keycloak_token_url="https://keycloak.internal/token",
+                        **{field: value},
                     )
                 ),
                 user_api_key_dict=admin,

@@ -14,7 +14,7 @@ import pytest
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
-from litellm.llms.anthropic.pass_through.adapters.transformation import (
+from litellm.llms.anthropic.messages.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
     truncate_tool_name,
 )
@@ -622,7 +622,7 @@ async def test_anthropic_view_applies_clear_edits_without_calling_the_compaction
 
     with (
         patch(
-            "litellm.llms.anthropic.pass_through.context_management.editors.compact._read_summary_model_setting",
+            "litellm.llms.anthropic.messages.context_management.editors.compact._read_summary_model_setting",
             return_value="gemini/gemini-2.5-flash",
         ),
         patch.object(litellm, "acompletion", side_effect=AssertionError("count_tokens must not summarize")) as summary,

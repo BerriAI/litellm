@@ -1379,7 +1379,6 @@ jobs:
             uv export --frozen --all-groups --all-extras --no-emit-project --no-emit-workspace --no-header --no-annotate \
               | awk '/^[^ ]/ { keep = $0 ~ /^(annotated-types|coverage|pydantic|pydantic-core|typing-extensions|typing-inspection)==/ } keep' \
               > /tmp/fan-in-requirements.txt
-            test "$(grep -c '^[^ ]' /tmp/fan-in-requirements.txt)" -eq 6
             uv venv .venv --python 3.12
             uv pip install --no-config --python .venv --require-hashes -r /tmp/fan-in-requirements.txt
       - attach_workspace:

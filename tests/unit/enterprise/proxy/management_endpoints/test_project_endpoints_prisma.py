@@ -1840,12 +1840,11 @@ def test_quota_providers_come_from_the_one_wildcard_route_requests_use():
             },
         ]
     )
-    route_of: Final = router_model_routes(router, "media-team")
 
-    assert route_of("gen4_turbo") == ModelRoute(providers=frozenset({"runwayml"}))
-    assert route_of("gen3a_turbo") == ModelRoute(
-        team_deployments=frozenset({TeamDeployment(provider="vertex_ai", called_model="3a_turbo")})
+    assert router_model_routes(router, "media-team")("gen4_turbo") == ModelRoute(
+        team_deployments=frozenset({TeamDeployment(provider="vertex_ai", called_model="4_turbo")})
     )
+    assert router_model_routes(router, None)("gen4_turbo") == ModelRoute(providers=frozenset({"runwayml"}))
 
 
 def test_quota_providers_read_the_provider_behind_a_known_api_base():
