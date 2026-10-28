@@ -23,3 +23,23 @@ ui:
 backend:
   gatewayUrl: https://gateway.example.com
 ```
+
+## Routes to another Service
+
+For a shared hostname, `ingress.extraPaths` can route to a Service in the same namespace using `serviceName` and `servicePort`. The port can be a number or a named Service port. Omit `service` when using these fields
+
+```yaml
+ingress:
+  enabled: true
+  className: alb
+  host: gateway.example.com
+  extraPaths:
+    - path: /moyai
+      pathType: Prefix
+      serviceName: moyai-ingress
+      servicePort: 8080
+```
+
+The Service and application must already support the path prefix. The chart adds the path to the existing Ingress and leaves its built-in routes in place. It does not create the target Service or rewrite requests
+
+For AWS ALB, configure the target Service's `alb.ingress.kubernetes.io/healthcheck-path` annotation when the application needs a different health check from LiteLLM. Existing `service` aliases (`gateway`, `backend`, `ui`) remain supported
