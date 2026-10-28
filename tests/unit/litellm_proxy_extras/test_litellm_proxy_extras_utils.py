@@ -670,6 +670,7 @@ class TestResolveAllMigrationsLedger:
         execute_fails,
         diff_fails: bool = False,
         execute_stderr: str = "boom",
+        mark_all_applied: bool = True,
     ):
         import subprocess as subprocess_module
 
@@ -711,7 +712,7 @@ class TestResolveAllMigrationsLedger:
             return _FakeCompleted()
 
         monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", fake_run)
-        ProxyExtrasDBManager._resolve_all_migrations(str(tmp_path), "schema.prisma")
+        ProxyExtrasDBManager._resolve_all_migrations(str(tmp_path), "schema.prisma", mark_all_applied=mark_all_applied)
         return calls
 
     def _resolved(self, calls):
@@ -762,6 +763,30 @@ class TestResolveAllMigrationsLedger:
             monkeypatch, tmp_path, partitioned=False, execute_fails=True, diff_fails=True,
             execute_stderr="ERROR: permission denied for schema public",
         )
+        assert self._resolved(calls) == []
+
+    def test_failed_diff_with_a_missing_table_marks_nothing_applied(self, monkeypatch, tmp_path):
+        calls = self._run(
+            monkeypatch, tmp_path, partitioned=False, execute_fails=True, diff_fails=True,
+            execute_stderr='ERROR: relation "LiteLLM_TeamTable" does not exist',
+        )
+        assert self._resolved(calls) == []
+
+    def test_failed_diff_with_an_already_dropped_constraint_still_marks_migrations_applied(self, monkeypatch, tmp_path):
+        calls = self._run(
+            monkeypatch, tmp_path, partitioned=False, execute_fails=True, diff_fails=True,
+            execute_stderr=(
+                'ERROR: constraint "LiteLLM_TeamMembership_budget_id_fkey" '
+                'of relation "LiteLLM_TeamMembership" does not exist'
+            ),
+        )
+        assert len(self._resolved(calls)) == 1
+
+    def test_failed_diff_during_the_post_deploy_sanity_check_replays_nothing(self, monkeypatch, tmp_path):
+        calls = self._run(
+            monkeypatch, tmp_path, partitioned=False, execute_fails=False, diff_fails=True, mark_all_applied=False
+        )
+        assert [c for c in calls if isinstance(c, list) and "execute" in c] == []
         assert self._resolved(calls) == []
 
 

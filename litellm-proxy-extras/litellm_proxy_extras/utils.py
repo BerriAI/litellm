@@ -146,6 +146,7 @@ class _MigrateAttemptBudget:
 
 _SPEND_LOGS_ALTER_RE = re.compile(r'^ALTER\s+TABLE\s+"LiteLLM_SpendLogs"\s', re.IGNORECASE)
 _SPEND_LOGS_ARTIFACT_DROP_RE = re.compile(r'^DROP\s+TABLE\s+"LiteLLM_SpendLogs_[^"]*"', re.IGNORECASE)
+_MISSING_RELATION: Final = re.compile(r'(?<!of )relation "[^"]+" does not exist')
 _SPEND_LOGS_PK_CLAUSE_RE = re.compile(
     r'^(?:DROP\s+CONSTRAINT\s+"[^"]*_pkey"'
     r'|ADD\s+(?:CONSTRAINT\s+"[^"]*"\s+)?PRIMARY\s+KEY\s*\([^)]*\))$',
@@ -550,6 +551,13 @@ class ProxyExtrasDBManager:
 
         # check if the migration was created
         if not diff_sql_path.exists():
+            if not mark_all_applied:
+                logger.warning(
+                    "Migration diff was not created (prisma migrate diff failed, likely a pooler URL). "
+                    "The ledger already records every migration file, so skipping the drift check "
+                    "instead of replaying them"
+                )
+                return
             logger.warning(
                 "Migration diff was not created (prisma migrate diff failed — "
                 "likely a pooler URL). Falling back to direct SQL execution of "
@@ -633,6 +641,8 @@ class ProxyExtrasDBManager:
         except subprocess.CalledProcessError as e:
             stderr: Final = str(e.stderr or "")  # pyright: ignore[reportAny]  # CalledProcessError.stderr is Any
             logger.warning(f"Failed to apply migration {mig_file.parent.name}: {stderr}")
+            if _MISSING_RELATION.search(stderr):
+                return False
             return ProxyExtrasDBManager._is_idempotent_error(stderr)
         except subprocess.TimeoutExpired:
             logger.warning(f"Migration {mig_file.parent.name} timed out.")
