@@ -4488,3 +4488,31 @@ def test_usage_default_range_reports_config_precedence(mock_auth, monkeypatch: p
     assert response.status_code == 200, response.text
     assert response.json()["values"]["usage_default_time_range"] == "month_to_date"
     assert response.json()["source"]["usage_default_time_range"] == "config"
+
+
+def test_update_default_team_member_budget_skips_teams_without_budget(monkeypatch):
+    """Saving a default team without max_budget_in_team must not clear the team's team member budget"""
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._types import NewUserRequestTeam, UserAPIKeyAuth
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+        update_default_team_member_budget,
+    )
+
+    update_team = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.management_endpoints.team_endpoints.update_team", update_team)
+
+    asyncio.run(
+        update_default_team_member_budget(
+            teams=[
+                NewUserRequestTeam(team_id="no-budget"),
+                NewUserRequestTeam(team_id="with-budget", max_budget_in_team=300.0),
+            ],
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+    )
+
+    assert update_team.await_count == 1
+    data = update_team.await_args.kwargs["data"]
+    assert (data.team_id, data.team_member_budget) == ("with-budget", 300.0)

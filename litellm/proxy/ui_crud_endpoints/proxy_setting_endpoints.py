@@ -1030,6 +1030,8 @@ async def update_default_team_member_budget(teams: list[NewUserRequestTeam], use
     for team in teams:
         team_id = team.team_id
         max_budget_in_team = team.max_budget_in_team
+        if max_budget_in_team is None:
+            continue
         try:
             await update_team(
                 data=UpdateTeamRequest(
