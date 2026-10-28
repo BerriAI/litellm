@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from mcp.types import CallToolResult, TextContent
 
-import litellm  # noqa: F401 - ensures litellm.responses.main is registered in sys.modules
+import litellm
 from litellm.responses.mcp.mcp_streaming_iterator import (
     MCPEnhancedStreamingIterator,
 )
@@ -293,14 +293,18 @@ async def test_continuation_id_is_final_round_not_interim_tool_call(monkeypatch)
     assert completed[-1].response.id != "resp-interim"
 
 
+@pytest.mark.parametrize("redact", (False, True))
 @pytest.mark.asyncio
-async def test_follow_up_call_failure_emits_terminal_error_event(monkeypatch):
+async def test_follow_up_call_failure_emits_terminal_error_event(
+    monkeypatch: pytest.MonkeyPatch, redact: bool, capsys: pytest.CaptureFixture[str]
+) -> None:
     """
     Regression test for the silent-swallow path: when the follow-up LLM call
     raises, the stream must emit a terminal `error` event instead of ending
     silently after the tool events (which surfaced to clients as a successful
     but empty completion).
     """
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", redact)
     _mock_mcp_environment(monkeypatch)
 
     aresponses_mock = AsyncMock(side_effect=RuntimeError("boom from provider"))
@@ -319,16 +323,21 @@ async def test_follow_up_call_failure_emits_terminal_error_event(monkeypatch):
     assert len(error_events) == 1
     assert error_events[0].error.type == "mcp_gateway_error"
     assert "boom from provider" in error_events[0].error.message
+    assert ("boom from provider" in capsys.readouterr().err) is not redact
 
 
+@pytest.mark.parametrize("redact", (False, True))
 @pytest.mark.asyncio
-async def test_initial_call_failure_is_stashed_for_eager_reraise(monkeypatch):
+async def test_initial_call_failure_is_stashed_for_eager_reraise(
+    monkeypatch: pytest.MonkeyPatch, redact: bool, capsys: pytest.CaptureFixture[str]
+) -> None:
     """
     Regression test: a failing initial LLM call must be stashed as
     `_initial_creation_error` so `aresponses_api_with_mcp` can re-raise it as a
     real 4xx before any SSE bytes are written, instead of returning HTTP 200
     with an empty stream.
     """
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", redact)
     _mock_mcp_environment(monkeypatch)
 
     aresponses_mock = AsyncMock(side_effect=RuntimeError("initial boom"))
@@ -339,6 +348,7 @@ async def test_initial_call_failure_is_stashed_for_eager_reraise(monkeypatch):
 
     assert iterator._initial_creation_error is not None
     assert "initial boom" in str(iterator._initial_creation_error)
+    assert ("initial boom" in capsys.readouterr().err) is not redact
 
 
 def _reasoning_item(encrypted_content: str):
