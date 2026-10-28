@@ -21,7 +21,7 @@ import { KeyInfoHeader } from "./KeyInfoHeader";
 import KeySavingsTab from "./KeySavingsTab";
 import KeyAutoRouterUsageTab from "./KeyAutoRouterUsageTab";
 import { useActivityDateRange } from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   hasProxyWideSpendView,
   isProxyAdminRole,
@@ -44,13 +44,21 @@ import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useQueryClient } from "@tanstack/react-query";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
+import { useTeamMemberBudgets } from "@/app/(dashboard)/hooks/teams/useTeamMemberBudgets";
 import { extractMcpEntitlement } from "../mcp_server_management/mcpEntitlement";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
-import { InheritedBudgetHint, inheritedBudgetGates, keyOwnerBudgetSource } from "../shared/InheritedBudgetHint";
+import {
+  InheritedBudgetHint,
+  inheritedBudgetGates,
+  keyOwnerBudgetSource,
+  teamMemberBudgetGate,
+} from "../shared/InheritedBudgetHint";
 import { KeyEditView } from "./key_edit_view";
+import { keyOrganizationId } from "./keyEditFieldNormalizers";
 import { isTeamAdminEditingMemberKey, teamAdminMemberKeyPayload } from "./teamAdminMemberKeyPayload";
+import { BudgetPeriodTooltip } from "@/components/shared/BudgetPeriodTooltip";
 
 export function needsLifetimeSpendBackfill(spend: number, totalSpend: number | null | undefined): boolean {
   return (totalSpend ?? 0) < spend;
@@ -118,6 +126,14 @@ export default function KeyInfoView({
   const { mutate: setKeyBlockedState, isPending: blockLoading } = useSetKeyBlockedState();
   // Add local state to maintain key data and track regeneration
   const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData);
+  const memberBudgetTeamIds = useMemo(
+    () =>
+      currentKeyData?.max_budget === null && currentKeyData.team_id && currentKeyData.user_id
+        ? [currentKeyData.team_id]
+        : [],
+    [currentKeyData],
+  );
+  const teamMemberBudgets = useTeamMemberBudgets(memberBudgetTeamIds);
   const [lastRegeneratedAt, setLastRegeneratedAt] = useState<Date | null>(null);
   const [keyDataUpdateHeldUntilModalClose, setKeyDataUpdateHeldUntilModalClose] = useState<Partial<KeyResponse> | null>(
     null,
@@ -223,6 +239,10 @@ export default function KeyInfoView({
       );
       if (Boolean(formValues.disable_global_guardrails) === previousDisableGlobalGuardrails) {
         delete formValues.disable_global_guardrails;
+      }
+
+      if ((formValues.organization_id || null) === keyOrganizationId(currentKeyData)) {
+        delete formValues.organization_id;
       }
 
       // Handle max budget empty string
@@ -383,7 +403,9 @@ export default function KeyInfoView({
 
       const newKeyValues = await keyUpdateCall(accessToken, formValues);
 
-      setCurrentKeyData((prevData) => (prevData ? { ...prevData, ...newKeyValues } : undefined));
+      setCurrentKeyData((prevData) =>
+        prevData ? { ...prevData, ...newKeyValues, org_id: newKeyValues.organization_id } : undefined,
+      );
       void queryClient.invalidateQueries({ queryKey: keyKeys.all });
 
       if (onKeyDataUpdate) {
@@ -531,13 +553,24 @@ export default function KeyInfoView({
   const lastConfiguredAt = currentKeyData.settings_updated_at || currentKeyData.created_at;
 
   const parentTeam = currentKeyData.team_id ? teamsData?.find((team) => team.team_id === currentKeyData.team_id) : null;
-  const orgId = currentKeyData.organization_id || currentKeyData.org_id || parentTeam?.organization_id || "";
+  const orgId = keyOrganizationId(currentKeyData) || parentTeam?.organization_id || "";
   const parentOrg = orgId ? organizations?.find((org) => org.organization_id === orgId) : null;
 
   const hasOwnBudget = currentKeyData.max_budget !== null;
-  const budgetDisplay = hasOwnBudget ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}` : "Unlimited";
   const ownerUser = keyOwnerBudgetSource(currentKeyData, applyUserBudgetToTeamKeys);
-  const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg, ownerUser);
+  const memberGate = hasOwnBudget
+    ? null
+    : teamMemberBudgetGate(
+        teamMemberBudgets[currentKeyData.team_id ?? ""],
+        currentKeyData.user_id,
+        currentKeyData.user?.user_email,
+      );
+  const budgetDisplay = (() => {
+    if (hasOwnBudget) return `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}`;
+    if (memberGate) return `$${formatNumberWithCommas(memberGate.maxBudget, 2)} (team member budget)`;
+    return "Unlimited";
+  })();
+  const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg, ownerUser, memberGate);
 
   return (
     <div className="w-full h-full overflow-y-auto p-4">
@@ -697,11 +730,21 @@ export default function KeyInfoView({
           <TabsContent value="overview" keepMounted>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
               <Card className="block p-6">
-                <p className="text-sm">Spend</p>
+                <p className="text-sm">
+                  Spend
+                  <BudgetPeriodTooltip
+                    spend={currentKeyData.spend}
+                    maxBudget={currentKeyData.max_budget}
+                    budgetDuration={currentKeyData.budget_duration}
+                    budgetResetAt={currentKeyData.budget_reset_at}
+                  />
+                </p>
                 <div className="mt-2">
                   <h3 className="text-lg font-medium">${formatNumberWithCommas(currentKeyData.spend, 4)}</h3>
                   <p className="text-sm">
-                    of {budgetDisplay}
+                    {memberGate
+                      ? `Team member spend $${formatNumberWithCommas(memberGate.spend ?? 0, 4)} of $${formatNumberWithCommas(memberGate.maxBudget, 2)} (team member budget)`
+                      : `of ${budgetDisplay}`}
                     <InheritedBudgetHint gates={inheritedGates} />
                   </p>
                   {currentKeyData.budget_reset_at && (
@@ -943,7 +986,7 @@ export default function KeyInfoView({
 
                   <div>
                     <p className="text-sm font-medium">Organization</p>
-                    <p className="text-sm">{(currentKeyData.organization_id ?? currentKeyData.org_id) || "Not Set"}</p>
+                    <p className="text-sm">{keyOrganizationId(currentKeyData) || "Not Set"}</p>
                   </div>
 
                   <div>
@@ -999,11 +1042,7 @@ export default function KeyInfoView({
 
                   <div>
                     <p className="text-sm font-medium">Budget</p>
-                    <p className="text-sm">
-                      {currentKeyData.max_budget !== null
-                        ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}`
-                        : "Unlimited"}
-                    </p>
+                    <p className="text-sm">{budgetDisplay}</p>
                   </div>
 
                   <div>

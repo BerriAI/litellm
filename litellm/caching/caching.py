@@ -18,14 +18,14 @@ from contextlib import contextmanager
 from enum import Enum
 from typing import Any, Final, Literal, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._internal_context import current_service_target, service_target
 from litellm._logging import verbose_logger
 from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
 from litellm.integrations.otel.runtime import phase_span
-from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
+from litellm.litellm_core_utils.model_param_helper import ModelParamHelper, peek_reasoning_summary_aliases
 from litellm.types.caching import *
 from litellm.types.utils import EmbeddingResponse, is_litellm_owned_kwarg
 
@@ -42,6 +42,8 @@ from .redis_semantic_cache import RedisSemanticCache
 from .s3_cache import S3Cache
 
 RESPONSE_CACHE_TARGET: Final = "llm_response"
+_ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset({"continuation_token"})
+_DECODED_LITERAL: Final = TypeAdapter(object)
 
 
 @contextmanager
@@ -374,7 +376,7 @@ class Cache:
         )
         return "".join(f"{field}: {value}" for field, value in scope_values if value is not None)
 
-    def get_cache_key(self, **kwargs) -> str:
+    def get_cache_key(self, **kwargs: object) -> str:
         """
         Get the cache key for the given arguments.
 
@@ -398,21 +400,26 @@ class Cache:
         for param in kwargs:
             if param in scope_excluded_params:
                 continue
-            if param in combined_kwargs:
+            if param in combined_kwargs or param in _ALWAYS_KEYED_PROVIDER_PARAMS:
                 param_value: str | None = self._get_param_value(param, kwargs)
+                if param in _ALWAYS_KEYED_PROVIDER_PARAMS and not param_value:
+                    continue
                 if param_value is not None:
                     cache_key += f"{param}: {param_value}"
             elif not is_litellm_owned_kwarg(param):
                 if litellm.enable_caching_on_provider_specific_optional_params is True:  # feature flagged for now
                     if kwargs[param] is None:
                         continue  # ignore None params
-                    param_value = kwargs[param]
-                    cache_key += f"{param}: {param_value}"
+                    cache_key += f"{param}: {kwargs[param]}"
 
         if is_semantic_cache:
             cache_key += self._get_semantic_cache_tenant_scope(kwargs)
 
-        hashed_cache_key = Cache._get_hashed_cache_key(cache_key)
+        reasoning_summary: Final = peek_reasoning_summary_aliases(kwargs)
+        reasoning_summary_material: Final = (
+            "" if reasoning_summary is None else f"reasoning_summary: {reasoning_summary}"
+        )
+        hashed_cache_key = Cache._get_hashed_cache_key(cache_key + reasoning_summary_material)
         hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
         verbose_logger.debug(
             "\nCreated cache key: %s (source material length: %d)",
@@ -445,7 +452,7 @@ class Cache:
 
         1. If caching groups are set, then return the caching group as the model https://docs.litellm.ai/docs/routing#caching-across-model-groups
         2. Else if a model_group is set, then return the model_group as the model. This is used for all requests sent through the litellm.Router()
-        3. Else use the `model` passed in kwargs
+        3. Else use the `model` passed in kwargs, plus `model_id` when set (e.g. a SageMaker inference component)
         """
         litellm_params: Final[dict] = kwargs.get("litellm_params", {}) or {}
         metadata_sources: Final[tuple[dict, ...]] = (
@@ -460,7 +467,10 @@ class Cache:
         caching_group: Final = next(
             (group for source in metadata_sources if (group := self._get_caching_group(source, model_group))), None
         )
-        return caching_group or model_group or kwargs["model"]
+        model_id_suffix: Final = (
+            f" model_id: {kwargs['model_id']}" if "model_id" in kwargs and kwargs["model_id"] is not None else ""
+        )
+        return caching_group or model_group or f"{kwargs['model']}{model_id_suffix}"
 
     def _get_caching_group(self, metadata: dict, model_group: str | None) -> str | None:
         caching_groups: Final[list | None] = metadata.get("caching_groups", [])
@@ -596,9 +606,11 @@ class Cache:
                 if isinstance(cached_response, dict):
                     pass
                 else:
-                    cached_response = json.loads(cached_response)  # Convert string to dictionary
+                    cached_response = _DECODED_LITERAL.validate_python(
+                        json.loads(cached_response)
+                    )  # Convert string to dictionary
             except Exception:
-                cached_response = ast.literal_eval(cached_response)
+                cached_response = _DECODED_LITERAL.validate_python(ast.literal_eval(cached_response))
             return cached_response
         return cached_result
 
@@ -706,7 +718,7 @@ class Cache:
                 cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None:
                 if isinstance(result, BaseModel):
-                    result = result.model_dump_json()
+                    result = result.model_dump_json(exclude_unset=True)
 
                 ## DEFAULT TTL ##
                 if self.ttl is not None:

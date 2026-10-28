@@ -6,7 +6,7 @@ Azure Prompt Shield Native Guardrail Integrationfor LiteLLM
 import math
 from collections.abc import Mapping, MutableMapping
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NoReturn, cast
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, NoReturn, cast
 
 from fastapi import HTTPException
 
@@ -35,6 +35,7 @@ from .base import (  # noqa: F401  # legacy module exports
 )
 
 if TYPE_CHECKING:
+    from litellm.caching.caching import DualCache
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.guardrails import LitellmParams
@@ -240,10 +241,10 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
     async def async_pre_call_hook(
         self,
         user_api_key_dict: "UserAPIKeyAuth",
-        cache: Any,
-        data: dict[str, Any],
+        cache: "DualCache",
+        data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, object] | None:
         """
         Pre-call hook to scan user prompts before sending to LLM.
 

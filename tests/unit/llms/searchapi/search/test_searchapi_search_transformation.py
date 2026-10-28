@@ -1,11 +1,24 @@
+from collections.abc import Iterator
 from typing import Final
 from unittest.mock import Mock, patch
 
 import httpx
 import pytest
+import respx
+from pydantic import ValidationError
 
-from litellm.llms.base_llm.search.transformation import SearchResponse
+import litellm
+from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
 from litellm.llms.searchapi.search.transformation import SearchAPIConfig
+
+
+@pytest.fixture
+def httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("SEARCHAPI_API_KEY", "test-searchapi-key")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+    litellm.in_memory_llm_clients_cache.flush_cache()
 
 
 class TestSearchAPIConfig:
@@ -208,3 +221,125 @@ class TestSearchAPIConfig:
         assert "site:test.com" in result
         assert "OR" in result
         assert "AND" in result
+
+
+def _transform(payload: object) -> SearchResponse:
+    return SearchAPIConfig().transform_search_response(raw_response=httpx.Response(200, json=payload), logging_obj=None)
+
+
+def test_searchapi_organic_results_keep_provider_order_fields_and_dates():
+    response = _transform(
+        {
+            "search_metadata": {"id": "search_1", "status": "Success"},
+            "search_information": {"total_results": 2},
+            "organic_results": [
+                {
+                    "position": 1,
+                    "title": "LiteLLM",
+                    "link": "https://example.com/litellm",
+                    "snippet": "Call every LLM API",
+                    "date": "Jan 5, 2024",
+                    "sitelinks": {"inline": [{"title": "Docs", "link": "https://example.com/docs"}]},
+                },
+                {"position": 2, "title": "Docs", "link": "https://example.com/docs", "snippet": "Docs", "date": None},
+            ],
+            "related_searches": [{"query": "litellm proxy"}],
+        }
+    )
+
+    assert response.object == "search"
+    assert response.results == [
+        SearchResult(
+            title="LiteLLM", url="https://example.com/litellm", snippet="Call every LLM API", date="Jan 5, 2024"
+        ),
+        SearchResult(title="Docs", url="https://example.com/docs", snippet="Docs", date=None),
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"error": "Invalid API key"},
+        {"search_metadata": {"status": "Success"}, "organic_results": []},
+        {"organic_results": ""},
+        {"organic_results": {}},
+    ],
+)
+def test_searchapi_response_without_organic_results_is_empty(payload):
+    assert _transform(payload).results == []
+
+
+def test_searchapi_result_missing_optional_fields_defaults_to_empty_strings_and_no_date():
+    assert _transform({"organic_results": [{"position": 1}]}).results == [
+        SearchResult(title="", url="", snippet="", date=None, last_updated=None)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("title", None),
+        ("title", 7),
+        ("link", None),
+        ("link", ["https://example.com"]),
+        ("snippet", None),
+        ("snippet", {"text": "snippet"}),
+        ("date", 1704412800),
+        ("date", ["Jan 5, 2024"]),
+    ],
+)
+def test_searchapi_result_with_field_of_wrong_type_is_rejected(field, value):
+    result = {"title": "T", "link": "https://example.com", "snippet": "S", "date": "Jan 5, 2024", field: value}
+
+    with pytest.raises(ValidationError):
+        _transform({"organic_results": [result]})
+
+
+def test_searchapi_result_with_several_fields_of_wrong_type_reports_every_field():
+    result = {"title": 7, "link": None, "snippet": ["snippet"], "date": 1704412800}
+
+    with pytest.raises(ValidationError) as exc_info:
+        _transform({"organic_results": [result]})
+
+    assert [error["loc"] for error in exc_info.value.errors()] == [("title",), ("url",), ("snippet",), ("date",)]
+
+
+def test_searchapi_malformed_result_is_rejected_without_naming_its_position():
+    results = [{}] * 429 + ["not-an-object"]
+
+    with pytest.raises(ValidationError) as exc_info:
+        _transform({"organic_results": results})
+
+    assert "429" not in str(exc_info.value)
+
+
+def test_search_request_and_result_mapping(
+    respx_mock: respx.MockRouter, httpx_transport: None
+) -> None:
+    route: Final = respx_mock.get("https://www.searchapi.io/api/v1/search").respond(
+        json={
+            "organic_results": [
+                {
+                    "title": "Search result",
+                    "link": "https://example.com/result",
+                    "snippet": "A scripted SearchAPI result.",
+                }
+            ]
+        }
+    )
+
+    response: Final = litellm.search(
+        query="how does LiteLLM search",
+        search_provider="searchapi",
+        api_key="test-searchapi-key",
+    )
+
+    assert dict(route.calls.last.request.url.params) == {
+        "engine": "google",
+        "q": "how does LiteLLM search",
+        "api_key": "test-searchapi-key",
+    }
+    assert [(item.title, item.url, item.snippet) for item in response.results] == [
+        ("Search result", "https://example.com/result", "A scripted SearchAPI result.")
+    ]

@@ -10,6 +10,7 @@ pub enum OriginalException {
         message: String,
     },
     Timeout {
+        phase: TimeoutPhase,
         timeout_seconds: Option<f64>,
         elapsed_seconds: Option<f64>,
     },
@@ -18,6 +19,19 @@ pub enum OriginalException {
     Plain {
         message: String,
     },
+}
+
+/// The httpx timeout that expired, spelled the way the Python HTTP handler names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::Display, strum::VariantArray)]
+pub enum TimeoutPhase {
+    #[strum(serialize = "Connection")]
+    Connect,
+    #[strum(serialize = "Read")]
+    Read,
+    #[strum(serialize = "Write")]
+    Write,
+    #[strum(serialize = "Connection pool")]
+    Pool,
 }
 
 /// Which provider-specific text rules apply before the shared status table.
@@ -94,6 +108,7 @@ const OPENAI_COMPATIBLE_PROVIDERS: &[&str] = &[
     "docker_model_runner",
     "ragflow",
     "pinstripes",
+    "openinfer",
     "darkbloom",
     "meta",
     "cognition",

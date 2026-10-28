@@ -1,6 +1,8 @@
 from typing import Final, cast
 from urllib.parse import urlparse
 
+from pydantic import ValidationError
+
 import litellm
 from litellm.constants import (
     NADIR_DEFAULT_API_BASE,
@@ -14,6 +16,12 @@ from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import GenericLiteLLMParams, LiteLLM_Params
+
+
+def invalid_provider_routing_hints_message(error: ValidationError) -> str:
+    return "; ".join(
+        f"Invalid {'.'.join(str(part) for part in detail['loc'])}: {detail['msg']}" for detail in error.errors()
+    )
 
 
 def _endpoint_matches_api_base(endpoint: str, api_base: str) -> bool:
@@ -51,6 +59,10 @@ def _endpoint_matches_api_base(endpoint: str, api_base: str) -> bool:
         return True
     url_path: Final = parsed_url.path.rstrip("/")
     return url_path == endpoint_path or url_path.startswith(endpoint_path + "/")
+
+
+def is_openai_compatible_endpoint(api_base: str) -> bool:
+    return any(_endpoint_matches_api_base(endpoint, api_base) for endpoint in litellm.openai_compatible_endpoints)
 
 
 def is_non_openai_azure_model(model: str) -> bool:
@@ -144,6 +156,14 @@ def declared_authenticating_provider(model: str | None, custom_llm_provider: str
     """
     declared: Final = custom_llm_provider or (model.split("/", 1)[0] if model and "/" in model else None)
     return declared if declared in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO else None
+
+
+def resolve_model_and_provider_for_metadata(model: str, custom_llm_provider: str | None = None) -> tuple[str, str]:
+    declared: Final = declared_authenticating_provider(model, custom_llm_provider)
+    if declared is not None:
+        return model.removeprefix(f"{declared}/"), declared
+    resolved_model, resolved_provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+    return resolved_model, resolved_provider
 
 
 def inferred_provider(model: str | None) -> str | None:
@@ -830,7 +850,9 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
             custom_llm_provider,
-        ) = litellm.ChatGPTConfig().get_openai_compatible_provider_info(model, api_base, api_key, custom_llm_provider)
+        ) = litellm.ChatGPTConfig().get_openai_compatible_provider_info(
+            model, api_base, api_key, custom_llm_provider, litellm_params
+        )
     elif custom_llm_provider == "novita":
         api_base = api_base or get_secret("NOVITA_API_BASE") or "https://api.novita.ai/v3/openai"
         dynamic_api_key = api_key or get_secret_str("NOVITA_API_KEY")
@@ -890,6 +912,10 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.MorphChatConfig().get_openai_compatible_provider_info(api_base, api_key)
+    elif custom_llm_provider == "opencode_go":
+        from litellm.llms.opencode.common_utils import go_api_base, go_api_key
+
+        return model, custom_llm_provider, go_api_key(api_key), go_api_base(api_base, model)
     elif custom_llm_provider == "lambda_ai":
         (
             api_base,
@@ -960,3 +986,9 @@ def _get_openai_compatible_provider_info(
     if dynamic_api_key is None and api_key is not None:
         dynamic_api_key = api_key
     return model, custom_llm_provider, dynamic_api_key, api_base
+
+
+def get_provider_affinity_header(api_base: str | None) -> str | None:
+    from litellm.llms.opencode.transformation import OpenCodeProviderAdapter
+
+    return OpenCodeProviderAdapter().get_provider_affinity_header(api_base)

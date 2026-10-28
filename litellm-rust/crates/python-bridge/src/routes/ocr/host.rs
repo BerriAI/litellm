@@ -1,5 +1,5 @@
 use litellm_auth::ResolvedCredential;
-use litellm_host_python::{InvokeError, PythonBinding, missing_state};
+use litellm_host_python::{Error as HostError, InvokeError, PythonBinding};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 use litellm_inference_ocr::route::{Ocr, OcrCall, OcrOp};
 use litellm_llms::base_llm::ocr::error::Error;
@@ -12,7 +12,7 @@ use pyo3::{
 };
 
 use super::{
-    errors::to_pyerr as ocr_error_to_pyerr,
+    errors::route_failure,
     project::{OcrHostHandles, SETTINGS_ERROR_MARKER, project_request},
 };
 use crate::{marshal::public_response, routes::RequestView};
@@ -42,7 +42,7 @@ impl OcrPythonHost {
     fn handles(&self) -> PyResult<&OcrHostHandles> {
         match &self.data {
             OcrHostData::Projected(handles) => Ok(handles),
-            _ => Err(missing_state()),
+            _ => Err(HostError::MissingState.into()),
         }
     }
 
@@ -50,13 +50,13 @@ impl OcrPythonHost {
         self.handles()?
             .azure_ad_token_provider
             .as_ref()
-            .ok_or_else(missing_state)?
+            .ok_or(HostError::MissingState)?
             .acquire(py)
     }
 
     fn projection(&mut self, py: Python<'_>, arguments: &Bound<'_, PyDict>) -> PyResult<OcrCall> {
         let OcrHostData::Unprojected = self.data else {
-            return Err(missing_state());
+            return Err(HostError::MissingState.into());
         };
         self.view.resolve(py, arguments)?;
         let (request, handles) = project_request(self.view.request(py)?, arguments)?;
@@ -77,7 +77,7 @@ impl OcrPythonHost {
             _ => "",
         };
         let mapped = py
-            .import("litellm.rust_bridge.ocr.route_host")
+            .import("litellm.rust_bridge.host.routes.ocr")
             .and_then(|module| module.getattr("map_failure"))
             .and_then(|map| map.call1((error.value(py), self.view.request(py)?, provider)))
             .and_then(|mapped| mapped.extract::<Py<PyBaseException>>().map_err(PyErr::from));
@@ -115,7 +115,7 @@ impl PythonBinding for OcrPythonHost {
         py: Python<'_>,
         response: LiteLLMOcrResponse,
     ) -> PyResult<Py<PyAny>> {
-        public_response(py, "litellm.rust_bridge.ocr.route_host", &response)
+        public_response(py, "litellm.rust_bridge.host.routes.ocr", &response)
     }
 
     fn encode_stream_head(
@@ -135,16 +135,11 @@ impl PythonBinding for OcrPythonHost {
     }
 
     fn map_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
-        if let Error::Secret(source) = &error
-            && let Some(original) = crate::secrets::python_error(py, source)
-        {
-            return Ok(original);
-        }
-        Ok(self.map_failure(py, ocr_error_to_pyerr(error)))
+        route_failure(py, error, |native| Ok(self.map_failure(py, native)))
     }
 
-    fn host_error(error: &PyErr) -> Error {
-        Error::InvalidRequest(error.to_string())
+    fn host_error(_: &PyErr) -> Error {
+        Error::HostCall
     }
 }
 

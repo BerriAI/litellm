@@ -17,9 +17,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from pydantic import JsonValue, TypeAdapter
 
 from litellm import Router
-from litellm.proxy.utils import evict_config_param, get_config_param
 from litellm.proxy.management_endpoints.fallback_management_endpoints import (
     FallbackCreateRequest,
     FallbackDeleteResponse,
@@ -28,6 +28,8 @@ from litellm.proxy.management_endpoints.fallback_management_endpoints import (
     delete_fallback,
     get_fallback,
 )
+from litellm.proxy.proxy_server import ProxyConfig
+from litellm.proxy.utils import evict_config_param, get_config_param
 from litellm.types.router import DeploymentTypedDict, LiteLLMParamsTypedDict
 
 
@@ -122,6 +124,7 @@ FALLBACK_DEPLOYMENT_ID: Final = "team-fallback-id"
 
 FallbackRules = list[dict[str, list[str]] | dict[str, object] | str]
 RouterSettings = dict[str, FallbackRules | None]
+_ROUTER_SETTINGS_JSON: Final = TypeAdapter(dict[str, JsonValue])
 
 
 def _litellm_params(mock_response: str | None) -> LiteLLMParamsTypedDict:
@@ -254,12 +257,14 @@ def _config_row(router_settings: RouterSettings) -> SimpleNamespace:
 class _StoredRouterSettings:
     """The LiteLLM_Config router_settings row, with the proxy objects that read it through the config cache"""
 
-    def __init__(self, router_settings: RouterSettings | None) -> None:
+    def __init__(self, router_settings: RouterSettings | None, config_file: RouterSettings | None = None) -> None:
         self.row: SimpleNamespace | None = None if router_settings is None else _config_row(router_settings)
         self.prisma_client: Final = MagicMock()
         self.prisma_client.get_generic_data = AsyncMock(side_effect=lambda **_: self.row)
         self.prisma_client.db.litellm_config.upsert = AsyncMock(side_effect=self._upsert)
-        self.proxy_config: Final = MagicMock()
+        self.proxy_config: Final = MagicMock() if config_file is None else ProxyConfig()
+        if config_file is not None:
+            self.proxy_config.router_settings.load_yaml(_ROUTER_SETTINGS_JSON.validate_python(config_file))
         self.proxy_config.get_config = AsyncMock(side_effect=self._get_config)
 
     async def _upsert(self, where: dict[str, str], data: dict[str, dict[str, str]]) -> None:
@@ -374,6 +379,102 @@ class TestFallbackWritesSeeTheLatestStoredRules:
         await self._create(FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"]), stored)
 
         assert stored.stored_fallbacks() == [GATEWAY_RULE]
+
+
+CONFIG_RULE: Final = {"gpt-5.4-mini": ["team-fallback"]}
+CONFIG_WINDOW_RULE: Final = {"team-primary": ["gpt-5.4-mini"]}
+
+
+class TestFallbackWritesHonourTheConfigFile:
+    """A fallbacks list set in config.yaml owns the key: /fallback writes that would change it are refused and
+    the router keeps serving the file's rules"""
+
+    @pytest.fixture(autouse=True)
+    async def clean_config_cache(self) -> AsyncIterator[None]:
+        await evict_config_param("router_settings")
+        yield
+        await evict_config_param("router_settings")
+
+    @pytest.fixture
+    def router(self) -> Router:
+        return _team_router()
+
+    @pytest.fixture
+    def stored(self) -> _StoredRouterSettings:
+        return _StoredRouterSettings({"fallbacks": [CONFIG_RULE]}, config_file={"fallbacks": [CONFIG_RULE]})
+
+    async def _create(
+        self, request: FallbackCreateRequest, router: Router, stored: _StoredRouterSettings
+    ) -> FallbackResponse:
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            patch("litellm.proxy.proxy_server.prisma_client", stored.prisma_client),
+            patch("litellm.proxy.proxy_server.proxy_config", stored.proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        ):
+            return await create_fallback(request, MagicMock())
+
+    async def _delete(self, model: str, router: Router, stored: _StoredRouterSettings) -> FallbackDeleteResponse:
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            patch("litellm.proxy.proxy_server.prisma_client", stored.prisma_client),
+            patch("litellm.proxy.proxy_server.proxy_config", stored.proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        ):
+            return await delete_fallback(model, "general", MagicMock())
+
+    async def test_a_create_that_adds_a_rule_to_a_config_owned_list_is_refused(
+        self, router: Router, stored: _StoredRouterSettings
+    ) -> None:
+        router.fallbacks = [CONFIG_RULE]
+        request: Final = FallbackCreateRequest(model="team-primary", fallback_models=["team-fallback"])
+
+        with pytest.raises(HTTPException) as refused:
+            await self._create(request, router, stored)
+
+        assert refused.value.status_code == 400
+        assert "key 'fallbacks' is set in the config file" in str(refused.value.detail)
+        assert stored.stored_fallbacks() == [CONFIG_RULE]
+        stored.prisma_client.db.litellm_config.upsert.assert_not_awaited()
+        assert router.fallbacks == [CONFIG_RULE]
+
+    async def test_a_delete_of_a_config_owned_rule_is_refused(
+        self, router: Router, stored: _StoredRouterSettings
+    ) -> None:
+        router.fallbacks = [CONFIG_RULE]
+
+        with pytest.raises(HTTPException) as refused:
+            await self._delete("gpt-5.4-mini", router, stored)
+
+        assert refused.value.status_code == 400
+        assert "key 'fallbacks' is set in the config file" in str(refused.value.detail)
+        assert stored.stored_fallbacks() == [CONFIG_RULE]
+        stored.prisma_client.db.litellm_config.upsert.assert_not_awaited()
+        assert router.fallbacks == [CONFIG_RULE]
+
+    async def test_a_create_that_restates_the_config_rule_is_accepted(
+        self, router: Router, stored: _StoredRouterSettings
+    ) -> None:
+        request: Final = FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"])
+
+        response: Final = await self._create(request, router, stored)
+
+        assert response.fallback_models == ["team-fallback"]
+        assert stored.stored_fallbacks() == [CONFIG_RULE]
+
+    async def test_a_sibling_list_the_config_file_does_not_set_stays_writable(
+        self, router: Router, stored: _StoredRouterSettings
+    ) -> None:
+        request: Final = FallbackCreateRequest(
+            model="team-primary", fallback_models=["gpt-5.4-mini"], fallback_type="context_window"
+        )
+
+        response: Final = await self._create(request, router, stored)
+
+        assert response.fallback_type == "context_window"
+        assert stored.row is not None
+        assert stored.row.param_value["context_window_fallbacks"] == [CONFIG_WINDOW_RULE]
+        assert router.context_window_fallbacks == [CONFIG_WINDOW_RULE]
 
 
 @pytest.mark.asyncio

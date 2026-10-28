@@ -2,7 +2,7 @@ import asyncio
 import importlib
 import json
 from io import BytesIO
-from typing import Dict, List
+from typing import Dict, Final, List
 
 import pytest
 
@@ -276,6 +276,40 @@ def test_replace_model_in_jsonl_multi_row_rewrites_every_model():
     assert all(row["body"]["model"] == "new-model" for row in rows)
 
 
+def test_replace_model_in_jsonl_keeps_every_row_on_its_original_line():
+    content = (
+        b'{"custom_id":"a","body":{"model":"old"}}\n'
+        b"\n"
+        b'{"custom_id":"c","body":{"model":"old"}}\n'
+        b'{"custom_id":"d",\n'
+        b'"body":{"model":"old"}}\n'
+        b'{"custom_id":"f","body":{"model":"old"}}\n'
+    )
+
+    result = replace_model_in_jsonl(content, "new-model", keep_line_numbers=True)
+
+    assert isinstance(result, InMemoryFile)
+    lines = result.getvalue().decode("utf-8").split("\n")
+    assert [json.loads(line)["custom_id"] if line else None for line in lines] == ["a", None, "c", None, "d", "f"]
+    assert all(json.loads(line)["body"]["model"] == "new-model" for line in lines if line)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b'\xef\xbb\xbf{"custom_id":"a","body":{"model":"old"}}\n\xef\xbb\xbf{"custom_id":"b","body":{"model":"old"}}\n',
+        '\ufeff{"custom_id":"a","body":{"model":"old"}}\n\ufeff{"custom_id":"b","body":{"model":"old"}}\n',
+    ],
+    ids=["bytes", "str"],
+)
+def test_replace_model_in_jsonl_rewrites_rows_that_start_with_a_bom(content):
+    result = replace_model_in_jsonl(content, "new-model")
+
+    assert isinstance(result, InMemoryFile)
+    rows = [json.loads(line) for line in result.getvalue().decode("utf-8").split("\n")]
+    assert [(row["custom_id"], row["body"]["model"]) for row in rows] == [("a", "new-model"), ("b", "new-model")]
+
+
 def test_replace_model_in_jsonl_with_embedded_newlines():
     """Test that replace_model_in_jsonl works correctly with embedded newlines in content"""
     # Create a JSONL with embedded newlines in the message content
@@ -346,3 +380,31 @@ def setup_and_teardown():
     yield
     loop.close()
     asyncio.set_event_loop(None)
+
+
+@pytest.mark.parametrize(
+    ("call_type", "cost", "eligible"),
+    (("aretrieve_batch", 0.25, True), ("retrieve_batch", 0.25, True), ("acompletion", 0.25, False),
+     ("aretrieve_batch", 0, False), ("aretrieve_batch", -0.25, False)),
+)
+def test_batch_charge_identity_requires_a_cost_bearing_retrieval(call_type: str, cost: float, eligible: bool) -> None:
+    from openai.types import Batch
+    from litellm.router_utils.batch_utils import batch_id_to_charge_once
+
+    batch: Final = Batch(
+        id="batch-budget", completion_window="24h", created_at=1, endpoint="/v1/chat/completions",
+        input_file_id="file-budget", object="batch", status="completed",
+    )
+    assert batch_id_to_charge_once(call_type, batch, cost) == (batch.id if eligible else None)
+    assert batch_id_to_charge_once(call_type, {"id": batch.id}, cost) is None
+
+
+def test_batch_charge_markers_keep_counters_and_batches_independent() -> None:
+    from litellm.caching.in_memory_cache import InMemoryCache
+    from litellm.router_utils.batch_utils import batch_charged_once_marker_key
+
+    cache: Final = InMemoryCache()
+    cache.set_cache(batch_charged_once_marker_key("provider-spend", "first-batch"), 1)
+    assert cache.get_cache(batch_charged_once_marker_key("provider-spend", "first-batch")) == 1
+    assert cache.get_cache(batch_charged_once_marker_key("deployment-spend", "first-batch")) is None
+    assert cache.get_cache(batch_charged_once_marker_key("provider-spend", "second-batch")) is None

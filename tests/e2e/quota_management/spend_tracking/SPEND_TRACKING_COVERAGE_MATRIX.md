@@ -32,7 +32,7 @@ proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
 | Chat (non-stream) | `test_cost_calculator.py`, `local_testing/test_completion_cost.py` | covered | yes (`test_chat_completion_writes_nonzero_spend_row`) |
 | Chat (streaming) | `test_streaming_interrupt_spend_tracking.py` | partial | yes (`test_streaming_chat_completion_tracks_spend`) |
 | Embedding | `test_cost_calculator.py` (#29956) | partial | yes (`test_embedding_writes_nonzero_spend_row`) |
-| Pass-through (gemini/anthropic) | `pass_through_tests/*.test.js` + `llm_translation/` suite | covered | yes (llm_translation suite) |
+| Pass-through (Gemini/Vertex) | `tests/integration/observability/test_passthrough_upstream_error_visibility.py`, `tests/unit/proxy/pass_through_endpoints/test_pass_through_endpoints.py`, and `tests/e2e/llm_translation/` | covered | yes (integration and e2e suites) |
 | Image / audio / rerank / responses / realtime | per-provider unit cost tests | partial/gap | gap |
 
 ## Entity spend aggregation
