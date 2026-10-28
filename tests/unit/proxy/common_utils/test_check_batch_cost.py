@@ -4635,7 +4635,6 @@ _A_REJECTED_KEY: Final = litellm.AuthenticationError(message="invalid api key", 
     ("unified_object_id", "retrieve"),
     (
         (_CLAIM_UNIFIED_BATCH_ID, _provider_batch("in_progress")),
-        (_CLAIM_UNIFIED_BATCH_ID, _provider_batch("completed")),
         (_CLAIM_UNIFIED_BATCH_ID, RuntimeError("timed out")),
         (
             _CLAIM_UNIFIED_BATCH_ID,
@@ -4647,7 +4646,6 @@ _A_REJECTED_KEY: Final = litellm.AuthenticationError(message="invalid api key", 
     ),
     ids=(
         "still_running",
-        "output_id_pending",
         "retrieve_timed_out",
         "provider_5xx",
         "provider_429",
@@ -4659,13 +4657,13 @@ _A_REJECTED_KEY: Final = litellm.AuthenticationError(message="invalid api key", 
     ("age", "db_status", "after_the_poll"),
     (
         (_PAST_THE_GIVE_UP_AGE, "in_progress", ("stale_expired", False)),
-        (_PAST_THE_GIVE_UP_AGE, "completed", ("completed", True)),
+        (_PAST_THE_GIVE_UP_AGE, "completed", ("completed", False)),
         (_INSIDE_THE_GIVE_UP_AGE, "in_progress", ("in_progress", False)),
         (_INSIDE_THE_GIVE_UP_AGE, "completed", ("completed", False)),
     ),
     ids=("unfinished_past_the_age", "finished_past_the_age", "unfinished_at_the_age", "finished_at_the_age"),
 )
-async def test_a_batch_a_poll_cannot_settle_is_given_up_only_once_past_the_give_up_age(
+async def test_only_an_unfinished_batch_a_poll_cannot_settle_is_given_up_once_past_the_give_up_age(
     unified_object_id: str,
     retrieve: LiteLLMBatch | Exception,
     age: timedelta,
@@ -4713,34 +4711,10 @@ async def _an_output_file_the_key_cannot_read() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("age", "retired"), ((_PAST_THE_GIVE_UP_AGE, True), (_INSIDE_THE_GIVE_UP_AGE, False)))
-async def test_a_finished_batch_whose_output_never_appeared_frees_its_files_once_past_the_give_up_age(
-    age: timedelta, retired: bool
-) -> None:
-    row: Final = _FakeManagedObjectRow()
-    row.created_at = _NOW - age
-    row.status = "completed"
-    router: Final = TestMultiPodBatchCostClaim._router()
-    router.aretrieve_batch.side_effect = _a_finished_batch_whose_output_never_appeared
-    prisma: Final = TestMultiPodBatchCostClaim._prisma(row, [])
-    poller: Final = TestMultiPodBatchCostClaim._instance(prisma, router)
-
-    with TestMultiPodBatchCostClaim._billing_patches([]):
-        await poller.check_batch_cost()
-
-    assert (row.status, row.batch_processed) == ("completed", retired)
-    if retired:
-        await TestMultiPodBatchCostClaim._run_deletion_guard(prisma, _CLAIM_OUTPUT_FILE_ID)
-    else:
-        with pytest.raises(HTTPException):
-            await TestMultiPodBatchCostClaim._run_deletion_guard(prisma, _CLAIM_OUTPUT_FILE_ID)
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("db_status", ("in_progress", "completed"))
-async def test_a_batch_past_the_staleness_cutoff_whose_output_id_lags_is_billed_once_it_appears(db_status: str) -> None:
+async def test_a_batch_past_the_give_up_age_whose_output_id_lags_is_billed_once_it_appears(db_status: str) -> None:
     row: Final = _FakeManagedObjectRow()
-    row.created_at = _NOW - _PAST_THE_STALENESS_CUTOFF
+    row.created_at = _NOW - _PAST_THE_GIVE_UP_AGE
     row.status = db_status
     journal: Final = []
     router: Final = TestMultiPodBatchCostClaim._router()
@@ -4760,50 +4734,22 @@ async def test_a_batch_past_the_staleness_cutoff_whose_output_id_lags_is_billed_
 
 
 @pytest.mark.asyncio
-async def test_a_client_saving_the_output_id_during_a_poll_past_the_give_up_age_keeps_the_batch_billable() -> None:
-    row: Final = _FakeManagedObjectRow()
-    row.created_at = _NOW - _PAST_THE_GIVE_UP_AGE
-    row.status = "completed"
-    journal: Final = []
-    router: Final = TestMultiPodBatchCostClaim._router()
-    finished_with_output: Final = router.aretrieve_batch.return_value
-
-    async def _a_client_saves_the_output_id_while_the_poller_still_sees_none(
-        *, model: str, batch_id: str, litellm_metadata: Mapping[str, object]
-    ) -> LiteLLMBatch:
-        row.updated_at = row.updated_at + timedelta(seconds=1)
-        return _provider_batch("completed")
-
-    router.aretrieve_batch.side_effect = _a_client_saves_the_output_id_while_the_poller_still_sees_none
-    poller: Final = TestMultiPodBatchCostClaim._instance(TestMultiPodBatchCostClaim._prisma(row, journal), router)
-
-    with TestMultiPodBatchCostClaim._billing_patches(journal):
-        await poller.check_batch_cost()
-        assert (row.status, row.batch_processed) == ("completed", False)
-        router.aretrieve_batch.side_effect = None
-        router.aretrieve_batch.return_value = finished_with_output
-        await poller.check_batch_cost()
-
-    assert journal == ["fetch", "claim", "bill"]
-    assert row.batch_processed is True
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("retrieve", "during_fetch"),
     (
         (_A_REJECTED_KEY, None),
         (_a_vertex_job_that_no_longer_exists, None),
+        (_a_finished_batch_whose_output_never_appeared, None),
         (None, _an_output_file_the_key_cannot_read),
     ),
-    ids=("key_rejected", "batch_404_without_its_id", "output_unreadable"),
+    ids=("key_rejected", "batch_404_without_its_id", "output_id_pending", "output_unreadable"),
 )
-async def test_a_finished_batch_the_provider_refuses_past_the_staleness_cutoff_bills_once_the_refusal_is_fixed(
+async def test_a_finished_batch_a_poll_cannot_bill_past_the_give_up_age_bills_once_the_cause_is_fixed(
     retrieve: Exception | Callable[..., Awaitable[LiteLLMBatch]] | None,
     during_fetch: Callable[[], Awaitable[None]] | None,
 ) -> None:
     row: Final = _FakeManagedObjectRow()
-    row.created_at = _NOW - _PAST_THE_STALENESS_CUTOFF
+    row.created_at = _NOW - _PAST_THE_GIVE_UP_AGE
     row.status = "completed"
     router: Final = TestMultiPodBatchCostClaim._router()
     router.aretrieve_batch.side_effect = retrieve

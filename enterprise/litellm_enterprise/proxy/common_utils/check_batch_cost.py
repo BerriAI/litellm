@@ -250,16 +250,10 @@ class CheckBatchCost:
     def _is_past_give_up_age(self, job: ManagedObjectRow) -> bool:
         return job.created_at < self._clock() - GIVE_UP_POLLING_AFTER
 
-    def _unchanged_snapshot(self, job: ManagedObjectRow) -> Mapping[str, object]:
-        return {**self._unprocessed_snapshot(job), "updated_at": job.updated_at}
-
-    async def _give_up_if_old(self, job: ManagedObjectRow, snapshot: Mapping[str, object]) -> None:
-        if not self._is_past_give_up_age(job):
+    async def _expire_if_old_and_unfinished(self, job: ManagedObjectRow) -> None:
+        if job.status in TERMINAL_MANAGED_OBJECT_STATUSES or not self._is_past_give_up_age(job):
             return
-        if job.status in TERMINAL_MANAGED_OBJECT_STATUSES:
-            await self._retire_job(job, f"unbilled {GIVE_UP_POLLING_AFTER.days} days after it was created", snapshot)
-            return
-        await self._expire_unfinished(job, snapshot)
+        await self._expire_unfinished(job)
 
     @staticmethod
     def _is_completed_with_output_id_pending(response: "LiteLLMBatch") -> bool:
@@ -273,11 +267,11 @@ class CheckBatchCost:
             and not _completed_batch_safe_to_retire(response)
         )
 
-    async def _expire_unfinished(self, job: ManagedObjectRow, snapshot: Mapping[str, object]) -> None:
+    async def _expire_unfinished(self, job: ManagedObjectRow) -> None:
         try:
             expired: Final = await _managed_object_table(self.prisma_client).update_many(
                 where={
-                    **snapshot,
+                    **self._unprocessed_snapshot(job),
                     "status": {"not_in": list(TERMINAL_MANAGED_OBJECT_STATUSES)},
                 },
                 data={"status": "stale_expired"},
@@ -291,9 +285,7 @@ class CheckBatchCost:
                 "and still not finished, so it is marked stale_expired and no longer polled"
             )
 
-    async def _retire_job(
-        self, job: "ManagedObjectRow", reason: str, snapshot: Mapping[str, object] | None = None
-    ) -> None:
+    async def _retire_job(self, job: "ManagedObjectRow", reason: str) -> None:
         """
         Take a row that can never be costed out of the poll page. Leaving it selectable
         would burn one of the MAX_OBJECTS_PER_POLL_CYCLE slots on every future cycle, and
@@ -303,7 +295,7 @@ class CheckBatchCost:
         data: Final = {"batch_processed": True} if self._has_batch_processed_column else {"status": "stale_expired"}
         try:
             retired: Final = await _managed_object_table(self.prisma_client).update_many(
-                where=snapshot if snapshot is not None else self._unprocessed_snapshot(job),
+                where=self._unprocessed_snapshot(job),
                 data=data,
             )
         except Exception as db_err:
@@ -1198,7 +1190,7 @@ class CheckBatchCost:
                 if self._has_unified_id_without_model(job):
                     await self._retire_job(job, "unified object id has no model id")
                 else:
-                    await self._give_up_if_old(job, self._unprocessed_snapshot(job))
+                    await self._expire_if_old_and_unfinished(job)
                 continue
             model_id, batch_id = routing
 
@@ -1224,14 +1216,13 @@ class CheckBatchCost:
                 if self._is_batch_gone_at_provider(e, batch_id) and self._batch_deployment_exists(model_id):
                     await self._retire_job(job, f"batch {batch_id} no longer exists at the provider")
                 else:
-                    await self._give_up_if_old(job, self._unprocessed_snapshot(job))
+                    await self._expire_if_old_and_unfinished(job)
                 continue
             if self._is_completed_with_output_id_pending(response):
                 verbose_proxy_logger.info(
                     f"CheckBatchCost: batch {batch_id} is completed but its output file id "
                     f"has not appeared yet; leaving job {job.id} for the next poll cycle"
                 )
-                await self._give_up_if_old(job, self._unchanged_snapshot(job))
                 continue
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE
@@ -1285,7 +1276,7 @@ class CheckBatchCost:
             elif response.status in PROVIDER_TERMINAL_BATCH_STATUSES:
                 await self._retire_unbilled_terminal_job(job, response, model_id, batch_id)
             else:
-                await self._give_up_if_old(job, self._unprocessed_snapshot(job))
+                await self._expire_if_old_and_unfinished(job)
 
         # Record polling run metrics (always, even if nothing was processed)
         if prom_logger:
