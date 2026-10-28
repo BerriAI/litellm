@@ -2050,6 +2050,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         Args:
             parsed_chunk: Dict containing the Responses API event chunk
             tool_call_index_map: Per-stream output_index -> sequential tool_call index map
+            reasoning_origin: Origin tag stamped on streamed encrypted reasoning, so replays reach only that origin
 
         Returns:
             ModelResponseStream: OpenAI-formatted streaming chunk

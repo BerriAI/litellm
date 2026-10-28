@@ -54,6 +54,7 @@ from litellm.utils import (
     peek_reasoning_summary_aliases,
     reasoning_effort_with_summary_alias,
     strip_reasoning_summary_aliases_from_optional_params,
+    with_reasoning_summary_in_effort,
 )
 
 if TYPE_CHECKING:
@@ -122,8 +123,8 @@ from litellm.llms.base_llm.chat.transformation import with_attribution_headers
 from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
     NativeOutputFallback,
-    bedrock_responses_bridge_api_base,
-    bedrock_responses_bridge_optional_params,
+    bedrock_request_bridges_to_responses,
+    bedrock_responses_bridge_call_params,
     bedrock_route_for_request,
     deployment_model_info,
     without_bedrock_native_output_opt_in,
@@ -6120,14 +6121,11 @@ def completion(
                 }
             )
         )
-        bedrock_bridges_to_responses: Final = (
-            custom_llm_provider == "bedrock"
-            and bedrock_route_for_request(
-                model,
-                request_params,
-                _ADDITIONAL_DROP_PARAMS_ADAPTER.validate_python(kwargs.get("additional_drop_params") or ()),
-            )
-            == "responses"
+        bedrock_bridges_to_responses: Final = bedrock_request_bridges_to_responses(
+            custom_llm_provider,
+            model,
+            request_params,
+            _ADDITIONAL_DROP_PARAMS_ADAPTER.validate_python(kwargs.get("additional_drop_params") or ()),
         )
 
         # Use base_model (the true underlying model) for Azure model-type
@@ -6139,25 +6137,14 @@ def completion(
         ) and not skip_responses_api_bridge:
             from litellm.completion_extras import responses_api_bridge
 
-            optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(
-                {**bedrock_responses_bridge_optional_params(optional_params)}
+            bridge_optional_params, bridge_litellm_params = (
+                bedrock_responses_bridge_call_params(optional_params, litellm_params, api_base)
                 if bedrock_bridges_to_responses
-                else optional_params
+                else (optional_params, litellm_params)
             )
-
-            if isinstance(resolved_reasoning_effort, dict) and "summary" in resolved_reasoning_effort:
-                optional_params["reasoning_effort"] = resolved_reasoning_effort
-            elif rs_val is not None:
-                eff: Final = optional_params.get("reasoning_effort", resolved_reasoning_effort)
-                if isinstance(eff, dict):
-                    optional_params["reasoning_effort"] = {**eff, "summary": rs_val}
-                elif eff is not None:
-                    optional_params["reasoning_effort"] = {
-                        "effort": eff,
-                        "summary": rs_val,
-                    }
-                else:
-                    optional_params["reasoning_effort"] = {"summary": rs_val}
+            stripped_optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(
+                bridge_optional_params
+            )
 
             return responses_api_bridge.completion(  # pyright: ignore[reportReturnType]  # bridge returns a coroutine on the acompletion path; awaited by the async caller
                 model=model,
@@ -6168,17 +6155,10 @@ def completion(
                 api_base=api_base,
                 acompletion=acompletion,
                 logging_obj=logging,
-                optional_params=optional_params,
-                litellm_params=(
-                    {
-                        **litellm_params,
-                        "api_base": bedrock_responses_bridge_api_base(
-                            api_base, litellm_params.get("aws_bedrock_runtime_endpoint")
-                        ),
-                    }
-                    if bedrock_bridges_to_responses
-                    else litellm_params
+                optional_params=with_reasoning_summary_in_effort(
+                    stripped_optional_params, resolved_reasoning_effort, rs_val
                 ),
+                litellm_params=bridge_litellm_params,
                 timeout=timeout,
                 client=client,  # pass AsyncOpenAI, OpenAI client
                 custom_llm_provider=custom_llm_provider,

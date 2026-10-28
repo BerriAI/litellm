@@ -1362,6 +1362,18 @@ def bedrock_responses_bridge_api_base(api_base: str | None, aws_bedrock_runtime_
     )
 
 
+def bedrock_responses_bridge_call_params(
+    optional_params: Mapping[str, object], litellm_params: Mapping[str, object], api_base: str | None
+) -> tuple[Mapping[str, object], Mapping[str, object]]:
+    return (
+        bedrock_responses_bridge_optional_params(optional_params),
+        {
+            **litellm_params,
+            "api_base": bedrock_responses_bridge_api_base(api_base, litellm_params.get("aws_bedrock_runtime_endpoint")),
+        },
+    )
+
+
 def _chat_completions_unless_converse_needed(
     model: str, request_params: Mapping[str, object] | None
 ) -> Literal["converse", "chat_completions", "responses"]:
@@ -1386,6 +1398,17 @@ def bedrock_route_for_request(
     return BedrockModelInfo.get_bedrock_route(
         model, MappingProxyType({key: value for key, value in request_params.items() if key not in dropped})
     )
+
+
+def bedrock_request_bridges_to_responses(
+    custom_llm_provider: str | None,
+    model: str,
+    request_params: Mapping[str, object],
+    additional_drop_params: Sequence[str] | None,
+) -> bool:
+    if custom_llm_provider != "bedrock":
+        return False
+    return bedrock_route_for_request(model, request_params, additional_drop_params) == "responses"
 
 
 def strip_bedrock_throughput_suffix(model: str) -> str:

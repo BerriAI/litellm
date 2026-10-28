@@ -11011,7 +11011,7 @@ def reasoning_effort_with_summary_alias(
 
 
 def strip_reasoning_summary_aliases_from_optional_params(
-    optional_params: dict,
+    optional_params: Mapping[str, object],
 ) -> tuple[dict, object | None]:
     """Copy optional_params; remove reasoningSummary aliases from top-level and extra_body."""
     op: Final = dict(optional_params)
@@ -11033,6 +11033,21 @@ def strip_reasoning_summary_aliases_from_optional_params(
         else:
             op.pop("extra_body", None)
     return op, rs_val
+
+
+def with_reasoning_summary_in_effort(
+    optional_params: Mapping[str, object], resolved_reasoning_effort: object, reasoning_summary: object | None
+) -> Mapping[str, object]:
+    if isinstance(resolved_reasoning_effort, dict) and "summary" in resolved_reasoning_effort:
+        return {**optional_params, "reasoning_effort": resolved_reasoning_effort}
+    if reasoning_summary is None:
+        return optional_params
+    effort: Final = optional_params.get("reasoning_effort", resolved_reasoning_effort)
+    if isinstance(effort, dict):
+        return {**optional_params, "reasoning_effort": {**effort, "summary": reasoning_summary}}
+    if effort is not None:
+        return {**optional_params, "reasoning_effort": {"effort": effort, "summary": reasoning_summary}}
+    return {**optional_params, "reasoning_effort": {"summary": reasoning_summary}}
 
 
 def get_non_default_transcription_params(kwargs: Mapping[str, object]) -> dict[str, object]:
