@@ -480,8 +480,8 @@ class TestSnowflakeCortexClaudeFixes:
             }
         ]
 
-    def test_messages_api_pdf_reaches_cortex_claude_as_a_document_block(self):
-        translated = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+    def test_messages_api_pdf_reaches_cortex_claude_as_a_document_block(self) -> None:
+        translated: Final = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
             messages=[
                 {
                     "role": "user",
@@ -498,7 +498,7 @@ class TestSnowflakeCortexClaudeFixes:
             model="snowflake/claude-sonnet-4-6",
         )
 
-        body = self._transform(translated)
+        body: Final = self._transform(translated)
 
         assert body["messages"][0]["content"] == [
             {
