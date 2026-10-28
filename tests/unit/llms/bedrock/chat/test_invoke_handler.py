@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.litellm_logging import _get_provider_request_id
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.bedrock.chat.invoke_handler import (
+    AmazonAnthropicClaudeStreamDecoder,
     AmazonOpenAICompatibleStreamDecoder,
     AWSEventStreamDecoder,
     _stream_decoder,
@@ -1120,6 +1121,7 @@ async def test_converse_streaming_completion_yields_text_and_finish_reason(
             ),
         )
     )
+
     def handle_request(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/converse-stream")
         return httpx.Response(200, content=event_stream_body, headers=_event_stream_headers())
@@ -1179,9 +1181,7 @@ def test_mistral_invoke_stream_yields_text_and_finish_reason(
     assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == (
         "A court case moves through the courts."
     )
-    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == [
-        "stop"
-    ]
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["stop"]
 
 
 def test_converse_streaming_tool_call_arguments_are_valid_json(
@@ -1721,6 +1721,7 @@ def test_filter_headers_for_aws_signature():
 @pytest.mark.parametrize("missing", ["botocore", "unrelated_dependency"])
 def test_invoke_decoder_reports_only_missing_aws_dependency(missing):
     from unittest.mock import patch
+
     from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 
     failure = ModuleNotFoundError("missing dependency", name=missing)
@@ -1835,9 +1836,7 @@ async def test_converse_stream_thinking_merges_into_content_with_think_tags() ->
             "contentBlockDelta", {"contentBlockIndex": 0, "delta": {"reasoningContent": {"signature": "c2lnbmF0dXJl"}}}
         ),
         _converse_event_frame("contentBlockStop", {"contentBlockIndex": 0}),
-        _converse_event_frame(
-            "contentBlockDelta", {"contentBlockIndex": 1, "delta": {"text": "Hi I am Anthropic, "}}
-        ),
+        _converse_event_frame("contentBlockDelta", {"contentBlockIndex": 1, "delta": {"text": "Hi I am Anthropic, "}}),
         _converse_event_frame(
             "contentBlockDelta", {"contentBlockIndex": 1, "delta": {"text": "I am a helpful assistant"}}
         ),
@@ -1919,7 +1918,11 @@ _CUT_JSON_TOOL_STREAM: Final = b"".join(
             "content_block": {"type": "tool_use", "id": "toolu_cut_1", "name": "json_tool_call", "input": {}},
         },
         {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": '{"city"'}},
-        {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": ': "Paris", '}},
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": ': "Paris", '},
+        },
         {
             "type": "content_block_delta",
             "index": 0,
@@ -1961,3 +1964,21 @@ async def test_async_anthropic_invoke_stream_cut_before_the_json_tool_block_ends
     chunks: Final = [chunk async for chunk in _cut_json_tool_stream_decoder().aiter_bytes(_chunks())]
 
     assert json.loads(_streamed_content(chunks)) == {"city": "Paris", "country": "France"}
+
+
+def test_invoke_stream_decoder_carries_the_guardrail_trace_of_the_message_stop_chunk() -> None:
+    """Bedrock Invoke reports the native guardrail trace once, on the final ``message_stop`` chunk, under
+    ``amazon-bedrock-trace``. The chunk keeps it so the stream builder and the spend log can price it."""
+    decoder = AmazonAnthropicClaudeStreamDecoder(model="anthropic.claude-sonnet-5-v1:0", sync_stream=True)
+    trace = {"guardrail": {"input": {"gid": {"invocationMetrics": {"usage": {"topicPolicyUnits": 1}}}}}}
+    plain = decoder._chunk_parser({"type": "message_stop", "amazon-bedrock-invocationMetrics": {"inputTokenCount": 3}})
+    traced = decoder._chunk_parser(
+        {
+            "type": "message_stop",
+            "amazon-bedrock-invocationMetrics": {"inputTokenCount": 3},
+            "amazon-bedrock-trace": trace,
+        }
+    )
+    assert (plain.provider_specific_fields or {}).get("amazon-bedrock-trace") is None
+    assert traced.provider_specific_fields is not None
+    assert traced.provider_specific_fields["amazon-bedrock-trace"] == trace
