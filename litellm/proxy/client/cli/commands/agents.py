@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
@@ -501,12 +502,14 @@ class _DeploymentParams(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     model: str
+    custom_llm_provider: str | None = None
 
 
 class _DeploymentInfo(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     team_public_model_name: str | None = None
+    blocked: bool | None = None
 
 
 class _Deployment(LiteLLMBaseModel):
@@ -531,6 +534,27 @@ def _public_name(deployment: _Deployment) -> str:
     return team_name or deployment.model_name
 
 
+def _is_paused(deployment: _Deployment) -> bool:
+    return deployment.model_info is not None and deployment.model_info.blocked is True
+
+
+def _openai_model(params: _DeploymentParams) -> str | None:
+    if params.custom_llm_provider not in (None, "openai"):
+        return None
+    provider, slash, name = params.model.partition("/")
+    if not slash:
+        return params.model
+    return name if provider == "openai" else None
+
+
+def _upstreams_by_public_name(deployments: Sequence[_Deployment]) -> Mapping[str, str]:
+    routes: Final = frozenset(
+        (_public_name(d), _openai_model(d.litellm_params)) for d in deployments if not _is_paused(d)
+    )
+    routes_per_name: Final = Counter(name for name, _ in routes)
+    return MappingProxyType({name: model for name, model in routes if model is not None and routes_per_name[name] == 1})
+
+
 def _fetch_model_upstreams(
     base_url: str,
     api_key: str,
@@ -548,8 +572,7 @@ def _fetch_model_upstreams(
         listing: Final = _DeploymentListing.model_validate_json(resp.content)
     except ValidationError:
         return _NO_UPSTREAMS
-    public_upstreams: Final = tuple((_public_name(d), d.litellm_params.model) for d in listing.data)
-    return MappingProxyType(dict(reversed(public_upstreams)))
+    return _upstreams_by_public_name(listing.data)
 
 
 class _OpenCodeLimit(LiteLLMBaseModel):
@@ -741,7 +764,8 @@ def codex_model_sync_args(
     must be a file, so it is written under $CODEX_HOME (default ~/.codex) and
     atomically replaced on every launch. The Codex at `binary` first lists its
     own models, so the ones the proxy serves keep that Codex's entries, an alias
-    included when the proxy's /v1/model/info routes it to one of them, and then
+    included when every unpaused deployment /v1/model/info lists for it routes
+    to the same OpenAI model and Codex knows that model, and then
     reads the file back once before it is handed over. The key never lands in
     the file. A failed fetch, read, listing, write or read-back is reported
     rather than raised: Codex still launches with its built-in catalog and takes

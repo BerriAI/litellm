@@ -777,15 +777,56 @@ class TestCodexModelSync:
         }
         assert "supports_search_tool" not in entries["m"]
 
-    def test_alias_served_by_several_deployments_takes_the_first_ones_entry(self, tmp_path):
-        deployments = [
-            {"model_name": "api-terra", "litellm_params": {"model": "openai/gpt-5.6-terra"}},
-            {"model_name": "api-terra", "litellm_params": {"model": "openai/gpt-5.5"}},
-        ]
-        listing = self._listing(self._row("api-terra"))
-        self._sync(listing, tmp_path, model_info=_FakeResponse(200, {"data": deployments}))
+    @pytest.mark.parametrize(
+        "deployments",
+        [
+            [
+                {"model_name": "api-terra", "litellm_params": {"model": "openai/gpt-5.6-terra"}},
+                {"model_name": "api-terra", "litellm_params": {"model": "gpt-5.6-terra"}},
+            ],
+            [{"model_name": "api-terra", "litellm_params": {"model": "gpt-5.6-terra", "custom_llm_provider": "openai"}}],
+            [
+                {
+                    "model_name": "api-terra",
+                    "litellm_params": {"model": "openai/gpt-5.5"},
+                    "model_info": {"id": "paused", "blocked": True},
+                },
+                {"model_name": "api-terra", "litellm_params": {"model": "openai/gpt-5.6-terra"}},
+            ],
+        ],
+        ids=["same_model_with_and_without_prefix", "openai_custom_llm_provider", "paused_deployment_ignored"],
+    )
+    def test_alias_whose_deployments_all_route_to_one_openai_model_gets_its_entry(self, tmp_path, deployments):
+        self._sync(self._listing(self._row("api-terra")), tmp_path, model_info=_FakeResponse(200, {"data": deployments}))
 
         assert self._entries(tmp_path)["api-terra"]["comp_hash"] == _STOCK_MODELS["gpt-5.6-terra"]["comp_hash"]
+
+    @pytest.mark.parametrize(
+        "deployments",
+        [
+            [
+                {"model_name": "api-terra", "litellm_params": {"model": "openai/gpt-5.5"}},
+                {
+                    "model_name": "model_name_team-1_d1",
+                    "litellm_params": {"model": "openai/gpt-5.6-terra"},
+                    "model_info": {"id": "d1", "team_public_model_name": "api-terra"},
+                },
+            ],
+            [
+                {"model_name": "api-terra", "litellm_params": {"model": "openai/gpt-5.6-terra"}},
+                {"model_name": "api-terra", "litellm_params": {"model": "anthropic/claude-opus-4-7"}},
+            ],
+            [{"model_name": "api-terra", "litellm_params": {"model": "azure/gpt-5.6-terra"}}],
+            [{"model_name": "api-terra", "litellm_params": {"model": "gpt-5.6-terra", "custom_llm_provider": "azure"}}],
+        ],
+        ids=["team_row_and_global_row_differ", "load_balanced_across_providers", "azure_prefix", "azure_provider"],
+    )
+    def test_alias_without_one_shared_openai_upstream_keeps_the_fallback_entry(self, tmp_path, deployments):
+        listing = self._listing(self._row("api-terra"))
+        self._sync(listing, tmp_path / "with", model_info=_FakeResponse(200, {"data": deployments}))
+        self._sync(listing, tmp_path / "without")
+
+        assert self._entries(tmp_path / "with")["api-terra"] == self._entries(tmp_path / "without")["api-terra"]
 
     @pytest.mark.parametrize(
         "model_info",
