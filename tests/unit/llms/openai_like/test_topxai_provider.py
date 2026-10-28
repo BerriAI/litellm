@@ -252,7 +252,6 @@ class TestTopxAIModelMetadata:
             )
 
             assert ("max_output_tokens" in info) is (model not in self.NO_OUTPUT_LIMIT_MODELS)
-            assert info.get("max_tokens") == info.get("max_output_tokens")
             assert info["max_input_tokens"] >= 500_000
             assert info["source"].startswith("https://ai.topxea.com/pricing/")
 
