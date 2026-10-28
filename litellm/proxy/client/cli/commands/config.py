@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.private_json import ensure_private_dir, write_pr
 
 HIDDEN_COMMANDS_KEY: Final = "hidden_commands"
 CLAUDE_SUBSCRIPTION_KEY: Final = "claude_subscription"
+CODEX_SUBSCRIPTION_KEY: Final = "codex_subscription"
 PKCE_KEY: Final = "pkce"
 
 _config_adapter: Final[TypeAdapter[Mapping[str, str]]] = TypeAdapter(Mapping[str, str])
@@ -114,9 +115,15 @@ def _normalize_boolean(key: str) -> Callable[[str], str]:
     return normalize
 
 
-def claude_subscription_default() -> bool:
-    """Whether `lite claude` keeps the claude.ai login unless told otherwise."""
-    return get_config_value(CLAUDE_SUBSCRIPTION_KEY) == "true"
+_SUBSCRIPTION_KEYS: Final[Mapping[str, str]] = MappingProxyType(
+    {"claude": CLAUDE_SUBSCRIPTION_KEY, "codex": CODEX_SUBSCRIPTION_KEY}
+)
+
+
+def subscription_default(agent: str) -> bool:
+    """Whether `lite <agent>` keeps the agent's own subscription login unless told otherwise."""
+    key: Final = _SUBSCRIPTION_KEYS.get(agent)
+    return key is not None and get_config_value(key) == "true"
 
 
 def pkce_default() -> bool:
@@ -129,6 +136,7 @@ _NORMALIZERS: Final[Mapping[str, Callable[[str], str]]] = MappingProxyType(
         "base_url": normalize_base_url,
         HIDDEN_COMMANDS_KEY: _normalize_hidden_commands,
         CLAUDE_SUBSCRIPTION_KEY: _normalize_boolean(CLAUDE_SUBSCRIPTION_KEY),
+        CODEX_SUBSCRIPTION_KEY: _normalize_boolean(CODEX_SUBSCRIPTION_KEY),
         PKCE_KEY: _normalize_boolean(PKCE_KEY),
     }
 )

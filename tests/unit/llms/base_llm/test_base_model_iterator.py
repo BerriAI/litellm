@@ -5,6 +5,7 @@ and non-string objects (e.g. Pydantic BaseModel events from the Responses API) p
 
 import json
 from collections.abc import AsyncIterator, Mapping
+from itertools import chain
 from typing import Final
 
 import httpx
@@ -15,6 +16,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator, convert_model_response_to_streaming
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
+from litellm.llms.openai.common_utils import OpenAIError
 from litellm.types.utils import Choices, GenericStreamingChunk, Message, ModelResponse
 
 
@@ -361,7 +363,8 @@ async def _aiter_lines(lines: tuple[str, ...]) -> AsyncIterator[str]:
 @pytest.mark.asyncio
 async def test_done_inside_streamed_json_is_content_not_the_end_of_stream(sync_mode: bool) -> None:
     lines: Final = (
-        _sse_chunk({"role": "assistant", "content": "Checklist: "}),
+        _sse_chunk({"role": "assistant", "reasoning_content": "Mark it [DONE] once tests pass"}),
+        _sse_chunk({"content": "Checklist: "}),
         _sse_chunk({"content": "- [DONE] write tests"}),
         _sse_chunk({"content": " - [ ] ship it"}),
         _sse_chunk(
@@ -402,7 +405,10 @@ async def test_done_inside_streamed_json_is_content_not_the_end_of_stream(sync_m
     chunks: Final = list(wrapper) if sync_mode else [chunk async for chunk in wrapper]
 
     deltas: Final = [chunk.choices[0].delta for chunk in chunks if chunk.choices]
-    tool_calls: Final = [tool_call for delta in deltas for tool_call in delta.tool_calls or ()]
+    tool_calls: Final = tuple(chain.from_iterable(delta.tool_calls or () for delta in deltas))
+    assert "".join(getattr(delta, "reasoning_content", None) or "" for delta in deltas) == (
+        "Mark it [DONE] once tests pass"
+    )
     assert "".join(delta.content or "" for delta in deltas) == "Checklist: - [DONE] write tests - [ ] ship it"
     assert json.loads("".join(tool_call.function.arguments or "" for tool_call in tool_calls)) == {
         "status": "[DONE]",
@@ -420,3 +426,12 @@ def test_done_marker_ends_the_stream(line: str) -> None:
     assert chunks == [
         GenericStreamingChunk(text="", is_finished=True, finish_reason="stop", usage=None, index=0, tool_use=None)
     ]
+
+
+def test_error_frame_mentioning_done_raises_instead_of_ending_the_stream() -> None:
+    line: Final = 'data: {"error": {"message": "prompt too long [DONE]", "code": 400}}'
+
+    with pytest.raises(OpenAIError, match=r"prompt too long \[DONE\]") as error:
+        list(OpenAIChatCompletionStreamingHandler(streaming_response=iter((line,)), sync_stream=True))
+
+    assert error.value.status_code == 400
