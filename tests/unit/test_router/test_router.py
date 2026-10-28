@@ -3774,6 +3774,132 @@ async def test_continued_stream_sharing_the_proxy_logging_object_bills_the_cut_t
     )
 
 
+def _responses_sse(*events: Mapping[str, object]) -> str:
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+
+
+def _responses_envelope(response_id: str, model: str, status: str, **fields: object) -> dict[str, object]:
+    return {
+        "id": response_id,
+        "object": "response",
+        "created_at": 1700000000,
+        "status": status,
+        "model": model,
+        "output": [],
+        **fields,
+    }
+
+
+@pytest.mark.asyncio
+async def test_responses_fallback_sharing_the_proxy_logging_object_logs_the_fallback_usage(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SpendRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    respx_mock.post("https://primary.example/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=_responses_sse(
+                {"type": "response.created", "response": _responses_envelope("resp_primary", "gpt-4o", "in_progress")},
+                *(
+                    {
+                        "type": "response.output_text.delta",
+                        "item_id": "msg_primary",
+                        "output_index": 0,
+                        "content_index": 0,
+                        "delta": word,
+                    }
+                    for word in ("Once ", "upon ", "a ", "time ", "there")
+                ),
+                {
+                    "type": "response.failed",
+                    "response": _responses_envelope(
+                        "resp_primary",
+                        "gpt-4o",
+                        "failed",
+                        error={"code": "server_error", "message": "The model had an internal error"},
+                    ),
+                },
+            ),
+        )
+    )
+    respx_mock.post("https://backup.example/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=_responses_sse(
+                {"type": "response.created", "response": _responses_envelope("resp_backup", "gpt-4o-mini", "in_progress")},
+                {
+                    "type": "response.completed",
+                    "response": _responses_envelope(
+                        "resp_backup",
+                        "gpt-4o-mini",
+                        "completed",
+                        output=[
+                            {
+                                "type": "message",
+                                "id": "msg_backup",
+                                "status": "completed",
+                                "role": "assistant",
+                                "content": [{"type": "output_text", "text": "Once upon a time", "annotations": []}],
+                            }
+                        ],
+                        usage={"input_tokens": 1000, "output_tokens": 700, "total_tokens": 1700},
+                    ),
+                },
+            ),
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k1", "api_base": "https://primary.example/v1"},
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "k2",
+                    "api_base": "https://backup.example/v1",
+                },
+            },
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+    shared_logging, _ = litellm.utils.function_setup(
+        original_function="aresponses",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="primary",
+        input="Tell me a story",
+        stream=True,
+        litellm_call_id="shared-call",
+    )
+
+    response: Final = await router.aresponses(
+        model="primary",
+        input="Tell me a story",
+        stream=True,
+        litellm_call_id="shared-call",
+        litellm_logging_obj=shared_logging,
+    )
+    _ = [event async for event in response]
+    await asyncio.wait_for(recorder.succeeded.wait(), timeout=10)
+
+    success: Final = recorder.successes[-1]
+    assert (success["prompt_tokens"], success["completion_tokens"]) == (1000, 700)
+    spend_row: Final = recorder.spend_rows[-1]
+    assert (spend_row["prompt_tokens"], spend_row["completion_tokens"], spend_row["spend"]) == (
+        1000,
+        700,
+        success["response_cost"],
+    )
+
+
 def test_carry_partial_spend_to_fallback_adds_the_partial_the_cut_stream_inherited():
     from litellm.types.utils import Usage
 
@@ -20628,6 +20754,37 @@ def test_resolved_litellm_models_answers_through_every_channel_a_request_uses(
     result is not "the call fails", so what to do about it stays each caller's policy.
     """
     assert set(_resolution_router().resolved_litellm_models(model_name)) == set(expected)
+
+
+def test_resolved_litellm_models_base_model_precedence_is_opt_in() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "pooled",
+                "litellm_params": {"model": "openai/deployment-a", "api_key": "sk-test", "base_model": "gpt-5.5"},
+                "model_info": {"base_model": "gpt-6-astra"},
+            },
+            {
+                "model_name": "pooled",
+                "litellm_params": {"model": "openai/deployment-b", "api_key": "sk-test", "base_model": "gpt-5.6-sol"},
+            },
+            {
+                "model_name": "team-deployment",
+                "litellm_params": {"model": "openai/deployment-c", "api_key": "sk-test"},
+                "model_info": {
+                    "base_model": "gpt-6-astra",
+                    "team_id": "test-team",
+                    "team_public_model_name": "team-model",
+                },
+            },
+        ],
+        model_group_alias={"nickname": "pooled"},
+    )
+    assert router.resolved_litellm_models("nickname") == ("openai/deployment-a", "openai/deployment-b")
+    assert router.resolved_litellm_models("nickname", use_base_model=True) == ("gpt-6-astra", "gpt-5.6-sol")
+    assert router.resolved_litellm_models("team-model", "test-team") == ("openai/deployment-c",)
+    assert router.resolved_litellm_models("team-model", "test-team", use_base_model=True) == ("gpt-6-astra",)
+    assert router.resolved_litellm_models("never-configured", use_base_model=True) == ()
 
 
 class TestTierParamsTheTargetAccepts:
