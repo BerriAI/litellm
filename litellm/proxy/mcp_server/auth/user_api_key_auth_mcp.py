@@ -101,6 +101,7 @@ if TYPE_CHECKING:
 _EMPTY_TOOLSET_GRANTS: Final[Mapping[str, Sequence[str]]] = MappingProxyType({})
 OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 _PROXY_SETTINGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_CAUSE_CHAIN_MAX_DEPTH: Final = 16
 _CACHED_VALUE: Final = TypeAdapter(object)
 
 
@@ -234,10 +235,15 @@ def _is_legacy_delegate_cold_start(mcp_servers: list[str] | None, client_ip: str
     return True
 
 
-def _caused_by(exc: BaseException | None, error_type: type[BaseException], depth: int = 16) -> bool:
-    if exc is None or depth == 0:
-        return False
-    return isinstance(exc, error_type) or _caused_by(exc.__cause__ or exc.__context__, error_type, depth - 1)
+def _caused_by(exc: BaseException, error_type: type[BaseException]) -> bool:
+    link: BaseException | None = exc  # rebind-ok: advances one link of the cause chain per iteration
+    for _ in range(_CAUSE_CHAIN_MAX_DEPTH):
+        if link is None:
+            return False
+        if isinstance(link, error_type):
+            return True
+        link = link.__cause__ or link.__context__
+    return False
 
 
 async def _bearer_is_litellm_credential(token: str) -> bool:
