@@ -7,7 +7,9 @@ its end-to-end wiring into provider routing (get_llm_provider) and model-info
 resolution (get_model_info) including the shipped rules in the bundled cost map.
 """
 
+import json
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -20,6 +22,8 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_routing_generalization,
     set_fallback_generalizations,
 )
+
+REPO_ROOT = Path(__file__).parents[3]
 
 
 @pytest.fixture
@@ -363,6 +367,16 @@ def test_exact_entries_fill_only_missing_fields(restore_generalizations, monkeyp
 # --------------------------------------------------------------------------- #
 # Shipped rules (bundled cost map)
 # --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "cost_map_path",
+    ["model_prices_and_context_window.json", "litellm/model_prices_and_context_window_backup.json"],
+)
+def test_every_shipped_rule_installs_without_a_skip_warning(restore_generalizations, warning_messages, cost_map_path):
+    rules = json.loads((REPO_ROOT / cost_map_path).read_text())["fallback_generalizations"]["rules"]
+    restore_generalizations(rules)
+    assert warning_messages == []
 
 
 @pytest.fixture
