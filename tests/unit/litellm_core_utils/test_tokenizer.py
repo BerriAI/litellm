@@ -403,12 +403,10 @@ def test_missing_python_tokenizer_warns_before_approximate_count(caplog, monkeyp
 
     from litellm.utils import (
         _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES,
-        _load_huggingface_tokenizer,
         _select_tokenizer_helper,
     )
 
     monkeypatch.setenv("LITELLM_RUST", "false")
-    _load_huggingface_tokenizer.cache_clear()
     _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
     try:
         with caplog.at_level(log_level, logger="LiteLLM"), patch.dict(sys.modules, {"tokenizers": None}):
@@ -418,7 +416,6 @@ def test_missing_python_tokenizer_warns_before_approximate_count(caplog, monkeyp
         assert ("token counts may be approximate" in caplog.text) is (log_level == "WARNING")
         assert ("install tokenizers" in caplog.text) is (log_level == "WARNING")
     finally:
-        _load_huggingface_tokenizer.cache_clear()
         _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
 
 
@@ -478,12 +475,10 @@ def test_tokenizer_fallback_logs_safe_diagnostic_context(caplog, monkeypatch):
 
     from litellm.utils import (
         _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES,
-        _load_huggingface_tokenizer,
         _select_tokenizer_helper,
     )
 
     monkeypatch.setenv("LITELLM_RUST", "false")
-    _load_huggingface_tokenizer.cache_clear()
     _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
     model = "llama-2\r\nforged-model\x1b[31m\u2028\u2029"
     secret = "sk-" + "x" * 48
@@ -511,7 +506,6 @@ def test_tokenizer_fallback_logs_safe_diagnostic_context(caplog, monkeypatch):
         assert "REDACTED" in message
         assert "install tokenizers and huggingface-hub" in message
     finally:
-        _load_huggingface_tokenizer.cache_clear()
         _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
 
 
