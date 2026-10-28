@@ -1,12 +1,37 @@
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Final
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, model_validator
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
-from ...router import ModelGroupInfo
+from ...router import ModelGroupInfo, updateDeployment
+
+
+class PatchModelRequest(updateDeployment):
+    litellm_params_to_remove: tuple[Annotated[str, Field(min_length=1)], ...] = Field(
+        default=(),
+        description=(
+            "Top-level litellm_params keys to delete. Omitted parameters remain unchanged. "
+            "The required model key and keys also supplied in litellm_params cannot be removed. "
+            "Removing an absent key or repeating a key is a no-op."
+        ),
+    )
+
+    model_config = ConfigDict(frozen=True, protected_namespaces=())
+
+    @model_validator(mode="after")
+    def validate_param_removals(self) -> "PatchModelRequest":
+        removals: Final = frozenset(self.litellm_params_to_remove)
+        if "model" in removals:
+            raise ValueError("The required litellm_params.model cannot be removed")
+        conflicts: Final[frozenset[str]] = (
+            removals.intersection(self.litellm_params.model_fields_set) if self.litellm_params else frozenset()
+        )
+        if conflicts:
+            raise ValueError(f"Cannot set and remove the same litellm_params keys: {', '.join(sorted(conflicts))}")
+        return self
 
 
 class ModelGroupInfoProxy(ModelGroupInfo):
@@ -22,7 +47,7 @@ class UpdateUsefulLinksRequest(LiteLLMBaseModel):
     # Supports both old format (Dict[str, str]) and new format (Dict[str, Dict[str, Any]])
     # New format: { "displayName": { "url": "...", "index": 0 } }
     # Old format: { "displayName": "url" } (for backward compatibility)
-    useful_links: dict[str, str | dict[str, Any]]
+    useful_links: dict[str, str | dict[str, object]]
 
 
 class AutoRouterClassifierDefaultPromptResponse(LiteLLMBaseModel):

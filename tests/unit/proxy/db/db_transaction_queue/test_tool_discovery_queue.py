@@ -5,9 +5,9 @@ Unit tests for ToolDiscoveryQueue.
 
 import pytest
 
-
 from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
     ToolDiscoveryQueue,
+    aggregate_tool_discoveries,
 )
 
 
@@ -16,57 +16,50 @@ def queue():
     return ToolDiscoveryQueue()
 
 
-def test_add_single_tool(queue):
+def test_a_tool_seen_once_flushes_with_call_count_one(queue):
     queue.add_update({"tool_name": "my_tool", "origin": "user_defined"})
-    items = queue.flush()
-    assert len(items) == 1
-    assert items[0]["tool_name"] == "my_tool"
-    assert items[0]["origin"] == "user_defined"
+    assert queue.flush() == [{"tool_name": "my_tool", "origin": "user_defined", "call_count": 1}]
 
 
-def test_deduplication_same_name(queue):
-    """Adding the same tool_name twice should only keep the first."""
-    queue.add_update({"tool_name": "tool_a", "origin": "mcp_server"})
-    queue.add_update({"tool_name": "tool_a", "origin": "user_defined"})
-    items = queue.flush()
-    assert len(items) == 1
-    assert items[0]["origin"] == "mcp_server"  # first wins
+def test_repeated_sightings_fold_into_one_row_counting_every_call(queue):
+    queue.add_update({"tool_name": "tool_a", "origin": "mcp_server", "created_by": "alice"})
+    queue.add_update({"tool_name": "tool_a", "origin": "user_defined", "created_by": "bob"})
+    queue.add_update({"tool_name": "tool_a"})
+    assert queue.flush() == [{"tool_name": "tool_a", "origin": "mcp_server", "created_by": "alice", "call_count": 3}]
 
 
-def test_deduplication_different_names(queue):
+def test_distinct_tools_each_get_their_own_row(queue):
     queue.add_update({"tool_name": "tool_a"})
     queue.add_update({"tool_name": "tool_b"})
-    items = queue.flush()
-    assert len(items) == 2
-    names = {i["tool_name"] for i in items}
-    assert names == {"tool_a", "tool_b"}
-
-
-def test_flush_clears_pending(queue):
-    queue.add_update({"tool_name": "tool_x"})
-    items1 = queue.flush()
-    assert len(items1) == 1
-    items2 = queue.flush()
-    assert len(items2) == 0
-
-
-def test_seen_names_reset_after_flush(queue):
-    """Seen-set is cleared on flush so the same tool can re-enter the next cycle."""
     queue.add_update({"tool_name": "tool_a"})
-    queue.flush()
-    queue.add_update({"tool_name": "tool_a"})  # same tool, new cycle
-    items = queue.flush()
-    assert len(items) == 1
-    assert items[0]["tool_name"] == "tool_a"
+    assert queue.flush() == [
+        {"tool_name": "tool_a", "call_count": 2},
+        {"tool_name": "tool_b", "call_count": 1},
+    ]
+
+
+def test_flush_clears_pending_and_the_next_cycle_counts_from_zero(queue):
+    queue.add_update({"tool_name": "tool_x"})
+    queue.add_update({"tool_name": "tool_x"})
+    assert queue.flush() == [{"tool_name": "tool_x", "call_count": 2}]
+    assert queue.flush() == []
+    queue.add_update({"tool_name": "tool_x"})
+    assert queue.flush() == [{"tool_name": "tool_x", "call_count": 1}]
 
 
 def test_empty_tool_name_ignored(queue):
     queue.add_update({"tool_name": ""})
     queue.add_update({"tool_name": None})  # type: ignore[arg-type]
-    items = queue.flush()
-    assert len(items) == 0
+    assert queue.flush() == []
 
 
-def test_flush_returns_list(queue):
-    result = queue.flush()
-    assert isinstance(result, list)
+def test_aggregate_sums_call_counts_across_workers_flushes():
+    worker_a = [{"tool_name": "get_weather", "origin": "user_defined", "call_count": 3}]
+    worker_b = [
+        {"tool_name": "get_weather", "origin": "mcp_server", "call_count": 2},
+        {"tool_name": "search", "call_count": 1},
+    ]
+    assert aggregate_tool_discoveries([*worker_a, *worker_b]) == (
+        {"tool_name": "get_weather", "origin": "user_defined", "call_count": 5},
+        {"tool_name": "search", "call_count": 1},
+    )
