@@ -40,7 +40,7 @@ class _OverridesPerChunk(CustomLogger):
 
 
 class _PerChunkGuardrail(CustomGuardrail):
-    async def async_post_call_streaming_hook(self, *args, **kwargs):
+    async def async_post_call_streaming_hook(self, user_api_key_dict: UserAPIKeyAuth, response: str) -> None:
         return None
 
 

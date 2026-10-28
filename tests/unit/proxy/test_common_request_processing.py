@@ -4973,16 +4973,18 @@ class TestAsyncStreamingDataGeneratorFastPath:
         hook_spy.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_fast_path_skips_per_chunk_hook_with_a_request_only_guardrail(self, monkeypatch):
+    async def test_fast_path_skips_per_chunk_hook_with_a_request_only_guardrail(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(litellm, "callbacks", [CustomGuardrail(guardrail_name="g", event_hook="pre_call")])
         ProxyLogging._callback_capabilities_cache.clear()
 
-        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
-        hook_spy = AsyncMock(side_effect=lambda **kw: kw["response"])
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=MagicMock())
+        hook_spy: Final = AsyncMock(side_effect=lambda **kw: kw["response"])
         monkeypatch.setattr(proxy_logging_obj, "async_post_call_streaming_hook", hook_spy)
 
-        chunks = [b"event: a\ndata: {}\n\n", b"event: b\ndata: {}\n\n"]
-        out = [
+        chunks: Final = [b"event: a\ndata: {}\n\n", b"event: b\ndata: {}\n\n"]
+        out: Final = [
             c
             async for c in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
                 response=self._aiter(chunks),

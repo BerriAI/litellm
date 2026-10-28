@@ -10,7 +10,7 @@ Covers ``_wrap_streaming_iterator_with_enrichment``,
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from datetime import datetime
 from typing import Any, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock
@@ -389,24 +389,26 @@ class _RequestOnlyGuardrail(CustomGuardrail):
         super().__init__(guardrail_name="request-only", event_hook=GuardrailEventHooks.pre_call, default_on=True)
         self.asked: List[GuardrailEventHooks] = []
 
-    def should_run_guardrail(self, data, event_type: GuardrailEventHooks) -> bool:
+    def should_run_guardrail(self, data: dict[str, object], event_type: GuardrailEventHooks) -> bool:
         self.asked.append(event_type)
         return super().should_run_guardrail(data=data, event_type=event_type)
 
 
 @pytest.mark.asyncio
 async def test_async_post_call_streaming_hook_does_not_ask_a_request_only_guardrail(
-    proxy_logging, make_user_api_key_auth, monkeypatch
-):
-    guardrail = _RequestOnlyGuardrail()
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = _RequestOnlyGuardrail()
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
-    chunk = ModelResponseStream(
+    chunk: Final = ModelResponseStream(
         id="rid",
         choices=[{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": None}],
         created=0,
         model="gpt-4o-mini",
     )
-    out = await proxy_logging.async_post_call_streaming_hook(
+    out: Final = await proxy_logging.async_post_call_streaming_hook(
         data={"messages": [{"role": "user", "content": "hi"}]},
         response=chunk,
         user_api_key_dict=make_user_api_key_auth(),
@@ -416,23 +418,25 @@ async def test_async_post_call_streaming_hook_does_not_ask_a_request_only_guardr
 
 
 class _PerChunkRewriter(CustomLogger):
-    async def async_post_call_streaming_hook(self, user_api_key_dict, response):  # type: ignore[override]
+    async def async_post_call_streaming_hook(self, user_api_key_dict: UserAPIKeyAuth, response: str) -> str:
         return f"modified-{response}"
 
 
 @pytest.mark.asyncio
 async def test_async_post_call_streaming_hook_skips_a_request_only_guardrail_beside_a_per_chunk_callback(
-    proxy_logging, make_user_api_key_auth, monkeypatch
-):
-    guardrail = _RequestOnlyGuardrail()
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = _RequestOnlyGuardrail()
     monkeypatch.setattr(litellm, "callbacks", [guardrail, _PerChunkRewriter()])
-    chunk = ModelResponseStream(
+    chunk: Final = ModelResponseStream(
         id="rid",
         choices=[{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": None}],
         created=0,
         model="gpt-4o-mini",
     )
-    out = await proxy_logging.async_post_call_streaming_hook(
+    out: Final = await proxy_logging.async_post_call_streaming_hook(
         data={"messages": [{"role": "user", "content": "hi"}]},
         response=chunk,
         user_api_key_dict=make_user_api_key_auth(),
@@ -474,8 +478,10 @@ async def _say_hi_through_chunk_hooks(proxy_logging: ProxyLogging, user_api_key_
 
 @pytest.mark.asyncio
 async def test_async_post_call_streaming_hook_runs_an_instance_hook_beside_a_guardrail(
-    proxy_logging, make_user_api_key_auth, monkeypatch
-):
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     guardrail: Final = _RequestOnlyGuardrail()
     monkeypatch.setattr(litellm, "callbacks", [guardrail, _instance_rewriter()])
     assert await _say_hi_through_chunk_hooks(proxy_logging, make_user_api_key_auth()) == "modified-say hi"
@@ -484,8 +490,10 @@ async def test_async_post_call_streaming_hook_runs_an_instance_hook_beside_a_gua
 
 @pytest.mark.asyncio
 async def test_async_post_call_streaming_hook_runs_an_instance_hook_beside_a_class_hook(
-    proxy_logging, make_user_api_key_auth, monkeypatch
-):
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(litellm, "callbacks", [_ClassChunkLogger(), _instance_rewriter()])
     assert await _say_hi_through_chunk_hooks(proxy_logging, make_user_api_key_auth()) == "modified-say hi"
 
