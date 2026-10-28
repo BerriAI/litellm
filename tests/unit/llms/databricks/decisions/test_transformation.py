@@ -1,6 +1,7 @@
 from typing import Final
 
 import pytest
+import responses
 
 from litellm.llms.databricks.decisions.transformation import DatabricksDecisionsConfig
 from litellm.types.decisions import (
@@ -19,6 +20,40 @@ _REQUEST: Final = DecisionsIRRequest(
     questions=(DecisionsIRPredicateQuestion(name="is_defect", instructions="Is this a defect?", criteria=None),),
 )
 _QUESTIONS: Final = {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}}
+
+
+@responses.activate
+def test_should_resolve_oauth_credentials_without_a_static_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABRICKS_CLIENT_ID", "synthetic-client")
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "synthetic-secret")
+    token: Final = responses.post(f"{_HOST}/oidc/v1/token", json={"access_token": "oauth-token", "expires_in": 3600})
+
+    assert DatabricksDecisionsConfig().resolve_credential(None, _BASE, {}) == "oauth-token"
+    assert token.call_count == 1
+
+
+@responses.activate
+@pytest.mark.parametrize("key_source", ("argument", "DATABRICKS_API_KEY", "DATABRICKS_TOKEN"))
+def test_should_preserve_static_key_precedence(monkeypatch: pytest.MonkeyPatch, key_source: str) -> None:
+    monkeypatch.setenv("DATABRICKS_CLIENT_ID", "synthetic-client")
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "synthetic-secret")
+    if key_source != "argument":
+        monkeypatch.setenv(key_source, "static-key")
+    config: Final = DatabricksDecisionsConfig()
+    base, key = config.resolve_connection(_BASE, "static-key" if key_source == "argument" else None)
+
+    assert base == _BASE
+    assert config.resolve_credential(key, _BASE, {}) == "static-key"
+    assert len(responses.calls) == 0
+
+
+@pytest.mark.parametrize("missing", ("DATABRICKS_CLIENT_ID", "DATABRICKS_CLIENT_SECRET"))
+def test_should_leave_incomplete_oauth_credentials_unresolved(monkeypatch: pytest.MonkeyPatch, missing: str) -> None:
+    monkeypatch.setenv("DATABRICKS_CLIENT_ID", "synthetic-client")
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "synthetic-secret")
+    monkeypatch.delenv(missing)
+
+    assert DatabricksDecisionsConfig().resolve_credential(None, _BASE, {}) is None
 
 
 @pytest.mark.parametrize("api_base", [_BASE, f"{_BASE}/"])

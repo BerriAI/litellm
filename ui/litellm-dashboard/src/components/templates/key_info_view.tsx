@@ -58,6 +58,7 @@ import {
 import { KeyEditView } from "./key_edit_view";
 import { keyOrganizationId } from "./keyEditFieldNormalizers";
 import { isTeamAdminEditingMemberKey, teamAdminMemberKeyPayload } from "./teamAdminMemberKeyPayload";
+import { BudgetPeriodTooltip } from "@/components/shared/BudgetPeriodTooltip";
 
 export function needsLifetimeSpendBackfill(spend: number, totalSpend: number | null | undefined): boolean {
   return (totalSpend ?? 0) < spend;
@@ -729,7 +730,15 @@ export default function KeyInfoView({
           <TabsContent value="overview" keepMounted>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
               <Card className="block p-6">
-                <p className="text-sm">Spend</p>
+                <p className="text-sm">
+                  Spend
+                  <BudgetPeriodTooltip
+                    spend={currentKeyData.spend}
+                    maxBudget={currentKeyData.max_budget}
+                    budgetDuration={currentKeyData.budget_duration}
+                    budgetResetAt={currentKeyData.budget_reset_at}
+                  />
+                </p>
                 <div className="mt-2">
                   <h3 className="text-lg font-medium">${formatNumberWithCommas(currentKeyData.spend, 4)}</h3>
                   <p className="text-sm">
