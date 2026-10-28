@@ -5,11 +5,13 @@ Docs - https://cloud.ibm.com/apidocs/watsonx-ai#text-rerank
 """
 
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Final, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str
@@ -22,7 +24,13 @@ from litellm.types.rerank import (
     RerankTokens,
 )
 
-from ..common_utils import IBMWatsonXMixin, _generate_watsonx_token, _get_api_params
+from ..common_utils import IBMWatsonXMixin, generate_watsonx_token, get_api_params
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_OPTIONAL_INT: Final[TypeAdapter[int | None]] = TypeAdapter(int | None)
+_STR: Final = TypeAdapter(str)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
@@ -39,7 +47,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         base_url: Final = self._get_base_url(api_base=api_base)
         endpoint: Final = WatsonXAIEndpoint.RERANK.value
 
-        url: Final = base_url.rstrip("/") + endpoint
+        url: Final = join_api_base(base_url, endpoint)
 
         params: Final = optional_params or {}
 
@@ -85,7 +93,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         elif zen_api_key:
             headers["Authorization"] = f"ZenApiKey {zen_api_key}"
         else:
-            token = _generate_watsonx_token(api_key=api_key, token=token)
+            token = generate_watsonx_token(api_key=api_key, token=token)
             # build auth headers
             headers["Authorization"] = f"Bearer {token}"
         return {**default_headers, **headers}
@@ -140,7 +148,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         """
         Transform request to IBM watsonx.ai rerank format
         """
-        watsonx_api_params: Final = _get_api_params(params=optional_rerank_params, model=model)
+        watsonx_api_params: Final = get_api_params(params=optional_rerank_params, model=model)
         watsonx_auth_payload: Final = self._prepare_payload(
             model=model,
             api_params=watsonx_api_params,
@@ -163,7 +171,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         Transform IBM watsonx.ai rerank response to LiteLLM RerankResponse format
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Failed to parse response: {e}",
@@ -171,13 +179,14 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
                 headers=raw_response.headers,
             )
 
-        _results: Final[list[dict] | None] = raw_response_json.get("results")
+        payload: Final = _JSON_OBJECT.validate_python(raw_response_json)
+        _results: Final = payload.get("results")
         if _results is None:
             raise ValueError(f"No results found in the response={raw_response_json}")
 
         transformed_results: Final = []
 
-        for result in _results:
+        for result in _JSON_OBJECTS.validate_python(_results):
             transformed_result: dict[str, object] = {
                 "index": result["index"],
                 "relevance_score": result["score"],
@@ -191,11 +200,11 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
 
             transformed_results.append(transformed_result)
 
-        response_id: Final = raw_response_json.get("id") or str(uuid.uuid4())
+        response_id: Final = _STR.validate_python(payload.get("id") or str(uuid.uuid4()))
 
         # Extract usage information
         _tokens: Final = RerankTokens(
-            input_tokens=raw_response_json.get("input_token_count", 0),
+            input_tokens=_OPTIONAL_INT.validate_python(payload.get("input_token_count", 0)),
         )
         rerank_meta: Final = RerankResponseMeta(tokens=_tokens)
 

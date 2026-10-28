@@ -1,0 +1,22 @@
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error(transparent)]
+    Http(#[from] litellm_http::Error),
+    #[error("environment_variables values must be strings, numbers or booleans")]
+    Environment,
+    #[error("MCP host does not yet support configured setting {0}")]
+    McpSetting(String),
+    #[error(transparent)]
+    Mcp(#[from] litellm_gateway_mcp::ConnectError),
+    #[error(transparent)]
+    Config(#[from] litellm_config::Error),
+    #[error("invalid Redis setting {setting}: {reason}")]
+    RedisInvalid {
+        setting: &'static str,
+        reason: &'static str,
+    },
+    #[error(transparent)]
+    RedisConnect(#[from] litellm_redis_client::ConnectError),
+    #[error("MCP requires a configured master key")]
+    Auth(#[from] litellm_gateway_auth::Error),
+}

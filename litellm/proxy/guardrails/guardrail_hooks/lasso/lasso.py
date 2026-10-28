@@ -9,7 +9,7 @@ import json
 import os
 import uuid
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
+from typing import TYPE_CHECKING, Final, Literal, TypedDict
 
 try:
     import ulid
@@ -31,12 +31,15 @@ from fastapi import HTTPException
 
 import litellm
 from litellm import DualCache
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
+    GUARDRAIL_SESSIONS_TARGET,
     CustomGuardrail,
     log_guardrail_information,
 )
 from litellm.integrations.custom_guardrail import dc as global_cache
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -310,6 +313,7 @@ class LassoGuardrail(CustomGuardrail):
 
         return response
 
+    @with_service_target(GUARDRAIL_SESSIONS_TARGET)
     def _get_or_generate_conversation_id(self, data: dict, cache: DualCache) -> str:
         """
         Get or generate a conversation_id for this request.
@@ -394,13 +398,15 @@ class LassoGuardrail(CustomGuardrail):
             HTTPException: If blocking violations are detected
         """
         raw_messages: Final[list[dict[str, object]]] = data.get("messages") or []
-        messages: list[dict[str, Any]] = self._expand_messages_for_classification(raw_messages) if raw_messages else []
-        messages_count: Final = len(messages)
-        if data.get("input") is not None:
-            # Responses-API payloads carry text in data["input"]. Inspect it
-            # alongside any "messages" array — otherwise a caller can attach
-            # benign messages and stash blocked content in input to bypass.
-            messages.extend(build_inspection_messages({"input": data["input"]}))
+        expanded_messages: Final = self._expand_messages_for_classification(raw_messages) if raw_messages else []
+        messages_count: Final = len(expanded_messages)
+        # Responses-API payloads carry text in data["input"]. Inspect it
+        # alongside any "messages" array — otherwise a caller can attach
+        # benign messages and stash blocked content in input to bypass.
+        input_messages: Final = (
+            build_inspection_messages({"input": data["input"]}) if data.get("input") is not None else []
+        )
+        messages: Final[Sequence[Mapping[str, object]]] = [*expanded_messages, *input_messages]
         if not messages:
             return data
 
@@ -418,7 +424,7 @@ class LassoGuardrail(CustomGuardrail):
         data: dict,
         cache: DualCache,
         message_type: Literal["PROMPT", "COMPLETION"],
-        messages: list[dict[str, object]],
+        messages: Sequence[Mapping[str, object]],
     ) -> dict:
         """Handle classification without masking."""
         try:
@@ -436,7 +442,7 @@ class LassoGuardrail(CustomGuardrail):
         data: dict,
         cache: DualCache,
         message_type: Literal["PROMPT", "COMPLETION"],
-        messages: list[dict[str, object]],
+        messages: Sequence[Mapping[str, object]],
         messages_count: int,
     ) -> dict:
         """Handle masking with classifix endpoint.
@@ -467,7 +473,7 @@ class LassoGuardrail(CustomGuardrail):
                     text_parts = [msg["content"] for msg in masked_for_input if isinstance(msg.get("content"), str)]
                     if text_parts:
                         data["input"] = "\n".join(text_parts)
-                self._log_masking_applied(message_type, dict(response))
+                self._log_masking_applied(message_type, response)
 
             return data
         except Exception as e:
@@ -476,7 +482,7 @@ class LassoGuardrail(CustomGuardrail):
 
     def _map_masked_messages_back(
         self,
-        original_messages: list[dict[str, Any]],
+        original_messages: Sequence[Mapping[str, object]],
         masked_messages: Sequence[Mapping[str, object]],
     ) -> list[dict[str, object]]:
         """Map Lasso-format masked messages back onto the original OpenAI-format messages.
@@ -489,7 +495,7 @@ class LassoGuardrail(CustomGuardrail):
         """
         # Index masked content by type so we can look up by id without caring about order.
         masked_tool_use: Final[dict[object, dict[str, object]]] = {}
-        masked_tool_result: Final[dict[str, str]] = {}
+        masked_tool_result: Final[dict[object, str]] = {}
         masked_text: Final[list[str]] = []
 
         for msg in masked_messages:
@@ -564,12 +570,12 @@ class LassoGuardrail(CustomGuardrail):
 
     def _update_tool_calls_from_masked(
         self,
-        tool_calls: list[object],
+        tool_calls: object,
         masked_tool_use: Mapping[object, Mapping[str, object]],
     ) -> list[object]:
         """Replace tool_call arguments with masked values returned by Lasso."""
         updated: Final = []
-        for call in tool_calls:
+        for call in iter_items(tool_calls):
             call_id = self._get_field(call, "id")
             if call_id and call_id in masked_tool_use:
                 masked_input = masked_tool_use[call_id].get("input")
@@ -624,7 +630,7 @@ class LassoGuardrail(CustomGuardrail):
     def _log_masking_applied(
         self,
         message_type: Literal["PROMPT", "COMPLETION"],
-        response: dict[str, Any],
+        response: LassoResponse,
     ) -> None:
         """Log masking application with structured context."""
         conversation_id: Final = getattr(self, "conversation_id", "unknown")
@@ -634,12 +640,12 @@ class LassoGuardrail(CustomGuardrail):
                 "guardrail_name": getattr(self, "guardrail_name", "unknown"),
                 "message_type": message_type,
                 "violations_count": len(response.get("findings", {})),
-                "masked_fields": len(response.get("messages", [])),
+                "masked_fields": len(response.get("messages") or []),
                 "conversation_id": conversation_id,
             },
         )
 
-    def _expand_messages_for_classification(self, messages: list[dict[str, Any]]) -> list[dict[str, object]]:
+    def _expand_messages_for_classification(self, messages: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
         """
         Convert raw OpenAI-format messages to Lasso API format with content blocks.
 
@@ -698,7 +704,7 @@ class LassoGuardrail(CustomGuardrail):
                 expanded.append({"role": role, "content": content})
 
             if role == "assistant":
-                for call in msg.get("tool_calls") or []:
+                for call in iter_items(msg.get("tool_calls") or []):
                     call_id, name, input_data = self._extract_tool_call_fields(call)
                     if not call_id or not name:
                         verbose_proxy_logger.warning(
@@ -746,7 +752,7 @@ class LassoGuardrail(CustomGuardrail):
 
     def _prepare_payload(
         self,
-        messages: list[dict[str, object]],
+        messages: Sequence[Mapping[str, object]],
         data: dict,
         cache: DualCache,
         message_type: Literal["PROMPT", "COMPLETION"] = "PROMPT",
@@ -814,7 +820,7 @@ class LassoGuardrail(CustomGuardrail):
             url=url,
             headers=headers,
             json=payload,
-            timeout=10.0,
+            timeout=self.timeout if self.timeout is not None else 10.0,
         )
         response.raise_for_status()
         return response.json()

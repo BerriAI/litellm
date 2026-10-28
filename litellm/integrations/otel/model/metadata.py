@@ -38,19 +38,49 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast, get_args
 
-from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+from pydantic import TypeAdapter
+
+from litellm.constants import (
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
+    SESSION_ID_GENERATED_METADATA_KEY,
+)
 from litellm.integrations.otel.model.semconv import resolve_operation
 from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 from litellm.integrations.otel.model.utils import as_str, as_str_mapping, to_seconds
+from litellm.types.utils import InternalCallOrigin
 
 if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingPayload
 
+_INTERNAL_CALL_ORIGINS: Final[frozenset[str]] = frozenset(get_args(InternalCallOrigin))
+_AUTH_ATTRIBUTE: Final = TypeAdapter(object)
+_EXPORTED_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, str]]] = TypeAdapter(Mapping[str, str])
+IDENTITY_METADATA_FIELDS: Final = (
+    "user_api_key_alias",
+    "user_api_key_user_id",
+    "user_api_key_end_user_id",
+    "user_api_key_team_id",
+    "user_api_key_team_alias",
+    "user_api_key_org_id",
+)
+
 REQUESTER_METADATA_KEY: Final = "requester_metadata"
 REQUESTER_METADATA_PATH: Final = f"{REQUESTER_METADATA_KEY}."
+
+
+def allowlisted_metadata(metadata: Mapping[str, str], metadata_keys: tuple[str, ...]) -> Mapping[str, str]:
+    return MappingProxyType(
+        {
+            meta_key.removeprefix(REQUESTER_METADATA_PATH): value
+            for meta_key in metadata_keys
+            if (value := metadata.get(meta_key))
+        }
+    )
 
 
 @dataclass(frozen=True)
@@ -111,7 +141,7 @@ class RequestIdentity:
         snapshot) is flattened to dotted keys so ``requester_metadata.<key>``
         resolves too.
         """
-        get: Final[Callable[[str], object]] = lambda name: getattr(auth, name, None)  # noqa: E731
+        get: Final[Callable[[str], object]] = lambda name: _AUTH_ATTRIBUTE.validate_python(getattr(auth, name, None))  # noqa: E731
         auth_meta: Final = tuple(
             (meta_key, str(value))
             for meta_key, attr in (
@@ -220,12 +250,26 @@ class LLMCallEvent:
     # actually attempted — router pre-call rejections, SDK failures before the
     # provider handoff, and standalone guardrail runs all lack it.
     upstream_started: bool
+    # When the request handed off to the provider, in epoch seconds. A close with no
+    # carrier (a destination logger never sees ``pre_call``) starts its span here,
+    # not at the logging object's creation, which predates routing and the cache.
+    upstream_start_seconds: float | None
+    # The litellm feature that made this call on the caller's behalf (an
+    # ``InternalCallOrigin`` such as ``autorouter_classifier``), ``None`` for the
+    # caller's own provider attempt.
+    purpose: str | None
+    # True for a response served from the litellm response cache. A cache hit
+    # never hands off to a provider, so ``upstream_started`` stays False even
+    # though the call completed and is worth a span.
+    cache_hit: bool
     # A best-effort ``"{operation} {model}"`` name known at ``pre_call`` time. The
     # span is renamed from the typed payload at close (``finish_span``); this only
     # needs to be reasonable for a span that never gets closed (a leak).
     provisional_span_name: str
     time_to_first_chunk_seconds: float | None
+    completion_start_seconds: float | None
     trace: TraceControls
+    session_id: str | None
 
     @classmethod
     def from_dict(cls, kwargs: Mapping[str, object]) -> LLMCallEvent:
@@ -233,6 +277,7 @@ class LLMCallEvent:
         payload: Final = cast("StandardLoggingPayload", raw_payload) if raw_payload else None
         operation: Final = resolve_operation(as_str(kwargs.get("call_type")))
         model: Final = as_str(kwargs.get("model")) or ""
+        trace: Final = caller_trace_controls(kwargs)
         return cls(
             call_id=_call_id(payload, kwargs),
             payload=payload,
@@ -240,13 +285,63 @@ class LLMCallEvent:
             auth_metadata=auth_metadata(payload, kwargs),
             is_no_upstream_call=bool(kwargs.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL)),
             upstream_started=kwargs.get("api_call_start_time") is not None,
+            upstream_start_seconds=_epoch_seconds(kwargs.get("api_call_start_time")),
+            purpose=internal_call_origin(payload, kwargs),
+            cache_hit=bool(payload.get("cache_hit")) if payload else False,  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
             provisional_span_name=f"{operation.value} {model}".strip(),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),
-            trace=caller_trace_controls(kwargs),
+            completion_start_seconds=_epoch_seconds(kwargs.get("completion_start_time")),
+            trace=trace,
+            session_id=caller_session_id(kwargs, trace),
         )
 
 
-def time_to_first_chunk_seconds(kwargs: Mapping[str, Any]) -> float | None:
+def _epoch_seconds(value: object) -> float | None:
+    return to_seconds(value) if isinstance(value, (datetime, float, int, str)) and not isinstance(value, bool) else None
+
+
+def internal_call_origin(payload: StandardLoggingPayload | None, kwargs: Mapping[str, object]) -> str | None:
+    """The ``InternalCallOrigin`` a litellm-made sub-call carries in its request metadata, else ``None``."""
+    return next(
+        (
+            origin
+            for metadata in _metadata_dicts(payload, kwargs)
+            if (origin := as_str(metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY))) in _INTERNAL_CALL_ORIGINS
+        ),
+        None,
+    )
+
+
+def caller_session_id(kwargs: Mapping[str, object], trace: TraceControls) -> str | None:
+    """The conversation id the caller sent (``litellm_session_id``, else the
+    ``session_id`` trace control); ``None`` when the request carried none.
+
+    ``get_litellm_params`` back-fills ``litellm_session_id`` from ``metadata.trace_id``
+    (which the proxy stamps with the OTel trace id) and ``missing_session_id: generate``
+    mints one into the body; neither is a caller conversation, so both are ignored,
+    while a ``langfuse_session_id`` header still counts under the generate policy.
+    ``StandardLoggingPayload.session_id`` is never read: the payload drops the
+    generated marker, so a replayed minted id would pass for a caller's."""
+    params: Final[Mapping[str, object]] = as_str_mapping(kwargs.get("litellm_params")) or MappingProxyType({})
+    bodies: Final = tuple(
+        metadata
+        for key in ("metadata", "litellm_metadata")
+        if (metadata := as_str_mapping(params.get(key))) is not None
+    )
+    from_body: Final = tuple(session for body in bodies if (session := as_str(body.get("session_id"))))
+    minted: Final = frozenset(
+        session
+        for body in bodies
+        if body.get(SESSION_ID_GENERATED_METADATA_KEY) and (session := as_str(body.get("session_id")))
+    )
+    if minted:
+        return next((session for session in (trace.session_id, *from_body) if session and session not in minted), None)
+    explicit: Final = as_str(params.get("litellm_session_id"))
+    echoes_trace_id: Final = explicit is not None and any(as_str(body.get("trace_id")) == explicit for body in bodies)
+    return (None if echoes_trace_id else explicit) or trace.session_id or None
+
+
+def time_to_first_chunk_seconds(kwargs: Mapping[str, object]) -> float | None:
     """Seconds from the upstream request being issued (``api_call_start_time``)
     to the first streamed chunk (``completion_start_time``); ``None`` for
     non-streaming calls, where ``completion_start_time`` is backfilled with the
@@ -254,8 +349,8 @@ def time_to_first_chunk_seconds(kwargs: Mapping[str, Any]) -> float | None:
     optional_params: Final = cast(Mapping[str, object], kwargs.get("optional_params") or {})
     if not optional_params.get("stream"):
         return None
-    api_call_start: Final = to_seconds(kwargs.get("api_call_start_time"))
-    completion_start: Final = to_seconds(kwargs.get("completion_start_time"))
+    api_call_start: Final = _epoch_seconds(kwargs.get("api_call_start_time"))
+    completion_start: Final = _epoch_seconds(kwargs.get("completion_start_time"))
     if api_call_start is None or completion_start is None:
         return None
     return completion_start - api_call_start
@@ -352,7 +447,7 @@ def metadata_from_request_data(data: object) -> Mapping[str, object] | None:
 
 def flatten_metadata(raw: Mapping[str, object]) -> Iterator[tuple[str, str]]:
     """Scalar leaves of a nested metadata mapping, keyed by their dotted path."""
-    stack: Final = list(tuple(raw.items())[::-1])  # mutable-ok: iterative worklist keeps the walk off the call stack
+    stack: Final = list(tuple(raw.items())[::-1])
     while stack:
         key, value = stack.pop()
         if (nested := as_str_mapping(value)) is not None:
@@ -383,6 +478,23 @@ def _model_info_id(model_info: object) -> str | None:
     if isinstance(model_info, Mapping):
         return as_str(model_info.get("id"))
     return None
+
+
+def exported_request_metadata(metadata: Mapping[str, object]) -> Mapping[str, str]:
+    """The non-empty string ``IDENTITY_METADATA_FIELDS`` of ``metadata``, with ``user_api_key_*`` dropped when
+    ``litellm.redact_user_api_key_info`` is on, as the ``langfuse`` callback does."""
+    from litellm.litellm_core_utils.redact_messages import (
+        redact_user_api_key_info as _redact_user_api_key_info,  # pyright: ignore[reportUnknownVariableType]  # helper uses bare dict
+    )
+
+    redact_metadata: Final = cast(  # cast-ok: adapter validates the helper's output below
+        Callable[[dict[str, str]], object],
+        _redact_user_api_key_info,
+    )
+    present: Final = {
+        field: value for field in IDENTITY_METADATA_FIELDS if isinstance(value := metadata.get(field), str) and value
+    }
+    return MappingProxyType(dict(_EXPORTED_METADATA_ADAPTER.validate_python(redact_metadata(present))))
 
 
 def _team_metadata_dict(value: object) -> Mapping[str, object] | None:

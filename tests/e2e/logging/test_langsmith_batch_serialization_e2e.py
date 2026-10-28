@@ -21,6 +21,7 @@ from typing import Final
 import pytest
 from e2e_config import CHEAP_OPENAI_MODEL, POLL_INTERVAL, POLL_TIMEOUT, unique_marker
 from e2e_http import Headers, Success, get_external
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 import litellm
@@ -90,6 +91,14 @@ def _poll_run(creds: LangsmithCreds, run_id: uuid.UUID) -> LangsmithRun:
 class TestLangsmithBatchSerialization:
     @pytest.mark.asyncio
     @pytest.mark.covers("logging.langsmith.success.serializes_non_native_metadata")
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     async def test_non_json_native_metadata_reaches_langsmith(self) -> None:
         creds: Final = load_langsmith_creds()
         logger: Final = LangsmithLogger(

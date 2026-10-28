@@ -1,3 +1,7 @@
+import { useQuery } from "@tanstack/react-query";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { autoRouterListKey, fetchAllModelDeployments } from "@/app/(dashboard)/hooks/models/useModels";
+import DecisionModelSelect from "../add_model/DecisionModelSelect";
 import { AutoRouterAvailabilityContext, useAutoRouterAvailability } from "../add_model/AutoRouterAvailability";
 import AutoRouterClassifierTabs from "../add_model/AutoRouterClassifierTabs";
 import { usesClassifierContext } from "../add_model/classifier_types";
@@ -33,6 +37,7 @@ import {
 import { isComplexityRouter } from "../add_model/auto_router_strategies";
 import {
   type BuildComplexityRouterConfigParams,
+  type StoredComplexityRouterConfig,
   buildComplexityRouterConfig,
   getClassifierModelError,
   getHeuristicV2SuccessThresholdError,
@@ -96,10 +101,12 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "plan_mode_min_tier",
   "tier_labels",
   "classifier_type",
+  "local_heuristic",
   "capability_classifier_config",
   "llm_v2_config",
   "classifier_llm_config",
   "jev_classifier_config",
+  "opensource_classifier_config",
   "classifier_context_window_size",
   "classifier_context_budget_chars",
   "classifier_context_include_assistant_turns",
@@ -127,6 +134,9 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "reasoning_override_min_score",
   "enable_context_window_escalation",
   "context_window_escalation_buffer",
+  "cache_aware_routing",
+  "cache_aware_routing_output_tokens",
+  "cache_aware_routing_timeout_ms",
   "stall_escalation_enabled",
   "stall_escalation_window",
   "stall_escalation_repeat_threshold",
@@ -151,6 +161,12 @@ const KEYWORD_MATCHING_KEYS = new Set([
   "embedding_model",
   "match_threshold",
 ]);
+
+const UNEDITED_STORED_VALUE_KEYS: readonly (keyof ComplexityRouterConfigValue)[] = [
+  "route_housekeeping_to_cheapest_tier",
+  "reminder_markers",
+  "max_tokens_from_tier_model",
+];
 
 const toRecord = (value: unknown): Record<string, unknown> => {
   const parsed: unknown = typeof value === "string" ? JSON.parse(value) : value;
@@ -179,7 +195,15 @@ export const buildUpdatedComplexityRouterConfig = (
   customTechnicalKeywords?: string[],
   keywordMatching?: KeywordMatchingState,
 ): Record<string, unknown> => {
+  const stored = toRecord(storedConfig);
+  const hydratedFromStored = hydrateComplexityRouterConfig(stored as StoredComplexityRouterConfig, undefined);
+  const unedited = new Set<string>(
+    UNEDITED_STORED_VALUE_KEYS.filter(
+      (key) => key in stored && JSON.stringify(value[key]) === JSON.stringify(hydratedFromStored[key]),
+    ),
+  );
   const isManaged = (key: string): boolean => {
+    if (unedited.has(key)) return false;
     if (key === "classifier_context_per_turn_chars") {
       return !usesClassifierContext(effectiveClassifierType(value)) || Object.prototype.hasOwnProperty.call(value, key);
     }
@@ -190,7 +214,7 @@ export const buildUpdatedComplexityRouterConfig = (
   };
   const dropped = customTierDroppedKeys(value);
   const preservedConfig = Object.fromEntries(
-    Object.entries(toRecord(storedConfig)).filter(([key]) => !isManaged(key) && !dropped.includes(key)),
+    Object.entries(stored).filter(([key]) => !isManaged(key) && !dropped.includes(key)),
   );
 
   const builderParams: BuildComplexityRouterConfigParams = {
@@ -208,11 +232,48 @@ export const buildUpdatedComplexityRouterConfig = (
   const unowned: readonly string[] = [
     ...(keywordMatching === undefined ? [...KEYWORD_MATCHING_KEYS].filter((key) => !isManaged(key)) : []),
     ...(customTechnicalKeywords === undefined ? ["custom_technical_keywords"] : []),
+    ...unedited,
   ];
   return {
     ...preservedConfig,
     ...Object.fromEntries(Object.entries(built).filter(([key]) => !unowned.includes(key))),
   };
+};
+
+const EditClassifierTabs = ({
+  value,
+  onChange,
+  children,
+  modelInfo,
+  accessToken,
+  userRole,
+  isVisible,
+}: React.ComponentProps<typeof AutoRouterClassifierTabs> & {
+  modelInfo: ModelGroup[];
+  accessToken: string;
+  userRole: string;
+  isVisible: boolean;
+}) => {
+  const { userId } = useAuthorized();
+  const hasDeployment = Boolean(value.jev_classifier_config?.deployment_name);
+  const { data: deployments } = useQuery({
+    queryKey: autoRouterListKey(userId ?? "", userRole),
+    queryFn: () => fetchAllModelDeployments(accessToken, userId ?? "", userRole),
+    enabled: Boolean(isVisible && accessToken && hasDeployment),
+  });
+  return (
+    <AutoRouterClassifierTabs
+      value={value}
+      onChange={onChange}
+      decisionModel={
+        hasDeployment ? (
+          <DecisionModelSelect value={value} onChange={onChange} modelInfo={modelInfo} deployments={deployments} />
+        ) : undefined
+      }
+    >
+      {children}
+    </AutoRouterClassifierTabs>
+  );
 };
 
 const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
@@ -614,7 +675,14 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
                 {isComplexityRouterModel ? (
                   /* Complexity Router Configuration */
                   <div className="w-full">
-                    <AutoRouterClassifierTabs value={complexityRouterConfig} onChange={setComplexityRouterConfig}>
+                    <EditClassifierTabs
+                      value={complexityRouterConfig}
+                      onChange={setComplexityRouterConfig}
+                      modelInfo={modelInfo}
+                      accessToken={accessToken}
+                      userRole={userRole}
+                      isVisible={isVisible}
+                    >
                       <ComplexityRouterConfig
                         editingTiers={editingTiers}
                         onEditingTiersChange={setEditingTiers}
@@ -643,7 +711,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
                         autoRouterCompression={autoRouterCompression}
                         onAutoRouterCompressionChange={isMemberManaged ? undefined : setAutoRouterCompression}
                       />
-                    </AutoRouterClassifierTabs>
+                    </EditClassifierTabs>
                   </div>
                 ) : (
                   <>

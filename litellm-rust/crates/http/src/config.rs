@@ -19,9 +19,15 @@ pub enum Verify {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ClientIdentity {
+    Pem(PathBuf),
+    Split { certificate: PathBuf, key: PathBuf },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct HttpClientConfig {
     pub verify: Verify,
-    pub client_certificate: Option<PathBuf>,
+    pub client_certificate: Option<ClientIdentity>,
     pub key_exchange_group: Option<KeyExchangeGroup>,
     pub tls12_cipher_suites: Option<Vec<Tls12CipherSuite>>,
     pub force_ipv4: bool,
@@ -67,7 +73,7 @@ impl From<&HttpSettings> for Resolution {
         Self {
             config: HttpClientConfig {
                 verify: Verify::from(settings),
-                client_certificate: settings.ssl_certificate.clone(),
+                client_certificate: settings.ssl_certificate.clone().map(ClientIdentity::Pem),
                 key_exchange_group: curve.clone().ok().flatten(),
                 tls12_cipher_suites: ciphers.tls12_cipher_suites,
                 force_ipv4: settings.force_ipv4,
@@ -276,7 +282,7 @@ mod tests {
             config,
             HttpClientConfig {
                 verify: Verify::BuiltInRoots,
-                client_certificate: Some("/client.pem".into()),
+                client_certificate: Some(ClientIdentity::Pem("/client.pem".into())),
                 key_exchange_group: None,
                 tls12_cipher_suites: None,
                 force_ipv4: true,

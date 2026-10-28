@@ -1,4 +1,3 @@
-import base64
 import json
 import uuid
 from collections.abc import Callable, Mapping
@@ -11,8 +10,12 @@ import pytest
 import yaml
 from integration._support.client import Gateway, JsonValue, eventually, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.process import owned_proxy
+from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.wire import Reply, Request, wire_server
+
+from litellm.types.videos.utils import decode_video_id_with_provider
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 
 @pytest.mark.covers(
@@ -102,7 +105,7 @@ def test_concurrent_success_and_failure_join_callbacks_and_rows_without_credenti
                 responses: Final = tuple(pool.map(request, tags))
             assert tuple(response.status_code for response in responses) == (200, 400, 200, 400)
             assert len(provider.drain()) == 4
-            batches = []
+            batches: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls must keep earlier batches
 
             def delivered() -> tuple[dict, ...]:
                 batches.extend(endpoint.drain())
@@ -135,7 +138,7 @@ def test_concurrent_success_and_failure_join_callbacks_and_rows_without_credenti
                     assert "synthetic callback failure" in json.dumps(event["error_information"])
                 rows: Final = eventually(
                     lambda identity=event["id"]: read_rows(
-                        'SELECT request_id, spend, prompt_tokens, completion_tokens, request_tags '
+                        "SELECT request_id, spend, prompt_tokens, completion_tokens, request_tags "
                         'FROM "LiteLLM_SpendLogs" WHERE request_id=%s',
                         (identity,),
                     ),
@@ -154,6 +157,201 @@ def test_concurrent_success_and_failure_join_callbacks_and_rows_without_credenti
                     assert rows[0]["prompt_tokens"] == event["prompt_tokens"]
                 else:
                     assert event["prompt_tokens"] == event["completion_tokens"] == rows[0]["completion_tokens"] == 0
+
+
+def _responses_frames(identity: str, text: str) -> tuple[bytes, ...]:
+    output: Final = [
+        {
+            "type": "message",
+            "id": f"msg_{identity}",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": text, "annotations": []}],
+        }
+    ]
+    completed: Final = {
+        "id": identity,
+        "object": "response",
+        "created_at": 1,
+        "status": "completed",
+        "model": "gpt-4o-mini",
+        "output": output,
+        "usage": {
+            "input_tokens": 11,
+            "output_tokens": 4,
+            "total_tokens": 15,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens_details": {"reasoning_tokens": 0},
+        },
+    }
+    events: Final = (
+        {"type": "response.created", "response": {**completed, "status": "in_progress", "output": [], "usage": None}},
+        {
+            "type": "response.output_text.delta",
+            "item_id": f"msg_{identity}",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": text,
+        },
+        {"type": "response.completed", "response": completed},
+    )
+    return tuple(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events)
+
+
+@pytest.mark.covers("other.observability.callbacks.streamed_responses_events_carry_provider_response_headers")
+def test_streamed_responses_success_callback_carries_provider_apim_request_id(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "resp_" + uuid.uuid4().hex
+    correlation: Final = "azure-correlation-" + marker
+    region: Final = "East US 2"
+    secret: Final = "synthetic-provider-secret-" + marker
+    sink_secret: Final = "synthetic-sink-secret-" + marker
+
+    def upstream(request: Request) -> Reply:
+        assert request.target.endswith("/responses"), request.target
+        assert request.headers["authorization"] == f"Bearer {secret}"
+        assert json.loads(request.body) == {
+            "model": "gpt-4o-mini",
+            "input": "header control " + marker,
+            "stream": True,
+        }, request.body
+        return Reply(
+            content_type="text/event-stream",
+            chunks=_responses_frames(marker, "streamed control"),
+            headers={"apim-request-id": correlation, "x-ms-region": region},
+        )
+
+    def sink(request: Request) -> Reply:
+        assert request.headers["authorization"] == f"Bearer {sink_secret}"
+        return Reply()
+
+    with wire_server(upstream) as provider, wire_server(sink) as endpoint:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["litellm_settings"].update({"callbacks": ["generic_api"], "DEFAULT_FLUSH_INTERVAL_SECONDS": 1})
+        path: Final = tmp_path / "callbacks.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with (
+            owned_proxy(
+                gateway,
+                tmp_path,
+                {
+                    "GENERIC_LOGGER_ENDPOINT": endpoint.url,
+                    "GENERIC_LOGGER_HEADERS": f"Authorization=Bearer {sink_secret}",
+                },
+                config=path,
+            ) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key=secret)
+            response: Final = candidate.request(
+                "POST", "/v1/responses", {"model": model, "input": "header control " + marker, "stream": True}
+            )
+            assert response.status_code == 200, response.text
+            assert f'"item_id":"msg_{marker}"' in response.text, response.text
+            assert '"type":"response.completed"' in response.text, response.text
+            assert len(provider.drain()) == 1
+            batches: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls must keep earlier batches
+
+            def delivered() -> tuple[dict, ...]:
+                batches.extend(endpoint.drain())
+                return tuple(
+                    event for batch in batches for event in json.loads(batch.body) if event.get("model_group") == model
+                )
+
+            events: Final = eventually(delivered, lambda values: len(values) == 1, seconds=10)
+            assert (events[0]["status"], events[0]["stream"], events[0]["call_type"]) == ("success", True, "aresponses")
+            additional_headers: Final = events[0]["hidden_params"]["additional_headers"] or {}
+            provider_headers: Final = {
+                name: value
+                for name, value in additional_headers.items()
+                if name in ("llm_provider-apim-request-id", "llm_provider-x-ms-region")
+            }
+            assert provider_headers == {
+                "llm_provider-apim-request-id": correlation,
+                "llm_provider-x-ms-region": region,
+            }, json.dumps(events[0]["hidden_params"])
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+def test_non_stream_openai_like_success_callback_carries_provider_headers(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = uuid.uuid4().hex
+    request_id: Final = "req_" + marker
+    sink_secret: Final = "synthetic-sink-secret-" + marker
+
+    def upstream(request: Request) -> Reply:
+        assert request.target.endswith("/chat/completions"), request.target
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": "chatcmpl-" + marker,
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "google.gemma-4-31b",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": marker}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 11, "completion_tokens": 4, "total_tokens": 15},
+                }
+            ).encode(),
+            headers={"x-amzn-requestid": request_id, "x-ratelimit-remaining-requests": "997"},
+        )
+
+    def sink(request: Request) -> Reply:
+        assert request.headers["authorization"] == f"Bearer {sink_secret}"
+        return Reply()
+
+    with wire_server(upstream) as provider, wire_server(sink) as endpoint:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["litellm_settings"].update({"callbacks": ["generic_api"], "DEFAULT_FLUSH_INTERVAL_SECONDS": 1})
+        path: Final = tmp_path / "callbacks.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with (
+            owned_proxy(
+                gateway,
+                tmp_path,
+                {
+                    "GENERIC_LOGGER_ENDPOINT": endpoint.url,
+                    "GENERIC_LOGGER_HEADERS": f"Authorization=Bearer {sink_secret}",
+                },
+                config=path,
+            ) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(
+                model="bedrock_mantle/google.gemma-4-31b",
+                api_base=provider.url,
+                api_key="synthetic-mantle-bearer",
+                aws_region_name="us-west-2",
+            )
+            response: Final = candidate.request(
+                "POST",
+                "/v1/chat/completions",
+                {
+                    "model": model,
+                    "messages": [{"role": "user", "content": "header callback " + marker}],
+                    "cache": {"no-cache": True},
+                },
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["choices"][0]["message"]["content"] == marker, response.text
+            assert len(provider.drain()) == 1
+            batches: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls must keep earlier batches
+
+            def delivered() -> tuple[dict, ...]:
+                batches.extend(endpoint.drain())
+                return tuple(
+                    event for batch in batches for event in json.loads(batch.body) if event.get("model_group") == model
+                )
+
+            events: Final = eventually(delivered, lambda values: len(values) == 1, seconds=10)
+            assert (events[0]["status"], events[0]["call_type"]) == ("success", "acompletion")
+            assert events[0]["litellm_call_id"] == response.headers["x-litellm-call-id"]
+            additional_headers: Final = events[0]["hidden_params"]["additional_headers"] or {}
+            assert {
+                name: additional_headers.get(name)
+                for name in ("llm_provider-x-amzn-requestid", "x_ratelimit_remaining_requests")
+            } == {"llm_provider-x-amzn-requestid": request_id, "x_ratelimit_remaining_requests": 997}, json.dumps(
+                events[0]["hidden_params"]
+            )
 
 
 _RAISING_HOOK: Final = """
@@ -234,9 +432,8 @@ def _responses_text(body: dict[str, JsonValue]) -> str:
 
 
 def _video_job(body: dict[str, JsonValue]) -> tuple[str, str]:
-    encoded_id: Final = string_value(body["id"]).removeprefix("video_")
-    decoded: Final = base64.b64decode(encoded_id).decode()
-    return decoded.rsplit("video_id:", 1)[-1], string_value(body["status"])
+    decoded: Final = decode_video_id_with_provider(string_value(body["id"]))
+    return string_value(decoded.get("video_id")), string_value(body["status"])
 
 
 @dataclass(frozen=True, slots=True)

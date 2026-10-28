@@ -86,3 +86,56 @@ def test_codex_agent_message_context_compaction_and_local_shell_call_reach_mantl
         forwarded: Final = wire.drain()
         assert len(forwarded) == 1, forwarded
         assert JSON_OBJECT.validate_json(forwarded[0].body)["input"] == expected_input, forwarded[0].body
+
+
+SHELL_TOOL: Final[JsonValue] = {
+    "type": "function",
+    "name": "shell",
+    "description": "run a shell command",
+    "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]},
+}
+APPLY_PATCH_TOOL: Final[JsonValue] = {
+    "type": "function",
+    "name": "apply_patch",
+    "description": "apply a diff",
+    "parameters": {"type": "object", "properties": {"patch": {"type": "string"}}, "required": ["patch"]},
+}
+
+
+@pytest.mark.covers("providers.bedrock_mantle.codex_additional_tools_input_item_is_hoisted_to_top_level_tools")
+def test_codex_additional_tools_input_item_reaches_mantle_as_top_level_tools(gateway: Gateway) -> None:
+    marker: Final = uuid.uuid4().hex
+    expected_input: Final[list[JsonValue]] = [user_turn(f"hoist tools {marker}")]
+    expected_tools: Final[list[JsonValue]] = [SHELL_TOOL, APPLY_PATCH_TOOL]
+
+    def mantle_peer(request: Request) -> Reply:
+        assert request.method == "POST" and request.target == "/openai/v1/responses", request.target
+        assert request.headers["authorization"] == f"Bearer {TOKEN}"
+        body: Final = JSON_OBJECT.validate_json(request.body)
+        assert body["model"] == "openai.gpt-5.6-sol", body
+        assert body["input"] == expected_input, body["input"]
+        assert body["tools"] == expected_tools, body
+        return Reply(body=RESPONSE)
+
+    with wire_server(mantle_peer) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=MODEL, api_key=TOKEN, api_base=wire.url, aws_region_name="us-east-2")
+        response: Final = gateway.request(
+            "POST",
+            "/v1/responses",
+            {
+                "model": model,
+                "input": [
+                    {"type": "additional_tools", "role": "developer", "tools": [APPLY_PATCH_TOOL]},
+                    user_turn(f"hoist tools {marker}"),
+                ],
+                "tools": [SHELL_TOOL],
+                "store": False,
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["output"][0]["content"][0]["text"] == "mantle wire control", response.text
+        forwarded: Final = wire.drain()
+        assert len(forwarded) == 1, forwarded
+        forwarded_body: Final = JSON_OBJECT.validate_json(forwarded[0].body)
+        assert forwarded_body["input"] == expected_input, forwarded[0].body
+        assert forwarded_body["tools"] == expected_tools, forwarded[0].body

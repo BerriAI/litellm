@@ -12,8 +12,11 @@ the JSON-serialized payloads. ``trace_attributes`` maps the caller's trace contr
 
 import json
 from collections.abc import Callable
+from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Final
 
+from litellm.integrations.langfuse.langfuse_otel_attributes import serialize_langfuse_datetime
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
     collect,
@@ -22,6 +25,7 @@ from litellm.integrations.otel.mappers.utils import (
     output_messages,
     serialize_messages,
 )
+from litellm.integrations.otel.model.metadata import IDENTITY_METADATA_FIELDS
 from litellm.integrations.otel.model.payloads import (
     LLMCallSpanData,
     LLMRequestParams,
@@ -35,6 +39,15 @@ LANGFUSE_TRACE_NAME: Final = "langfuse.trace.name"
 LANGFUSE_TRACE_USER_ID: Final = "user.id"
 LANGFUSE_TRACE_SESSION_ID: Final = "session.id"
 LANGFUSE_TRACE_TAGS: Final = "langfuse.trace.tags"
+LANGFUSE_OBSERVATION_METADATA: Final = "langfuse.observation.metadata"
+LANGFUSE_TRACE_METADATA_PREFIX: Final = "langfuse.trace.metadata."
+LANGFUSE_REQUEST_METADATA_ATTRIBUTES: Final[frozenset[str]] = frozenset(
+    {LANGFUSE_OBSERVATION_METADATA, *(f"{LANGFUSE_TRACE_METADATA_PREFIX}{name}" for name in IDENTITY_METADATA_FIELDS)}
+)
+
+
+def _identity_field(name: str) -> Callable[[LLMCallSpanData], AttrValue | None]:
+    return lambda d: d.request_metadata.get(name)
 
 
 class LangfuseMapper:
@@ -45,6 +58,14 @@ class LangfuseMapper:
         "langfuse.observation.id": lambda d: d.identity.call_id or None,
         "langfuse.trace.metadata.team_id": lambda d: d.identity.team_id or None,
         "langfuse.trace.metadata.team_alias": lambda d: d.identity.team_alias or None,
+        "langfuse.observation.completion_start_time": lambda d: (
+            serialize_langfuse_datetime(datetime.fromtimestamp(d.completion_start_seconds, tz=timezone.utc))
+            if d.completion_start_seconds is not None
+            else None
+        ),
+        **MappingProxyType(
+            {f"{LANGFUSE_TRACE_METADATA_PREFIX}{name}": _identity_field(name) for name in IDENTITY_METADATA_FIELDS}
+        ),
     }
 
     # Sub-tables folded into their respective JSON blobs.
@@ -56,14 +77,19 @@ class LangfuseMapper:
         "presence_penalty": lambda rp: rp.presence_penalty,
         "seed": lambda rp: rp.seed,
     }
+    # Langfuse prices every key, and litellm's prompt/completion counts include cache and reasoning tokens
     _USAGE_FIELDS: dict[str, Callable[[LLMUsage], AttrValue | None]] = {
-        "input": lambda u: u.input_tokens,
-        "output": lambda u: u.output_tokens,
+        "input": lambda u: u.uncached_input_tokens,
+        "input_cached_tokens": lambda u: u.cache_read_input_tokens or None,
+        "input_cache_creation": lambda u: u.cache_creation_input_tokens or None,
+        "output": lambda u: u.non_reasoning_output_tokens,
+        "output_reasoning_tokens": lambda u: u.reasoning_tokens or None,
         "total": lambda u: u.total_tokens,
     }
 
     # JSON-payload attributes: each builder returns the serialized blob or None.
     _BLOB_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
+        LANGFUSE_OBSERVATION_METADATA: lambda d: json_if(dict(d.request_metadata)),
         "langfuse.observation.model.parameters": lambda d: json_if(
             collect(LangfuseMapper._MODEL_PARAMS, d.request_params)
         ),
@@ -85,10 +111,10 @@ class LangfuseMapper:
                 return {}
 
     @staticmethod
-    def trace_attributes(trace: TraceControls) -> AttributeMap:
+    def trace_attributes(trace: TraceControls, call_type: str | None = None) -> AttributeMap:
         return drop_none_pairs(
             (
-                (LANGFUSE_TRACE_NAME, trace.name or None),
+                (LANGFUSE_TRACE_NAME, trace.name or (f"litellm-{call_type}" if call_type else None)),
                 (LANGFUSE_TRACE_USER_ID, trace.user_id or None),
                 (LANGFUSE_TRACE_SESSION_ID, trace.session_id or None),
                 (LANGFUSE_TRACE_TAGS, trace.tags or None),

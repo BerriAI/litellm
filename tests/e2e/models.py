@@ -42,10 +42,10 @@ class BudgetWindowState(BudgetWindow):
 
 
 class KeyLoggingCallbackVars(BaseModel):
-    langfuse_public_key: str | None = None
-    langfuse_secret_key: str | None = None
-    langfuse_host: str | None = None
-    wandb_api_key: str | None = None
+    langfuse_public_key: str | None = Field(default=None, repr=False)
+    langfuse_secret_key: str | None = Field(default=None, repr=False)
+    langfuse_host: str | None = Field(default=None, repr=False)
+    wandb_api_key: str | None = Field(default=None, repr=False)
     weave_project_id: str | None = None
 
 
@@ -67,6 +67,7 @@ class ObjectPermission(BaseModel):
     mcp_servers: list[str] | None = None
     mcp_access_groups: list[str] | None = None
     mcp_toolsets: list[str] | None = None
+    mcp_tool_search_enabled: bool | None = None
 
 
 class KeyGenerateBody(BaseModel):
@@ -233,6 +234,7 @@ ContentPart = TextContentPart | ImageContentPart
 class ChatMessage(BaseModel):
     role: str
     content: str | list[ContentPart]
+    cache_control: CacheControl | None = None
 
 
 class CacheControl(BaseModel):
@@ -272,6 +274,24 @@ class ChatTool(BaseModel):
     function: ChatToolFunction
 
 
+class AnthropicToolBody(BaseModel, frozen=True):
+    type: Literal["computer_20250124", "web_fetch_20250910", "text_editor_20250728", "url", "mcp"]
+    name: str | None = None
+    function: dict[str, JsonValue] | None = None
+    max_uses: int | None = None
+    url: str | None = None
+    authorization_token: str | None = None
+    server_label: str | None = None
+    server_url: str | None = None
+    require_approval: str | None = None
+    headers: dict[str, str] | None = None
+
+
+class AnthropicExtraBody(BaseModel, frozen=True):
+    tools: Sequence[AnthropicToolBody] | None = None
+    web_search_options: dict[str, JsonValue] | None = None
+
+
 class McpChatTool(BaseModel):
     """An MCP server attached to a chat completion (OpenAI `type: "mcp"` tool).
     `server_url` selects the gateway-registered server by its alias suffix; with
@@ -285,6 +305,10 @@ class McpChatTool(BaseModel):
     allowed_tools: list[str] | None = None
 
 
+class GeminiUrlContextTool(BaseModel, frozen=True):
+    urlContext: dict[str, JsonValue] = Field(default_factory=dict)
+
+
 class ToolCallFunction(BaseModel):
     name: str | None = None
     arguments: str | None = None
@@ -294,19 +318,28 @@ class ToolCall(BaseModel):
     id: str | None = None
     type: str | None = None
     function: ToolCallFunction = ToolCallFunction()
+    cache_control: CacheControl | None = None
+
+
+class ThinkingBlock(BaseModel):
+    type: str
+    thinking: str | None = None
+    signature: str | None = None
+    data: str | None = None
 
 
 class ChatAssistantTurn(BaseModel):
     role: Literal["assistant"] = "assistant"
     content: str | None = None
     reasoning_content: str | None = None
+    thinking_blocks: list[ThinkingBlock] | None = None
     tool_calls: list[ToolCall] | None = None
 
 
 class ChatToolResultTurn(BaseModel):
     role: Literal["tool"] = "tool"
     tool_call_id: str
-    content: str
+    content: str | list[ContentPart]
 
 
 type ChatTurn = ChatMessage | ChatAssistantTurn | ChatToolResultTurn
@@ -331,7 +364,8 @@ class ChatBody(BaseModel):
     thinking: ThinkingParam | None = None
     service_tier: str | None = None
     prompt_cache_key: str | None = None
-    tools: Sequence[ChatTool | McpChatTool] | None = None
+    prompt_cache_retention: str | None = None
+    tools: Sequence[ChatTool | McpChatTool | GeminiUrlContextTool] | None = None
     tool_choice: str | None = None
     guardrails: list[str] | None = None
     include_guardrail_response: bool | None = None
@@ -422,6 +456,7 @@ class OutMessage(BaseModel):
     role: str | None = None
     content: str | None = None
     reasoning_content: str | None = None
+    thinking_blocks: list[ThinkingBlock] | None = None
     tool_calls: list[ToolCall] | None = None
     provider_specific_fields: McpResponseMetadata | None = None
 
@@ -433,6 +468,7 @@ class ChatChoice(BaseModel):
 
 class PromptTokensDetails(BaseModel):
     cached_tokens: int | None = None
+    cache_write_tokens: int | None = None
 
 
 class CompletionTokensDetails(BaseModel):
@@ -457,6 +493,15 @@ class GuardrailInformationEntry(BaseModel):
     duration: float | None = None
 
 
+class GeminiUrlMetadata(BaseModel, frozen=True):
+    retrievedUrl: str
+    urlRetrievalStatus: str
+
+
+class GeminiUrlContextMetadata(BaseModel, frozen=True):
+    urlMetadata: Sequence[GeminiUrlMetadata]
+
+
 class ChatResponse(BaseModel):
     id: str | None = None
     object: str | None = None
@@ -465,6 +510,36 @@ class ChatResponse(BaseModel):
     usage: Usage | None = None
     service_tier: str | None = None
     guardrail_information: list[GuardrailInformationEntry] | None = None
+    vertex_ai_url_context_metadata: Sequence[GeminiUrlContextMetadata] | None = None
+
+
+class ResponsesInputTokensDetails(BaseModel):
+    cached_tokens: int | None = None
+
+
+class ResponsesUsage(BaseModel):
+    """`/v1/responses` usage shape: input/output tokens, not prompt/completion."""
+
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int | None = None
+    input_tokens_details: ResponsesInputTokensDetails | None = None
+
+
+class ResponsesApiResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: str | None = None
+    usage: ResponsesUsage | None = None
+
+
+class ResponsesStreamEvent(BaseModel):
+    """One `/v1/responses` SSE event; `response.completed` carries the final response."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    type: str
+    response: ResponsesApiResponse | None = None
 
 
 # ---------- anthropic /v1/messages + count_tokens ----------
@@ -564,7 +639,19 @@ class AnthropicMessagesBody(BaseModel):
     stream: bool | None = None
     tools: list[AnthropicTool] | None = None
     tool_choice: AnthropicToolChoice | None = None
+    thinking: ThinkingParam | None = None
     guardrails: list[str] | None = None
+    cache: dict[str, bool] | None = {"no-cache": True}
+
+
+class ResponsesStreamBody(BaseModel):
+    """POST /v1/responses body in the subset the spend tests stream with.
+    `input` stays a plain string: the tests only drive single-turn prompts."""
+
+    model: str
+    input: str
+    stream: bool = True
+    max_output_tokens: int | None = None
     cache: dict[str, bool] | None = {"no-cache": True}
 
 
@@ -591,11 +678,47 @@ class AnthropicMessagesResponse(BaseModel):
     usage: Usage | None = None
 
 
-class CountTokensResponse(BaseModel):
+TokenCountSource = Literal["provider", "token_count_model", "local_estimate"]
+
+
+class LitellmCountSource(BaseModel, frozen=True):
+    litellm_count_source: TokenCountSource | None = None
+    litellm_count_model: str | None = None
+
+
+class CountTokensResponse(LitellmCountSource, frozen=True):
     """`/v1/messages/count_tokens` answer. `input_tokens` is required so a 200
     whose body lacks it fails validation instead of passing vacuously."""
 
     input_tokens: int
+
+
+class ResponsesInputTokensResponse(LitellmCountSource, frozen=True):
+    object: str
+    input_tokens: int
+
+
+class TokenCounterBody(BaseModel, frozen=True):
+    model: str
+    messages: list[ChatMessage]
+
+
+class TokenCounterResponse(BaseModel, frozen=True):
+    total_tokens: int
+    request_model: str
+    model_used: str
+    tokenizer_type: str
+    count_source: TokenCountSource | None = None
+
+
+class AnthropicErrorBody(BaseModel):
+    type: str
+    message: str
+
+
+class AnthropicErrorEvent(BaseModel):
+    type: Literal["error"]
+    error: AnthropicErrorBody
 
 
 # ---------- mcp servers ----------
@@ -610,27 +733,14 @@ class McpInfo(BaseModel):
     logo_url: str | None = None
 
 
-class McpOauthCredentials(BaseModel):
-    upstream_resource: str
-
-
 class McpServerCreateBody(BaseModel):
-    """POST /v1/mcp/server. For a gateway-managed OAuth server, `auth_type` is
-    `oauth2` and `oauth2_flow` is `authorization_code`; the upstream endpoints
-    are discovered and registered via DCR when left unset. `allow_all_keys`
-    false scopes the server to keys granted it through object_permission."""
+    """POST /v1/mcp/server. `allow_all_keys` false scopes the server to keys
+    granted it through object_permission."""
 
     alias: str
     url: str
     transport: str = "http"
     allow_all_keys: bool = True
-    auth_type: str | None = None
-    oauth2_flow: Literal["client_credentials", "authorization_code"] | None = None
-    per_server_oauth_discovery: bool | None = None
-    authorization_url: str | None = None
-    token_url: str | None = None
-    registration_url: str | None = None
-    credentials: McpOauthCredentials | None = None
     server_name: str | None = None
     description: str | None = None
     mcp_info: McpInfo | None = None
@@ -668,26 +778,6 @@ class McpServerRow(McpServerInfo):
 
 class McpServerListResponse(RootModel[list[McpServerRow]]):
     """GET /v1/mcp/server answers with a bare array of servers."""
-
-
-class McpServerUserCredentialRow(BaseModel):
-    user_id: str
-    credential_type: Literal["oauth2", "byok"]
-    expires_at: str | None = None
-    connected_at: str | None = None
-    updated_at: str
-
-
-class McpServerUserCredentialListResponse(RootModel[tuple[McpServerUserCredentialRow, ...]]):
-    """GET /v1/mcp/server/{server_id}/user-credentials answers with a bare array."""
-
-
-class McpOauthUserCredentialStatus(BaseModel):
-    server_id: str
-    has_credential: bool
-    expires_at: str | None = None
-    is_expired: bool = False
-    connected_at: str | None = None
 
 
 class ToolsetTool(BaseModel):
@@ -796,10 +886,15 @@ class OcrPage(BaseModel):
     markdown: str
 
 
+class OcrUsageInfo(BaseModel):
+    pages_processed: int | None = None
+
+
 class OcrResponse(BaseModel):
     object: str | None = None
     model: str | None = None
     pages: list[OcrPage] = []
+    usage_info: OcrUsageInfo | None = None
 
 
 # ---------- completions ----------
@@ -928,9 +1023,14 @@ class GuardrailEntityMatch(BaseModel):
     end: int
 
 
+class GuardrailModeRecord(BaseModel):
+    tags: dict[str, str | list[str]] | None = None
+    default: str | list[str] | None = None
+
+
 class GuardrailRunRecord(BaseModel):
     guardrail_name: str | None = None
-    guardrail_mode: str | None = None
+    guardrail_mode: str | list[str] | GuardrailModeRecord | None = None
     guardrail_status: str | None = None
     guardrail_provider: str | None = None
     masked_entity_count: dict[str, int] | None = None
@@ -953,7 +1053,7 @@ class SpendLogMetadata(BaseModel):
 
 class SpendLogRow(BaseModel):
     request_id: str | None = None
-    api_key: str | None = None
+    api_key: str | None = Field(default=None, repr=False)
     model: str | None = None
     spend: float | None = None
     status: str | None = None
@@ -981,7 +1081,7 @@ class SpendLogs(RootModel[list[SpendLogRow]]):
 
 class SpendLogsParams(BaseModel):
     request_id: str | None = None
-    api_key: str | None = None
+    api_key: str | None = Field(default=None, repr=False)
 
     @model_validator(mode="after")
     def require_filter(self) -> SpendLogsParams:
@@ -1002,7 +1102,7 @@ class SpendLogsPageParams(BaseModel):
     end_date: str
     page: int
     page_size: int
-    api_key: str | None = None
+    api_key: str | None = Field(default=None, repr=False)
 
 
 class SessionSpendLogsParams(BaseModel):
@@ -1164,6 +1264,48 @@ class CostMap(RootModel[dict[str, CostMapEntry]]):
     pass
 
 
+class ConfigPatchResponse(BaseModel):
+    status: str
+    values: dict[str, float | dict[str, float]]
+
+
+class CostDiscountConfig(RootModel[dict[str, float]]):
+    pass
+
+
+class CostMarginConfig(RootModel[dict[str, float | dict[str, float]]]):
+    pass
+
+
+class CostDiscountConfigResponse(BaseModel):
+    values: dict[str, float]
+
+
+class CostMarginConfigResponse(BaseModel):
+    values: dict[str, float | dict[str, float]]
+
+
+class BedrockGuardrailParams(BaseModel):
+    guardrail: Literal["bedrock"] = "bedrock"
+    mode: Literal["pre_call"] = "pre_call"
+    default_on: bool = False
+    guardrailIdentifier: str
+    guardrailVersion: str
+
+
+class BedrockGuardrailSpec(BaseModel):
+    guardrail_name: str
+    litellm_params: BedrockGuardrailParams
+
+
+class GuardrailCreateBody(BaseModel):
+    guardrail: BedrockGuardrailSpec
+
+
+class GuardrailCreateResponse(BaseModel):
+    guardrail_id: str
+
+
 class FileEntry(BaseModel):
     id: str
 
@@ -1193,35 +1335,47 @@ class FineTuningJobsResponse(BaseModel):
 # ---------- model management ----------
 
 
+class CacheControlInjectionPoint(BaseModel):
+    location: Literal["message"]
+    role: str | None = None
+    index: int | None = None
+
+
+class PromptCacheOptions(BaseModel):
+    mode: Literal["implicit", "explicit"]
+
+
 class LiteLLMParamsBody(BaseModel):
     """POST /model/new litellm_params: `model` is the only required field; `api_key`
     et al may be an `os.environ/FOO` reference the proxy resolves at call time.
     The `*_cost_per_token` / `*_token_cost` fields register a per-deployment custom
-    pricing override (the cache and `_priority` rates only apply when both base
+    pricing override (the cache and service-tier rates only apply when both base
     rates are set, which is what makes the proxy register the deployment's full
     pricing entry); left None (and dropped from the body) the deployment keeps the
     backend's canonical rate."""
 
     model: str
-    api_key: str | None = None
+    api_key: str | None = Field(default=None, repr=False)
     litellm_credential_name: str | None = None
-    api_base: str | None = None
+    api_base: str | None = Field(default=None, repr=False)
     api_version: str | None = None
+    responses_api_version: str | None = None
     realtime_protocol: str | None = None
     allowed_openai_params: list[str] | None = None
-    aws_access_key_id: str | None = None
-    aws_secret_access_key: str | None = None
+    drop_params: bool | None = None
+    aws_access_key_id: str | None = Field(default=None, repr=False)
+    aws_secret_access_key: str | None = Field(default=None, repr=False)
     aws_region_name: str | None = None
-    aws_bedrock_runtime_endpoint: str | None = None
+    aws_bedrock_runtime_endpoint: str | None = Field(default=None, repr=False)
     vertex_project: str | None = None
     vertex_location: str | None = None
-    vertex_credentials: str | None = None
+    vertex_credentials: str | None = Field(default=None, repr=False)
     gcs_bucket_name: str | None = None
     bucket_name: str | None = None
     s3_bucket_name: str | None = None
     s3_region_name: str | None = None
-    s3_access_key_id: str | None = None
-    s3_secret_access_key: str | None = None
+    s3_access_key_id: str | None = Field(default=None, repr=False)
+    s3_secret_access_key: str | None = Field(default=None, repr=False)
     s3_encryption_key_id: str | None = None
     aws_batch_role_arn: str | None = None
     aws_role_name: str | None = None
@@ -1233,7 +1387,17 @@ class LiteLLMParamsBody(BaseModel):
     cache_creation_input_token_cost: float | None = None
     input_cost_per_token_priority: float | None = None
     output_cost_per_token_priority: float | None = None
-    extra_headers: dict[str, str] | None = None
+    input_cost_per_token_balanced: float | None = None
+    output_cost_per_token_balanced: float | None = None
+    cache_read_input_token_cost_balanced: float | None = None
+    input_cost_per_token_flex: float | None = None
+    output_cost_per_token_flex: float | None = None
+    cache_read_input_token_cost_flex: float | None = None
+    max_tokens: int | None = None
+    max_completion_tokens: int | None = None
+    custom_llm_provider: str | None = None
+    reasoning_effort: str | None = None
+    extra_headers: dict[str, str] | None = Field(default=None, repr=False)
     use_in_pass_through: bool | None = None
     complexity_router_config: dict[str, object] | None = None
     auto_router_config: str | None = None
@@ -1245,12 +1409,19 @@ class LiteLLMParamsBody(BaseModel):
     max_retries: int | None = None
     cooldown_time: float | None = None
     extra_body: DeploymentExtraBody | None = None
+    cache_control_injection_points: list[CacheControlInjectionPoint] | None = None
+    prompt_cache_options: PromptCacheOptions | None = None
     tpm: int | None = None
     weight: int | None = None
     order: int | None = None
 
 
-ModelMode = Literal["batch", "realtime", "image_generation"]
+ModelMode = Literal["chat", "batch", "realtime", "image_generation"]
+
+
+class TokenCountModelBody(BaseModel, frozen=True):
+    model: str
+    region: str | None = None
 
 
 class ModelInfoBody(BaseModel):
@@ -1260,10 +1431,12 @@ class ModelInfoBody(BaseModel):
     # constraint when a prior run's teardown had not removed the row.
     id: str | None = None
     mode: ModelMode | None = None
+    supported_endpoints: list[str] | None = None
     access_groups: list[str] | None = None
     team_id: str | None = None
     allowed_fails: int | None = None
     allowed_fails_policy: dict[str, int] | None = None
+    token_count_model: TokenCountModelBody | None = None
 
 
 class ModelNewBody(BaseModel):
@@ -1336,7 +1509,7 @@ class ConnectionTestResponse(BaseModel):
 
 class CredentialCreateBody(BaseModel):
     credential_name: str
-    credential_values: dict[str, str]
+    credential_values: dict[str, str] = Field(repr=False)
     credential_info: dict[str, str] = {}
 
 
@@ -1367,7 +1540,7 @@ class KeyUpdateBody(BaseModel):
     keeps its stored value, `CLEAR` sends an explicit null that clears it (`budget_duration`
     clears `budget_reset_at` with it), and `metadata` replaces the stored metadata wholesale."""
 
-    key: str
+    key: str = Field(repr=False)
     project_id: str | Cleared | None = None
     models: list[str] | None = None
     key_alias: str | None = None
@@ -1426,6 +1599,7 @@ class TeamNewBody(BaseModel):
     team_id: str | None = None
     organization_id: str | None = None
     metadata: TeamMetadata | None = None
+    model_aliases: dict[str, str] | None = None
 
 
 class TeamNewResponse(BaseModel):
@@ -1457,7 +1631,7 @@ class TeamInfoResponse(BaseModel):
 
 class TeamMemberAddBody(BaseModel):
     team_id: str
-    member: TeamMemberEntry
+    member: TeamMemberEntry | list[TeamMemberEntry]
 
 
 class TeamMemberDeleteBody(BaseModel):
@@ -1467,6 +1641,20 @@ class TeamMemberDeleteBody(BaseModel):
 
 class TeamDeleteBody(BaseModel):
     team_ids: list[str]
+
+
+class ProjectCreateBody(BaseModel):
+    team_id: str
+    project_alias: str
+    models: list[str]
+
+
+class ProjectIdentity(BaseModel):
+    project_id: str
+
+
+class ProjectDeleteBody(BaseModel):
+    project_ids: list[str]
 
 
 class TeamListEntry(BaseModel):
@@ -1486,10 +1674,12 @@ class UserNewBody(BaseModel):
     user_role: UserRole
     user_id: str | None = None
     auto_create_key: bool | None = None
+    max_budget: float | None = None
 
 
 class UserNewResponse(BaseModel):
     user_id: str
+    key: str | None = None
 
 
 class UserUpdateBody(BaseModel):
@@ -1531,6 +1721,40 @@ class UserListRow(BaseModel):
 class UserListResponse(BaseModel):
     users: list[UserListRow]
     total: int
+
+
+class UserKeyRow(BaseModel):
+    token: str
+    key_alias: str | None = None
+
+
+class UserInfoWithKeysResponse(BaseModel):
+    user_id: str | None = None
+    keys: list[UserKeyRow] = []
+
+
+class JwtKeyMappingRow(BaseModel):
+    id: str
+    jwt_claim_name: str
+    jwt_claim_value: str
+    created_by: str | None = None
+
+
+class JwtKeyMappingListParams(BaseModel):
+    size: int = 100
+
+
+class JwtKeyMappingListResponse(BaseModel):
+    mappings: list[JwtKeyMappingRow]
+    total_count: int
+
+
+class JwtKeyMappingDeleteBody(BaseModel):
+    id: str
+
+
+class JwtKeyMappingDeleteResponse(BaseModel):
+    status: str
 
 
 class OrgNewBody(BaseModel):

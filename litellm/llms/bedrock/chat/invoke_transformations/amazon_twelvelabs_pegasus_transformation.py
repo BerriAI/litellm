@@ -20,6 +20,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.custom_httpx.http_handler import header_value
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import get_base64_str
@@ -67,7 +68,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
                 optional_params["responseFormat"] = self._normalize_response_format(value)
         return optional_params
 
-    def _normalize_response_format(self, value: Any) -> Any:
+    def _normalize_response_format(self, value: Any) -> object:
         """Normalize response_format to TwelveLabs format.
 
         TwelveLabs expects:
@@ -245,8 +246,8 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
             )
 
         # Calculate usage from headers
-        bedrock_input_tokens: Final = raw_response.headers.get("x-amzn-bedrock-input-token-count", None)
-        bedrock_output_tokens: Final = raw_response.headers.get("x-amzn-bedrock-output-token-count", None)
+        bedrock_input_tokens: Final = header_value(raw_response.headers, "x-amzn-bedrock-input-token-count")
+        bedrock_output_tokens: Final = header_value(raw_response.headers, "x-amzn-bedrock-output-token-count")
 
         prompt_tokens: Final = int(bedrock_input_tokens or litellm.token_counter(messages=messages))
 

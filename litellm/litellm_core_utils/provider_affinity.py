@@ -44,10 +44,10 @@ def _get_value(value: object, key: str) -> object | None:
     return getattr(value, key, None)
 
 
-def _get_provider_affinity_header_name(litellm_params: object | None) -> str | None:
+def _get_provider_affinity_header_name(litellm_params: object | None, default_header: str | None = None) -> str | None:
     header: Final = _get_value(litellm_params, "provider_affinity_header") if litellm_params is not None else None
     if header is None:
-        return None
+        return default_header
     if not isinstance(header, str):
         raise TypeError("provider_affinity_header must be a string")
     return validate_provider_affinity_header_name(header)
@@ -83,16 +83,16 @@ def get_stable_session_id(litellm_params: object | None) -> str | None:
     return None
 
 
-def add_provider_affinity_header(  # mutable-ok: downstream handlers add auth and signing headers
-    headers: Mapping[str, object], litellm_params: object | None
+def add_provider_affinity_header(
+    headers: Mapping[str, object], litellm_params: object | None, default_header: str | None = None
 ) -> dict[str, object]:  # mutable-ok: downstream handlers add auth and signing headers
-    header_name: Final = _get_provider_affinity_header_name(litellm_params)
+    header_name: Final = _get_provider_affinity_header_name(litellm_params, default_header)
     if header_name is None or any(key.lower() == header_name.lower() for key in headers):
-        return dict(headers)  # mutable-ok: downstream handlers add auth and signing headers
+        return dict(headers)
 
     session_id: Final = get_stable_session_id(litellm_params)
     if session_id is None:
-        return dict(headers)  # mutable-ok: downstream handlers add auth and signing headers
+        return dict(headers)
     if any(character in session_id for character in ("\r", "\n", "\0")):
         raise ValueError("session_id cannot contain HTTP header control characters")
-    return {**headers, header_name: session_id}  # mutable-ok: downstream handlers add auth and signing headers
+    return {**headers, header_name: session_id}

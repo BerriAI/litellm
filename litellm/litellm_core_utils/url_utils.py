@@ -22,11 +22,11 @@ Admins can opt out via two ``litellm`` globals (wired from proxy config):
 import asyncio
 import socket
 from ipaddress import ip_address, ip_network
-from typing import Any, Final, Protocol
-from urllib.parse import quote, urlparse, urlunparse
+from typing import Final, Protocol
+from urllib.parse import quote, urlparse, urlsplit, urlunparse
 
 import httpx
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, Unpack
 
 import litellm
 
@@ -50,6 +50,7 @@ class _UrlFetcher(Protocol):
         *,
         headers: dict[str, str] | None = None,
         follow_redirects: bool = False,
+        timeout: float | httpx.Timeout | None = None,
     ) -> httpx.Response: ...
 
 
@@ -62,6 +63,8 @@ class _AsyncUrlFetcher(Protocol):
         *,
         headers: dict[str, str] | None = None,
         follow_redirects: bool = False,
+        timeout: float | httpx.Timeout | None = None,
+        max_response_bytes: int | None = None,
     ) -> httpx.Response: ...
 
 
@@ -73,17 +76,23 @@ class _AsyncFetcherView(TypedDict):
     fetcher: ReadOnly[_AsyncUrlFetcher]
 
 
-class _CallerHeadersView(TypedDict):
+class _FetchOptions(TypedDict, total=False):
     headers: ReadOnly[dict[str, str]]
+    follow_redirects: ReadOnly[bool]
+    timeout: ReadOnly[float | httpx.Timeout | None]
 
 
-# Globally-routable IPs that are cloud-internal. Everything else
-# non-public is caught by ``not ip.is_global`` (RFC 6890, as implemented by
-# Python's ``ipaddress`` module). This list only holds IPs that are
-# publicly routable *and* point to cloud-fabric services reachable from
-# inside a VM via special in-fabric routing.
+class _AsyncFetchOptions(_FetchOptions, total=False):
+    max_response_bytes: ReadOnly[int | None]
+
+
+# Cloud-internal IPs that ``ip.is_global`` can report as public. Everything
+# else non-public is caught by ``not ip.is_global`` (RFC 6890, as implemented
+# by Python's ``ipaddress`` module). Older Python patch releases (3.12.2, for
+# one) treat most of 192.0.0.0/24 as global, so it is listed to block it everywhere.
 _CLOUD_METADATA_EXCEPTIONS: Final = [
     ip_network("168.63.129.16/32"),  # Azure Wire Server
+    ip_network("192.0.0.0/24"),
 ]
 
 _ALLOWED_SCHEMES: Final = ("http", "https")
@@ -127,6 +136,28 @@ def encode_url_path_segments(value: object, *, field_name: str = "path") -> str:
         raise ValueError(f"{field_name} is required")
 
     return "/".join(encode_url_path_segment(segment, field_name=field_name) for segment in value_str.split("/"))
+
+
+def _strip_trailing_slashes_keeping_the_scheme(api_base: str) -> str:
+    stripped: Final = api_base.rstrip("/")
+    parts: Final = urlsplit(stripped)
+    if parts.scheme and not (parts.netloc or parts.path or parts.query or parts.fragment):
+        return api_base
+    if not parts.query or not parts.path.endswith("/"):
+        return stripped
+    url_before_query, _, query = stripped.partition("?")
+    return f"{url_before_query.rstrip('/')}?{query}"
+
+
+def join_api_base(api_base: str, route: str) -> str:
+    return f"{_strip_trailing_slashes_keeping_the_scheme(api_base)}/{route.lstrip('/')}"
+
+
+def ensure_api_route(api_base: str, route: str) -> str:
+    base: Final = _strip_trailing_slashes_keeping_the_scheme(api_base)
+    if urlsplit(base).path.endswith(f"/{route.lstrip('/')}"):
+        return base
+    return join_api_base(base, route)
 
 
 def _is_blocked_ip(addr: str) -> bool:
@@ -418,7 +449,7 @@ def _extract_redirect_url(response: httpx.Response, request_url: str) -> str:
     return str(httpx.URL(request_url).join(location))
 
 
-def safe_get(client: _UrlFetcher, url: str, **kwargs: Any) -> httpx.Response:
+def safe_get(client: _UrlFetcher, url: str, **kwargs: Unpack[_FetchOptions]) -> httpx.Response:
     """
     Fetch a user-supplied URL with SSRF protection on every redirect hop.
 
@@ -438,21 +469,23 @@ def safe_get(client: _UrlFetcher, url: str, **kwargs: Any) -> httpx.Response:
         The final httpx.Response.
     """
     if not getattr(litellm, "user_url_validation", True):
-        kwargs.setdefault("follow_redirects", True)
-        unvalidated: Final[_ResponseView] = {"response": client.get(url, **kwargs)}
+        unvalidated_options: Final[_FetchOptions] = {
+            **kwargs,
+            "follow_redirects": kwargs.get("follow_redirects", True),
+        }
+        unvalidated: Final[_ResponseView] = {"response": client.get(url, **unvalidated_options)}
         return unvalidated["response"]
     fetcher_view: Final[_FetcherView] = {"fetcher": client}
     fetcher: Final = fetcher_view["fetcher"]
-    kwargs.pop("follow_redirects", None)
-    headers_view: Final[_CallerHeadersView] = {"headers": kwargs.pop("headers", {})}
+    caller_headers: Final = kwargs.get("headers", {})
     for _ in range(_MAX_REDIRECTS):
         validated_url, original_host = validate_url(url)
-        response = fetcher.get(
-            validated_url,
-            headers={**headers_view["headers"], "Host": original_host},
-            follow_redirects=False,
+        hop_options: _FetchOptions = {
             **kwargs,
-        )
+            "headers": {**caller_headers, "Host": original_host},
+            "follow_redirects": False,
+        }
+        response = fetcher.get(validated_url, **hop_options)
         if not response.is_redirect:
             return response
         # Resolve the next hop against the ORIGINAL (pre-rewrite) URL so
@@ -461,24 +494,26 @@ def safe_get(client: _UrlFetcher, url: str, **kwargs: Any) -> httpx.Response:
     raise SSRFError("Too many redirects")
 
 
-async def async_safe_get(client: _AsyncUrlFetcher, url: str, **kwargs: Any) -> httpx.Response:
+async def async_safe_get(client: _AsyncUrlFetcher, url: str, **kwargs: Unpack[_AsyncFetchOptions]) -> httpx.Response:
     """Async version of safe_get."""
     if not getattr(litellm, "user_url_validation", True):
-        kwargs.setdefault("follow_redirects", True)
-        unvalidated: Final[_ResponseView] = {"response": await client.get(url, **kwargs)}
+        unvalidated_options: Final[_AsyncFetchOptions] = {
+            **kwargs,
+            "follow_redirects": kwargs.get("follow_redirects", True),
+        }
+        unvalidated: Final[_ResponseView] = {"response": await client.get(url, **unvalidated_options)}
         return unvalidated["response"]
     fetcher_view: Final[_AsyncFetcherView] = {"fetcher": client}
     fetcher: Final = fetcher_view["fetcher"]
-    kwargs.pop("follow_redirects", None)
-    headers_view: Final[_CallerHeadersView] = {"headers": kwargs.pop("headers", {})}
+    caller_headers: Final = kwargs.get("headers", {})
     for _ in range(_MAX_REDIRECTS):
         validated_url, original_host = await asyncio.to_thread(validate_url, url)
-        response = await fetcher.get(
-            validated_url,
-            headers={**headers_view["headers"], "Host": original_host},
-            follow_redirects=False,
+        hop_options: _AsyncFetchOptions = {
             **kwargs,
-        )
+            "headers": {**caller_headers, "Host": original_host},
+            "follow_redirects": False,
+        }
+        response = await fetcher.get(validated_url, **hop_options)
         if not response.is_redirect:
             return response
         # Resolve the next hop against the ORIGINAL (pre-rewrite) URL so

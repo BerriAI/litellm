@@ -38,7 +38,7 @@ export function AutoRoutersPanel({
   const canCreate = createScope !== "forbidden";
   const { data: deployments, isLoading } = useAutoRouters();
   const invalidateAutoRouters = useInvalidateAutoRouters();
-  // Clicking a router opens the same ?model= drill-in the All Models table uses, so an auto
+  // Clicking a router opens the same ?model= drill-in the Deployed Models table uses, so an auto
   // router gets the full ModelInfoView: Model Settings, Edit Settings, Edit Auto Router and
   // Delete. A separate detail view here would be a worse copy of it.
   const { openModel } = useModelDetailRouting();
@@ -100,13 +100,13 @@ export function AutoRoutersPanel({
       <Dialog open={isCreating} onOpenChange={setIsCreating}>
         {/* The form is long, so the dialog caps its height and scrolls its body rather than
             growing past the viewport. */}
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
+        <DialogContent
+          overlayClassName="bg-black/40 backdrop-blur-sm"
+          className="max-h-[90vh] overflow-y-auto sm:max-w-4xl"
+        >
           <DialogHeader>
             <DialogTitle>Add Auto Router</DialogTitle>
-            <DialogDescription>
-              Choose a classifier to route each request to a model. Called like any other model, so clients keep using a
-              single model name.
-            </DialogDescription>
+            <DialogDescription>Choose models for your auto router.</DialogDescription>
           </DialogHeader>
           <AddAutoRouterTab
             handleOk={handleCreated}

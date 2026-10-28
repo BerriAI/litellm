@@ -239,6 +239,8 @@ graph LR
 7. `DBSpendUpdateWriter.update_database()` queues spend increments to Redis
 8. Background job `update_spend` flushes queued spend to PostgreSQL every 60s
 
+Cost lookup falls back to the response model when the provider-reported name cannot be priced. Explicitly registered zero rates remain zero, and custom deployment pricing or an explicit `base_model` retain precedence
+
 ### Data Access Layer (Models & Repositories)
 
 Database entities and the operations on them live in two packages at the root of `litellm/` so both the gateway (`proxy/`) and the SDK can use them without importing proxy internals:
@@ -255,7 +257,7 @@ Conventions to follow when touching this layer:
 | Column vs. field names | Where a model field differs from its DB column (for example `org_id` maps to the `organization_id` column), the repository translates in both directions rather than relying on Pydantic to guess. |
 | Array mutations | Adds use Prisma's atomic `push` (`add_member`, `add_admin`, `add_models`) to avoid read-modify-write races. Removals fall back to read-modify-write because Prisma has no atomic array remove. |
 
-To add a new entity, define the model under `litellm/models/`, re-export it from `proxy/_types.py` if existing code imports it from there, and add a repository under `litellm/repositories/` (subclass `BaseRepository` for plain CRUD, or add bespoke methods when the entity needs encryption, archiving, or atomic array updates). Mirror the tests in `tests/test_litellm/repositories/`.
+To add a new entity, define the model under `litellm/models/`, re-export it from `proxy/_types.py` if existing code imports it from there, and add a repository under `litellm/repositories/` (subclass `BaseRepository` for plain CRUD, or add bespoke methods when the entity needs encryption, archiving, or atomic array updates). Mirror the tests in `tests/unit/repositories/`.
 
 ---
 
@@ -332,13 +334,13 @@ Each translation is isolated in its own file, making it easy to test and modify 
 |--------------|----------|------------------|
 | `/v1/chat/completions` | Anthropic | `llms/anthropic/chat/transformation.py` |
 | `/v1/chat/completions` | Bedrock Converse | `llms/bedrock/chat/converse_transformation.py` |
-| `/v1/chat/completions` | Bedrock Invoke | `llms/bedrock/chat/invoke_transformations/anthropic_claude3_transformation.py` |
+| `/v1/chat/completions` | Bedrock Invoke | `llms/bedrock/chat/invoke_transformations/anthropic_claude_transformation.py` |
 | `/v1/chat/completions` | Gemini | `llms/gemini/chat/transformation.py` |
 | `/v1/chat/completions` | Vertex AI | `llms/vertex_ai/gemini/transformation.py` |
 | `/v1/chat/completions` | OpenAI | `llms/openai/chat/gpt_transformation.py` |
-| `/v1/messages` (passthrough) | Anthropic | `llms/anthropic/experimental_pass_through/messages/transformation.py` |
-| `/v1/messages` (passthrough) | Bedrock | `llms/bedrock/messages/invoke_transformations/anthropic_claude3_transformation.py` |
-| `/v1/messages` (passthrough) | Vertex AI | `llms/vertex_ai/vertex_ai_partner_models/anthropic/experimental_pass_through/transformation.py` |
+| `/v1/messages` (passthrough) | Anthropic | `llms/anthropic/messages/native/transformation.py` |
+| `/v1/messages` (passthrough) | Bedrock | `llms/bedrock/messages/invoke_transformations/anthropic_claude_transformation.py` |
+| `/v1/messages` (passthrough) | Vertex AI | `llms/vertex_ai/vertex_ai_partner_models/anthropic/messages/transformation.py` |
 | Passthrough endpoints | All | `proxy/pass_through_endpoints/llm_provider_handlers/` |
 
 ### Example: Debugging prompt caching
@@ -346,7 +348,7 @@ Each translation is isolated in its own file, making it easy to test and modify 
 If `/v1/messages` → Bedrock Converse prompt caching isn't working but Bedrock Invoke works:
 
 1. **Bedrock Converse translation**: `llms/bedrock/chat/converse_transformation.py`
-2. **Bedrock Invoke translation**: `llms/bedrock/chat/invoke_transformations/anthropic_claude3_transformation.py`
+2. **Bedrock Invoke translation**: `llms/bedrock/chat/invoke_transformations/anthropic_claude_transformation.py`
 3. Compare how each handles `cache_control` in `transform_request()`
 
 ### How translations work

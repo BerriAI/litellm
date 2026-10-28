@@ -4,8 +4,6 @@ on: # zizmor: ignore[dangerous-triggers] runs the base branch's code only; the P
   pull_request_target:
     branches:
       - main
-      - litellm_internal_staging
-      - litellm_oss_staging
       - "litellm_**"
 
 permissions:
@@ -42,4 +40,4 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          uv run --frozen python ci_cd/cost_map_guard.py --base "$MERGE_BASE" --head "$HEAD_SHA" --head-ref "$HEAD_REF"
+          uv run --no-project python ci_cd/cost_map_guard.py --base "$MERGE_BASE" --head "$HEAD_SHA" --head-ref "$HEAD_REF"

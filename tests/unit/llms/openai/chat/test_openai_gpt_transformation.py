@@ -1,15 +1,21 @@
 """
 Tests for OpenAI GPT transformation (litellm/llms/openai/chat/gpt_transformation.py)
 """
-
-
-import pytest
+import base64
+import json
 from typing import Final
 
+import pytest
+import respx
+from httpx import Response
 
 import litellm
-from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
-from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    TOOL_RESULT_IMAGE_BOUNDARY,
+    TOOL_RESULT_MEDIA_BOUNDARY,
+)
+from litellm.litellm_core_utils.prompt_templates.image_handling import in_memory_cache
+from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
@@ -94,6 +100,44 @@ class TestOpenAIGPTConfig:
 
         supported_params = self.config.get_supported_openai_params("gpt-4.1")
         assert "prompt_cache_key" in supported_params
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_o3_reasoning_effort_is_sent_in_chat_request(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "chatcmpl-o3",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "o3-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hello"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
+            },
+        )
+    )
+    response: Final = litellm.completion(
+        model="o3-mini",
+        messages=[{"role": "user", "content": "Hello"}],
+        reasoning_effort="high",
+        api_key="sk-openai-test",
+    )
+    request_body: Final = json.loads(route.calls[0].request.content)
+
+    assert route.call_count == 1
+    assert request_body == {
+        "model": "o3-mini",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "reasoning_effort": "high",
+    }
+    assert response.choices[0].message.content == "Hello"
 
 
 class TestGetOptionalParamsIntegration:
@@ -247,6 +291,33 @@ class TestOpenAIChatCompletionStreamingHandler:
         assert result.usage.prompt_tokens == 13797
         assert result.usage.completion_tokens == 350
         assert result.usage.total_tokens == 14147
+
+    def test_chunk_parser_preserves_service_tier(self):
+        """OpenAI-compatible upstreams serve a service_tier on every streamed
+        chunk; chunk_parser must keep it on the emitted ModelResponseStream so
+        disconnect billing and the reassembled response see the served tier."""
+        handler = OpenAIChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+
+        tiered_chunk = {
+            "id": "gen-123",
+            "created": 1234567890,
+            "model": "openai/gpt-4o-mini",
+            "object": "chat.completion.chunk",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": ""},
+                    "finish_reason": None,
+                }
+            ],
+            "service_tier": "priority",
+        }
+        plain_chunk = {key: value for key, value in tiered_chunk.items() if key != "service_tier"}
+
+        assert handler.chunk_parser(tiered_chunk).model_dump().get("service_tier") == "priority"
+        assert handler.chunk_parser(plain_chunk).model_dump().get("service_tier") is None
 
     def test_chunk_parser_raises_on_in_body_error_payload(self):
         """vLLM/sglang return HTTP 200 streams whose body carries the error,
@@ -872,6 +943,205 @@ class TestCacheControlPreservationForCustomEndpoint:
         assert all("cache_control" not in m for m in body["messages"])
 
 
+_EPHEMERAL: Final[dict[str, str]] = {"type": "ephemeral"}
+_EXPLICIT: Final[dict[str, str]] = {"mode": "explicit"}
+_LOOKUP_TOOL: Final[dict[str, object]] = {"type": "function", "function": {"name": "lookup", "parameters": {}}}
+
+
+def _text(value: str) -> dict[str, object]:
+    return {"type": "text", "text": value}
+
+
+def _marked(part: dict[str, object], mark: dict[str, str] = _EPHEMERAL) -> dict[str, object]:
+    return {**part, "cache_control": mark}
+
+
+def _breakpoint(part: dict[str, object]) -> dict[str, object]:
+    return {**part, "prompt_cache_breakpoint": _EXPLICIT}
+
+
+class TestCacheControlAsPromptCacheBreakpoint:
+    """
+    A deployment that reads OpenAI's prompt_cache_breakpoint (gpt-5.6+ on api.openai.com,
+    or one opted in through prompt_cache_options) gets each Anthropic cache_control mark
+    rewritten on the same part instead of stripped, so the cache the caller asked for is
+    still written. Every other endpoint keeps or strips the marks exactly as before.
+    """
+
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+
+    @pytest.fixture(autouse=True)
+    def _clean_openai_base_env(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+        monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+        monkeypatch.setattr(litellm, "api_base", None, raising=False)
+
+    @staticmethod
+    def _marked_messages() -> list[dict[str, object]]:
+        return [
+            {"role": "system", "content": [_text("Answer briefly"), _marked(_text("Stable rules"))]},
+            {
+                "role": "user",
+                "content": [
+                    _marked(_text("Describe this"), {"type": "ephemeral", "ttl": "1h"}),
+                    _marked({"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}),
+                    _text("and nothing else"),
+                ],
+            },
+            {"role": "assistant", "content": [_marked(_text("earlier answer"))]},
+            {"role": "user", "content": "and again"},
+        ]
+
+    @staticmethod
+    def _rewritten_messages() -> list[dict[str, object]]:
+        return [
+            {"role": "system", "content": [_text("Answer briefly"), _breakpoint(_text("Stable rules"))]},
+            {
+                "role": "user",
+                "content": [
+                    _breakpoint(_text("Describe this")),
+                    _breakpoint({"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}),
+                    _text("and nothing else"),
+                ],
+            },
+            {"role": "assistant", "content": [_text("earlier answer")]},
+            {"role": "user", "content": "and again"},
+        ]
+
+    def _transform(
+        self,
+        model: str,
+        messages: list[dict[str, object]],
+        *,
+        custom_llm_provider: str = "openai",
+        api_base: str | None = None,
+        optional_params: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        return self.config.transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params or {},
+            litellm_params={"custom_llm_provider": custom_llm_provider, "api_base": api_base},
+            headers={},
+        )
+
+    def test_gpt_5_6_rewrites_system_and_user_marks_and_drops_the_assistant_mark(self):
+        body = self._transform("gpt-5.6", self._marked_messages())
+        assert body["messages"] == self._rewritten_messages()
+
+    @pytest.mark.asyncio
+    async def test_async_gpt_5_6_rewrites_the_same_way(self):
+        body = await self.config.async_transform_request(
+            model="gpt-5.6",
+            messages=self._marked_messages(),
+            optional_params={},
+            litellm_params={"custom_llm_provider": "openai", "api_base": None},
+            headers={},
+        )
+        assert body["messages"] == self._rewritten_messages()
+
+    def test_gpt_5_6_turns_a_marked_string_message_into_one_marked_text_part(self):
+        messages: list[dict[str, object]] = [
+            {"role": "system", "content": "You are helpful.", "cache_control": _EPHEMERAL},
+            {"role": "user", "content": "Hello", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+            {"role": "user", "content": "unmarked"},
+        ]
+        body = self._transform("gpt-5.6", messages)
+        assert body["messages"] == [
+            {"role": "system", "content": [_breakpoint(_text("You are helpful."))]},
+            {"role": "user", "content": [_breakpoint(_text("Hello"))]},
+            {"role": "user", "content": "unmarked"},
+        ]
+
+    def test_gpt_5_6_message_level_mark_on_list_content_marks_the_last_part(self):
+        messages: list[dict[str, object]] = [
+            {"role": "user", "content": [_text("first"), _text("last")], "cache_control": _EPHEMERAL},
+        ]
+        body = self._transform("gpt-5.6", messages)
+        assert body["messages"] == [{"role": "user", "content": [_text("first"), _breakpoint(_text("last"))]}]
+
+    def test_gpt_5_6_marked_message_with_null_content_still_goes_out_with_the_mark_stripped(self):
+        messages: list[dict[str, object]] = [
+            {"role": "user", "content": None, "cache_control": _EPHEMERAL},
+            {"role": "user", "content": "Hello"},
+        ]
+        body = self._transform("gpt-5.6", messages)
+        assert body["messages"] == [{"role": "user", "content": None}, {"role": "user", "content": "Hello"}]
+
+    def test_gpt_5_6_keeps_the_mark_on_a_tool_message_and_drops_the_tool_definition_mark(self):
+        messages: list[dict[str, object]] = [
+            {"role": "user", "content": "look it up"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": [_marked(_text("found it"))]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "found it again", "cache_control": _EPHEMERAL},
+        ]
+        body = self._transform("gpt-5.6", messages, optional_params={"tools": [_marked(dict(_LOOKUP_TOOL))]})
+        assert body["messages"][2:] == [
+            {"role": "tool", "tool_call_id": "call_1", "content": [_breakpoint(_text("found it"))]},
+            {"role": "tool", "tool_call_id": "call_1", "content": [_breakpoint(_text("found it again"))]},
+        ], "a breakpoint on a tool message part writes the cache on live gpt-5.6 Chat Completions (2026-10-12)"
+        assert body["tools"] == [_LOOKUP_TOOL]
+
+    def test_gpt_4o_on_openai_still_strips_every_mark(self):
+        body = self._transform(
+            "gpt-4o", self._marked_messages(), optional_params={"tools": [_marked(dict(_LOOKUP_TOOL))]}
+        )
+        assert body["messages"] == [
+            {"role": "system", "content": [_text("Answer briefly"), _text("Stable rules")]},
+            {
+                "role": "user",
+                "content": [
+                    _text("Describe this"),
+                    {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+                    _text("and nothing else"),
+                ],
+            },
+            {"role": "assistant", "content": [_text("earlier answer")]},
+            {"role": "user", "content": "and again"},
+        ]
+        assert body["tools"] == [_LOOKUP_TOOL]
+
+    def test_custom_api_base_without_opt_in_keeps_cache_control_untouched(self):
+        body = self._transform("gpt-5.6", self._marked_messages(), api_base="http://localhost:4000/v1")
+        assert body["messages"] == self._marked_messages()
+
+    def test_custom_api_base_opted_in_through_prompt_cache_options_rewrites(self):
+        body = self._transform(
+            "gpt-5.6",
+            self._marked_messages(),
+            api_base="http://localhost:4000/v1",
+            optional_params={"extra_body": {"prompt_cache_options": {"mode": "explicit"}}},
+        )
+        assert body["messages"] == self._rewritten_messages()
+        assert body["extra_body"] == {"prompt_cache_options": {"mode": "explicit"}}
+
+    def test_non_openai_provider_still_strips(self):
+        body = self._transform(
+            "gpt-5.6",
+            self._marked_messages(),
+            custom_llm_provider="fireworks_ai",
+            api_base="https://api.fireworks.ai/inference/v1",
+        )
+        assert body["messages"] == [
+            {"role": "system", "content": [_text("Answer briefly"), _text("Stable rules")]},
+            {
+                "role": "user",
+                "content": [
+                    _text("Describe this"),
+                    {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+                    _text("and nothing else"),
+                ],
+            },
+            {"role": "assistant", "content": [_text("earlier answer")]},
+            {"role": "user", "content": "and again"},
+        ]
+
+
 class TestToolChoiceWithoutToolsDropped:
     def setup_method(self):
         self.config = OpenAIGPTConfig()
@@ -998,6 +1268,113 @@ class TestToolChoiceWithoutToolsDropped:
         )
         assert body["tool_choice"] == "auto"
         assert body["tools"] == tools
+
+
+_OPENAI_CHAT_REPLY: Final = {
+    "id": "chatcmpl-media",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "gpt-4o",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "seen"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("tool_result", [False, True])
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.asyncio
+async def test_openai_media_download_preserves_supported_chat_fields(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, sync_mode: bool, tool_result: bool
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    pdf_url: Final = "https://files.example.test/pdf-url-download.pdf"
+    pdf_content: Final = b"%PDF-1.7\nmock-pdf"
+    image_url: Final = "data:image/png;base64,aW1hZ2U="
+    in_memory_cache.delete_cache(pdf_url)
+    download: Final = respx_mock.get(pdf_url).mock(
+        return_value=Response(200, headers={"content-type": "application/pdf"}, content=pdf_content)
+    )
+    chat: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=Response(200, json=_OPENAI_CHAT_REPLY)
+    )
+
+    text_part: Final = {"type": "text", "text": "What is the first page of the PDF?"}
+    audio_part: Final = {"type": "input_audio", "input_audio": {"data": "YXVkaW8=", "format": "wav"}}
+    media_parts: Final = [
+        {"type": "file", "file": {
+            "file_id": pdf_url, "format": "application/pdf", "detail": "high", "video_metadata": {"fps": 2},
+        }},
+        {"type": "image_url", "image_url": {
+            "url": image_url, "format": "image/png", "detail": "high", "video_metadata": {"fps": 2},
+        }},
+        audio_part,
+    ]
+    tool_call: Final = {
+        "role": "assistant",
+        "tool_calls": [{"id": "call_asset", "type": "function", "function": {"name": "read", "arguments": "{}"}}],
+    }
+    messages: Final = (
+        [tool_call, {"role": "tool", "tool_call_id": "call_asset", "content": [text_part, *media_parts]}]
+        if tool_result else [{"role": "user", "content": [text_part, *media_parts]}]
+    )
+    if sync_mode:
+        litellm.completion(model="gpt-4o", messages=messages, api_key="sk-openai-test")
+    else:
+        await litellm.acompletion(model="gpt-4o", messages=messages, api_key="sk-openai-test")
+
+    assert download.call_count == 1
+    expected_content: Final = [
+        {"type": "text", "text": TOOL_RESULT_MEDIA_BOUNDARY} if tool_result else text_part,
+        {
+            "type": "file",
+            "file": {
+                "file_data": f"data:application/pdf;base64,{base64.b64encode(pdf_content).decode('utf-8')}",
+                "filename": "my_file.pdf",
+            },
+        },
+        {"type": "image_url", "image_url": {"url": image_url, "detail": "high"}},
+        audio_part,
+    ]
+    expected_messages: Final = (
+        [tool_call, {"role": "tool", "tool_call_id": "call_asset", "content": [text_part]},
+         {"role": "user", "content": expected_content}]
+        if tool_result else [{"role": "user", "content": expected_content}]
+    )
+    assert json.loads(chat.calls[0].request.content)["messages"] == expected_messages
+
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_vision_with_custom_model_preserves_base64_image_in_request(respx_mock: respx.MockRouter) -> None:
+    image_uri: Final = f"data:image/png;base64,{base64.b64encode(b'test-image').decode('utf-8')}"
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {"type": "image_url", "image_url": {"url": image_uri}},
+            ],
+        }
+    ]
+    route: Final = respx_mock.post("https://my-custom.api.openai.com/chat/completions").mock(
+        return_value=Response(200, json=_OPENAI_CHAT_REPLY)
+    )
+
+    litellm.completion(
+        model="openai/my-custom-model",
+        max_tokens=10,
+        api_base="https://my-custom.api.openai.com",
+        messages=messages,
+        api_key="sk-openai-test",
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "my-custom-model",
+        "messages": messages,
+        "max_tokens": 10,
+    }
 
 
 class TestToolMessageImageHoisting:
@@ -1241,6 +1618,43 @@ class TestOpenAIPromptCacheBreakpointChatPath:
         assert request["messages"][1]["content"] == [{"type": "text", "text": "hi", "prompt_cache_breakpoint": self.EXPLICIT}]
         assert request["extra_body"] == {"prompt_cache_options": self.EXPLICIT}
         assert "prompt_cache_options" not in request
+
+    @pytest.mark.parametrize(
+        ("model", "drop_params", "sent"),
+        [("gpt-4.1", True, False), ("gpt-4.1", False, True), ("gpt-5.6", True, True)],
+        ids=["unread-dropped", "unread-sent-through", "read-kept"],
+    )
+    def test_drop_params_strips_breakpoints_only_where_the_model_cannot_read_them(
+        self, model: str, drop_params: bool, sent: bool
+    ):
+        marked_part: Final = {"type": "text", "text": "hi", "prompt_cache_breakpoint": self.EXPLICIT}
+        part: Final = {"type": "text", "text": "hi"}
+        call: Final = {"id": "c1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+        function: Final = {"name": "f", "parameters": {"type": "object"}}
+        marked: Final = {"prompt_cache_breakpoint": self.EXPLICIT}
+
+        request = OpenAIGPTConfig().transform_request(
+            model=model,
+            messages=[
+                {"role": "user", "content": [marked_part]},
+                {"role": "assistant", "content": "ok", **marked, "tool_calls": [{**call, **marked}]},
+                {"role": "tool", "tool_call_id": "c1", "content": "done"},
+            ],
+            optional_params={"tools": [{"type": "function", "function": {**function, **marked}}, {"type": "function", "function": function, **marked}]},
+            litellm_params={"custom_llm_provider": "openai", "drop_params": drop_params},
+            headers={},
+        )
+
+        mark: Final = marked if sent else {}
+        assert request["messages"] == [
+            {"role": "user", "content": [marked_part if sent else part]},
+            {"role": "assistant", "content": "ok", **mark, "tool_calls": [{**call, **mark}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "done"},
+        ]
+        assert request["tools"] == [
+            {"type": "function", "function": {**function, **mark}},
+            {"type": "function", "function": function, **mark},
+        ]
 
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'

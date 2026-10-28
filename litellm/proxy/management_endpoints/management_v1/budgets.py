@@ -3,11 +3,12 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from itertools import chain
 from types import MappingProxyType
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, TypeAdapter
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
@@ -35,6 +36,7 @@ from litellm.proxy.list_api.list_framework import (
 )
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.proxy.utils import PrismaClient
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.management_v1 import (
     ListResponse,
     ProblemDetail,
@@ -45,7 +47,7 @@ router: Final = APIRouter(prefix=MANAGEMENT_V1_PREFIX)
 BUDGET_TABLE: Final = '"LiteLLM_BudgetTable"'
 
 
-class BudgetListItem(BaseModel):
+class BudgetListItem(LiteLLMBaseModel):
     """One budget as the Budgets page reads it, and as it comes back off the table.
 
     Validating the raw row through here is what makes `tpm_limit` / `rpm_limit`
@@ -65,7 +67,7 @@ class BudgetListItem(BaseModel):
     updated_at: datetime
 
 
-class _RowCount(BaseModel):
+class _RowCount(LiteLLMBaseModel):
     count: int
 
 
@@ -73,6 +75,32 @@ _BUDGET_ROWS: Final = TypeAdapter(tuple[BudgetListItem, ...])
 _ROW_COUNTS: Final = TypeAdapter(tuple[_RowCount, ...])
 
 SELECTED_COLUMNS: Final = ", ".join(f'"{name}"' for name in BudgetListItem.model_fields)
+
+
+# Unicode 17.0 Nd zeroes, each followed by its other nine digits in UnicodeData.txt.
+_DECIMAL_ZEROES: Final = "0٠۰߀०০੦૦୦௦౦೦൦෦๐໐༠၀႐០᠐᥆᧐᪀᪐᭐᮰᱀᱐꘠꣐꤀꧐꧰꩐꯰０𐒠𐴰𐵀𑁦𑃰𑄶𑇐𑋰𑑐𑓐𑙐𑛀𑛐𑛚𑜰𑣠𑥐𑯰𑱐𑵐𑶠\U00011de0𑽐𖄰𖩠𖫀𖭐𖵰𜳰𝟎𝟘𝟢𝟬𝟶𞅀𞋰𞓰𞗱𞥐🯰"
+_DECIMAL_DIGITS: Final = "".join(
+    chain.from_iterable(tuple(chr(ord(zero) + digit) for digit in range(10)) for zero in _DECIMAL_ZEROES)
+)
+_ASCII_DIGITS: Final = "0123456789" * len(_DECIMAL_ZEROES)
+
+
+_BUDGET_DURATION_SECONDS: Final = f"""(
+    SELECT EXTRACT(EPOCH FROM (
+        (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') +
+        (parts[1] || ' ' || CASE parts[2]
+            WHEN 's' THEN 'seconds' WHEN 'm' THEN 'minutes' WHEN 'h' THEN 'hours'
+            WHEN 'd' THEN 'days' WHEN 'w' THEN 'weeks' WHEN 'mo' THEN 'months' END)::interval
+        - (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+    )) FROM regexp_match(
+        CASE lower(trim(budget_duration))
+            WHEN 'hourly' THEN '1h' WHEN 'daily' THEN '24h'
+            WHEN 'weekly' THEN '7d' WHEN 'monthly' THEN '30d'
+            ELSE CASE WHEN octet_length(budget_duration) = length(budget_duration) THEN budget_duration
+                ELSE translate(budget_duration, '{_DECIMAL_DIGITS}', '{_ASCII_DIGITS}') END END,
+        '^([0-9]+)(mo|[smhdw])'
+    ) AS duration(parts)
+)"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,20 +113,24 @@ class PrismaBudgetListExecutor:
     async def count(self, where: tuple[Predicate, ...]) -> int:
         clauses, params = where_sql(where)
         sql: Final = f"SELECT COUNT(*) AS count FROM {BUDGET_TABLE}" + (f" WHERE {clauses}" if clauses else "")
-        rows: Final = await self.prisma_client.db.query_raw(sql, *params)
-        counted: Final = _ROW_COUNTS.validate_python(rows)
+        counted: Final = _ROW_COUNTS.validate_python(await self.prisma_client.db.query_raw(sql, *params))
         return counted[0].count if counted else 0
 
     async def find_many(self, plan: QueryPlan) -> Sequence[BudgetListItem]:
         clauses, params = where_sql(plan.where)
+        ordering: Final = ", ".join(
+            order_by_sql((key,)).replace("NULLS LAST", "NULLS FIRST")
+            if key.descending and key.field in ("max_budget", "tpm_limit", "rpm_limit", "tpd_limit")
+            else order_by_sql((key,))
+            for key in plan.order
+        ).replace('"budget_duration"', _BUDGET_DURATION_SECONDS)
         sql: Final = (
             f"SELECT {SELECTED_COLUMNS} FROM {BUDGET_TABLE}"
             + (f" WHERE {clauses}" if clauses else "")
-            + f" ORDER BY {order_by_sql(plan.order)}"
+            + f" ORDER BY {ordering}"
             + f" LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
         )
-        rows: Final = await self.prisma_client.db.query_raw(sql, *params, plan.take, plan.skip)
-        return _BUDGET_ROWS.validate_python(rows)
+        return _BUDGET_ROWS.validate_python(await self.prisma_client.db.query_raw(sql, *params, plan.take, plan.skip))
 
 
 def _serialize(row: BudgetListItem) -> BudgetListItem:
@@ -112,10 +144,8 @@ def _scope(caller: UserAPIKeyAuth) -> Scope:
     return ScopeDenied(reason=f"Only proxy admins can list budgets, your role={caller.user_role}")
 
 
-# budget_duration is deliberately absent from `sortable`: the column holds strings
-# like "7d" and "30d", so a lexicographic ORDER BY puts "30d" ahead of "7d".
 BUDGET_FILTERS: Final[Mapping[str, FilterSpec]] = MappingProxyType(
-    {  # mutable-ok: an immutable mapping has no literal form; MappingProxyType freezes this one and it never escapes
+    {
         "budget_duration": FilterSpec(type=str, ops=frozenset(("in", "is_null"))),
         "max_budget": FilterSpec(type=float, ops=frozenset(("gte", "lte", "is_null"))),
         "created_at": FilterSpec(type=datetime, ops=frozenset(("gte", "lte"))),
@@ -124,7 +154,9 @@ BUDGET_FILTERS: Final[Mapping[str, FilterSpec]] = MappingProxyType(
 
 BUDGETS_LIST_SPEC: Final[ListSpec[BudgetListItem, BudgetListItem]] = ListSpec(
     resource="budgets",
-    sortable=frozenset(("budget_id", "max_budget", "tpm_limit", "rpm_limit", "tpd_limit", "created_at")),
+    sortable=frozenset(
+        ("budget_id", "max_budget", "tpm_limit", "rpm_limit", "tpd_limit", "created_at", "budget_duration")
+    ),
     searchable=frozenset(("budget_id",)),
     filters=BUDGET_FILTERS,
     default_sort=(SortKey(field="created_at", descending=True),),
@@ -155,8 +187,9 @@ async def list_budgets(
     way to page, sort or filter it.
 
     `sort` takes a comma-separated list of `budget_id`, `max_budget`, `tpm_limit`,
-    `rpm_limit`, `tpd_limit` or `created_at`, each optionally prefixed with `-` for descending,
-    and defaults to `-created_at`. `budget_id` is appended to every sort as the
+    `rpm_limit`, `tpd_limit`, `created_at` or `budget_duration`, each optionally prefixed with `-` for descending,
+    and defaults to `-created_at`. Reset periods sort by elapsed time, with calendar months
+    measured from the current UTC date and unset periods last. `budget_id` is appended to every sort as the
     tiebreaker. `q` is a case-insensitive substring match on `budget_id`.
     `page_size` defaults to 50 and is capped at 100. Filters are
     `filter[budget_duration][in|is_null]`, `filter[max_budget][gte|lte|is_null]`
@@ -165,7 +198,7 @@ async def list_budgets(
     Example curl:
     ```
     curl --location --globoff 'http://0.0.0.0:4000/management/v1/budgets?sort=-max_budget&filter[budget_duration][in]=7d,30d&page_size=25' \
-        --header 'Authorization: Bearer sk-1234'
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     try:

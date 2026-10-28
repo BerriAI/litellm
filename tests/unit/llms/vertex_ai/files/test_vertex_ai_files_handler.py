@@ -208,6 +208,7 @@ class TestVertexAIFilesHandler:
         assert service_account == "/model/sa.json"
 
     def test_resolve_read_gcs_config_falls_back_to_env(self, monkeypatch):
+        monkeypatch.delenv("GCS_BATCH_BUCKET_NAME", raising=False)
         monkeypatch.setenv("GCS_BUCKET_NAME", "env-default-bucket")
         monkeypatch.setenv("GCS_PATH_SERVICE_ACCOUNT", "/env/sa.json")
 
@@ -215,6 +216,40 @@ class TestVertexAIFilesHandler:
 
         assert bucket == "env-default-bucket"
         assert service_account == "/env/sa.json"
+
+    def test_resolve_read_gcs_config_prefers_batch_env_over_logging_env(self, monkeypatch):
+        monkeypatch.setenv("GCS_BATCH_BUCKET_NAME", "batch-bucket")
+        monkeypatch.setenv("GCS_BUCKET_NAME", "logging-bucket")
+
+        bucket, _ = self.handler._resolve_read_gcs_config(litellm_params={}, vertex_credentials=None)
+
+        assert bucket == "batch-bucket"
+
+    def test_resolve_read_gcs_config_prefers_per_model_bucket_over_batch_env(self, monkeypatch):
+        monkeypatch.setenv("GCS_BATCH_BUCKET_NAME", "batch-bucket")
+
+        bucket, _ = self.handler._resolve_read_gcs_config(
+            litellm_params={"gcs_bucket_name": "my-model-bucket"},
+            vertex_credentials=None,
+        )
+
+        assert bucket == "my-model-bucket"
+
+    def test_resolve_read_gcs_config_prefers_gcs_bucket_name_over_legacy(self):
+        bucket, _ = self.handler._resolve_read_gcs_config(
+            litellm_params={"gcs_bucket_name": "my-model-bucket", "bucket_name": "legacy-bucket"},
+            vertex_credentials=None,
+        )
+
+        assert bucket == "my-model-bucket"
+
+    def test_resolve_read_gcs_config_accepts_legacy_bucket_name_alone(self):
+        bucket, _ = self.handler._resolve_read_gcs_config(
+            litellm_params={"bucket_name": "legacy-bucket"},
+            vertex_credentials=None,
+        )
+
+        assert bucket == "legacy-bucket"
 
     def test_resolve_read_gcs_config_serializes_dict_credentials(self, monkeypatch):
         monkeypatch.delenv("GCS_PATH_SERVICE_ACCOUNT", raising=False)
@@ -225,87 +260,3 @@ class TestVertexAIFilesHandler:
         )
 
         assert service_account == '{"type": "service_account", "project_id": "p"}'
-
-    @pytest.mark.asyncio
-    async def test_afile_content_honors_per_model_bucket_over_env(self, monkeypatch):
-        """
-        Regression for #32640: a batch output written to a per-model gcs_bucket_name must be
-        readable even when the global GCS_BUCKET_NAME points at a different bucket. Before the
-        fix the read path resolved the bucket from env only and raised
-        "file_id bucket does not match the configured storage bucket".
-        """
-        monkeypatch.setenv("GCS_BUCKET_NAME", "env-default-bucket")
-        monkeypatch.delenv("GCS_PATH_SERVICE_ACCOUNT", raising=False)
-
-        file_id = "gs%3A%2F%2Fmy-model-bucket%2Flitellm-vertex-files%2Fuploads%2Fabc-batch-output.jsonl"
-        file_content_request = FileContentRequest(file_id=file_id, extra_headers=None, extra_body=None)
-
-        with (
-            patch.object(self.handler, "download_gcs_object", new_callable=AsyncMock) as mock_download,
-            patch.object(
-                self.handler,
-                "get_or_create_vertex_instance",
-                new_callable=AsyncMock,
-                return_value=object(),
-            ),
-        ):
-            mock_download.return_value = b"batch output"
-
-            result = await self.handler.afile_content(
-                file_content_request=file_content_request,
-                vertex_credentials="/model/sa.json",
-                vertex_project="test-project",
-                vertex_location="us-central1",
-                timeout=60.0,
-                max_retries=0,
-                litellm_params={
-                    "gcs_bucket_name": "my-model-bucket",
-                    "vertex_credentials": "/model/sa.json",
-                },
-            )
-
-        assert isinstance(result, HttpxBinaryResponseContent)
-        assert result.response.content == b"batch output"
-
-        dynamic_params = mock_download.call_args.kwargs["standard_callback_dynamic_params"]
-        assert dynamic_params["gcs_bucket_name"] == "my-model-bucket"
-        assert dynamic_params["gcs_path_service_account"] == "/model/sa.json"
-        assert mock_download.call_args.kwargs["object_name"] == "litellm-vertex-files/uploads/abc-batch-output.jsonl"
-
-    @pytest.mark.asyncio
-    async def test_afile_content_reads_without_global_env_bucket(self, monkeypatch):
-        """
-        Regression for #32640: with no global GCS_BUCKET_NAME set, a model-group-level
-        deployment (per-model gcs_bucket_name) must still be readable. Before the fix the read
-        path raised "GCS_BUCKET_NAME is not set in the environment".
-        """
-        monkeypatch.delenv("GCS_BUCKET_NAME", raising=False)
-        monkeypatch.delenv("GCS_PATH_SERVICE_ACCOUNT", raising=False)
-
-        file_id = "gs%3A%2F%2Fmy-model-bucket%2Flitellm-vertex-files%2Fuploads%2Fabc-batch-output.jsonl"
-        file_content_request = FileContentRequest(file_id=file_id, extra_headers=None, extra_body=None)
-
-        with (
-            patch.object(self.handler, "download_gcs_object", new_callable=AsyncMock) as mock_download,
-            patch.object(
-                self.handler,
-                "get_or_create_vertex_instance",
-                new_callable=AsyncMock,
-                return_value=object(),
-            ),
-        ):
-            mock_download.return_value = b"batch output"
-
-            result = await self.handler.afile_content(
-                file_content_request=file_content_request,
-                vertex_credentials="/model/sa.json",
-                vertex_project="test-project",
-                vertex_location="us-central1",
-                timeout=60.0,
-                max_retries=0,
-                litellm_params={"gcs_bucket_name": "my-model-bucket"},
-            )
-
-        assert isinstance(result, HttpxBinaryResponseContent)
-        dynamic_params = mock_download.call_args.kwargs["standard_callback_dynamic_params"]
-        assert dynamic_params["gcs_bucket_name"] == "my-model-bucket"

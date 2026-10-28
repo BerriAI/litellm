@@ -10,7 +10,7 @@ use rstest::rstest;
 #[ignore]
 async fn reads_a_real_secret() {
     let environment = Arc::new(ProcessEnvironment);
-    let manager = AzureKeyVault::new(environment).unwrap();
+    let manager = AzureKeyVault::new(litellm_http::Client::plain_for_test(), environment).unwrap();
     let name = std::env::var("AZURE_KEY_VAULT_LIVE_SECRET_NAME").unwrap();
     let secret = manager.get_secret(&name).await.unwrap().unwrap();
     assert!(matches!(&secret, Secret::String(_)));
