@@ -47,6 +47,29 @@ const hydratedState: KeywordMatchingState = {
   matchThreshold: 0.72,
 };
 
+describe("output token policy edits", () => {
+  it.each([undefined, true, false, "clamp"] as const)("preserves and edits stored mode %s", (mode) => {
+    const stored = {
+      ...STORED,
+      ...(mode !== undefined && { max_tokens_from_tier_model: mode }),
+      tier_model_configs: { SIMPLE: [{ model_name: "gpt-4o-mini", litellm_params: { max_tokens: 700 } }] },
+    };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+    expect(hydrated.max_tokens_from_tier_model).toBe(mode);
+    const unchanged = buildUpdatedComplexityRouterConfig(stored, { ...hydrated, return_raw_model_name: true });
+    expect(unchanged.max_tokens_from_tier_model).toBe(mode);
+    expect("max_tokens_from_tier_model" in unchanged).toBe(mode !== undefined);
+    for (const nextMode of [true, false, "clamp"] as const) {
+      const saved = buildUpdatedComplexityRouterConfig(stored, {
+        ...hydrated,
+        max_tokens_from_tier_model: nextMode,
+      });
+      expect(saved.max_tokens_from_tier_model).toBe(nextMode === true && mode !== true ? undefined : nextMode);
+      expect(saved.tier_model_configs).toEqual(stored.tier_model_configs);
+    }
+  });
+});
+
 describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
   it.each([undefined, false, true])("preserves cache settings through edit and save: %s", (enabled) => {
     const stored = {
@@ -895,6 +918,7 @@ describe("managed keys survive an untouched open-and-save", () => {
     plan_mode_min_tier: "COMPLEX",
     tier_labels: { SIMPLE: "Cheap" },
     classifier_type: "heuristic_first",
+    local_heuristic: "heuristic",
     heuristic_v2_success_threshold: 0.89,
     heuristic_first_max_tier: "SIMPLE",
     classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000, reasoning_effort: "low" },
@@ -968,6 +992,8 @@ describe("managed keys survive an untouched open-and-save", () => {
   it("carries every managed key a built-in router can hold through hydrate then save", () => {
     const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
     const saved = buildUpdatedComplexityRouterConfig(STORED_ALL_MANAGED, hydrated);
+    expect(hydrated.local_heuristic).toBe(STORED_ALL_MANAGED.local_heuristic);
+    expect(saved.local_heuristic).toBe(STORED_ALL_MANAGED.local_heuristic);
 
     const dropped = [...MANAGED_COMPLEXITY_ROUTER_KEYS]
       .filter((key) => !KEYS_ANOTHER_CLASSIFIER_TYPE_OWNS.has(key))

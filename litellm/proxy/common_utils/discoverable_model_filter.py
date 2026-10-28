@@ -109,6 +109,20 @@ def undiscoverable_model_names(
     )
 
 
+def undiscoverable_model_groups(
+    llm_router: Router | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    team_id: str | None,
+) -> frozenset[str]:
+    if llm_router is None or user_api_key_has_admin_view(user_api_key_dict):
+        return frozenset()
+    return frozenset(
+        row["model_name"]
+        for row in llm_router.get_model_list() or ()
+        if is_undiscoverable_deployment(row) and is_undiscoverable_model_name(row["model_name"], llm_router, team_id)
+    )
+
+
 def discoverable_rows(
     rows: Iterable[Mapping[str, object]],
     user_api_key_dict: UserAPIKeyAuth,

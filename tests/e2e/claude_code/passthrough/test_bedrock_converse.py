@@ -18,7 +18,10 @@ The (feature, provider) for this cell is inferred from the file path by
 
 from __future__ import annotations
 
+from e2e_metadata import Domain, Subject, meta
 
+
+@meta(Subject(domain=Domain.PASSTHROUGH))
 def test_passthrough_bedrock_converse(compat_result):
     """Report not_applicable: Claude Code has no Converse-wire mode."""
     compat_result.set(

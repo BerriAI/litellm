@@ -117,7 +117,7 @@ export const MIGRATED_E2E_PAGES: Readonly<Record<string, MigratedPage>> = {
     linkName: "AI Hub",
     content: { role: "heading", name: "AI Hub" },
   },
-  new_usage: { segment: "usage", linkName: "Usage", content: { role: "heading", name: "Usage View" } },
+  new_usage: { segment: "usage", linkName: "Usage", content: { role: "heading", name: "Usage" } },
   usage: {
     segment: "old-usage",
     linkName: "Old Usage",

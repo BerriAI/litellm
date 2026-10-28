@@ -7,8 +7,9 @@ from typing import Final
 from integration._support.wire import Reply, Request, Wire
 from pydantic import JsonValue
 
+from tests.integration._support.provider import MODEL_DISCOVERY
+
 _USAGE: Final = {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
-MODEL_DISCOVERY: Final = ("GET", "/v1/models")
 
 
 def answering_model_discovery(respond: Callable[[Request], Reply]) -> Callable[[Request], Reply]:

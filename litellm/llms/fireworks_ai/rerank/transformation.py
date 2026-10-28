@@ -8,12 +8,14 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.fireworks_ai.common_utils import FireworksAIMixin
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.rerank import (
     RerankBilledUnits,
     RerankResponse,
@@ -24,7 +26,7 @@ from litellm.types.rerank import (
 )
 
 
-class _FireworksAIUsageFields(BaseModel):
+class _FireworksAIUsageFields(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     total_tokens: int | None = 0
@@ -32,7 +34,7 @@ class _FireworksAIUsageFields(BaseModel):
     completion_tokens: int | None = 0
 
 
-class _FireworksAIResultFields(BaseModel):
+class _FireworksAIResultFields(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True, hide_input_in_errors=True)
 
     index: int | float | str
@@ -42,6 +44,7 @@ class _FireworksAIResultFields(BaseModel):
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _STR: Final = TypeAdapter(str)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
@@ -60,9 +63,9 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
             api_base = api_base.rstrip("/")
             if not api_base.endswith("/rerank"):
                 if api_base.endswith("/v1") or api_base.endswith("/inference/v1"):
-                    api_base = f"{api_base}/rerank"
+                    api_base = join_api_base(api_base, "rerank")
                 else:
-                    api_base = f"{api_base}/inference/v1/rerank"
+                    api_base = join_api_base(api_base, "inference/v1/rerank")
             return api_base
         return "https://api.fireworks.ai/inference/v1/rerank"
 
@@ -198,7 +201,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
         Transform Fireworks AI rerank response to LiteLLM RerankResponse format
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Failed to parse response: {e}",

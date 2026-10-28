@@ -1,3 +1,36 @@
+{{- $componentHosts := .Values.ingress.componentHosts | default dict -}}
+{{- $hasComponentHosts := or $componentHosts.ui $componentHosts.backend $componentHosts.gateway -}}
+{{- if $hasComponentHosts }}
+{{- if not (and $componentHosts.ui $componentHosts.backend $componentHosts.gateway) }}
+{{- fail "ingress.componentHosts.ui, backend, and gateway must all be set together" }}
+{{- end }}
+{{- if not .Values.gateway.enabled }}
+{{- fail "ingress.componentHosts requires gateway.enabled=true" }}
+{{- end }}
+{{- if not .Values.backend.enabled }}
+{{- fail "ingress.componentHosts requires backend.enabled=true" }}
+{{- end }}
+{{- if not .Values.ui.enabled }}
+{{- fail "ingress.componentHosts requires ui.enabled=true" }}
+{{- end }}
+{{- if .Values.ingress.host }}
+{{- fail "ingress.host must be empty when ingress.componentHosts is configured" }}
+{{- end }}
+{{- if .Values.ingress.extraPaths }}
+{{- fail "ingress.extraPaths must be empty when ingress.componentHosts is configured" }}
+{{- end }}
+{{- if not (trim .Values.ui.backendUrl) }}
+{{- fail "ui.backendUrl is required when ingress.componentHosts is configured" }}
+{{- end }}
+{{- $_ := include "litellm.ui.backendOrigin" . }}
+{{- if not (trim .Values.backend.gatewayUrl) }}
+{{- fail "backend.gatewayUrl is required when ingress.componentHosts is configured" }}
+{{- end }}
+{{- $_ := include "litellm.backend.gatewayOrigin" . }}
+{{- if not (trim .Values.ui.publicUrl) }}
+{{- fail "ui.publicUrl is required when ingress.componentHosts is configured" }}
+{{- end }}
+{{- end }}
 {{- if .Values.ingress.enabled -}}
 {{- $gatewayName := include "litellm.gateway.fullname" . -}}
 {{- $backendName := include "litellm.backend.fullname" . -}}
@@ -90,6 +123,66 @@
   adding to it.
 */}}
 {{- $builtinPathKeys := list "/test|Exact" "/debug/memory/summary|Exact" "/|Prefix" -}}
+{{- if $hasComponentHosts }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "litellm.fullname" . }}
+  labels:
+    {{- include "litellm.commonLabels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ $componentHosts.ui | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $uiName }}
+                port:
+                  number: {{ $uiPort }}
+    - host: {{ $componentHosts.backend | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $backendName }}
+                port:
+                  number: {{ $backendPort }}
+    - host: {{ $componentHosts.gateway | quote }}
+      http:
+        paths:
+          {{- if or (eq (include "litellm.lens.mode" .) "bundled") (and (eq (include "litellm.lens.mode" .) "external") .Values.lensWorker.externalServiceName) }}
+          - path: /lens-ingest
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Values.lensWorker.externalServiceName | default (printf "%s-lens-worker" (include "litellm.fullname" .)) }}
+                port:
+                  number: {{ .Values.lensWorker.service.port }}
+          {{- end }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $gatewayName }}
+                port:
+                  number: {{ $gatewayPort }}
+{{- else }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -156,6 +249,16 @@ spec:
                 port:
                   number: {{ $gatewayPort }}
           {{- end }}
+          {{- if or (eq (include "litellm.lens.mode" .) "bundled") (and (eq (include "litellm.lens.mode" .) "external") .Values.lensWorker.externalServiceName) }}
+          {{- $builtinPathKeys = append $builtinPathKeys "/lens-ingest|Prefix" }}
+          - path: /lens-ingest
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Values.lensWorker.externalServiceName | default (printf "%s-lens-worker" (include "litellm.fullname" .)) }}
+                port:
+                  number: {{ .Values.lensWorker.service.port }}
+          {{- end }}
           {{- /*
             --- Operator-supplied extra paths (ingress.extraPaths) ---
             Rendered after every built-in path so an entry can never take
@@ -174,10 +277,33 @@ spec:
           {{- if not $extra.path }}
           {{- fail (printf "ingress.extraPaths[%d]: 'path' is required" $idx) }}
           {{- end }}
+          {{- $target := dict }}
+          {{- $port := dict }}
+          {{- if or (hasKey $extra "serviceName") (hasKey $extra "servicePort") }}
+          {{- if hasKey $extra "service" }}
+          {{- fail (printf "ingress.extraPaths[%d]: service cannot be combined with serviceName or servicePort" $idx) }}
+          {{- end }}
+          {{- if not (and (kindIs "string" $extra.serviceName) $extra.serviceName $extra.servicePort) }}
+          {{- fail (printf "ingress.extraPaths[%d]: a non-empty serviceName and servicePort are required for a custom Service" $idx) }}
+          {{- end }}
+          {{- $target = dict "name" $extra.serviceName }}
+          {{- if kindIs "string" $extra.servicePort }}
+          {{- $port = dict "name" $extra.servicePort }}
+          {{- else if or (kindIs "float64" $extra.servicePort) (kindIs "int64" $extra.servicePort) (kindIs "int" $extra.servicePort) }}
+          {{- if or (lt (float64 $extra.servicePort) 1.0) (gt (float64 $extra.servicePort) 65535.0) (ne (float64 $extra.servicePort) (float64 (int $extra.servicePort))) }}
+          {{- fail (printf "ingress.extraPaths[%d]: numeric servicePort must be an integer from 1 to 65535" $idx) }}
+          {{- end }}
+          {{- $port = dict "number" (int $extra.servicePort) }}
+          {{- else }}
+          {{- fail (printf "ingress.extraPaths[%d]: servicePort must be a port number or name" $idx) }}
+          {{- end }}
+          {{- else }}
           {{- $service := $extra.service | default "gateway" }}
-          {{- $target := get $extraPathBackends $service }}
+          {{- $target = get $extraPathBackends $service }}
           {{- if not $target }}
           {{- fail (printf "ingress.extraPaths[%d] (path %s): unknown service %q, expected one of backend, gateway, ui" $idx $extra.path $service) }}
+          {{- end }}
+          {{- $port = dict "number" $target.port }}
           {{- end }}
           {{- $requestedPathType := $extra.pathType | default "Prefix" }}
           {{- if not (has $requestedPathType (list "Prefix" "Exact" "ImplementationSpecific")) }}
@@ -194,9 +320,9 @@ spec:
             pathType: {{ $pathType }}
             backend:
               service:
-                name: {{ $target.name }}
+                name: {{ $target.name | quote }}
                 port:
-                  number: {{ $target.port }}
+                  {{- toYaml $port | nindent 18 }}
           {{- end }}
           # --- Catch-all → backend (management API: /key/*, /user/*, /team/*, ...) ---
           - path: /
@@ -206,4 +332,5 @@ spec:
                 name: {{ $backendName }}
                 port:
                   number: {{ $backendPort }}
+{{- end }}
 {{- end }}

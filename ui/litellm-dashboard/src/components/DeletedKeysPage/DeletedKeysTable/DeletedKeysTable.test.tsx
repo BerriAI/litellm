@@ -9,7 +9,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 const makeDeletedKey = (overrides: Partial<DeletedKeyResponse> = {}): DeletedKeyResponse =>
   ({
-    token: "sk-1234567890abcdef",
+    token: "sk-9876543210fedcba",
     token_id: "key-1",
     key_name: "test-key",
     key_alias: "Test Key Alias",
@@ -45,7 +45,7 @@ it("should display key information", () => {
   renderWithProviders(<DeletedKeysTable {...defaultProps} />);
 
   expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
-  expect(screen.getByText("sk-1234567890abcdef")).toBeInTheDocument();
+  expect(screen.getByText("sk-9876543210fedcba")).toBeInTheDocument();
   expect(screen.getByText("user@example.com")).toBeInTheDocument();
 });
 

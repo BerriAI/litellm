@@ -6,6 +6,7 @@ Relevant Issue: https://github.com/BerriAI/litellm/issues/13764
 
 import json
 from collections.abc import Mapping
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import BaseModel
@@ -27,6 +28,10 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
+
+
+def serialize_langfuse_datetime(value: datetime) -> str:
+    return json.dumps(value.astimezone().isoformat())
 
 
 def get_output_content_by_type(

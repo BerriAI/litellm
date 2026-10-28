@@ -333,6 +333,14 @@ describe("preservedAdminCredentials vs preservedDeclaredAppCredentials", () => {
     expect(preservedAdminCredentials(credentials)).toEqual({ client_id: "cid", upstream_resource: "auto" });
   });
 
+  it("preserves admin-typed scopes and drops blank ones", () => {
+    expect(preservedAdminCredentials({ client_id: "cid", scopes: ["api://mcp/.default", ""] })).toEqual({
+      client_id: "cid",
+      scopes: ["api://mcp/.default"],
+    });
+    expect(preservedAdminCredentials({ client_id: "cid", scopes: [] })).toEqual({ client_id: "cid" });
+  });
+
   // The two helpers answer different questions and must not be collapsed: "has the admin declared an
   // OAuth app" gates the app-may-not-match-upstream warning, so a resource-only server must read as
   // having no declared app.

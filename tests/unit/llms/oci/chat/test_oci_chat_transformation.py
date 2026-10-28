@@ -1078,15 +1078,19 @@ class TestOCIReasoningEffort:
         return body["chatRequest"]
 
     def test_reasoning_effort_lowercase_uppercased(self):
+        # gpt-5 accepts reasoningEffort; OCI's Grok 4.20 models reject it
+        # (see TestReasoningEffortGating at the end of this module).
         chat_request = self._build_chat_request(
-            "xai.grok-4-fast-reasoning",
+            "openai.gpt-5",
             {"reasoning_effort": "low"},
         )
         assert chat_request.get("reasoningEffort") == "LOW"
 
     def test_reasoning_effort_disable_mapped_to_none(self):
+        # gpt-5 accepts reasoningEffort; OCI's Grok 4.20 models reject it
+        # (see TestReasoningEffortGating at the end of this module).
         chat_request = self._build_chat_request(
-            "xai.grok-4-fast-reasoning",
+            "openai.gpt-5",
             {"reasoning_effort": "disable"},
         )
         assert chat_request.get("reasoningEffort") == "NONE"
@@ -1947,3 +1951,216 @@ class TestOCIStreamWrapperTerminalChunk:
         )
 
         assert [chunk.choices[0].finish_reason for chunk in chunks] == [None, "stop"]
+
+
+# ---------------------------------------------------------------------------
+# BerriAI/litellm#31449: mixed tool lists and reasoning_effort gating
+#
+# 1. Non-function tools answer 400 without ``drop_params`` and are dropped
+#    with it, unless the request depends on them: when no function tool is
+#    left, or ``tool_choice`` forces a dropped tool, it still answers 400.
+# 2. ``reasoning_effort`` is withheld from OCI models whose catalog entry
+#    declares no reasoning effort levels (xAI Grok 4.20), so ``drop_params``
+#    works and callers get a clear error otherwise.
+# ---------------------------------------------------------------------------
+from litellm.llms.oci.chat.transformation import get_vendor_from_model
+
+FUNCTION_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Weather for a city",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+    },
+}
+BUILTIN_TOOL = {"type": "web_search_preview"}
+SERVER_TOOL = {"type": "computer_use_preview", "display_width": 1024}
+FORCE_BUILTIN = {"type": "function", "function": {"name": "web_search_preview"}}
+FORCE_FUNCTION = {"type": "function", "function": {"name": "get_weather"}}
+
+GPT_OSS_MODELS = ["openai.gpt-oss-120b", "openai.gpt-oss-20b"]
+
+
+def _oci_tool_params(model, tools, tool_choice, drop_params):
+    request = {"tools": tools} if tool_choice is None else {"tools": tools, "tool_choice": tool_choice}
+    config = OCIChatConfig()
+    mapped = config.map_openai_params(
+        non_default_params=request,
+        optional_params={},
+        model=model,
+        drop_params=drop_params,
+    )
+    return config._get_optional_params(get_vendor_from_model(model), mapped, model=model)
+
+
+class TestNonFunctionTools:
+    @pytest.mark.parametrize("model", ["xai.grok-4.20", "cohere.command-latest"])
+    @pytest.mark.parametrize("non_function_tool", [BUILTIN_TOOL, SERVER_TOOL, {"name": "untyped"}])
+    def test_rejected_without_drop_params(self, monkeypatch, model, non_function_tool):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        with pytest.raises(OCIError, match="drop_params") as exc_info:
+            _oci_tool_params(model, [non_function_tool, FUNCTION_TOOL], None, drop_params=False)
+        assert exc_info.value.status_code == 400
+
+    def test_global_drop_params_drops_them(self, monkeypatch):
+        monkeypatch.setattr(litellm, "drop_params", True)
+        params = _oci_tool_params("xai.grok-4.20", [BUILTIN_TOOL, FUNCTION_TOOL], "auto", drop_params=False)
+        assert [tool.name for tool in params["tools"]] == ["get_weather"]
+
+    @pytest.mark.parametrize("model", ["xai.grok-4.20", "cohere.command-latest"])
+    def test_drop_params_keeps_function_tools_only(self, model):
+        params = _oci_tool_params(model, [BUILTIN_TOOL, FUNCTION_TOOL, SERVER_TOOL], None, drop_params=True)
+        assert [tool.name for tool in params["tools"]] == ["get_weather"]
+
+    def test_drop_params_keeps_unforced_tool_choice(self):
+        params = _oci_tool_params("xai.grok-4.20", [BUILTIN_TOOL, FUNCTION_TOOL], "required", drop_params=True)
+        assert params["toolChoice"] == {"type": "REQUIRED"}
+
+    @pytest.mark.parametrize("tool_choice", [None, "auto", "required"])
+    def test_drop_params_rejects_a_request_with_no_function_tool_left(self, tool_choice):
+        with pytest.raises(OCIError, match="every tool") as exc_info:
+            _oci_tool_params("xai.grok-4.20", [BUILTIN_TOOL, SERVER_TOOL], tool_choice, drop_params=True)
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.parametrize(
+        "tool_choice",
+        [FORCE_BUILTIN, "web_search_preview", {"type": "web_search_preview"}],
+    )
+    def test_forcing_a_dropped_tool_is_rejected(self, tool_choice):
+        with pytest.raises(OCIError, match="tool_choice forces `web_search_preview`") as exc_info:
+            _oci_tool_params("xai.grok-4.20", [BUILTIN_TOOL, FUNCTION_TOOL], tool_choice, drop_params=True)
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.parametrize(
+        ("dropped_tool", "tool_choice"),
+        [
+            ({"type": "bash_20250124", "name": "bash"}, {"type": "function", "function": {"name": "bash"}}),
+            ({"type": "custom", "custom": {"name": "code_exec"}}, "code_exec"),
+            ({"type": "custom", "custom": {"name": "code_exec"}}, {"type": "function", "function": {"name": "code_exec"}}),
+        ],
+    )
+    def test_forcing_a_dropped_tool_by_name_is_rejected(self, dropped_tool, tool_choice):
+        with pytest.raises(OCIError, match="tool_choice forces") as exc_info:
+            _oci_tool_params("xai.grok-4.20", [dropped_tool, FUNCTION_TOOL], tool_choice, drop_params=True)
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.parametrize("tool_choice", [FORCE_FUNCTION, "get_weather"])
+    def test_forcing_a_kept_tool_is_preserved(self, tool_choice):
+        params = _oci_tool_params("xai.grok-4.20", [BUILTIN_TOOL, FUNCTION_TOOL], tool_choice, drop_params=True)
+        assert params["toolChoice"] == {"type": "FUNCTION", "name": "get_weather"}
+
+    def test_forcing_a_kept_function_sharing_a_dropped_tool_name_is_preserved(self):
+        web_search_function = {**FUNCTION_TOOL, "function": {**FUNCTION_TOOL["function"], "name": "web_search"}}
+        force_web_search = {"type": "function", "function": {"name": "web_search"}}
+        params = _oci_tool_params(
+            "xai.grok-4.20", [{"type": "web_search"}, web_search_function], force_web_search, drop_params=True
+        )
+        assert [tool.name for tool in params["tools"]] == ["web_search"]
+        assert params["toolChoice"] == {"type": "FUNCTION", "name": "web_search"}
+
+    def test_misspelled_function_choice_is_left_for_the_service(self):
+        params = _oci_tool_params("xai.grok-4.20", [BUILTIN_TOOL, FUNCTION_TOOL], "get_weathr", drop_params=True)
+        assert params["toolChoice"] == {"type": "FUNCTION", "name": "get_weathr"}
+
+    def test_function_only_tools_are_untouched_without_drop_params(self, monkeypatch):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        params = _oci_tool_params("xai.grok-4.20", [FUNCTION_TOOL], FORCE_FUNCTION, drop_params=False)
+        assert [tool.name for tool in params["tools"]] == ["get_weather"]
+        assert params["toolChoice"] == {"type": "FUNCTION", "name": "get_weather"}
+
+
+SERVED_GROK_4_20_MODELS = [
+    "xai.grok-4.20-reasoning",
+    "xai.grok-4.20-non-reasoning",
+    "xai.grok-4.20-0309-reasoning",
+    "xai.grok-4.20-0309-non-reasoning",
+]
+
+
+class TestReasoningEffortGating:
+    @pytest.mark.parametrize("model", SERVED_GROK_4_20_MODELS + ["xai.grok-4.20"])
+    def test_models_declaring_no_levels_are_gated(self, local_model_cost_map, model):
+        supported = OCIChatConfig().get_supported_openai_params(model)
+        assert "reasoning_effort" not in supported
+        assert "tools" in supported
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "meta.llama-3.3-70b-instruct",
+            "meta.llama-4-scout-17b-16e-instruct",
+            "xai.grok-4.20-multi-agent",
+            "openai.gpt-5",
+            "openai.gpt-oss-120b",
+            "google.gemini-2.5-flash",
+            "google.gemini-2.5-flash-lite",
+        ],
+    )
+    def test_models_declaring_nothing_are_forwarded(self, local_model_cost_map, model):
+        assert "reasoning_effort" in OCIChatConfig().get_supported_openai_params(model)
+
+    def test_models_absent_from_catalog_are_forwarded(self, local_model_cost_map):
+        assert "oci/meta.llama-9-future-instruct" not in litellm.model_cost
+        assert "reasoning_effort" in OCIChatConfig().get_supported_openai_params("meta.llama-9-future-instruct")
+
+    def test_gate_is_catalog_driven(self, local_model_cost_map, monkeypatch):
+        entry = {**litellm.model_cost["oci/meta.llama-3.3-70b-instruct"], "reasoning_effort_levels": []}
+        monkeypatch.setitem(litellm.model_cost, "oci/meta.llama-3.3-70b-instruct", entry)
+        assert "reasoning_effort" not in OCIChatConfig().get_supported_openai_params("meta.llama-3.3-70b-instruct")
+
+    @pytest.mark.parametrize("model", SERVED_GROK_4_20_MODELS)
+    def test_reasoning_effort_dropped_under_drop_params(self, local_model_cost_map, model):
+        result = OCIChatConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "low", "temperature": 0.1},
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
+        assert "reasoningEffort" not in result
+        assert "reasoning_effort" not in result
+        assert result["temperature"] == 0.1
+
+    def test_reasoning_effort_raises_without_drop_params_for_gated_grok(self, local_model_cost_map, monkeypatch):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        with pytest.raises(OCIError, match=r"reasoning_effort.*xai\.grok-4\.20-reasoning"):
+            OCIChatConfig().map_openai_params(
+                non_default_params={"reasoning_effort": "low"},
+                optional_params={},
+                model="xai.grok-4.20-reasoning",
+                drop_params=False,
+            )
+
+    @pytest.mark.parametrize(
+        "model", ["openai.gpt-5", "google.gemini-2.5-flash", "openai.gpt-oss-120b", "meta.llama-3.3-70b-instruct"]
+    )
+    def test_reasoning_effort_forwarded_when_not_gated(self, local_model_cost_map, model):
+        result = OCIChatConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "low"},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+        assert result["reasoningEffort"] == "low"
+
+
+def _oci_chat_request(model, optional_params):
+    return OCIChatConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={**BASE_OCI_PARAMS, **optional_params},
+        litellm_params={},
+        headers={},
+    )["chatRequest"]
+
+
+class TestOpenAIPrefixMaxTokensKey:
+    @pytest.mark.parametrize("model", GPT_OSS_MODELS)
+    def test_gpt_oss_keeps_max_tokens(self, local_model_cost_map, model):
+        chat_request = _oci_chat_request(model, {"max_tokens": 64})
+        assert chat_request["maxTokens"] == 64
+        assert "maxCompletionTokens" not in chat_request
+
+    def test_gpt5_still_routes_to_max_completion_tokens(self, local_model_cost_map):
+        chat_request = _oci_chat_request("openai.gpt-5", {"max_tokens": 64})
+        assert chat_request["maxCompletionTokens"] == 64
+        assert "maxTokens" not in chat_request

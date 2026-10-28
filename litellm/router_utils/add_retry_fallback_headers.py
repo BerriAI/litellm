@@ -1,10 +1,17 @@
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Awaitable, Mapping
 from types import MappingProxyType
-from typing import Any, Final, Protocol, TypedDict, cast
+from typing import Final, Protocol, TypedDict, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
+
+from litellm.litellm_core_utils.hidden_params import (
+    HIDDEN_PARAMS_ATTR as _HIDDEN_PARAMS_ATTR,
+)
+from litellm.litellm_core_utils.hidden_params import (
+    set_hidden_params,
+)
 
 
 class FallbackErrorInfo(TypedDict):
@@ -14,8 +21,15 @@ class FallbackErrorInfo(TypedDict):
     code: str | None
 
 
-class _HiddenParamsHost(Protocol):
+class HiddenParamsHost(Protocol):
     _hidden_params: dict[str, object]
+
+
+_HiddenParamsHost = HiddenParamsHost
+
+
+class AsyncIteratorProtocol(Protocol):
+    def __anext__(self) -> Awaitable[object]: ...
 
 
 _EMPTY_OBJECT_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
@@ -90,17 +104,27 @@ class HiddenParamsAsyncIteratorWrapper:
     """
 
     def __init__(self, inner: object) -> None:
-        self._inner = inner
+        self.inner = inner
         self._hidden_params: dict[str, object] = {}
+
+    @property
+    def _inner(self) -> object:
+        return self.inner
+
+    @_inner.setter
+    def _inner(self, value: object) -> None:
+        self.inner = value
 
     def __aiter__(self) -> "HiddenParamsAsyncIteratorWrapper":
         return self
 
     async def __anext__(self) -> object:
-        return await cast(Any, self._inner).__anext__()
+        return await cast(  # cast-ok: provider stream is guarded by __anext__
+            AsyncIteratorProtocol, self.inner
+        ).__anext__()
 
     async def aclose(self) -> None:
-        aclose: Final = getattr(self._inner, "aclose", None)
+        aclose: Final = getattr(self.inner, "aclose", None)
         if callable(aclose):
             await aclose()
 
@@ -210,10 +234,8 @@ def get_hidden_params_dict(
 
 
 def _write_hidden_params(response: object, hidden_params: dict[str, object]) -> None:
-    if isinstance(response, dict):
-        response["_hidden_params"] = hidden_params
-    elif hasattr(response, "_hidden_params"):
-        cast(_HiddenParamsHost, response)._hidden_params = hidden_params
+    if isinstance(response, dict) or hasattr(response, _HIDDEN_PARAMS_ATTR):
+        set_hidden_params(response, hidden_params)
 
 
 def _ensure_additional_headers_dict(
