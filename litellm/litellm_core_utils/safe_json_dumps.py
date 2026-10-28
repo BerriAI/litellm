@@ -24,12 +24,14 @@ def safe_json_structure(
     max_depth: int = DEFAULT_MAX_RECURSE_DEPTH,
     value_transform: Callable[[str | None, str], str] | None = None,
     key: str | None = None,
+    *,
+    non_finite_as_null: bool = False,
 ) -> object:
     """
     Rebuild data out of JSON-native pieces while detecting circular references.
     If a circular reference is detected then a marker string is returned.
-    NUL bytes are stripped from strings to prevent PostgreSQL 22P05 errors, and NaN and
-    infinite floats become null, since JSON has no token for them and jsonb rejects them.
+    NUL bytes are stripped from strings to prevent PostgreSQL 22P05 errors. With
+    non_finite_as_null, NaN and infinite floats become null, since jsonb rejects them.
 
     value_transform, when given, is applied to every string leaf (and to the
     str() fallback for non-serializable objects) with the mapping key the leaf
@@ -49,7 +51,7 @@ def safe_json_structure(
             cleaned = obj.replace("\x00", "") if "\x00" in obj else obj
             return _transform(key, cleaned)
         if isinstance(obj, (int, float, bool, type(None))):
-            return _finite_or_none(obj)
+            return _finite_or_none(obj) if non_finite_as_null else obj
         # Check for circular reference.
         if id(obj) in seen:
             return "CircularReference Detected"
@@ -95,6 +97,10 @@ def safe_dumps(
     data: object,
     max_depth: int = DEFAULT_MAX_RECURSE_DEPTH,
     value_transform: Callable[[str | None, str], str] | None = None,
+    *,
+    non_finite_as_null: bool = False,
 ) -> str:
     """Serialize data to JSON text through safe_json_structure."""
-    return json.dumps(safe_json_structure(data, max_depth, value_transform), default=str)
+    return json.dumps(
+        safe_json_structure(data, max_depth, value_transform, non_finite_as_null=non_finite_as_null), default=str
+    )

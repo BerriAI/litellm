@@ -892,7 +892,7 @@ def get_logging_payload(
             user=metadata.get("user_api_key_user_id", "") or "",
             team_id=metadata.get("user_api_key_team_id", "") or "",
             organization_id=metadata.get("user_api_key_org_id") or "",
-            metadata=safe_dumps(clean_metadata),
+            metadata=safe_dumps(clean_metadata, non_finite_as_null=True),
             cache_key=cache_key,
             spend=kwargs.get("response_cost", 0),
             total_tokens=usage.get("total_tokens", standard_logging_total_tokens),
@@ -1204,7 +1204,7 @@ def _get_messages_for_spend_logs_payload(
                 messages: Final = standard_logging_payload.get("messages")
                 if messages is not None:
                     try:
-                        return safe_dumps(messages)
+                        return safe_dumps(messages, non_finite_as_null=True)
                     except Exception:
                         return "{}"
     return "{}"
@@ -1899,7 +1899,8 @@ def _get_proxy_server_request_for_spend_logs_payload(
             _request_body_json_str: Final = safe_dumps(
                 _stored_request_without_requester_ip_address(stored_request_body)
                 if drop_requester_ip_address
-                else stored_request_body
+                else stored_request_body,
+                non_finite_as_null=True,
             )
             if LITELLM_TRUNCATED_PAYLOAD_FIELD in _request_body_json_str:
                 verbose_proxy_logger.info(
@@ -1980,7 +1981,7 @@ def _get_response_for_spend_logs_payload(
         if isinstance(sanitized_response, str):
             result_str = strip_null_bytes(sanitized_response)
         else:
-            result_str = safe_dumps(sanitized_response)
+            result_str = safe_dumps(sanitized_response, non_finite_as_null=True)
         if LITELLM_TRUNCATED_PAYLOAD_FIELD in result_str:
             verbose_proxy_logger.info(
                 "Spend Log: response was truncated before storing in DB. %s",
@@ -2051,7 +2052,7 @@ def spend_log_row_with_retained_metadata(
         return row
     metadata: Final = _SPEND_LOGS_METADATA_ADAPTER.validate_json(metadata_json)
     retained: Final = {name: value for name, value in metadata.items() if fields.keeps(name)}
-    return {**row, "metadata": safe_dumps(retained)}
+    return {**row, "metadata": safe_dumps(retained, non_finite_as_null=True)}
 
 
 def _get_status_for_spend_log(

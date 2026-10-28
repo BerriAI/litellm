@@ -12048,8 +12048,8 @@ class TestResponseCostFromLoggingObjForCacheHits:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("response_cost", "expected_header"),
-        ((float("nan"), None), (float("inf"), None), (0.0042, "0.0042")),
-        ids=("nan", "inf", "finite"),
+        ((float("nan"), None), (float("inf"), None), (0.0042, "0.0042"), (2, "2")),
+        ids=("nan", "inf", "finite", "int"),
     )
     async def test_a_non_finite_response_cost_sends_no_cost_header(
         self, response_cost: float, expected_header: str | None
@@ -12068,6 +12068,31 @@ class TestResponseCostFromLoggingObjForCacheHits:
         )
 
         assert headers.get("x-litellm-response-cost") == expected_header
+
+    @pytest.mark.asyncio
+    async def test_an_overflowing_cost_breakdown_sends_no_infinite_cost_header(self):
+        response: Final = litellm.ModelResponse()
+        response._hidden_params = {"response_cost": 0.0}
+        logging_obj: Final = self._logging_obj()
+        logging_obj.cost_breakdown = {
+            "original_cost": float("inf"),
+            "input_cost": float("inf"),
+            "output_cost": 0.0012,
+            "total_cost": float("inf"),
+        }
+
+        headers: Final = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+            response=response,
+            request_data={"model": "gpt-5.4-mini"},
+            request=Request({"type": "http", "method": "POST", "headers": []}),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            logging_obj=logging_obj,
+            version=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+
+        cost_headers: Final = {name: value for name, value in headers.items() if name.startswith("x-litellm-response-cost")}
+        assert cost_headers == {"x-litellm-response-cost-output": "0.0012"}
 
     def test_a_fresh_zero_cost_v1_messages_call_still_sends_no_cost_header(self):
         logging_obj: Final = self._logging_obj()

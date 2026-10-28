@@ -2968,3 +2968,23 @@ def test_convert_to_model_response_object_function_output():
     assert result.usage.completion_tokens_details == CompletionTokensDetailsWrapper(reasoning_tokens=0)
 
     assert result._hidden_params is not None
+
+
+@pytest.mark.parametrize("reported_cost", [float("nan"), float("inf")])
+def test_a_non_finite_provider_usage_cost_is_dropped_so_the_response_is_strict_json(reported_cost: float):
+    response: Final = convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-non-finite-cost",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-4o",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "cost": reported_cost},
+        },
+        model_response_object=ModelResponse(),
+    )
+
+    usage: Final = json.loads(json.dumps(response.model_dump(), allow_nan=False))["usage"]
+    assert "cost" not in usage
+    assert usage["total_tokens"] == 4
+

@@ -2070,7 +2070,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     litellm_model_name=litellm_model_name,
                     router_model_id=router_model_id or hidden_params.get("model_id"),
                 )
-                return hidden_params["response_cost"]
+                return self._recorded_response_cost(hidden_params["response_cost"])
             elif router_model_id is None and "model_id" in hidden_params:  # use model_id if not already set
                 router_model_id = hidden_params["model_id"]
 
@@ -2165,7 +2165,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 litellm_model_name=litellm_model_name,
                 router_model_id=router_model_id,
             )
-            return total_response_cost
+            return self._recorded_response_cost(total_response_cost)
         except Exception as e:  # error calculating cost
             debug_info = StandardLoggingModelCostFailureDebugInformation(
                 error_str=str(e),
@@ -2190,6 +2190,14 @@ class Logging(LiteLLMLoggingBaseClass):
         return None
 
     _response_cost_calculator = response_cost_calculator
+
+    def _recorded_response_cost(self, cost: float | None) -> float | None:
+        if cost is None or finite_cost(cost) is not None:
+            return cost
+        verbose_logger.warning(
+            "Recording a non-finite response_cost=%s as 0 for litellm_call_id=%s", cost, self.litellm_call_id
+        )
+        return 0.0
 
     def uncached_price(self, result: object) -> UncachedPrice:
         previous_cost_breakdown: Final = self.cost_breakdown

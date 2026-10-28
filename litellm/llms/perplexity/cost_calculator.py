@@ -6,7 +6,7 @@ Helper util for handling perplexity-specific cost calculation
 from datetime import datetime
 from typing import Final
 
-from litellm.litellm_core_utils.core_helpers import finite_cost
+from litellm.litellm_core_utils.core_helpers import finite_reported_cost
 from litellm.litellm_core_utils.llm_cost_calc.utils import TokenRates, apply_off_peak_pricing
 from litellm.types.utils import Usage
 from litellm.utils import get_model_info
@@ -35,7 +35,7 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
         total_cost = cost_info.get("total_cost")
     elif isinstance(cost_info, (int, float)) and not isinstance(cost_info, bool):
         total_cost = float(cost_info)
-    reported_cost: Final = None if total_cost is None else finite_cost(float(total_cost))
+    reported_cost: Final = None if total_cost is None else finite_reported_cost(float(total_cost))
     if reported_cost is not None:
         return (0.0, reported_cost)
 

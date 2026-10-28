@@ -381,6 +381,20 @@ async def test_org_member_spend_is_summed_across_pods_and_restored_on_rpush_fail
     assert restored_spend["org_member_list_transactions"] == {member_key: 1.5}
 
 
+@pytest.mark.asyncio
+async def test_a_single_parked_batch_with_a_nan_spend_drains_as_zero(
+    redis_update_buffer: RedisUpdateBuffer, mock_redis_cache: AsyncMock
+):
+    mock_redis_cache.async_lpop = AsyncMock(
+        return_value=json.dumps({"key_list_transactions": {"nan-key": float("nan"), "ok-key": 0.5}}, allow_nan=True)
+    )
+
+    drained: Final = await redis_update_buffer.get_all_update_transactions_from_redis_buffer()
+
+    assert drained is not None
+    assert drained["key_list_transactions"] == {"nan-key": 0.0, "ok-key": 0.5}
+
+
 PARKED_DAILY_KEY: Final = "user-1_2025-01-15_api-key-123_gpt-4o_openai_/chat/completions"
 
 
@@ -836,6 +850,16 @@ async def test_store_spend_logs_in_redis_drops_oldest_rows_past_the_cap():
     parked = await buffer.get_spend_logs_from_redis_buffer(limit=10)
     assert [row["request_id"] for row in parked] == ["mid", "new"]
     assert await buffer.get_spend_logs_from_redis_buffer(limit=10) == ()
+
+
+@pytest.mark.asyncio
+async def test_a_spend_log_row_parked_with_a_nan_spend_is_read_back_with_zero_spend():
+    buffer: Final = RedisUpdateBuffer(redis_cache=_ListRedis())
+    buffer.should_commit_spend_updates_to_redis = MagicMock(return_value=True)
+
+    assert await buffer.store_spend_logs_in_redis([{"request_id": "nan-row", "spend": float("nan")}]) is True
+
+    assert await buffer.get_spend_logs_from_redis_buffer(limit=10) == ({"request_id": "nan-row", "spend": 0.0},)
 
 
 @pytest.mark.asyncio

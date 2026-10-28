@@ -1,4 +1,5 @@
 import json
+import math
 import re
 import time
 from collections.abc import Collection, Mapping, Sequence
@@ -2058,10 +2059,15 @@ class Usage(SafeAttributeModel, CompletionUsage):
         else:  # maintain openai compatibility in usage object if possible
             del self.server_tool_use
 
-        if cost is not None:
-            self.cost = cost
-        else:
+        if cost is None:
             del self.cost
+        elif isinstance(cost, float) and not math.isfinite(cost):
+            verbose_logger.warning(
+                "Dropping a non-finite provider usage cost %s, the cost map prices the request", cost
+            )
+            del self.cost
+        else:
+            self.cost = cost
 
         ## ANTHROPIC MAPPING ##
         if "cache_creation_input_tokens" in params and isinstance(params["cache_creation_input_tokens"], int):
