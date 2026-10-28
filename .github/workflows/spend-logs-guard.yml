@@ -19,12 +19,16 @@ concurrency:
 
 jobs:
   spend-logs-guard:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest-8-cores
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           ref: ${{ github.event.pull_request.base.ref }}
           persist-credentials: false
+          sparse-checkout: |
+            .github/actions/setup-uv-with-retries
+            ci_cd/spend_logs_guard.py
+          sparse-checkout-cone-mode: false
       - name: Fetch the pull request head, its merge base and its reviews
         id: revisions
         env:
