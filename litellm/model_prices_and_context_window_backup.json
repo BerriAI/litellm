@@ -76189,6 +76189,8 @@
         "supports_vision": true,
         "supports_prompt_caching": false,
         "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true,
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
         "supports_sampling_params": false
@@ -76204,6 +76206,8 @@
         "supports_vision": true,
         "supports_prompt_caching": false,
         "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true,
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
         "supports_sampling_params": false
@@ -76220,7 +76224,28 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false,
         "prompt_cache_min_tokens": 4096
+    },
+    "kyma/claude-haiku-5.5": {
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 1.35e-07,
+        "cache_read_input_token_cost": 1.35e-08,
+        "output_cost_per_token": 6.75e-07,
+        "litellm_provider": "kyma",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true,
+        "supports_adaptive_thinking": true,
+        "thinking_always_on": false,
+        "supports_sampling_params": false,
+        "prompt_cache_min_tokens": 512
     },
     "kyma/claude-opus-4-7": {
         "max_input_tokens": 1000000,
@@ -76234,6 +76259,8 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false,
         "supports_adaptive_thinking": true,
         "supports_sampling_params": false,
         "prompt_cache_min_tokens": 2048
@@ -76250,7 +76277,28 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true,
         "supports_adaptive_thinking": true,
+        "supports_sampling_params": false,
+        "prompt_cache_min_tokens": 512
+    },
+    "kyma/claude-opus-5.5": {
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 5.4e-06,
+        "cache_read_input_token_cost": 2.7e-07,
+        "output_cost_per_token": 2.7e-05,
+        "litellm_provider": "kyma",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true,
+        "supports_adaptive_thinking": true,
+        "thinking_always_on": true,
         "supports_sampling_params": false,
         "prompt_cache_min_tokens": 512
     },
@@ -76266,6 +76314,8 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false,
         "supports_adaptive_thinking": true,
         "prompt_cache_min_tokens": 1024
     },
@@ -76281,9 +76331,30 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true,
         "supports_adaptive_thinking": true,
         "supports_sampling_params": false,
         "prompt_cache_min_tokens": 1024
+    },
+    "kyma/claude-sonnet-5.5": {
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 2.7e-06,
+        "cache_read_input_token_cost": 1.35e-07,
+        "output_cost_per_token": 1.35e-05,
+        "litellm_provider": "kyma",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true,
+        "supports_adaptive_thinking": true,
+        "thinking_always_on": true,
+        "supports_sampling_params": false,
+        "prompt_cache_min_tokens": 512
     },
     "kyma/deepseek-r1": {
         "max_input_tokens": 64000,
@@ -76295,7 +76366,9 @@
         "supports_function_calling": true,
         "supports_vision": false,
         "supports_prompt_caching": false,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/deepseek-v3": {
         "max_input_tokens": 160000,
@@ -76307,7 +76380,9 @@
         "supports_function_calling": true,
         "supports_vision": false,
         "supports_prompt_caching": false,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/deepseek-v4-flash": {
         "max_input_tokens": 1000000,
@@ -76320,7 +76395,9 @@
         "supports_function_calling": true,
         "supports_vision": false,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/deepseek-v4-flash-vision-exp": {
         "max_input_tokens": 1048576,
@@ -76332,7 +76409,23 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": false,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
+    },
+    "kyma/deepseek-v4.1-flash": {
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 2.7e-07,
+        "output_cost_per_token": 8.1e-07,
+        "litellm_provider": "kyma",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": false,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/gemini-3-flash": {
         "max_input_tokens": 1048576,
@@ -76345,7 +76438,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/gemini-3.1-pro": {
         "max_input_tokens": 1048576,
@@ -76358,7 +76453,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true
     },
     "kyma/gemini-3.5-flash": {
         "max_input_tokens": 1048576,
@@ -76371,7 +76468,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/gemini-3.5-flash-lite": {
         "max_input_tokens": 1048576,
@@ -76384,7 +76483,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/gemini-3.6-flash": {
         "max_input_tokens": 1048576,
@@ -76397,7 +76498,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_pdf_input": false
     },
     "kyma/gemini-3.7-flash": {
         "max_input_tokens": 1048576,
@@ -76410,7 +76513,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true
     },
     "kyma/gemini-3.8-flash": {
         "max_input_tokens": 1048576,
@@ -76422,7 +76527,24 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true
+    },
+    "kyma/gemini-4-argon": {
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "input_cost_per_token": 5.4e-06,
+        "cache_read_input_token_cost": 2.7e-07,
+        "output_cost_per_token": 2.7e-05,
+        "litellm_provider": "kyma",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true
     },
     "kyma/gemma-4-31b": {
         "max_input_tokens": 128000,
@@ -76435,7 +76557,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/glm-4.5-air": {
         "max_input_tokens": 131072,
@@ -76448,7 +76572,9 @@
         "supports_function_calling": true,
         "supports_vision": false,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/glm-4.7-flash": {
         "max_input_tokens": 203000,
@@ -76461,7 +76587,9 @@
         "supports_function_calling": true,
         "supports_vision": false,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/glm-5.1": {
         "max_input_tokens": 203000,
@@ -76474,7 +76602,9 @@
         "supports_function_calling": true,
         "supports_vision": false,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/glm-5.2": {
         "max_input_tokens": 1000000,
@@ -76487,7 +76617,9 @@
         "supports_function_calling": true,
         "supports_vision": false,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/glm-5.3": {
         "max_input_tokens": 1310720,
@@ -76499,7 +76631,9 @@
         "supports_function_calling": true,
         "supports_vision": false,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/glm-5.3-flash": {
         "max_input_tokens": 1310720,
@@ -76511,7 +76645,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/gpt-5.6-luna": {
         "max_input_tokens": 1050000,
@@ -76524,7 +76660,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true
     },
     "kyma/gpt-5.6-luna-pro": {
         "max_input_tokens": 1050000,
@@ -76537,7 +76675,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true
     },
     "kyma/gpt-5.6-sol": {
         "max_input_tokens": 1050000,
@@ -76550,7 +76690,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true
     },
     "kyma/gpt-5.6-sol-pro": {
         "max_input_tokens": 1050000,
@@ -76563,7 +76705,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true
     },
     "kyma/gpt-5.6-terra": {
         "max_input_tokens": 1050000,
@@ -76578,7 +76722,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/gpt-5.6-terra-pro": {
         "max_input_tokens": 1050000,
@@ -76591,7 +76737,58 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true
+    },
+    "kyma/gpt-6-astra": {
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 1.35e-05,
+        "cache_read_input_token_cost": 1.35e-06,
+        "output_cost_per_token": 6.75e-05,
+        "litellm_provider": "kyma",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
+    },
+    "kyma/gpt-6-luna": {
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 1.639e-07,
+        "cache_read_input_token_cost": 1.35e-08,
+        "output_cost_per_token": 8.195e-07,
+        "input_cost_per_token_above_272k_tokens": 2.7e-07,
+        "output_cost_per_token_above_272k_tokens": 1.0125e-06,
+        "litellm_provider": "kyma",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true
+    },
+    "kyma/gpt-6.1-sol": {
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 2.7e-06,
+        "cache_read_input_token_cost": 1.35e-07,
+        "output_cost_per_token": 1.35e-05,
+        "input_cost_per_token_above_272k_tokens": 5.4e-06,
+        "output_cost_per_token_above_272k_tokens": 2.025e-05,
+        "litellm_provider": "kyma",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true
     },
     "kyma/gpt-oss-120b": {
         "max_input_tokens": 128000,
@@ -76603,7 +76800,9 @@
         "supports_function_calling": true,
         "supports_vision": false,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/grok-4.20": {
         "max_input_tokens": 2000000,
@@ -76615,7 +76814,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": false,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true
     },
     "kyma/grok-4.20-multi-agent": {
         "max_input_tokens": 2000000,
@@ -76627,7 +76828,9 @@
         "supports_function_calling": false,
         "supports_vision": true,
         "supports_prompt_caching": false,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true
     },
     "kyma/grok-4.3": {
         "max_input_tokens": 1000000,
@@ -76642,7 +76845,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/grok-4.5": {
         "max_input_tokens": 500000,
@@ -76654,7 +76859,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": false,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true
     },
     "kyma/grok-4.6": {
         "max_input_tokens": 500000,
@@ -76666,7 +76873,24 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": false,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true
+    },
+    "kyma/grok-4.7": {
+        "max_input_tokens": 500000,
+        "max_output_tokens": 450000,
+        "input_cost_per_token": 2.16e-06,
+        "cache_read_input_token_cost": 5.4e-07,
+        "output_cost_per_token": 6.48e-06,
+        "litellm_provider": "kyma",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true
     },
     "kyma/grok-build": {
         "max_input_tokens": 256000,
@@ -76681,7 +76905,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/hy3": {
         "max_input_tokens": 262144,
@@ -76693,7 +76919,23 @@
         "supports_function_calling": true,
         "supports_vision": false,
         "supports_prompt_caching": false,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
+    },
+    "kyma/hy4-preview": {
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 64000,
+        "input_cost_per_token": 1.1259e-06,
+        "output_cost_per_token": 3.3764e-06,
+        "litellm_provider": "kyma",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": false,
+        "supports_prompt_caching": false,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/kimi-k2.6": {
         "max_input_tokens": 262144,
@@ -76705,7 +76947,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": false,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/kimi-k2.7-code": {
         "max_input_tokens": 262144,
@@ -76717,7 +76961,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": false,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/kimi-k3": {
         "max_input_tokens": 1048576,
@@ -76730,7 +76976,24 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
+    },
+    "kyma/kimi-k3.1-pro": {
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 943718,
+        "input_cost_per_token": 2.7e-06,
+        "cache_read_input_token_cost": 2.7e-07,
+        "output_cost_per_token": 1.35e-05,
+        "litellm_provider": "kyma",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/llama-3.3-70b": {
         "max_input_tokens": 128000,
@@ -76742,7 +77005,9 @@
         "supports_function_calling": true,
         "supports_vision": false,
         "supports_prompt_caching": true,
-        "supports_reasoning": false
+        "supports_reasoning": false,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/llama-4-maverick": {
         "max_input_tokens": 1048576,
@@ -76754,7 +77019,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": false,
-        "supports_reasoning": false
+        "supports_reasoning": false,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/mimo-v2.5": {
         "max_input_tokens": 1050000,
@@ -76766,7 +77033,37 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": false,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
+    },
+    "kyma/mimo-v2.6-flash": {
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 1.89e-07,
+        "output_cost_per_token": 3.78e-07,
+        "litellm_provider": "kyma",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": false,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
+    },
+    "kyma/mimo-v2.6-pro": {
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 5.805e-07,
+        "output_cost_per_token": 1.1745e-06,
+        "litellm_provider": "kyma",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": false,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/minimax-m2.5": {
         "max_input_tokens": 196608,
@@ -76778,7 +77075,9 @@
         "supports_function_calling": true,
         "supports_vision": false,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/minimax-m2.7": {
         "max_input_tokens": 204800,
@@ -76790,7 +77089,9 @@
         "supports_function_calling": true,
         "supports_vision": false,
         "supports_prompt_caching": false,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/minimax-m3": {
         "max_input_tokens": 1048576,
@@ -76803,7 +77104,24 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
+    },
+    "kyma/minimax-m3.1-flash": {
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 524288,
+        "input_cost_per_token": 2.025e-07,
+        "cache_read_input_token_cost": 2.025e-08,
+        "output_cost_per_token": 8.1e-07,
+        "litellm_provider": "kyma",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/muse-glimmer-30b": {
         "max_input_tokens": 131072,
@@ -76815,7 +77133,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": false,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/muse-spark-1.1": {
         "max_input_tokens": 1048576,
@@ -76827,7 +77147,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": false,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true
     },
     "kyma/muse-spark-1.2": {
         "max_input_tokens": 1048576,
@@ -76839,7 +77161,51 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": false,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true
+    },
+    "kyma/muse-spark-1.3": {
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 1.688e-06,
+        "output_cost_per_token": 5.738e-06,
+        "litellm_provider": "kyma",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": false,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true
+    },
+    "kyma/muse-spark-open": {
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 943718,
+        "input_cost_per_token": 1.688e-06,
+        "output_cost_per_token": 5.738e-06,
+        "litellm_provider": "kyma",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": false,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
+    },
+    "kyma/muse-wonder": {
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 943718,
+        "input_cost_per_token": 5.4e-06,
+        "output_cost_per_token": 2.7e-05,
+        "litellm_provider": "kyma",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": false,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": true
     },
     "kyma/nemotron-3-ultra-550b": {
         "max_input_tokens": 1000000,
@@ -76852,7 +77218,24 @@
         "supports_function_calling": true,
         "supports_vision": false,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
+    },
+    "kyma/nemotron-3.5-super-vl": {
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 235929,
+        "input_cost_per_token": 8.1e-08,
+        "cache_read_input_token_cost": 1.35e-08,
+        "output_cost_per_token": 4.725e-07,
+        "litellm_provider": "kyma",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/qwen-3-32b": {
         "max_input_tokens": 32768,
@@ -76864,7 +77247,9 @@
         "supports_function_calling": true,
         "supports_vision": false,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/qwen-3-coder": {
         "max_input_tokens": 131072,
@@ -76877,7 +77262,9 @@
         "supports_function_calling": true,
         "supports_vision": false,
         "supports_prompt_caching": true,
-        "supports_reasoning": false
+        "supports_reasoning": false,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/qwen-3.6-plus": {
         "max_input_tokens": 1000000,
@@ -76891,7 +77278,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/qwen-3.7-max": {
         "max_input_tokens": 1000000,
@@ -76904,7 +77293,9 @@
         "supports_function_calling": true,
         "supports_vision": false,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/qwen-3.7-plus": {
         "max_input_tokens": 1000000,
@@ -76919,7 +77310,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/qwen-3.8-max": {
         "max_input_tokens": 1000000,
@@ -76932,7 +77325,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/qwen3.7-flash": {
         "max_input_tokens": 1000000,
@@ -76949,7 +77344,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/qwen3.8-27b": {
         "max_input_tokens": 1000000,
@@ -76961,7 +77358,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": false,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/qwen3.8-flash": {
         "max_input_tokens": 1000000,
@@ -76973,7 +77372,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     },
     "kyma/sonar": {
         "max_input_tokens": 127072,
@@ -76985,7 +77386,9 @@
         "supports_function_calling": false,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": false
+        "supports_reasoning": false,
+        "supports_response_schema": false,
+        "supports_pdf_input": false
     },
     "kyma/sonar-pro": {
         "max_input_tokens": 200000,
@@ -76997,7 +77400,9 @@
         "supports_function_calling": false,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": false
+        "supports_reasoning": false,
+        "supports_response_schema": false,
+        "supports_pdf_input": false
     },
     "kyma/step-3.7-flash": {
         "max_input_tokens": 256000,
@@ -77010,6 +77415,23 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
+    },
+    "kyma/step-5-preview": {
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 64000,
+        "input_cost_per_token": 1.35e-06,
+        "cache_read_input_token_cost": 1.35e-07,
+        "output_cost_per_token": 3.645e-06,
+        "litellm_provider": "kyma",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_pdf_input": false
     }
 }

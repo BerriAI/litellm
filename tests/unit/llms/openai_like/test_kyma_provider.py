@@ -59,6 +59,20 @@ def test_kyma_provider_keeps_explicit_credentials(monkeypatch: pytest.MonkeyPatc
     assert api_base == "https://kyma.internal.example/v1"
 
 
+def test_bare_model_on_kyma_base_url_keeps_openai_routing(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-env-key")
+
+    model, provider, api_key, api_base = get_llm_provider(
+        model="gpt-6-luna",
+        custom_llm_provider=None,
+        api_base="https://kymaapi.com/v1",
+        api_key=None,
+    )
+
+    assert (model, provider, api_base) == ("gpt-6-luna", "openai", "https://kymaapi.com/v1")
+    assert api_key is None
+
+
 def test_kyma_is_available_in_add_model_form():
     fields_path: Final = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
     providers: Final = json.loads(fields_path.read_text())
