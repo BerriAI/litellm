@@ -46,4 +46,4 @@ jobs:
           MERGE_BASE: ${{ steps.revisions.outputs.merge_base }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          uv run --frozen python ci_cd/spend_logs_guard.py --base "$MERGE_BASE" --head "$HEAD_SHA" --approver kerry-berri --reviews "$RUNNER_TEMP/reviews.json"
+          uv run --no-project --with pydantic==2.14.1 python ci_cd/spend_logs_guard.py --base "$MERGE_BASE" --head "$HEAD_SHA" --approver kerry-berri --reviews "$RUNNER_TEMP/reviews.json"
