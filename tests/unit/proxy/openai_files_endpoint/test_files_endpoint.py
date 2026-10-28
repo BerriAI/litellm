@@ -6410,7 +6410,11 @@ def _router_with_wildcard_and_unprefixed_anthropic_deployments() -> Router:
                 "litellm_params": {"model": unprefixed_anthropic_model, "api_key": "anthropic_api_key"},
                 "model_info": {"id": "claude-unprefixed-id"},
             },
-        ]
+        ],
+        model_group_alias={"claude-alias": "claude-unprefixed"},
+        routing_groups=[
+            {"group_name": "claude-group", "models": ["claude-unprefixed"], "routing_strategy": "simple-shuffle"}
+        ],
     )
 
 
@@ -6436,6 +6440,16 @@ def _callers_files_on_wildcard_unprefixed_and_passthrough_deployments() -> list[
             model_mappings={"anthropic/claude-haiku-5-5": "litellm_db://unified-wildcard-storage"},
             storage_backend="litellm_db",
         ),
+        _managed_file_row(
+            "unified-alias-storage",
+            model_mappings={"claude-alias": "s3://bucket/unified-alias-storage"},
+            storage_backend="s3",
+        ),
+        _managed_file_row(
+            "unified-group-storage",
+            model_mappings={"claude-group": "s3://bucket/unified-group-storage"},
+            storage_backend="s3",
+        ),
     ]
 
 
@@ -6458,7 +6472,14 @@ def _callers_files_on_wildcard_unprefixed_and_passthrough_deployments() -> list[
             "/anthropic/v1/files",
             {},
             {},
-            ["unified-wildcard", "unified-unprefixed", "unified-storage", "unified-wildcard-storage"],
+            [
+                "unified-wildcard",
+                "unified-unprefixed",
+                "unified-storage",
+                "unified-wildcard-storage",
+                "unified-alias-storage",
+                "unified-group-storage",
+            ],
         ),
         ("/openai/v1/files", {}, {}, ["unified-gpt", "unified-passthrough"]),
         ("/v1/files", {"target_model_names": "claude-unprefixed"}, {}, ["unified-unprefixed", "unified-storage"]),

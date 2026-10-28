@@ -1775,9 +1775,24 @@ def _deployments_on_provider(llm_router: Router | None, custom_llm_provider: str
     )
 
 
-def _pattern_routes_model_name_to_provider(llm_router: Router, custom_llm_provider: str, model_name: str) -> bool:
-    return model_name not in llm_router.model_names and llm_router.pattern_router.routes_to_provider(
-        model_name, custom_llm_provider
+def _routed_model_name_on_provider(
+    llm_router: Router, custom_llm_provider: str, provider_model_names: frozenset[str], model_name: str
+) -> bool:
+    if model_name in llm_router.model_names:
+        return model_name in provider_model_names
+    return llm_router.pattern_router.routes_to_provider(model_name, custom_llm_provider)
+
+
+def _stored_model_name_routes_to_provider(
+    llm_router: Router, custom_llm_provider: str, provider_model_names: frozenset[str], model_name: str
+) -> bool:
+    routing_group: Final = llm_router.get_routing_group(model_name)
+    routed_model_names: Final = (
+        tuple(routing_group.models) if routing_group is not None else (llm_router.routable_model_group(model_name),)
+    )
+    return any(
+        _routed_model_name_on_provider(llm_router, custom_llm_provider, provider_model_names, routed_model_name)
+        for routed_model_name in routed_model_names
     )
 
 
@@ -1787,16 +1802,20 @@ def _files_on_provider(llm_router: Router | None, custom_llm_provider: str) -> _
     if custom_llm_provider not in litellm.provider_list:
         return _UnscopedFileList(status_code=400, detail=f"Unknown provider '{custom_llm_provider}' for listing files.")
     passthrough_model_id: Final = passthrough_file_model_id(custom_llm_provider)
-    model_mapping_keys: Final = _model_mapping_keys(
-        _deployments_on_provider(llm_router, custom_llm_provider)
-    ) | frozenset((passthrough_model_id,) if passthrough_model_id is not None else ())
+    deployments: Final = tuple(_deployments_on_provider(llm_router, custom_llm_provider))
+    model_mapping_keys: Final = _model_mapping_keys(deployments) | frozenset(
+        (passthrough_model_id,) if passthrough_model_id is not None else ()
+    )
     if llm_router is None:
         return _ListedFiles(FileListModelScope(model_mapping_keys), custom_llm_provider)
     return _ListedFiles(
         FileListModelScope(
             model_mapping_keys,
             routes_stored_model_name=functools.partial(
-                _pattern_routes_model_name_to_provider, llm_router, custom_llm_provider
+                _stored_model_name_routes_to_provider,
+                llm_router,
+                custom_llm_provider,
+                frozenset(deployment.model_name for deployment in deployments),
             ),
         ),
         custom_llm_provider,
