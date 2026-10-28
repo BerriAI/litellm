@@ -2328,14 +2328,18 @@ def _metadata_fields(value: object) -> Mapping[str, object]:
         return {}
 
 
+def _is_key_identity_field(key: str) -> bool:
+    return key == "user_api_key" or key.startswith("user_api_key_")
+
+
 def _guardrail_request_metadata(caller: object, proxy: object) -> Mapping[str, object]:
     caller_fields: Final = tuple(
-        (key, value) for key, value in _metadata_fields(caller).items() if not key.startswith("user_api_key_")
+        (key, value) for key, value in _metadata_fields(caller).items() if not _is_key_identity_field(key)
     )
     key_identity: Final = tuple(
-        (key, value) for key, value in _metadata_fields(proxy).items() if key.startswith("user_api_key_")
+        (key, value) for key, value in _metadata_fields(proxy).items() if _is_key_identity_field(key)
     )
-    return dict((*caller_fields, *key_identity))
+    return MappingProxyType(dict((*caller_fields, *key_identity)))
 
 
 def _execution_timeout_response(timeout: float) -> TestCustomCodeGuardrailResponse:

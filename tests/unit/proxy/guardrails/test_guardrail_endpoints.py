@@ -2252,6 +2252,34 @@ async def test_apply_guardrail_replaces_caller_identity_with_the_authenticated_k
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_ignores_a_caller_supplied_user_api_key(mocker):
+    """The bare key field carries attribution as much as the prefixed ones, so a caller
+    cannot set it either."""
+    mock_guardrail = _patch_apply_guardrail_env(
+        mocker,
+        {"texts": ["ok"]},
+        processed_data={
+            "guardrail_name": "test-guardrail",
+            "metadata": {"route": "/apply_guardrail", "user_api_key": "hash-of-the-real-key"},
+        },
+    )
+
+    request = ApplyGuardrailRequest(
+        guardrail_name="test-guardrail",
+        text="hello",
+        metadata={"forbidden_topics": ["tax"], "user_api_key": "hash-of-someone-else"},
+    )
+    await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(key_alias="billing-app", user_id="u-1"),
+    )
+
+    forwarded = mock_guardrail.apply_guardrail.await_args.kwargs["request_data"]["metadata"]
+    assert forwarded == {"forbidden_topics": ["tax"], "user_api_key": "hash-of-the-real-key"}
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_attaches_key_identity_when_caller_sends_no_metadata(mocker):
     """A caller that sends no metadata still gets the authenticated identity
     forwarded, the same shape every LLM route gives a guardrail."""
