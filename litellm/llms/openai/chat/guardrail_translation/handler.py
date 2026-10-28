@@ -850,9 +850,23 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
         if self._streamed_tool_call_fingerprints(responses_so_far):
-            assembled: Final = self._rebuild_ended_stream_per_choice(responses_so_far, litellm_logging_obj)
-            resolved_request_data["response"] = assembled
-            if len(assembled.choices) > 1:
+            # Rebuilding folds every chunk accumulated so far, so doing it on every sampled round is
+            # quadratic in stream length: a 400-chunk stream costs ~44x one end-of-stream rebuild.
+            # main rebuilds only on the ended path, so rebuild here only when this round consumes the
+            # assembled response -- to isolate choices, or to hand over complete tool calls once the
+            # stream has finished. A single-choice round in flight needs neither.
+            stream_ended: Final = self._first_choice_has_finished(responses_so_far)
+            streamed_choice_indices: Final = frozenset(
+                choice.index for chunk in responses_so_far for choice in chunk.choices
+            )
+            assembled: Final = (
+                None
+                if len(streamed_choice_indices) == 1 and not stream_ended
+                else self._rebuild_ended_stream_per_choice(responses_so_far, litellm_logging_obj)
+            )
+            if assembled is not None:
+                resolved_request_data["response"] = assembled
+            if assembled is not None and len(assembled.choices) > 1:
                 choice_rounds: Final = tuple(
                     (
                         choice,
@@ -913,7 +927,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             # main never handed to a guardrail: one that parses them either errors or judges
             # arguments that do not exist yet. Send tool calls only once the stream has finished and
             # the arguments are complete; the text of those rounds is still inspected above.
-            if self._first_choice_has_finished(responses_so_far):
+            if assembled is not None and stream_ended:
                 tool_calls: Final = chain.from_iterable(choice.message.tool_calls or () for choice in assembled.choices)
                 inputs["tool_calls"] = TypeAdapter(list[ChatCompletionToolCallChunk]).validate_python(
                     tuple(

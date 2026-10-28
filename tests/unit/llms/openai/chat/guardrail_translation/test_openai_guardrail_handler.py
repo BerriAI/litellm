@@ -1636,6 +1636,53 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert [call["function"]["arguments"] for call in sent] == ['{"city": "Paris"}']
 
     @pytest.mark.asyncio
+    async def test_diff_mode_does_not_rebuild_the_stream_on_in_flight_rounds(self) -> None:
+        """Rebuilding folds every chunk so far, so a per-round rebuild is quadratic in length.
+
+        main rebuilds only on the ended path; an in-flight single-choice round consumes nothing
+        from the assembled response, so it must not pay for one.
+        """
+        from unittest.mock import patch
+
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        def chunk(text: str, finish_reason: str | None) -> ModelResponseStream:
+            return ModelResponseStream(choices=[StreamingChoices(
+                index=0, delta=Delta(content=text, tool_calls=[{
+                    "index": 0, "id": "call_0", "type": "function",
+                    "function": {"name": "weather", "arguments": '{"c'},
+                }]), finish_reason=finish_reason,
+            )])
+
+        handler: Final = OpenAIChatCompletionsHandler()
+        rebuilds: Final[list[int]] = []
+        original: Final = OpenAIChatCompletionsHandler._rebuild_ended_stream_per_choice
+
+        def counting_rebuild(responses_so_far, litellm_logging_obj):  # type: ignore[no-untyped-def]  # test spy
+            rebuilds.append(len(responses_so_far))
+            return original(responses_so_far, litellm_logging_obj)
+
+        # The real attribute is a staticmethod, so the spy has to be one too: a plain function
+        # would be bound and receive the handler as its first argument.
+        with patch.object(
+            OpenAIChatCompletionsHandler, "_rebuild_ended_stream_per_choice", staticmethod(counting_rebuild)
+        ):
+            await handler.process_output_streaming_response(
+                responses_so_far=[chunk("looking", None)],
+                guardrail_to_apply=MockGuardrail(guardrail_name="test"),
+                litellm_logging_obj=None, stream_transform_sink=StreamTransformSink(),
+            )
+            assert rebuilds == []
+
+            await handler.process_output_streaming_response(
+                responses_so_far=[chunk("looking", None), chunk(" it up", "tool_calls")],
+                guardrail_to_apply=MockGuardrail(guardrail_name="test"),
+                litellm_logging_obj=None, stream_transform_sink=StreamTransformSink(),
+            )
+            assert rebuilds == [2]
+
+    @pytest.mark.asyncio
     async def test_deliver_ended_stream_tool_rewrites_keep_choice_indices(self) -> None:
         handler: Final = OpenAIChatCompletionsHandler()
         chunks: Final = self._two_choice_tool_call_stream_chunks()
