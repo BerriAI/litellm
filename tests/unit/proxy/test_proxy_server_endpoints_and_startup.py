@@ -13169,6 +13169,7 @@ def _patched_coordination_redis_module_state(
         patch.object(proxy_server_module, "spend_counter_cache", spend_cache),
         patch.object(proxy_server_module, "user_api_key_cache", DualCache()),
         patch.object(proxy_server_module, "cli_sso_session_cache", DualCache()),
+        patch.object(proxy_server_module, "saml_sso_cache", DualCache()),
         patch.object(proxy_server_module, "llm_router", None),
         patch.object(proxy_server_module, "litellm_config_cache", config_cache),
         patch.object(proxy_server_module, "RedisCache", redis_cache_class),
@@ -13474,6 +13475,38 @@ async def test_env_fallback_does_not_schedule_a_retry_without_a_redis_target():
     assert built is None
     assert spend_redis is None
     assert scheduled.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_env_retry_is_scheduled_once_while_one_is_running():
+    """A config reload runs the env fallback again, so a second failed boot probe
+    must not start a second re-probe next to the one still running."""
+    release: Final = asyncio.Event()
+    started: Final[list[bool]] = []
+
+    async def retry(enable_redis_auth_cache: bool) -> None:
+        started.append(enable_redis_auth_cache)
+        await release.wait()
+
+    pending: Final[set[asyncio.Task[None]]] = set()
+    with (
+        patch.object(proxy_server_module, "_retry_coordination_redis_from_environment", retry),
+        patch.object(proxy_server_module, "_coordination_redis_env_retry_tasks", pending),
+    ):
+        proxy_server_module._schedule_coordination_redis_env_retry(enable_redis_auth_cache=False)
+        proxy_server_module._schedule_coordination_redis_env_retry(enable_redis_auth_cache=False)
+        assert len(pending) == 1
+
+        (first,) = tuple(pending)
+        release.set()
+        await first
+        assert not pending, "a finished re-probe is dropped so a later miss can start a new one"
+
+        proxy_server_module._schedule_coordination_redis_env_retry(enable_redis_auth_cache=True)
+        (second,) = tuple(pending)
+        await second
+
+    assert started == [False, True]
 
 
 @pytest.mark.asyncio

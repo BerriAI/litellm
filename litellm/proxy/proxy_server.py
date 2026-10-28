@@ -5110,7 +5110,8 @@ def build_redis_usage_cache(redis_params: Mapping[str, object]) -> RedisCache:
 _build_redis_usage_cache: Final = build_redis_usage_cache
 
 
-_coordination_redis_env_retry_task: "asyncio.Task | None" = None
+# Holds the one background re-probe per process; a set, so scheduling never rebinds a module global.
+_coordination_redis_env_retry_tasks: Final[set["asyncio.Task[None]"]] = set()
 
 
 async def _probe_coordination_redis_from_environment() -> RedisCache | None:
@@ -5187,16 +5188,17 @@ async def _retry_coordination_redis_from_environment(enable_redis_auth_cache: bo
 
 def _schedule_coordination_redis_env_retry(enable_redis_auth_cache: bool) -> None:
     """Start the background re-probe, once per process."""
-    global _coordination_redis_env_retry_task  # rebind-ok: one retry task per process
-    if _coordination_redis_env_retry_task is not None and not _coordination_redis_env_retry_task.done():
+    if any(not task.done() for task in _coordination_redis_env_retry_tasks):
         return
     try:
         loop: Final = asyncio.get_running_loop()
     except RuntimeError:
         return
-    _coordination_redis_env_retry_task = loop.create_task(
+    task: Final = loop.create_task(
         _retry_coordination_redis_from_environment(enable_redis_auth_cache=enable_redis_auth_cache)
     )
+    _coordination_redis_env_retry_tasks.add(task)
+    task.add_done_callback(_coordination_redis_env_retry_tasks.discard)
 
 
 def environment_has_redis_connection_target() -> bool:
