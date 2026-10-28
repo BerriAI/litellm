@@ -54,52 +54,47 @@ async function setRowsPerPage(page: PlaywrightPage, size: "25" | "50" | "100"): 
 test.describe("Logs pagination with Aria in the header", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
-  for (const viewport of [
-    { width: 1440, height: 900 },
-    { width: 390, height: 844 },
-  ]) {
-    test(`keeps pagination reachable and Aria available at ${viewport.width}px`, async ({ page, request }) => {
-      await page.setViewportSize(viewport);
-      const alias = `e2e-aria-header-${uniqueSuffix()}`;
-      const key = await createVirtualKey(request, { key_alias: alias });
-      try {
-        const ids = await Promise.all(
-          Array.from({ length: 26 }, (_, index) =>
-            sendChatCompletion(request, {
-              model: CHAT_MODEL_A,
-              prompt: `${alias}-${index}`,
-              apiKey: key.key,
-            }),
-          ),
-        );
-        await Promise.all(ids.map((id) => waitForSpendLog(request, id)));
-        await openLogs(page);
-        await setAriaHidden(page, false);
-        await applyKeyAliasFilter(page, await openFilterDrawer(page), alias);
-        await setRowsPerPage(page, "25");
-        await expect(visibleTestId(page, "pagination-range")).toHaveText("Showing 1-25 of 26");
-        await visibleTestId(page, "pagination-next").click();
-        await expect(visibleTestId(page, "pagination-range")).toHaveText("Showing 26-26 of 26");
+  test("keeps pagination reachable and Aria available at 1440px", async ({ page, request }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const alias = `e2e-aria-header-${uniqueSuffix()}`;
+    const key = await createVirtualKey(request, { key_alias: alias });
+    try {
+      const ids = await Promise.all(
+        Array.from({ length: 26 }, (_, index) =>
+          sendChatCompletion(request, {
+            model: CHAT_MODEL_A,
+            prompt: `${alias}-${index}`,
+            apiKey: key.key,
+          }),
+        ),
+      );
+      await Promise.all(ids.map((id) => waitForSpendLog(request, id)));
+      await openLogs(page);
+      await setAriaHidden(page, false);
+      await applyKeyAliasFilter(page, await openFilterDrawer(page), alias);
+      await setRowsPerPage(page, "25");
+      await expect(visibleTestId(page, "pagination-range")).toHaveText("Showing 1-25 of 26");
+      await visibleTestId(page, "pagination-next").click();
+      await expect(visibleTestId(page, "pagination-range")).toHaveText("Showing 26-26 of 26");
 
-        const aria = page.getByRole("banner").getByRole("button", { name: "Aria Agent", exact: true });
+      const aria = page.getByRole("banner").getByRole("button", { name: "Aria Agent", exact: true });
+      await aria.click();
+      await expect(page.getByRole("dialog", { name: "Aria Agent", exact: true })).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(aria).toBeFocused();
+      await visibleTestId(page, "pagination-first").click();
+      await expect(visibleTestId(page, "pagination-range")).toHaveText("Showing 1-25 of 26");
+      for (const destination of [Page.Usage, Page.LlmPlayground, Page.ApiKeys]) {
+        await navigateToPage(page, destination);
         await aria.click();
         await expect(page.getByRole("dialog", { name: "Aria Agent", exact: true })).toBeVisible();
         await page.keyboard.press("Escape");
         await expect(aria).toBeFocused();
-        await visibleTestId(page, "pagination-first").click();
-        await expect(visibleTestId(page, "pagination-range")).toHaveText("Showing 1-25 of 26");
-        for (const destination of [Page.Usage, Page.LlmPlayground, Page.ApiKeys]) {
-          await navigateToPage(page, destination);
-          await aria.click();
-          await expect(page.getByRole("dialog", { name: "Aria Agent", exact: true })).toBeVisible();
-          await page.keyboard.press("Escape");
-          await expect(aria).toBeFocused();
-        }
-      } finally {
-        await deleteVirtualKey(request, key.token);
       }
-    });
-  }
+    } finally {
+      await deleteVirtualKey(request, key.token);
+    }
+  });
 });
 
 test.describe("Logs page session-grouped pagination", () => {

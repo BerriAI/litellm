@@ -1,7 +1,7 @@
 import asyncio
 import json
 from datetime import datetime
-from typing import Any, Dict, Final, List
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
@@ -284,8 +284,9 @@ class TestAzureAnthropicCostCalculation:
     @patch("litellm.completion_cost")
     def test_cost_calculation_with_azure_ai_custom_llm_provider(self, mock_completion_cost):
         """Test that custom_llm_provider is passed to completion_cost for Azure AI Anthropic"""
-        from litellm.types.utils import ModelResponse
         from datetime import datetime
+
+        from litellm.types.utils import ModelResponse
 
         mock_completion_cost.return_value = 0.001
 
@@ -319,8 +320,9 @@ class TestAzureAnthropicCostCalculation:
     @patch("litellm.completion_cost")
     def test_cost_calculation_without_custom_llm_provider(self, mock_completion_cost):
         """Test that cost calculation works without custom_llm_provider (standard Anthropic)"""
-        from litellm.types.utils import ModelResponse
         from datetime import datetime
+
+        from litellm.types.utils import ModelResponse
 
         mock_completion_cost.return_value = 0.001
 
@@ -353,8 +355,9 @@ class TestAzureAnthropicCostCalculation:
     @patch("litellm.completion_cost")
     def test_cost_calculation_does_not_duplicate_provider_prefix(self, mock_completion_cost):
         """Test that provider prefix is not duplicated if already present in model name"""
-        from litellm.types.utils import ModelResponse
         from datetime import datetime
+
+        from litellm.types.utils import ModelResponse
 
         mock_completion_cost.return_value = 0.001
 
@@ -826,9 +829,10 @@ class TestAnthropicBatchPassthroughCostTracking:
         mock_request_body,
     ):
         """Test that model gets 'anthropic/' prefix when not found in router"""
+        import base64
+
         from litellm.llms.anthropic.batches.transformation import AnthropicBatchesConfig
         from litellm.types.utils import LiteLLMBatch
-        import base64
 
         # Model not in router - returns same model name
         mock_get_model_id.return_value = "claude-sonnet-4-5-20250929"
@@ -1089,7 +1093,7 @@ class TestAnthropicBatchPassthroughCostTracking:
 class TestBuildCompleteStreamingResponseRobustness:
     """_build_complete_streaming_response must tolerate non-standard SSE frames."""
 
-    def _build(self, chunks: List[str]):
+    def _build(self, chunks: list[str]):
         return AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
             all_chunks=chunks,
             litellm_logging_obj=MagicMock(),
@@ -1840,9 +1844,6 @@ class TestStreamFalseDeduplication:
         This is the _is_assembled_stream_success gate: with stream=False it
         always returned False and the guard was permanently disabled.
         """
-        from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-            EndpointType,
-        )
         from litellm.types.utils import ModelResponse
 
         # Simulate what pass_through_endpoints.py now does after stream detection
@@ -2642,8 +2643,6 @@ def test_create_anthropic_response_logging_payload(mock_logging_obj, metadata_pa
 def test_handle_logging_anthropic_collected_chunks(all_chunks):
     from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
         AnthropicPassthroughLoggingHandler,
-        PassthroughStandardLoggingPayload,
-        EndpointType,
     )
     from litellm.types.utils import ModelResponse
 
@@ -2943,3 +2942,65 @@ def test_streamed_messages_from_other_providers_ignore_a_zero_usage_cost_field()
     headers = result["result"]._hidden_params.get("additional_headers") or {}
     assert "llm_provider-x-litellm-response-cost" not in headers
     assert result["kwargs"].get("response_cost") != 0.0
+
+
+_BEDROCK_TRACE_PRICING: Final = {
+    "bedrock/guardrails": {
+        "litellm_provider": "bedrock",
+        "mode": "guardrail",
+        "guardrail_cost_per_unit": {"topicPolicyUnits": 0.00015, "contentPolicyUnits": 0.00015},
+    }
+}
+_BEDROCK_INVOKE_TRACE: Final = {
+    "guardrail": {
+        "input": {"gid": {"invocationMetrics": {"usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 1}}}},
+        "outputs": [{"gid": {"invocationMetrics": {"usage": {"topicPolicyUnits": 2, "contentPolicyUnits": 2}}}}],
+    }
+}
+
+
+def _recorded_guardrail_entries(logging_obj: LiteLLMLoggingObj) -> list:
+    return logging_obj.model_call_details["litellm_params"]["metadata"]["standard_logging_guardrail_information"]
+
+
+def test_anthropic_passthrough_handler_bills_the_bedrock_guardrail_trace_of_a_messages_response(
+    monkeypatch, mock_httpx_response, mock_response, mock_logging_obj
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", _BEDROCK_TRACE_PRICING)
+    mock_logging_obj.model_call_details["litellm_params"] = {"metadata": {}}
+    AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
+        httpx_response=mock_httpx_response,
+        response_body={**mock_response, "amazon-bedrock-trace": _BEDROCK_INVOKE_TRACE},
+        logging_obj=mock_logging_obj,
+        url_route="/v1/messages",
+        result="success",
+        start_time=datetime(2025, 1, 1),
+        end_time=datetime(2025, 1, 1),
+        cache_hit=False,
+    )
+    (entry,) = _recorded_guardrail_entries(mock_logging_obj)
+    assert entry["guardrail_provider"] == "bedrock"
+    assert entry["guardrail_usage"] == {"topicPolicyUnits": 3, "contentPolicyUnits": 3}
+    assert entry["guardrail_cost"] == pytest.approx(6 * 0.00015)
+
+
+def test_anthropic_passthrough_stream_bills_the_bedrock_guardrail_trace_of_the_message_stop_event(
+    monkeypatch, mock_logging_obj, all_chunks
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", _BEDROCK_TRACE_PRICING)
+    mock_logging_obj.model_call_details["litellm_params"] = {"metadata": {}}
+    stop_event: Final = json.dumps({"type": "message_stop", "amazon-bedrock-trace": _BEDROCK_INVOKE_TRACE})
+    chunks: Final = [*all_chunks, f"event: message_stop\ndata: {stop_event}\n\n"]
+    AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=mock_logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "claude", "messages": []},
+        endpoint_type=MagicMock(),
+        start_time=datetime(2025, 1, 1),
+        all_chunks=chunks,
+        end_time=datetime(2025, 1, 1),
+    )
+    (entry,) = _recorded_guardrail_entries(mock_logging_obj)
+    assert entry["guardrail_usage"] == {"topicPolicyUnits": 3, "contentPolicyUnits": 3}
+    assert entry["guardrail_cost"] == pytest.approx(6 * 0.00015)

@@ -37,7 +37,6 @@ from litellm.litellm_core_utils.redact_messages import _get_turn_off_message_log
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.proxy._types import AddTeamCallback, ProxyException, TeamCallbackMetadata, UserAPIKeyAuth
-from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
     LiteLLMProxyRequestSetup,
@@ -54,11 +53,13 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_provider_specific_headers_to_request,
     check_if_token_is_service_account,
     clean_headers,
+    forwarded_anthropic_oauth_token,
     get_dynamic_logging_metadata,
     get_metadata_variable_name,
     move_guardrails_to_metadata,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
 from litellm.types.utils import CredentialItem
 
 
@@ -1393,6 +1394,8 @@ async def test_add_litellm_data_to_request_strips_string_encoded_admin_injection
         ("fallback_depth", True),
         ("_target_order", 2),
         ("attempted_targets", ["forged"]),
+        ("_excluded_deployment_ids", ["pinned-deployment"]),
+        ("_retry_skipped_deployment_ids", ["pinned-deployment"]),
     ],
 )
 async def test_add_litellm_data_to_request_strips_forged_fallback_hop_state(
@@ -1477,6 +1480,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "_managed_background_response": True,
         "_guardrail_pipelines": [{"name": "spoofed"}],
         "_pipeline_managed_guardrails": ["evaded"],
+        "_failover_excluded_ids": ["pinned-deployment"],
         "safe_user_metadata": "kept",
     }
     data = {
@@ -1537,6 +1541,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "_managed_background_response",
         "_guardrail_pipelines",
         "_pipeline_managed_guardrails",
+        "_failover_excluded_ids",
     }
     assert "litellm_metadata" not in updated
     for stripped_key in stripped_keys:
@@ -5962,6 +5967,25 @@ def test_clean_headers_strips_x_api_key_when_byok_disabled():
     assert "x-api-key" not in result
 
 
+@pytest.mark.parametrize(
+    ("headers", "expected_token"),
+    [
+        (
+            {"authorization": "Bearer sk-ant-oat01-caller", "x-litellm-api-key": "Bearer sk-proxy"},
+            "sk-ant-oat01-caller",
+        ),
+        ({"authorization": "Bearer sk-ant-oat01-caller"}, None),
+        ({"authorization": "Bearer sk-ant-api03-caller", "x-litellm-api-key": "Bearer sk-proxy"}, None),
+        ({"x-litellm-api-key": "Bearer sk-proxy"}, None),
+    ],
+    ids=["oauth-beside-proxy-key", "oauth-used-as-proxy-key", "non-oauth-authorization", "no-authorization"],
+)
+def test_forwarded_anthropic_oauth_token_follows_chats_forwarding_rule(
+    headers: dict[str, str], expected_token: str | None
+) -> None:
+    assert forwarded_anthropic_oauth_token(Headers(headers)) == expected_token
+
+
 def test_clean_headers_strips_x_api_key_when_byok_enabled_but_x_api_key_was_auth_header():
     """
     Anti-replay regression: even when forward_llm_provider_auth_headers=True,
@@ -9576,7 +9600,7 @@ async def test_mcp_credentials_only_removed_from_logging_copies(path: str, custo
     with (
         patch("litellm.proxy.proxy_server.general_settings", settings),
         patch.dict(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.config_mcp_servers",
+            "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager.config_mcp_servers",
             {"header-test": server},
             clear=True,
         ),
@@ -10371,8 +10395,8 @@ class TestResolveUserProviderCredentials:
         _get_hierarchical_router_settings) must be part of discovery."""
         from types import SimpleNamespace
 
-        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
         import litellm.proxy.auth.auth_checks as auth_checks
+        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         table = self._env(monkeypatch)
         monkeypatch.setattr(

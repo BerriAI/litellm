@@ -14,7 +14,7 @@ import respx
 import litellm
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 
-GATEWAY_REGISTRY_MODULE: Final = "litellm.proxy._experimental.mcp_server.mcp_server_manager"
+GATEWAY_REGISTRY_MODULE: Final = "litellm.proxy.mcp_server.mcp_server_manager"
 GATEWAY_HANDLER_MODULES: Final = (
     "litellm.responses.mcp.litellm_proxy_mcp_handler",
     "litellm.responses.mcp.chat_completions_handler",

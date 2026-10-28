@@ -119,6 +119,7 @@ from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy modul
     _strip_client_pricing_overrides,  # pyright: ignore[reportPrivateUsage]  # sanitize before trusted hooks add guardrail costs
     get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
     redact_credential_headers,
+    strip_client_guardrail_information,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.route_priority import (
@@ -149,6 +150,7 @@ from .streaming_handler import PassThroughStreamingHandler
 from .success_handler import PassThroughEndpointLogging
 from .upstream_usage_headers import (
     UpstreamReportedUsage,
+    apply_upstream_reported_model,
     apply_upstream_reported_usage,
 )
 
@@ -855,6 +857,7 @@ def _build_passthrough_failure_request_payload(
     logging_obj: LiteLLMLoggingObj | None,
     custom_llm_provider: str | None,
     upstream_usage: UpstreamReportedUsage | None = None,
+    upstream_model: str | None = None,
 ) -> dict:
     """Build the ``request_data`` dict passed to ``post_call_failure_hook``.
 
@@ -865,6 +868,8 @@ def _build_passthrough_failure_request_payload(
     ``upstream_usage`` carries the cost and tokens an upstream reported on an
     error response. Spend tracking only attributes a recovered cost when it
     comes paired with a usage object, so both keys are written together.
+    ``upstream_model`` is the model name the upstream reported, which replaces
+    the body's ``model`` on the failure row just as it does on a success row.
     """
     request_payload: Final[dict] = dict(cast(Mapping[str, object], parsed_body or {}))  # cast-ok: json body
     if kwargs:
@@ -878,6 +883,8 @@ def _build_passthrough_failure_request_payload(
     if upstream_usage is not None:
         request_payload["response_cost"] = upstream_usage.response_cost or 0.0
         request_payload["combined_usage_object"] = Usage(total_tokens=upstream_usage.total_tokens or 0)
+    if upstream_model is not None:
+        request_payload["model"] = upstream_model
     return request_payload
 
 
@@ -1223,10 +1230,11 @@ async def pass_through_request(
             _parsed_body,
         )
 
+        client_body: Final = TypeAdapter(dict[str, object]).validate_python(_parsed_body)
+        strip_client_guardrail_information(client_body)
         if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
-            pricing_body: Final = TypeAdapter(dict[str, object]).validate_python(_parsed_body)
-            _strip_client_pricing_overrides(pricing_body)
-            _parsed_body = pricing_body
+            _strip_client_pricing_overrides(client_body)
+        _parsed_body = client_body
         if custom_llm_provider in ("laya", "bespoke"):
             decision_request: Final = TypeAdapter(Mapping[str, object]).validate_python(_parsed_body)
             checkpoint: Final = validate_oss_request(custom_llm_provider, decision_request)
@@ -1541,6 +1549,10 @@ async def pass_through_request(
                 logging_obj=logging_obj,
                 headers=response.headers,
             )
+            upstream_model = apply_upstream_reported_model(  # rebind-ok: bound once per branch, like upstream_usage
+                logging_obj=logging_obj,
+                headers=response.headers,
+            )
 
             relay_response: Final = await _log_passthrough_upstream_failure(
                 response=response,
@@ -1551,6 +1563,7 @@ async def pass_through_request(
                     logging_obj=logging_obj,
                     custom_llm_provider=custom_llm_provider,
                     upstream_usage=upstream_usage,
+                    upstream_model=upstream_model,
                 ),
                 logging_obj=logging_obj,
             )
@@ -1629,6 +1642,10 @@ async def pass_through_request(
             logging_obj=logging_obj,
             headers=response.headers,
         )
+        upstream_model = apply_upstream_reported_model(  # rebind-ok: bound once per branch, like upstream_usage
+            logging_obj=logging_obj,
+            headers=response.headers,
+        )
 
         if _is_streaming_response(response) is True:
             logging_obj.stream = True
@@ -1643,6 +1660,7 @@ async def pass_through_request(
                     logging_obj=logging_obj,
                     custom_llm_provider=custom_llm_provider,
                     upstream_usage=upstream_usage,
+                    upstream_model=upstream_model,
                 ),
                 logging_obj=logging_obj,
             )
@@ -1743,6 +1761,7 @@ async def pass_through_request(
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
             upstream_usage=upstream_usage,
+            upstream_model=upstream_model,
         )
         failure_request_payload["response_body"] = response_body
         await _log_passthrough_upstream_failure(

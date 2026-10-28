@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import copy
 import datetime
 import json
@@ -12053,6 +12054,122 @@ class TestResponseCostFromLoggingObjForCacheHits:
         )
 
         assert cost == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["messages", "openai"])
+@pytest.mark.parametrize("keepalive", ["disabled", "fast", "pinged"])
+async def test_completed_synthetic_stream_reuses_capacity_without_freeing_another_request(
+    surface: Literal["messages", "openai"],
+    keepalive: Literal["disabled", "fast", "pinged"],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
+        FakeAnthropicMessagesStreamIterator,
+    )
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.sse_keepalive import SSE_COMMENT_PING_BYTES
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.utils import InternalUsageCache, hash_token
+    from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+
+    def clock() -> datetime.datetime:
+        return datetime.datetime(2026, 1, 1)
+
+    cache: Final = DualCache()
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(cache), time_provider=clock
+    )
+    logger: Final = ProxyLogging(user_api_key_cache=cache)
+    logger.proxy_hook_mapping["parallel_request_limiter"] = limiter
+    auth: Final = ProxyUserAPIKeyAuth(api_key=hash_token("sk-synthetic-stream"), max_parallel_requests=2)
+    counter: Final = f"{{api_key:{auth.api_key}}}:max_parallel_requests"
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", logger)
+
+    async def admit(call_id: str) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=cache,
+            data={"model": "test-model", "litellm_call_id": call_id},
+            call_type="anthropic_messages",
+        )
+
+    async def request(call_id: str) -> None:
+        upstream_answers: Final = asyncio.Event()
+        if keepalive != "pinged":
+            upstream_answers.set()
+
+        async def produce() -> StreamingResponse:
+            await admit(call_id)
+            with pytest.raises(HTTPException) as rejected:
+                await contextvars.Context().run(asyncio.create_task, admit("overlapping"))
+            assert rejected.value.status_code == 429
+            await upstream_answers.wait()
+            body: Final = AnthropicMessagesResponse(
+                id=call_id,
+                type="message",
+                role="assistant",
+                model="test-model",
+                content=[{"type": "text", "text": "Search completed"}],
+                stop_reason="end_turn",
+                stop_sequence=None,
+                usage={"input_tokens": 0, "output_tokens": 0},
+            )
+            source: Final = FakeAnthropicMessagesStreamIterator(body)
+            data: Final = {"model": "test-model", "litellm_call_id": call_id}
+            stream: Final = (
+                ProxyBaseLLMRequestProcessing.async_sse_data_generator(source, auth, data, logger)
+                if surface == "messages"
+                else proxy_server.async_data_generator(source, auth, data)
+            )
+            return StreamingResponse(stream)
+
+        response: Final = await open_sse_before_first_byte(
+            produce(), None if keepalive == "disabled" else 0.001 if keepalive == "pinged" else 60.0
+        )
+        first: Final = await anext(response.body_iterator)
+        if keepalive == "pinged":
+            assert first == SSE_COMMENT_PING_BYTES
+            upstream_answers.set()
+        frames: Final = (first, *tuple([frame async for frame in response.body_iterator]))
+        wire: Final = b"".join(frame.encode() if isinstance(frame, str) else frame for frame in frames)
+        assert b'"type": "message_stop"' in wire
+
+    await contextvars.Context().run(asyncio.create_task, admit("still-streaming"))
+    for index in range(4):
+        await contextvars.Context().run(asyncio.create_task, request(f"completed-{index}"))
+        occupied: Final = await cache.async_get_cache(counter)
+        assert isinstance(occupied, dict) and len(occupied) == 1, occupied
+
+
+@pytest.mark.asyncio
+async def test_completed_stream_cleanup_does_not_release_an_unowned_legacy_slot() -> None:
+    from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
+    from litellm.proxy.utils import InternalUsageCache, hash_token
+
+    def clock() -> datetime.datetime:
+        return datetime.datetime(2026, 1, 1)
+
+    cache: Final = DualCache()
+    limiter: Final = PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache), clock=clock)
+    logger: Final = ProxyLogging(user_api_key_cache=cache)
+    logger.proxy_hook_mapping["parallel_request_limiter"] = limiter
+    auth: Final = ProxyUserAPIKeyAuth(api_key=hash_token("sk-legacy-stream"), max_parallel_requests=1)
+    await limiter.async_pre_call_hook(auth, cache, {}, "acompletion")
+
+    await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
+        request=None,
+        request_data={},
+        response=None,
+        stream_completed=True,
+        user_api_key_dict=auth,
+        proxy_logging_obj=logger,
+    )
+
+    with pytest.raises(HTTPException) as rejected:
+        await limiter.async_pre_call_hook(auth, cache, {}, "acompletion")
+    assert rejected.value.status_code == 429
 
 
 def test_maybe_get_model_id_reads_the_chat_metadata_the_router_updated_in_place():

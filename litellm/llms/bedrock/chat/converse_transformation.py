@@ -2859,6 +2859,8 @@ class AmazonConverseConfig(BaseConfig):
         # Add "trace" from Bedrock guardrails - if user has opted in to returning it
         if "trace" in completion_response:
             setattr(model_response, "trace", completion_response["trace"])
+            if logging_obj is not None:
+                logging_obj.record_native_bedrock_guardrail(model_response)
 
         # Add service_tier if present in Bedrock response
         # Map Bedrock serviceTier (object) to OpenAI service_tier (string)

@@ -1255,7 +1255,12 @@ class TestTriggerCooldownForFailedDeployment:
                     "model_name": "fallback-model",
                     "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
                     "model_info": {"id": "fallback-deployment"},
-                }
+                },
+                {
+                    "model_name": "fallback-model",
+                    "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
+                    "model_info": {"id": "fallback-sibling"},
+                },
             ],
             allowed_fails=0,
             cooldown_time=60,
@@ -1345,7 +1350,12 @@ async def test_a_fallback_deployment_whose_stream_stalled_stays_out_of_cooldown(
                 "model_name": "fallback-model",
                 "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
                 "model_info": {"id": "fallback-deployment"},
-            }
+            },
+            {
+                "model_name": "fallback-model",
+                "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
+                "model_info": {"id": "fallback-sibling"},
+            },
         ],
         allowed_fails=0,
         cooldown_time=60,

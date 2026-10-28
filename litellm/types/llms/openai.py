@@ -28,9 +28,6 @@ from openai.types.beta.threads.message_content import MessageContent
 from openai.types.beta.threads.run import Run
 from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_audio_param import ChatCompletionAudioParam
-from openai.types.chat.chat_completion_content_part_input_audio_param import (
-    ChatCompletionContentPartInputAudioParam,
-)
 from openai.types.chat.chat_completion_modality import ChatCompletionModality
 from openai.types.chat.chat_completion_prediction_content_param import (
     ChatCompletionPredictionContentParam,
@@ -804,6 +801,7 @@ class ChatCompletionImageUrlObject(TypedDict, total=False):
     url: Required[str]
     detail: str
     format: str
+    video_metadata: ReadOnly[Mapping[str, object]]
 
 
 class ChatCompletionImageObject(TypedDict):
@@ -821,8 +819,15 @@ class ChatCompletionVideoObject(TypedDict):
     video_url: str | ChatCompletionVideoUrlObject
 
 
-class ChatCompletionAudioObject(ChatCompletionContentPartInputAudioParam):
-    pass
+class ChatCompletionInputAudio(TypedDict):
+    data: ReadOnly[str]
+    format: ReadOnly[str]
+
+
+class ChatCompletionAudioObject(TypedDict):
+    type: ReadOnly[Literal["input_audio"]]
+    input_audio: ReadOnly[ChatCompletionInputAudio]
+    cache_control: NotRequired[ChatCompletionCachedContent]  # writable-ok: [LIT012] cache hook mutates blocks
 
 
 class DocumentObject(TypedDict):
@@ -895,6 +900,8 @@ class OpenAIChatCompletionAssistantMessage(TypedDict, total=False):
             | ChatCompletionThinkingBlock
             | ChatCompletionRedactedThinkingBlock
             | ChatCompletionImageObject
+            | ChatCompletionAudioObject
+            | ChatCompletionFileObject
         ]
         | None
     )
@@ -918,7 +925,11 @@ class ChatCompletionToolReferenceObject(TypedDict):
 
 
 ToolMessageContentPart: TypeAlias = (
-    ChatCompletionTextObject | ChatCompletionImageObject | ChatCompletionToolReferenceObject
+    ChatCompletionTextObject
+    | ChatCompletionImageObject
+    | ChatCompletionAudioObject
+    | ChatCompletionFileObject
+    | ChatCompletionToolReferenceObject
 )
 
 
@@ -1803,7 +1814,7 @@ class ContentPartDonePartOutputText(BaseLiteLLMOpenAIResponseObject):
     type: Literal["output_text"]
     text: str
     annotations: list[BaseLiteLLMOpenAIResponseObject]
-    logprobs: list[OpenAIChatCompletionLogprobsContent] | None
+    logprobs: list[OpenAIChatCompletionLogprobsContent] | None = None
 
 
 class ContentPartDonePartRefusal(BaseLiteLLMOpenAIResponseObject):
