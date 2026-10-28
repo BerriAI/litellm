@@ -80,7 +80,6 @@ function extractToolCallsFromResponse(log: LogEntry): ToolCall[] {
     return responseData.tool_calls;
   }
 
-  // Responses API format: response.output[].type === "function_call"
   if (Array.isArray(responseData.output)) {
     const toolCalls = toolCallsFromOutput(responseData.output);
     if (toolCalls.length > 0) return toolCalls;
