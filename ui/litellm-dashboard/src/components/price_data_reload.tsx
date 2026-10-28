@@ -387,7 +387,7 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
                 <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Info className="size-3.5 shrink-0" />
                   <span>
-                    Local mode forced via <code>LITELLM_LOCAL_MODEL_COST_MAP=True</code>
+                    Local mode forced via <code>LITELLM_LOCAL_MODEL_COST_MAP</code> or <code>LITELLM_OFFLINE_MODE</code>
                   </span>
                 </div>
               )}

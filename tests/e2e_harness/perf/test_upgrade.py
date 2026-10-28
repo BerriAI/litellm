@@ -304,7 +304,9 @@ def test_invalid_200_is_not_an_allowed_non_200(failed: WireRecord) -> None:
 
 def _ceiling(metric: str, percentile: int | None = None) -> float:
     return next(
-        limit.max for limit in upgrade_case().limits if limit.metric == metric and limit.percentile == percentile
+        limit.max
+        for limit in upgrade_case().limits
+        if limit.metric == metric and limit.percentile == percentile and limit.max is not None
     )
 
 
