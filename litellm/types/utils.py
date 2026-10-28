@@ -3511,6 +3511,7 @@ AUDIT_GUARDRAIL_FIELDS: Final[frozenset[str]] = frozenset(
         "end_time",
         "duration",
         "masked_entity_count",
+        "choice_index",
         "guardrail_id",
         "policy_template",
         "detection_method",
