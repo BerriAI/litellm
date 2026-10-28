@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
-from pydantic import AwareDatetime, JsonValue, TypeAdapter
+from pydantic import AwareDatetime, ConfigDict, JsonValue, TypeAdapter
 
 from litellm.accounting import CostEvent, DeliveryTarget, EventKind, InboundUsageEvent, OutboundUsageEvent
 from litellm.proxy.db.db_span import db_span
@@ -180,10 +180,15 @@ class AccountingLedger:
 
     @classmethod
     def for_client(cls, client: PrismaClient) -> AccountingLedger:
+        from prisma.client import TransactionManager
+
+        managers: Final = TypeAdapter(TransactionManager, config=ConfigDict(arbitrary_types_allowed=True))
+
         @asynccontextmanager
         async def transaction() -> AsyncGenerator[Prisma]:
             primary: Final = writer_wrapper(client.db)
-            async with db_span("accounting_ledger", "LiteLLM_AccountingEvent"), primary.tx(timeout=_TIMEOUT) as db:
+            manager: Final = managers.validate_python(primary.tx(timeout=_TIMEOUT))
+            async with db_span("accounting_ledger", "LiteLLM_AccountingEvent"), manager as db:
                 await db.execute_raw("SET LOCAL statement_timeout = 5000")
                 await db.execute_raw("SET LOCAL lock_timeout = 1000")
                 yield db
