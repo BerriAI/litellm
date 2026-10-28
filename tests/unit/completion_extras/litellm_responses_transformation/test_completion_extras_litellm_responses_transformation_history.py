@@ -208,6 +208,7 @@ def _next_turn_input(
     assistant: Mapping[str, object],
     model: str = f"openai/responses/{MODEL}",
     tools: Sequence[Mapping[str, object]] = TOOLS,
+    drop_params: bool = False,
 ) -> list[Mapping[str, object]]:
     with respx.mock(assert_all_called=True) as router:
         upstream: Final = router.post(
@@ -220,6 +221,7 @@ def _next_turn_input(
             api_key="sk-test",
             api_base=None if model.startswith("openai/") else AZURE_API_BASE,
             api_version=None if model.startswith("openai/") else "2025-04-01-preview",
+            drop_params=drop_params,
         )
     return json.loads(upstream.calls[0].request.content)["input"]
 
@@ -321,13 +323,52 @@ def test_missing_or_corrupt_replay_metadata_falls_back_to_the_chat_fields(
     assert sent[3]["phase"] == "final_answer"
 
 
-def test_a_phase_openai_does_not_define_is_left_off_the_fallback() -> None:
+def test_a_phase_openai_does_not_define_is_dropped_under_drop_params() -> None:
     assistant: Final = _assistant_turn(OUTPUT, stream=False)
 
-    sent: Final = _next_turn_input({**assistant, "provider_specific_fields": {"phase": "analysis"}})
+    sent: Final = _next_turn_input({**assistant, "provider_specific_fields": {"phase": "analysis"}}, drop_params=True)
 
     assert _types(sent[1:-1]) == ["reasoning", "reasoning", "message", "function_call"]
     assert "phase" not in sent[3]
+
+
+def test_a_phase_openai_does_not_define_is_rejected_without_drop_params() -> None:
+    assistant: Final = _assistant_turn(OUTPUT, stream=False)
+
+    with respx.mock(assert_all_called=False) as router:
+        upstream: Final = router.post(url__startswith=OPENAI_RESPONSES_URL).mock(
+            return_value=httpx.Response(200, json=_response((FOLLOW_UP,)))
+        )
+        with pytest.raises(litellm.BadRequestError, match="'analysis'"):
+            litellm.completion(
+                model=f"openai/responses/{MODEL}",
+                messages=[USER, {**assistant, "phase": "analysis"}, TOOL_RESULT],
+                tools=list(TOOLS),
+                api_key="sk-test",
+            )
+
+    assert not upstream.called
+
+
+@pytest.mark.parametrize("fields", [None, ["not", "a", "mapping"]], ids=["no-fields", "malformed-fields"])
+def test_an_assistant_message_the_app_wrote_replays_without_a_phase(fields: object) -> None:
+    sent: Final = _next_turn_input(
+        {
+            "role": "assistant",
+            "content": "Checking Paris.",
+            "tool_calls": [
+                {
+                    "id": "call_weather_paris",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                }
+            ],
+            "provider_specific_fields": fields,
+        }
+    )
+
+    assert _types(sent[1:-1]) == ["message", "function_call"]
+    assert "phase" not in sent[1]
 
 
 SEARCH_CALL: Final = {

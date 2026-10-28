@@ -117,9 +117,21 @@ class _PhaseFields(_Frozen):
     phase: Phase | None = None
 
 
-class _PhasedMessage(_Frozen):
-    phase: Phase | None = None
-    provider_specific_fields: _PhaseFields | None = None
+class _RequestedPhaseFields(_Frozen):
+    phase: object = None
+
+
+class _RequestedPhase(_Frozen):
+    phase: object = None
+    provider_specific_fields: _RequestedPhaseFields | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class UnknownPhase:
+    value: object
+
+
+_PHASE: Final[TypeAdapter[Phase]] = TypeAdapter(Phase)
 
 
 class _RetainedFields(_PhaseFields):
@@ -150,13 +162,19 @@ def _chat_message(message: object) -> _ChatMessage | None:
         return None
 
 
-def explicit_phase(message: object) -> Phase | None:
+def requested_phase(message: object) -> Phase | UnknownPhase | None:
     try:
-        phased: Final = _PhasedMessage.model_validate(_as_json(message))
+        requested: Final = _RequestedPhase.model_validate(_as_json(message))
     except ValidationError:
         return None
-    fields: Final = phased.provider_specific_fields
-    return phased.phase or (fields.phase if fields else None)
+    fields: Final = requested.provider_specific_fields
+    value: Final = requested.phase or (fields.phase if fields else None)
+    if value is None:
+        return None
+    try:
+        return _PHASE.validate_python(value)
+    except ValidationError:
+        return UnknownPhase(value)
 
 
 def reasoning_input_item(

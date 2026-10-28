@@ -27,11 +27,12 @@ from litellm import ModelResponse
 from litellm._logging import verbose_logger
 from litellm.completion_extras.litellm_responses_transformation.history import (
     PHASE_FIELD,
-    explicit_phase,
+    UnknownPhase,
     output_message_text,
     reasoning_input_item,
     replay_fields,
     replay_items,
+    requested_phase,
 )
 from litellm.integrations.anthropic_cache_control_hook import supports_openai_prompt_cache_breakpoint
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
@@ -568,9 +569,20 @@ def completed_stream_history(
     return fields or None
 
 
-def _assistant_phase_field(msg: object, replay_openai_history: bool) -> Mapping[str, object]:
-    phase: Final = explicit_phase(msg) if replay_openai_history else None
-    return {PHASE_FIELD: phase} if phase else {}
+def _assistant_phase_field(msg: object, replay_openai_history: bool, drop_params: bool) -> Mapping[str, object]:
+    match requested_phase(msg) if replay_openai_history else None:
+        case None:
+            return {}
+        case UnknownPhase(value=value) if drop_params:
+            verbose_logger.debug("Chat provider: dropping assistant phase=%r under drop_params", value)
+            return {}
+        case UnknownPhase(value=value):
+            raise litellm.UnsupportedParamsError(
+                message=f"phase must be 'commentary' or 'final_answer', got {value!r}. "
+                "To drop it, set `litellm.drop_params=True` or pass `drop_params=True`."
+            )
+        case phase:
+            return {PHASE_FIELD: phase}
 
 
 def _responses_event_type(chunk: Mapping[str, object]) -> object:
@@ -966,7 +978,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             "content": self._convert_content_to_responses_format(
                                 content, "assistant", drop_params=drop_params
                             ),
-                            **_assistant_phase_field(msg, replay_openai_history),
+                            **_assistant_phase_field(msg, replay_openai_history, drop_params),
                         }
                     )
                 for tool_call in tool_calls:
@@ -1007,7 +1019,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         "content": self._convert_content_to_responses_format(
                             content, cast(str, role), drop_params=drop_params
                         ),
-                        **_assistant_phase_field(msg, replay_openai_history and role == "assistant"),
+                        **_assistant_phase_field(msg, replay_openai_history and role == "assistant", drop_params),
                     }
                 )
             elif role == "assistant":
