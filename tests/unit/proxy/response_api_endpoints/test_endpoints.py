@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import dataclasses
 import json
+import re
 import unittest
 from collections.abc import Mapping
 from typing import Any, Final, Literal, cast
@@ -1801,11 +1802,19 @@ class TestResponsesWSStreamingFirstMessage:
 @pytest.mark.parametrize(
     ("failure", "expected_status", "expected_type"),
     [
-        (ValueError("No deployments available - crossed budget: Exceeded budget for deployment"), 429, "rate_limit_exceeded"),
+        (
+            ValueError("No deployments available - crossed budget: Exceeded budget for deployment"),
+            429,
+            "rate_limit_exceeded",
+        ),
         (litellm.BadRequestError(message="bad input", model="m", llm_provider="openai"), 400, "invalid_request_error"),
         (RuntimeError("boom"), 500, "server_error"),
         (ValueError(f"{RouterErrors.no_deployments_with_tag_routing.value}=['free']"), 401, "invalid_request_error"),
-        (ProxyException(message="Authentication Error", type="auth_error", param=None, code=401), 401, "invalid_request_error"),
+        (
+            ProxyException(message="Authentication Error", type="auth_error", param=None, code=401),
+            401,
+            "invalid_request_error",
+        ),
         (HTTPException(status_code=403, detail="key not allowed"), 403, "invalid_request_error"),
     ],
     ids=["crossed-budget", "bad-request", "unexpected", "tag-routing", "proxy-auth", "http-exception"],
@@ -2278,11 +2287,17 @@ class TestResponsesWSFirstFrameModelAuth:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "selection", [{"guardrails": "frame-pick"}, {"guardrails": [{"name": "frame-pick"}]}, {"guardrail_config": []}]
+        ("selection", "message"),
+        [
+            (
+                {"guardrails": "frame-pick"},
+                "response.create guardrails: 'str' instances are not allowed as a Sequence value",
+            ),
+            ({"guardrails": [{"name": "frame-pick"}]}, "response.create guardrails.0: Input should be a valid string"),
+            ({"guardrail_config": []}, "response.create guardrail_config: Input should be a valid dictionary"),
+        ],
     )
-    async def test_frame_guard_refuses_a_frame_whose_guardrail_selection_is_malformed(self, selection):
-        from pydantic import ValidationError
-
+    async def test_frame_guard_refuses_a_frame_whose_guardrail_selection_is_malformed(self, selection, message):
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
 
         proxy_logging_obj = MagicMock()
@@ -2294,7 +2309,7 @@ class TestResponsesWSFirstFrameModelAuth:
             MagicMock(),
         )
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
             await guard(json.dumps({"type": "response.create", "input": "hi", **selection}))
 
         proxy_logging_obj.pre_call_hook.assert_not_awaited()
@@ -2685,6 +2700,7 @@ class TestResponsesWSFirstFrameModelAuth:
         ws.receive_text = AsyncMock(
             return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
         )
+
         async def close_over_the_network(**kwargs):
             await asyncio.sleep(0)
 
@@ -2704,7 +2720,9 @@ class TestResponsesWSFirstFrameModelAuth:
 
         def route_request(data, **kwargs):
             async def relay():
-                guarded = await data["responses_ws_frame_guard"](json.dumps({"type": "response.create", "input": "two"}))
+                guarded = await data["responses_ws_frame_guard"](
+                    json.dumps({"type": "response.create", "input": "two"})
+                )
                 guarded.bill_refusal(refusal)
                 if relay_outcome == "still_relaying":
                     await asyncio.Event().wait()
@@ -2722,6 +2740,7 @@ class TestResponsesWSFirstFrameModelAuth:
             side_effect=lambda user_api_key_dict, data, call_type, guardrails_only: data
         )
         proxy_logging_obj.post_call_failure_hook = AsyncMock(side_effect=slow_failure_hook)
+
         async def release_over_the_network(user_api_key_dict):
             await asyncio.sleep(0.01)
 
@@ -2764,7 +2783,9 @@ class TestResponsesWSFirstFrameModelAuth:
             row_may_finish.set()
             await asyncio.wait_for(row_written.wait(), timeout=1)
 
-        assert proxy_logging_obj.post_call_failure_hook.await_args.kwargs["original_exception"] is (crash if crashed else refusal)
+        assert proxy_logging_obj.post_call_failure_hook.await_args.kwargs["original_exception"] is (
+            crash if crashed else refusal
+        )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("ending", ["client_closed", "crash"])
@@ -2799,7 +2820,9 @@ class TestResponsesWSFirstFrameModelAuth:
 
         def route_request(data, **kwargs):
             async def relay():
-                guarded = await data["responses_ws_frame_guard"](json.dumps({"type": "response.create", "input": "two"}))
+                guarded = await data["responses_ws_frame_guard"](
+                    json.dumps({"type": "response.create", "input": "two"})
+                )
                 guarded.bill_refusal(refusal)
                 if ending == "crash":
                     raise crash
@@ -2874,7 +2897,9 @@ class TestResponsesWSFirstFrameModelAuth:
 
         def route_request(data, **kwargs):
             async def relay():
-                guarded = await data["responses_ws_frame_guard"](json.dumps({"type": "response.create", "input": "two"}))
+                guarded = await data["responses_ws_frame_guard"](
+                    json.dumps({"type": "response.create", "input": "two"})
+                )
                 guarded.bill_refusal(refusal)
                 data["litellm_metadata"]["standard_logging_guardrail_information"] = "written by a broken callback"
                 raise RuntimeError("relay crashed")
@@ -4576,7 +4601,9 @@ class TestResponsesInputTokens:
 
         assert response.status_code == 200, response.text
         sent = counter.await_args.kwargs["responses_request"]
-        assert {name: sent[name] for name in ("tools", "tool_choice", "parallel_tool_calls") if name in sent} == expected
+        assert {
+            name: sent[name] for name in ("tools", "tool_choice", "parallel_tool_calls") if name in sent
+        } == expected
 
     def test_previous_response_id_reaches_the_counter_authorized_next_to_the_id_the_client_held(self) -> None:
         from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD

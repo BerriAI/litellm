@@ -2022,7 +2022,6 @@ _CLIENT_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
 _CLIENT_GUARDRAIL_SELECTORS: Final = ("guardrails", "guardrail_config", "policies")
 _PROXY_ONLY_FRAME_FIELDS: Final = (*_CLIENT_GUARDRAIL_SELECTORS, "include_guardrail_response")
 _NESTED_BODY_ONLY_FIELDS: Final = (*_GUARDED_FRAME_FIELDS, *_PROXY_ONLY_FRAME_FIELDS)
-_GUARDRAIL_NAMES: Final = TypeAdapter(list[str])
 _OBJECTS: Final = TypeAdapter(list[object])
 _TURN_COPIED_CONTAINERS: Final = (list, dict)
 
@@ -2116,6 +2115,14 @@ def _responses_ws_frame_guard(
     return guard
 
 
+class _FrameGuardrailSelection(TypedDict, total=False):
+    guardrails: ReadOnly[Sequence[str]]
+    guardrail_config: ReadOnly[Mapping[str, object]]
+
+
+_FRAME_GUARDRAIL_SELECTION: Final = TypeAdapter(_FrameGuardrailSelection)
+
+
 async def _metadata_with_frame_guardrails(
     bucket: Mapping[str, object],
     body: Mapping[str, object],
@@ -2125,6 +2132,7 @@ async def _metadata_with_frame_guardrails(
 ) -> Mapping[str, object]:
     """A frame selects guardrails the way an HTTP ``/v1/responses`` body does, adding to the key, team and policy
     guardrails the socket was admitted with, so a frame can never shrink that list"""
+    selection: Final = _frame_guardrail_selection(body)
     metadata: Final = (
         await _metadata_with_frame_policies(bucket, body["policies"], model, metadata_key, user_api_key_dict)
         if "policies" in body
@@ -2138,23 +2146,32 @@ async def _metadata_with_frame_guardrails(
             {
                 "guardrails": [
                     *(_OBJECTS.validate_python(existing_guardrails) if isinstance(existing_guardrails, list) else ()),
-                    *_GUARDRAIL_NAMES.validate_python(body["guardrails"]),
+                    *selection["guardrails"],
                 ]
             }
-            if "guardrails" in body
+            if "guardrails" in selection
             else {}
         ),
         **(
             {
                 "guardrail_config": {
                     **(_WS_FRAME.validate_python(existing_config) if isinstance(existing_config, dict) else {}),
-                    **_WS_FRAME.validate_python(body["guardrail_config"]),
+                    **selection["guardrail_config"],
                 }
             }
-            if "guardrail_config" in body
+            if "guardrail_config" in selection
             else {}
         ),
     }
+
+
+def _frame_guardrail_selection(body: Mapping[str, object]) -> _FrameGuardrailSelection:
+    try:
+        return _FRAME_GUARDRAIL_SELECTION.validate_python(
+            {key: body[key] for key in ("guardrails", "guardrail_config") if key in body}
+        )
+    except ValidationError as e:
+        raise ValueError(f"response.create {first_validation_error(e)}") from e
 
 
 async def _metadata_with_frame_policies(
