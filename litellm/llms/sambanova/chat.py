@@ -14,6 +14,14 @@ from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import AllMessageValues
 
 
+def _has_text_only_content(message: AllMessageValues) -> bool:
+    """Whether the message content is a string, or a list holding text parts only."""
+    content = message.get("content")
+    if not isinstance(content, list):
+        return True
+    return all(isinstance(part, str) or (isinstance(part, dict) and part.get("type") == "text") for part in content)
+
+
 class SambanovaConfig(OpenAIGPTConfig):
     """
     Reference: https://docs.sambanova.ai/cloud/api-reference/
@@ -117,14 +125,22 @@ class SambanovaConfig(OpenAIGPTConfig):
         """
         Transform messages to handle content list conversion.
 
-        SambaNova API doesn't support content as a list - only string content.
-        This converts content lists like [{"type": "text", "text": "..."}] to strings.
+        SambaNova's API takes a string for `content`, and its vision models also take
+        the OpenAI content-list form with `image_url` parts. Flatten only the messages
+        whose list is entirely text: flattening a list that carries an `image_url` (or
+        any other non-text part) drops the attachment, and the model then answers as if
+        nothing was sent - HTTP 200 and no error, so the loss is silent.
         """
 
+        def _transform():
+            # handle_messages_with_content_list_to_str_conversion mutates the messages it
+            # is given, so passing the text-only subset converts exactly those.
+            handle_messages_with_content_list_to_str_conversion([m for m in messages if _has_text_only_content(m)])
+            return messages
+
         async def _async_transform():
-            return handle_messages_with_content_list_to_str_conversion(messages)
+            return _transform()
 
         if is_async:
             return _async_transform()
-        messages = handle_messages_with_content_list_to_str_conversion(messages)
-        return messages
+        return _transform()
