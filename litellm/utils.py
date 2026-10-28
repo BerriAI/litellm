@@ -6417,7 +6417,23 @@ def _strip_mantle_region_prefix(model: str) -> str:
     return split_mantle_region_prefix(model)[1]
 
 
+_API_SELECTOR_SEGMENTS: Final = frozenset({"responses", "chat_completions"})
+
+
+def _without_api_selector_segment(model: str) -> str:
+    segments: Final = model.split("/")
+    selector_index: Final = 1 if segments[0] in LlmProvidersSet else 0
+    has_selector: Final = len(segments) > selector_index + 1 and segments[selector_index] in _API_SELECTOR_SEGMENTS
+    return "/".join((*segments[:selector_index], *segments[selector_index + 1 :])) if has_selector else model
+
+
 def get_potential_model_names(model: str, custom_llm_provider: str | None) -> PotentialModelNamesAndCustomLLMProvider:
+    return _potential_model_names_for(
+        model=_without_api_selector_segment(model), custom_llm_provider=custom_llm_provider
+    )
+
+
+def _potential_model_names_for(model: str, custom_llm_provider: str | None) -> PotentialModelNamesAndCustomLLMProvider:
     if custom_llm_provider is None:
         # Get custom_llm_provider
         try:
