@@ -14,13 +14,17 @@ class SingleFlight(Generic[_R]):
     lock: threading.Lock = field(default_factory=threading.Lock)
     in_flight: Future[_R] | None = None
 
-    def run(self, fetch: Callable[[], _R]) -> _R:
+    def run(self, fetch: Callable[[], _R], while_busy: _R | None = None) -> _R:
+        return self._run(fetch, while_busy, retries_left=1)
+
+    def _run(self, fetch: Callable[[], _R], while_busy: _R | None, retries_left: int) -> _R:
         leader: Final[Future[_R]] = Future()
         with self.lock:
-            flight: Final = leader if self.in_flight is None else self.in_flight
-            self.in_flight = flight
-        if flight is not leader:
-            return flight.result()
+            in_flight: Final = self.in_flight
+            if in_flight is None:
+                self.in_flight = leader
+        if in_flight is not None:
+            return self._follow(in_flight, fetch, while_busy, retries_left)
         try:
             result: Final = fetch()
         except BaseException as error:
@@ -32,6 +36,16 @@ class SingleFlight(Generic[_R]):
         finally:
             with self.lock:
                 self.in_flight = None
+
+    def _follow(self, in_flight: Future[_R], fetch: Callable[[], _R], while_busy: _R | None, retries_left: int) -> _R:
+        if while_busy is not None:
+            return while_busy
+        try:
+            return in_flight.result()
+        except Exception:
+            if retries_left == 0:
+                raise
+            return self._run(fetch, while_busy, retries_left - 1)
 
 
 @dataclass(frozen=True, slots=True)

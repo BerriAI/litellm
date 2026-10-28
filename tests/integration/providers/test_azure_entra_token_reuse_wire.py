@@ -1,4 +1,5 @@
 import asyncio
+import itertools
 import json
 import threading
 import time
@@ -50,6 +51,8 @@ _HOLD_SECONDS: Final = 60
 _LIVELINESS_SECONDS: Final = 3
 _HERD: Final = 6
 _HERD_WINDOW_SECONDS: Final = 3
+_TOKEN_LIFETIME_SECONDS: Final = 3600
+_INSIDE_REFRESH_WINDOW_SECONDS: Final = 120
 _REMOVED_ENVIRONMENT: Final = (
     "AZURE_API_KEY",
     "AZURE_OPENAI_API_KEY",
@@ -165,14 +168,14 @@ def _is_token_endpoint(request: Request) -> bool:
     return _identity_resource(request) is not None or request.target.endswith(_EXCHANGE_SUFFIX)
 
 
-def _managed_identity(resource: str, hold: _Hold | None) -> Reply:
+def _managed_identity(resource: str, hold: _Hold | None, lifetime_seconds: int = _TOKEN_LIFETIME_SECONDS) -> Reply:
     if hold is not None and resource == hold.resource:
         hold.arrivals.put(resource)
         hold.release.wait(_HOLD_SECONDS)
     return _json(
         {
             "access_token": _identity_token(resource),
-            "expires_on": str(int(time.time()) + 3600),
+            "expires_on": str(int(time.time()) + lifetime_seconds),
             "resource": resource,
             "token_type": "Bearer",
         }
@@ -345,6 +348,77 @@ def test_concurrent_cold_requests_share_one_managed_identity_fetch(rig: _Rig, su
     assert [call.headers.get("authorization") for call in _provider_calls(requests)] == [
         f"Bearer {_identity_token(resource)}"
     ] * _HERD
+
+
+def _scripted_identity(resource: str, fetches: tuple[Callable[[], Reply], ...]) -> Callable[[Request], Reply]:
+    attempts: Final = itertools.count()
+    edge: Final = _edge(_azure_openai)
+
+    def respond(request: Request) -> Reply:
+        if _identity_resource(request) != resource:
+            return edge(request)
+        return fetches[min(next(attempts), len(fetches) - 1)]()
+
+    return respond
+
+
+def _held_failure(hold: _Hold) -> Reply:
+    hold.arrivals.put(hold.resource)
+    hold.release.wait(_HOLD_SECONDS)
+    return Reply(body=b"not json")
+
+
+def _herd(
+    rig: _Rig, edge: Callable[[Request], Reply], resource: str, hold: _Hold, warm_up: bool
+) -> tuple[tuple[httpx.Response, ...], tuple[Request, ...]]:
+    with (
+        wire_server(edge, port=rig.port) as wire,
+        rig.gateway.scenario() as scenario,
+        ThreadPoolExecutor(max_workers=_HERD) as pool,
+    ):
+        model: Final = _model(scenario, _Surface.LEGACY_CHAT, rig.edge, f"{resource}/.default")
+        key: Final = scenario.key()
+        warm_up_responses: Final = (_post(_Surface.LEGACY_CHAT, rig.gateway, key, model),) if warm_up else ()
+        calls: Final = tuple(pool.submit(_post, _Surface.LEGACY_CHAT, rig.gateway, key, model) for _ in range(_HERD))
+        try:
+            eventually(
+                hold.arrivals.qsize,
+                lambda arrived: arrived >= _HERD,
+                seconds=_HERD_WINDOW_SECONDS,
+                return_last_on_timeout=True,
+            )
+        finally:
+            hold.release.set()
+        return warm_up_responses + tuple(call.result(timeout=_HOLD_SECONDS) for call in calls), wire.drain()
+
+
+def test_concurrent_requests_inside_the_refresh_window_share_one_refresh_and_keep_the_valid_token(rig: _Rig) -> None:
+    resource: Final = f"api://audit-refresh-{uuid.uuid4().hex}"
+    hold: Final = _Hold(resource)
+    edge: Final = _scripted_identity(
+        resource,
+        (
+            lambda: _managed_identity(resource, None, _INSIDE_REFRESH_WINDOW_SECONDS),
+            lambda: _managed_identity(resource, hold),
+        ),
+    )
+
+    responses, requests = _herd(rig, edge, resource, hold, warm_up=True)
+
+    assert [response.status_code for response in responses] == [200] * (_HERD + 1), [r.text for r in responses]
+    assert _identity_fetches(requests, resource) == 2
+
+
+def test_a_failed_cold_fetch_fails_only_the_request_that_made_it(rig: _Rig) -> None:
+    resource: Final = f"api://audit-failure-{uuid.uuid4().hex}"
+    hold: Final = _Hold(resource)
+    edge: Final = _scripted_identity(resource, (lambda: _held_failure(hold), lambda: _managed_identity(resource, None)))
+
+    responses, _ = _herd(rig, edge, resource, hold, warm_up=False)
+
+    assert sorted(response.status_code == 200 for response in responses) == [False] + [True] * (_HERD - 1), [
+        r.text for r in responses
+    ]
 
 
 def _oidc_model(scenario: Scenario, rig: _Rig, audience: str) -> str:

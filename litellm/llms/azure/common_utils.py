@@ -335,6 +335,7 @@ def get_azure_ad_token_from_oidc(
             "azure_client_id": azure_client_id,
             "azure_tenant_id": azure_tenant_id,
             "azure_authority_host": azure_authority_host,
+            "scope": scope,
             "oidc_token": oidc_token,
         }
     )

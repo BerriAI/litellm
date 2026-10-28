@@ -1,7 +1,9 @@
+import itertools
 import json
 import os
 import threading
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from queue import SimpleQueue
@@ -436,12 +438,14 @@ _CONCURRENT_CALLERS: Final = 4
 _SCOPE: Final = "api://audit/.default"
 _YEAR_2100: Final = 4_102_444_800
 _LONG_EXPIRED: Final = 1
+_JOIN_WINDOW_SECONDS: Final = 0.5
 
 
 @dataclass(frozen=True, slots=True)
 class _HeldCredential:
     expires_on: int = _YEAR_2100
-    failure: Exception | None = None
+    failing_attempts: int = 0
+    attempts: Iterator[int] = field(default_factory=itertools.count)
     requests: SimpleQueue[tuple[str, ...]] = field(default_factory=SimpleQueue)
     everyone_asked: threading.Event = field(default_factory=threading.Event)
     release: threading.Event = field(default_factory=threading.Event)
@@ -451,9 +455,10 @@ class _HeldCredential:
         if self.requests.qsize() >= _CONCURRENT_CALLERS:
             self.everyone_asked.set()
         self.release.wait(5)
-        if self.failure is not None:
-            raise self.failure
-        return AccessTokenInfo("shared-token", self.expires_on)
+        attempt: Final = next(self.attempts)
+        if attempt < self.failing_attempts:
+            raise ClientAuthenticationError("Entra is down")
+        return AccessTokenInfo(f"token-{attempt}", self.expires_on)
 
 
 def _call_together(provider: Callable[[], str], credential: _HeldCredential) -> tuple[Future[str], ...]:
@@ -477,7 +482,7 @@ def test_concurrent_cold_callers_share_one_token_request() -> None:
 
     calls: Final = _call_together(provider, credential)
 
-    assert tuple(call.result() for call in calls) == ("shared-token",) * _CONCURRENT_CALLERS
+    assert tuple(call.result() for call in calls) == ("token-0",) * _CONCURRENT_CALLERS
     assert credential.requests.qsize() == 0
 
 
@@ -491,46 +496,106 @@ def test_concurrent_callers_after_the_token_expired_share_one_token_request() ->
 
     calls: Final = _call_together(provider, credential)
 
-    assert tuple(call.result() for call in calls) == ("shared-token",) * _CONCURRENT_CALLERS
+    assert tuple(call.result() for call in calls) == ("token-1",) * _CONCURRENT_CALLERS
     assert credential.requests.qsize() == 0
 
 
-def test_concurrent_cold_callers_share_one_failed_token_request() -> None:
-    credential: Final = _HeldCredential(failure=ClientAuthenticationError("Entra is down"))
+def test_a_failed_cold_token_request_fails_only_the_caller_that_made_it() -> None:
+    credential: Final = _HeldCredential(failing_attempts=1)
     provider: Final = single_flight_bearer_token_provider(credential, _SCOPE)
 
     calls: Final = _call_together(provider, credential)
+
+    failed: Final = sorted(isinstance(call.exception(), ClientAuthenticationError) for call in calls)
+    assert failed == [False] * (_CONCURRENT_CALLERS - 1) + [True]
+
+
+@dataclass(frozen=True, slots=True)
+class _DownCredential:
+    requests: SimpleQueue[None] = field(default_factory=SimpleQueue)
+    answers: threading.Semaphore = field(default_factory=lambda: threading.Semaphore(0))
+
+    def get_token_info(self, *_: str, options: TokenRequestOptions | None = None) -> AccessTokenInfo:
+        self.requests.put(None)
+        self.answers.acquire(timeout=5)
+        raise ClientAuthenticationError("Entra is down")
+
+
+def test_an_entra_outage_fails_every_concurrent_caller_after_one_shared_retry() -> None:
+    credential: Final = _DownCredential()
+    provider: Final = single_flight_bearer_token_provider(credential, _SCOPE)
+    start: Final = threading.Barrier(_CONCURRENT_CALLERS)
+
+    def call() -> str:
+        start.wait(5)
+        return provider()
+
+    with ThreadPoolExecutor(max_workers=_CONCURRENT_CALLERS) as pool:
+        calls: Final = tuple(pool.submit(call) for _ in range(_CONCURRENT_CALLERS))
+        for _ in range(2):
+            credential.requests.get(timeout=5)
+            time.sleep(_JOIN_WINDOW_SECONDS)
+            credential.answers.release()
 
     assert all(isinstance(call.exception(), ClientAuthenticationError) for call in calls)
     assert credential.requests.qsize() == 0
 
 
 @dataclass(frozen=True, slots=True)
-class _SlowRefreshCredential:
+class _ExpiringSoonTokens:
     requests: SimpleQueue[None] = field(default_factory=SimpleQueue)
     refresh_started: threading.Event = field(default_factory=threading.Event)
     release: threading.Event = field(default_factory=threading.Event)
 
-    def get_token_info(self, *_: str, options: TokenRequestOptions | None = None) -> AccessTokenInfo:
+    def next_token(self) -> tuple[str, int]:
         self.requests.put(None)
-        if self.requests.qsize() == 2:
-            self.refresh_started.set()
-            self.release.wait(5)
-        return AccessTokenInfo("valid-token", _YEAR_2100, refresh_on=_LONG_EXPIRED)
+        if self.requests.qsize() == 1:
+            return "expiring-token", int(time.time()) + 120
+        self.refresh_started.set()
+        self.release.wait(5)
+        return "refreshed-token", _YEAR_2100
 
 
-def test_a_slow_refresh_leaves_other_callers_on_the_still_valid_token() -> None:
-    credential: Final = _SlowRefreshCredential()
+@dataclass(frozen=True, slots=True)
+class _ExpiringSoonTokenInfoCredential:
+    tokens: _ExpiringSoonTokens = field(default_factory=_ExpiringSoonTokens)
+
+    def get_token_info(self, *_: str, options: TokenRequestOptions | None = None) -> AccessTokenInfo:
+        return AccessTokenInfo(*self.tokens.next_token())
+
+
+@dataclass(frozen=True, slots=True)
+class _ExpiringSoonTokenOnlyCredential:
+    tokens: _ExpiringSoonTokens = field(default_factory=_ExpiringSoonTokens)
+
+    def get_token(
+        self,
+        *_: str,
+        claims: str | None = None,
+        tenant_id: str | None = None,
+        enable_cae: bool = False,
+        **kwargs: object,
+    ) -> AccessToken:
+        return AccessToken(*self.tokens.next_token())
+
+
+@pytest.mark.parametrize("credential_type", (_ExpiringSoonTokenInfoCredential, _ExpiringSoonTokenOnlyCredential))
+def test_callers_during_a_refresh_keep_the_valid_token_while_one_of_them_refreshes(
+    credential_type: type[_ExpiringSoonTokenInfoCredential | _ExpiringSoonTokenOnlyCredential],
+) -> None:
+    credential: Final = credential_type()
+    tokens: Final = credential.tokens
     provider: Final = single_flight_bearer_token_provider(credential, _SCOPE)
-    assert provider() == "valid-token"
+    assert provider() == "expiring-token"
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with ThreadPoolExecutor(max_workers=_CONCURRENT_CALLERS) as pool:
         refresh: Final = pool.submit(provider)
-        assert credential.refresh_started.wait(5)
-        other_caller: Final = pool.submit(provider)
+        assert tokens.refresh_started.wait(5)
+        others: Final = tuple(pool.submit(provider) for _ in range(_CONCURRENT_CALLERS - 1))
         try:
-            assert other_caller.result(timeout=2) == "valid-token"
+            assert tuple(other.result(timeout=2) for other in others) == ("expiring-token",) * (_CONCURRENT_CALLERS - 1)
         finally:
-            credential.release.set()
+            tokens.release.set()
 
-    assert refresh.result() == "valid-token"
+    assert (refresh.result(), provider()) == ("refreshed-token", "refreshed-token")
+    assert tokens.requests.qsize() == 2

@@ -2366,6 +2366,33 @@ def test_concurrent_oidc_callers_share_one_token_exchange(monkeypatch: pytest.Mo
     assert exchanges.qsize() == 0
 
 
+def test_oidc_tokens_for_different_scopes_are_exchanged_and_cached_separately(monkeypatch: pytest.MonkeyPatch) -> None:
+    exchanged_scopes: Final = SimpleQueue[str]()
+
+    class ScopedTokenEndpoint(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            scope: Final = parse_qs(request.read().decode())["scope"][-1]
+            exchanged_scopes.put(scope)
+            return httpx.Response(200, json={"access_token": f"token-for:{scope}", "expires_in": 3600})
+
+    monkeypatch.setattr(litellm, "sync_transport", ScopedTokenEndpoint(), raising=False)
+    monkeypatch.setenv("AZURE_TEST_OIDC_SCOPED_ASSERTION", "scoped-jwt")
+    tenant: Final = f"tenant-{uuid.uuid4().hex}"
+
+    def token_for(scope: str) -> str:
+        return get_azure_ad_token_from_oidc(
+            azure_ad_token="os.environ/AZURE_TEST_OIDC_SCOPED_ASSERTION",
+            azure_client_id="client",
+            azure_tenant_id=tenant,
+            scope=scope,
+        )
+
+    tokens: Final = tuple(token_for(scope) for scope in ("api://first/.default", "api://second/.default") * 2)
+
+    assert tokens == ("token-for:api://first/.default", "token-for:api://second/.default") * 2
+    assert exchanged_scopes.qsize() == 2
+
+
 def test_evicting_an_azure_client_built_on_the_callers_session_leaves_it_open(monkeypatch):
     """`initialize_azure_sdk_client` puts `litellm.aclient_session` on the SDK client.
 

@@ -12,7 +12,14 @@ from litellm.types.secret_managers.get_azure_ad_token_provider import (
 )
 
 if TYPE_CHECKING:
-    from azure.core.credentials import AccessTokenInfo, SupportsTokenInfo, TokenRequestOptions
+    from azure.core.credentials import (
+        AccessToken,
+        AccessTokenInfo,
+        SupportsTokenInfo,
+        TokenCredential,
+        TokenRequestOptions,
+    )
+    from typing_extensions import TypeIs  # noqa: TID251  # tells the two azure-core credential protocols apart
 
 
 def infer_credential_type_from_environment() -> AzureCredentialType:
@@ -42,13 +49,22 @@ def infer_credential_type_from_environment() -> AzureCredentialType:
 
 
 @dataclass(slots=True)
-class _ExpiryWatchingCredential:
+class _HeldToken:
+    token: "AccessToken | AccessTokenInfo | None" = None
+
+    def still_valid(self) -> str | None:
+        held: Final = self.token
+        return held.token if held is not None and held.expires_on > time.time() else None
+
+
+@dataclass(slots=True)
+class _TokenInfoWatcher:
     credential: "SupportsTokenInfo"
-    expires_on: int = 0
+    held: _HeldToken
 
     def get_token_info(self, *scopes: str, options: "TokenRequestOptions | None" = None) -> "AccessTokenInfo":
         token: Final = self.credential.get_token_info(*scopes, options=options)
-        self.expires_on = token.expires_on
+        self.held.token = token
         return token
 
     def close(self) -> None:
@@ -66,17 +82,46 @@ class _ExpiryWatchingCredential:
         self.credential.__exit__(exc_type, exc_value, traceback)
 
 
-def single_flight_bearer_token_provider(credential: "SupportsTokenInfo", scope: str) -> Callable[[], str]:
+@dataclass(slots=True)
+class _TokenWatcher:
+    credential: "TokenCredential"
+    held: _HeldToken
+
+    def get_token(
+        self,
+        *scopes: str,
+        claims: str | None = None,
+        tenant_id: str | None = None,
+        enable_cae: bool = False,
+        **kwargs: object,  # kwargs-ok: azure-core forwards its request options verbatim to the wrapped credential
+    ) -> "AccessToken":
+        token: Final = self.credential.get_token(
+            *scopes, claims=claims, tenant_id=tenant_id, enable_cae=enable_cae, **kwargs
+        )
+        self.held.token = token
+        return token
+
+
+def _supports_token_info(
+    credential: "TokenCredential | SupportsTokenInfo",
+) -> "TypeIs[SupportsTokenInfo]":
+    return hasattr(credential, "get_token_info")
+
+
+def single_flight_bearer_token_provider(
+    credential: "TokenCredential | SupportsTokenInfo", scope: str
+) -> Callable[[], str]:
     from azure.identity import get_bearer_token_provider
 
-    watched: Final = _ExpiryWatchingCredential(credential)
+    held: Final = _HeldToken()
+    watched: Final = (
+        _TokenInfoWatcher(credential, held) if _supports_token_info(credential) else _TokenWatcher(credential, held)
+    )
     provider: Final = get_bearer_token_provider(watched, scope)
-    cold_fetch: Final[SingleFlight[str]] = SingleFlight()
+    token_request: Final[SingleFlight[str]] = SingleFlight()
 
     def bearer_token() -> str:
-        if watched.expires_on > time.time():
-            return provider()
-        return cold_fetch.run(provider)
+        return token_request.run(provider, while_busy=held.still_valid())
 
     return bearer_token
 
@@ -120,7 +165,7 @@ def get_azure_ad_token_provider(
         else None or os.environ.get("AZURE_CREDENTIAL") or infer_credential_type_from_environment()
     )
     verbose_logger.info("For Azure AD Token Provider, choosing credential type: %s", cred)
-    credential: SupportsTokenInfo | None = None
+    credential: TokenCredential | SupportsTokenInfo | None = None
     if cred == AzureCredentialType.ClientSecretCredential:
         credential = ClientSecretCredential(
             client_id=os.environ["AZURE_CLIENT_ID"],

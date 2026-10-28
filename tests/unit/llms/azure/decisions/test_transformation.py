@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 import respx
-from azure.core.credentials import AccessTokenInfo
+from azure.core.credentials import AccessToken
 
 import litellm
 from litellm.llms.azure import common_utils
@@ -103,10 +103,10 @@ async def test_default_credential_refreshes_without_opt_in(
     is_async: bool,
     systemone: bool,
 ) -> None:
-    credential = Mock(spec=["get_token_info"])
-    credential.get_token_info.side_effect = [
-        AccessTokenInfo("synthetic-first", int(time.time()) + 120),
-        AccessTokenInfo("synthetic-refreshed", int(time.time()) + 3600),
+    credential = Mock(spec=["get_token"])
+    credential.get_token.side_effect = [
+        AccessToken("synthetic-first", int(time.time()) + 120),
+        AccessToken("synthetic-refreshed", int(time.time()) + 3600),
     ]
     factory = Mock(return_value=credential)
     monkeypatch.setattr("azure.identity.DefaultAzureCredential", factory)
@@ -119,10 +119,9 @@ async def test_default_credential_refreshes_without_opt_in(
         "Bearer synthetic-refreshed",
     ]
     factory.assert_called_once_with()
-    assert credential.get_token_info.call_count == 2
+    assert credential.get_token.call_count == 2
     assert all(
-        call.args == ("https://cognitiveservices.azure.com/.default",)
-        for call in credential.get_token_info.call_args_list
+        call.args == ("https://cognitiveservices.azure.com/.default",) for call in credential.get_token.call_args_list
     )
 
 
