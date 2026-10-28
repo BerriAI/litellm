@@ -21,6 +21,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -188,6 +189,7 @@ def _normalize_tool_choice(selected_params: dict) -> None:
 _TOOL_CHOICE_MODES: Final = frozenset({"auto", "none", "required", "any"})
 _TOOLS_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 _JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _as_json_object(value: object) -> Mapping[str, object] | None:
@@ -538,7 +540,7 @@ class OCIChatConfig(BaseConfig):
         stream: bool | None = None,
     ) -> str:
         base: Final = get_oci_base_url(optional_params, api_base or litellm.api_base)
-        return f"{base}/{OCI_API_VERSION}/actions/chat"
+        return join_api_base(base, f"{OCI_API_VERSION}/actions/chat")
 
     def _get_optional_params(self, vendor: OCIVendors, optional_params: dict, model: str = "") -> dict:
         param_map: Final = (
@@ -700,7 +702,7 @@ class OCIChatConfig(BaseConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        response_json: Final = raw_response.json()
+        response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
 
         if not isinstance(response_json, dict):
             raise OCIError(

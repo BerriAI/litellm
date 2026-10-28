@@ -5,7 +5,6 @@ import time
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Final
 
 import httpx
@@ -14,6 +13,7 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.single_flight import single_flight_lru_cache
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
@@ -24,9 +24,10 @@ from litellm.types.llms.base import LiteLLMBaseModel
 oidc_cache: Final = DualCache()
 
 _PARSED_LITERAL: Final = TypeAdapter(object)
+_SECRET_MANAGER_CLIENT: Final = TypeAdapter(object)
 
 
-@lru_cache(maxsize=128)
+@single_flight_lru_cache
 def _cached_azure_oidc_token_provider(audience: str) -> Callable[[], str]:
     return get_azure_ad_token_provider(azure_scope=audience)
 
@@ -383,7 +384,7 @@ def get_secret(
     try:
         if _should_read_secret_from_secret_manager() and litellm.secret_manager_client is not None:
             try:
-                client: Final = litellm.secret_manager_client
+                client: Final = _SECRET_MANAGER_CLIENT.validate_python(litellm.secret_manager_client)
                 key_manager = "local"
                 if key_management_system is not None:
                     key_manager = key_management_system.value

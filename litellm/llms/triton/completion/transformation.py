@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Final, Literal
 
 from httpx import Headers, Response
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.constants import DEFAULT_MAX_TOKENS_FOR_TRITON
 from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
@@ -30,6 +31,10 @@ from ..common_utils import TritonError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+
+class _TritonGenerateResponse(TypedDict):
+    text_output: ReadOnly[str]
 
 
 class TritonConfig(BaseConfig):
@@ -220,7 +225,7 @@ class TritonGenerateConfig(TritonConfig):
         json_mode: bool | None = None,
     ) -> ModelResponse:
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final[_TritonGenerateResponse] = raw_response.json()
         except Exception:
             raise TritonError(message=raw_response.text, status_code=raw_response.status_code)
         model_response.choices = [Choices(index=0, message=Message(content=raw_response_json["text_output"]))]

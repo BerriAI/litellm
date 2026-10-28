@@ -11,6 +11,7 @@ from typing import Final, Literal
 
 from pydantic import JsonValue
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 
@@ -205,6 +206,10 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         encoded_body: Final = base64.b64encode(json.dumps(body_data).encode()).decode()
         return {"input": {"invokeModel": {"body": encoded_body}}}
 
+    @staticmethod
+    def count_tokens_model_id(model: str) -> str:
+        return get_bedrock_base_model(model).removeprefix("bedrock/")
+
     def get_bedrock_count_tokens_endpoint(
         self,
         model: str,
@@ -224,21 +229,14 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         Returns:
             Complete endpoint URL for CountTokens API
         """
-        # Use existing LiteLLM function to get the base model ID (removes region prefix)
-        model_id = get_bedrock_base_model(model)
-
-        # Remove bedrock/ prefix if present
-        model_id = model_id.removeprefix("bedrock/")  # Remove "bedrock/" prefix
-        encoded_model_id: Final = self.encode_model_id(model_id=model_id)
+        encoded_model_id: Final = self.encode_model_id(model_id=self.count_tokens_model_id(model))
 
         base_url, _ = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_region_name=aws_region_name,
         )
-        endpoint: Final = f"{base_url}/model/{encoded_model_id}/count-tokens"
-
-        return endpoint
+        return join_api_base(base_url, f"model/{encoded_model_id}/count-tokens")
 
     def transform_bedrock_response_to_anthropic(
         self, bedrock_response: Mapping[str, JsonValue]
