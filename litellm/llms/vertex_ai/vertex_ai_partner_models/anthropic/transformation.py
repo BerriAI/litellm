@@ -1,5 +1,7 @@
 # What is this?
 ## Handler file for calling claude-3 on vertex ai
+import base64
+import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
@@ -19,6 +21,19 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 _NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_VERTEX_LABELS_HEADER: Final = "X-Vertex-AI-Labels"
+_LABELS: Final = TypeAdapter(Mapping[object, object])
+
+
+def _vertex_labels_header(labels: object, header_names: Mapping[str, object]) -> str | None:
+    if not isinstance(labels, dict) or any(name.lower() == _VERTEX_LABELS_HEADER.lower() for name in header_names):
+        return None
+    string_labels: Final = {
+        key: value
+        for key, value in _LABELS.validate_python(labels).items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+    return base64.b64encode(json.dumps(string_labels).encode()).decode() if string_labels else None
 
 
 class VertexAIError(Exception):
@@ -102,6 +117,12 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        params: Final = _NON_DEFAULT_PARAMS.validate_python(optional_params)
+        labels_header: Final = _vertex_labels_header(params.get("labels"), _NON_DEFAULT_PARAMS.validate_python(headers))
+        if "labels" in params:
+            del optional_params["labels"]  # rebind-ok: labels travel in the X-Vertex-AI-Labels header, not the body
+        if labels_header is not None:
+            headers[_VERTEX_LABELS_HEADER] = labels_header  # rebind-ok: outbound headers are returned by mutation
         data: Final = super().transform_request(
             model=model,
             messages=messages,
