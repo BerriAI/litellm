@@ -445,6 +445,16 @@ def test_provider_specific_cache_key_ignores_litellm_owned_kwargs(monkeypatch: p
     assert cache.get_cache_key(**{**request, "top_k": 6}) != base_key
 
 
+def test_provider_specific_cache_key_ignores_parent_otel_span(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", True)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {"model": "gpt-4.1-mini", "messages": [{"role": "user", "content": "hi"}]}
+
+    assert cache.get_cache_key(**request, parent_otel_span=object()) == cache.get_cache_key(
+        **request, parent_otel_span=object()
+    )
+
+
 def test_cache_key_tells_apart_requests_that_differ_only_in_continuation_token() -> None:
     cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
     request: Final = {
