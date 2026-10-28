@@ -205,7 +205,7 @@ class CohereChatConfig(BaseConfig):
             if param == "presence_penalty":
                 optional_params["presence_penalty"] = value
             if param == "stop":
-                optional_params["stop_sequences"] = value
+                optional_params["stop_sequences"] = [value] if isinstance(value, str) else value
             if param == "tools":
                 optional_params["tools"] = value
             if param == "seed":

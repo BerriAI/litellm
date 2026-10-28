@@ -77,6 +77,26 @@ class TestCohereTransform:
         # The function should properly map max_tokens if max_completion_tokens is not provided
         assert result == {"temperature": 0.7, "max_tokens": 200}
 
+    def test_cohere_stop_string_to_list(self):
+        """Test that a string stop parameter is converted to a list of strings for stop_sequences"""
+        result = self.config.map_openai_params(
+            non_default_params={"stop": "END"},
+            optional_params={},
+            model=self.model,
+            drop_params=False,
+        )
+        assert result == {"stop_sequences": ["END"]}
+
+    def test_cohere_stop_list_preserved(self):
+        """Test that a list stop parameter is preserved as a list for stop_sequences"""
+        result = self.config.map_openai_params(
+            non_default_params={"stop": ["END", "STOP"]},
+            optional_params={},
+            model=self.model,
+            drop_params=False,
+        )
+        assert result == {"stop_sequences": ["END", "STOP"]}
+
 
 class TestCohereV2Transform:
     def setup_method(self):
@@ -140,6 +160,26 @@ class TestCohereV2Transform:
         )
 
         assert optional_params["max_tokens"] == 256
+
+    def test_v2_stop_string_to_list(self):
+        """Test that a string stop parameter is converted to a list of strings for stop_sequences in v2"""
+        result = self.config.map_openai_params(
+            non_default_params={"stop": "END"},
+            optional_params={},
+            model=self.model,
+            drop_params=False,
+        )
+        assert result == {"stop_sequences": ["END"]}
+
+    def test_v2_stop_list_preserved(self):
+        """Test that a list stop parameter is preserved as a list for stop_sequences in v2"""
+        result = self.config.map_openai_params(
+            non_default_params={"stop": ["END", "STOP"]},
+            optional_params={},
+            model=self.model,
+            drop_params=False,
+        )
+        assert result == {"stop_sequences": ["END", "STOP"]}
 
 
 @pytest.mark.asyncio
