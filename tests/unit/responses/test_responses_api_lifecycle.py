@@ -219,6 +219,10 @@ async def _event_types(stream: object) -> tuple[str, ...]:
             {"stream": True, "starting_after": 1, "extra_query": {"starting_after": 3, "include[]": "usage"}},
             {"stream": "true", "starting_after": "3", "include[]": "usage"},
         ),
+        (
+            {"stream": True, "extra_query": {"include": "usage", "limit": "1", "api-version": "2020-01-01"}},
+            {"stream": "true", "include": "usage"},
+        ),
     ),
 )
 @pytest.mark.asyncio
@@ -243,18 +247,36 @@ async def test_streamed_retrieve_replays_the_stored_events_after_the_cursor(
 
 
 @pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.parametrize("starting_after", (3, -1, "abc"))
 @pytest.mark.asyncio
-async def test_retrieve_without_stream_still_returns_the_response_object(sync_mode: bool) -> None:
+async def test_retrieve_without_stream_still_returns_the_response_object(
+    sync_mode: bool, starting_after: object
+) -> None:
     with respx.mock() as mock_router:
         route: Final = _retrieve_route(mock_router, "openai").mock(
             return_value=httpx.Response(200, json=_stored_response("completed"))
         )
-        retrieved: Final = await _retrieve(sync_mode, starting_after=3, **_retrieve_kwargs("openai"))
+        retrieved: Final = await _retrieve(sync_mode, starting_after=starting_after, **_retrieve_kwargs("openai"))
         (call,) = route.calls
 
     assert isinstance(retrieved, ResponsesAPIResponse)
     assert retrieved.status == "completed"
     assert dict(call.request.url.params) == {}
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_a_streamed_retrieve_answered_with_json_returns_the_response_object(sync_mode: bool) -> None:
+    with respx.mock() as mock_router:
+        route: Final = _retrieve_route(mock_router, "openai").mock(
+            return_value=httpx.Response(200, json=_stored_response("completed"))
+        )
+        retrieved: Final = await _retrieve(sync_mode, stream=True, starting_after=3, **_retrieve_kwargs("openai"))
+        (call,) = route.calls
+
+    assert isinstance(retrieved, ResponsesAPIResponse)
+    assert retrieved.status == "completed"
+    assert dict(call.request.url.params) == {"stream": "true", "starting_after": "3"}
 
 
 @pytest.mark.parametrize("sync_mode", (True, False))
@@ -399,6 +421,35 @@ async def test_a_malformed_resume_query_is_rejected_before_any_upstream_call(
 
     assert exc_info.value.status_code == 400
     assert route.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("resume_kwargs", "expected_query"),
+    (
+        ({"stream": "maybe", "starting_after": 3}, {}),
+        ({"extra_query": {"stream": "1"}}, {}),
+        ({"stream": True, "starting_after": -1}, {"stream": "true"}),
+        ({"extra_query": {"stream": "true", "starting_after": "abc"}}, {"stream": "true"}),
+    ),
+)
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_a_malformed_resume_query_is_dropped_under_drop_params(
+    sync_mode: bool, resume_kwargs: dict[str, object], expected_query: dict[str, str]
+) -> None:
+    upstream: Final = (
+        httpx.Response(200, headers=_STREAM_HEADERS, content=_REPLAY_AFTER_3)
+        if expected_query
+        else httpx.Response(200, json=_stored_response("completed"))
+    )
+    with respx.mock() as mock_router:
+        route: Final = _retrieve_route(mock_router, "openai").mock(return_value=upstream)
+        retrieved: Final = await _retrieve(sync_mode, drop_params=True, **_retrieve_kwargs("openai"), **resume_kwargs)
+        streamed_types: Final = None if isinstance(retrieved, ResponsesAPIResponse) else await _event_types(retrieved)
+        (call,) = route.calls
+
+    assert dict(call.request.url.params) == expected_query
+    assert (streamed_types is not None) == bool(expected_query)
 
 
 _UNSUPPORTED_PROVIDERS: Final = ("xai", "manus", "volcengine")

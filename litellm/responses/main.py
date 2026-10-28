@@ -107,7 +107,7 @@ else:
     MCPTool = Any
 
 from .retrieve_stream_query import (
-    RETRIEVE_STREAM_QUERY_KEYS,
+    RETRIEVE_INCLUDE_QUERY_KEYS,
     InvalidRetrieveStreamQuery,
     RetrieveStreamQuery,
     parse_retrieve_stream_query,
@@ -2029,12 +2029,15 @@ def _requested_retrieve_stream_query(
     starting_after: int | None,
     extra_query: Mapping[str, object] | None,
     custom_llm_provider: str | None,
+    drop_malformed: bool,
 ) -> RetrieveStreamQuery:
     explicit: Final = {
         key: value for key, value in (("stream", stream), ("starting_after", starting_after)) if value is not None
     }
     requested: Final = {**explicit, **(extra_query or {})}
-    parsed: Final = parse_retrieve_stream_query(requested.get("stream"), requested.get("starting_after"))
+    parsed: Final = parse_retrieve_stream_query(
+        requested.get("stream"), requested.get("starting_after"), drop_malformed=drop_malformed
+    )
     if isinstance(parsed, InvalidRetrieveStreamQuery):
         raise litellm.BadRequestError(
             message=parsed.message,
@@ -2217,6 +2220,7 @@ def get_responses(
                 starting_after=starting_after,
                 extra_query=extra_query,
                 custom_llm_provider=custom_llm_provider,
+                drop_malformed=drops_unsupported_params(litellm_params.drop_params),
             ),
             responses_api_provider_config=responses_api_provider_config,
             custom_llm_provider=custom_llm_provider,
@@ -2248,7 +2252,7 @@ def get_responses(
             logging_obj=litellm_logging_obj,
             extra_headers=extra_headers,
             extra_query={
-                key: value for key, value in (extra_query or {}).items() if key not in RETRIEVE_STREAM_QUERY_KEYS
+                key: value for key, value in (extra_query or {}).items() if key in RETRIEVE_INCLUDE_QUERY_KEYS
             },
             extra_body=extra_body,
             stream=stream_query.stream,

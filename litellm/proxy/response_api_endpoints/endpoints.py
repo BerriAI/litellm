@@ -83,6 +83,7 @@ from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 from litellm.proxy.utils import count_request_input_tokens, handle_exception_on_proxy
 from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
 from litellm.responses.litellm_completion_transformation.count_request import MODEL_FILE_ID_MAPPING_FIELD
+from litellm.responses.retrieve_stream_query import RETRIEVE_INCLUDE_QUERY_KEYS, RETRIEVE_STREAM_QUERY_KEYS
 from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWsFrameGuard, spawn_logging_task
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -102,7 +103,7 @@ router: Final = APIRouter()
 _RESPONSES_WS_CONFIG_VALUE_ADAPTER: Final[TypeAdapter[object | None]] = TypeAdapter(object | None)
 _DECODED_JSON: Final = TypeAdapter(object)
 _PROXY_SERVER_REQUEST_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
-_RETRIEVE_QUERY_PARAMS: Final = ("include", "include[]", "include_obfuscation", "starting_after", "stream")
+_RETRIEVE_QUERY_PARAMS: Final = tuple(sorted(RETRIEVE_INCLUDE_QUERY_KEYS | RETRIEVE_STREAM_QUERY_KEYS))
 
 _ResponseDocSchemas: TypeAlias = dict[int | str, dict[str, object]]  # fastapi's responses kwarg
 

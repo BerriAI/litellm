@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Final, Literal
 
 RETRIEVE_STREAM_QUERY_KEYS: Final = frozenset({"stream", "starting_after"})
+RETRIEVE_INCLUDE_QUERY_KEYS: Final = frozenset({"include", "include[]", "include_obfuscation"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -14,6 +15,10 @@ class RetrieveStreamQuery:
 class InvalidRetrieveStreamQuery:
     param: Literal["stream", "starting_after"]
     message: str
+
+
+_NO_STREAM: Final = RetrieveStreamQuery(stream=False, starting_after=None)
+_FULL_REPLAY: Final = RetrieveStreamQuery(stream=True, starting_after=None)
 
 
 def _parsed_stream(value: object) -> bool | InvalidRetrieveStreamQuery:
@@ -43,12 +48,14 @@ def _parsed_starting_after(value: object) -> int | None | InvalidRetrieveStreamQ
 
 
 def parse_retrieve_stream_query(
-    stream: object, starting_after: object
+    stream: object, starting_after: object, drop_malformed: bool
 ) -> RetrieveStreamQuery | InvalidRetrieveStreamQuery:
     parsed_stream: Final = _parsed_stream(stream)
     if isinstance(parsed_stream, InvalidRetrieveStreamQuery):
-        return parsed_stream
+        return _NO_STREAM if drop_malformed else parsed_stream
+    if not parsed_stream:
+        return _NO_STREAM
     parsed_starting_after: Final = _parsed_starting_after(starting_after)
     if isinstance(parsed_starting_after, InvalidRetrieveStreamQuery):
-        return parsed_starting_after
-    return RetrieveStreamQuery(stream=parsed_stream, starting_after=parsed_starting_after)
+        return _FULL_REPLAY if drop_malformed else parsed_starting_after
+    return RetrieveStreamQuery(stream=True, starting_after=parsed_starting_after)

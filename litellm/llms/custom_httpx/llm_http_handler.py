@@ -371,6 +371,10 @@ def _signed_body_kwargs(*, signed_body: bytes | None, data: dict[str, object]) -
     return {"json": data}
 
 
+def _answered_json(response: httpx.Response) -> bool:
+    return "application/json" in response.headers.get("content-type", "").lower()
+
+
 def _stream_query_params(stream: bool, starting_after: int | None) -> Mapping[str, object]:
     if not stream:
         return {}
@@ -3571,7 +3575,7 @@ class BaseLLMHTTPHandler:
                 provider_config=responses_api_provider_config,
             )
 
-        if stream:
+        if stream and not _answered_json(response):
             return SyncResponsesAPIStreamingIterator(
                 response=response,
                 model="",
@@ -3583,6 +3587,8 @@ class BaseLLMHTTPHandler:
                 replays_stored_stream=True,
             )
 
+        if stream:
+            response.read()
         return responses_api_provider_config.transform_get_response_api_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -3667,7 +3673,7 @@ class BaseLLMHTTPHandler:
                 provider_config=responses_api_provider_config,
             )
 
-        if stream:
+        if stream and not _answered_json(response):
             return ResponsesAPIStreamingIterator(
                 response=response,
                 model="",
@@ -3679,6 +3685,8 @@ class BaseLLMHTTPHandler:
                 replays_stored_stream=True,
             )
 
+        if stream:
+            await response.aread()
         return responses_api_provider_config.transform_get_response_api_response(
             raw_response=response,
             logging_obj=logging_obj,
