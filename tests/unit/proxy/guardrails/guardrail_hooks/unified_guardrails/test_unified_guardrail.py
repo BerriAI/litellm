@@ -2966,6 +2966,146 @@ class TestStreamingScanDedup:
         assert [scan["texts"] for scan in guardrail.scans] == [["abc"]]
 
 
+class _BackgroundScanGuardrail(_MarkerBlockingScanGuardrail):
+    """Background-scanned guardrail whose scans hold until released, then block BLOCKME and rewrite other text"""
+
+    def __init__(self) -> None:
+        super().__init__(sampling_rate=2)
+        self.streaming_scan_in_background = True
+        self.released = anyio.Event()
+        self.scanned = anyio.Event()
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        **kwargs: object,
+    ) -> GenericGuardrailAPIInputs:
+        await self.released.wait()
+        try:
+            recorded = await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+        finally:
+            self.scanned.set()
+        return {**recorded, "texts": ["REWRITTEN" for _ in recorded.get("texts") or []]}
+
+
+class TestStreamingBackgroundScan:
+    """streaming_scan_in_background: the stream keeps flowing while a sampled scan runs, and a
+    failed scan ends it before the next chunk. LIT-9338."""
+
+    @pytest.fixture(autouse=True)
+    def _use_real_mappings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
+
+    @staticmethod
+    def _guarded_stream(guardrail: CustomGuardrail, *texts: str) -> AsyncGenerator[object, None]:
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
+            for text in texts:
+                yield _stream_chunk(text)
+            yield _stream_chunk("", finish_reason="stop")
+
+        return UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/chat/completions"),
+            response=upstream(),
+            request_data={"guardrail_to_apply": guardrail, "model": "gpt-4", "metadata": {}},
+        )
+
+    @staticmethod
+    async def _receive(stream: AsyncGenerator[object, None], count: int) -> list[object]:
+        with anyio.fail_after(5):
+            return [await stream.__anext__() for _ in range(count)]
+
+    @staticmethod
+    def _block_frames(items: list[object]) -> bytes:
+        assert not any(isinstance(item, ModelResponseStream) for item in items), items
+        return b"".join(item for item in items if isinstance(item, bytes))
+
+    @pytest.mark.asyncio
+    async def test_chunks_stream_while_the_scan_runs_and_its_rewrite_never_reaches_them(self):
+        guardrail = _BackgroundScanGuardrail()
+        stream = self._guarded_stream(guardrail, "a", "b", "c", "d")
+
+        sent = await self._receive(stream, 4)
+        assert guardrail.scans == ()
+        guardrail.released.set()
+        rest = [item async for item in stream]
+
+        assert [_delta_text(item) for item in (*sent, *rest)] == ["a", "b", "c", "d", ""]
+        assert [scan["texts"] for scan in guardrail.scans] == [["ab"], ["abcd"]], guardrail.scans
+
+    @pytest.mark.asyncio
+    async def test_a_block_ends_the_stream_before_the_next_chunk(self):
+        guardrail = _BackgroundScanGuardrail()
+        stream = self._guarded_stream(guardrail, "a", "BLOCKME", "c", "d", "e")
+
+        sent = await self._receive(stream, 3)
+        guardrail.released.set()
+        await guardrail.scanned.wait()
+        rest = [item async for item in stream]
+
+        assert [_delta_text(item) for item in sent] == ["a", "BLOCKME", "c"]
+        assert b"blocked" in self._block_frames(rest)
+        assert [scan["texts"] for scan in guardrail.scans] == [["aBLOCKME"]], guardrail.scans
+
+    @pytest.mark.asyncio
+    async def test_a_block_that_lands_after_the_last_chunk_still_ends_the_stream(self):
+        guardrail = _BackgroundScanGuardrail()
+        stream = self._guarded_stream(guardrail, "a", "BLOCKME", "c", "d", "e", "f")
+
+        sent = await self._receive(stream, 7)
+        guardrail.released.set()
+        rest = [item async for item in stream]
+
+        assert [_delta_text(item) for item in sent] == ["a", "BLOCKME", "c", "d", "e", "f", ""]
+        assert b"blocked" in self._block_frames(rest)
+        assert [scan["texts"] for scan in guardrail.scans] == [["aBLOCKME"]], guardrail.scans
+
+    @pytest.mark.asyncio
+    async def test_a_block_from_a_scan_that_covered_the_ended_stream_still_ends_it(self):
+        guardrail = _BackgroundScanGuardrail()
+        guardrail.released.set()
+
+        out = [item async for item in self._guarded_stream(guardrail, "BLOCKME")]
+
+        assert [_delta_text(item) for item in out if isinstance(item, ModelResponseStream)] == ["BLOCKME", ""]
+        assert b"blocked" in b"".join(item for item in out if isinstance(item, bytes))
+        assert [scan["texts"] for scan in guardrail.scans] == [["BLOCKME"]], guardrail.scans
+
+    @pytest.mark.asyncio
+    async def test_closing_mid_scan_waits_for_it_then_scans_what_was_sent(self):
+        guardrail = _BackgroundScanGuardrail()
+        stream = self._guarded_stream(guardrail, "a", "b", "c", "d")
+
+        await self._receive(stream, 3)
+        guardrail.released.set()
+        await stream.aclose()
+
+        assert [scan["texts"] for scan in guardrail.scans] == [["ab"], ["abc"]], guardrail.scans
+
+    @pytest.mark.asyncio
+    async def test_closing_after_a_background_block_does_not_scan_again(self):
+        guardrail = _BackgroundScanGuardrail()
+        stream = self._guarded_stream(guardrail, "a", "BLOCKME", "c", "d")
+
+        await self._receive(stream, 3)
+        guardrail.released.set()
+        await stream.aclose()
+
+        assert [scan["texts"] for scan in guardrail.scans] == [["aBLOCKME"]], guardrail.scans
+
+    @pytest.mark.asyncio
+    async def test_buffered_release_on_scan_ignores_the_flag(self):
+        guardrail = _BackgroundScanGuardrail()
+        guardrail.streaming_buffer_until_moderated = True
+        guardrail.streaming_buffer_release_on_scan = True
+        guardrail.released.set()
+
+        out = [item async for item in self._guarded_stream(guardrail, "BLOCKME", "b", "c", "d")]
+
+        assert b"blocked" in self._block_frames(out)
+
+
 class TestTranslationMappingsAreReadLive:
     """The hooks must read the handler map on every call, never memoize it on the module.
 
