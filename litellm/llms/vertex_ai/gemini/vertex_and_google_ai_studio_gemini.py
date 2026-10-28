@@ -2743,10 +2743,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 chunk_indices = support.get("groundingChunkIndices", [])
 
                 if start_index is not None and end_index is not None and chunk_indices:
-                    # Use the first chunk's URL for the annotation
-                    first_chunk_idx = chunk_indices[0]
-                    if first_chunk_idx in chunk_to_uri_map:
-                        uri_info = chunk_to_uri_map[first_chunk_idx]
+                    for chunk_index in chunk_indices:
+                        if chunk_index not in chunk_to_uri_map:
+                            continue
+                        uri_info = chunk_to_uri_map[chunk_index]
 
                         url_citation: ChatCompletionAnnotationURLCitation = {
                             "start_index": start_index,
