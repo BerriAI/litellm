@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import litellm
-from litellm.llms.anthropic.messages.adapters.handler import _run_polyfill_if_enabled
+from litellm.llms.anthropic.messages.adapters.handler import _run_polyfill_if_enabled, prepare_context_managed_request
 from litellm.llms.anthropic.messages.context_management import (
     AnthropicContextManagementError,
     PolyfillResult,
@@ -722,6 +722,36 @@ def test_input_tokens_trigger_counts_the_system_prompt(system: str | list[dict[s
     assert met_without_system is not None
     assert with_system["cleared_tool_uses"] == 2
     assert with_system["cleared_input_tokens"] == met_without_system["cleared_input_tokens"] > 0
+
+
+async def test_input_tokens_trigger_counts_a_client_compaction_summary() -> None:
+    """A client compaction summary moves into the system prompt, so the trigger counts it too."""
+    tail: Final = _make_history(n_pairs=3)
+    edit_spec: Final = {
+        "type": "clear_tool_uses_20250919",
+        "trigger": {"type": "input_tokens", "value": litellm.token_counter(model=MODEL, messages=tail) + 100},
+        "keep": {"type": "tool_uses", "value": 1},
+    }
+    compacted_turn: Final = {"role": "assistant", "content": [{"type": "compaction", "content": "Earlier work. " * 400}]}
+
+    async def prepare(messages: list[dict[str, object]]) -> PolyfillResult | None:
+        return await prepare_context_managed_request(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            context_management_spec={"edits": [edit_spec]},
+            litellm_metadata=None,
+            additional_drop_params=None,
+            llm_router=None,
+        )
+
+    without_summary: Final = await prepare(deepcopy(tail))
+    with_summary: Final = await prepare([compacted_turn, *deepcopy(tail)])
+
+    assert without_summary is None or not without_summary.applied_edits
+    assert with_summary is not None
+    assert [edit.get("cleared_tool_uses") for edit in with_summary.applied_edits] == [2]
 
 
 @pytest.mark.parametrize(("clear_tool_inputs", "triggers"), [(False, False), (True, True)])

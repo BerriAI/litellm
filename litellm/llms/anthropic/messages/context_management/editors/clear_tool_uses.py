@@ -223,6 +223,8 @@ def _trigger_met(
         messages=messages,
         tools=cast("list[ChatCompletionToolParam] | None", tools),
     )
+    if message_tokens > threshold:
+        return True, message_tokens
     current_tokens: Final = message_tokens + count_system_tokens(model, system)
     verbose_logger.debug("context_management polyfill: current_tokens: %s", current_tokens)
     verbose_logger.debug("context_management polyfill: threshold: %s", threshold)
