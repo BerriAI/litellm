@@ -10,12 +10,17 @@ from integration._support.client import Gateway, list_value, object_value
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from pydantic import JsonValue, TypeAdapter
 
+from litellm.proxy._lazy_features import LAZY_FEATURES
+
 DOCS_SECONDS: Final = 120
 COLD_DOCS: Final = 4
 CHATS: Final = 8
 CHAT_MODEL: Final = "openai/gpt-5.4-mini"
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 OWNED_PROXY_TIMEOUT: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+TWO_OWNED_PROXIES_TIMEOUT: Final = pytest.mark.timeout(2 * (2 * graceful_stop_seconds() + 120))
+LAZY_ROUTES_FLAG: Final = "LITELLM_DISABLE_LAZY_ROUTES"
+WARMED_FEATURE: Final = next(feature for feature in LAZY_FEATURES if feature.name == "policies")
 
 
 def _timed_get(candidate: Gateway, path: str) -> tuple[httpx.Response, float]:
@@ -37,6 +42,11 @@ def _schema(response: httpx.Response) -> dict[str, JsonValue]:
 
 def _servers(response: httpx.Response) -> list[JsonValue]:
     return list(list_value(_schema(response).get("servers", [])))
+
+
+def _warmed_feature_operations(response: httpx.Response) -> dict[str, JsonValue]:
+    paths: Final = object_value(_schema(response)["paths"])
+    return {path: operations for path, operations in paths.items() if WARMED_FEATURE.matches(path)}
 
 
 @OWNED_PROXY_TIMEOUT
@@ -127,3 +137,24 @@ def test_a_scalar_server_root_path_is_listed_once_in_servers(gateway: Gateway, t
     with owned_proxy_process(gateway, tmp_path, {"SERVER_ROOT_PATH": "/gateway"}, client_timeout=DOCS_SECONDS) as owned:
         servers: Final = _servers(owned.gateway.request("GET", "/gateway/openapi.json"))
     assert servers == [{"url": "/gateway"}]
+
+
+@TWO_OWNED_PROXIES_TIMEOUT
+def test_a_lazy_feature_loaded_during_a_cold_openapi_build_shows_its_live_routes_in_the_next_schema(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with owned_proxy_process(gateway, tmp_path, {LAZY_ROUTES_FLAG: "true"}, client_timeout=DOCS_SECONDS) as eager:
+        live: Final = _warmed_feature_operations(eager.gateway.request("GET", "/openapi.json"))
+    with (
+        owned_proxy_process(
+            gateway, tmp_path, {}, remove_environment=(LAZY_ROUTES_FLAG,), client_timeout=DOCS_SECONDS
+        ) as lazy,
+        ThreadPoolExecutor(1) as pool,
+    ):
+        docs: Final = pool.submit(lazy.gateway.request, "GET", "/openapi.json")
+        warmed: Final = lazy.gateway.request("POST", f"/lazy/warm/{WARMED_FEATURE.name}")
+        assert docs.result().status_code == 200
+        after: Final = _warmed_feature_operations(lazy.gateway.request("GET", "/openapi.json"))
+    assert warmed.status_code == 200, warmed.text
+    assert live, "the eager proxy published no route of the warmed feature"
+    assert after == live
