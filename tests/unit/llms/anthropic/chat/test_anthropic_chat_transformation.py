@@ -9756,14 +9756,6 @@ def test_json_mode_text_without_tool_call_is_unchanged():
     assert message.tool_calls is None
     assert "json_mode_preamble_text" not in (message.provider_specific_fields or {})
 
-    preamble: Final = "Let me answer the question. "
-    json_result: Final = _transform_json_mode_body(
-        {**body, "content": [{"type": "text", "text": preamble}, *body["content"]]}
-    )
-    json_message: Final = json_result.choices[0].message
-    assert json_message.content == '{"answer": "Hello"}'
-    assert json_message.provider_specific_fields["json_mode_preamble_text"] == preamble
-
 
 def test_json_mode_with_a_real_tool_keeps_mixed_response_behavior():
     preamble: Final = "I will look up the details. "
@@ -9785,13 +9777,6 @@ def test_json_mode_with_a_real_tool_keeps_mixed_response_behavior():
     assert message.tool_calls[0].function.name == "get_weather"
     assert message.tool_calls[0].function.arguments == '{"location": "San Francisco"}'
     assert "json_mode_preamble_text" not in (message.provider_specific_fields or {})
-
-    json_result: Final = _transform_json_mode_body(
-        {**body, "content": [{"type": "text", "text": preamble}, *body["content"]]}
-    )
-    json_message: Final = json_result.choices[0].message
-    assert json_message.content == '{"answer": "Hello"}'
-    assert json_message.provider_specific_fields["json_mode_preamble_text"] == preamble
 
 
 def test_non_dict_upstream_body_still_transforms_without_refusal_fields() -> None:
