@@ -59,9 +59,7 @@ def _metadata_values(litellm_params: object) -> tuple[object, ...]:
     )
 
 
-def get_caller_litellm_session_id(litellm_params: object | None) -> str | None:
-    if litellm_params is None:
-        return None
+def _non_generated_litellm_session_id(litellm_params: object) -> str | None:
     has_generated_session_id: Final = any(
         isinstance(metadata, Mapping) and metadata.get(SESSION_ID_GENERATED_METADATA_KEY)
         for metadata in _metadata_values(litellm_params)
@@ -70,18 +68,7 @@ def get_caller_litellm_session_id(litellm_params: object | None) -> str | None:
     return str(litellm_session_id) if litellm_session_id and not has_generated_session_id else None
 
 
-def get_stable_session_id(litellm_params: object | None) -> str | None:
-    if litellm_params is None:
-        return None
-
-    direct_session_id: Final = _get_value(litellm_params, "session_id")
-    if direct_session_id:
-        return str(direct_session_id)
-
-    caller_session_id: Final = get_caller_litellm_session_id(litellm_params)
-    if caller_session_id:
-        return caller_session_id
-
+def _metadata_session_id(litellm_params: object) -> str | None:
     for metadata in _metadata_values(litellm_params):
         if (
             isinstance(metadata, Mapping)
@@ -90,6 +77,37 @@ def get_stable_session_id(litellm_params: object | None) -> str | None:
         ):
             return str(value)
     return None
+
+
+def _metadata_field_equals(litellm_params: object, field: str, value: str) -> bool:
+    return any(_get_value(metadata, field) == value for metadata in _metadata_values(litellm_params))
+
+
+def get_caller_litellm_session_id(litellm_params: object | None) -> str | None:
+    if litellm_params is None:
+        return None
+    session_id: Final = _non_generated_litellm_session_id(litellm_params)
+    copies_trace_id: Final = session_id is not None and (
+        _metadata_field_equals(litellm_params, "trace_id", session_id)
+        and not _metadata_field_equals(litellm_params, "session_id", session_id)
+    )
+    return None if copies_trace_id else session_id
+
+
+def get_requested_session_id(litellm_params: object | None) -> str | None:
+    if litellm_params is None:
+        return None
+    direct_session_id: Final = _get_value(litellm_params, "session_id")
+    return str(direct_session_id) if direct_session_id else _metadata_session_id(litellm_params)
+
+
+def get_stable_session_id(litellm_params: object | None) -> str | None:
+    if litellm_params is None:
+        return None
+    direct_session_id: Final = _get_value(litellm_params, "session_id")
+    if direct_session_id:
+        return str(direct_session_id)
+    return _non_generated_litellm_session_id(litellm_params) or _metadata_session_id(litellm_params)
 
 
 def add_provider_affinity_header(

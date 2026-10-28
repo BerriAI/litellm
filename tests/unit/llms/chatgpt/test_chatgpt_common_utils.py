@@ -7,6 +7,7 @@ import h11
 import pytest
 
 from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
+from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.llms.chatgpt.common_utils import (
     extract_chatgpt_account_id,
     get_chatgpt_client_credential,
@@ -98,7 +99,11 @@ def test_other_authentication_schemes_are_not_chatgpt_logins():
 class TestGetChatGPTSessionId:
     @pytest.mark.parametrize(
         "explicit",
-        [{"litellm_session_id": "chosen"}, {"session_id": "chosen"}, {"metadata": {"session_id": "chosen"}}],
+        [
+            {"litellm_session_id": "chosen"},
+            {"session_id": "chosen"},
+            {"metadata": {"session_id": "chosen"}},
+        ],
     )
     def test_explicit_session_id_wins_over_prompt_cache_key(self, explicit: Mapping[str, object]) -> None:
         assert get_chatgpt_session_id({**explicit, "prompt_cache_key": "conv-123"}) == "chosen"
@@ -108,6 +113,8 @@ class TestGetChatGPTSessionId:
         [
             {"litellm_trace_id": "trace-1"},
             {"litellm_call_id": "call-1"},
+            get_litellm_params(metadata={"trace_id": "trace-1"}),
+            {"litellm_session_id": "trace-1", "litellm_metadata": {"trace_id": "trace-1"}},
             {"litellm_session_id": "gen-1", "metadata": {"session_id": "gen-1", SESSION_ID_GENERATED_METADATA_KEY: True}},
             {
                 "litellm_session_id": "gen-1",
@@ -121,7 +128,12 @@ class TestGetChatGPTSessionId:
     def test_proxy_mapped_session_header_wins_over_body_session_id(self) -> None:
         assert (
             get_chatgpt_session_id(
-                {"litellm_session_id": "header-session", "session_id": "body-session", "prompt_cache_key": "conv-123"}
+                {
+                    "litellm_session_id": "header-session",
+                    "metadata": {"trace_id": "header-session", "session_id": "header-session"},
+                    "session_id": "body-session",
+                    "prompt_cache_key": "conv-123",
+                }
             )
             == "header-session"
         )
