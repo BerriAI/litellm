@@ -5,6 +5,7 @@ import openai
 import pytest
 
 import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails
 
 SEEDREAM_MODELS: Final = (
@@ -83,3 +84,36 @@ async def test_a_deployment_priced_tencent_image_model_outside_seedream_bills_it
     )
 
     assert response._hidden_params["response_cost"] == pytest.approx(0.04)
+
+
+def test_a_seedream_deployment_priced_per_token_in_the_ui_bills_its_own_rate() -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "created": 1792551825,
+                "data": [{"output_format": "jpeg", "size": "1024x1024", "url": "https://cos.example/0.jpg"}],
+                "tokenhub_usage": {"total_tokens": 11250},
+            },
+        )
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "seedream-flash",
+                "litellm_params": {
+                    "model": "tencent/seedream-image-v5.0-flash",
+                    "api_key": "sk-tokenhub",
+                    "output_cost_per_token": 0.000001,
+                },
+            }
+        ]
+    )
+
+    response: Final = router.image_generation(
+        model="seedream-flash",
+        prompt="a red paper lantern",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(11250 * 0.000001)

@@ -60913,7 +60913,7 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.018,
         "output_cost_per_image_token": 1.6e-06,
-        "source": "https://www.tencentcloud.com/document/product/1300/78937",
+        "source": "https://cloud.tencent.com/document/product/1823/130055",
         "supported_endpoints": [
             "/v1/images/generations",
             "/v1/images/edits"

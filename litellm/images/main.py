@@ -61,6 +61,7 @@ from litellm.types.utils import (
     ProviderRoutingHints,
 )
 from litellm.utils import (
+    EXTRA_BODY_ROUTING_KEYS,
     ImageResponse,
     ProviderConfigManager,
     get_llm_provider,
@@ -813,7 +814,7 @@ def _tokenhub_passthrough_edit_params(
     unmapped_excluded: Final = _DROP_PARAM_KWARGS | _IMAGE_EDIT_OPENAI_PARAMS | frozenset(mapped_params) | dropped
     return {
         **{key: value for key, value in non_default_params.items() if key not in unmapped_excluded},
-        **{key: value for key, value in (extra_body or {}).items() if key not in dropped},
+        **{key: value for key, value in (extra_body or {}).items() if key not in dropped | EXTRA_BODY_ROUTING_KEYS},
     }
 
 
@@ -1056,7 +1057,7 @@ def image_edit(
                 **(
                     _tokenhub_passthrough_edit_params(
                         non_default_params,
-                        extra_body,
+                        extra_body if isinstance(extra_body, dict) else None,
                         provider_supported_params,
                         additional_drop_params,
                     )

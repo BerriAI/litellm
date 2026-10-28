@@ -172,6 +172,8 @@ def test_edit_keeps_dropped_params_out_of_the_tokenhub_body(
     [
         ({"extra_body": {"response_format": "b64_json"}}, {"response_format": "b64_json"}),
         ({"size": "1K", "extra_body": {"size": "2K"}}, {"size": "2K"}),
+        ({"extra_body": {"model": "seedream-image-v5.0-pro", "seed": 7}}, {"seed": 7}),
+        ({"extra_body": '{"seed": 7}'}, {}),
     ],
 )
 def test_edit_sends_extra_body_fields_as_given(
