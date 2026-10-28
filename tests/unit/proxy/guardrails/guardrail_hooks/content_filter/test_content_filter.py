@@ -408,11 +408,12 @@ class TestContentFilterGuardrail:
     @pytest.mark.parametrize(
         ("text", "expected"),
         [
-            ("PIN 4821 4532 0151 1283 0366 thanks", "PIN 4821 [CREDIT_CARD_REDACTED] thanks"),
+            ("PIN 4821 4532 0151 1283 0366 thanks", "PIN [CREDIT_CARD_REDACTED] thanks"),
             ("order 4111 4532 0151 1283 0366", "order [CREDIT_CARD_REDACTED]"),
+            ("order 4532 1234 5678 9010 paid by 4532 0151 1283 0366", "order 4532 1234 5678 9010 paid by [CREDIT_CARD_REDACTED]"),
         ],
     )
-    async def test_checksum_pattern_masks_a_valid_card_overlapping_another_candidate(self, text: str, expected: str):
+    async def test_checksum_pattern_masks_each_run_of_candidates_that_holds_a_valid_card(self, text: str, expected: str):
         guardrail: Final = ContentFilterGuardrail(
             guardrail_name="test-checksum-overlap",
             patterns=[
@@ -427,6 +428,29 @@ class TestContentFilterGuardrail:
         )
 
         assert guardrailed_inputs.get("texts") == [expected]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "iban",
+        [
+            "GB66\u212aEST12345698765432",
+            "GB73W\u0130ST12345698765432",
+            "GB\u0668\u0662WEST12345698765432",
+        ],
+    )
+    async def test_checksum_pattern_masks_a_valid_iban_with_characters_the_regex_case_folds(self, iban: str):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-checksum-folding",
+            patterns=[ContentFilterPattern(pattern_type="prebuilt", pattern_name="iban", action=ContentFilterAction.MASK)],
+        )
+
+        guardrailed_inputs: Final = await guardrail.apply_guardrail(
+            inputs={"texts": [f"send it to {iban}"]},
+            request_data={},
+            input_type="request",
+        )
+
+        assert guardrailed_inputs.get("texts") == ["send it to [IBAN_REDACTED]"]
 
     def test_api_key_patterns(self):
         """

@@ -12,7 +12,8 @@ import json
 import os
 import re
 import time
-from collections.abc import AsyncGenerator, Callable, Coroutine, Iterator, Mapping, Sequence
+from bisect import bisect_left
+from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from re import Pattern
@@ -878,14 +879,21 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         return self._merge_spans(match_spans)
 
-    @staticmethod
     def _checksum_valid_spans(
-        regex: Pattern[str], text: str, validator: Callable[[str], bool]
-    ) -> Iterator[tuple[int, int]]:
+        self, regex: Pattern[str], text: str, validator: Callable[[str], bool]
+    ) -> tuple[tuple[int, int], ...]:
         overlapping_regex: Final = re.compile(f"(?=({regex.pattern}))", regex.flags)
-        return (
-            (match.start(1), match.end(1)) for match in overlapping_regex.finditer(text) if validator(match.group(1))
-        )
+        candidates: Final = tuple(overlapping_regex.finditer(text))
+        valid_starts: Final = tuple(candidate.start(1) for candidate in candidates if validator(candidate.group(1)))
+        if not valid_starts:
+            return ()
+        candidate_runs: Final = self._merge_spans([candidate.span(1) for candidate in candidates])
+        return tuple(run for run in candidate_runs if self._run_contains_start(run, valid_starts))
+
+    @staticmethod
+    def _run_contains_start(run: tuple[int, int], sorted_starts: Sequence[int]) -> bool:
+        index: Final = bisect_left(sorted_starts, run[0])
+        return index < len(sorted_starts) and sorted_starts[index] < run[1]
 
     def _match_near_keyword(
         self,
