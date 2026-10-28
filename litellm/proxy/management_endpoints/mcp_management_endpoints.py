@@ -1122,42 +1122,31 @@ if MCP_AVAILABLE:
 
         access_groups: Final[set[str]] = set()
 
-        if user_api_key_has_admin_view(user_api_key_dict):
-            # Get from config-loaded servers
-            for server in global_mcp_server_manager.config_mcp_servers.values():
-                cfg_groups = getattr(server, "access_groups", None)
-                if cfg_groups and isinstance(cfg_groups, (list, set, tuple)):
-                    for g in cfg_groups:
+        def _collect_groups(server_obj: Any) -> None:
+            for attr in ("mcp_access_groups", "access_groups"):
+                raw_groups = getattr(server_obj, attr, None)
+                if raw_groups and isinstance(raw_groups, (list, set, tuple)):
+                    for g in raw_groups:
                         if g:
                             access_groups.add(str(g))
 
-            # Get from DB
+        if user_api_key_has_admin_view(user_api_key_dict):
+            for cfg_server in global_mcp_server_manager.config_mcp_servers.values():
+                _collect_groups(cfg_server)
+
             if prisma_client is not None:
                 try:
-                    mcp_servers: Final[Sequence[prisma_models.LiteLLM_MCPServerTable]] = await MCPServerRepository(
+                    db_servers: Final[Sequence[prisma_models.LiteLLM_MCPServerTable]] = await MCPServerRepository(
                         prisma_client
                     ).table.find_many()
-                    for server in mcp_servers:
-                        mcp_groups = getattr(server, "mcp_access_groups", None)
-                        if mcp_groups and isinstance(mcp_groups, (list, set, tuple)):
-                            for g in mcp_groups:
-                                if g:
-                                    access_groups.add(str(g))
+                    for db_server in db_servers:
+                        _collect_groups(db_server)
                 except Exception as e:
                     verbose_proxy_logger.debug("Error getting MCP access groups: %s", e)
         else:
             accessible_servers: Final = await _resolve_accessible_mcp_servers(user_api_key_dict)
-            for server in accessible_servers:
-                mcp_groups = getattr(server, "mcp_access_groups", None)
-                if mcp_groups and isinstance(mcp_groups, (list, set, tuple)):
-                    for g in mcp_groups:
-                        if g:
-                            access_groups.add(str(g))
-                cfg_groups = getattr(server, "access_groups", None)
-                if cfg_groups and isinstance(cfg_groups, (list, set, tuple)):
-                    for g in cfg_groups:
-                        if g:
-                            access_groups.add(str(g))
+            for acc_server in accessible_servers:
+                _collect_groups(acc_server)
 
         # Convert to sorted list
         access_groups_list: Final[list[str]] = sorted(list(access_groups))

@@ -42714,7 +42714,7 @@
     "paths": {
       "/v1/mcp/access_groups": {
         "get": {
-          "description": "Get all available MCP access groups from the database AND config",
+          "description": "Get available MCP access groups from the database AND config.\nAdmins receive the full catalog; non-admin callers are scoped to servers they have access to.",
           "operationId": "get_mcp_access_groups_v1_mcp_access_groups_get",
           "responses": {
             "200": {
