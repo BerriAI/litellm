@@ -16,6 +16,7 @@ from typing import Final
 
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.router_utils.common_utils import deployment_ids_failed_in_request
 from litellm.types.llms.openai import AllMessageValues
 
 
@@ -40,19 +41,9 @@ class ResponsesApiDeploymentCheck(CustomLogger):
         parent_otel_span: Span | None = None,
     ) -> list[dict]:
         request: Final = request_kwargs or {}
-        previous_response_id: Final = request.get("previous_response_id")
-        pinning_response_id: Final = (
-            str(previous_response_id)
-            if previous_response_id is not None
-            else ResponsesAPIRequestUtils.comparison_response_id(request)
+        model_id: Final = ResponsesAPIRequestUtils.pinned_response_model_id(
+            request, deployment_ids_failed_in_request(request)
         )
-        if pinning_response_id is None:
-            return healthy_deployments
-
-        decoded_response: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(
-            response_id=pinning_response_id,
-        )
-        model_id: Final = decoded_response.get("model_id")
         if model_id is None:
             return healthy_deployments
 

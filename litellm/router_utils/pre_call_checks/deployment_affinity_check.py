@@ -401,27 +401,26 @@ class DeploymentAffinityCheck(CustomLogger):
             enable_session_id,
         ) = self._get_effective_flags(model)
 
+        failed_deployment_ids: Final = deployment_ids_failed_in_request(
+            cast(Mapping[str, object], request_kwargs)  # cast-ok: request kwargs keys are param names
+        )
+
         # 1) Responses API continuity (high priority)
         if enable_responses_api:
-            previous_response_id: Final = request_kwargs.get("previous_response_id")
-            pinning_response_id: Final = (
-                str(previous_response_id)
-                if previous_response_id is not None
-                else ResponsesAPIRequestUtils.comparison_response_id(request_kwargs)
+            responses_model_id: Final = ResponsesAPIRequestUtils.pinned_response_model_id(
+                request_kwargs, failed_deployment_ids
             )
-            if pinning_response_id is not None:
-                responses_model_id = ResponsesAPIRequestUtils.get_model_id_from_response_id(pinning_response_id)
-                if responses_model_id is not None:
-                    deployment = self._find_deployment_by_model_id(
-                        healthy_deployments=typed_healthy_deployments,
-                        model_id=responses_model_id,
+            if responses_model_id is not None:
+                deployment = self._find_deployment_by_model_id(
+                    healthy_deployments=typed_healthy_deployments,
+                    model_id=responses_model_id,
+                )
+                if deployment is not None:
+                    verbose_router_logger.debug(
+                        "DeploymentAffinityCheck: response id pinning -> deployment=%s",
+                        responses_model_id,
                     )
-                    if deployment is not None:
-                        verbose_router_logger.debug(
-                            "DeploymentAffinityCheck: response id pinning -> deployment=%s",
-                            responses_model_id,
-                        )
-                        return [deployment]
+                    return [deployment]
 
         if self.is_priority_group is not None and self.is_priority_group(model):
             return typed_healthy_deployments
@@ -434,9 +433,6 @@ class DeploymentAffinityCheck(CustomLogger):
 
         session_affinity_active: Final = (
             enable_session_id or self._get_marker_session_affinity_ttl(request_kwargs=request_kwargs) is not None
-        )
-        failed_deployment_ids: Final = deployment_ids_failed_in_request(
-            cast(Mapping[str, object], request_kwargs)  # cast-ok: request kwargs keys are param names
         )
         user_key: Final = (
             self.get_user_key_from_request_kwargs(request_kwargs=request_kwargs)

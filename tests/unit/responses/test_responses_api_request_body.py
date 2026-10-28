@@ -23,6 +23,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.responses.utils import COMPARISON_RESPONSE_ID_ROUTING_HINT
 from litellm.types.llms.openai import ResponsesAPIResponse
 from tests.unit.llms.bedrock.slow_upstream import (
     STREAM_TIMEOUT_SECONDS,
@@ -662,13 +663,37 @@ async def test_aresponses_websocket_keeps_routing_hints_out_of_the_relay_kwargs(
             litellm_logging_obj=MagicMock(),
             input=[{"type": "message", "role": "user", "content": "hi"}],
             previous_response_id="resp_prev",
-            prompt_cache_options={"comparison_response_id": "resp_compared"},
+            **{COMPARISON_RESPONSE_ID_ROUTING_HINT: "resp_compared"},
         )
 
         mock_ws.assert_awaited_once()
         assert "input" not in mock_ws.call_args.kwargs
         assert "previous_response_id" not in mock_ws.call_args.kwargs
-        assert "prompt_cache_options" not in mock_ws.call_args.kwargs
+        assert COMPARISON_RESPONSE_ID_ROUTING_HINT not in mock_ws.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_aresponses_websocket_fills_a_deployment_prompt_cache_options_next_to_a_comparison_routing_hint():  # test-quality-ok: the request defaults handed to the relay are the only place a deployment default is observable before the provider socket
+    from unittest.mock import MagicMock
+
+    from litellm.responses.main import _aresponses_websocket
+
+    with patch.object(
+        import_module("litellm.responses.main").base_llm_http_handler,
+        "async_responses_websocket",
+        new_callable=AsyncMock,
+    ) as mock_ws:
+        await _aresponses_websocket(
+            model="openai/gpt-5.6",
+            websocket=MagicMock(),
+            api_key="sk-test",
+            litellm_logging_obj=MagicMock(),
+            prompt_cache_options={"ttl": "12h"},
+            **{COMPARISON_RESPONSE_ID_ROUTING_HINT: "resp_compared"},
+        )
+
+    request_defaults: Final = mock_ws.call_args.kwargs["request_defaults"]
+    assert request_defaults.fill_missing["prompt_cache_options"] == {"ttl": "12h"}
 
 
 _STRIPPED_WS_INPUT = [{"role": "user", "content": "hi"}]

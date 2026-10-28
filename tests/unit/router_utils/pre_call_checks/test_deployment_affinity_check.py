@@ -9,7 +9,7 @@ import pytest
 
 import litellm
 from litellm.caching.dual_cache import DualCache
-from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.responses.utils import COMPARISON_RESPONSE_ID_ROUTING_HINT, ResponsesAPIRequestUtils
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
 )
@@ -1332,6 +1332,11 @@ def _response_id_from(model_id: str) -> str:
             "A",
             id="previous-response-wins",
         ),
+        pytest.param(
+            {COMPARISON_RESPONSE_ID_ROUTING_HINT: _response_id_from("C")},
+            "C",
+            id="websocket-first-frame-routing-hint",
+        ),
     ],
 )
 async def test_comparison_response_id_pins_its_deployment_unless_a_previous_response_id_does(
@@ -1357,3 +1362,36 @@ async def test_comparison_response_id_pins_its_deployment_unless_a_previous_resp
     )
 
     assert [deployment["model_info"]["id"] for deployment in pinned] == [pinned_model_id]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failed_ids",
+    [
+        pytest.param({"_excluded_deployment_ids": ["A"]}, id="excluded-by-failover"),
+        pytest.param({"_retry_skipped_deployment_ids": ("A",)}, id="skipped-by-retry"),
+    ],
+)
+async def test_comparison_response_id_pin_steps_aside_once_its_deployment_failed(
+    failed_ids: dict[str, object],
+) -> None:
+    callback: Final = DeploymentAffinityCheck(
+        cache=DualCache(),
+        ttl_seconds=60,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=True,
+    )
+    healthy_deployments: Final = [
+        {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}, "model_info": {"id": model_id}}
+        for model_id in ("A", "B")
+    ]
+
+    candidates: Final = await callback.async_filter_deployments(
+        model="gpt-4o",
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs={"prompt_cache_options": {"comparison_response_id": _response_id_from("A")}, **failed_ids},
+        parent_otel_span=None,
+    )
+
+    assert [deployment["model_info"]["id"] for deployment in candidates] == ["A", "B"]

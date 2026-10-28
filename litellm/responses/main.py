@@ -59,7 +59,7 @@ from litellm.responses.mcp.round_billing import (
     summed_cost_breakdown,
 )
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
-from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.responses.utils import COMPARISON_RESPONSE_ID_ROUTING_HINT, ResponsesAPIRequestUtils
 from litellm.router_utils.reasoning_effort_capability import (
     deployment_reasoning_effort_levels,
     model_group_from_metadata,
@@ -2718,7 +2718,9 @@ def _deployment_reasoning_default(kwargs: Mapping[str, object]) -> Reasoning | d
     return LiteLLMResponsesTransformationHandler().map_reasoning_effort(reasoning_effort)
 
 
-_RESPONSES_WS_ROUTING_HINT_KEYS: Final = frozenset({"input", "previous_response_id", "prompt_cache_options"})
+_RESPONSES_WS_ROUTING_HINT_KEYS: Final = frozenset(
+    {"input", "previous_response_id", COMPARISON_RESPONSE_ID_ROUTING_HINT}
+)
 
 
 def _first_ws_frame_with_routed_input(first_message: str, routed_input: object) -> str:

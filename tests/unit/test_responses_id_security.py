@@ -1193,6 +1193,33 @@ class TestComparisonResponseIdIsAuthorized:
         assert refused_first == _comparison_request(issued_id)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("is_proxy_admin", "keeps_the_deployment"),
+        [
+            pytest.param(False, False, id="member-sends-only-the-provider-id"),
+            pytest.param(True, True, id="admin-keeps-the-routed-id"),
+        ],
+    )
+    async def test_unencrypted_routed_reference_steers_routing_only_for_callers_trusted_with_unmanaged_ids(
+        self, is_proxy_admin: bool, keeps_the_deployment: bool, mock_cache: MagicMock, salt_key_env: str
+    ) -> None:
+        from litellm.proxy._types import LitellmUserRoles
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        routed_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai", model_id="pair-b", response_id=_FABRICATED_PROVIDER_RESPONSE_ID
+        )
+        caller: Final = _auth(user_role=LitellmUserRoles.PROXY_ADMIN if is_proxy_admin else None)
+
+        result: Final = await _run_create_hook(_hook(), caller, _comparison_request(routed_id), mock_cache)
+
+        sent_id: Final = result["prompt_cache_options"]["comparison_response_id"]
+        assert sent_id == (routed_id if keeps_the_deployment else _FABRICATED_PROVIDER_RESPONSE_ID)
+        assert ResponsesAPIRequestUtils.get_model_id_from_response_id(sent_id) == (
+            "pair-b" if keeps_the_deployment else None
+        )
+
+    @pytest.mark.asyncio
     async def test_unmanaged_reference_is_sent_as_given(self, mock_cache: MagicMock, salt_key_env: str) -> None:
         result: Final = await _run_create_hook(
             _hook(), _auth(), _comparison_request(_FABRICATED_UNMANAGED_ID), mock_cache

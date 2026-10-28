@@ -20,6 +20,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
     ResponsesAPIResponse,
@@ -208,9 +209,12 @@ class ResponsesIDSecurity(CustomLogger):
         return {**placed_options, COMPARISON_RESPONSE_ID_FIELD: comparison_id}
 
     def authorize_comparison_id(self, comparison_id: str, user_api_key_dict: "UserAPIKeyAuth") -> str:
-        if not self._is_encrypted_response_id(comparison_id):
+        if self._is_encrypted_response_id(comparison_id):
+            return self.authorize_response_id(comparison_id, user_api_key_dict)
+        if self._unmanaged_response_ids_allowed(user_api_key_dict):
             return comparison_id
-        return self.authorize_response_id(comparison_id, user_api_key_dict)
+        decoded: Final = ResponsesAPIRequestUtils.decode_exact_responses_api_response_id(comparison_id)
+        return comparison_id if decoded is None else decoded.get("response_id", comparison_id)
 
     def authorize_response_id(
         self,

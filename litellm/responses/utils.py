@@ -36,6 +36,8 @@ from litellm.types.utils import (
     text_tokens_without_nested_reasoning,
 )
 
+COMPARISON_RESPONSE_ID_ROUTING_HINT: Final = "comparison_response_id_routing_hint"
+
 _PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[
     TypeAdapter[ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None]
 ] = TypeAdapter(ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None)
@@ -804,11 +806,24 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def comparison_response_id(request: Mapping[str, object]) -> str | None:
+        routing_hint: Final = request.get(COMPARISON_RESPONSE_ID_ROUTING_HINT)
+        if isinstance(routing_hint, str) and routing_hint:
+            return routing_hint
         extra_body: Final = as_str_mapping(request.get("extra_body"))
         container: Final = extra_body if extra_body is not None and "prompt_cache_options" in extra_body else request
         options: Final = as_str_mapping(container.get("prompt_cache_options"))
         comparison_id: Final = None if options is None else options.get("comparison_response_id")
         return comparison_id if isinstance(comparison_id, str) and comparison_id else None
+
+    @staticmethod
+    def pinned_response_model_id(request: Mapping[str, object], failed_deployment_ids: frozenset[str]) -> str | None:
+        previous_response_id: Final = request.get("previous_response_id")
+        if previous_response_id is not None:
+            return ResponsesAPIRequestUtils.get_model_id_from_response_id(str(previous_response_id))
+        compared_model_id: Final = ResponsesAPIRequestUtils.get_model_id_from_response_id(
+            ResponsesAPIRequestUtils.comparison_response_id(request)
+        )
+        return None if compared_model_id in failed_deployment_ids else compared_model_id
 
     @staticmethod
     def _is_litellm_encoded_response_id(response_id: str) -> bool:
