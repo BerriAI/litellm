@@ -7,7 +7,7 @@ import asyncio
 import math
 import os
 import sys
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, MutableMapping, Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
 from functools import partial
@@ -358,6 +358,53 @@ def _get_budget_metrics_per_request_timeout() -> float:
     return parsed
 
 
+class _LabeledGauge(Protocol):
+    """
+    Structural type shared by ``prometheus_client.Gauge`` and the no-op /
+    label-excluding wrappers above.
+
+    ``remove`` is declared even though retirement is performed by
+    ``BoundedPrometheusSeriesTracker``: the tracker takes an untyped metric and
+    reports an ``AttributeError`` as "not removed" rather than raising, so a
+    wrapper that stopped exposing ``remove`` would silently retire nothing.
+    Requiring it here is what keeps that a type error instead.
+    """
+
+    def labels(self, *labelvalues: str) -> _LabeledGauge: ...
+
+    def set(self, value: float) -> None: ...
+
+    def remove(self, *labelvalues: object) -> None: ...
+
+
+_TEAM_RATE_LIMIT_GAUGE_SPECS: Final[
+    tuple[
+        tuple[
+            DEFINED_PROMETHEUS_METRICS,
+            Literal["remaining", "limit"],
+            Literal["requests", "tokens"],
+        ],
+        ...,
+    ]
+] = (
+    ("litellm_remaining_team_requests_for_model", "remaining", "requests"),
+    ("litellm_remaining_team_tokens_for_model", "remaining", "tokens"),
+    ("litellm_team_rpm_limit", "limit", "requests"),
+    ("litellm_team_tpm_limit", "limit", "tokens"),
+)
+
+
+def _series_retirement_supported() -> bool:
+    """
+    ``prometheus_client`` refuses to remove a labelset in multiprocess mode and
+    warns when asked, because each worker owns its own mmap file and cannot
+    retire a series another worker wrote. Retirement is therefore a
+    single-process capability, and attempting it under multiprocess collection
+    would only emit warnings while leaving the sample in place.
+    """
+    return not ("PROMETHEUS_MULTIPROC_DIR" in os.environ or "prometheus_multiproc_dir" in os.environ)
+
+
 def _get_proxy_llm_router() -> Router | None:
     try:
         from litellm.proxy.proxy_server import llm_router
@@ -539,6 +586,11 @@ class PrometheusLogger(CustomLogger):
                 else SharedPrometheusSeriesAdmissions(directory=_multiproc_dir)
             )
             self._series_limits = self._configured_series_limits(multiprocess_mode=_multiproc_dir is not None)
+            # Last labelset emitted per (metric, team, model), so a renamed team's
+            # previous series can be retired without scanning the registry.
+            self._team_series_label_values: MutableMapping[  # mutable-ok: per-process emission state, rewritten as teams are renamed
+                tuple[str, str, str], tuple[str, ...]
+            ] = {}
 
             # Create metric factory functions
             self._counter_factory = self._create_metric_factory(Counter)
@@ -828,6 +880,34 @@ class PrometheusLogger(CustomLogger):
                     "window, by rate_limit_type"
                 ),
                 labelnames=self.get_labels_for_metric("litellm_project_model_rate_limit_used_metric"),
+            )
+
+            ########################################
+            # LiteLLM Team rate limit metrics
+            ########################################
+
+            self.litellm_remaining_team_requests_for_model = self._gauge_factory(  # pyright: ignore[reportUnknownMemberType]  # _create_metric_factory is untyped upstream
+                "litellm_remaining_team_requests_for_model",
+                "Remaining Requests team can make for model (model based rpm limit on team)",
+                labelnames=self.get_labels_for_metric("litellm_remaining_team_requests_for_model"),
+            )
+
+            self.litellm_remaining_team_tokens_for_model = self._gauge_factory(  # pyright: ignore[reportUnknownMemberType]  # _create_metric_factory is untyped upstream
+                "litellm_remaining_team_tokens_for_model",
+                "Remaining Tokens team can make for model (model based tpm limit on team)",
+                labelnames=self.get_labels_for_metric("litellm_remaining_team_tokens_for_model"),
+            )
+
+            self.litellm_team_rpm_limit = self._gauge_factory(  # pyright: ignore[reportUnknownMemberType]  # _create_metric_factory is untyped upstream
+                "litellm_team_rpm_limit",
+                "Configured RPM limit for team + model (model based rpm limit on team)",
+                labelnames=self.get_labels_for_metric("litellm_team_rpm_limit"),
+            )
+
+            self.litellm_team_tpm_limit = self._gauge_factory(  # pyright: ignore[reportUnknownMemberType]  # _create_metric_factory is untyped upstream
+                "litellm_team_tpm_limit",
+                "Configured TPM limit for team + model (model based tpm limit on team)",
+                labelnames=self.get_labels_for_metric("litellm_team_tpm_limit"),
             )
 
             ########################################
@@ -1768,6 +1848,21 @@ class PrometheusLogger(CustomLogger):
             model_id=enum_values.model_id,
         )
 
+        # set team rpm/tpm metrics for the requested model
+        # The isinstance(dict) narrowing above erases this payload's field types, so the
+        # three values it supplies come back as Unknown and are restored here.
+        team_for_gauges: Final = cast("str | None", user_api_team)  # cast-ok: narrowed TypedDict loses the field type
+        team_alias_for_gauges: Final = cast("str | None", user_api_team_alias)  # cast-ok: same narrowed payload
+        model_group_for_gauges: Final = cast(  # cast-ok: the payload declares model_group as str
+            "str | None", standard_logging_payload["model_group"]
+        )
+        self._set_team_rate_limit_metrics(
+            user_api_team=team_for_gauges,
+            user_api_team_alias=team_alias_for_gauges,
+            model_group=model_group_for_gauges,
+            standard_logging_payload=standard_logging_payload,  # pyright: ignore[reportArgumentType]  # isinstance(dict) above narrows the TypedDict to dict[Unknown, Unknown]
+        )
+
         self._set_v3_rate_limit_allowed_and_used_metrics(
             standard_logging_payload=standard_logging_payload,  # pyright: ignore[reportArgumentType]  # isinstance(dict) above narrows the TypedDict to dict[Unknown, Unknown]
             enum_values=enum_values,
@@ -2348,18 +2443,21 @@ class PrometheusLogger(CustomLogger):
         series.set(math.nan if capture_rate is None else capture_rate)
 
     @staticmethod
-    def _get_remaining_from_v3_rate_limit_headers(
+    def _get_v3_rate_limit_header(
         standard_logging_payload: StandardLoggingPayload | None,
+        descriptor_key: Literal["model_per_key", "model_per_team"],
+        value_type: Literal["remaining", "limit"],
         rate_limit_type: Literal["requests", "tokens"],
     ) -> int | None:
         """
-        Read the per-(key, model) remaining value emitted by the v3 rate
-        limiter (``parallel_request_limiter_v3.py``), which writes
-        ``x-ratelimit-model_per_key-remaining-{requests,tokens}`` into
-        ``standard_logging_object.hidden_params.additional_headers`` instead
-        of the ``litellm-key-remaining-*`` metadata keys the legacy limiter
-        sets. The header carries no model group; it always refers to this
-        request's model group, which is what the gauges are labeled with.
+        Read a per-(scope, model) value emitted by the v3 rate limiter
+        (``parallel_request_limiter_v3.py``), which writes
+        ``x-ratelimit-{descriptor_key}-{remaining,limit}-{requests,tokens}``
+        into ``standard_logging_object.hidden_params.additional_headers``
+        instead of the ``litellm-key-remaining-*`` metadata keys the legacy
+        limiter sets. The header carries no model group; it always refers to
+        this request's model group, which is what the gauges are labeled
+        with. A scope with no configured limit produces no header at all.
         Values are written in-process as plain ints (never HTTP-serialized
         strings), so anything else is rejected rather than coerced.
         """
@@ -2367,7 +2465,7 @@ class PrometheusLogger(CustomLogger):
             return None
         return PrometheusLogger._get_int_from_v3_rate_limit_headers(
             standard_logging_payload=standard_logging_payload,
-            header_name=f"x-ratelimit-model_per_key-remaining-{rate_limit_type}",
+            header_name=f"x-ratelimit-{descriptor_key}-{value_type}-{rate_limit_type}",
         )
 
     @staticmethod
@@ -2556,15 +2654,21 @@ class PrometheusLogger(CustomLogger):
 
         remaining_requests = metadata.get(remaining_requests_variable_name)
         if remaining_requests is None:
-            remaining_requests = self._get_remaining_from_v3_rate_limit_headers(
-                standard_logging_payload=standard_logging_payload, rate_limit_type="requests"
+            remaining_requests = self._get_v3_rate_limit_header(
+                standard_logging_payload=standard_logging_payload,
+                descriptor_key="model_per_key",
+                value_type="remaining",
+                rate_limit_type="requests",
             )
         if remaining_requests is None:
             remaining_requests = sys.maxsize
         remaining_tokens = metadata.get(remaining_tokens_variable_name)
         if remaining_tokens is None:
-            remaining_tokens = self._get_remaining_from_v3_rate_limit_headers(
-                standard_logging_payload=standard_logging_payload, rate_limit_type="tokens"
+            remaining_tokens = self._get_v3_rate_limit_header(
+                standard_logging_payload=standard_logging_payload,
+                descriptor_key="model_per_key",
+                value_type="remaining",
+                rate_limit_type="tokens",
             )
         if remaining_tokens is None:
             remaining_tokens = sys.maxsize
@@ -2594,6 +2698,166 @@ class PrometheusLogger(CustomLogger):
             label_context=label_context,
         )
         self.litellm_remaining_api_key_tokens_for_model.labels(**tokens_labels).set(remaining_tokens)
+
+    def _set_team_rate_limit_metrics(
+        self,
+        user_api_team: str | None,
+        user_api_team_alias: str | None,
+        model_group: str | None,
+        standard_logging_payload: StandardLoggingPayload | None,
+    ) -> None:
+        """
+        Emit the per-(team, model) rate limit gauges from the values the v3
+        rate limiter already computed for its ``model_per_team`` descriptor
+        and shipped to the client as ``x-ratelimit-model_per_team-*``
+        headers. A team with no per-model limit configured for the requested
+        model produces no header, and therefore no series, which matches how
+        the per-key gauges behave.
+        """
+        if user_api_team is None:
+            return
+
+        payload_as_dict: Final = cast("dict[str, object] | None", standard_logging_payload)  # cast-ok: dict at runtime
+        enum_values: Final = UserAPIKeyLabelValues(
+            team=user_api_team,
+            team_alias=user_api_team_alias,
+            model=model_group,
+            custom_metadata_labels=get_custom_labels_from_metadata(
+                metadata=_get_combined_custom_metadata_from_standard_logging_payload(
+                    standard_logging_payload=payload_as_dict
+                )
+            ),
+        )
+        label_context: Final = PrometheusLabelFactoryContext(enum_values)
+
+        for metric_name, value_type, rate_limit_type in _TEAM_RATE_LIMIT_GAUGE_SPECS:
+            gauge: _LabeledGauge = cast("_LabeledGauge", getattr(self, metric_name))  # cast-ok: specs name built gauges
+            self._sync_team_rate_limit_gauge(
+                gauge=gauge,
+                metric_name=metric_name,
+                value=self._get_v3_rate_limit_header(
+                    standard_logging_payload=standard_logging_payload,
+                    descriptor_key="model_per_team",
+                    value_type=value_type,
+                    rate_limit_type=rate_limit_type,
+                ),
+                enum_values=enum_values,
+                label_context=label_context,
+            )
+
+    def _sync_team_rate_limit_gauge(
+        self,
+        gauge: _LabeledGauge,
+        metric_name: DEFINED_PROMETHEUS_METRICS,
+        value: int | None,
+        enum_values: UserAPIKeyLabelValues,
+        label_context: PrometheusLabelFactoryContext,
+    ) -> None:
+        """
+        Set the gauge, or drop its child series when this team has no limit
+        configured for this model. Prometheus keeps a child series for the
+        life of the process once emitted, so without the drop a team whose
+        limit is removed would keep publishing the last remaining/limit
+        values it ever saw, and alerts would evaluate against a number no
+        longer being enforced.
+
+        Superseded aliases are swept on both paths, because a team can be
+        renamed and then have its limit removed before it sends another
+        limited request, which would otherwise strand the pre-rename series.
+
+        Both drops go through ``BoundedPrometheusSeriesTracker.remove_series``,
+        the same call the key/team rate limit gauges use, rather than a second
+        removal path of this file's own.
+        """
+        labelnames: Final = self.get_labels_for_metric(metric_name)
+        if (
+            UserAPIKeyLabelNames.TEAM.value not in labelnames
+            or UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value not in labelnames
+        ):
+            # This gauge is team-and-model scoped, so it needs both labels to
+            # identify what it is reporting. Without the team label it collapses
+            # to one sample shared by every team; without the model label, to one
+            # sample shared by every model of a team -- and then a request for an
+            # unlimited model retires the series a limited one published, while a
+            # second limited model overwrites it. Either way the series cannot
+            # attribute a limit to anyone and cannot be retired, so publishing
+            # nothing beats publishing a number that silently belongs to whichever
+            # request wrote it last.
+            return
+
+        labels: Final[dict[str, str]] = (  # mutable-ok: built by the factory and only read here
+            cast(  # cast-ok: the factory is annotated to return a bare dict
+                "dict[str, str]",
+                prometheus_label_factory(
+                    supported_enum_labels=labelnames,
+                    enum_values=enum_values,
+                    label_context=label_context,
+                ),
+            )
+        )
+        label_values: Final[tuple[str, ...]] = tuple(labels.get(name, "") for name in labelnames)
+        can_retire: Final = _series_retirement_supported()
+        if can_retire:
+            self._drop_superseded_team_series(
+                gauge=gauge, metric_name=metric_name, labels=labels, label_values=label_values
+            )
+        if value is not None:
+            gauge.labels(*label_values).set(value)
+            return
+
+        if not can_retire:
+            return
+
+        self._forget_team_series(metric_name=metric_name, labels=labels)
+        # Removal goes through the shared tracker so this file has one path
+        # that drops a child series. A labelset with no child is the common
+        # case here -- the team never had a limit for this model -- and the
+        # tracker already treats that as removed rather than an error.
+        self._bounded_prometheus_series_tracker.remove_series(gauge, label_values)
+
+    def _drop_superseded_team_series(
+        self,
+        gauge: _LabeledGauge,
+        metric_name: DEFINED_PROMETHEUS_METRICS,
+        labels: Mapping[str, str],
+        label_values: tuple[str, ...],
+    ) -> None:
+        """
+        Retire the series this team and model last published under a different
+        alias. Renaming a team changes ``team_alias``, which starts a new
+        series, and the old one would otherwise keep publishing the values it
+        held at rename time, double counting the team on any sum over ``team``.
+
+        The previously emitted labelset is remembered per (metric, team, model)
+        rather than found by scanning the registry. A scan would cost every
+        team request work proportional to the total number of team series ever
+        emitted, which any authenticated caller could amplify by sending
+        ordinary traffic.
+        """
+        identity: Final = (
+            metric_name,
+            labels.get(UserAPIKeyLabelNames.TEAM.value, ""),
+            labels.get(UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value, ""),
+        )
+        previous: Final = self._team_series_label_values.get(identity)
+        if previous is not None and previous != label_values:
+            self._bounded_prometheus_series_tracker.remove_series(gauge, previous)
+        self._team_series_label_values[identity] = label_values
+
+    def _forget_team_series(
+        self,
+        metric_name: DEFINED_PROMETHEUS_METRICS,
+        labels: Mapping[str, str],
+    ) -> None:
+        """Stop tracking a (metric, team, model) whose series has been dropped."""
+        self._team_series_label_values.pop(
+            (
+                metric_name,
+                labels.get(UserAPIKeyLabelNames.TEAM.value, ""),
+                labels.get(UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value, ""),
+            ),
+            None,
+        )
 
     @staticmethod
     def _get_input_sequence_length(
