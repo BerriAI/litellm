@@ -47,7 +47,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     OpenAiResponsesToChatCompletionStreamIterator,
     tool_call_dict_from_output_item,
 )
-from litellm.litellm_core_utils.allowed_tools_tool_choice import pruned_allowed_tool_choice
+from litellm.litellm_core_utils.allowed_tools_tool_choice import pruned_allowed_tool_choice, removed_tool_names
 from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
@@ -59,7 +59,6 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
     list_field,
     merge_guardrailed_scoped_messages,
-    removed_tool_names,
     role_out_of_guardrail_scope,
     scoped_structured_message_indices,
     stream_item_field,

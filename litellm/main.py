@@ -114,6 +114,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
 from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+from litellm.litellm_core_utils.tool_fields import drop_policy
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
@@ -5713,11 +5714,7 @@ def completion(
         drops_unsupported_params: Final = (
             litellm.drop_params is True or normalize_drop_params(routing_kwargs.get("drop_params")) is True
         )
-        drops_tool_choice: Final = (
-            drops_unsupported_params
-            or "tool_choice"
-            in _ADDITIONAL_DROP_PARAMS_ADAPTER.validate_python(routing_kwargs.get("additional_drop_params") or [])
-        )
+        drops_tool_choice: Final = drop_policy(routing_kwargs).drops("tool_choice")
         reasoning_model_group: Final = model_group_from_metadata(
             routing_kwargs.get("metadata"), routing_kwargs.get("litellm_metadata")
         )

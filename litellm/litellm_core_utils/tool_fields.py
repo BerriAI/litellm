@@ -1,4 +1,4 @@
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import reduce
 from typing import Annotated, Final, TypeAlias
@@ -102,6 +102,15 @@ def _without_tool_fields(data: Mapping[str, object]) -> Mapping[str, object]:
     return {name: value for name, value in data.items() if name not in TOOL_FIELDS}
 
 
+def _with_kept_tools(
+    fields: Mapping[str, object], tools: Sequence[object], kept: Sequence[object]
+) -> Mapping[str, object]:
+    from litellm.litellm_core_utils.allowed_tools_tool_choice import pruned_allowed_tool_choice, removed_tool_names
+
+    pruned: Final = pruned_allowed_tool_choice(fields, removed_tool_names(tools, kept))
+    return {**fields, "tools": kept} if pruned is None else {**fields, "tools": kept, "tool_choice": pruned}
+
+
 def _malformed_tools(data: Mapping[str, object]) -> MalformedField | None:
     tools: Final = data.get("tools")
     if tools is None:
@@ -116,7 +125,9 @@ def _malformed_tools(data: Mapping[str, object]) -> MalformedField | None:
         return None
     kept: Final = [entry for entry, error in zip(entries, entry_errors) if error is None]
     return MalformedField(
-        "tools", first_error, lambda fields: {**fields, "tools": kept} if kept else _without_tool_fields(fields)
+        "tools",
+        first_error,
+        lambda fields: _with_kept_tools(fields, entries, kept) if kept else _without_tool_fields(fields),
     )
 
 

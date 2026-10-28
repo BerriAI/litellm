@@ -29,7 +29,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     replayed_tool_search_tool_names,
 )
-from litellm.litellm_core_utils.allowed_tools_tool_choice import pruned_allowed_tool_choice
+from litellm.litellm_core_utils.allowed_tools_tool_choice import pruned_allowed_tool_choice, removed_tool_names
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import stream_chunk_builder
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
@@ -45,7 +45,6 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     merge_guardrailed_scoped_messages,
     merge_returned_tools_into_request_tools,
     openai_tool_name,
-    removed_tool_names,
     role_out_of_guardrail_scope,
     scoped_structured_message_indices,
     stream_item_field,

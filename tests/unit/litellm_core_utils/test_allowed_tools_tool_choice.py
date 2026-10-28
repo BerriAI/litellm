@@ -8,6 +8,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     chat_allowed_tool_choice,
     parse_allowed_tool_choice,
     pruned_allowed_tool_choice,
+    removed_tool_names,
     responses_allowed_tool_choice,
     tool_choice_for_provider,
 )
@@ -209,3 +210,20 @@ def test_a_choice_left_with_no_tools_becomes_none():
 )
 def test_the_request_keeps_its_choice_when_nothing_it_allows_is_removed(request_body, removed):
     assert pruned_allowed_tool_choice(request_body, removed) is None
+
+
+@pytest.mark.parametrize(
+    "dropped_tool",
+    [
+        {"type": "function", "function": {"name": "get_time"}},
+        {"type": "custom", "custom": {"name": "get_time"}},
+        {"type": "function", "name": "get_time"},
+        {"type": "custom", "name": "get_time"},
+    ],
+    ids=["chat_function", "chat_custom", "responses_function", "responses_custom"],
+)
+def test_a_dropped_function_or_custom_tool_is_named_as_removed(dropped_tool):
+    kept_tool: Final = {"type": "function", "function": {"name": "get_weather"}}
+    request_tools: Final = (kept_tool, dropped_tool, {"type": "mcp", "server_label": "deepwiki"})
+
+    assert removed_tool_names(request_tools, (kept_tool,)) == {"get_time"}

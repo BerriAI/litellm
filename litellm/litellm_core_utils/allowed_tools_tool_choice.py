@@ -1,4 +1,4 @@
-from collections.abc import Mapping, Sequence, Set
+from collections.abc import Iterable, Mapping, Sequence, Set
 from typing import Final, Literal, TypeVar
 
 from openai.types.responses.tool_choice_allowed_param import ToolChoiceAllowedParam
@@ -127,9 +127,9 @@ def is_allowed_tools_choice(tool_choice: object) -> bool:
 def _accepts_allowed_tools(custom_llm_provider: str, model: str) -> bool:
     match custom_llm_provider:
         case "azure_ai":
-            from litellm.llms.azure_ai.common_utils import azure_ai_routes_to_openai_chat
+            from litellm.llms.azure_ai.common_utils import azure_ai_serves_openai_chat_model
 
-            return azure_ai_routes_to_openai_chat(model)
+            return azure_ai_serves_openai_chat_model(model)
         case _:
             return custom_llm_provider in PROVIDERS_ACCEPTING_ALLOWED_TOOLS
 
@@ -207,3 +207,8 @@ def pruned_allowed_tool_choice(request: object, removed_tool_names: Set[str]) ->
     if len(kept) == len(tools):
         return None
     return _with_allowed_tools(choice, kept) if kept else "none"
+
+
+def removed_tool_names(request_tools: Iterable[object], kept_tools: Iterable[object]) -> frozenset[str]:
+    kept_names: Final = frozenset(filter(None, map(function_or_custom_tool_name, kept_tools)))
+    return frozenset(filter(None, map(function_or_custom_tool_name, request_tools))) - kept_names

@@ -146,6 +146,51 @@ async def test_additional_drop_params_drops_only_the_malformed_tool_entries() ->
     assert sent["tools"] == [_GOOD_TOOL]
 
 
+@pytest.mark.parametrize(
+    ("tool_choice", "pruned"),
+    [
+        (
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {
+                    "mode": "auto",
+                    "tools": [
+                        {"type": "function", "function": {"name": "get_weather"}},
+                        {"type": "function", "function": {"name": "get_time"}},
+                    ],
+                },
+            },
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {"mode": "auto", "tools": [{"type": "function", "function": {"name": "get_weather"}}]},
+            },
+        ),
+        (
+            {
+                "type": "allowed_tools",
+                "mode": "auto",
+                "tools": [{"type": "function", "name": "get_weather"}, {"type": "function", "name": "get_time"}],
+            },
+            {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "get_weather"}]},
+        ),
+        ({"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_time"}]}, "none"),
+    ],
+    ids=["chat_shape", "responses_shape", "only_the_dropped_tool"],
+)
+@pytest.mark.asyncio
+async def test_drop_params_prunes_a_dropped_malformed_tool_from_the_allowed_tools_choice(
+    tool_choice: Mapping[str, object], pruned: object
+) -> None:
+    malformed_time_tool: Final = {"type": "function", "function": {"name": "get_time", "parameters": "object"}}
+    request: Final = _proxy_request(
+        "drops", drop_params=True, tools=[_GOOD_TOOL, malformed_time_tool], tool_choice=tool_choice
+    )
+
+    sent: Final = await async_pre_call_deployment_hook(dict(request), "acompletion")
+
+    assert (sent["tools"], sent["tool_choice"]) == ([_GOOD_TOOL], pruned)
+
+
 @pytest.mark.asyncio
 async def test_an_sdk_call_keeps_the_tools_it_passed() -> None:
     tools: Final = (_GOOD_TOOL,)

@@ -179,13 +179,14 @@ class SemanticToolFilterHook(CustomLogger):
     def _with_caller_allowed_tools(
         self, request: object, available_tools: Sequence[object], filtered_tools: Sequence[object]
     ) -> tuple[object, ...]:
-        dropped_allowed_names: Final = allowed_tool_names(request) - frozenset(
-            self._selected_tool_names(filtered_tools)
+        allowed_names: Final = allowed_tool_names(request)
+        allowed_tools: Final = tuple(
+            tool for tool in available_tools if self.filter.extract_tool_info(tool)[0] in allowed_names
         )
-        return (
-            *filtered_tools,
-            *(tool for tool in available_tools if self.filter.extract_tool_info(tool)[0] in dropped_allowed_names),
+        other_picks: Final = tuple(
+            tool for tool in filtered_tools if self.filter.extract_tool_info(tool)[0] not in allowed_names
         )
+        return (*allowed_tools, *other_picks[: max(len(filtered_tools) - len(allowed_tools), 0)])
 
     @staticmethod
     async def _narrow_mcp_references(

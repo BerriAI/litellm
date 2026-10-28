@@ -629,7 +629,7 @@ async def test_semantic_filter_hook_keeps_mcp_tools_the_allowed_tools_choice_nam
         MCPTool(name=f"mcp_tool_{i}", description=f"MCP tool {i}", inputSchema={"type": "object"}) for i in range(5)
     ]
     filter_instance._build_router(mcp_tools)
-    picked = {tool.name for tool in await filter_instance.filter_tools(query="What is the weather?", available_tools=mcp_tools)}
+    picked = [tool.name for tool in await filter_instance.filter_tools(query="What is the weather?", available_tools=mcp_tools)]
     unpicked = next(tool.name for tool in mcp_tools if tool.name not in picked)
     native_tool = {"type": "function", "function": {"name": "get_current_weather", "parameters": {"type": "object"}}}
     tool_choice = {
@@ -651,7 +651,7 @@ async def test_semantic_filter_hook_keeps_mcp_tools_the_allowed_tools_choice_nam
         call_type="completion",
     )
 
-    assert {tool.name for tool in result["tools"] if isinstance(tool, MCPTool)} == {*picked, unpicked}
+    assert [tool.name for tool in result["tools"] if isinstance(tool, MCPTool)] == [unpicked, *picked[:-1]]
     assert native_tool in result["tools"]
     assert result["tool_choice"] == tool_choice
 
@@ -674,7 +674,7 @@ async def test_semantic_filter_hook_keeps_expanded_tools_the_allowed_tools_choic
         }
         for i in range(5)
     ]
-    picked = {tool["name"] for tool in await filter_instance.filter_tools(query="Send an email", available_tools=expanded_tools)}
+    picked = [tool["name"] for tool in await filter_instance.filter_tools(query="Send an email", available_tools=expanded_tools)]
     unpicked = next(tool["name"] for tool in expanded_tools if tool["name"] not in picked)
     tool_choice = {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": unpicked}]}
 
@@ -692,9 +692,9 @@ async def test_semantic_filter_hook_keeps_expanded_tools_the_allowed_tools_choic
             call_type="aresponses",
         )
 
-    assert set(result["tools"][0]["allowed_tools"]) == {*picked, unpicked}
+    assert result["tools"][0]["allowed_tools"] == [unpicked, *picked[:-1]]
     assert result["tool_choice"] == tool_choice
-    assert result["metadata"]["litellm_semantic_filter_stats"] == f"5->{len(picked) + 1}"
+    assert result["metadata"]["litellm_semantic_filter_stats"] == f"5->{len(picked)}"
 
 
 @requires_semantic_router

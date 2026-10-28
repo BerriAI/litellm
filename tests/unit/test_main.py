@@ -5540,7 +5540,7 @@ def _mock_chat_completion(respx_mock: respx.MockRouter) -> respx.Route:
     [
         ("openai/gpt-4.1-mini", {"api_base": "http://localhost:12346/v1"}),
         ("litellm_proxy/gpt-4.1-mini", {"api_base": "http://localhost:12346/v1"}),
-        ("azure_ai/DeepSeek-V4-Flash", {"api_base": "http://localhost:12346/models"}),
+        ("azure_ai/gpt-4.1-mini", {"api_base": "http://localhost:12346/models"}),
         ("azure/gpt-4.1-mini", {"api_base": "http://localhost:12346", "api_version": "2025-04-01-preview"}),
     ],
 )
@@ -5570,6 +5570,7 @@ def test_completion_sends_allowed_tools_nested_to_openai_shaped_providers(
         "ollama/llama3",
         "deepseek/deepseek-chat",
         "azure_ai/claude-haiku-4-5",
+        "azure_ai/DeepSeek-V4-Flash",
         "azure_ai/agents/asst_abc123",
     ],
 )
@@ -5615,6 +5616,21 @@ def test_drop_params_sends_tools_without_an_allowed_tools_choice_a_provider_cann
     sent: Final = json.loads(respx_mock.calls[0].request.content)
     assert "tool_choice" not in sent, sent
     assert [tool["function"]["name"] for tool in sent["tools"]] == ["get_weather", "get_time"]
+
+
+def test_completion_sends_tools_when_additional_drop_params_is_a_string(respx_mock: respx.MockRouter) -> None:
+    mock_route: Final = _mock_chat_completion(respx_mock)
+
+    litellm.completion(
+        model="openai/gpt-4.1-mini",
+        messages=[{"role": "user", "content": "What time is it?"}],
+        tools=ALLOWED_TOOLS_REQUEST_TOOLS,
+        api_base="http://localhost:12346/v1",
+        api_key="fake_api_key",
+        additional_drop_params="logprobs",
+    )
+
+    assert mock_route.call_count == 1
 
 
 @pytest.mark.parametrize("model", ["openai/gpt-4.1-mini", "deepseek/deepseek-chat"])
