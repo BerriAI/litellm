@@ -8,7 +8,6 @@ Has all /sso/* routes
 /sso/debug/callback - returns the OpenID object returned by the SSO provider
 """
 
-import asyncio
 import base64
 import hashlib
 import inspect
@@ -1807,7 +1806,7 @@ async def warn_if_id_jag_capture_gap(*, retention_enabled: RetentionCheck | None
     verbose_proxy_logger.warning("SSO debug callback ran with an oauth2_id_jag capture gap: %s", gap)
 
 
-async def create_team_member_add_task(team_id, user_info):
+async def create_team_member_add_task(team_id: str, user_info: NewUserResponse | LiteLLM_UserTable):
     """Create a task for adding a member to a team."""
     try:
         member: Final = Member(user_id=user_info.user_id, role="user")
@@ -1823,22 +1822,22 @@ async def create_team_member_add_task(team_id, user_info):
         verbose_proxy_logger.debug("[Non-Blocking] Error trying to add sso user to db: %s", e)
 
 
-async def add_missing_team_member(user_info: NewUserResponse | LiteLLM_UserTable, sso_teams: list[str]):
+async def add_missing_team_member(
+    user_info: NewUserResponse | LiteLLM_UserTable,
+    sso_teams: Sequence[str],
+    *,
+    add_team_member: Callable[
+        [str, NewUserResponse | LiteLLM_UserTable], Awaitable[object]
+    ] = create_team_member_add_task,
+) -> None:
     """
     - Get missing teams (diff b/w user_info.team_ids and sso_teams)
-    - Add missing user to missing teams
+    - Add missing user to missing teams, one at a time in sso_teams order, so user.teams keeps the claim's order
     """
-    # Handle None as empty list for new users
-    user_teams: Final = user_info.teams if user_info.teams is not None else []
-    missing_teams: Final = set(sso_teams) - set(user_teams)
-    missing_teams_list: Final = list(missing_teams)
-    tasks = []
-    tasks = [create_team_member_add_task(team_id, user_info) for team_id in missing_teams_list]
-
-    try:
-        await asyncio.gather(*tasks)
-    except Exception as e:
-        verbose_proxy_logger.debug("[Non-Blocking] Error trying to add sso user to db: %s", e)
+    held_teams: Final = frozenset(user_info.teams or ())
+    missing_teams: Final = tuple(team_id for team_id in dict.fromkeys(sso_teams) if team_id not in held_teams)
+    for team_id in missing_teams:
+        await add_team_member(team_id, user_info)
 
 
 def get_disabled_non_admin_personal_key_creation():
@@ -2403,7 +2402,9 @@ async def fetch_cli_sso_team_details(
     except Exception as e:
         verbose_proxy_logger.error("Error fetching team details for CLI SSO session: %s", e)
         return None
-    return tuple(_cli_sso_team_detail(team_row.model_dump()) for team_row in prisma_teams)
+    fetched_details: Final = tuple(_cli_sso_team_detail(team_row.model_dump()) for team_row in prisma_teams)
+    details_by_team_id: Final = MappingProxyType({detail.team_id: detail for detail in fetched_details})
+    return tuple(details_by_team_id[team_id] for team_id in dict.fromkeys(teams) if team_id in details_by_team_id)
 
 
 def _cli_sso_session_teams(team_details: Sequence[CliSsoTeamDetail]) -> list[str]:

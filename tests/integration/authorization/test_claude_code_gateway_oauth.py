@@ -545,3 +545,58 @@ def test_device_authorization_polls_complete_sso_and_mints_a_model_restricted_be
             assert set(token_form) == {"code", "code_verifier", "grant_type", "redirect_uri"}, token_form
             assert userinfo_request.method == "GET" and urlsplit(userinfo_request.target).path == "/userinfo"
             assert user_id == _USER_ID
+
+
+def _device_code_grant(gateway: Gateway) -> _AccessToken:
+    authorization_response: Final = gateway.client.post(
+        "/claude_code_gateway/oauth/device_authorization", data={"client_id": _CLIENT_ID}
+    )
+    assert authorization_response.status_code == 200, authorization_response.text
+    authorization: Final = _DeviceAuthorization.model_validate_json(authorization_response.content)
+    verification: Final = gateway.client.get(authorization.verification_uri, follow_redirects=False)
+    assert verification.status_code == 303, verification.text
+    identity_provider_redirect: Final = gateway.client.get(verification.headers["location"], follow_redirects=False)
+    assert identity_provider_redirect.status_code == 302, identity_provider_redirect.text
+    callback: Final = gateway.client.get(identity_provider_redirect.headers["location"], follow_redirects=False)
+    assert callback.status_code == 200, callback.text
+    browser_token: Final = _BROWSER_TOKEN.search(callback.text)
+    assert browser_token is not None, callback.text
+    completion: Final = gateway.client.post(
+        f"/sso/cli/complete/{authorization.device_code.partition('.')[0]}",
+        data={"user_code": authorization.user_code, "browser_complete_token": html.unescape(browser_token.group(1))},
+    )
+    assert completion.status_code == 200, completion.text
+    token_response: Final = gateway.client.post(
+        "/claude_code_gateway/oauth/token",
+        data={
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            "device_code": authorization.device_code,
+            "client_id": _CLIENT_ID,
+        },
+    )
+    assert token_response.status_code == 200, token_response.text
+    return _AccessToken.model_validate_json(token_response.content)
+
+
+@pytest.mark.timeout(300)
+def test_gateway_login_binds_the_first_team_on_the_user_record_after_a_write_to_its_row(
+    enabled_gateway: Gateway, identity_provider: Wire
+) -> None:
+    run_id: Final = uuid.uuid4().hex
+    with enabled_gateway.scenario() as scenario:
+        user_id: Final = scenario.user(user_id=_USER_ID, user_email=_USER_EMAIL, user_role="internal_user")
+        first_team: Final = scenario.team(team_id=f"zeta-{run_id}")
+        second_team: Final = scenario.team(team_id=f"alpha-{run_id}")
+        for team_id in (first_team, second_team):
+            enabled_gateway.post(
+                "/team/member_add", {"team_id": team_id, "member": {"role": "user", "user_id": user_id}}
+            )
+        enabled_gateway.post("/team/update", {"team_id": first_team, "metadata": {"updated_by_run": run_id}})
+        assert enabled_gateway.rows('SELECT teams FROM "LiteLLM_UserTable" WHERE user_id = %s', (user_id,)) == [
+            {"teams": [first_team, second_team]}
+        ]
+
+        token: Final = _device_code_grant(enabled_gateway)
+        identity_provider.drain()
+
+        assert (token.user_id, token.team_id) == (user_id, first_team)
