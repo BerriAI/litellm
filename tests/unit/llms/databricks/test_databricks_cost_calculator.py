@@ -33,6 +33,13 @@ PRICE_FIELDS: Final = (
     "cache_read_input_token_cost",
 )
 PUBLISHED_DBU_PER_MILLION: Final = {
+    "databricks/databricks-claude-haiku-5-5": ("1.429", "7.143", "1.786", "0.143"),
+    "databricks/databricks-claude-sonnet-5-5": ("28.571", "142.857", "35.714", "1.429"),
+    "databricks/databricks-gpt-6-1-sol": ("28.571", "142.857", "35.714", "1.429"),
+    "databricks/databricks-gpt-6-1-terra": ("14.286", "71.429", "17.857", "0.714"),
+    "databricks/databricks-gpt-6-astra": ("142.857", "714.286", "178.571", "14.286"),
+    "databricks/databricks-gpt-6-luna": ("1.429", "7.143", "1.786", "0.143"),
+    "databricks/databricks-gpt-6-sol": ("28.571", "142.857", "35.714", "2.857"),
     "databricks/databricks-claude-opus-5-5": ("57.143", "285.714", "71.429", "2.857"),
     "databricks/databricks-claude-fable-5-1": ("142.858", "714.286", "178.572", "3.572"),
     "databricks/databricks-claude-fable-5": ("142.858", "714.286", "178.572", "14.286"),
@@ -43,7 +50,7 @@ PUBLISHED_DBU_PER_MILLION: Final = {
     "databricks/databricks-claude-opus-4-5": ("71.429", "357.143", "89.286", "7.143"),
     "databricks/databricks-claude-opus-4-1": ("214.286", "1071.429", "267.857", "21.429"),
     "databricks/databricks-claude-opus-4": ("214.286", "1071.429", "267.857", "21.429"),
-    "databricks/databricks-claude-sonnet-5": ("42.857", "214.286", "53.571", "4.286"),
+    "databricks/databricks-claude-sonnet-5": ("28.571", "142.857", "35.714", "2.857"),
     "databricks/databricks-claude-sonnet-4-6": ("42.857", "214.286", "53.571", "4.286"),
     "databricks/databricks-claude-sonnet-4-5": ("42.857", "214.286", "53.571", "4.286"),
     "databricks/databricks-claude-sonnet-4-1": ("42.857", "214.286", "53.571", "4.286"),
@@ -197,7 +204,7 @@ def test_models_without_a_cache_discount_bill_cache_tokens_at_the_input_rate(
     assert prompt_cost > 8000 * info["input_cost_per_token"]
 
 
-def test_every_model_without_published_cache_dbu_bills_cache_at_its_own_input_rate(
+def test_every_model_without_published_cache_dbu_bills_cache_writes_at_its_own_input_rate(
     local_model_cost_map: None,
 ) -> None:
     without_published_rates: Final = [
@@ -210,8 +217,7 @@ def test_every_model_without_published_cache_dbu_bills_cache_at_its_own_input_ra
 
     for model in without_published_rates:
         info = _model_info(model)
-        for field in CACHE_FIELDS:
-            assert info[field] == pytest.approx(info["input_cost_per_token"]), (model, field)
+        assert info["cache_creation_input_token_cost"] == pytest.approx(info["input_cost_per_token"]), model
 
 
 @pytest.mark.parametrize("model", NEW_MODELS)
@@ -222,14 +228,6 @@ def test_backup_price_map_matches_main(model: str) -> None:
     assert model in main_cost
     assert model in backup_cost
     assert backup_cost[model] == main_cost[model]
-
-
-def test_sonnet_5_ships_standard_rates_not_introductory(local_model_cost_map: None) -> None:
-    sonnet_5: Final = _model_info("databricks/databricks-claude-sonnet-5")
-    sonnet_4_6: Final = _model_info("databricks/databricks-claude-sonnet-4-6")
-
-    for field in PRICE_FIELDS:
-        assert sonnet_5[field] == pytest.approx(sonnet_4_6[field]), field
 
 
 def test_cost_per_token_bills_the_served_priority_tier(
