@@ -3260,6 +3260,8 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
         if _end_user_object is not None:
             valid_token_dict.update(end_user_params)
             valid_token_dict["end_user_object_permission"] = _end_user_object.object_permission
+        elif litellm.max_end_user_budget_id is not None:
+            valid_token_dict.update(end_user_params)
 
     # check if token is from litellm-ui, litellm ui makes keys to allow users to login with sso. These keys can only be used for LiteLLM UI functions
     # sso/login, ui/login, /key functions and /user functions
