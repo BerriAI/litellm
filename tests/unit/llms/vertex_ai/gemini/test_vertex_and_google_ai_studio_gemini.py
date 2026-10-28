@@ -10719,3 +10719,34 @@ def test_gemini_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(monk
     )
     assert "tools" not in mapped
     assert "tool_choice" not in mapped
+
+
+@pytest.mark.parametrize("chunk_indices", [[0, 1], [2, 1, 0]])
+def test_grounding_support_preserves_every_web_source(chunk_indices: list[int]) -> None:
+    metadata: Final = {
+        "groundingChunks": [
+            {"web": {"uri": "https://example.com/a", "title": "A"}},
+            {"web": {"uri": "https://example.com/b", "title": "B"}},
+            {"retrievedContext": {"uri": "gs://document"}},
+        ],
+        "groundingSupports": [
+            {"segment": {"startIndex": 0, "endIndex": 5}, "groundingChunkIndices": chunk_indices},
+            {"segment": {"startIndex": 6, "endIndex": 11}, "groundingChunkIndices": [1]},
+        ],
+    }
+
+    annotations: Final = VertexGeminiConfig._convert_grounding_metadata_to_annotations([metadata], "First claim")
+
+    expected_sources: Final = [(index, 0, 5) for index in chunk_indices if index in (0, 1)] + [(1, 6, 11)]
+    assert annotations == [
+        {
+            "type": "url_citation",
+            "url_citation": {
+                "start_index": start,
+                "end_index": end,
+                "url": metadata["groundingChunks"][index]["web"]["uri"],
+                "title": metadata["groundingChunks"][index]["web"]["title"],
+            },
+        }
+        for index, start, end in expected_sources
+    ]
