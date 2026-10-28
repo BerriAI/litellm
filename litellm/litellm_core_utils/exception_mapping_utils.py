@@ -2036,14 +2036,6 @@ def _map_azure_exception(
             litellm_debug_info=extra_information,
             response=getattr(original_exception, "response", None),
         )
-    elif "This model's maximum context length is" in error_str:
-        raise ContextWindowExceededError(
-            message=f"AzureException ContextWindowExceededError - {message}",
-            llm_provider="azure",
-            model=model,
-            litellm_debug_info=extra_information,
-            response=getattr(original_exception, "response", None),
-        )
     elif "DeploymentNotFound" in error_str:
         raise NotFoundError(
             message=f"AzureException NotFoundError - {message}",
@@ -2079,6 +2071,18 @@ def _map_azure_exception(
         )
         raise BadRequestError(
             message=helpful_message,
+            llm_provider="azure",
+            model=model,
+            litellm_debug_info=extra_information,
+            response=getattr(original_exception, "response", None),
+            body=getattr(original_exception, "body", None),
+        )
+    elif getattr(original_exception, "status_code", None) in (None, 400) and (
+        azure_error_code == "context_length_exceeded"
+        or ExceptionCheckers.is_error_str_context_window_exceeded(error_str)
+    ):
+        raise ContextWindowExceededError(
+            message=f"AzureException ContextWindowExceededError - {message}",
             llm_provider="azure",
             model=model,
             litellm_debug_info=extra_information,
